@@ -1,9 +1,10 @@
-import { ChildProcess, spawn, exec } from 'child_process';
+import { exec } from 'child_process';
 import { readFile, stat } from 'fs/promises';
 import { join, relative } from 'path';
 import { promisify } from 'util';
 
 import { glob } from 'glob';
+import * as nodePty from 'node-pty';
 
 import type {
   RunStatus,
@@ -20,9 +21,16 @@ import { dbg } from '../lib/debug';
 
 const execAsync = promisify(exec);
 
-function getProcessEnvWithoutNodeEnv(): typeof process.env {
+function getProcessEnvWithoutNodeEnv(): Record<string, string> {
   const { NODE_ENV: _nodeEnv, ...env } = process.env;
-  return env;
+  // node-pty expects Record<string, string>, filter out undefined values
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 /**
@@ -105,6 +113,48 @@ async function killProcessTree(
   }
 }
 
+/**
+ * Handle terminal line-overwrite sequences within a single line.
+ *
+ * Many CLI tools (Metro, webpack, npm) rewrite the current line using:
+ *   - `\r`        — carriage return (cursor to column 0, next text overwrites)
+ *   - `\x1b[2K`   — erase entire line
+ *   - `\x1b[K`    — erase to end of line
+ *   - `\x1b[1G`   — cursor to column 1
+ *
+ * Since we're not a full terminal emulator, we take the pragmatic approach:
+ * find the last "restart" point and keep only the text after it.
+ */
+function applyLineOverwrites(line: string): string {
+  let result = line;
+
+  // Find the last erase-line sequence (\x1b[2K or \x1b[K) and discard everything before it
+  // eslint-disable-next-line no-control-regex
+  const eraseMatch = /\x1b\[2?K/g;
+  let lastEraseEnd = -1;
+  let match;
+  while ((match = eraseMatch.exec(result)) !== null) {
+    lastEraseEnd = match.index + match[0].length;
+  }
+  if (lastEraseEnd > 0) {
+    result = result.substring(lastEraseEnd);
+  }
+
+  // Find the last cursor-to-column-1 (\x1b[1G) and discard everything before it
+  const cursorHomeIdx = result.lastIndexOf('\x1b[1G');
+  if (cursorHomeIdx !== -1) {
+    result = result.substring(cursorHomeIdx + 4);
+  }
+
+  // Handle bare \r — take text after the last carriage return
+  const crIdx = result.lastIndexOf('\r');
+  if (crIdx !== -1) {
+    result = result.substring(crIdx + 1);
+  }
+
+  return result;
+}
+
 type StatusChangeCallback = (taskId: string, status: RunStatus) => void;
 type LogCallback = (
   taskId: string,
@@ -116,10 +166,14 @@ type LogCallback = (
 interface TrackedProcess {
   commandId: string;
   command: string;
-  process: ChildProcess;
+  pty: nodePty.IPty;
+  pid: number;
   status: 'running' | 'stopped' | 'errored';
-  stdoutBuffer: string;
-  stderrBuffer: string;
+  outputBuffer: string;
+  /** Set to true once the 'exit' event fires */
+  exited: boolean;
+  /** Resolves when the process exits */
+  exitPromise: Promise<{ exitCode: number; signal?: number }>;
 }
 
 class RunCommandService {
@@ -175,38 +229,16 @@ class RunCommandService {
     tracked: TrackedProcess;
     timeoutMs: number;
   }): Promise<boolean> {
-    if (
-      tracked.process.exitCode !== null ||
-      tracked.process.signalCode !== null
-    ) {
+    if (tracked.exited) {
       return Promise.resolve(true);
     }
 
-    return new Promise<boolean>((resolve) => {
-      const onDone = () => {
-        clearTimeout(timer);
-        tracked.process.removeListener('exit', onExit);
-        tracked.process.removeListener('error', onError);
-      };
-
-      const onExit = () => {
-        onDone();
-        resolve(true);
-      };
-
-      const onError = () => {
-        onDone();
-        resolve(true);
-      };
-
-      const timer = setTimeout(() => {
-        onDone();
-        resolve(false);
-      }, timeoutMs);
-
-      tracked.process.once('exit', onExit);
-      tracked.process.once('error', onError);
-    });
+    return Promise.race([
+      tracked.exitPromise.then(() => true),
+      new Promise<boolean>((resolve) =>
+        setTimeout(() => resolve(false), timeoutMs),
+      ),
+    ]);
   }
 
   onStatusChange(callback: StatusChangeCallback): () => void {
@@ -249,40 +281,44 @@ class RunCommandService {
   private flushBuffer({
     taskId,
     tracked,
-    stream,
   }: {
     taskId: string;
     tracked: TrackedProcess;
-    stream: RunCommandLogStream;
   }): void {
-    const key = stream === 'stdout' ? 'stdoutBuffer' : 'stderrBuffer';
-    const value = tracked[key];
-    if (!value) {
+    if (!tracked.outputBuffer) {
       return;
     }
-    this.notifyLog(taskId, tracked.commandId, stream, value);
-    tracked[key] = '';
+    this.notifyLog(taskId, tracked.commandId, 'stdout', tracked.outputBuffer);
+    tracked.outputBuffer = '';
   }
 
   private appendLogChunk({
     taskId,
     tracked,
-    stream,
     chunk,
   }: {
     taskId: string;
     tracked: TrackedProcess;
-    stream: RunCommandLogStream;
     chunk: string;
   }): void {
-    const key = stream === 'stdout' ? 'stdoutBuffer' : 'stderrBuffer';
-    const combined = `${tracked[key]}${chunk.replace(/\r\n/g, '\n')}`;
-    const parts = combined.split('\n');
-    tracked[key] = parts.pop() ?? '';
+    // Normalize Windows line endings, then split on newlines
+    const normalized = chunk.replace(/\r\n/g, '\n');
+    const combined = tracked.outputBuffer + normalized;
+    const lines = combined.split('\n');
+    tracked.outputBuffer = lines.pop() ?? '';
 
-    for (const line of parts) {
-      this.notifyLog(taskId, tracked.commandId, stream, line);
+    for (const rawLine of lines) {
+      this.notifyLog(
+        taskId,
+        tracked.commandId,
+        'stdout',
+        applyLineOverwrites(rawLine),
+      );
     }
+
+    // Apply overwrites to the buffer itself so progressive \r updates
+    // collapse rather than accumulate
+    tracked.outputBuffer = applyLineOverwrites(tracked.outputBuffer);
   }
 
   getRunStatus(taskId: string): RunStatus {
@@ -292,7 +328,7 @@ class RunCommandService {
           id: t.commandId,
           command: t.command,
           status: t.status,
-          pid: t.process.pid,
+          pid: t.pid,
         }))
       : [];
     return {
@@ -456,67 +492,70 @@ class RunCommandService {
       };
     }
 
-    dbg.runCommand('Spawning command: %s', command.command);
-    const childProcess = spawn(command.command, {
+    dbg.runCommand('Spawning command via PTY: %s', command.command);
+
+    const shell =
+      process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/sh';
+    const shellArgs =
+      process.platform === 'win32'
+        ? ['/c', command.command]
+        : ['-c', command.command];
+
+    const ptyProcess = nodePty.spawn(shell, shellArgs, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 30,
       cwd: workingDir,
-      shell: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
       env: getProcessEnvWithoutNodeEnv(),
-      // Create a new process group so we can kill the shell AND its children
-      detached: true,
     });
+
+    let exitResolve: (value: { exitCode: number; signal?: number }) => void;
+    const exitPromise = new Promise<{ exitCode: number; signal?: number }>(
+      (resolve) => {
+        exitResolve = resolve;
+      },
+    );
 
     const trackedProcess: TrackedProcess = {
       commandId: command.id,
       command: command.command,
-      process: childProcess,
+      pty: ptyProcess,
+      pid: ptyProcess.pid,
       status: 'running',
-      stdoutBuffer: '',
-      stderrBuffer: '',
+      outputBuffer: '',
+      exited: false,
+      exitPromise,
     };
 
     const taskProcesses = this.getTaskProcesses(taskId);
     taskProcesses.set(command.id, trackedProcess);
 
     dbg.runCommand(
-      'Process started with PID %d for command: %s',
-      childProcess.pid,
+      'PTY process started with PID %d for command: %s',
+      ptyProcess.pid,
       command.command,
     );
 
-    childProcess.stdout?.setEncoding('utf8');
-    childProcess.stdout?.on('data', (chunk: string) => {
+    // PTY combines stdout and stderr into a single stream
+    ptyProcess.onData((data: string) => {
       this.appendLogChunk({
         taskId,
         tracked: trackedProcess,
-        stream: 'stdout',
-        chunk,
+        chunk: data,
       });
     });
 
-    childProcess.stderr?.setEncoding('utf8');
-    childProcess.stderr?.on('data', (chunk: string) => {
-      this.appendLogChunk({
-        taskId,
-        tracked: trackedProcess,
-        stream: 'stderr',
-        chunk,
-      });
-    });
-
-    childProcess.on('exit', (code) => {
-      dbg.runCommand('Process %d exited with code %d', childProcess.pid, code);
-      this.flushBuffer({ taskId, tracked: trackedProcess, stream: 'stdout' });
-      this.flushBuffer({ taskId, tracked: trackedProcess, stream: 'stderr' });
-      trackedProcess.status = code === 0 ? 'stopped' : 'errored';
-      this.notifyStatusChange(taskId);
-    });
-
-    childProcess.on('error', (err) => {
-      dbg.runCommand('Process %d error: %O', childProcess.pid, err);
-      this.flushBuffer({ taskId, tracked: trackedProcess, stream: 'stdout' });
-      this.flushBuffer({ taskId, tracked: trackedProcess, stream: 'stderr' });
-      trackedProcess.status = 'errored';
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      dbg.runCommand(
+        'PTY process %d exited with code %d signal %d',
+        trackedProcess.pid,
+        exitCode,
+        signal,
+      );
+      this.flushBuffer({ taskId, tracked: trackedProcess });
+      trackedProcess.exited = true;
+      trackedProcess.status = exitCode === 0 ? 'stopped' : 'errored';
+      exitResolve!({ exitCode, signal });
       this.notifyStatusChange(taskId);
     });
 
@@ -538,6 +577,50 @@ class RunCommandService {
     });
   }
 
+  sendInput({
+    taskId,
+    runCommandId,
+    input,
+  }: {
+    taskId: string;
+    runCommandId: string;
+    input: string;
+  }): void {
+    const taskProcesses = this.runningProcesses.get(taskId);
+    if (!taskProcesses) return;
+
+    const tracked = taskProcesses.get(runCommandId);
+    if (!tracked || tracked.status !== 'running') return;
+
+    tracked.pty.write(input);
+  }
+
+  private static VALID_SIGNALS = new Set(['SIGINT', 'SIGTERM']);
+
+  sendSignal({
+    taskId,
+    runCommandId,
+    signal,
+  }: {
+    taskId: string;
+    runCommandId: string;
+    signal: string;
+  }): void {
+    if (!RunCommandService.VALID_SIGNALS.has(signal)) return;
+
+    const taskProcesses = this.runningProcesses.get(taskId);
+    if (!taskProcesses) return;
+
+    const tracked = taskProcesses.get(runCommandId);
+    if (!tracked || tracked.status !== 'running') return;
+
+    try {
+      process.kill(tracked.pid, signal);
+    } catch {
+      // Process may already be dead
+    }
+  }
+
   private async stopCommandWithoutLock({
     taskId,
     runCommandId,
@@ -555,40 +638,37 @@ class RunCommandService {
       return;
     }
 
-    if (tracked.process.pid && tracked.status === 'running') {
+    if (tracked.status === 'running') {
       let exited = false;
-      const pid = tracked.process.pid;
-      const pgid = -pid; // Negative PID targets the process group
+      const pid = tracked.pid;
 
       // Collect descendant PIDs before killing, since the tree may become
-      // partially orphaned after the process group signal
+      // partially orphaned after the signal
       const descendantPids = await getDescendantPids(pid);
 
       try {
         dbg.runCommand(
-          'Sending SIGTERM to process group %d (%s)',
+          'Sending SIGTERM to PTY process %d (%s)',
           pid,
           tracked.command,
         );
-        process.kill(pgid, 'SIGTERM');
+        tracked.pty.kill('SIGTERM');
         exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
 
         if (!exited) {
           dbg.runCommand(
-            'SIGTERM timeout for process group %d, sending SIGKILL',
+            'SIGTERM timeout for PTY process %d, sending SIGKILL',
             pid,
           );
-          process.kill(pgid, 'SIGKILL');
+          tracked.pty.kill('SIGKILL');
           exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
         }
       } catch {
-        dbg.runCommand('Process group %d may already be dead', pid);
+        dbg.runCommand('PTY process %d may already be dead', pid);
         exited = true;
       }
 
-      // Kill any remaining descendant processes that survived the group signal.
-      // This handles apps like Electron that spawn child processes outside the
-      // process group (renderer, GPU, utility processes).
+      // Kill any remaining descendant processes that survived.
       if (descendantPids.length > 0) {
         dbg.runCommand(
           'Killing %d remaining descendant processes of %d',
@@ -599,7 +679,7 @@ class RunCommandService {
           try {
             process.kill(descendantPid, 'SIGKILL');
           } catch {
-            // Process may already be dead from the group kill
+            // Process may already be dead
           }
         }
 
@@ -648,23 +728,18 @@ class RunCommandService {
   }
 
   /**
-   * Synchronous last-resort cleanup: sends SIGTERM to every tracked process group.
+   * Synchronous last-resort cleanup: sends SIGTERM to every tracked process.
    * Registered on `process.on('exit')` so it fires even on unexpected shutdown
    * (SIGINT, SIGTERM, uncaught exception). Cannot help with SIGKILL (kill -9).
-   *
-   * NOTE: This only targets process groups, so child processes that escaped the
-   * group (e.g. Electron renderer/GPU processes) may survive. The async
-   * `stopAllCommands` method handles full tree killing — prefer calling it
-   * during graceful shutdown (e.g. `before-quit`) before this sync fallback.
    */
   killAllProcessGroupsSync(): void {
     for (const taskProcesses of this.runningProcesses.values()) {
       for (const tracked of taskProcesses.values()) {
-        if (tracked.process.pid && tracked.status === 'running') {
+        if (tracked.status === 'running') {
           try {
-            process.kill(-tracked.process.pid, 'SIGTERM');
+            tracked.pty.kill('SIGTERM');
           } catch {
-            // Process group may already be dead
+            // Process may already be dead
           }
         }
       }

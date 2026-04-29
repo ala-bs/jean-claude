@@ -745,6 +745,16 @@ export interface Api {
       taskId: string;
       runCommandId: string;
     }) => Promise<void>;
+    sendInput: (params: {
+      taskId: string;
+      runCommandId: string;
+      input: string;
+    }) => Promise<void>;
+    sendSignal: (params: {
+      taskId: string;
+      runCommandId: string;
+      signal: 'SIGINT' | 'SIGTERM';
+    }) => Promise<void>;
     getStatus: (taskId: string) => Promise<RunStatus>;
     getTaskIdsWithRunningCommands: () => Promise<string[]>;
     killPortsForCommand: (
@@ -1311,6 +1321,8 @@ export const api: Api = hasWindowApi
           commands: [],
         }),
         stopCommand: async () => {},
+        sendInput: async () => {},
+        sendSignal: async () => {},
         getStatus: async () => ({
           isRunning: false,
           commands: [],

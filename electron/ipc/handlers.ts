@@ -2412,6 +2412,22 @@ export function registerIpcHandlers() {
     (_, params: { taskId: string; runCommandId: string }) =>
       runCommandService.stopCommand(params),
   );
+  ipcMain.handle(
+    'project:commands:run:sendInput',
+    (_, params: { taskId: string; runCommandId: string; input: string }) =>
+      runCommandService.sendInput(params),
+  );
+  ipcMain.handle(
+    'project:commands:run:sendSignal',
+    (
+      _,
+      params: {
+        taskId: string;
+        runCommandId: string;
+        signal: 'SIGINT' | 'SIGTERM';
+      },
+    ) => runCommandService.sendSignal(params),
+  );
   ipcMain.handle('project:commands:run:getStatus', (_, taskId: string) =>
     runCommandService.getRunStatus(taskId),
   );

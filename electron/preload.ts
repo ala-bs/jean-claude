@@ -490,6 +490,16 @@ contextBridge.exposeInMainWorld('api', {
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>
       ipcRenderer.invoke('project:commands:run:stopCommand', params),
+    sendInput: (params: {
+      taskId: string;
+      runCommandId: string;
+      input: string;
+    }) => ipcRenderer.invoke('project:commands:run:sendInput', params),
+    sendSignal: (params: {
+      taskId: string;
+      runCommandId: string;
+      signal: 'SIGINT' | 'SIGTERM';
+    }) => ipcRenderer.invoke('project:commands:run:sendSignal', params),
     getStatus: (taskId: string) =>
       ipcRenderer.invoke('project:commands:run:getStatus', taskId),
     getTaskIdsWithRunningCommands: () =>
