@@ -1004,7 +1004,7 @@ export function NewTaskOverlay({
           </div>
         )}
         {showPromptInput && (
-          <div className="flex shrink-0 flex-col px-5 pt-5 pb-3">
+          <div className="flex shrink-0 flex-col px-[18px] py-3.5">
             <div className="flex flex-1 flex-col">
               <PromptTextarea
                 ref={promptInputRef}
@@ -1022,7 +1022,7 @@ export function NewTaskOverlay({
                 images={draft?.images}
                 onImageAttach={handleImageAttach}
                 onImageRemove={handleImageRemove}
-                className="text-ink-1 placeholder-ink-3 min-h-[60px] border-transparent bg-transparent px-0 py-0 text-[15px] leading-relaxed focus:border-transparent focus:ring-0 focus:outline-none"
+                className="text-ink-1 placeholder-ink-3 border-transparent bg-transparent px-0 py-0 text-sm focus:border-transparent focus:ring-0 focus:outline-none"
               />
             </div>
           </div>

@@ -821,7 +821,7 @@ export const PromptTextarea = forwardRef<
           autoComplete="off"
           className={clsx(
             // Structural classes (always applied)
-            'text-ink-1 placeholder-ink-3 min-h-[40px] w-full resize-none text-sm leading-[20px] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50',
+            'text-ink-1 placeholder-ink-3 min-h-[1lh] w-full resize-none text-sm leading-[20px] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50',
             // Chrome classes (border, bg, padding, rounding) — replaced when className is provided
             className ??
               'border-glass-border bg-glass-light focus:border-glass-border-strong focus:ring-acc/10 rounded-lg border px-3 py-2 focus:ring-1',
@@ -847,7 +847,12 @@ export const PromptTextarea = forwardRef<
         )}
         {/* Completion loader + file picker button */}
         {(onImageAttach || (isCompletionLoading && !completion)) && (
-          <div className="absolute right-2 bottom-2 flex items-center gap-1">
+          <div
+            className={clsx(
+              'absolute flex items-center gap-1',
+              className ? 'right-0 bottom-0' : 'right-2 bottom-2',
+            )}
+          >
             {isCompletionLoading && !completion && (
               <div className="pointer-events-none">
                 <Loader2 className="text-ink-3 h-3.5 w-3.5 animate-spin" />
