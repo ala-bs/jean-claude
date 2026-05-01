@@ -15,6 +15,7 @@ import {
   FolderSymlink,
   Bug,
   ListTodo,
+  Search,
 } from 'lucide-react';
 import { useEffect, useState, useCallback, useMemo, useRef, memo } from 'react';
 
@@ -30,6 +31,7 @@ import {
   DropdownInfo,
 } from '@/common/ui/dropdown';
 import { IconButton } from '@/common/ui/icon-button';
+import { Input } from '@/common/ui/input';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import { Separator } from '@/common/ui/separator';
@@ -53,6 +55,7 @@ import { PrReviewValidation } from '@/features/task/ui-pr-review-validation';
 import { SkillPublishAction } from '@/features/task/ui-skill-publish-action';
 import { StepFlowBar } from '@/features/task/ui-step-flow-bar';
 import { TaskPrView } from '@/features/task/ui-task-pr-view';
+import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { useAgentStream, useAgentControls } from '@/hooks/use-agent';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useContextUsage, type ContextUsage } from '@/hooks/use-context-usage';
@@ -82,6 +85,7 @@ import {
   useCompleteTask,
 } from '@/hooks/use-tasks';
 import { api } from '@/lib/api';
+import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { getBranchFromWorktreePath } from '@/lib/worktree';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import {
@@ -117,7 +121,6 @@ import { FileExplorerPane } from './file-explorer-pane';
 import { TaskPendingNoteInput } from './task-pending-note-input';
 import { TaskSettingsPane } from './task-settings-pane';
 import { ToolDiffPreviewPane } from './tool-diff-preview-pane';
-import { WorkItemsEditor } from './work-items-editor';
 
 const LAST_ASSISTANT_MESSAGE_MAX_LENGTH = 1200;
 
@@ -303,6 +306,50 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   );
   const [addStepAtEnd, setAddStepAtEnd] = useState(false);
   const [showWorkItemsEditor, setShowWorkItemsEditor] = useState(false);
+  const [workItemsFilter, setWorkItemsFilter] = useState('');
+  // Buffered selection state for work items modal (applied on submit)
+  const [draftWorkItemIds, setDraftWorkItemIds] = useState<string[]>([]);
+  const [draftWorkItemUrls, setDraftWorkItemUrls] = useState<string[]>([]);
+
+  const openWorkItemsEditor = useCallback(() => {
+    setDraftWorkItemIds(task?.workItemIds ?? []);
+    setDraftWorkItemUrls(task?.workItemUrls ?? []);
+    setWorkItemsFilter('');
+    setShowWorkItemsEditor(true);
+  }, [task?.workItemIds, task?.workItemUrls]);
+
+  const handleWorkItemToggle = useCallback(
+    (workItem: AzureDevOpsWorkItem) => {
+      const wiId = workItem.id.toString();
+      setDraftWorkItemIds((ids) => {
+        if (ids.includes(wiId)) {
+          const idx = ids.indexOf(wiId);
+          setDraftWorkItemUrls((urls) => urls.filter((_, i) => i !== idx));
+          return ids.filter((_, i) => i !== idx);
+        }
+        setDraftWorkItemUrls((urls) => [...urls, workItem.url]);
+        return [...ids, wiId];
+      });
+    },
+    [],
+  );
+
+  const handleClearWorkItems = useCallback(() => {
+    setDraftWorkItemIds([]);
+    setDraftWorkItemUrls([]);
+  }, []);
+
+  const handleSubmitWorkItems = useCallback(() => {
+    updateTask.mutate({
+      id: taskId,
+      data: {
+        workItemIds: draftWorkItemIds.length > 0 ? draftWorkItemIds : null,
+        workItemUrls: draftWorkItemUrls.length > 0 ? draftWorkItemUrls : null,
+      },
+    });
+    setShowWorkItemsEditor(false);
+  }, [taskId, updateTask, draftWorkItemIds, draftWorkItemUrls]);
+
   const createStep = useCreateStep();
   // Ref for the task panel container (used by shrink-to-target animation)
   const taskPanelRef = useRef<HTMLDivElement>(null);
@@ -347,6 +394,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   useEffect(() => {
     setShowWorkItemsEditor(false);
   }, [taskId]);
+
 
   // Notify backend this task is focused (dismisses completion notifications, etc.)
   useEffect(() => {
@@ -1027,7 +1075,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             {/* Edit / Add work items button */}
             {hasWorkItemsLink && (
               <IconButton
-                onClick={() => setShowWorkItemsEditor(true)}
+                onClick={() => openWorkItemsEditor()}
                 icon={<ListTodo />}
                 size="sm"
                 variant="ghost"
@@ -1046,23 +1094,52 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               isOpen={showWorkItemsEditor}
               onClose={() => setShowWorkItemsEditor(false)}
               title="Linked Work Items"
-              size="sm"
+              size="xl"
             >
-              <WorkItemsEditor
-                projectId={project.id}
-                providerId={project.workItemProviderId!}
-                azureProjectId={project.workItemProjectId!}
-                azureProjectName={project.workItemProjectName!}
-                workItemIds={task.workItemIds ?? []}
-                workItemUrls={task.workItemUrls ?? []}
-                onUpdate={({ workItemIds, workItemUrls }) => {
-                  updateTask.mutate({
-                    id: taskId,
-                    data: { workItemIds, workItemUrls },
-                  });
-                }}
-                onClose={() => setShowWorkItemsEditor(false)}
-              />
+              <div className="flex flex-col" style={{ height: '60vh' }}>
+                {/* Search input */}
+                <div className="mb-2 shrink-0 px-1">
+                  <Input
+                    type="text"
+                    value={workItemsFilter}
+                    onChange={(e) => setWorkItemsFilter(e.target.value)}
+                    placeholder="Search work items..."
+                    size="sm"
+                    icon={<Search />}
+                  />
+                </div>
+
+                {/* Picker */}
+                <div className="min-h-0 flex-1">
+                  <WorkItemPicker
+                    providerId={project.workItemProviderId!}
+                    projectId={project.workItemProjectId!}
+                    projectName={project.workItemProjectName!}
+                    selectedWorkItemIds={draftWorkItemIds}
+                    onToggleSelect={handleWorkItemToggle}
+                    onClearSelection={handleClearWorkItems}
+                    filter={workItemsFilter}
+                  />
+                </div>
+
+                {/* Footer with submit */}
+                <div className="border-glass-border flex items-center justify-end gap-2 border-t pt-3">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setShowWorkItemsEditor(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={handleSubmitWorkItems}
+                  >
+                    Save
+                  </Button>
+                </div>
+              </div>
             </Modal>
           )}
 
@@ -1138,7 +1215,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               {hasWorkItemsLink && (
                 <DropdownItem
                   icon={<ListTodo />}
-                  onClick={() => setShowWorkItemsEditor(true)}
+                  onClick={() => openWorkItemsEditor()}
                 >
                   {task.workItemIds?.length
                     ? 'Edit Work Items'

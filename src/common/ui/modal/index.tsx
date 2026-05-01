@@ -10,6 +10,7 @@ const modalSizeClasses = {
   sm: 'max-w-sm',
   md: 'max-w-md',
   lg: 'max-w-2xl',
+  xl: 'max-w-7xl',
 } as const;
 
 export function Modal({
@@ -25,7 +26,7 @@ export function Modal({
   isOpen: boolean;
   onClose: () => void;
   title?: ReactNode;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   closeOnClickOutside?: boolean;
   closeOnEscape?: boolean;
   contentRef?: RefObject<HTMLDivElement | null>;

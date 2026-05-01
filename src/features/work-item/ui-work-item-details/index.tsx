@@ -1,23 +1,8 @@
-import { Bug, BookOpen, CheckSquare, FileText } from 'lucide-react';
-
 import { Kbd } from '@/common/ui/kbd';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 
-// Get icon component for work item type
-function WorkItemTypeIcon({ type }: { type: string }) {
-  switch (type) {
-    case 'Bug':
-      return <Bug className="text-status-fail h-4 w-4 shrink-0" />;
-    case 'User Story':
-    case 'Feature':
-      return <BookOpen className="text-acc-ink h-4 w-4 shrink-0" />;
-    case 'Task':
-      return <CheckSquare className="text-status-done h-4 w-4 shrink-0" />;
-    default:
-      return <FileText className="text-ink-2 h-4 w-4 shrink-0" />;
-  }
-}
+import { WorkItemTypeIcon } from '../ui-work-item-shared';
 
 export function WorkItemDetails({
   workItem,

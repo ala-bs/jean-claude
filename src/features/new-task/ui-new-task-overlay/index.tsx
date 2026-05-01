@@ -1,9 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
-import clsx from 'clsx';
-import Fuse from 'fuse.js';
-import { ChevronRight, List, Columns3, Search } from 'lucide-react';
+import { ChevronRight, Search } from 'lucide-react';
 import React, {
-  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -16,7 +13,6 @@ import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
-import { Select } from '@/common/ui/select';
 import {
   BackendSelector,
   getModelsForBackend,
@@ -27,6 +23,7 @@ import {
   PromptTextarea,
   type PromptTextareaRef,
 } from '@/features/common/ui-prompt-textarea';
+import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useCreateFeedNote } from '@/hooks/use-feed-notes';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
@@ -34,7 +31,7 @@ import { useProjects, useProjectBranches } from '@/hooks/use-projects';
 import { useBackendsSetting, useCompletionSetting } from '@/hooks/use-settings';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { useCreateTaskWithWorktree } from '@/hooks/use-tasks';
-import { useWorkItems, useIterations } from '@/hooks/use-work-items';
+import { useWorkItems } from '@/hooks/use-work-items';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { compressImage } from '@/lib/image-compression';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
@@ -60,27 +57,6 @@ import {
   expandTemplate,
   extractWorkItemImageUrls,
 } from '../ui-prompt-composer';
-import { WorkItemBoard } from '../ui-work-item-board';
-import { WorkItemDetails } from '../ui-work-item-details';
-import { WorkItemList } from '../ui-work-item-list';
-
-// Status urgency for sorting work items in list view (lower = more urgent / actionable)
-const STATUS_URGENCY: Record<string, number> = {
-  Active: 1,
-  'In Progress': 2,
-  'In Design': 2.1,
-  'To Do': 2.1,
-  New: 3,
-  Resolved: 4,
-  Deployed: 4.5,
-  Closed: 5,
-  Done: 6,
-  Removed: 7,
-};
-
-function getStatusUrgency(status: string): number {
-  return STATUS_URGENCY[status] ?? 3;
-}
 
 // Check if project has work items linked
 function projectHasWorkItems(project: Project | null): boolean {
@@ -188,6 +164,14 @@ export function NewTaskOverlay({
   const [highlightedWorkItemId, setHighlightedWorkItemId] = useState<
     string | null
   >(null);
+
+  // Persisted panel width for work items picker
+  const workItemsPanelWidth = useUISetting('workItemsPanelWidth');
+  const setUISetting = useUIStore((s) => s.setSetting);
+  const handlePanelWidthChange = useCallback(
+    (width: number) => setUISetting('workItemsPanelWidth', width),
+    [setUISetting],
+  );
 
   const { triggerAnimation } = useShrinkToTarget({
     panelRef,
@@ -453,14 +437,6 @@ export function NewTaskOverlay({
   const handleClearSelectedWorkItems = useCallback(() => {
     updateDraft({ workItemIds: [] });
   }, [updateDraft]);
-
-  // Handle work item highlight from mouse
-  const handleWorkItemHighlight = useCallback(
-    (workItem: AzureDevOpsWorkItem) => {
-      setHighlightedWorkItemId(workItem.id.toString());
-    },
-    [],
-  );
 
   // Track whether work item images are being fetched
   const [isFetchingWorkItemImages, setIsFetchingWorkItemImages] =
@@ -1041,18 +1017,18 @@ export function NewTaskOverlay({
         {inputMode === 'search' && searchStep === 'select' && (
           <div className="flex h-full w-full grow flex-col overflow-hidden p-2">
             <SearchModeContent
-              projectId={selectedProjectId}
               project={selectedProject}
               filter={draft?.workItemsFilter ?? ''}
               selectedWorkItemIds={draft?.workItemIds ?? []}
-              highlightedWorkItemId={highlightedWorkItemId}
               viewMode={draft?.workItemsViewMode ?? 'board'}
               onViewModeChange={(mode: WorkItemsViewMode) =>
                 updateDraft({ workItemsViewMode: mode })
               }
               onWorkItemToggle={handleWorkItemToggle}
               onClearSelectedWorkItems={handleClearSelectedWorkItems}
-              onWorkItemHighlight={handleWorkItemHighlight}
+              onHighlightChange={setHighlightedWorkItemId}
+              panelWidth={workItemsPanelWidth}
+              onPanelWidthChange={handlePanelWidthChange}
               onAdvanceToCompose={advanceToCompose}
               canAdvance={canAdvanceToCompose}
             />
@@ -1437,182 +1413,33 @@ function ToolCheckmark({ checked }: { checked: boolean }) {
 
 // Work item search mode content with real work items
 function SearchModeContent({
-  projectId,
   project,
   filter,
   selectedWorkItemIds,
-  highlightedWorkItemId,
   viewMode,
   onViewModeChange,
   onWorkItemToggle,
   onClearSelectedWorkItems,
-  onWorkItemHighlight,
+  onHighlightChange,
+  panelWidth,
+  onPanelWidthChange,
   onAdvanceToCompose,
   canAdvance,
 }: {
-  projectId: string | null;
   project: Project | null;
   filter: string;
   selectedWorkItemIds: string[];
-  highlightedWorkItemId: string | null;
   viewMode: WorkItemsViewMode;
   onViewModeChange: (mode: WorkItemsViewMode) => void;
   onWorkItemToggle: (workItem: AzureDevOpsWorkItem) => void;
   onClearSelectedWorkItems: () => void;
-  onWorkItemHighlight: (workItem: AzureDevOpsWorkItem) => void;
+  onHighlightChange?: (workItemId: string | null) => void;
+  panelWidth?: number;
+  onPanelWidthChange?: (width: number) => void;
   onAdvanceToCompose: () => void;
   canAdvance: boolean;
 }) {
-  const hasWorkItems = projectHasWorkItems(project);
-
-  // Fetch iterations for the selected project
-  const { data: iterations = [] } = useIterations({
-    providerId: project?.workItemProviderId ?? '',
-    projectName: project?.workItemProjectName ?? '',
-  });
-
-  // Find current iteration for default selection
-  const currentIteration = useMemo(
-    () => iterations.find((i) => i.isCurrent),
-    [iterations],
-  );
-
-  // Selected iteration: '__current__' (auto-resolve), '__all__' (no filter), or iteration ID
-  const [selectedIterationId, setSelectedIterationId] =
-    useState<string>('__current__');
-
-  // Reset iteration selection when project changes
-  useEffect(() => {
-    setSelectedIterationId('__current__');
-  }, [projectId]);
-
-  // Resolve selected iteration to an iteration path for WIQL filtering
-  const resolvedIterationPath = useMemo(() => {
-    if (selectedIterationId === '__all__') return undefined;
-    if (selectedIterationId === '__current__') {
-      return iterations.find((i) => i.isCurrent)?.path;
-    }
-    return iterations.find((i) => i.id === selectedIterationId)?.path;
-  }, [selectedIterationId, iterations]);
-
-  // Build iteration dropdown options
-  const iterationOptions = useMemo(() => {
-    const opts = [
-      {
-        value: '__current__',
-        label: currentIteration
-          ? `Current: ${currentIteration.name}`
-          : 'Current Iteration',
-      },
-      { value: '__all__', label: 'All Iterations' },
-    ];
-    // Add individual iterations (most recent first — reverse since API returns chronological)
-    for (const iter of [...iterations].reverse()) {
-      if (iter.isCurrent) continue; // already represented by __current__
-      opts.push({ value: iter.id, label: iter.name });
-    }
-    return opts;
-  }, [iterations, currentIteration]);
-
-  // Fetch work items for the selected project
-  const { data: workItems = [], isLoading } = useWorkItems({
-    providerId: project?.workItemProviderId ?? '',
-    projectId: project?.workItemProjectId ?? '',
-    projectName: project?.workItemProjectName ?? '',
-    filters: {
-      excludeWorkItemTypes: ['Test Suite', 'Test Case', 'Epic', 'Feature'],
-      iterationPath: resolvedIterationPath,
-    },
-  });
-
-  // Create Fuse instance for fuzzy search
-  const fuse = useMemo(
-    () =>
-      new Fuse(workItems, {
-        keys: ['fields.title', 'id'],
-        threshold: 0.4,
-        ignoreLocation: true,
-      }),
-    [workItems],
-  );
-
-  // Filter and sort work items client-side
-  const filteredWorkItems = useMemo(() => {
-    if (!filter.trim()) {
-      // Sort by status priority when not searching
-      return [...workItems].sort(
-        (a, b) =>
-          getStatusUrgency(a.fields.state) - getStatusUrgency(b.fields.state),
-      );
-    }
-    // Preserve fuzzy search relevance order when searching
-    return fuse.search(filter).map((r) => r.item);
-  }, [workItems, filter, fuse]);
-
-  // Find the highlighted work item index
-  const highlightedIndex = useMemo(() => {
-    if (highlightedWorkItemId === null) return -1;
-    return filteredWorkItems.findIndex(
-      (wi) => wi.id.toString() === highlightedWorkItemId,
-    );
-  }, [filteredWorkItems, highlightedWorkItemId]);
-
-  // Cached highlighted work item for details panel (updated via transition for performance)
-  const [highlightedWorkItem, setHighlightedWorkItem] =
-    useState<AzureDevOpsWorkItem | null>(null);
-
-  useEffect(() => {
-    startTransition(() => {
-      if (
-        highlightedIndex >= 0 &&
-        highlightedIndex < filteredWorkItems.length
-      ) {
-        setHighlightedWorkItem(filteredWorkItems[highlightedIndex]);
-      } else if (selectedWorkItemIds.length > 0) {
-        // Show first selected work item if no highlight
-        const firstSelected = workItems.find(
-          (wi) => wi.id.toString() === selectedWorkItemIds[0],
-        );
-        setHighlightedWorkItem(firstSelected ?? null);
-      } else {
-        setHighlightedWorkItem(null);
-      }
-    });
-  }, [filteredWorkItems, highlightedIndex, selectedWorkItemIds, workItems]);
-
-  // Resizable panel
-  const panelWidth = useUISetting('workItemsPanelWidth');
-  const setSetting = useUIStore((s) => s.setSetting);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const handleDragStart = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = panelWidth;
-
-      const onMouseMove = (moveEvent: MouseEvent) => {
-        if (!containerRef.current) return;
-        const containerWidth = containerRef.current.offsetWidth;
-        const deltaX = moveEvent.clientX - startX;
-        const deltaPct = (deltaX / containerWidth) * 100;
-        setSetting('workItemsPanelWidth', startWidth + deltaPct);
-      };
-
-      const onMouseUp = () => {
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-      };
-
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-    },
-    [panelWidth, setSetting],
-  );
-
-  // Show appropriate content based on context
-  if (projectId === null) {
-    // Note mode does not show work items
+  if (!project) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-ink-2 text-center">
@@ -1622,8 +1449,7 @@ function SearchModeContent({
     );
   }
 
-  if (!hasWorkItems) {
-    // Project doesn't have work items linked
+  if (!projectHasWorkItems(project)) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-ink-2 text-center">
@@ -1636,139 +1462,29 @@ function SearchModeContent({
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-ink-2 text-sm">Loading work items...</div>
-      </div>
-    );
-  }
-
-  // Two-panel layout for work items
   return (
-    <div ref={containerRef} className="flex h-full w-full overflow-hidden">
-      {/* Work items list */}
-      <div
-        className="flex shrink-0 flex-col overflow-hidden"
-        style={{ width: `${panelWidth}%` }}
-      >
-        <div
-          className="mb-0 flex items-center gap-2 px-1 py-2"
-          style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
-        >
-          <span className="text-ink-3 font-mono text-[10px] font-semibold tracking-wider uppercase">
-            Work Items ({filteredWorkItems.length})
-            {selectedWorkItemIds.length > 0 && (
-              <span className="text-acc-ink ml-2 font-mono text-[10px] font-semibold tracking-wider uppercase">
-                {selectedWorkItemIds.length} selected
-              </span>
-            )}
-          </span>
-
-          <div className="flex items-center gap-2">
-            {viewMode === 'board' && selectedWorkItemIds.length > 0 && (
-              <button
-                type="button"
-                onClick={onClearSelectedWorkItems}
-                className="border-glass-border text-ink-1 hover:border-glass-border-strong hover:text-ink-0 rounded border px-2 py-1 text-xs font-medium"
-              >
-                Clear selected
-              </button>
-            )}
-
-            {/* Iteration dropdown */}
-            {iterations.length > 0 && (
-              <Select
-                value={selectedIterationId}
-                options={iterationOptions}
-                onChange={setSelectedIterationId}
-                label="Iteration"
-                side="bottom"
-              />
-            )}
-
-            {/* View mode toggle */}
-            <div className="border-glass-border flex rounded border">
-              <button
-                type="button"
-                onClick={() => onViewModeChange('list')}
-                className={clsx(
-                  'flex items-center px-1.5 py-1',
-                  viewMode === 'list'
-                    ? 'bg-bg-3 text-ink-0'
-                    : 'text-ink-2 hover:text-ink-1',
-                )}
-                title="List view"
-              >
-                <List className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => onViewModeChange('board')}
-                className={clsx(
-                  'flex items-center px-1.5 py-1',
-                  viewMode === 'board'
-                    ? 'bg-bg-3 text-ink-0'
-                    : 'text-ink-2 hover:text-ink-1',
-                )}
-                title="Board view"
-              >
-                <Columns3 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-
-            {/* Next button */}
-            {canAdvance && (
-              <Button variant="primary" size="sm" onClick={onAdvanceToCompose}>
-                Next
-                <ChevronRight className="h-3 w-3" />
-                <Kbd shortcut="cmd+enter" className="ml-1" />
-              </Button>
-            )}
-          </div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {viewMode === 'list' ? (
-            <WorkItemList
-              workItems={filteredWorkItems}
-              highlightedWorkItemId={highlightedWorkItemId}
-              selectedWorkItemIds={selectedWorkItemIds}
-              providerId={project?.workItemProviderId ?? undefined}
-              onToggleSelect={onWorkItemToggle}
-              onHighlight={onWorkItemHighlight}
-            />
-          ) : (
-            <WorkItemBoard
-              workItems={filteredWorkItems}
-              highlightedWorkItemId={highlightedWorkItemId}
-              selectedWorkItemIds={selectedWorkItemIds}
-              providerId={project?.workItemProviderId ?? undefined}
-              onToggleSelect={onWorkItemToggle}
-              onHighlight={onWorkItemHighlight}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Drag handle */}
-      <div
-        className="hover:bg-bg-3 active:bg-bg-2 w-1 shrink-0 cursor-col-resize bg-transparent"
-        onMouseDown={handleDragStart}
-      />
-
-      {/* Work item details */}
-      <div
-        className="flex-1 overflow-y-auto rounded-none border-l p-3"
-        style={{
-          borderColor: 'oklch(1 0 0 / 0.04)',
-          background: 'oklch(0 0 0 / 0.22)',
-        }}
-      >
-        <WorkItemDetails
-          workItem={highlightedWorkItem ?? null}
-          providerId={project?.workItemProviderId ?? undefined}
-        />
-      </div>
-    </div>
+    <WorkItemPicker
+      providerId={project.workItemProviderId!}
+      projectId={project.workItemProjectId!}
+      projectName={project.workItemProjectName!}
+      selectedWorkItemIds={selectedWorkItemIds}
+      onToggleSelect={onWorkItemToggle}
+      onClearSelection={onClearSelectedWorkItems}
+      onHighlightChange={onHighlightChange}
+      filter={filter}
+      viewMode={viewMode}
+      onViewModeChange={onViewModeChange}
+      panelWidth={panelWidth}
+      onPanelWidthChange={onPanelWidthChange}
+      headerRight={
+        canAdvance ? (
+          <Button variant="primary" size="sm" onClick={onAdvanceToCompose}>
+            Next
+            <ChevronRight className="h-3 w-3" />
+            <Kbd shortcut="cmd+enter" className="ml-1" />
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
