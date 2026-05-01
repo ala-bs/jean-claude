@@ -58,6 +58,9 @@ export interface ResolvedPermissionRule {
   tool: string;
   pattern: string; // '*' for scalar rules, glob pattern for pattern-map rules
   action: PermissionAction;
+  /** When set, this rule uses subpath validation instead of glob matching.
+   *  The value is the resolved working directory (worktree or project root). */
+  subpathRoot?: string;
 }
 
 /**

@@ -4,7 +4,11 @@ import * as path from 'path';
 import picomatch from 'picomatch';
 import writeFileAtomic from 'write-file-atomic';
 
-import { parseCompoundCommand, stripRedirections } from '@shared/shell-parse';
+import {
+  parseCompoundCommand,
+  stripRedirections,
+  validateSubpathArgs,
+} from '@shared/shell-parse';
 
 import type {
   JeanClaudeSettings,
@@ -270,12 +274,15 @@ export function resolveRules(
   settings: JeanClaudeSettings,
   isWorktree: boolean,
   globalRules?: ResolvedPermissionRule[],
+  workingDir?: string,
 ): ResolvedPermissionRule[] {
   const projectRules = flattenScope(settings.permissions.project);
   const baseRules = [...(globalRules ?? []), ...projectRules];
 
   if (!isWorktree || !settings.permissions.worktrees) {
-    return baseRules;
+    return workingDir
+      ? expandSubpathPlaceholders(baseRules, workingDir)
+      : baseRules;
   }
 
   const worktreeScope = settings.permissions.worktrees;
@@ -283,11 +290,40 @@ export function resolveRules(
 
   if (worktreeScope.extends === 'project') {
     // Append worktree rules after base rules (last-match-wins)
-    return [...baseRules, ...worktreeRules];
+    const merged = [...baseRules, ...worktreeRules];
+    return workingDir ? expandSubpathPlaceholders(merged, workingDir) : merged;
   }
 
   // No extends — worktree rules only (but still include global)
-  return [...(globalRules ?? []), ...worktreeRules];
+  const noExtend = [...(globalRules ?? []), ...worktreeRules];
+  return workingDir
+    ? expandSubpathPlaceholders(noExtend, workingDir)
+    : noExtend;
+}
+
+/**
+ * Expand `{subpath}` placeholders in bash permission patterns.
+ *
+ * When a bash rule pattern contains `{subpath}`, it is replaced with
+ * a glob pattern matching the command prefix + any args (`prefix *`),
+ * and the rule is tagged with `subpathRoot` for smart path validation
+ * during matching.
+ */
+function expandSubpathPlaceholders(
+  rules: ResolvedPermissionRule[],
+  workingDir: string,
+): ResolvedPermissionRule[] {
+  return rules.map((rule) => {
+    if (rule.tool !== 'bash' || !rule.pattern.includes('{subpath}')) {
+      return rule;
+    }
+    const prefix = rule.pattern.replaceAll('{subpath}', '').trim();
+    return {
+      ...rule,
+      pattern: prefix ? `${prefix} *` : '*',
+      subpathRoot: workingDir,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +414,16 @@ function evaluateSinglePermission(
 
   for (const rule of rules) {
     if (rule.tool !== toolKey && rule.tool !== '*') continue;
-    if (matchPattern(rule.pattern, normalized, isBash)) {
+
+    if (rule.subpathRoot && isBash) {
+      // Subpath rule: first-pass glob on command name, then validate all path args
+      if (
+        matchPattern(rule.pattern, normalized, true) &&
+        validateSubpathArgs(normalized, rule.subpathRoot)
+      ) {
+        result = rule.action;
+      }
+    } else if (matchPattern(rule.pattern, normalized, isBash)) {
       result = rule.action;
     }
   }
@@ -817,6 +862,7 @@ export function compileForClaude(rules: ResolvedPermissionRule[]): {
 
   for (const rule of rules) {
     if (rule.tool === '*') continue; // Claude doesn't support wildcard tool
+    if (rule.subpathRoot) continue; // Subpath rules handled by runtime evaluator
     const claudeName = toolNameMap[rule.tool] ?? rule.tool;
 
     if (rule.tool === 'bash' && rule.pattern !== '*') {
@@ -882,7 +928,7 @@ export async function buildWorktreeSettings(
   const globalRules = await globalPermissions.resolveGlobalRules();
 
   const settings = await readSettings(sourcePath);
-  const rules = resolveRules(settings, true, globalRules);
+  const rules = resolveRules(settings, true, globalRules, destPath);
 
   // Write Claude-compatible settings to worktree
   const claudePerms = compileForClaude(rules);
@@ -922,17 +968,19 @@ export async function evaluateToolPermission({
   isWorktree,
   toolName,
   input,
+  workingDir,
 }: {
   projectPath: string;
   isWorktree: boolean;
   toolName: string;
   input: Record<string, unknown>;
+  workingDir?: string;
 }): Promise<PermissionEvalResult> {
   const globalPermissions = await import('./global-permissions-service');
   const globalRules = await globalPermissions.resolveGlobalRules();
 
   const settings = await readSettings(projectPath);
-  const rules = resolveRules(settings, isWorktree, globalRules);
+  const rules = resolveRules(settings, isWorktree, globalRules, workingDir);
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
   return evaluatePermission(rules, tool, matchValue);
 }

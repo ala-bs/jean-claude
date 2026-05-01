@@ -462,7 +462,7 @@ class AgentService {
     const isWorktree = !!task.worktreePath;
     const globalRules = await resolveGlobalRules();
     const settings = await readSettings(project.path);
-    const rules = resolveRules(settings, isWorktree, globalRules);
+    const rules = resolveRules(settings, isWorktree, globalRules, workingDir);
 
     // For review steps, provide the Jean-Claude MCP server at runtime
     const mcpServers =
