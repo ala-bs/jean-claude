@@ -17,6 +17,7 @@ import {
 } from '@/features/common/ui-file-diff';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
+import { useSteps } from '@/hooks/use-steps';
 import { useTaskSummary } from '@/hooks/use-task-summary';
 import {
   useWorktreeDiff,
@@ -24,7 +25,7 @@ import {
 } from '@/hooks/use-worktree-diff';
 import { api, type FileAnnotation, type WorktreeDiffFile } from '@/lib/api';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
-import { useDiffFileTreeWidth } from '@/stores/navigation';
+import { useDiffFileTreeWidth, useTaskState } from '@/stores/navigation';
 import {
   useReviewCommentsStore,
   useReviewComments,
@@ -66,8 +67,8 @@ export function WorktreeDiffView({
   pullRequestUrl: string | null;
   onMergeStarted: () => void;
   onOpenPrView: () => void;
-  /** Called when user submits a review. Receives the synthesized prompt. */
-  onSubmitReview?: (prompt: string) => void;
+  /** Called when user submits a review. Receives the synthesized prompt and target step ID (null = new step). */
+  onSubmitReview?: (prompt: string, targetStepId: string | null) => void;
   bottomPadding?: number;
 }) {
   const { data, isLoading, error, refresh } = useWorktreeDiff(taskId, true);
@@ -103,6 +104,10 @@ export function WorktreeDiffView({
     return summary?.annotations ?? [];
   }, [summary?.annotations]);
 
+  // Steps & active step for review submission target
+  const { data: stepsList } = useSteps(taskId);
+  const { activeStepId } = useTaskState(taskId);
+
   // Review comments state
   const reviewComments = useReviewComments(taskId);
   const openReviewCount = useOpenReviewCommentCount(taskId);
@@ -110,6 +115,9 @@ export function WorktreeDiffView({
   const addComment = useReviewCommentsStore((s) => s.addComment);
   const removeComment = useReviewCommentsStore((s) => s.removeComment);
   const resolveComment = useReviewCommentsStore((s) => s.resolveComment);
+  const clearResolvedComments = useReviewCommentsStore(
+    (s) => s.clearResolvedComments,
+  );
   const [isSubmitOverlayOpen, setIsSubmitOverlayOpen] = useState(false);
 
   const handleAddReviewComment = useCallback(
@@ -150,11 +158,26 @@ export function WorktreeDiffView({
   );
 
   const handleSubmitReview = useCallback(
-    (prompt: string) => {
+    (prompt: string, targetStepId: string | null) => {
       setIsSubmitOverlayOpen(false);
-      onSubmitReview?.(prompt);
+      onSubmitReview?.(prompt, targetStepId);
+
+      // Resolve all open comments after submission
+      for (const comment of reviewComments) {
+        if (!comment.resolved) {
+          resolveComment(taskId, comment.id);
+        }
+      }
+      // Clean up resolved comments from store
+      clearResolvedComments(taskId);
     },
-    [onSubmitReview],
+    [
+      onSubmitReview,
+      reviewComments,
+      resolveComment,
+      clearResolvedComments,
+      taskId,
+    ],
   );
 
   // Handle summary generation
@@ -394,6 +417,8 @@ export function WorktreeDiffView({
         {isSubmitOverlayOpen && (
           <ReviewSubmitOverlay
             comments={reviewComments}
+            steps={stepsList}
+            activeStepId={activeStepId}
             onSubmit={handleSubmitReview}
             onClose={() => setIsSubmitOverlayOpen(false)}
           />

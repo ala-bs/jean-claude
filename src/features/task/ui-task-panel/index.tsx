@@ -1353,21 +1353,32 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               pullRequestUrl={task.pullRequestUrl}
               onMergeStarted={handleMergeStarted}
               onOpenPrView={openPrView}
-              onSubmitReview={(prompt) => {
-                const backend = activeStep?.agentBackend ?? 'claude-code';
-                const mode =
-                  activeStep?.interactionMode ??
-                  getDefaultInteractionModeForBackend({ backend });
-                const model = activeStep?.modelPreference ?? 'default';
-                void handleAddStep({
-                  promptTemplate: prompt,
-                  presetType: 'new-session',
-                  interactionMode: mode,
-                  agentBackend: backend,
-                  modelPreference: model,
-                  images: [],
-                  start: true,
-                });
+              onSubmitReview={(prompt, targetStepId) => {
+                if (targetStepId) {
+                  // Send to existing step (may differ from activeStepId)
+                  if (targetStepId !== activeStepId) {
+                    setActiveStepId(targetStepId);
+                  }
+                  void api.agent.sendMessage(targetStepId, [
+                    { type: 'text', text: prompt },
+                  ]);
+                } else {
+                  // Create new step
+                  const backend = activeStep?.agentBackend ?? 'claude-code';
+                  const mode =
+                    activeStep?.interactionMode ??
+                    getDefaultInteractionModeForBackend({ backend });
+                  const model = activeStep?.modelPreference ?? 'default';
+                  void handleAddStep({
+                    promptTemplate: prompt,
+                    presetType: 'new-session',
+                    interactionMode: mode,
+                    agentBackend: backend,
+                    modelPreference: model,
+                    images: [],
+                    start: true,
+                  });
+                }
               }}
               bottomPadding={footerHeight}
             />

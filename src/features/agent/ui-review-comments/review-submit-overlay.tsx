@@ -1,20 +1,34 @@
 import { ChevronDown, ChevronRight, Send, X } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { ReviewComment } from '@/stores/review-comments';
 import { synthesizeReviewPrompt } from '@/stores/review-comments';
+import type { TaskStep } from '@shared/types';
 
 export function ReviewSubmitOverlay({
   comments,
+  steps,
+  activeStepId,
   onSubmit,
   onClose,
 }: {
   comments: ReviewComment[];
-  onSubmit: (prompt: string) => void;
+  steps?: TaskStep[];
+  activeStepId?: string | null;
+  onSubmit: (prompt: string, targetStepId: string | null) => void;
   onClose: () => void;
 }) {
   const [globalIntent, setGlobalIntent] = useState('');
   const [showPromptPreview, setShowPromptPreview] = useState(false);
+  // null means "New step"
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(
+    activeStepId ?? null,
+  );
+
+  // Sync if activeStepId changes while overlay is open
+  useEffect(() => {
+    setSelectedStepId(activeStepId ?? null);
+  }, [activeStepId]);
 
   const openComments = useMemo(
     () => comments.filter((c) => !c.resolved),
@@ -28,9 +42,9 @@ export function ReviewSubmitOverlay({
 
   const handleSubmit = useCallback(() => {
     if (synthesized) {
-      onSubmit(synthesized);
+      onSubmit(synthesized, selectedStepId);
     }
-  }, [synthesized, onSubmit]);
+  }, [synthesized, selectedStepId, onSubmit]);
 
   return (
     <div
@@ -72,6 +86,32 @@ export function ReviewSubmitOverlay({
             className="border-line bg-bg-0 text-ink-1 placeholder:text-ink-4 focus:border-acc-line w-full resize-none rounded border px-2.5 py-2 text-xs outline-none"
           />
         </div>
+
+        {/* Step selector */}
+        {steps && steps.length > 0 && (
+          <div className="border-line-soft border-b px-4 py-3.5">
+            <div className="text-ink-4 mb-1.5 text-[10.5px] font-medium tracking-wider uppercase">
+              Send to step
+            </div>
+            <select
+              value={selectedStepId ?? '__new__'}
+              onChange={(e) =>
+                setSelectedStepId(
+                  e.target.value === '__new__' ? null : e.target.value,
+                )
+              }
+              className="border-line bg-bg-0 text-ink-1 focus:border-acc-line w-full rounded border px-2.5 py-2 text-xs outline-none"
+            >
+              <option value="__new__">+ New step</option>
+              {steps.map((step) => (
+                <option key={step.id} value={step.id}>
+                  {step.name}
+                  {step.id === activeStepId ? ' (active)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Comment cards */}
         <div className="flex-1 overflow-y-auto px-4 py-2.5">
@@ -148,7 +188,9 @@ export function ReviewSubmitOverlay({
         {/* Footer */}
         <div className="border-line-soft bg-bg-1 flex items-center gap-2 border-t px-4 py-3">
           <span className="text-ink-3 text-[11px]">
-            A new step will be created from this review.
+            {selectedStepId
+              ? `Prompt will be sent to "${steps?.find((s) => s.id === selectedStepId)?.name ?? 'step'}".`
+              : 'A new step will be created from this review.'}
           </span>
           <div className="flex-1" />
           <button
