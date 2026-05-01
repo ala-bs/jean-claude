@@ -8,10 +8,9 @@ export type OverlayType =
   | 'command-palette'
   | 'project-switcher'
   | 'keyboard-help'
-  | 'background-jobs'
+  | 'activity-center'
   | 'settings'
   | 'project-backlog'
-  | 'notification-center'
   | 'pipelines'
   | 'running-commands';
 

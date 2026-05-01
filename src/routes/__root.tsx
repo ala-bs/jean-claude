@@ -9,11 +9,10 @@ import { useCallback, useEffect } from 'react';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
+import { ActivityCenterOverlay } from '@/features/activity-center/ui-activity-center-overlay';
 import { TaskMessageManager } from '@/features/agent/task-message-manager';
-import { BackgroundJobsOverlay } from '@/features/background-jobs/ui-background-jobs-overlay';
 import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-palette-overlay';
 import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
-import { NotificationCenterOverlay } from '@/features/notifications/ui-notification-center';
 import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
 import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
 import { ProjectOverlay } from '@/features/project/ui-project-overlay';
@@ -25,7 +24,6 @@ import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { resolveLastLocationRedirect } from '@/lib/navigation';
 import { useCurrentVisibleProject } from '@/stores/navigation';
 import { useNewTaskDraft } from '@/stores/new-task-draft';
-import { useNotificationsStore } from '@/stores/notifications';
 import { useOverlaysStore } from '@/stores/overlays';
 
 export const Route = createRootRoute({
@@ -167,24 +165,24 @@ function ProjectOverlayContainer() {
   return <ProjectOverlay onClose={() => close('project-switcher')} />;
 }
 
-function BackgroundJobsContainer() {
-  const isOpen = useOverlaysStore((s) => s.activeOverlay === 'background-jobs');
+function ActivityCenterContainer() {
+  const isOpen = useOverlaysStore((s) => s.activeOverlay === 'activity-center');
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
 
-  useCommands('background-jobs-trigger', [
+  useCommands('activity-center-trigger', [
     {
       shortcut: 'cmd+j',
-      label: 'Open Background Jobs',
+      label: 'Activity Center',
       section: 'General',
       handler: () => {
-        toggle('background-jobs');
+        toggle('activity-center');
       },
     },
   ]);
 
   if (!isOpen) return null;
-  return <BackgroundJobsOverlay onClose={() => close('background-jobs')} />;
+  return <ActivityCenterOverlay onClose={() => close('activity-center')} />;
 }
 
 function SettingsContainer() {
@@ -265,37 +263,6 @@ function PipelinesOverlayContainer() {
   return <PipelinesOverlay onClose={() => close('pipelines')} />;
 }
 
-function NotificationCenterContainer() {
-  const isOpen = useOverlaysStore(
-    (s) => s.activeOverlay === 'notification-center',
-  );
-  const toggle = useOverlaysStore((s) => s.toggle);
-  const close = useOverlaysStore((s) => s.close);
-  const markAllAsRead = useNotificationsStore((s) => s.markAllAsRead);
-
-  const handleClose = useCallback(() => {
-    markAllAsRead();
-    close('notification-center');
-  }, [markAllAsRead, close]);
-
-  useCommands('notification-center-trigger', [
-    {
-      shortcut: 'cmd+shift+j',
-      label: 'Open Notification Center',
-      section: 'General',
-      handler: () => {
-        if (isOpen) {
-          markAllAsRead();
-        }
-        toggle('notification-center');
-      },
-    },
-  ]);
-
-  if (!isOpen) return null;
-  return <NotificationCenterOverlay onClose={handleClose} />;
-}
-
 function RootLayout() {
   return (
     <div className="aurora-app-bg flex h-screen w-screen overflow-hidden">
@@ -309,9 +276,8 @@ function RootLayout() {
       <CommandPaletteContainer />
       <ProjectOverlayContainer />
       <ProjectBacklogContainer />
-      <BackgroundJobsContainer />
+      <ActivityCenterContainer />
       <SettingsContainer />
-      <NotificationCenterContainer />
       <RunningCommandsContainer />
       <PipelinesOverlayContainer />
 

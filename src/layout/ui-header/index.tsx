@@ -1,7 +1,5 @@
-import clsx from 'clsx';
 import {
   ClipboardList,
-  Loader2,
   Menu,
   SlidersHorizontal,
   Terminal,
@@ -23,16 +21,12 @@ import { useBacklogProjectId } from '@/hooks/use-backlog-project-id';
 import { useProjectTodoCount } from '@/hooks/use-project-todos';
 import { useProjects } from '@/hooks/use-projects';
 import { api } from '@/lib/api';
-import {
-  getRunningJobsCount,
-  useBackgroundJobsStore,
-} from '@/stores/background-jobs';
 import { useCurrentVisibleProject } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
+import { ActivityButton } from './activity-button';
 import { CompletionCostDisplay } from './completion-cost-display';
-import { NotificationBar } from './notification-bar';
 import { RamUsageDisplay } from './ram-usage-display';
 import { UsageDisplay } from './usage-display';
 
@@ -42,11 +36,8 @@ export function Header() {
   const { projectId } = useCurrentVisibleProject();
   const { data: projects = [] } = useProjects();
   const openOverlay = useOverlaysStore((state) => state.open);
-  const jobs = useBackgroundJobsStore((state) => state.jobs);
   const backlogProjectId = useBacklogProjectId();
   const { data: todoCount } = useProjectTodoCount(backlogProjectId);
-
-  const runningJobsCount = useMemo(() => getRunningJobsCount(jobs), [jobs]);
 
   const runCommandRunning = useTaskMessagesStore((s) => s.runCommandRunning);
   const menuDropdownRef = useRef<{ toggle: () => void } | null>(null);
@@ -109,14 +100,13 @@ export function Header() {
 
   return (
     <header
-      className="flex h-10 items-center"
+      className="relative flex h-10 items-center"
       style={{ WebkitAppRegion: 'drag' } as CSSProperties}
     >
-      {/* Traffic light padding on macOS */}
-      {isMac && !isWindowFullscreen && <div className="w-[70px]" />}
-
+      {/* LEFT — traffic lights + menu */}
+      {isMac && !isWindowFullscreen && <div className="w-[70px] shrink-0" />}
       <div
-        className="flex min-w-0 flex-1 px-2"
+        className="flex min-w-0 items-center px-2"
         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
       >
         <Dropdown
@@ -184,47 +174,27 @@ export function Header() {
         </Dropdown>
       </div>
 
-      {/* Notification bar + Usage display */}
+      {/* CENTER — Activity (absolutely centered) */}
       <div
-        className="flex items-center gap-1 px-4"
+        className="pointer-events-none absolute inset-0 flex items-center justify-center"
         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
       >
-        <NotificationBar />
+        <div className="pointer-events-auto">
+          <ActivityButton />
+        </div>
+      </div>
+
+      {/* Spacer to push telemetry right */}
+      <div className="flex-1" />
+
+      {/* RIGHT — telemetry */}
+      <div
+        className="flex shrink-0 items-center gap-1 px-4"
+        style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+      >
         <RamUsageDisplay />
         <CompletionCostDisplay />
         <UsageDisplay />
-      </div>
-
-      {/* Background jobs */}
-      <div
-        className="pr-2"
-        style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-      >
-        <Button
-          variant="ghost"
-          size="sm"
-          data-animation-target="jobs-button"
-          onClick={() => openOverlay('background-jobs')}
-          className={clsx(
-            'relative transition-all duration-500',
-            runningJobsCount > 0
-              ? 'jobs-running-border text-bg-0'
-              : 'text-ink-2 hover:border-glass-border-strong hover:text-bg-0 border border-white/[0.08] bg-white/5 hover:bg-white/10',
-          )}
-        >
-          {runningJobsCount > 0 ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Loader2 className="h-3.5 w-3.5" />
-          )}
-          <span>Jobs</span>
-          <Kbd shortcut="cmd+j" className="text-[9px]" />
-          {runningJobsCount > 0 && (
-            <span className="bg-acc text-bg-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none shadow-[0_0_6px_oklch(0.6_0.2_264)]">
-              {runningJobsCount}
-            </span>
-          )}
-        </Button>
       </div>
     </header>
   );
