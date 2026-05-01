@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
@@ -167,8 +168,6 @@ function TriggerRunDialogInner({
 }) {
   // Branch state (build only)
   const [branchFilter, setBranchFilter] = useState(defaultBranch);
-  const [showBranchDropdown, setShowBranchDropdown] = useState(false);
-  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Debounce branch for YAML parameter fetching to avoid per-keystroke API calls
   const debouncedBranch = useDebouncedValue(branchFilter, 400);
@@ -307,13 +306,11 @@ function TriggerRunDialogInner({
     });
   }, [processInputs, yamlParameters, overridableVariables, allParamNames]);
 
-  // Filtered branches for dropdown
-  const filteredBranches = useMemo(() => {
-    const filter = branchFilter.toLowerCase();
-    return branchNames
-      .filter((b) => b.toLowerCase().includes(filter))
-      .slice(0, 20);
-  }, [branchNames, branchFilter]);
+  // Convert branch names to BranchInfo[] for BranchSelect
+  const pipelineBranchInfos = useMemo(
+    () => branchNames.map((name: string) => ({ name, lastCommitDate: '' })),
+    [branchNames],
+  );
 
   // Single parameter change handler — marks the key as dirty
   const handleParamChange = useCallback((name: string, value: string) => {
@@ -407,13 +404,6 @@ function TriggerRunDialogInner({
     },
   });
 
-  // Cleanup blur timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
-    };
-  }, []);
-
   const hasParams =
     processInputs.length > 0 ||
     uniqueYamlParams.length > 0 ||
@@ -436,37 +426,14 @@ function TriggerRunDialogInner({
 
           {/* Branch selector (build only) */}
           {isBuild && (
-            <div className="relative mb-4">
+            <div className="mb-4">
               <label className="text-ink-2 mb-1 block text-xs">Branch</label>
-              <Input
-                size="sm"
-                value={branchFilter}
-                onChange={(e) => setBranchFilter(e.target.value)}
-                onFocus={() => setShowBranchDropdown(true)}
-                onBlur={() => {
-                  blurTimeoutRef.current = setTimeout(
-                    () => setShowBranchDropdown(false),
-                    200,
-                  );
-                }}
+              <BranchSelect
+                branches={pipelineBranchInfos}
+                value={branchFilter || undefined}
+                onChange={(branch) => setBranchFilter(branch)}
+                placeholder="Select branch..."
               />
-              {showBranchDropdown && filteredBranches.length > 0 && (
-                <div className="border-glass-border bg-bg-0 absolute top-full z-10 mt-1 max-h-40 w-full overflow-y-auto rounded border">
-                  {filteredBranches.map((branch) => (
-                    <button
-                      key={branch}
-                      className="text-ink-1 hover:bg-glass-medium block w-full px-3 py-1.5 text-left text-sm"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setBranchFilter(branch);
-                        setShowBranchDropdown(false);
-                      }}
-                    >
-                      {branch}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           )}
 

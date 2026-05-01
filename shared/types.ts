@@ -164,6 +164,11 @@ export interface UpdateProvider {
   updatedAt?: string;
 }
 
+export interface BranchInfo {
+  name: string;
+  lastCommitDate: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -189,6 +194,7 @@ export interface Project {
   completionContext: string | null;
   aiSkillSlots: AiSkillSlotsSetting | null;
   protectedBranches: string[];
+  favoriteBranches: string[];
   prPriority: ProjectPriority;
   workItemPriority: ProjectPriority;
   createdAt: string;
@@ -219,6 +225,7 @@ export interface NewProject {
   completionContext?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
   protectedBranches?: string[];
+  favoriteBranches?: string[];
   prPriority?: ProjectPriority;
   workItemPriority?: ProjectPriority;
   createdAt?: string;
@@ -249,6 +256,7 @@ export interface UpdateProject {
   completionContext?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
   protectedBranches?: string[];
+  favoriteBranches?: string[];
   prPriority?: ProjectPriority;
   workItemPriority?: ProjectPriority;
   updatedAt?: string;

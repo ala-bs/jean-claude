@@ -10,9 +10,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useCommands } from '@/common/hooks/use-commands';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
+import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
-import { Select } from '@/common/ui/select';
 import { useProject } from '@/hooks/use-projects';
 import { useAiSkillSlotsSetting } from '@/hooks/use-settings';
 import {
@@ -63,8 +63,12 @@ export function WorktreeActions({
 
   const { data: status, isLoading: isStatusLoading } =
     useWorktreeStatus(taskId);
-  const { data: branches, isLoading: isBranchesLoading } =
+  const { data: branchInfos, isLoading: isBranchesLoading } =
     useWorktreeBranches(taskId);
+  const branches = useMemo(
+    () => branchInfos?.map((b) => b.name),
+    [branchInfos],
+  );
   const commitMutation = useCommitWorktree();
   const mergeMutation = useMergeWorktree();
   const pushMutation = usePushBranch();
@@ -124,18 +128,6 @@ export function WorktreeActions({
   const canMerge =
     !status?.hasStagedChanges && !isStatusLoading && !isSelectedBranchProtected;
   const canCreatePr = !status?.hasUncommittedChanges && !isStatusLoading;
-
-  // Add protection indicators to branch options
-  const branchOptions = useMemo(
-    () =>
-      (branches ?? []).map((branch) => ({
-        value: branch,
-        label: protectedBranches.includes(branch)
-          ? `${branch} (protected)`
-          : branch,
-      })),
-    [branches, protectedBranches],
-  );
 
   // Set default branch when branches load
   // Priority: sourceBranch > defaultBranch > main > master > first branch
@@ -290,16 +282,17 @@ export function WorktreeActions({
       {/* Merge section */}
       <div className="flex flex-col gap-2">
         <label className="text-ink-2 text-xs font-medium">Merge into</label>
-        <Select
-          value={isBranchesLoading ? '' : selectedBranch}
-          options={
-            isBranchesLoading
-              ? [{ value: '', label: 'Loading…' }]
-              : branchOptions
-          }
+        <BranchSelect
+          branches={branchInfos ?? []}
+          branchesLoading={isBranchesLoading}
+          favoriteBranches={project?.favoriteBranches}
+          defaultBranch={defaultBranch}
+          protectedBranches={protectedBranches}
+          value={selectedBranch || undefined}
           onChange={setSelectedBranch}
-          disabled={isBranchesLoading || !branches?.length}
+          disabled={isBranchesLoading || !branchInfos?.length}
           className="w-full justify-between"
+          placeholder="Select branch..."
         />
         {isSelectedBranchProtected ? (
           <div className="flex items-center gap-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 px-2 py-1.5 text-xs text-amber-300">

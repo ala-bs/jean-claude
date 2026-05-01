@@ -48,6 +48,7 @@ import type {
   AiSkillSlotsSetting,
 } from '@shared/types';
 
+import { FavoriteBranchesInput } from './favorite-branches-input';
 import { ProtectedBranchesInput } from './protected-branches-input';
 
 export type ProjectSettingsMenuItem =
@@ -76,8 +77,12 @@ export function ProjectSettings({
   onProjectDeleted: () => void;
 }) {
   const { data: project } = useProject(projectId);
-  const { data: branches, isLoading: branchesLoading } =
+  const { data: branchInfos, isLoading: branchesLoading } =
     useProjectBranches(projectId);
+  const branches = useMemo(
+    () => branchInfos?.map((b) => b.name),
+    [branchInfos],
+  );
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
   const deleteWorktreesFolder = useDeleteProjectWorktreesFolder();
@@ -102,6 +107,7 @@ export function ProjectSettings({
     null,
   );
   const [protectedBranches, setProtectedBranches] = useState<string[]>([]);
+  const [favoriteBranches, setFavoriteBranches] = useState<string[]>([]);
   const [isGeneratingContext, setIsGeneratingContext] = useState(false);
 
   const { data: backendsSetting } = useBackendsSetting();
@@ -120,6 +126,7 @@ export function ProjectSettings({
       setCompletionContext(project.completionContext ?? '');
       setWorktreesPath(project.worktreesPath ?? '');
       setProtectedBranches(project.protectedBranches ?? []);
+      setFavoriteBranches(project.favoriteBranches ?? []);
       setAiSkillSlots(project.aiSkillSlots);
     }
   }, [project]);
@@ -171,6 +178,7 @@ export function ProjectSettings({
         completionContext: completionContext || null,
         worktreesPath: worktreesPath || null,
         protectedBranches,
+        favoriteBranches,
         aiSkillSlots,
       },
     });
@@ -215,6 +223,7 @@ export function ProjectSettings({
     completionContext !== (project.completionContext ?? '') ||
     worktreesPath !== (project.worktreesPath ?? '') ||
     !isEqual(protectedBranches, project.protectedBranches ?? []) ||
+    !isEqual(favoriteBranches, project.favoriteBranches ?? []) ||
     !isEqual(aiSkillSlots, project.aiSkillSlots ?? null);
 
   let content: ReactElement;
@@ -323,6 +332,13 @@ export function ProjectSettings({
             branchesLoading={branchesLoading}
             protectedBranches={protectedBranches}
             onChange={setProtectedBranches}
+          />
+
+          <FavoriteBranchesInput
+            branches={branches ?? []}
+            branchesLoading={branchesLoading}
+            favoriteBranches={favoriteBranches}
+            onChange={setFavoriteBranches}
           />
 
           <div>

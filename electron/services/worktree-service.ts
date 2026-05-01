@@ -6,6 +6,8 @@ import { promisify } from 'util';
 import { app } from 'electron';
 import { nanoid } from 'nanoid';
 
+import type { BranchInfo } from '@shared/types';
+
 import { ProjectRepository } from '../database/repositories/projects';
 import { dbg } from '../lib/debug';
 import { isEnoent, pathExists } from '../lib/fs';
@@ -706,10 +708,10 @@ export async function getCurrentBranch(repoPath: string): Promise<string> {
  */
 export async function getProjectBranches(
   projectPath: string,
-): Promise<string[]> {
+): Promise<BranchInfo[]> {
   try {
     const { stdout } = await execAsync(
-      'git branch --format="%(refname:short)"',
+      'git branch --sort=-committerdate --format="%(refname:short)\t%(committerdate:iso-strict)"',
       {
         cwd: projectPath,
         encoding: 'utf-8',
@@ -718,7 +720,17 @@ export async function getProjectBranches(
     return stdout
       .trim()
       .split('\n')
-      .filter((branch) => branch.length > 0);
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const separatorIndex = line.indexOf('\t');
+        if (separatorIndex === -1) {
+          return { name: line, lastCommitDate: '' };
+        }
+        return {
+          name: line.slice(0, separatorIndex),
+          lastCommitDate: line.slice(separatorIndex + 1),
+        };
+      });
   } catch (error) {
     throw new Error(`Failed to get branches: ${error}`);
   }

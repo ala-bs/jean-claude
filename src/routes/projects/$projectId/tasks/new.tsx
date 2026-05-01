@@ -1,13 +1,13 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, ListTodo } from 'lucide-react';
 import { nanoid } from 'nanoid';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 
+import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
-import { Select } from '@/common/ui/select';
 import { BackendSelector } from '@/features/agent/ui-backend-selector';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
@@ -30,8 +30,9 @@ function NewTask() {
   const navigate = useNavigate();
   const createTask = useCreateTaskWithWorktree();
   const { data: project } = useProject(projectId);
-  const { data: branches = [], isLoading: branchesLoading } =
+  const { data: branchInfos = [], isLoading: branchesLoading } =
     useProjectBranches(projectId);
+  const branches = useMemo(() => branchInfos.map((b) => b.name), [branchInfos]);
   const { data: skills = [] } = useProjectSkills(projectId);
 
   const { data: completionSetting } = useCompletionSetting();
@@ -212,31 +213,18 @@ function NewTask() {
                 <label className="text-ink-2 mb-1 block text-sm font-medium">
                   Base branch
                 </label>
-                <Select
-                  value={
-                    branchesLoading
-                      ? ''
-                      : (effectiveSourceBranch ?? branches[0] ?? '')
-                  }
-                  options={
-                    branchesLoading
-                      ? [{ value: '', label: 'Loading branches…' }]
-                      : branches.length === 0
-                        ? [{ value: '', label: 'No branches found' }]
-                        : branches.map((branch) => ({
-                            value: branch,
-                            label:
-                              branch +
-                              (branch === project?.defaultBranch
-                                ? ' (default)'
-                                : ''),
-                          }))
-                  }
+                <BranchSelect
+                  branches={branchInfos}
+                  branchesLoading={branchesLoading}
+                  favoriteBranches={project?.favoriteBranches}
+                  defaultBranch={project?.defaultBranch}
+                  value={effectiveSourceBranch ?? branchInfos[0]?.name}
                   onChange={(value) =>
                     setDraft({ sourceBranch: value || null })
                   }
                   disabled={branchesLoading}
                   className="w-full justify-between"
+                  placeholder="Select branch..."
                 />
               </div>
             )}

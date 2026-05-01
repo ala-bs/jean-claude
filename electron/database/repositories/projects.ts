@@ -7,7 +7,7 @@ import { NewProject, ProjectRow, ProjectType, UpdateProject } from '../schema';
 const MAX_PROTECTED_BRANCHES = 100;
 const MAX_BRANCH_NAME_LENGTH = 256;
 
-function sanitizeProtectedBranches(
+function sanitizeBranchList(
   branches: string[] | undefined | null,
 ): string | null {
   if (!branches || branches.length === 0) return null;
@@ -45,10 +45,22 @@ function parseProjectRow(row: ProjectRow) {
       // Malformed JSON — fall back to empty array
     }
   }
+  let favoriteBranches: string[] = [];
+  if (row.favoriteBranches) {
+    try {
+      const parsed: unknown = JSON.parse(row.favoriteBranches);
+      favoriteBranches = Array.isArray(parsed)
+        ? parsed.filter((b): b is string => typeof b === 'string')
+        : [];
+    } catch {
+      // Malformed JSON — fall back to empty
+    }
+  }
   return {
     ...row,
     aiSkillSlots,
     protectedBranches,
+    favoriteBranches,
   };
 }
 
@@ -96,6 +108,7 @@ export const ProjectRepository = {
       showPrsInFeed,
       aiSkillSlots,
       protectedBranches,
+      favoriteBranches,
       ...rest
     } = data;
     const row = await db
@@ -108,7 +121,8 @@ export const ProjectRepository = {
         showWorkItemsInFeed: showWorkItemsInFeed === false ? 0 : 1,
         showPrsInFeed: showPrsInFeed === false ? 0 : 1,
         aiSkillSlots: aiSkillSlots ? JSON.stringify(aiSkillSlots) : null,
-        protectedBranches: sanitizeProtectedBranches(protectedBranches),
+        protectedBranches: sanitizeBranchList(protectedBranches),
+        favoriteBranches: sanitizeBranchList(favoriteBranches),
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -123,6 +137,7 @@ export const ProjectRepository = {
       showPrsInFeed,
       aiSkillSlots,
       protectedBranches,
+      favoriteBranches,
       ...rest
     } = data;
     const row = await db
@@ -139,7 +154,10 @@ export const ProjectRepository = {
           aiSkillSlots: aiSkillSlots ? JSON.stringify(aiSkillSlots) : null,
         }),
         ...(protectedBranches !== undefined && {
-          protectedBranches: sanitizeProtectedBranches(protectedBranches),
+          protectedBranches: sanitizeBranchList(protectedBranches),
+        }),
+        ...(favoriteBranches !== undefined && {
+          favoriteBranches: sanitizeBranchList(favoriteBranches),
         }),
         updatedAt: new Date().toISOString(),
       })

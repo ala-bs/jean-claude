@@ -79,6 +79,7 @@ import type {
   Token,
   NewToken,
   UpdateToken,
+  BranchInfo,
   InteractionMode,
   AppSettings,
   ProjectTodo,
@@ -323,7 +324,7 @@ export interface Api {
     delete: (id: string) => Promise<void>;
     deleteWorktreesFolder: (projectId: string) => Promise<void>;
     reorder: (orderedIds: string[]) => Promise<Project[]>;
-    getBranches: (projectId: string) => Promise<string[]>;
+    getBranches: (projectId: string) => Promise<BranchInfo[]>;
     getCurrentBranch: (projectId: string) => Promise<string>;
     getDetected: () => Promise<DetectedProject[]>;
     getSkills: (projectId: string) => Promise<Skill[]>;
@@ -431,7 +432,7 @@ export interface Api {
           commitAllUnstaged?: boolean;
         },
       ) => Promise<MergeWorktreeResult>;
-      getBranches: (taskId: string) => Promise<string[]>;
+      getBranches: (taskId: string) => Promise<BranchInfo[]>;
       pushBranch: (taskId: string) => Promise<void>;
       delete: (
         taskId: string,

@@ -93,6 +93,7 @@ export interface ProjectTable {
   completionContext: string | null;
   aiSkillSlots: string | null; // JSON text
   protectedBranches: string | null; // JSON array of branch names
+  favoriteBranches: string | null; // JSON array of branch names
   prPriority: string;
   workItemPriority: string;
   showWorkItemsInFeed: number; // SQLite boolean: 1 = show (default), 0 = hide

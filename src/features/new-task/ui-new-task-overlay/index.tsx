@@ -13,6 +13,7 @@ import React, {
 
 import { useCommands } from '@/common/hooks/use-commands';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
+import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
 import { Select } from '@/common/ui/select';
@@ -235,7 +236,8 @@ export function NewTaskOverlay({
   });
 
   // Fetch branches for the selected project
-  const { data: branches = [] } = useProjectBranches(selectedProjectId);
+  const { data: branchInfos = [] } = useProjectBranches(selectedProjectId);
+  const branches = useMemo(() => branchInfos.map((b) => b.name), [branchInfos]);
 
   // Get selected work items objects
   const selectedWorkItems = useMemo(() => {
@@ -1220,15 +1222,15 @@ export function NewTaskOverlay({
                   }}
                 >
                   <span style={{ color: 'oklch(0.55 0.01 280)' }}>from</span>
-                  <Select
-                    value={currentSourceBranch ?? ''}
-                    options={branches.map((branch) => ({
-                      value: branch,
-                      label: branch,
-                    }))}
+                  <BranchSelect
+                    branches={branchInfos}
+                    favoriteBranches={selectedProject?.favoriteBranches}
+                    defaultBranch={selectedProject?.defaultBranch}
+                    value={currentSourceBranch ?? undefined}
                     onChange={(branch) => updateDraft({ sourceBranch: branch })}
                     label="Source branch"
                     side="top"
+                    size="xs"
                   />
                 </div>
               )}
