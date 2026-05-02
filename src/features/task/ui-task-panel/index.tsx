@@ -30,7 +30,6 @@ import {
   DropdownDivider,
   DropdownInfo,
 } from '@/common/ui/dropdown';
-import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
@@ -1083,21 +1082,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   </Chip>
                 );
               })}
-
-            {/* Edit / Add work items button */}
-            {hasWorkItemsLink && (
-              <IconButton
-                onClick={() => openWorkItemsEditor()}
-                icon={<ListTodo />}
-                size="sm"
-                variant="ghost"
-                tooltip={
-                  task.workItemIds?.length
-                    ? 'Edit linked work items'
-                    : 'Link work items'
-                }
-              />
-            )}
           </div>
 
           {/* Work items editor modal */}
