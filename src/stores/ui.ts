@@ -1,14 +1,18 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+export type DiffViewMode = 'inline' | 'side-by-side' | 'current-state';
+
 interface UISettings {
   sidebarCollapsed: boolean;
   workItemsPanelWidth: number;
+  diffViewMode: DiffViewMode;
 }
 
 const UI_SETTINGS_DEFAULTS: UISettings = {
   sidebarCollapsed: false,
   workItemsPanelWidth: 50,
+  diffViewMode: 'inline',
 };
 
 function validateSettings(settings: UISettings): UISettings {
@@ -36,6 +40,12 @@ function migrateLegacyKeys(raw: Record<string, unknown>): Partial<UISettings> {
     legacy.sidebarCollapsed = raw.sidebarCollapsed;
   if (typeof raw.workItemsPanelWidth === 'number')
     legacy.workItemsPanelWidth = raw.workItemsPanelWidth;
+  if (
+    raw.diffViewMode === 'inline' ||
+    raw.diffViewMode === 'side-by-side' ||
+    raw.diffViewMode === 'current-state'
+  )
+    legacy.diffViewMode = raw.diffViewMode;
   return legacy;
 }
 

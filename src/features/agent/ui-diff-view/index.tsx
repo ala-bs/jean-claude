@@ -9,6 +9,8 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { codeToTokens, type ThemedToken } from 'shiki';
 
+import { useUISetting, useUIStore } from '@/stores/ui';
+
 import { ChangeNavigator } from './change-navigator';
 import { CurrentStateTable } from './current-state-table';
 import { DiffMinimap, type ViewportInfo } from './diff-minimap';
@@ -65,9 +67,8 @@ export function DiffView({
 }) {
   const [state, setState] = useState<DiffState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<
-    'inline' | 'side-by-side' | 'current-state'
-  >('inline');
+  const viewMode = useUISetting('diffViewMode');
+  const setSetting = useUIStore((s) => s.setSetting);
   const [viewport, setViewport] = useState<ViewportInfo | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -188,7 +189,8 @@ export function DiffView({
         )}
         <button
           onClick={() =>
-            setViewMode(
+            setSetting(
+              'diffViewMode',
               viewMode === 'inline'
                 ? 'side-by-side'
                 : viewMode === 'side-by-side'
