@@ -40,6 +40,7 @@ export function FileDiffContent({
   reviewComments,
   onAddReviewComment,
   onDeleteReviewComment,
+  onEditReviewComment,
   showReviewStatus,
   onResolveReviewComment,
 }: {
@@ -75,6 +76,7 @@ export function FileDiffContent({
     presets: ReviewPresetId[];
   }) => void;
   onDeleteReviewComment?: (commentId: string) => void;
+  onEditReviewComment?: (commentId: string, newBody: string) => void;
   showReviewStatus?: boolean;
   onResolveReviewComment?: (commentId: string) => void;
 }) {
@@ -161,6 +163,7 @@ export function FileDiffContent({
           showStatus={showReviewStatus ?? false}
           onResolve={onResolveReviewComment}
           onDelete={onDeleteReviewComment}
+          onEdit={onEditReviewComment}
         />
       ),
     }));
@@ -169,6 +172,7 @@ export function FileDiffContent({
     showReviewStatus,
     onResolveReviewComment,
     onDeleteReviewComment,
+    onEditReviewComment,
   ]);
 
   // Merge thread comments, annotation comments, and review comments

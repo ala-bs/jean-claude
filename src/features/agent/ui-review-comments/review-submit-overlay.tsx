@@ -179,7 +179,7 @@ function ReviewSubmitOverlayContent({
                         </span>
                       ))}
                     </div>
-                    <div className="text-ink-1 text-xs leading-relaxed">
+                    <div className="text-ink-1 text-xs leading-relaxed whitespace-pre-wrap">
                       {c.body}
                     </div>
                   </div>

@@ -67,11 +67,13 @@ export function ReviewCommentThread({
   showStatus,
   onResolve,
   onDelete,
+  onEdit,
 }: {
   comment: ReviewComment;
   showStatus: boolean;
   onResolve?: (commentId: string) => void;
   onDelete?: (commentId: string) => void;
+  onEdit?: (commentId: string, newBody: string) => void;
 }) {
   return (
     <div
@@ -85,9 +87,8 @@ export function ReviewCommentThread({
         lineStart={comment.anchor.lineStart}
         lineEnd={comment.anchor.lineEnd}
         body={comment.body}
-        onRemove={
-          !showStatus && onDelete ? () => onDelete(comment.id) : undefined
-        }
+        onRemove={onDelete ? () => onDelete(comment.id) : undefined}
+        onEdit={onEdit ? (newBody) => onEdit(comment.id, newBody) : undefined}
         renderHeaderExtras={
           <>
             {showStatus && <StatusPill status={comment.status} />}
@@ -105,7 +106,7 @@ export function ReviewCommentThread({
             ))}
           </>
         }
-        renderActions={
+        renderExtraActions={
           showStatus && onResolve ? (
             <button
               onClick={() => onResolve(comment.id)}

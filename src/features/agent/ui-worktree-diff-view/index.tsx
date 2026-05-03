@@ -114,6 +114,7 @@ export function WorktreeDiffView({
   const commentCountByFile = useReviewCommentsByFile(taskId);
   const addComment = useReviewCommentsStore((s) => s.addComment);
   const removeComment = useReviewCommentsStore((s) => s.removeComment);
+  const updateComment = useReviewCommentsStore((s) => s.updateComment);
   const resolveComment = useReviewCommentsStore((s) => s.resolveComment);
   const clearResolvedComments = useReviewCommentsStore(
     (s) => s.clearResolvedComments,
@@ -148,6 +149,13 @@ export function WorktreeDiffView({
       removeComment(taskId, commentId);
     },
     [taskId, removeComment],
+  );
+
+  const handleEditReviewComment = useCallback(
+    (commentId: string, newBody: string) => {
+      updateComment(taskId, commentId, { body: newBody });
+    },
+    [taskId, updateComment],
   );
 
   const handleResolveReviewComment = useCallback(
@@ -417,6 +425,7 @@ export function WorktreeDiffView({
                 onSubmitReview ? handleAddReviewComment : undefined
               }
               onDeleteReviewComment={handleDeleteReviewComment}
+              onEditReviewComment={handleEditReviewComment}
               onResolveReviewComment={handleResolveReviewComment}
             />
           ) : (
@@ -448,6 +457,7 @@ function WorktreeFileDiffContent({
   annotations,
   onAddReviewComment,
   onDeleteReviewComment,
+  onEditReviewComment,
   onResolveReviewComment,
 }: {
   file: WorktreeDiffFile;
@@ -462,6 +472,7 @@ function WorktreeFileDiffContent({
     presets: ReviewPresetId[];
   }) => void;
   onDeleteReviewComment?: (commentId: string) => void;
+  onEditReviewComment?: (commentId: string, newBody: string) => void;
   onResolveReviewComment?: (commentId: string) => void;
 }) {
   const { data, isLoading, error } = useWorktreeFileContent(
@@ -500,6 +511,7 @@ function WorktreeFileDiffContent({
       reviewComments={fileReviewComments}
       onAddReviewComment={onAddReviewComment}
       onDeleteReviewComment={onDeleteReviewComment}
+      onEditReviewComment={onEditReviewComment}
       onResolveReviewComment={onResolveReviewComment}
     />
   );

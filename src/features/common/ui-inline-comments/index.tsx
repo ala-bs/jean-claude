@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+import { Pencil, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
@@ -35,6 +35,7 @@ export function InlineCommentComposer({
   placeholder = 'Add a comment...',
   submitLabel = 'Add comment',
   canSubmitEmpty = false,
+  initialBody = '',
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -52,8 +53,10 @@ export function InlineCommentComposer({
    * that makes an empty body valid.
    */
   canSubmitEmpty?: boolean;
+  /** Initial body text (for editing existing comments). */
+  initialBody?: string;
 }) {
-  const [body, setBody] = useState('');
+  const [body, setBody] = useState(initialBody);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bindingId = useId();
 
@@ -141,22 +144,77 @@ export function InlineCommentBubble({
   lineEnd,
   body,
   onRemove,
+  onEdit,
   renderHeaderExtras,
-  renderActions,
+  renderExtraActions,
   renderFooter,
 }: {
   lineStart: number;
   lineEnd?: number;
   body: string;
   onRemove?: () => void;
+  /** Called with the new body text when the user saves an edit. */
+  onEdit?: (newBody: string) => void;
   /** Extra elements in the header row (e.g. status pill, preset tags). */
   renderHeaderExtras?: ReactNode;
-  /** Replaces the default remove button with custom actions (e.g. resolve). */
-  renderActions?: ReactNode;
+  /** Extra action buttons rendered alongside the default edit/remove buttons. */
+  renderExtraActions?: ReactNode;
   /** Rendered below the body (e.g. agent response note). */
   renderFooter?: ReactNode;
 }) {
   const lineLabel = formatLineRangeLabel(lineStart, lineEnd);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editBody, setEditBody] = useState(body);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const bindingId = useId();
+
+  const startEditing = useCallback(() => {
+    setEditBody(body);
+    setIsEditing(true);
+  }, [body]);
+
+  const cancelEditing = useCallback(() => {
+    setIsEditing(false);
+    setEditBody(body);
+  }, [body]);
+
+  const saveEdit = useCallback(() => {
+    const trimmed = editBody.trim();
+    if (!trimmed || trimmed === body) {
+      cancelEditing();
+      return;
+    }
+    onEdit?.(trimmed);
+    setIsEditing(false);
+  }, [editBody, body, onEdit, cancelEditing]);
+
+  // Focus textarea when entering edit mode
+  useEffect(() => {
+    if (isEditing) {
+      editTextareaRef.current?.focus();
+    }
+  }, [isEditing]);
+
+  // Keyboard bindings for edit mode
+  useRegisterKeyboardBindings(
+    `inline-comment-edit-${bindingId}`,
+    isEditing
+      ? {
+          'cmd+enter': () => {
+            if (document.activeElement !== editTextareaRef.current)
+              return false;
+            saveEdit();
+            return true;
+          },
+          escape: () => {
+            if (document.activeElement !== editTextareaRef.current)
+              return false;
+            cancelEditing();
+            return true;
+          },
+        }
+      : {},
+  );
 
   return (
     <div className="group flex items-start gap-2 rounded px-3 py-1.5">
@@ -174,19 +232,64 @@ export function InlineCommentBubble({
           </span>
           {renderHeaderExtras}
           <div className="flex-1" />
-          {renderActions ??
-            (onRemove && (
+          {!isEditing && (onEdit || onRemove || renderExtraActions) && (
+            <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+              {onEdit && (
+                <button
+                  type="button"
+                  aria-label="Edit comment"
+                  className="text-ink-4 hover:text-ink-1 mt-0.5 shrink-0"
+                  onClick={startEditing}
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              )}
+              {onRemove && (
+                <button
+                  type="button"
+                  aria-label="Remove comment"
+                  className="text-ink-4 hover:text-ink-1 mt-0.5 shrink-0"
+                  onClick={onRemove}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+              {renderExtraActions}
+            </div>
+          )}
+        </div>
+        {isEditing ? (
+          <div className="flex flex-col gap-1.5">
+            <textarea
+              ref={editTextareaRef}
+              className="bg-bg-2 text-ink-1 border-stroke-1 min-h-[48px] w-full resize-y rounded border px-2 py-1.5 text-xs focus:outline-none"
+              value={editBody}
+              onChange={(e) => setEditBody(e.target.value)}
+            />
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                aria-label="Remove comment"
-                className="text-ink-4 hover:text-ink-1 mt-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-                onClick={onRemove}
+                className="bg-acc text-acc-ink inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium disabled:opacity-50"
+                onClick={saveEdit}
+                disabled={!editBody.trim() || editBody.trim() === body}
               >
-                <X className="h-3 w-3" />
+                Save
+                <kbd className="rounded bg-white/20 px-1 py-px font-mono text-[9px]">
+                  {'\u2318\u21B5'}
+                </kbd>
               </button>
-            ))}
-        </div>
-        <div className="text-ink-0 text-xs">{body}</div>
+              <button
+                type="button"
+                className="text-ink-3 hover:text-ink-1 rounded px-2 py-1 text-xs"
+                onClick={cancelEditing}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="text-ink-0 text-xs whitespace-pre-wrap">{body}</div>
+        )}
         {renderFooter}
       </div>
     </div>

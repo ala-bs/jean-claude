@@ -51,7 +51,7 @@ export function CommentableFileViewer({
   }, []);
 
   const comments = useComposerFileCommentsForFile(projectId, filePath);
-  const { addComment, removeComment } =
+  const { addComment, removeComment, updateComment } =
     useComposerFileCommentActions(projectId);
 
   const { data: fileData, isLoading } = useQuery({
@@ -232,6 +232,9 @@ export function CommentableFileViewer({
                   onMouseUp={() => handleLineMouseUp(lineNumber)}
                   inlineComments={lineComments}
                   onRemoveComment={removeComment}
+                  onEditComment={(commentId, newBody) =>
+                    updateComment(commentId, { body: newBody })
+                  }
                   showComposer={!!showComposer}
                   composerLineRange={composerLineRange}
                   onComposerSubmit={handleComposerSubmit}
@@ -265,6 +268,7 @@ function FileLineRow({
   onMouseUp,
   inlineComments,
   onRemoveComment,
+  onEditComment,
   showComposer,
   composerLineRange,
   onComposerSubmit,
@@ -288,6 +292,7 @@ function FileLineRow({
       }>
     | undefined;
   onRemoveComment: (commentId: string) => void;
+  onEditComment: (commentId: string, newBody: string) => void;
   showComposer: boolean;
   composerLineRange: { start: number; end: number } | null;
   onComposerSubmit: (body: string) => void;
@@ -365,6 +370,7 @@ function FileLineRow({
                   lineEnd={comment.anchor.lineEnd}
                   body={comment.body}
                   onRemove={() => onRemoveComment(comment.id)}
+                  onEdit={(newBody) => onEditComment(comment.id, newBody)}
                 />
               ))}
             </div>
