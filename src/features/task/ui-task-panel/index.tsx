@@ -268,8 +268,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const {
     isOpen: isDiffViewOpen,
     selectedFilePath: diffSelectedFile,
+    collapsedFolders: diffCollapsedFolders,
     toggleDiffView,
     selectFile: selectDiffFile,
+    toggleCollapsedFolder: toggleDiffCollapsedFolder,
   } = useDiffViewState(taskId);
 
   // PR view state
@@ -1342,6 +1344,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               projectId={project.id}
               selectedFilePath={diffSelectedFile}
               onSelectFile={selectDiffFile}
+              collapsedFolders={diffCollapsedFolders}
+              onToggleFolder={toggleDiffCollapsedFolder}
               branchName={
                 task.branchName ?? getBranchFromWorktreePath(task.worktreePath)
               }

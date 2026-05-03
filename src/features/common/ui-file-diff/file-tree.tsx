@@ -25,6 +25,8 @@ export function DiffFileTree({
   onSelectFile,
   filesWithAnnotations,
   commentCountByFile,
+  collapsedFolders: externalCollapsedFolders,
+  onToggleFolder: externalOnToggleFolder,
 }: {
   files: DiffFile[];
   selectedPath: string | null;
@@ -33,10 +35,15 @@ export function DiffFileTree({
   filesWithAnnotations?: Set<string>;
   /** Number of unresolved review comments per file path */
   commentCountByFile?: Record<string, number>;
+  /** Externally-managed set of collapsed folder paths (for persistence). When provided, takes precedence over local state. */
+  collapsedFolders?: Set<string>;
+  /** Callback when a folder is toggled. Required when collapsedFolders is provided. */
+  onToggleFolder?: (path: string) => void;
 }) {
   const tree = useMemo(() => buildTree(files), [files]);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
-    // Start with all folders expanded
+
+  // All folder paths in the current tree
+  const allFolderPaths = useMemo(() => {
     const folders = new Set<string>();
     const collectFolders = (nodes: TreeNode[]) => {
       for (const node of nodes) {
@@ -48,19 +55,45 @@ export function DiffFileTree({
     };
     collectFolders(tree);
     return folders;
-  });
+  }, [tree]);
 
-  const toggleFolder = (path: string) => {
-    setExpandedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
+  // Local state fallback when no external state is provided
+  const [localExpandedFolders, setLocalExpandedFolders] = useState<Set<string>>(
+    () => new Set(allFolderPaths),
+  );
+
+  // Derive expandedFolders: if external collapsedFolders provided, compute expanded = allFolders - collapsed
+  const expandedFolders = useMemo(() => {
+    if (externalCollapsedFolders) {
+      const expanded = new Set<string>();
+      for (const folder of allFolderPaths) {
+        if (!externalCollapsedFolders.has(folder)) {
+          expanded.add(folder);
+        }
       }
-      return next;
-    });
-  };
+      return expanded;
+    }
+    return localExpandedFolders;
+  }, [externalCollapsedFolders, allFolderPaths, localExpandedFolders]);
+
+  const toggleFolder = useCallback(
+    (path: string) => {
+      if (externalOnToggleFolder) {
+        externalOnToggleFolder(path);
+      } else {
+        setLocalExpandedFolders((prev) => {
+          const next = new Set(prev);
+          if (next.has(path)) {
+            next.delete(path);
+          } else {
+            next.add(path);
+          }
+          return next;
+        });
+      }
+    },
+    [externalOnToggleFolder],
+  );
 
   const hasAnnotation = useCallback(
     (path: string) => filesWithAnnotations?.has(path) ?? false,

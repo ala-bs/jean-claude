@@ -36,6 +36,8 @@ export type RightPane =
 
 interface DiffViewState {
   selectedFilePath: string | null;
+  /** Folder paths the user has manually collapsed in the diff file tree */
+  collapsedFolders: Set<string>;
 }
 
 interface FileExplorerState {
@@ -73,6 +75,7 @@ interface TaskState {
 
 const defaultDiffViewState: DiffViewState = {
   selectedFilePath: null,
+  collapsedFolders: new Set<string>(),
 };
 
 const defaultFileExplorerState: FileExplorerState = {
@@ -185,6 +188,7 @@ interface NavigationState {
   setTaskRightPane: (taskId: string, pane: RightPane | null) => void;
   setTaskViewMode: (taskId: string, mode: TaskViewMode) => void;
   setDiffViewSelectedFile: (taskId: string, filePath: string | null) => void;
+  toggleDiffViewCollapsedFolder: (taskId: string, folderPath: string) => void;
   setFileExplorerSelectedFile: (
     taskId: string,
     filePath: string | null,
@@ -320,6 +324,33 @@ const useStore = create<NavigationState>()(
             },
           },
         })),
+
+      toggleDiffViewCollapsedFolder: (taskId, folderPath) =>
+        set((state) => {
+          const taskState = state.taskState[taskId] ?? defaultTaskState;
+          const diffViewState = taskState.diffView ?? defaultDiffViewState;
+          const nextCollapsed = new Set(diffViewState.collapsedFolders);
+
+          if (nextCollapsed.has(folderPath)) {
+            nextCollapsed.delete(folderPath);
+          } else {
+            nextCollapsed.add(folderPath);
+          }
+
+          return {
+            taskState: {
+              ...state.taskState,
+              [taskId]: {
+                ...defaultTaskState,
+                ...taskState,
+                diffView: {
+                  ...diffViewState,
+                  collapsedFolders: nextCollapsed,
+                },
+              },
+            },
+          };
+        }),
 
       setFileExplorerSelectedFile: (taskId, filePath) =>
         set((state) => ({
@@ -501,12 +532,44 @@ const useStore = create<NavigationState>()(
             {
               rightPane: taskState.rightPane,
               activeView: taskState.activeView,
-              diffView: taskState.diffView,
+              diffView: {
+                selectedFilePath: taskState.diffView.selectedFilePath,
+                // Serialize Set as array for JSON persistence
+                collapsedFolders: [...taskState.diffView.collapsedFolders],
+              },
               prDraft: taskState.prDraft,
             },
           ]),
         ),
       }),
+      merge: (persisted, current) => {
+        const persistedState = persisted as Partial<NavigationState>;
+        const merged = { ...current, ...persistedState };
+
+        // Rehydrate collapsedFolders from arrays back to Sets
+        if (persistedState.taskState) {
+          merged.taskState = Object.fromEntries(
+            Object.entries(persistedState.taskState).map(
+              ([taskId, taskState]) => [
+                taskId,
+                {
+                  ...defaultTaskState,
+                  ...taskState,
+                  diffView: {
+                    ...defaultDiffViewState,
+                    ...taskState.diffView,
+                    collapsedFolders: new Set(
+                      (taskState.diffView?.collapsedFolders as any) ?? [],
+                    ),
+                  },
+                },
+              ],
+            ),
+          );
+        }
+
+        return merged as NavigationState;
+      },
     },
   ),
 );
@@ -793,6 +856,9 @@ export function useDiffViewState(taskId: string) {
   const setDiffViewSelectedFileAction = useStore(
     (state) => state.setDiffViewSelectedFile,
   );
+  const toggleDiffViewCollapsedFolderAction = useStore(
+    (state) => state.toggleDiffViewCollapsedFolder,
+  );
 
   const toggleDiffView = useCallback(
     () =>
@@ -819,13 +885,27 @@ export function useDiffViewState(taskId: string) {
     [taskId, setDiffViewSelectedFileAction],
   );
 
+  const collapsedFolders = useStore(
+    (state) =>
+      state.taskState[taskId]?.diffView.collapsedFolders ??
+      defaultDiffViewState.collapsedFolders,
+  );
+
+  const toggleCollapsedFolder = useCallback(
+    (folderPath: string) =>
+      toggleDiffViewCollapsedFolderAction(taskId, folderPath),
+    [taskId, toggleDiffViewCollapsedFolderAction],
+  );
+
   return {
     isOpen: taskState.activeView === 'diff',
     selectedFilePath: taskState.diffView.selectedFilePath,
+    collapsedFolders,
     toggleDiffView,
     openDiffView,
     closeDiffView,
     selectFile,
+    toggleCollapsedFolder,
   };
 }
 

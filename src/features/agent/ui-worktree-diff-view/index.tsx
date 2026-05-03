@@ -54,6 +54,8 @@ export function WorktreeDiffView({
   onOpenPrView,
   onSubmitReview,
   bottomPadding = 0,
+  collapsedFolders,
+  onToggleFolder,
 }: {
   taskId: string;
   projectId: string;
@@ -71,6 +73,10 @@ export function WorktreeDiffView({
   /** Called when user submits a review. Receives the synthesized prompt parts and target step ID (null = new step). */
   onSubmitReview?: (parts: PromptPart[], targetStepId: string | null) => void;
   bottomPadding?: number;
+  /** Set of collapsed folder paths in the diff file tree */
+  collapsedFolders?: Set<string>;
+  /** Callback when a folder is toggled in the diff file tree */
+  onToggleFolder?: (path: string) => void;
 }) {
   const { data, isLoading, error, refresh } = useWorktreeDiff(taskId, true);
   const { data: summary, isLoading: isSummaryLoading } = useTaskSummary(taskId);
@@ -375,6 +381,8 @@ export function WorktreeDiffView({
             onSelectFile={onSelectFile}
             filesWithAnnotations={filesWithAnnotations}
             commentCountByFile={commentCountByFile}
+            collapsedFolders={collapsedFolders}
+            onToggleFolder={onToggleFolder}
           />
           <WorktreeActions
             taskId={taskId}
