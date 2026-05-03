@@ -3,6 +3,8 @@ import { useCallback, useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import { clearReviewCommentsForTask } from './review-comments';
+
 // Discriminated union for right pane types
 export type RightPane =
   | {
@@ -452,7 +454,10 @@ const useStore = create<NavigationState>()(
           };
         }),
 
-      clearTaskNavHistoryState: (taskId) =>
+      clearTaskNavHistoryState: (taskId) => {
+        // Clear associated review comments (outside zustand set to avoid circular state)
+        clearReviewCommentsForTask(taskId);
+
         set((state) => {
           const { [taskId]: _, ...restTaskState } = state.taskState;
 
@@ -483,7 +488,8 @@ const useStore = create<NavigationState>()(
             lastTaskByProject: newLastTaskByProject,
             lastLocation: newLastLocation,
           };
-        }),
+        });
+      },
     }),
     {
       name: 'navigation',

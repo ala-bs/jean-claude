@@ -5,6 +5,7 @@ import { useTaskMessagesStore, TaskState } from '@/stores/task-messages';
 
 // Hoisted outside component to avoid recreation on every render
 const DEFAULT_TASK_STATE: TaskState = {
+  taskId: '',
   messages: [],
   status: 'waiting',
   error: null,
@@ -15,6 +16,7 @@ const DEFAULT_TASK_STATE: TaskState = {
 };
 
 export function useTaskMessages({
+  taskId,
   stepId,
 }: {
   taskId: string;
@@ -54,7 +56,7 @@ export function useTaskMessages({
       api.steps.findById(stepId),
     ]).then(([messages, step]) => {
       if (step) {
-        loadStep(stepId, messages, step.status);
+        loadStep(stepId, taskId, messages, step.status);
         // Also fetch pending request after loading step
         fetchPendingRequest();
       }
@@ -63,7 +65,7 @@ export function useTaskMessages({
         fetchingRef.current = null;
       }
     });
-  }, [stepId, loadStep, fetchPendingRequest]);
+  }, [stepId, taskId, loadStep, fetchPendingRequest]);
 
   const refetch = useCallback(() => {
     if (!stepId) return;

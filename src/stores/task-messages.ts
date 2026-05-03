@@ -8,6 +8,8 @@ import type {
 import type { RunCommandLogStream, RunStatus } from '@shared/run-command-types';
 import type { TaskStatus, TaskStepStatus } from '@shared/types';
 
+import { clearReviewCommentsForTask } from './review-comments';
+
 type StepExecutionStatus = TaskStatus | TaskStepStatus;
 
 const MAX_RUN_COMMAND_LOG_LINES = 5000;
@@ -26,6 +28,7 @@ interface RunCommandLogState {
 export type RunCommandLogs = Record<string, RunCommandLogState>;
 
 export interface TaskState {
+  taskId: string;
   messages: NormalizedEntry[];
   status: StepExecutionStatus;
   error: string | null;
@@ -69,6 +72,7 @@ interface TaskMessagesStore {
   // Actions (all keyed by stepId)
   loadStep: (
     stepId: string,
+    taskId: string,
     messages: NormalizedEntry[],
     status: StepExecutionStatus,
   ) => void;
@@ -132,10 +136,25 @@ function evictIfNeeded(
   const toEvict = inactiveSteps.length - cacheLimit;
   const idsToEvict = new Set(inactiveSteps.slice(0, toEvict).map(([id]) => id));
 
+  // Collect taskIds of evicted steps
+  const evictedTaskIds = new Set<string>();
+
   const newSteps: Record<string, TaskState> = {};
   for (const [id, state] of entries) {
     if (!idsToEvict.has(id)) {
       newSteps[id] = state;
+    } else {
+      evictedTaskIds.add(state.taskId);
+    }
+  }
+
+  // Clear review comments for tasks that have no remaining loaded steps
+  for (const taskId of evictedTaskIds) {
+    const hasRemainingSteps = Object.values(newSteps).some(
+      (s) => s.taskId === taskId,
+    );
+    if (!hasRemainingSteps) {
+      clearReviewCommentsForTask(taskId);
     }
   }
 
@@ -149,11 +168,12 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
   runCommandRunning: {},
   cacheLimit: DEFAULT_CACHE_LIMIT,
 
-  loadStep: (stepId, messages, status) => {
+  loadStep: (stepId, taskId, messages, status) => {
     set((state) => {
       const newSteps = {
         ...state.steps,
         [stepId]: {
+          taskId,
           messages,
           status,
           error: null,

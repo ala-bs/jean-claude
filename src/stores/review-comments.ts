@@ -186,6 +186,13 @@ const {
 
 export { useReviewComments, useReviewCommentsForFile };
 
+// -- Imperative API (for use outside React components) --
+
+/** Clear all review comments for a task. Call during task state cleanup. */
+export function clearReviewCommentsForTask(taskId: string) {
+  baseStore.getState().clearComments(taskId);
+}
+
 // -- Domain-specific selector hooks --
 
 export function useOpenReviewCommentCount(taskId: string) {
