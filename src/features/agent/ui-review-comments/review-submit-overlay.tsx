@@ -7,13 +7,14 @@ import {
 } from '@/common/context/keyboard-bindings';
 import type { ReviewComment } from '@/stores/review-comments';
 import { synthesizeReviewPrompt } from '@/stores/review-comments';
+import type { PromptPart } from '@shared/agent-backend-types';
 import type { TaskStep } from '@shared/types';
 
 export function ReviewSubmitOverlay(props: {
   comments: ReviewComment[];
   steps?: TaskStep[];
   activeStepId?: string | null;
-  onSubmit: (prompt: string, targetStepId: string | null) => void;
+  onSubmit: (parts: PromptPart[], targetStepId: string | null) => void;
   onClose: () => void;
 }) {
   return (
@@ -33,7 +34,7 @@ function ReviewSubmitOverlayContent({
   comments: ReviewComment[];
   steps?: TaskStep[];
   activeStepId?: string | null;
-  onSubmit: (prompt: string, targetStepId: string | null) => void;
+  onSubmit: (parts: PromptPart[], targetStepId: string | null) => void;
   onClose: () => void;
 }) {
   const [globalIntent, setGlobalIntent] = useState('');
@@ -57,6 +58,12 @@ function ReviewSubmitOverlayContent({
     () => synthesizeReviewPrompt(openComments, globalIntent),
     [openComments, globalIntent],
   );
+
+  const synthesizedText = useMemo(() => {
+    if (!synthesized) return null;
+    const textPart = synthesized.find((p) => p.type === 'text');
+    return textPart?.type === 'text' ? textPart.text : null;
+  }, [synthesized]);
 
   const handleSubmit = useCallback(() => {
     if (synthesized) {
@@ -182,6 +189,18 @@ function ReviewSubmitOverlayContent({
                     <div className="text-ink-1 text-xs leading-relaxed whitespace-pre-wrap">
                       {c.body}
                     </div>
+                    {c.images && c.images.length > 0 && (
+                      <div className="mt-1 flex gap-1">
+                        {c.images.map((img, imgIdx) => (
+                          <img
+                            key={imgIdx}
+                            src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
+                            alt={img.filename || 'Attached'}
+                            className="h-8 w-8 rounded border border-white/10 object-cover"
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -206,13 +225,13 @@ function ReviewSubmitOverlayContent({
             <span className="text-ink-4 ml-auto text-[10.5px]">
               {showPromptPreview
                 ? 'read-only'
-                : `${synthesized?.length ?? 0} chars`}
+                : `${synthesizedText?.length ?? 0} chars`}
             </span>
           </button>
-          {showPromptPreview && synthesized && (
+          {showPromptPreview && synthesizedText && (
             <div className="px-4 pb-3.5">
               <div className="border-line bg-bg-1 max-h-[200px] overflow-y-auto rounded border p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-                {synthesized}
+                {synthesizedText}
               </div>
             </div>
           )}

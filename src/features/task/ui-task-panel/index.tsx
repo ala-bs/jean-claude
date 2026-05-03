@@ -1353,29 +1353,32 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               pullRequestUrl={task.pullRequestUrl}
               onMergeStarted={handleMergeStarted}
               onOpenPrView={openPrView}
-              onSubmitReview={(prompt, targetStepId) => {
+              onSubmitReview={(parts, targetStepId) => {
                 if (targetStepId) {
                   // Send to existing step (may differ from activeStepId)
                   if (targetStepId !== activeStepId) {
                     setActiveStepId(targetStepId);
                   }
-                  void api.agent.sendMessage(targetStepId, [
-                    { type: 'text', text: prompt },
-                  ]);
+                  void api.agent.sendMessage(targetStepId, parts);
                 } else {
                   // Create new step
+                  const textPart = parts.find((p) => p.type === 'text');
+                  const imageParts = parts.filter(
+                    (p): p is PromptImagePart => p.type === 'image',
+                  );
                   const backend = activeStep?.agentBackend ?? 'claude-code';
                   const mode =
                     activeStep?.interactionMode ??
                     getDefaultInteractionModeForBackend({ backend });
                   const model = activeStep?.modelPreference ?? 'default';
                   void handleAddStep({
-                    promptTemplate: prompt,
+                    promptTemplate:
+                      textPart?.type === 'text' ? textPart.text : '',
                     presetType: 'new-session',
                     interactionMode: mode,
                     agentBackend: backend,
                     modelPreference: model,
-                    images: [],
+                    images: imageParts,
                     start: true,
                   });
                 }

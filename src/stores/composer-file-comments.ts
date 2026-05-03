@@ -1,5 +1,7 @@
 import { useStore } from 'zustand';
 
+import type { PromptImagePart, PromptPart } from '@shared/agent-backend-types';
+
 import {
   createCommentSelectors,
   createKeyedCommentStore,
@@ -12,6 +14,7 @@ export interface ComposerFileComment {
   id: string;
   anchor: FileCommentAnchor;
   body: string;
+  images?: PromptImagePart[];
   createdAt: number;
 }
 
@@ -54,7 +57,7 @@ export const useComposerFileCommentActions = selectors.useCommentActions;
 /** Synthesize a structured prompt from file comments. Returns null if no comments. */
 export function synthesizeFileCommentsPrompt(
   comments: ComposerFileComment[],
-): string | null {
+): PromptPart[] | null {
   if (comments.length === 0) return null;
 
   // Group comments by file
@@ -68,10 +71,11 @@ export function synthesizeFileCommentsPrompt(
     }
   }
 
-  const parts: string[] = [];
+  const textLines: string[] = [];
+  const imageParts: PromptImagePart[] = [];
 
   for (const [filePath, fileComments] of byFile) {
-    parts.push(`### ${filePath}`);
+    textLines.push(`### ${filePath}`);
 
     // Sort by line number within each file
     const sorted = [...fileComments].sort(
@@ -82,11 +86,25 @@ export function synthesizeFileCommentsPrompt(
       const lineLabel = c.anchor.lineEnd
         ? `L${c.anchor.lineStart}-${c.anchor.lineEnd}`
         : `L${c.anchor.lineStart}`;
-      parts.push(`- ${lineLabel}: ${c.body}`);
+      const imageTag =
+        c.images && c.images.length > 0 ? ' [see attached image]' : '';
+      textLines.push(`- ${lineLabel}: ${c.body}${imageTag}`);
+
+      if (c.images) {
+        imageParts.push(...c.images);
+      }
     }
 
-    parts.push('');
+    textLines.push('');
   }
 
-  return parts.join('\n').trimEnd();
+  const result: PromptPart[] = [
+    { type: 'text', text: textLines.join('\n').trimEnd() },
+  ];
+
+  for (const img of imageParts) {
+    result.push(img);
+  }
+
+  return result;
 }

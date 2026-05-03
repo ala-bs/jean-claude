@@ -6,6 +6,7 @@ import {
   InlineCommentComposer,
 } from '@/features/common/ui-inline-comments';
 import { REVIEW_PRESETS, type ReviewPresetId } from '@/stores/review-comments';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 
 function PresetChips({
   selectedPresets,
@@ -42,7 +43,11 @@ export function ReviewCommentComposer({
 }: {
   lineStart: number;
   lineEnd?: number;
-  onSubmit: (body: string, presets: ReviewPresetId[]) => void;
+  onSubmit: (
+    body: string,
+    presets: ReviewPresetId[],
+    images: PromptImagePart[],
+  ) => void;
   onCancel: () => void;
 }) {
   const [selectedPresets, setSelectedPresets] = useState<ReviewPresetId[]>([]);
@@ -54,8 +59,8 @@ export function ReviewCommentComposer({
   }, []);
 
   const handleSubmit = useCallback(
-    (body: string) => {
-      onSubmit(body, selectedPresets);
+    (body: string, images: PromptImagePart[]) => {
+      onSubmit(body, selectedPresets, images);
     },
     [onSubmit, selectedPresets],
   );

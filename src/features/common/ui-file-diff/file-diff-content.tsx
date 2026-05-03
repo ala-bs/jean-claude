@@ -16,6 +16,7 @@ import { ReviewCommentComposer } from '@/features/agent/ui-review-comments/revie
 import { ReviewCommentThread } from '@/features/agent/ui-review-comments/review-comment-thread';
 import type { FileAnnotation } from '@/lib/api';
 import type { ReviewComment, ReviewPresetId } from '@/stores/review-comments';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 
 import { FileDiffHeader } from './file-diff-header';
 import type { DiffFile, CommentThread } from './types';
@@ -74,9 +75,14 @@ export function FileDiffContent({
     lineEnd?: number;
     body: string;
     presets: ReviewPresetId[];
+    images?: PromptImagePart[];
   }) => void;
   onDeleteReviewComment?: (commentId: string) => void;
-  onEditReviewComment?: (commentId: string, newBody: string) => void;
+  onEditReviewComment?: (
+    commentId: string,
+    newBody: string,
+    newImages: PromptImagePart[],
+  ) => void;
   showReviewStatus?: boolean;
   onResolveReviewComment?: (commentId: string) => void;
 }) {
@@ -209,7 +215,7 @@ export function FileDiffContent({
 
   // Handle review comment submission
   const handleAddReviewComment = useCallback(
-    (body: string, presets: ReviewPresetId[]) => {
+    (body: string, presets: ReviewPresetId[], images: PromptImagePart[]) => {
       if (commentFormLineRange !== null && onAddReviewComment) {
         onAddReviewComment({
           filePath: file.path,
@@ -220,6 +226,7 @@ export function FileDiffContent({
               : undefined,
           body,
           presets,
+          images: images.length > 0 ? images : undefined,
         });
         setCommentFormLineRange(null);
       }

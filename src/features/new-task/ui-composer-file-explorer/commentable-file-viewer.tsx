@@ -18,6 +18,7 @@ import {
   getCommentedLineSet,
   groupCommentsByLine,
 } from '@/stores/utils-comment-store';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 
 export function CommentableFileViewer({
   filePath,
@@ -153,7 +154,7 @@ export function CommentableFileViewer({
   );
 
   const handleComposerSubmit = useCallback(
-    (body: string) => {
+    (body: string, images: PromptImagePart[]) => {
       if (!composerLineRange) return;
       addComment({
         anchor: {
@@ -165,6 +166,7 @@ export function CommentableFileViewer({
               : undefined,
         },
         body,
+        images: images.length > 0 ? images : undefined,
       });
       setComposerLineRange(null);
     },
@@ -232,8 +234,11 @@ export function CommentableFileViewer({
                   onMouseUp={() => handleLineMouseUp(lineNumber)}
                   inlineComments={lineComments}
                   onRemoveComment={removeComment}
-                  onEditComment={(commentId, newBody) =>
-                    updateComment(commentId, { body: newBody })
+                  onEditComment={(commentId, newBody, newImages) =>
+                    updateComment(commentId, {
+                      body: newBody,
+                      images: newImages.length > 0 ? newImages : undefined,
+                    })
                   }
                   showComposer={!!showComposer}
                   composerLineRange={composerLineRange}
@@ -289,13 +294,18 @@ function FileLineRow({
         id: string;
         anchor: { lineStart: number; lineEnd?: number };
         body: string;
+        images?: PromptImagePart[];
       }>
     | undefined;
   onRemoveComment: (commentId: string) => void;
-  onEditComment: (commentId: string, newBody: string) => void;
+  onEditComment: (
+    commentId: string,
+    newBody: string,
+    newImages: PromptImagePart[],
+  ) => void;
   showComposer: boolean;
   composerLineRange: { start: number; end: number } | null;
-  onComposerSubmit: (body: string) => void;
+  onComposerSubmit: (body: string, images: PromptImagePart[]) => void;
   onComposerCancel: () => void;
 }) {
   const renderedContent =
@@ -369,8 +379,11 @@ function FileLineRow({
                   lineStart={comment.anchor.lineStart}
                   lineEnd={comment.anchor.lineEnd}
                   body={comment.body}
+                  images={comment.images}
                   onRemove={() => onRemoveComment(comment.id)}
-                  onEdit={(newBody) => onEditComment(comment.id, newBody)}
+                  onEdit={(newBody, newImages) =>
+                    onEditComment(comment.id, newBody, newImages)
+                  }
                 />
               ))}
             </div>

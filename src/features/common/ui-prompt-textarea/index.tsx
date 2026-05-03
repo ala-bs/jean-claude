@@ -35,7 +35,7 @@ import {
   getFilePathSuggestions,
   useProjectFilePaths,
 } from '@/hooks/use-project-file-paths';
-import { compressImage } from '@/lib/image-compression';
+import { processImageFile, MAX_IMAGES } from '@/lib/image-utils';
 import { useToastStore } from '@/stores/toasts';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import type { Skill } from '@shared/skill-types';
@@ -98,42 +98,6 @@ type MentionToken = {
   end: number;
   query: string;
 };
-
-const MAX_IMAGES = 5;
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-const ALLOWED_IMAGE_TYPES = [
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  'image/avif',
-];
-
-async function processImageFile(
-  file: File,
-  onAttach: (image: PromptImagePart) => void,
-  onError?: (message: string) => void,
-): Promise<void> {
-  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-    onError?.(`Unsupported image type: ${file.type}`);
-    return;
-  }
-  if (file.size > MAX_FILE_SIZE) {
-    onError?.(
-      `Image too large (${(file.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_FILE_SIZE / 1024 / 1024} MB)`,
-    );
-    return;
-  }
-  const { agent, storage } = await compressImage(file);
-  onAttach({
-    type: 'image',
-    data: agent.data,
-    mimeType: agent.mimeType,
-    filename: file.name,
-    storageData: storage.data,
-    storageMimeType: storage.mimeType,
-  });
-}
 
 export interface PromptTextareaRef {
   focus: () => void;

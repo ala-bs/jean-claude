@@ -34,6 +34,7 @@ import {
   useReviewCommentsByFile,
   type ReviewPresetId,
 } from '@/stores/review-comments';
+import type { PromptImagePart, PromptPart } from '@shared/agent-backend-types';
 
 const HEADER_HEIGHT_CLS = `h-[40px] shrink-0`;
 
@@ -67,8 +68,8 @@ export function WorktreeDiffView({
   pullRequestUrl: string | null;
   onMergeStarted: () => void;
   onOpenPrView: () => void;
-  /** Called when user submits a review. Receives the synthesized prompt and target step ID (null = new step). */
-  onSubmitReview?: (prompt: string, targetStepId: string | null) => void;
+  /** Called when user submits a review. Receives the synthesized prompt parts and target step ID (null = new step). */
+  onSubmitReview?: (parts: PromptPart[], targetStepId: string | null) => void;
   bottomPadding?: number;
 }) {
   const { data, isLoading, error, refresh } = useWorktreeDiff(taskId, true);
@@ -128,6 +129,7 @@ export function WorktreeDiffView({
       lineEnd?: number;
       body: string;
       presets: ReviewPresetId[];
+      images?: PromptImagePart[];
     }) => {
       addComment(taskId, {
         anchor: {
@@ -136,6 +138,7 @@ export function WorktreeDiffView({
           lineEnd: params.lineEnd,
         },
         body: params.body,
+        images: params.images,
         presets: params.presets,
         status: 'open',
         resolved: false,
@@ -152,8 +155,11 @@ export function WorktreeDiffView({
   );
 
   const handleEditReviewComment = useCallback(
-    (commentId: string, newBody: string) => {
-      updateComment(taskId, commentId, { body: newBody });
+    (commentId: string, newBody: string, newImages: PromptImagePart[]) => {
+      updateComment(taskId, commentId, {
+        body: newBody,
+        images: newImages.length > 0 ? newImages : undefined,
+      });
     },
     [taskId, updateComment],
   );
@@ -166,9 +172,9 @@ export function WorktreeDiffView({
   );
 
   const handleSubmitReview = useCallback(
-    (prompt: string, targetStepId: string | null) => {
+    (parts: PromptPart[], targetStepId: string | null) => {
       setIsSubmitOverlayOpen(false);
-      onSubmitReview?.(prompt, targetStepId);
+      onSubmitReview?.(parts, targetStepId);
 
       // Resolve all open comments after submission
       for (const comment of reviewComments) {
@@ -472,9 +478,14 @@ function WorktreeFileDiffContent({
     lineEnd?: number;
     body: string;
     presets: ReviewPresetId[];
+    images?: PromptImagePart[];
   }) => void;
   onDeleteReviewComment?: (commentId: string) => void;
-  onEditReviewComment?: (commentId: string, newBody: string) => void;
+  onEditReviewComment?: (
+    commentId: string,
+    newBody: string,
+    newImages: PromptImagePart[],
+  ) => void;
   onResolveReviewComment?: (commentId: string) => void;
 }) {
   const { data, isLoading, error } = useWorktreeFileContent(

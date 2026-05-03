@@ -1,6 +1,8 @@
 import { useRef, useMemo } from 'react';
 import { useStore } from 'zustand';
 
+import type { PromptImagePart, PromptPart } from '@shared/agent-backend-types';
+
 import {
   createKeyedCommentStore,
   createCommentSelectors,
@@ -42,6 +44,7 @@ export interface ReviewComment {
   id: string;
   anchor: FileCommentAnchor;
   body: string;
+  images?: PromptImagePart[];
   presets: ReviewPresetId[];
   status: ReviewCommentStatus;
   agentNote?: string;
@@ -224,19 +227,20 @@ export function useReviewCommentsByFile(taskId: string) {
 export function synthesizeReviewPrompt(
   comments: ReviewComment[],
   globalIntent?: string,
-): string | null {
+): PromptPart[] | null {
   const openComments = comments.filter((c) => !c.resolved);
   if (openComments.length === 0) return null;
 
-  const parts: string[] = [];
+  const textLines: string[] = [];
+  const imageParts: PromptImagePart[] = [];
 
   if (globalIntent?.trim()) {
-    parts.push(globalIntent.trim());
-    parts.push('');
+    textLines.push(globalIntent.trim());
+    textLines.push('');
   }
 
-  parts.push('Address the following inline comments from the diff review:');
-  parts.push('');
+  textLines.push('Address the following inline comments from the diff review:');
+  textLines.push('');
 
   openComments.forEach((c, i) => {
     const lineLabel = c.anchor.lineEnd
@@ -244,18 +248,30 @@ export function synthesizeReviewPrompt(
       : `L${c.anchor.lineStart}`;
     const anchor = `${c.anchor.filePath}:${lineLabel}`;
     const tags = c.presets.length > 0 ? ` [${c.presets.join(', ')}]` : '';
-    parts.push(`${i + 1}. ${anchor}${tags}`);
+    const imageTag =
+      c.images && c.images.length > 0 ? ' [see attached image]' : '';
+    textLines.push(`${i + 1}. ${anchor}${tags}`);
     // When body is empty but presets exist, generate instruction from presets
     const body =
       c.body ||
       (c.presets.length > 0 ? `${c.presets.join(' and ')} this code` : '');
-    parts.push(`   \u2192 ${body}`);
-    parts.push('');
+    textLines.push(`   \u2192 ${body}${imageTag}`);
+    textLines.push('');
+
+    if (c.images) {
+      imageParts.push(...c.images);
+    }
   });
 
-  parts.push(
+  textLines.push(
     "Keep changes scoped to the comments. Don't refactor unrelated code.",
   );
 
-  return parts.join('\n');
+  const result: PromptPart[] = [{ type: 'text', text: textLines.join('\n') }];
+
+  for (const img of imageParts) {
+    result.push(img);
+  }
+
+  return result;
 }

@@ -30,10 +30,15 @@ export function ComposerCommentsChip({
   const { selectFile } = useComposerFileExplorerState(projectId);
   const { updateDraft } = useNewTaskDraft();
 
-  const synthesizedPrompt = useMemo(
+  const synthesizedParts = useMemo(
     () => synthesizeFileCommentsPrompt(comments),
     [comments],
   );
+  const synthesizedPrompt = useMemo(() => {
+    if (!synthesizedParts) return null;
+    const textPart = synthesizedParts.find((p) => p.type === 'text');
+    return textPart?.type === 'text' ? textPart.text : null;
+  }, [synthesizedParts]);
 
   const position = useDropdownPosition({
     isOpen,

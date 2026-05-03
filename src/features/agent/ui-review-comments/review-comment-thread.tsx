@@ -6,6 +6,7 @@ import {
   InlineCommentBubble,
 } from '@/features/common/ui-inline-comments';
 import type { ReviewComment } from '@/stores/review-comments';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 
 function StatusPill({ status }: { status: ReviewComment['status'] }) {
   const config = {
@@ -73,7 +74,11 @@ export function ReviewCommentThread({
   showStatus: boolean;
   onResolve?: (commentId: string) => void;
   onDelete?: (commentId: string) => void;
-  onEdit?: (commentId: string, newBody: string) => void;
+  onEdit?: (
+    commentId: string,
+    newBody: string,
+    newImages: PromptImagePart[],
+  ) => void;
 }) {
   return (
     <div
@@ -87,8 +92,13 @@ export function ReviewCommentThread({
         lineStart={comment.anchor.lineStart}
         lineEnd={comment.anchor.lineEnd}
         body={comment.body}
+        images={comment.images}
         onRemove={onDelete ? () => onDelete(comment.id) : undefined}
-        onEdit={onEdit ? (newBody) => onEdit(comment.id, newBody) : undefined}
+        onEdit={
+          onEdit
+            ? (newBody, newImages) => onEdit(comment.id, newBody, newImages)
+            : undefined
+        }
         renderHeaderExtras={
           <>
             {showStatus && <StatusPill status={comment.status} />}

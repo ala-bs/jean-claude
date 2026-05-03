@@ -614,17 +614,27 @@ export function NewTaskOverlay({
         finalPrompt = draft.prompt ?? '';
       }
 
+      let draftImages: PromptImagePart[] | undefined =
+        draft.images && draft.images.length > 0 ? draft.images : undefined;
+
       // Append synthesized file comments to prompt
-      const fileContext = synthesizeFileCommentsPrompt(fileComments);
-      if (fileContext) {
-        finalPrompt = finalPrompt.trim()
-          ? `${finalPrompt}\n\n${fileContext}`
-          : fileContext;
+      const fileContextParts = synthesizeFileCommentsPrompt(fileComments);
+      if (fileContextParts) {
+        const textPart = fileContextParts.find((p) => p.type === 'text');
+        if (textPart && textPart.type === 'text') {
+          finalPrompt = finalPrompt.trim()
+            ? `${finalPrompt}\n\n${textPart.text}`
+            : textPart.text;
+        }
+        const commentImages = fileContextParts.filter(
+          (p): p is PromptImagePart => p.type === 'image',
+        );
+        if (commentImages.length > 0) {
+          draftImages = [...(draftImages ?? []), ...commentImages];
+        }
       }
 
       const backlogTodoId = draft.backlogTodoId ?? null;
-      const draftImages =
-        draft.images && draft.images.length > 0 ? draft.images : undefined;
 
       const jobId = addRunningJob({
         type: 'task-creation',
