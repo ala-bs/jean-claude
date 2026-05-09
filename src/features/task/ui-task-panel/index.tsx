@@ -9,6 +9,7 @@ import {
   Settings,
   GitBranch,
   GitCompare,
+  GitFork,
   GitPullRequest,
   MoreHorizontal,
   FolderTree,
@@ -93,6 +94,8 @@ import {
   useDiffViewState,
   usePrViewState,
 } from '@/stores/navigation';
+import { useNewTaskDraftStore } from '@/stores/new-task-draft';
+import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useTaskPrompt } from '@/stores/task-prompts';
 import { useToastStore } from '@/stores/toasts';
@@ -1251,6 +1254,24 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   shortcut="cmd+w"
                 >
                   Open Worktree in Editor
+                </DropdownItem>
+              )}
+              {task.branchName && (
+                <DropdownItem
+                  icon={<GitFork />}
+                  onClick={() => {
+                    overflowMenuRef.current?.toggle();
+                    const draftStore = useNewTaskDraftStore.getState();
+                    draftStore.setSelectedProjectId(task.projectId);
+                    draftStore.setDraft(task.projectId, {
+                      sourceBranch: task.branchName,
+                      createWorktree: true,
+                      inputMode: 'prompt',
+                    });
+                    useOverlaysStore.getState().open('new-task');
+                  }}
+                >
+                  Sub Task
                 </DropdownItem>
               )}
               <DropdownItem
