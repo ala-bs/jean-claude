@@ -89,9 +89,12 @@ function GraphNode({
   const hasQuestion = attention === 'has-question';
   const needsAttention = needsPermission || hasQuestion;
 
-  // For attention states on main tasks, render icon instead of circle
-  if (needsAttention && !isSubtask) {
-    const iconSize = 14;
+  // For attention states, render icon instead of circle
+  if (needsAttention) {
+    const iconSize = isSubtask ? 12 : 14;
+    const left = isSubtask
+      ? RAIL_W - 9 - iconSize / 2 + 4
+      : NODE_X - iconSize / 2;
     return (
       <div
         className={clsx(
@@ -101,7 +104,7 @@ function GraphNode({
         )}
         style={{
           position: 'absolute',
-          left: NODE_X - iconSize / 2,
+          left,
           top: 14 - 1,
           width: iconSize,
           height: iconSize,
@@ -902,6 +905,27 @@ function SubtaskRow({
             {formatRelativeTime(child.timestamp)}
           </span>
         </div>
+        {/* Permission/question indicator */}
+        {childNeedsAttention && (
+          <div
+            className={clsx(
+              'flex items-center gap-1 pt-0.5 text-[10px]',
+              childHasQuestion ? 'text-status-azure' : 'text-status-run',
+            )}
+          >
+            {childNeedsPermission ? (
+              <>
+                <ShieldQuestion className="h-2.5 w-2.5 shrink-0" />
+                <span>Waiting for permission</span>
+              </>
+            ) : (
+              <>
+                <MessageSquare className="h-2.5 w-2.5 shrink-0" />
+                <span>Waiting for answer</span>
+              </>
+            )}
+          </div>
+        )}
         {/* Sub-task work items */}
         {child.workItemIds && child.workItemIds.length > 0 && (
           <div className="mt-0.5 flex flex-wrap gap-1">
