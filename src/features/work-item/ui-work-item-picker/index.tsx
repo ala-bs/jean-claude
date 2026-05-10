@@ -14,8 +14,8 @@ import {
 import { Select } from '@/common/ui/select';
 import type { SelectOption } from '@/common/ui/select';
 import { WorkItemBoard } from '@/features/work-item/ui-work-item-board';
-import { WorkItemDetails } from '@/features/work-item/ui-work-item-details';
 import { WorkItemList } from '@/features/work-item/ui-work-item-list';
+import { WorkItemPreview } from '@/features/work-item/ui-work-item-preview';
 import { useIterations, useWorkItems } from '@/hooks/use-work-items';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import type { WorkItemsViewMode } from '@/stores/new-task-draft';
@@ -367,7 +367,7 @@ export function WorkItemPicker({
           background: 'oklch(0 0 0 / 0.22)',
         }}
       >
-        <WorkItemDetails
+        <WorkItemPreview
           workItem={highlightedWorkItem}
           providerId={providerId}
           projectName={projectName}

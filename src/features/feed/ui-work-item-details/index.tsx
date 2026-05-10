@@ -8,8 +8,10 @@ import {
   FileText,
   FlaskConical,
   Loader2,
+  MessagesSquare,
 } from 'lucide-react';
-import { useState } from 'react';
+import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Chip } from '@/common/ui/chip';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
@@ -23,6 +25,8 @@ import {
 } from '@/hooks/use-work-items';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
+
+type DetailsTab = 'comments' | 'test-cases';
 
 function WorkItemTypeIcon({
   type,
@@ -68,7 +72,7 @@ function StateBadge({ state }: { state: string }) {
   );
 }
 
-export function FeedWorkItemDetails({
+export function WorkItemDetails({
   projectId,
   workItemId,
 }: {
@@ -108,6 +112,15 @@ export function FeedWorkItemDetails({
       projectName,
       workItemId,
     });
+  const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
+  const [activeTab, setActiveTab] = useState<DetailsTab>('comments');
+
+  useEffect(() => {
+    if (!hasTestCases && activeTab === 'test-cases') {
+      setActiveTab('comments');
+    }
+  }, [hasTestCases, activeTab]);
+
   const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
     initialWidth: commentsPaneWidth,
     minWidth: minCommentsPaneWidth,
@@ -211,30 +224,6 @@ export function FeedWorkItemDetails({
               No description provided.
             </p>
           )}
-
-          {(isLoadingTestCases || relatedTestCases.length > 0) && (
-            <div className="border-glass-border mt-4 border-t pt-4">
-              <div className="text-ink-3 mb-3 text-xs font-medium tracking-wide uppercase">
-                Related Test Cases
-              </div>
-
-              {isLoadingTestCases && (
-                <p className="text-ink-3 text-sm">Loading test cases...</p>
-              )}
-
-              {relatedTestCases.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  {relatedTestCases.map((tc) => (
-                    <ExpandableTestCase
-                      key={tc.id}
-                      testCase={tc}
-                      providerId={providerId ?? undefined}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         <div
@@ -246,18 +235,58 @@ export function FeedWorkItemDetails({
         />
 
         <aside
-          className="border-glass-border/50 bg-bg-1/20 min-w-0 shrink-0 border-l px-5 py-4"
+          className="border-glass-border/50 bg-bg-1/20 flex min-w-0 shrink-0 flex-col border-l"
           style={{ width: effectiveCommentsPaneWidth }}
         >
-          <WorkItemComments
-            comments={comments}
-            isLoading={isLoadingComments}
-            error={
-              commentsError instanceof Error ? commentsError.message : null
-            }
-            providerId={providerId ?? undefined}
-            emptyMessage="No comments on this work item yet."
-          />
+          <div className="border-glass-border flex gap-0 border-b px-3">
+            <FeedTabButton
+              active={activeTab === 'comments'}
+              onClick={() => setActiveTab('comments')}
+              icon={<MessagesSquare className="h-3.5 w-3.5" />}
+              label="Comments"
+              count={comments.length}
+            />
+            {hasTestCases && (
+              <FeedTabButton
+                active={activeTab === 'test-cases'}
+                onClick={() => setActiveTab('test-cases')}
+                icon={<FlaskConical className="h-3.5 w-3.5" />}
+                label="Test Cases"
+                count={relatedTestCases.length}
+              />
+            )}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            {activeTab === 'comments' && (
+              <WorkItemComments
+                comments={comments}
+                isLoading={isLoadingComments}
+                error={
+                  commentsError instanceof Error ? commentsError.message : null
+                }
+                providerId={providerId ?? undefined}
+                emptyMessage="No comments on this work item yet."
+                hideHeader
+              />
+            )}
+
+            {activeTab === 'test-cases' && (
+              <div className="flex flex-col gap-2">
+                {isLoadingTestCases ? (
+                  <p className="text-ink-3 text-sm">Loading test cases...</p>
+                ) : (
+                  relatedTestCases.map((tc) => (
+                    <ExpandableTestCase
+                      key={tc.id}
+                      testCase={tc}
+                      providerId={providerId ?? undefined}
+                    />
+                  ))
+                )}
+              </div>
+            )}
+          </div>
         </aside>
       </div>
     </div>
@@ -355,5 +384,43 @@ function ExpandableTestCase({
         </div>
       )}
     </div>
+  );
+}
+
+function FeedTabButton({
+  active,
+  onClick,
+  icon,
+  label,
+  count,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  label: string;
+  count: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+        active
+          ? 'border-accent-1 text-ink-1'
+          : 'text-ink-3 hover:text-ink-2 border-transparent'
+      }`}
+    >
+      {icon}
+      {label}
+      {count > 0 && (
+        <span
+          className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] ${
+            active ? 'bg-accent-1/10 text-accent-1' : 'bg-ink-4/20 text-ink-3'
+          }`}
+        >
+          {count}
+        </span>
+      )}
+    </button>
   );
 }

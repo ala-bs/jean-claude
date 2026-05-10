@@ -1,5 +1,11 @@
-import { ChevronRight, FlaskConical } from 'lucide-react';
-import { useState } from 'react';
+import {
+  ChevronRight,
+  FileText,
+  FlaskConical,
+  MessagesSquare,
+} from 'lucide-react';
+import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Kbd } from '@/common/ui/kbd';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
@@ -12,7 +18,9 @@ import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { WorkItemComments } from '../ui-work-item-comments';
 import { WorkItemTypeIcon } from '../ui-work-item-shared';
 
-export function WorkItemDetails({
+type DetailsTab = 'content' | 'comments' | 'test-cases';
+
+export function WorkItemPreview({
   workItem,
   providerId,
   projectName,
@@ -39,6 +47,15 @@ export function WorkItemDetails({
       workItemId,
     });
 
+  const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
+  const [activeTab, setActiveTab] = useState<DetailsTab>('content');
+
+  useEffect(() => {
+    if (!hasTestCases && activeTab === 'test-cases') {
+      setActiveTab('content');
+    }
+  }, [hasTestCases, activeTab]);
+
   if (!workItem) {
     return (
       <div className="flex h-full min-h-37.5 items-center justify-center">
@@ -62,34 +79,63 @@ export function WorkItemDetails({
 
       <h3 className="text-ink-0 mt-2 text-sm font-medium">{title}</h3>
 
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        <div className="flex items-center gap-1">
-          <span className="text-ink-3">Assigned:</span>
-          <span className="text-ink-1">{assignedTo ?? 'Unassigned'}</span>
-        </div>
-
-        <div className="flex items-center gap-1">
-          <span className="text-ink-3">State:</span>
-          <span className="text-ink-1">{state}</span>
-        </div>
+      <div className="border-glass-border mt-3 flex gap-0 border-b">
+        <TabButton
+          active={activeTab === 'content'}
+          onClick={() => setActiveTab('content')}
+          icon={<FileText className="h-3.5 w-3.5" />}
+          label="Content"
+        />
+        <TabButton
+          active={activeTab === 'comments'}
+          onClick={() => setActiveTab('comments')}
+          icon={<MessagesSquare className="h-3.5 w-3.5" />}
+          label="Comments"
+          count={comments.length}
+        />
+        {hasTestCases && (
+          <TabButton
+            active={activeTab === 'test-cases'}
+            onClick={() => setActiveTab('test-cases')}
+            icon={<FlaskConical className="h-3.5 w-3.5" />}
+            label="Test Cases"
+            count={relatedTestCases.length}
+          />
+        )}
       </div>
 
-      {fields.description && (
-        <div className="border-glass-border my-3 border-t" />
-      )}
+      <div className="mt-3 min-h-0 flex-1">
+        {activeTab === 'content' && (
+          <div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+              <div className="flex items-center gap-1">
+                <span className="text-ink-3">Assigned:</span>
+                <span className="text-ink-1">{assignedTo ?? 'Unassigned'}</span>
+              </div>
 
-      {fields.description && (
-        <AzureHtmlContent
-          html={fields.description}
-          providerId={providerId}
-          className="text-ink-2 text-xs"
-          imageClassName="max-h-72 w-auto object-contain"
-          enableImageModal
-        />
-      )}
+              <div className="flex items-center gap-1">
+                <span className="text-ink-3">State:</span>
+                <span className="text-ink-1">{state}</span>
+              </div>
+            </div>
 
-      {(isLoadingComments || comments.length > 0 || !!commentsError) && (
-        <div className="mt-4 min-h-0 flex-1">
+            {fields.description && (
+              <div className="border-glass-border my-3 border-t" />
+            )}
+
+            {fields.description && (
+              <AzureHtmlContent
+                html={fields.description}
+                providerId={providerId}
+                className="text-ink-2 text-xs"
+                imageClassName="max-h-72 w-auto object-contain"
+                enableImageModal
+              />
+            )}
+          </div>
+        )}
+
+        {activeTab === 'comments' && (
           <WorkItemComments
             comments={comments}
             isLoading={isLoadingComments}
@@ -97,32 +143,26 @@ export function WorkItemDetails({
               commentsError instanceof Error ? commentsError.message : null
             }
             providerId={providerId}
+            hideHeader
           />
-        </div>
-      )}
+        )}
 
-      {(isLoadingTestCases || relatedTestCases.length > 0) && (
-        <div className="border-glass-border my-3 border-t" />
-      )}
-
-      {isLoadingTestCases && (
-        <p className="text-ink-3 text-xs">Loading test cases...</p>
-      )}
-
-      {relatedTestCases.length > 0 && (
-        <div className="flex flex-col gap-1 pb-2">
-          <div className="text-ink-3 text-[11px] font-medium tracking-wide uppercase">
-            Related Test Cases
+        {activeTab === 'test-cases' && (
+          <div className="flex flex-col gap-1 pb-2">
+            {isLoadingTestCases ? (
+              <p className="text-ink-3 text-xs">Loading test cases...</p>
+            ) : (
+              relatedTestCases.map((tc) => (
+                <ExpandableTestCase
+                  key={tc.id}
+                  testCase={tc}
+                  providerId={providerId}
+                />
+              ))
+            )}
           </div>
-          {relatedTestCases.map((tc) => (
-            <ExpandableTestCase
-              key={tc.id}
-              testCase={tc}
-              providerId={providerId}
-            />
-          ))}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -218,5 +258,43 @@ function ExpandableTestCase({
         </div>
       )}
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  icon,
+  label,
+  count,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  label: string;
+  count?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-xs font-medium transition-colors ${
+        active
+          ? 'border-accent-1 text-ink-1'
+          : 'text-ink-3 hover:text-ink-2 border-transparent'
+      }`}
+    >
+      {icon}
+      {label}
+      {count != null && count > 0 && (
+        <span
+          className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] ${
+            active ? 'bg-accent-1/10 text-accent-1' : 'bg-ink-4/20 text-ink-3'
+          }`}
+        >
+          {count}
+        </span>
+      )}
+    </button>
   );
 }

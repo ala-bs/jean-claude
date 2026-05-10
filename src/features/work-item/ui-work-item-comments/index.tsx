@@ -15,6 +15,70 @@ function formatCommentDate(value: string) {
   }).format(date);
 }
 
+function CommentsContent({
+  comments,
+  isLoading,
+  error,
+  providerId,
+  emptyMessage,
+}: {
+  comments: WorkItemComment[];
+  isLoading: boolean;
+  error?: string | null;
+  providerId?: string;
+  emptyMessage: string;
+}) {
+  if (isLoading) {
+    return <div className="text-ink-3 py-6 text-sm">Loading comments...</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="py-6">
+        <p className="text-ink-2 text-sm">Unable to load comments.</p>
+        <p className="text-ink-3 mt-1 text-xs">{error}</p>
+      </div>
+    );
+  }
+
+  if (comments.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+        <MessageSquare className="text-ink-4 h-8 w-8" />
+        <p className="text-ink-3 max-w-56 text-sm">{emptyMessage}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3 pb-2">
+      {comments.map((comment) => (
+        <div
+          key={comment.id}
+          className="rounded-md border px-3 py-2.5"
+          style={{
+            borderColor: 'oklch(1 0 0 / 0.06)',
+            background: 'oklch(1 0 0 / 0.02)',
+          }}
+        >
+          <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+            <span className="text-ink-1 font-medium">{comment.createdBy}</span>
+            <span className="text-ink-4">&bull;</span>
+            <span className="text-ink-3">
+              {formatCommentDate(comment.createdDate)}
+            </span>
+          </div>
+          <AzureHtmlContent
+            html={comment.text}
+            providerId={providerId}
+            className="text-ink-2 text-xs"
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function WorkItemComments({
   comments,
   isLoading,
@@ -22,6 +86,7 @@ export function WorkItemComments({
   providerId,
   emptyMessage = 'No comments yet.',
   title = 'Comments',
+  hideHeader = false,
 }: {
   comments: WorkItemComment[];
   isLoading: boolean;
@@ -29,7 +94,20 @@ export function WorkItemComments({
   providerId?: string;
   emptyMessage?: string;
   title?: string;
+  hideHeader?: boolean;
 }) {
+  if (hideHeader) {
+    return (
+      <CommentsContent
+        comments={comments}
+        isLoading={isLoading}
+        error={error}
+        providerId={providerId}
+        emptyMessage={emptyMessage}
+      />
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2">
@@ -47,47 +125,13 @@ export function WorkItemComments({
       </div>
 
       <div className="border-glass-border/50 mt-3 min-h-0 flex-1 overflow-y-auto border-t pt-3">
-        {isLoading ? (
-          <div className="text-ink-3 py-6 text-sm">Loading comments...</div>
-        ) : error ? (
-          <div className="py-6">
-            <p className="text-ink-2 text-sm">Unable to load comments.</p>
-            <p className="text-ink-3 mt-1 text-xs">{error}</p>
-          </div>
-        ) : comments.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-            <MessageSquare className="text-ink-4 h-8 w-8" />
-            <p className="text-ink-3 max-w-56 text-sm">{emptyMessage}</p>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3 pb-2">
-            {comments.map((comment) => (
-              <div
-                key={comment.id}
-                className="rounded-md border px-3 py-2.5"
-                style={{
-                  borderColor: 'oklch(1 0 0 / 0.06)',
-                  background: 'oklch(1 0 0 / 0.02)',
-                }}
-              >
-                <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-                  <span className="text-ink-1 font-medium">
-                    {comment.createdBy}
-                  </span>
-                  <span className="text-ink-4">&bull;</span>
-                  <span className="text-ink-3">
-                    {formatCommentDate(comment.createdDate)}
-                  </span>
-                </div>
-                <AzureHtmlContent
-                  html={comment.text}
-                  providerId={providerId}
-                  className="text-ink-2 text-xs"
-                />
-              </div>
-            ))}
-          </div>
-        )}
+        <CommentsContent
+          comments={comments}
+          isLoading={isLoading}
+          error={error}
+          providerId={providerId}
+          emptyMessage={emptyMessage}
+        />
       </div>
     </div>
   );
