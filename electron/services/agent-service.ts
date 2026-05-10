@@ -741,6 +741,15 @@ class AgentService {
         }
 
         const status = result.isError ? 'errored' : 'completed';
+
+        // Mark as unread BEFORE emitting the status event so the feed
+        // re-fetch (triggered by the event) reads the updated value.
+        const isFocused =
+          this.mainWindow?.isFocused() && this.focusedTaskId === taskId;
+        if (!isFocused) {
+          await TaskRepository.setHasUnread(taskId, true);
+        }
+
         this.emitEvent(taskId, stepId, { type: 'status', status });
 
         // Auto-start dependent steps whose dependencies are now satisfied
@@ -753,15 +762,6 @@ class AgentService {
           this.start(autoStepId).catch((err) => {
             void this.handleAutoStartFailure(autoStepId, err);
           });
-        }
-
-        // Mark as unread if completed and user isn't viewing this task
-        if (status === 'completed') {
-          const isFocused =
-            this.mainWindow?.isFocused() && this.focusedTaskId === taskId;
-          if (!isFocused) {
-            await TaskRepository.setHasUnread(taskId, true);
-          }
         }
 
         // Notify on completion
