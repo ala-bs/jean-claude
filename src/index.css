@@ -23,12 +23,12 @@
   --color-ink-1: oklch(0.88 0.008 275);
   --color-ink-2: oklch(0.68 0.012 275);
   --color-ink-3: oklch(0.52 0.014 275);
-  --color-ink-4: oklch(0.40 0.014 275);
+  --color-ink-4: oklch(0.4 0.014 275);
 
   /* Accent — electric violet */
-  --color-acc: oklch(0.72 0.20 295);
-  --color-acc-soft: oklch(0.72 0.20 295 / 0.16);
-  --color-acc-line: oklch(0.72 0.20 295 / 0.40);
+  --color-acc: oklch(0.72 0.2 295);
+  --color-acc-soft: oklch(0.72 0.2 295 / 0.16);
+  --color-acc-line: oklch(0.72 0.2 295 / 0.4);
   --color-acc-ink: oklch(0.82 0.17 295);
 
   /* Status — same L+C, hue rotation only */
@@ -51,14 +51,14 @@
   --color-glass-subtle: oklch(1 0 0 / 0.025);
   --color-glass-light: oklch(1 0 0 / 0.04);
   --color-glass-medium: oklch(1 0 0 / 0.06);
-  --color-glass-strong: oklch(1 0 0 / 0.10);
+  --color-glass-strong: oklch(1 0 0 / 0.1);
   --color-glass-border: oklch(1 0 0 / 0.08);
   --color-glass-border-strong: oklch(1 0 0 / 0.12);
 
   /* ── Legacy mappings for gradual migration ── */
   /* These let existing neutral-*, blue-*, etc. classes still compile */
-  --color-primary: oklch(0.72 0.20 295);
-  --color-primary-dim: oklch(0.60 0.18 295);
+  --color-primary: oklch(0.72 0.2 295);
+  --color-primary-dim: oklch(0.6 0.18 295);
   --color-primary-container: oklch(0.25 0.03 275);
   --color-secondary: oklch(0.78 0.18 295);
   --color-secondary-dim: oklch(0.65 0.15 295);
@@ -68,7 +68,7 @@
   --color-surface: oklch(0.14 0.012 275);
   --color-surface-bright: oklch(0.17 0.013 275);
   --color-surface-variant: oklch(0.16 0.012 275);
-  --color-surface-tint: oklch(0.72 0.20 295 / 0.05);
+  --color-surface-tint: oklch(0.72 0.2 295 / 0.05);
   --color-surface-container-lowest: oklch(0.08 0.01 275);
   --color-surface-container-low: oklch(0.12 0.011 275);
   --color-surface-container: oklch(0.15 0.012 275);
@@ -115,7 +115,7 @@
 
   /* ── Elevation ── */
   --shadow-ambient: 0 24px 48px oklch(0 0 0 / 0.3);
-  --shadow-focus-glow: 0 0 0 4px oklch(0.72 0.20 295 / 0.2);
+  --shadow-focus-glow: 0 0 0 4px oklch(0.72 0.2 295 / 0.2);
 }
 
 /* ── Base layer: global defaults from the design system ── */
@@ -165,19 +165,18 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-1), var(--color-bg-1))
-      padding-box,
+    linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.65 0.20 295),
-        oklch(0.60 0.22 320),
+        oklch(0.65 0.2 295),
+        oklch(0.6 0.22 320),
         oklch(0.72 0.18 295),
-        oklch(0.65 0.20 295)
+        oklch(0.65 0.2 295)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 1.5s linear infinite;
-  box-shadow: 0 0 6px 0px oklch(0.72 0.20 295 / 0.35);
+  box-shadow: 0 0 6px 0px oklch(0.72 0.2 295 / 0.35);
 }
 
 @keyframes cat-bongo-bob {
@@ -302,11 +301,13 @@ button {
 @keyframes activity-glow {
   0%,
   100% {
-    box-shadow: 0 0 6px oklch(var(--acc) / 0.25),
+    box-shadow:
+      0 0 6px oklch(var(--acc) / 0.25),
       inset 0 0 0 1px oklch(var(--acc) / 0.2);
   }
   50% {
-    box-shadow: 0 0 12px oklch(var(--acc) / 0.4),
+    box-shadow:
+      0 0 12px oklch(var(--acc) / 0.4),
       inset 0 0 0 1px oklch(var(--acc) / 0.35);
   }
 }
@@ -336,38 +337,36 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-0), var(--color-bg-0))
-      padding-box,
+    linear-gradient(var(--color-bg-0), var(--color-bg-0)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.65 0.20 295),
-        oklch(0.60 0.22 320),
+        oklch(0.65 0.2 295),
+        oklch(0.6 0.22 320),
         oklch(0.72 0.18 295),
-        oklch(0.65 0.20 295)
+        oklch(0.65 0.2 295)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 3s linear infinite;
-  box-shadow: 0 0 12px 0px oklch(0.72 0.20 295 / 0.15);
+  box-shadow: 0 0 12px 0px oklch(0.72 0.2 295 / 0.15);
 }
 
 @utility running-border-selected {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-3), var(--color-bg-3))
-      padding-box,
+    linear-gradient(var(--color-bg-3), var(--color-bg-3)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
         oklch(0.72 0.22 295),
         oklch(0.67 0.24 320),
-        oklch(0.78 0.20 295),
+        oklch(0.78 0.2 295),
         oklch(0.72 0.22 295)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 1.5s linear infinite;
-  box-shadow: 0 0 10px 1px oklch(0.72 0.20 295 / 0.60);
+  box-shadow: 0 0 10px 1px oklch(0.72 0.2 295 / 0.6);
 }
 
 /* Animated gradient border for permission requests (yellow/orange) */
@@ -375,8 +374,7 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-1), var(--color-bg-1))
-      padding-box,
+    linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
         oklch(0.78 0.16 75),
@@ -394,19 +392,18 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-3), var(--color-bg-3))
-      padding-box,
+    linear-gradient(var(--color-bg-3), var(--color-bg-3)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
         oklch(0.84 0.18 75),
-        oklch(0.78 0.20 55),
+        oklch(0.78 0.2 55),
         oklch(0.88 0.17 80),
         oklch(0.84 0.18 75)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 2s linear infinite;
-  box-shadow: 0 0 10px 1px oklch(0.78 0.16 75 / 0.60);
+  box-shadow: 0 0 10px 1px oklch(0.78 0.16 75 / 0.6);
 }
 
 /* Animated gradient border for question requests (teal/blue) */
@@ -414,8 +411,7 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-1), var(--color-bg-1))
-      padding-box,
+    linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
         oklch(0.78 0.16 195),
@@ -433,8 +429,7 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-3), var(--color-bg-3))
-      padding-box,
+    linear-gradient(var(--color-bg-3), var(--color-bg-3)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
         oklch(0.84 0.18 195),
@@ -445,7 +440,7 @@ button {
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 2s linear infinite;
-  box-shadow: 0 0 10px 1px oklch(0.78 0.16 205 / 0.60);
+  box-shadow: 0 0 10px 1px oklch(0.78 0.16 205 / 0.6);
 }
 
 @keyframes completed-unread-breathe {
@@ -457,7 +452,7 @@ button {
     box-shadow: 0 0 7px 0 oklch(0.78 0.16 160 / 0.24);
   }
   62% {
-    box-shadow: 0 0 11px 1px oklch(0.78 0.16 200 / 0.30);
+    box-shadow: 0 0 11px 1px oklch(0.78 0.16 200 / 0.3);
   }
 }
 
@@ -466,8 +461,7 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-1), var(--color-bg-1))
-      padding-box,
+    linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     linear-gradient(
         120deg,
         oklch(0.78 0.16 155),
@@ -483,8 +477,7 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-3), var(--color-bg-3))
-      padding-box,
+    linear-gradient(var(--color-bg-3), var(--color-bg-3)) padding-box,
     linear-gradient(
         120deg,
         oklch(0.84 0.18 155),
@@ -501,39 +494,39 @@ button {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.72 0.20 295 / 0.45);
+  border: 1.5px solid oklch(0.72 0.2 295 / 0.45);
   box-shadow:
-    inset 0 0 0 1px oklch(0.72 0.20 295 / 0.15),
-    0 0 24px oklch(0.72 0.20 295 / 0.10);
+    inset 0 0 0 1px oklch(0.72 0.2 295 / 0.15),
+    0 0 24px oklch(0.72 0.2 295 / 0.1);
 }
 
 @utility focused-border-fail {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.72 0.18 25 / 0.60);
+  border: 1.5px solid oklch(0.72 0.18 25 / 0.6);
   box-shadow:
     inset 0 0 0 1px oklch(0.72 0.18 25 / 0.15),
-    0 0 24px oklch(0.72 0.18 25 / 0.10);
+    0 0 24px oklch(0.72 0.18 25 / 0.1);
 }
 
 @utility focused-border-run {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.78 0.16 75 / 0.60);
+  border: 1.5px solid oklch(0.78 0.16 75 / 0.6);
   box-shadow:
     inset 0 0 0 1px oklch(0.78 0.16 75 / 0.15),
-    0 0 24px oklch(0.78 0.16 75 / 0.10);
+    0 0 24px oklch(0.78 0.16 75 / 0.1);
 }
 
 @utility focused-border-run-subtle {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.78 0.16 75 / 0.40);
+  border: 1.5px solid oklch(0.78 0.16 75 / 0.4);
   box-shadow:
-    inset 0 0 0 1px oklch(0.78 0.16 75 / 0.10),
+    inset 0 0 0 1px oklch(0.78 0.16 75 / 0.1),
     0 0 24px oklch(0.78 0.16 75 / 0.06);
 }
 
@@ -541,31 +534,30 @@ button {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.78 0.16 260 / 0.40);
+  border: 1.5px solid oklch(0.78 0.16 260 / 0.4);
   box-shadow:
     inset 0 0 0 1px oklch(0.78 0.16 260 / 0.15),
-    0 0 24px oklch(0.78 0.16 260 / 0.10);
+    0 0 24px oklch(0.78 0.16 260 / 0.1);
 }
 
 @utility focused-border-azure {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.78 0.16 205 / 0.60);
+  border: 1.5px solid oklch(0.78 0.16 205 / 0.6);
   box-shadow:
     inset 0 0 0 1px oklch(0.78 0.16 205 / 0.15),
-    0 0 24px oklch(0.78 0.16 205 / 0.10);
+    0 0 24px oklch(0.78 0.16 205 / 0.1);
 }
 
 /* ── Step flow bar: running chip animated border ── */
 @utility step-chip-running {
   background:
-    linear-gradient(var(--color-bg-0), var(--color-bg-0))
-      padding-box,
+    linear-gradient(var(--color-bg-0), var(--color-bg-0)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
         oklch(0.72 0.18 295),
-        oklch(0.65 0.20 320),
+        oklch(0.65 0.2 320),
         oklch(0.78 0.16 290),
         oklch(0.72 0.18 295)
       )
@@ -594,7 +586,7 @@ button {
     90deg,
     var(--color-line) 0%,
     oklch(0.72 0.18 295) 40%,
-    oklch(0.65 0.20 320) 60%,
+    oklch(0.65 0.2 320) 60%,
     var(--color-line) 100%
   );
   background-size: 200% 100%;
@@ -606,21 +598,20 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-1), var(--color-bg-1))
-      padding-box,
+    linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.65 0.20 295),
-        oklch(0.60 0.22 310),
+        oklch(0.65 0.2 295),
+        oklch(0.6 0.22 310),
         oklch(0.58 0.22 325),
-        oklch(0.60 0.22 310),
-        oklch(0.65 0.20 295)
+        oklch(0.6 0.22 310),
+        oklch(0.65 0.2 295)
       )
       border-box;
   border: 1px solid transparent;
   animation: gradient-rotate 4s linear infinite;
   box-shadow:
-    0 0 12px 0 oklch(0.72 0.20 295 / 0.20),
+    0 0 12px 0 oklch(0.72 0.2 295 / 0.2),
     0 4px 6px -1px rgba(0, 0, 0, 0.2);
 }
 
@@ -628,30 +619,41 @@ button {
   position: relative;
   isolation: isolate;
   background:
-    linear-gradient(var(--color-bg-1), var(--color-bg-1))
-      padding-box,
+    linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.65 0.20 295),
-        oklch(0.60 0.22 310),
+        oklch(0.65 0.2 295),
+        oklch(0.6 0.22 310),
         oklch(0.58 0.22 325),
-        oklch(0.60 0.22 310),
-        oklch(0.65 0.20 295)
+        oklch(0.6 0.22 310),
+        oklch(0.65 0.2 295)
       )
       border-box;
   border: 1px solid transparent;
   animation: gradient-rotate 4s linear infinite;
   box-shadow:
-    0 0 14px 0 oklch(0.72 0.20 295 / 0.25),
-    0 0 6px 0 oklch(0.60 0.22 320 / 0.15),
+    0 0 14px 0 oklch(0.72 0.2 295 / 0.25),
+    0 0 6px 0 oklch(0.6 0.22 320 / 0.15),
     0 4px 6px -1px rgba(0, 0, 0, 0.25);
 }
 
 @utility aurora-app-bg {
   background:
-    radial-gradient(ellipse 1200px 700px at 15% -10%, oklch(0.35 0.15 295 / 0.35), transparent 55%),
-    radial-gradient(ellipse 900px 600px at 110% 110%, oklch(0.35 0.12 205 / 0.3), transparent 50%),
-    radial-gradient(ellipse 600px 500px at 60% 50%, oklch(0.3 0.1 330 / 0.12), transparent 60%),
+    radial-gradient(
+      ellipse 1200px 700px at 15% -10%,
+      oklch(0.35 0.15 295 / 0.35),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 900px 600px at 110% 110%,
+      oklch(0.35 0.12 205 / 0.3),
+      transparent 50%
+    ),
+    radial-gradient(
+      ellipse 600px 500px at 60% 50%,
+      oklch(0.3 0.1 330 / 0.12),
+      transparent 60%
+    ),
     oklch(0.11 0.015 275);
 }
 
@@ -736,7 +738,6 @@ button {
   animation: letter-enter 220ms cubic-bezier(0.22, 1.2, 0.36, 1) both;
 }
 
-
 /* ── Sidebar: card enter animation (fade + slide from left) ── */
 @keyframes sidebar-card-enter {
   from {
@@ -755,12 +756,22 @@ button {
 
 @utility separator-h {
   height: 1px;
-  background: linear-gradient(to right, transparent, oklch(1 0 0 / 0.06), transparent);
+  background: linear-gradient(
+    to right,
+    transparent,
+    oklch(1 0 0 / 0.06),
+    transparent
+  );
 }
 
 @utility separator-v {
   width: 1px;
-  background: linear-gradient(to bottom, transparent, oklch(1 0 0 / 0.06), transparent);
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    oklch(1 0 0 / 0.06),
+    transparent
+  );
 }
 
 @utility panel-edge-shadow {
@@ -776,18 +787,40 @@ button {
 /* Pulsing glow on running task nodes */
 @keyframes feed-node-pulse {
   0% {
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-status-run) 55%, transparent);
+    box-shadow: 0 0 0 0
+      color-mix(in oklch, var(--color-status-run) 55%, transparent);
   }
   70% {
-    box-shadow: 0 0 0 7px color-mix(in oklch, var(--color-status-run) 0%, transparent);
+    box-shadow: 0 0 0 7px
+      color-mix(in oklch, var(--color-status-run) 0%, transparent);
   }
   100% {
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-status-run) 0%, transparent);
+    box-shadow: 0 0 0 0
+      color-mix(in oklch, var(--color-status-run) 0%, transparent);
   }
 }
 
 .feed-node-pulse {
   animation: feed-node-pulse 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes feed-unread-node-pulse {
+  0% {
+    box-shadow: 0 0 0 0
+      color-mix(in oklch, var(--color-status-done) 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px
+      color-mix(in oklch, var(--color-status-done) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(in oklch, var(--color-status-done) 0%, transparent);
+  }
+}
+
+.feed-unread-node-pulse {
+  animation: feed-unread-node-pulse 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 /* Flowing dashes on the rail for running tasks */
@@ -812,6 +845,18 @@ button {
   animation: feed-rail-flow 0.9s linear infinite;
 }
 
+.feed-unread-rail {
+  background-image: linear-gradient(
+    to bottom,
+    var(--color-status-done) 0 6px,
+    color-mix(in oklch, var(--color-status-done) 16%, transparent) 6px 14px
+  ) !important;
+  background-size: 100% 14px !important;
+  background-repeat: repeat-y !important;
+  opacity: 0.78 !important;
+  animation: feed-rail-flow 1.2s linear infinite;
+}
+
 /* Running row sweep gradient */
 @keyframes feed-row-flow {
   0% {
@@ -828,7 +873,8 @@ button {
   background-color: var(--color-bg-0);
   box-shadow:
     inset 3px 0 0 var(--color-status-run),
-    inset 0 0 28px -2px color-mix(in oklch, var(--color-status-run) 32%, transparent);
+    inset 0 0 28px -2px
+      color-mix(in oklch, var(--color-status-run) 32%, transparent);
   background-image: linear-gradient(
     90deg,
     color-mix(in oklch, var(--color-status-run) 6%, transparent) 0%,
@@ -844,6 +890,28 @@ button {
   animation: feed-row-flow 6s linear infinite !important;
 }
 
+.feed-unread-row {
+  position: relative;
+  isolation: isolate;
+  box-shadow:
+    inset 3px 0 0 var(--color-status-done),
+    inset 0 0 28px -2px
+      color-mix(in oklch, var(--color-status-done) 24%, transparent);
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--color-status-done) 5%, transparent) 0%,
+    color-mix(in oklch, var(--color-status-done) 22%, transparent) 18%,
+    color-mix(in oklch, var(--color-status-done) 6%, transparent) 38%,
+    color-mix(in oklch, var(--color-status-done) 6%, transparent) 50%,
+    color-mix(in oklch, var(--color-status-done) 22%, transparent) 68%,
+    color-mix(in oklch, var(--color-status-done) 6%, transparent) 88%,
+    color-mix(in oklch, var(--color-status-done) 5%, transparent) 100%
+  ) !important;
+  background-size: 200% 100% !important;
+  background-repeat: repeat !important;
+  animation: feed-row-flow 8s linear infinite !important;
+}
+
 /* Animated dashes on branch line for running sub-tasks */
 @keyframes feed-dash-flow {
   to {
@@ -856,15 +924,23 @@ button {
   animation: feed-dash-flow 0.9s linear infinite;
 }
 
+.feed-unread-branch {
+  stroke-dasharray: 4 4;
+  animation: feed-dash-flow 1.2s linear infinite;
+}
+
 /* ─── Permission / Question waiting indicators ─────────────────── */
 
 /* Permission node pulse (yellow/orange — same hue as status-run) */
 @keyframes feed-node-pulse-permission {
-  0%, 100% {
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-status-run) 60%, transparent);
+  0%,
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(in oklch, var(--color-status-run) 60%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 6px color-mix(in oklch, var(--color-status-run) 0%, transparent);
+    box-shadow: 0 0 0 6px
+      color-mix(in oklch, var(--color-status-run) 0%, transparent);
   }
 }
 
@@ -874,11 +950,14 @@ button {
 
 /* Question node pulse (teal — status-azure hue) */
 @keyframes feed-node-pulse-question {
-  0%, 100% {
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-status-azure) 60%, transparent);
+  0%,
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(in oklch, var(--color-status-azure) 60%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 6px color-mix(in oklch, var(--color-status-azure) 0%, transparent);
+    box-shadow: 0 0 0 6px
+      color-mix(in oklch, var(--color-status-azure) 0%, transparent);
   }
 }
 
@@ -890,14 +969,24 @@ button {
 .feed-permission-row {
   box-shadow:
     inset 3px 0 0 var(--color-status-run),
-    inset 0 0 20px -4px color-mix(in oklch, var(--color-status-run) 20%, transparent);
-  background: color-mix(in oklch, var(--color-status-run) 5%, transparent) !important;
+    inset 0 0 20px -4px
+      color-mix(in oklch, var(--color-status-run) 20%, transparent);
+  background: color-mix(
+    in oklch,
+    var(--color-status-run) 5%,
+    transparent
+  ) !important;
 }
 
 /* Question row glow (teal tint) */
 .feed-question-row {
   box-shadow:
     inset 3px 0 0 var(--color-status-azure),
-    inset 0 0 20px -4px color-mix(in oklch, var(--color-status-azure) 20%, transparent);
-  background: color-mix(in oklch, var(--color-status-azure) 5%, transparent) !important;
+    inset 0 0 20px -4px
+      color-mix(in oklch, var(--color-status-azure) 20%, transparent);
+  background: color-mix(
+    in oklch,
+    var(--color-status-azure) 5%,
+    transparent
+  ) !important;
 }

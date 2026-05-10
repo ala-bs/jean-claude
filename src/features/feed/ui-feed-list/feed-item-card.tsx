@@ -76,10 +76,12 @@ const NODE_X = 16; // center X of main node
 function GraphNode({
   attention,
   isRunning,
+  hasUnread,
   isSubtask,
 }: {
   attention: FeedItemAttention;
   isRunning: boolean;
+  hasUnread?: boolean;
   isSubtask?: boolean;
 }) {
   const color = statusColor(attention);
@@ -122,7 +124,10 @@ function GraphNode({
 
   return (
     <div
-      className={clsx(!isSubtask && isRunning && 'feed-node-pulse')}
+      className={clsx(
+        isRunning && !isSubtask && 'feed-node-pulse',
+        hasUnread && !isRunning && 'feed-unread-node-pulse',
+      )}
       style={{
         position: 'absolute',
         left,
@@ -237,6 +242,7 @@ export function FeedItemCard({
 
   const isTask = item.source === 'task';
   const isRunning = item.attention === 'running';
+  const hasUnread = Boolean(item.hasUnread);
   const needsPermission = item.attention === 'needs-permission';
   const hasQuestion = item.attention === 'has-question';
   const needsAttention = needsPermission || hasQuestion;
@@ -401,13 +407,16 @@ export function FeedItemCard({
                   ? 'feed-permission-row border-transparent'
                   : hasQuestion
                     ? 'feed-question-row border-transparent'
-                    : !showRail && 'border-line-soft',
+                    : hasUnread
+                      ? 'feed-unread-row border-transparent'
+                      : !showRail && 'border-line-soft',
               isSelected
                 ? 'border-l-2 border-l-[var(--color-acc)]'
                 : 'border-l-2 border-l-transparent',
               !isSelected &&
                 !isRunning &&
                 !needsAttention &&
+                !hasUnread &&
                 'hover:bg-glass-light',
             )}
             style={{ minHeight: isSubtask ? 36 : 50 }}
@@ -418,7 +427,10 @@ export function FeedItemCard({
                 {/* Vertical rail line */}
                 {showRail && (
                   <div
-                    className={clsx(isRunning && 'feed-running-rail')}
+                    className={clsx(
+                      isRunning && 'feed-running-rail',
+                      hasUnread && !isRunning && 'feed-unread-rail',
+                    )}
                     style={{
                       position: 'absolute',
                       left: NODE_X - 0.75,
@@ -431,7 +443,11 @@ export function FeedItemCard({
                   />
                 )}
                 {/* Main node */}
-                <GraphNode attention={item.attention} isRunning={isRunning} />
+                <GraphNode
+                  attention={item.attention}
+                  isRunning={isRunning}
+                  hasUnread={hasUnread}
+                />
               </div>
             )}
 
@@ -812,10 +828,16 @@ function SubtaskRow({
       className={clsx(
         'relative flex cursor-pointer transition-colors',
         isRunning && 'feed-running-row',
+        child.hasUnread && !isRunning && 'feed-unread-row',
         !isRunning && childNeedsPermission && 'feed-permission-row',
         !isRunning && childHasQuestion && 'feed-question-row',
         !isRunning &&
+          child.hasUnread &&
           !childNeedsAttention &&
+          'feed-unread-row',
+        !isRunning &&
+          !childNeedsAttention &&
+          !child.hasUnread &&
           !isSelected &&
           'hover:bg-glass-light',
         isSelected
@@ -851,13 +873,17 @@ function SubtaskRow({
             strokeWidth="1.5"
             fill="none"
             opacity="0.7"
-            className={clsx(isRunning && 'feed-running-branch')}
+            className={clsx(
+              isRunning && 'feed-running-branch',
+              child.hasUnread && !isRunning && 'feed-unread-branch',
+            )}
           />
         </svg>
         {/* Sub-task node */}
         <GraphNode
           attention={child.attention}
           isRunning={isRunning}
+          hasUnread={child.hasUnread}
           isSubtask
         />
       </div>
