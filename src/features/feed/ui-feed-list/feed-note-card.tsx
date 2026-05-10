@@ -115,6 +115,7 @@ export function FeedNoteCard({
           ref={triggerRef as React.Ref<HTMLDivElement>}
           role="link"
           tabIndex={0}
+          data-feed-selected={isSelected ? 'true' : 'false'}
           draggable={isDraggable}
           onDragStart={onDragStart}
           onDragOver={onDragOver}

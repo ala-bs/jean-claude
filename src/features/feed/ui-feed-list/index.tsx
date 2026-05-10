@@ -138,6 +138,7 @@ export function FeedList() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [_dragOverId, setDragOverId] = useState<string | null>(null);
   const [dragOverPinZone, setDragOverPinZone] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
 
   // --- Drag handlers for pinned zone items ---
   const handlePinnedDragStart = useCallback((id: string) => {
@@ -354,6 +355,20 @@ export function FeedList() {
     [allVisibleItems, isItemSelected],
   );
 
+  useEffect(() => {
+    if (!currentItem) {
+      return;
+    }
+
+    listRef.current
+      ?.querySelector<HTMLElement>('[data-feed-selected="true"]')
+      ?.scrollIntoView({
+        block: 'nearest',
+        inline: 'nearest',
+        behavior: 'auto',
+      });
+  }, [currentItem]);
+
   useCommands('feed-list-navigation', [
     {
       label: 'Go to Feed Item 1',
@@ -472,6 +487,7 @@ export function FeedList() {
 
   return (
     <div
+      ref={listRef}
       className="flex h-full flex-col overflow-y-auto overscroll-contain"
       style={{
         maskImage:

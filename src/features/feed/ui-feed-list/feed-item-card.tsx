@@ -383,6 +383,7 @@ export function FeedItemCard({
           <div
             role="link"
             tabIndex={0}
+            data-feed-selected={isSelected ? 'true' : 'false'}
             draggable={isDraggable}
             onDragStart={onDragStart}
             onDragOver={onDragOver}
