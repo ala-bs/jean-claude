@@ -1,6 +1,6 @@
 import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import type { MouseEvent } from 'react';
-import { useCallback, useState, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import { formatModelName } from '@/hooks/use-model';
 import { formatNumber } from '@/lib/number';
@@ -13,6 +13,7 @@ import type {
 
 import { MarkdownContent } from '../../ui-markdown-content';
 import type { DisplayMessage, PromptGroup } from '../message-merger';
+import { RunningTimer } from '../ui-running-timer';
 import { SkillEntry } from '../ui-skill-entry';
 import { SubagentEntry } from '../ui-subagent-entry';
 import {
@@ -667,17 +668,8 @@ export function PromptGroupEntry({
     [defaultDetailsExpanded],
   );
 
-  // Compute step count and elapsed time for header
+  // Compute step count for header
   const stepCount = group.childMessages.length;
-  const elapsed = useMemo(() => {
-    if (!isRunning || !group.promptEntry.date) return null;
-    const startMs = new Date(group.promptEntry.date).getTime();
-    const nowMs = Date.now();
-    const sec = Math.floor((nowMs - startMs) / 1000);
-    const min = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${min}:${String(s).padStart(2, '0')}`;
-  }, [isRunning, group.promptEntry.date]);
 
   // Compute file edit/write stats from child messages
   const fileStats = useMemo(() => {
@@ -792,9 +784,10 @@ export function PromptGroupEntry({
                     </span>
                   </span>
                 </span>
-                {elapsed && (
-                  <span className="text-ink-4 ml-1.5">{elapsed}</span>
-                )}
+                <RunningTimer
+                  startDate={group.promptEntry.date}
+                  className="text-ink-4 ml-1.5"
+                />
               </>
             ) : (
               <>
