@@ -128,6 +128,7 @@ export function WorktreeDiffView({
   const removeComment = useReviewCommentsStore((s) => s.removeComment);
   const updateComment = useReviewCommentsStore((s) => s.updateComment);
   const resolveComment = useReviewCommentsStore((s) => s.resolveComment);
+  const clearOpenComments = useReviewCommentsStore((s) => s.clearOpenComments);
   const clearResolvedComments = useReviewCommentsStore(
     (s) => s.clearResolvedComments,
   );
@@ -183,6 +184,17 @@ export function WorktreeDiffView({
     },
     [taskId, resolveComment],
   );
+
+  const handleClearAllComments = useCallback(() => {
+    const confirmed = window.confirm(
+      'Clear all pending review comments for this task?',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    clearOpenComments(taskId);
+  }, [clearOpenComments, taskId]);
 
   const handleSubmitReview = useCallback(
     (
@@ -431,6 +443,7 @@ export function WorktreeDiffView({
         {onSubmitReview && (
           <ReviewSubmitBar
             commentCount={openReviewCount}
+            onClearAllComments={handleClearAllComments}
             onSubmit={() => setIsSubmitOverlayOpen(true)}
           />
         )}

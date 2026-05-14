@@ -81,6 +81,15 @@ function clearResolvedComments(taskId: string) {
   }));
 }
 
+function clearOpenComments(taskId: string) {
+  baseStore.setState((s) => ({
+    comments: {
+      ...s.comments,
+      [taskId]: (s.comments[taskId] ?? []).filter((c) => c.resolved),
+    },
+  }));
+}
+
 function resolveAllAddressed(taskId: string) {
   baseStore.setState((s) => ({
     comments: {
@@ -136,6 +145,7 @@ interface ReviewCommentsCompat {
   ) => void;
   resolveComment: (taskId: string, commentId: string) => void;
   clearComments: (taskId: string) => void;
+  clearOpenComments: (taskId: string) => void;
   clearResolvedComments: (taskId: string) => void;
   resolveAllAddressed: (taskId: string) => void;
   setCommentStatuses: (
@@ -167,6 +177,7 @@ function getCompat(
     removeComment: state.removeComment,
     updateComment: state.updateComment,
     clearComments: state.clearComments,
+    clearOpenComments,
     resolveComment,
     clearResolvedComments,
     resolveAllAddressed,

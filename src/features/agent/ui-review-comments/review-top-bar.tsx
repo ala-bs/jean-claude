@@ -3,9 +3,11 @@ import { Check, MessageSquare } from 'lucide-react';
 export function ReviewSubmitBar({
   commentCount,
   onSubmit,
+  onClearAllComments,
 }: {
   commentCount: number;
   onSubmit: () => void;
+  onClearAllComments?: () => void;
 }) {
   if (commentCount === 0) return null;
 
@@ -16,6 +18,14 @@ export function ReviewSubmitBar({
         {commentCount} review comment{commentCount !== 1 ? 's' : ''} pending
       </span>
       <div className="flex-1" />
+      {onClearAllComments && (
+        <button
+          onClick={onClearAllComments}
+          className="text-ink-2 hover:bg-glass-medium hover:text-ink-1 rounded px-2.5 py-1 text-[11.5px] font-medium transition-colors"
+        >
+          Clear all comments
+        </button>
+      )}
       <button
         onClick={onSubmit}
         className="bg-acc inline-flex items-center gap-1.5 rounded px-3 py-1 text-[11.5px] font-medium text-white"
