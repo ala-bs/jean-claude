@@ -5,6 +5,59 @@ import { api } from '@/lib/api';
 const DEBOUNCE_MS = 300;
 const MIN_INPUT_LENGTH = 10;
 
+// --- FIM completion cache (shared across all hook instances) ---
+const CACHE_MAX_SIZE = 100;
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+interface CacheEntry {
+  result: string;
+  timestamp: number;
+}
+
+const completionCache = new Map<string, CacheEntry>();
+
+function makeCacheKey(
+  prompt: string,
+  projectId: string | undefined,
+  contextBeforePrompt: string | undefined,
+): string {
+  // JSON.stringify avoids collisions from inputs containing the separator
+  return JSON.stringify([projectId ?? '', contextBeforePrompt ?? '', prompt]);
+}
+
+function getCached(key: string): string | null {
+  const entry = completionCache.get(key);
+  if (!entry) return null;
+
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    completionCache.delete(key);
+    return null;
+  }
+
+  // Move to end (most recently used) by re-inserting
+  completionCache.delete(key);
+  completionCache.set(key, entry);
+  return entry.result;
+}
+
+function setCached(key: string, result: string): void {
+  // Evict oldest entries if at capacity
+  if (completionCache.size >= CACHE_MAX_SIZE) {
+    // Map iteration order = insertion order, so first key is oldest
+    const oldest = completionCache.keys().next().value;
+    if (oldest !== undefined) {
+      completionCache.delete(oldest);
+    }
+  }
+
+  completionCache.set(key, { result, timestamp: Date.now() });
+}
+
+// Exported for testing or manual invalidation
+export function clearCompletionCache(): void {
+  completionCache.clear();
+}
+
 export function useInlineCompletion({
   text,
   enabled,
@@ -50,6 +103,17 @@ export function useInlineCompletion({
 
     debounceTimerRef.current = setTimeout(async () => {
       const contextBeforePrompt = getContextBeforePromptRef.current?.();
+      const cacheKey = makeCacheKey(text, projectId, contextBeforePrompt);
+
+      // Check cache first — skip IPC + API call entirely
+      const cached = getCached(cacheKey);
+      if (cached !== null) {
+        if (requestIdRef.current === currentRequestId) {
+          setCompletion(cached);
+          setIsLoading(false);
+        }
+        return;
+      }
 
       // Always complete from the end of the text — cursor position is ignored
       const result = await api.completion.complete({
@@ -61,6 +125,7 @@ export function useInlineCompletion({
       // Only apply if this is still the latest request
       if (requestIdRef.current === currentRequestId) {
         if (result) {
+          setCached(cacheKey, result);
           setCompletion(result);
         }
         setIsLoading(false);
