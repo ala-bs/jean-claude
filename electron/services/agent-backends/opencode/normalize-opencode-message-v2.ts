@@ -293,13 +293,18 @@ function buildEntries(
   return buildAssistantEntries(info as OcAssistantMessage, parts, ctx);
 }
 
+function toIsoDateFromOpenCodeTimestamp(timestamp: number): string {
+  const unixMs = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
+  return new Date(unixMs).toISOString();
+}
+
 function buildUserEntries(
   info: OcUserMessage,
   parts: OcPart[],
   ctx: OpenCodeNormalizationContext,
 ): NormalizationEvent[] {
   const events: NormalizationEvent[] = [];
-  const date = new Date(info.time.created * 1000).toISOString();
+  const date = toIsoDateFromOpenCodeTimestamp(info.time.created);
   const model = `${info.model.providerID}/${info.model.modelID}`;
 
   // Collect text and image sections, then emit a single user-prompt entry.
@@ -350,7 +355,7 @@ function buildAssistantEntries(
   ctx: OpenCodeNormalizationContext,
 ): NormalizationEvent[] {
   const events: NormalizationEvent[] = [];
-  const date = new Date(info.time.created * 1000).toISOString();
+  const date = toIsoDateFromOpenCodeTimestamp(info.time.created);
   const model = `${info.providerID}/${info.modelID}`;
 
   for (const part of parts) {

@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { formatModelName } from '@/hooks/use-model';
 import { formatNumber } from '@/lib/number';
-import { formatDuration } from '@/lib/time';
+import { ensureUtc, formatDuration } from '@/lib/time';
 import type {
   NormalizedEntry,
   NormalizedToolUse,
@@ -203,6 +203,33 @@ function getLastAssistantMessageText(
   }
 
   return null;
+}
+
+function parseDateMs(date: string | undefined): number | null {
+  if (!date) return null;
+
+  const ms = Date.parse(ensureUtc(date));
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function getRunningStartDate({
+  promptDate,
+  previousPromptDate,
+}: {
+  promptDate: string | undefined;
+  previousPromptDate: string | undefined;
+}): string | undefined {
+  const promptMs = parseDateMs(promptDate);
+  if (promptMs !== null && promptMs <= Date.now() + 5_000) {
+    return promptDate;
+  }
+
+  const previousPromptMs = parseDateMs(previousPromptDate);
+  if (previousPromptMs !== null && previousPromptMs <= Date.now() + 5_000) {
+    return previousPromptDate;
+  }
+
+  return promptDate;
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────
@@ -592,6 +619,7 @@ export function PromptGroupEntry({
   group,
   isLast = false,
   isTaskRunning = false,
+  previousPromptDate,
   onFilePathClick,
   onToolDiffClick,
   onEntryContextMenu,
@@ -601,6 +629,7 @@ export function PromptGroupEntry({
   isLast?: boolean;
   /** Whether the parent task is currently running */
   isTaskRunning?: boolean;
+  previousPromptDate?: string;
   onFilePathClick?: (
     filePath: string,
     lineStart?: number,
@@ -663,6 +692,15 @@ export function PromptGroupEntry({
     };
   }, [group.childMessages, group.durationMs, group.resultEntry, group.status]);
 
+  const completedDurationLabel = useMemo(() => {
+    if (showRunningHeader) return null;
+
+    const durationMs = group.durationMs ?? group.resultEntry?.durationMs;
+    if (durationMs === undefined || durationMs < 0) return null;
+
+    return formatDuration(durationMs);
+  }, [group.durationMs, group.resultEntry?.durationMs, showRunningHeader]);
+
   // Activity for running state
   const activity = useMemo(() => {
     if (!isRunning) return null;
@@ -711,6 +749,15 @@ export function PromptGroupEntry({
 
   // Compute step count for header
   const stepCount = group.childMessages.length;
+
+  const runningStartDate = useMemo(
+    () =>
+      getRunningStartDate({
+        promptDate: group.promptEntry.date,
+        previousPromptDate,
+      }),
+    [group.promptEntry.date, previousPromptDate],
+  );
 
   // Compute file edit/write stats from child messages
   const fileStats = useMemo(() => {
@@ -826,12 +873,17 @@ export function PromptGroupEntry({
                   </span>
                 </span>
                 <RunningTimer
-                  startDate={group.promptEntry.date}
+                  startDate={runningStartDate}
                   className="text-ink-4 ml-1.5"
                 />
               </>
             ) : (
               <>
+                {completedDurationLabel && (
+                  <span className="text-ink-4 tracking-normal normal-case">
+                    {completedDurationLabel}
+                  </span>
+                )}
                 <span className="text-ink-2">{stepCount} steps</span>
                 {resultSummary?.stats && (
                   <span className="text-ink-4 ml-1.5 tracking-normal normal-case">

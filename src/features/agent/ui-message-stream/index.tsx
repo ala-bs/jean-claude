@@ -299,6 +299,15 @@ export const MessageStream = memo(function MessageStream({
             // Prompt groups render as collapsible entries
             if (streamMessage.kind === 'prompt-group') {
               const promptIdx = promptIndexMap.get(index);
+              const previousPromptDate = (() => {
+                for (let i = index - 1; i >= 0; i--) {
+                  const previousMessage = streamMessages[i];
+                  if (previousMessage?.kind === 'prompt-group') {
+                    return previousMessage.promptEntry.date;
+                  }
+                }
+                return undefined;
+              })();
               // Show separator before non-first prompt groups
               const showSeparator =
                 index > 0 && streamMessages[index - 1]?.kind === 'prompt-group';
@@ -324,6 +333,7 @@ export const MessageStream = memo(function MessageStream({
                     group={streamMessage}
                     isLast={index === lastPromptGroupIndex}
                     isTaskRunning={isRunning}
+                    previousPromptDate={previousPromptDate}
                     onFilePathClick={onFilePathClick}
                     onToolDiffClick={onToolDiffClick}
                     onEntryContextMenu={handleEntryContextMenu}
