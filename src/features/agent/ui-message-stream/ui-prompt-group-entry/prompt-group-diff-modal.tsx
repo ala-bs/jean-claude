@@ -202,12 +202,13 @@ export function PromptGroupDiffModal({
         </div>
 
         {/* Diff content */}
-        <div className="min-w-0 flex-1 overflow-auto">
+        <div className="min-w-0 flex-1 overflow-hidden">
           {selectedChange ? (
             <DiffView
               filePath={selectedChange.displayPath}
               oldString={selectedChange.oldContent}
               newString={selectedChange.newContent}
+              withMinimap
             />
           ) : (
             <div className="text-ink-3 flex h-full items-center justify-center text-sm">
