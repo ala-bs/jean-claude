@@ -803,28 +803,30 @@ export function PromptGroupEntry({
       {/* Part 1: Prompt section */}
       <PromptSection group={group} onFilePathClick={onFilePathClick} />
 
-      {/* Part 2: Agent section — flex row with optional sticky collapse gutter */}
-      <div className={`mt-2 flex ${detailsExpanded ? 'gap-0' : ''}`}>
-        {/* Sticky collapse gutter — only when expanded */}
+      {/* Part 2: Agent section with floating sticky collapse control */}
+      <div className="relative mt-2">
+        {/* Floating collapse control — only when expanded */}
         {detailsExpanded && (
-          <div className="relative w-5 shrink-0">
-            <button
-              type="button"
-              onClick={toggleDetails}
-              className="text-ink-2 hover:text-ink-1 sticky top-[50vh] z-10 -mr-1 flex h-7 w-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md border border-white/12 bg-white/10 shadow-[0_6px_18px_rgba(0,0,0,0.22)] backdrop-blur-[6px] transition-all duration-150 hover:border-white/20 hover:bg-white/16 hover:shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
-              style={{
-                opacity: 0.72,
-              }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.opacity = '1';
-              }}
-              onMouseOut={(e) => {
-                e.currentTarget.style.opacity = '0.72';
-              }}
-              aria-label="Collapse timeline"
-            >
-              <ChevronDown className="text-ink-2 h-3 w-3" />
-            </button>
+          <div className="pointer-events-none absolute top-3.5 bottom-3.5 left-0 z-10 w-0 overflow-visible">
+            <div className="pointer-events-auto sticky top-[50vh] -translate-x-1/2 -translate-y-1/2">
+              <button
+                type="button"
+                onClick={toggleDetails}
+                className="text-ink-2 hover:text-ink-1 flex h-7 w-6 cursor-pointer items-center justify-center rounded-md border border-white/12 bg-white/10 shadow-[0_6px_18px_rgba(0,0,0,0.22)] backdrop-blur-[6px] transition-all duration-150 hover:border-white/20 hover:bg-white/16 hover:shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
+                style={{
+                  opacity: 0.72,
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.opacity = '1';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.opacity = '0.72';
+                }}
+                aria-label="Collapse timeline"
+              >
+                <ChevronDown className="text-ink-2 h-3 w-3" />
+              </button>
+            </div>
           </div>
         )}
 
