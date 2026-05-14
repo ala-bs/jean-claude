@@ -235,6 +235,7 @@ export function FeedItemCard({
       runCommandStatus?.commands.filter((c) => c.status === 'running') ?? [],
     [runCommandStatus],
   );
+  const hasRunningCommand = runningCommands.length > 0;
   const runningBgJobs = useRunningBackgroundJobsForTask(item.taskId ?? null);
   const pendingCommentCount = useOpenReviewCommentCount(item.taskId ?? '');
   const isDeleting = runningBgJobs.some((j) => j.type === 'task-deletion');
@@ -408,7 +409,11 @@ export function FeedItemCard({
               isRunning
                 ? [
                     'feed-running-row border-transparent',
+                    hasRunningCommand && 'feed-command-running-row',
                     isSelected && 'feed-running-row-focused',
+                    isSelected &&
+                      hasRunningCommand &&
+                      'feed-command-running-row-focused',
                   ]
                 : needsPermission
                   ? 'feed-permission-row border-transparent'
@@ -426,6 +431,9 @@ export function FeedItemCard({
             )}
             style={{ minHeight: isSubtask ? 36 : 50 }}
           >
+            {hasRunningCommand && (
+              <div className="feed-command-running-bottom-border" />
+            )}
             {/* ─ Rail column (tasks) ─ */}
             {isTask && !isSubtask && (
               <div className="relative shrink-0" style={{ width: RAIL_W }}>
@@ -805,6 +813,16 @@ function SubtaskRow({
 }) {
   const navigate = useNavigate();
   const childColor = statusColor(child.attention);
+  const childRunCommandStatus = useTaskMessagesStore((s) =>
+    child.taskId ? s.runCommandRunning[child.taskId] : undefined,
+  );
+  const childRunningCommands = useMemo(
+    () =>
+      childRunCommandStatus?.commands.filter((c) => c.status === 'running') ??
+      [],
+    [childRunCommandStatus],
+  );
+  const childHasRunningCommand = childRunningCommands.length > 0;
 
   const handleClick = useCallback(() => {
     if (child.taskId) {
@@ -839,7 +857,12 @@ function SubtaskRow({
       className={clsx(
         'relative flex cursor-pointer transition-colors',
         isRunning && 'feed-running-row',
+        isRunning && childHasRunningCommand && 'feed-command-running-row',
         isRunning && isSelected && 'feed-running-row-focused',
+        isRunning &&
+          isSelected &&
+          childHasRunningCommand &&
+          'feed-command-running-row-focused',
         !isRunning && childNeedsPermission && 'feed-permission-row',
         !isRunning && childHasQuestion && 'feed-question-row',
         !isRunning &&
@@ -853,6 +876,9 @@ function SubtaskRow({
       )}
       style={{ minHeight: 36 }}
     >
+      {childHasRunningCommand && (
+        <div className="feed-command-running-bottom-border" />
+      )}
       {/* Rail with branch SVG */}
       <div className="relative shrink-0" style={{ width: RAIL_W }}>
         {/* Parent rail continues */}
