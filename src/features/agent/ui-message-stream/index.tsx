@@ -323,6 +323,7 @@ export const MessageStream = memo(function MessageStream({
                   <PromptGroupEntry
                     group={streamMessage}
                     isLast={index === lastPromptGroupIndex}
+                    isTaskRunning={isRunning}
                     onFilePathClick={onFilePathClick}
                     onToolDiffClick={onToolDiffClick}
                     onEntryContextMenu={handleEntryContextMenu}

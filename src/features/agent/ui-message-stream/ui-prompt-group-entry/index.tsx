@@ -591,6 +591,7 @@ function RunningSummary({
 export function PromptGroupEntry({
   group,
   isLast = false,
+  isTaskRunning = false,
   onFilePathClick,
   onToolDiffClick,
   onEntryContextMenu,
@@ -598,6 +599,8 @@ export function PromptGroupEntry({
 }: {
   group: PromptGroup;
   isLast?: boolean;
+  /** Whether the parent task is currently running */
+  isTaskRunning?: boolean;
   onFilePathClick?: (
     filePath: string,
     lineStart?: number,
@@ -614,6 +617,8 @@ export function PromptGroupEntry({
   const isError = group.status === 'error';
   const isInterrupted = group.status === 'interrupted';
   const isRunning = group.status === 'running';
+  // Show running indicator in header when this is the last group and task is active
+  const showRunningHeader = isRunning || (isLast && isTaskRunning);
   const [diffModalOpen, setDiffModalOpen] = useState(false);
   // Details expand/collapse:
   // - error/interrupted on last group: start expanded
@@ -769,7 +774,7 @@ export function PromptGroupEntry({
               <ChevronRight className="h-2.5 w-2.5" />
             )}
 
-            {isRunning ? (
+            {showRunningHeader ? (
               <>
                 <span className="inline-flex items-center gap-1.5">
                   <span
