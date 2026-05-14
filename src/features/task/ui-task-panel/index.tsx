@@ -1023,7 +1023,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       className="bg-bg-0 flex h-full w-full overflow-hidden rounded-tl-xl"
     >
       {/* Main content */}
-      <div className="relative flex min-w-0 flex-1 flex-col">
+      <div
+        className={clsx(
+          'relative flex min-w-0 flex-1 flex-col',
+          rightPane && 'mr-2',
+        )}
+      >
         {/* Header */}
         <div
           className={clsx(
