@@ -71,17 +71,14 @@ function statusColor(attention: FeedItemAttention): string {
 // ─── Rail constants ──────────────────────────────────────────────
 const RAIL_W = 32; // rail column width in px
 const NODE_X = 16; // center X of main node
+const FEED_RAIL_COLOR = 'var(--color-ink-4)';
 
 // ─── Graph Node (circle or attention icon) ──────────────────────
 function GraphNode({
   attention,
-  isRunning,
-  hasUnread,
   isSubtask,
 }: {
   attention: FeedItemAttention;
-  isRunning: boolean;
-  hasUnread?: boolean;
   isSubtask?: boolean;
 }) {
   const color = statusColor(attention);
@@ -127,10 +124,6 @@ function GraphNode({
 
   return (
     <div
-      className={clsx(
-        isRunning && !isSubtask && 'feed-node-pulse',
-        hasUnread && !isRunning && 'feed-unread-node-pulse',
-      )}
       style={{
         position: 'absolute',
         left,
@@ -139,7 +132,7 @@ function GraphNode({
         height: size,
         borderRadius: '50%',
         background: 'var(--color-bg-0)',
-        border: `2px solid ${color}`,
+        border: `2px solid ${FEED_RAIL_COLOR}`,
         zIndex: 2,
       }}
     />
@@ -255,8 +248,6 @@ export function FeedItemCard({
   const prMerged = item.workItemPrStatus === 'completed';
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
-  const dotColor = statusColor(item.attention);
-
   const handleClick = useCallback(() => {
     if (item.source === 'work-item' && item.workItemId) {
       navigate({
@@ -440,27 +431,19 @@ export function FeedItemCard({
                 {/* Vertical rail line */}
                 {showRail && (
                   <div
-                    className={clsx(
-                      isRunning && 'feed-running-rail',
-                      hasUnread && !isRunning && 'feed-unread-rail',
-                    )}
                     style={{
                       position: 'absolute',
                       left: NODE_X - 0.75,
                       top: 0,
                       bottom: 0,
                       width: 1.5,
-                      background: dotColor,
-                      opacity: 0.5,
+                      background: FEED_RAIL_COLOR,
+                      opacity: 0.45,
                     }}
                   />
                 )}
                 {/* Main node */}
-                <GraphNode
-                  attention={item.attention}
-                  isRunning={isRunning}
-                  hasUnread={hasUnread}
-                />
+                {showRail && <GraphNode attention={item.attention} />}
               </div>
             )}
 
@@ -684,7 +667,6 @@ export function FeedItemCard({
               <SubtaskRow
                 key={child.id}
                 child={child}
-                parentColor={dotColor}
                 isRunning={child.attention === 'running'}
                 isSelected={child.taskId === currentTaskId}
               />
@@ -712,8 +694,8 @@ export function FeedItemCard({
                     top: 0,
                     bottom: 14,
                     width: 1.5,
-                    background: dotColor,
-                    opacity: 0.5,
+                    background: FEED_RAIL_COLOR,
+                    opacity: 0.45,
                   }}
                 />
                 <PrDiamond merged={prMerged} />
@@ -802,17 +784,14 @@ export function FeedItemCard({
 // ─── SubtaskRow (renders with branch connector from parent rail) ──
 function SubtaskRow({
   child,
-  parentColor,
   isRunning,
   isSelected,
 }: {
   child: FeedItem;
-  parentColor: string;
   isRunning: boolean;
   isSelected?: boolean;
 }) {
   const navigate = useNavigate();
-  const childColor = statusColor(child.attention);
   const childRunCommandStatus = useTaskMessagesStore((s) =>
     child.taskId ? s.runCommandRunning[child.taskId] : undefined,
   );
@@ -889,8 +868,8 @@ function SubtaskRow({
             top: 0,
             bottom: 0,
             width: 1.5,
-            background: parentColor,
-            opacity: 0.5,
+            background: FEED_RAIL_COLOR,
+            opacity: 0.45,
           }}
         />
         {/* Branch curve */}
@@ -902,23 +881,14 @@ function SubtaskRow({
         >
           <path
             d={`M ${NODE_X} 0 L ${NODE_X} 12 Q ${NODE_X} 18 ${NODE_X + 7} 18 L ${RAIL_W - 6} 18`}
-            stroke={childColor}
+            stroke={FEED_RAIL_COLOR}
             strokeWidth="1.5"
             fill="none"
             opacity="0.7"
-            className={clsx(
-              isRunning && 'feed-running-branch',
-              child.hasUnread && !isRunning && 'feed-unread-branch',
-            )}
           />
         </svg>
         {/* Sub-task node */}
-        <GraphNode
-          attention={child.attention}
-          isRunning={isRunning}
-          hasUnread={child.hasUnread}
-          isSubtask
-        />
+        <GraphNode attention={child.attention} isSubtask />
       </div>
 
       {/* Sub-task content */}
