@@ -669,6 +669,37 @@ export function PromptGroupEntry({
     return getRunningActivity(group.childMessages);
   }, [isRunning, group.childMessages]);
 
+  // Extract todos for collapsed non-running state
+  const completedTodos = useMemo(() => {
+    if (isRunning) return null;
+    const allEntries: NormalizedEntry[] = [];
+    for (const dm of group.childMessages) {
+      if (dm.kind === 'entry') allEntries.push(dm.entry);
+      if (dm.kind === 'subagent') allEntries.push(...dm.childEntries);
+      if (dm.kind === 'skill') allEntries.push(...dm.childEntries);
+    }
+    const todoProgress = getTodoProgress(allEntries);
+    if (!todoProgress) return null;
+    const todos: Array<{ text: string; done: boolean; current: boolean }> = [];
+    for (let i = allEntries.length - 1; i >= 0; i--) {
+      const entry = allEntries[i];
+      if (entry.type !== 'tool-use' || entry.name !== 'todo-write') continue;
+      const todoEntry = entry as ToolUseByName<'todo-write'>;
+      const todoItems = todoEntry.result?.newTodos ?? todoEntry.input.todos;
+      if (todoItems && todoItems.length > 0) {
+        for (const t of todoItems) {
+          todos.push({
+            text: t.description ?? t.content,
+            done: t.status === 'completed',
+            current: t.status === 'in_progress',
+          });
+        }
+        break;
+      }
+    }
+    return todos.length > 0 ? todos : null;
+  }, [isRunning, group.childMessages]);
+
   const toggleDetails = useCallback(
     () =>
       setDetailsToggled((prev) => {
@@ -882,17 +913,37 @@ export function PromptGroupEntry({
             ) : isRunning && activity ? (
               /* Collapsed running: live summary */
               <RunningSummary activity={activity} />
-            ) : resultSummary ? (
-              /* Collapsed done: result block */
-              <ResultBlock
-                resultText={resultSummary.text}
-                stats={resultSummary.stats}
-                isError={resultSummary.isError}
-                onFilePathClick={onFilePathClick}
-              />
-            ) : isInterrupted ? (
-              <span className="text-ink-3 text-xs">Interrupted</span>
-            ) : null}
+            ) : (
+              /* Collapsed done/interrupted: todos then result */
+              <div className="flex flex-col gap-2.5">
+                {completedTodos && completedTodos.length > 0 && (
+                  <div>
+                    <div className="text-ink-4 mb-1.5 flex items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase">
+                      <span>todo</span>
+                      <span className="text-ink-3 rounded-full bg-white/[0.06] px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
+                        {completedTodos.filter((t) => t.done).length}/
+                        {completedTodos.length}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      {completedTodos.map((td, i) => (
+                        <TodoRow key={i} todo={td} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {resultSummary ? (
+                  <ResultBlock
+                    resultText={resultSummary.text}
+                    stats={resultSummary.stats}
+                    isError={resultSummary.isError}
+                    onFilePathClick={onFilePathClick}
+                  />
+                ) : isInterrupted ? (
+                  <span className="text-ink-3 text-xs">Interrupted</span>
+                ) : null}
+              </div>
+            )}
           </div>
 
           {/* Changes summary — bottom of agent section (clickable) */}
