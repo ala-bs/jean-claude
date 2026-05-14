@@ -1990,16 +1990,48 @@ export function registerIpcHandlers() {
     ) => fetchImageAsBase64(params),
   );
 
-  ipcMain.handle('tasks:worktree:pushBranch', async (_, taskId: string) => {
-    const task = await TaskRepository.findById(taskId);
-    if (!task?.worktreePath || !task?.branchName) {
-      throw new Error(`Task ${taskId} does not have a worktree with a branch`);
-    }
-    return pushBranch({
-      worktreePath: task.worktreePath,
-      branchName: task.branchName,
-    });
-  });
+  ipcMain.handle(
+    'tasks:worktree:pushBranch',
+    async (_, taskId: string, params?: { commitUnstaged?: boolean }) => {
+      const task = await TaskRepository.findById(taskId);
+      if (!task?.worktreePath || !task?.branchName) {
+        throw new Error(
+          `Task ${taskId} does not have a worktree with a branch`,
+        );
+      }
+
+      let committedBeforePush = false;
+
+      if (params?.commitUnstaged) {
+        const status = await getWorktreeStatus(task.worktreePath);
+        if (status.hasUncommittedChanges) {
+          await commitWorktreeChanges({
+            worktreePath: task.worktreePath,
+            message: 'chore: commit unstaged changes before push',
+            stageAll: true,
+          });
+          committedBeforePush = true;
+        }
+      }
+
+      try {
+        return await pushBranch({
+          worktreePath: task.worktreePath,
+          branchName: task.branchName,
+        });
+      } catch (error) {
+        if (committedBeforePush) {
+          const message =
+            error instanceof Error ? error.message : 'Push failed';
+          throw new Error(
+            `Changes were committed locally, but push failed: ${message}`,
+          );
+        }
+
+        throw error;
+      }
+    },
+  );
 
   ipcMain.handle(
     'tasks:worktree:delete',

@@ -453,7 +453,10 @@ export interface Api {
         },
       ) => Promise<MergeWorktreeResult>;
       getBranches: (taskId: string) => Promise<BranchInfo[]>;
-      pushBranch: (taskId: string) => Promise<void>;
+      pushBranch: (
+        taskId: string,
+        params?: { commitUnstaged?: boolean },
+      ) => Promise<void>;
       delete: (
         taskId: string,
         options?: { keepBranch?: boolean },

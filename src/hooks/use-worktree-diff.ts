@@ -173,10 +173,26 @@ export function useGenerateCommitMessage() {
 
 export function usePushBranch() {
   const queryClient = useQueryClient();
+  const invalidateWorktreeQueries = (taskId: string) => {
+    queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+    queryClient.invalidateQueries({ queryKey: ['worktree-diff', taskId] });
+    queryClient.invalidateQueries({
+      queryKey: ['worktree-file-content', taskId],
+    });
+  };
+
   return useMutation({
-    mutationFn: (taskId: string) => api.tasks.worktree.pushBranch(taskId),
-    onSuccess: (_, taskId) => {
-      queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+    mutationFn: (params: { taskId: string; commitUnstaged?: boolean }) =>
+      api.tasks.worktree.pushBranch(params.taskId, {
+        commitUnstaged: params.commitUnstaged,
+      }),
+    onSuccess: (_, { taskId }) => {
+      invalidateWorktreeQueries(taskId);
+    },
+    onError: (_, { taskId, commitUnstaged }) => {
+      if (commitUnstaged) {
+        invalidateWorktreeQueries(taskId);
+      }
     },
   });
 }

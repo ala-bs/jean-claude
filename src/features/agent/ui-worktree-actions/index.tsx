@@ -30,6 +30,7 @@ import { useToastStore } from '@/stores/toasts';
 
 import { CommitModal } from './commit-modal';
 import { MergeConfirmDialog } from './merge-confirm-dialog';
+import { PushConfirmDialog } from './push-confirm-dialog';
 
 export function WorktreeActions({
   taskId,
@@ -55,6 +56,7 @@ export function WorktreeActions({
   onOpenPrView: () => void;
 }) {
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
+  const [isPushConfirmOpen, setIsPushConfirmOpen] = useState(false);
   const [isMergeConfirmOpen, setIsMergeConfirmOpen] = useState(false);
   // Priority: sourceBranch (where worktree was created from) > defaultBranch (project setting) > 'main'
   const [selectedBranch, setSelectedBranch] = useState<string>(
@@ -107,19 +109,34 @@ export function WorktreeActions({
   const hasRunningCommitJob = runningBgJobs.some((j) => j.type === 'commit');
 
   const hasUnpushedCommits = status?.hasUnpushedCommits ?? false;
+  const hasUncommittedChanges = status?.hasUncommittedChanges ?? false;
   const canPush =
-    hasUnpushedCommits && !status?.hasUncommittedChanges && !isStatusLoading;
+    (hasUnpushedCommits || hasUncommittedChanges) &&
+    !isStatusLoading &&
+    !hasRunningCommitJob;
+
+  const pushChanges = (commitUnstaged?: boolean) => {
+    pushMutation.mutate(
+      { taskId, commitUnstaged },
+      {
+        onSuccess: () => {
+          addToast({ type: 'success', message: 'Changes pushed successfully' });
+        },
+        onError: (error: unknown) => {
+          const msg = error instanceof Error ? error.message : 'Push failed';
+          addToast({ type: 'error', message: msg });
+        },
+      },
+    );
+  };
 
   const handlePush = () => {
-    pushMutation.mutate(taskId, {
-      onSuccess: () => {
-        addToast({ type: 'success', message: 'Changes pushed successfully' });
-      },
-      onError: (error: unknown) => {
-        const msg = error instanceof Error ? error.message : 'Push failed';
-        addToast({ type: 'error', message: msg });
-      },
-    });
+    if (hasUncommittedChanges) {
+      setIsPushConfirmOpen(true);
+      return;
+    }
+
+    pushChanges();
   };
 
   const canCommit =
@@ -176,6 +193,16 @@ export function WorktreeActions({
         markJobFailed(jobId, msg);
         addToast({ type: 'error', message: msg });
       });
+  };
+
+  const handleConfirmPush = () => {
+    setIsPushConfirmOpen(false);
+    pushChanges(true);
+  };
+
+  const handlePushExistingCommits = () => {
+    setIsPushConfirmOpen(false);
+    pushChanges(false);
   };
 
   const handleMerge = (params: {
@@ -320,7 +347,7 @@ export function WorktreeActions({
       {hasRepoLink &&
         (pullRequestUrl ? (
           <div className="flex gap-2">
-            {hasUnpushedCommits && (
+            {(hasUnpushedCommits || hasUncommittedChanges) && (
               <Button
                 onClick={handlePush}
                 disabled={!canPush}
@@ -330,8 +357,8 @@ export function WorktreeActions({
                 icon={<ArrowUpFromLine />}
                 className="flex-1"
                 title={
-                  status?.hasUncommittedChanges
-                    ? 'Commit changes first'
+                  hasUncommittedChanges
+                    ? 'Commit changes and then push'
                     : 'Push changes to remote'
                 }
               >
@@ -372,6 +399,15 @@ export function WorktreeActions({
         taskId={taskId}
         canAutoGenerate={canAutoGenerateCommitMessage}
         contentRef={commitDialogRef}
+      />
+
+      <PushConfirmDialog
+        isOpen={isPushConfirmOpen}
+        onClose={() => setIsPushConfirmOpen(false)}
+        onCommitAndPush={handleConfirmPush}
+        onPushOnly={hasUnpushedCommits ? handlePushExistingCommits : undefined}
+        showPushOnly={hasUnpushedCommits}
+        isPending={pushMutation.isPending}
       />
 
       <MergeConfirmDialog

@@ -144,8 +144,8 @@ contextBridge.exposeInMainWorld('api', {
       ) => ipcRenderer.invoke('tasks:worktree:merge', taskId, params),
       getBranches: (taskId: string) =>
         ipcRenderer.invoke('tasks:worktree:getBranches', taskId),
-      pushBranch: (taskId: string) =>
-        ipcRenderer.invoke('tasks:worktree:pushBranch', taskId),
+      pushBranch: (taskId: string, params?: { commitUnstaged?: boolean }) =>
+        ipcRenderer.invoke('tasks:worktree:pushBranch', taskId, params),
       delete: (taskId: string, options?: { keepBranch?: boolean }) =>
         ipcRenderer.invoke('tasks:worktree:delete', taskId, options),
       cleanupAfterCompletion: (
