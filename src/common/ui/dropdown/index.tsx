@@ -346,10 +346,12 @@ export function DropdownInfo({
   label,
   value,
   onClick,
+  valueClassName,
 }: {
   label: string;
   value: string;
   onClick?: () => void;
+  valueClassName?: string;
 }) {
   return (
     <div
@@ -364,7 +366,14 @@ export function DropdownInfo({
       )}
     >
       <span className="text-ink-3">{label}</span>
-      <span className="text-ink-2 truncate font-mono text-xs">{value}</span>
+      <span
+        className={clsx(
+          'text-ink-2 truncate font-mono text-xs',
+          valueClassName,
+        )}
+      >
+        {value}
+      </span>
     </div>
   );
 }

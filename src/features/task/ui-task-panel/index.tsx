@@ -1051,20 +1051,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             </Chip>
 
             {/* Branch chip */}
-            {task.worktreePath ? (
-              <Chip
-                icon={<GitBranch />}
-                onClick={() => {
-                  void handleOpenWorktreeInEditor();
-                }}
-                title={`Open worktree in editor: ${task.branchName ?? getBranchFromWorktreePath(task.worktreePath)}`}
-                size="xs"
-                className="max-w-28 sm:max-w-36"
-              >
-                {task.branchName ??
-                  getBranchFromWorktreePath(task.worktreePath)}
-              </Chip>
-            ) : task.branchName ? (
+            {task.worktreePath ? null : task.branchName ? (
               <Chip
                 size="xs"
                 icon={<GitBranch />}
@@ -1328,9 +1315,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               )}
 
               {/* Group 3: Info (only when session data exists) */}
-              {(activeStep?.sessionId || model) && (
+              {(activeStep?.sessionId || model || task.worktreePath) && (
                 <>
                   <DropdownDivider />
+                  {task.worktreePath && (
+                    <DropdownInfo
+                      label="Worktree"
+                      value={task.worktreePath}
+                      valueClassName="max-w-56 whitespace-normal break-all text-right"
+                    />
+                  )}
                   {model && (
                     <DropdownInfo
                       label="Model"
