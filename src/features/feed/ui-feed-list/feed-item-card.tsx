@@ -491,7 +491,9 @@ export function FeedItemCard({
                   ? 'feed-permission-row border-transparent'
                   : hasQuestion
                     ? 'feed-question-row border-transparent'
-                    : !showRail && 'border-line-soft',
+                    : hasUnread
+                      ? 'feed-unread-row border-transparent'
+                      : !showRail && 'border-line-soft',
               isSelected
                 ? 'border-l-2 border-l-[var(--color-acc)]'
                 : 'border-l-2 border-l-transparent',
@@ -500,10 +502,6 @@ export function FeedItemCard({
                 !needsAttention &&
                 !hasUnread &&
                 'hover:bg-glass-light',
-              hasUnread &&
-                !isRunning &&
-                !needsAttention &&
-                'completed-unread-glow',
             )}
             style={{ minHeight: isSubtask ? 36 : 50 }}
           >
@@ -937,7 +935,7 @@ function SubtaskRow({
         child.hasUnread &&
           !isRunning &&
           !childNeedsAttention &&
-          'completed-unread-glow',
+          'feed-unread-row',
         isSelected
           ? 'border-l-2 border-l-[var(--color-acc)]'
           : 'border-l-2 border-l-transparent',

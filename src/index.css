@@ -443,24 +443,6 @@ button {
   box-shadow: 0 0 10px 1px oklch(0.78 0.16 205 / 0.6);
 }
 
-@keyframes completed-unread-breathe {
-  0%,
-  100% {
-    box-shadow: 0 0 4px 0 oklch(0.78 0.16 155 / 0.16);
-  }
-  30% {
-    box-shadow: 0 0 7px 0 oklch(0.78 0.16 160 / 0.24);
-  }
-  62% {
-    box-shadow: 0 0 11px 1px oklch(0.78 0.16 200 / 0.3);
-  }
-}
-
-/* Subtle glow for completed-but-unread tasks (no border) */
-@utility completed-unread-glow {
-  animation: completed-unread-breathe 3.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-
 /* Static glow for any focused/selected feed item */
 @utility focused-border {
   position: relative;
@@ -776,7 +758,6 @@ button {
   animation: feed-node-pulse 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
-
 /* Flowing dashes on the rail for running tasks */
 @keyframes feed-rail-flow {
   0% {
@@ -888,10 +869,8 @@ button {
 .feed-unread-row {
   position: relative;
   isolation: isolate;
-  box-shadow:
-    inset 3px 0 0 var(--color-status-done),
-    inset 0 0 28px -2px
-      color-mix(in oklch, var(--color-status-done) 24%, transparent);
+  box-shadow: inset 0 0 28px -2px
+    color-mix(in oklch, var(--color-status-done) 24%, transparent);
   background-image: linear-gradient(
     90deg,
     color-mix(in oklch, var(--color-status-done) 5%, transparent) 0%,
