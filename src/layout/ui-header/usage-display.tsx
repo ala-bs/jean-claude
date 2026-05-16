@@ -260,7 +260,7 @@ function ProviderUsageChip({
         />
       }
       side="bottom"
-      minWidth={220}
+      minWidth={280}
     >
       <div
         className={clsx(

@@ -85,8 +85,8 @@ export function UsageHistoryChart({
         referenceData={chartData.linear}
         xData={chartData.timestamps}
         xDomain={[windowStartMs, nowMs]}
-        width={200}
-        height={36}
+        width={260}
+        height={48}
         color={color}
         max={100}
         fillOpacity={0.1}
