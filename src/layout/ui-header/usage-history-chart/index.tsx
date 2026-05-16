@@ -21,21 +21,25 @@ function getColorForUtilization(utilization: number): string {
   return LEVEL_COLORS.excellent;
 }
 
-/** Last N hours of usage history as a sparkline. */
+/** Current rate-limit window usage history as a sparkline. */
 export function UsageHistoryChart({
   provider,
   limitKey,
-  hours = 6,
+  resetsAt,
+  windowDurationMs,
 }: {
   provider: UsageProviderType;
   limitKey: string;
-  hours?: number;
+  resetsAt: Date;
+  windowDurationMs: number;
 }) {
+  const windowStartMs = resetsAt.getTime() - windowDurationMs;
+  const nowMs = Date.now();
+
   const since = useMemo(() => {
-    const d = new Date();
-    d.setHours(d.getHours() - hours);
+    const d = new Date(windowStartMs);
     return d.toISOString();
-  }, [hours]);
+  }, [windowStartMs]);
 
   const { data: history } = useUsageHistory({
     provider,
@@ -45,8 +49,16 @@ export function UsageHistoryChart({
 
   const chartData = useMemo(() => {
     if (!history || history.length < 2) return null;
-    return history.map((s) => s.utilization);
-  }, [history]);
+    return {
+      timestamps: history.map((snapshot) =>
+        new Date(snapshot.recordedAt).getTime(),
+      ),
+      usage: history.map((snapshot) => snapshot.utilization),
+      linear: history.map((snapshot) =>
+        getLinearUtilization(snapshot, windowDurationMs),
+      ),
+    };
+  }, [history, windowDurationMs]);
 
   if (!chartData) {
     return (
@@ -54,21 +66,24 @@ export function UsageHistoryChart({
     );
   }
 
-  const latest = chartData[chartData.length - 1];
+  const latest = chartData.usage[chartData.usage.length - 1];
   const color = getColorForUtilization(latest);
-  const minVal = Math.min(...chartData);
-  const maxVal = Math.max(...chartData);
+  const minVal = Math.min(...chartData.usage);
+  const maxVal = Math.max(...chartData.usage);
 
   return (
     <div className="space-y-1">
       <div className="text-ink-3 flex items-center justify-between text-[10px]">
-        <span>{hours}h history</span>
+        <span>{formatHistoryWindowLabel(windowDurationMs)}</span>
         <span>
           {minVal.toFixed(0)}% – {maxVal.toFixed(0)}%
         </span>
       </div>
       <Sparkline
-        data={chartData}
+        data={chartData.usage}
+        referenceData={chartData.linear}
+        xData={chartData.timestamps}
+        xDomain={[windowStartMs, nowMs]}
         width={200}
         height={36}
         color={color}
@@ -76,14 +91,41 @@ export function UsageHistoryChart({
         fillOpacity={0.15}
         className={clsx('w-full')}
       />
+      <div className="text-ink-3 flex items-center justify-between text-[10px]">
+        <span>Solid: actual</span>
+        <span>Dashed: linear pace</span>
+      </div>
       <div className="text-ink-3 flex justify-between text-[10px]">
-        <span>{formatTimeLabel(hours)}</span>
+        <span>window start</span>
         <span>now</span>
       </div>
     </div>
   );
 }
 
-function formatTimeLabel(hours: number): string {
-  return `${hours}h ago`;
+function formatHistoryWindowLabel(windowDurationMs: number): string {
+  const totalHours = windowDurationMs / (60 * 60 * 1000);
+
+  if (totalHours >= 24) {
+    const totalDays = totalHours / 24;
+    return Number.isInteger(totalDays)
+      ? `${totalDays}d window`
+      : `${totalDays.toFixed(1)}d window`;
+  }
+
+  return Number.isInteger(totalHours)
+    ? `${totalHours}h window`
+    : `${totalHours.toFixed(1)}h window`;
+}
+
+function getLinearUtilization(
+  snapshot: { recordedAt: string; resetsAt: string },
+  windowDurationMs: number,
+): number {
+  const resetTimeMs = new Date(snapshot.resetsAt).getTime();
+  const recordedAtMs = new Date(snapshot.recordedAt).getTime();
+  const windowStartMs = resetTimeMs - windowDurationMs;
+  const elapsedMs = recordedAtMs - windowStartMs;
+
+  return Math.min(Math.max((elapsedMs / windowDurationMs) * 100, 0), 100);
 }
