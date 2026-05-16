@@ -860,7 +860,6 @@ button {
 
 .feed-command-running-row-focused {
   box-shadow:
-    inset 3px 0 0 color-mix(in oklch, var(--color-status-done) 95%, white 5%),
     inset 0 0 34px -3px
       color-mix(in oklch, var(--color-status-done) 34%, transparent),
     0 0 0 1px color-mix(in oklch, var(--color-status-done) 24%, transparent);
@@ -942,7 +941,6 @@ button {
 /* Permission row glow (amber/yellow tint) */
 .feed-permission-row {
   box-shadow:
-    inset 3px 0 0 var(--color-status-run),
     inset 0 0 20px -4px
       color-mix(in oklch, var(--color-status-run) 20%, transparent);
   background: color-mix(
@@ -955,7 +953,6 @@ button {
 /* Question row glow (teal tint) */
 .feed-question-row {
   box-shadow:
-    inset 3px 0 0 var(--color-status-azure),
     inset 0 0 20px -4px
       color-mix(in oklch, var(--color-status-azure) 20%, transparent);
   background: color-mix(
