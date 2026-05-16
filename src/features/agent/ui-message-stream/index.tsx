@@ -29,6 +29,7 @@ import { groupByPrompts, mergeSkillMessages } from './message-merger';
 import type { StreamMessage } from './message-merger';
 import {
   addBashToPermissionsItem,
+  copyToClipboardItem,
   showRawMessageItem,
   useMessageContextMenu,
 } from './ui-message-context-menu';
@@ -203,12 +204,20 @@ export const MessageStream = memo(function MessageStream({
 
       // Prompt groups use their promptEntry id for context menu
       if (streamMessage.kind === 'prompt-group') {
+        const copyItem = copyToClipboardItem(streamMessage.promptEntry);
+        if (copyItem) items.push(copyItem);
         if (onShowRawMessage) {
           items.push(
             showRawMessageItem(onShowRawMessage, streamMessage.promptEntry.id),
           );
         }
         return items;
+      }
+
+      // "Copy to clipboard" for entries with copyable text
+      if (streamMessage.kind === 'entry') {
+        const copyItem = copyToClipboardItem(streamMessage.entry);
+        if (copyItem) items.push(copyItem);
       }
 
       // "Add to permissions" for bash tool entries
@@ -253,6 +262,9 @@ export const MessageStream = memo(function MessageStream({
   const buildEntryContextMenuItems = useCallback(
     (entry: NormalizedEntry): ContextMenuItem[] => {
       const items: ContextMenuItem[] = [];
+
+      const copyItem = copyToClipboardItem(entry);
+      if (copyItem) items.push(copyItem);
 
       if (
         onAddBashToPermissions &&

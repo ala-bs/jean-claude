@@ -1,10 +1,11 @@
-import { Bug, Shield } from 'lucide-react';
+import { Bug, Clipboard, Shield } from 'lucide-react';
 import type { MouseEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useRegisterOverlay } from '@/common/context/overlay';
+import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
 export interface ContextMenuItem {
   label: string;
@@ -135,5 +136,34 @@ export function addBashToPermissionsItem(
     label: 'Add to permissions\u2026',
     icon: <Shield />,
     onClick: () => onAdd(command),
+  };
+}
+
+/**
+ * Extract copyable text from a normalized entry.
+ * Currently scoped to user prompts and assistant messages only.
+ */
+function getEntryText(entry: NormalizedEntry): string | null {
+  switch (entry.type) {
+    case 'user-prompt':
+      return entry.value;
+    case 'assistant-message':
+      return entry.value;
+    default:
+      return null;
+  }
+}
+
+export function copyToClipboardItem(
+  entry: NormalizedEntry,
+): ContextMenuItem | null {
+  const text = getEntryText(entry)?.trim();
+  if (!text) return null;
+  return {
+    label: 'Copy to clipboard',
+    icon: <Clipboard />,
+    onClick: () => {
+      navigator.clipboard.writeText(text).catch(() => {});
+    },
   };
 }
