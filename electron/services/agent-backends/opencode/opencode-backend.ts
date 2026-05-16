@@ -702,10 +702,6 @@ export class OpenCodeBackend implements AgentBackend {
         // Only process events for our session
         const sessionIdFromEvent = this.getSessionIdFromEvent(ocEvent);
         if (sessionIdFromEvent && sessionIdFromEvent !== sessionId) {
-          dbg.agent(
-            '[opencode] Skipping event for session %s',
-            sessionIdFromEvent,
-          );
           continue;
         }
 
