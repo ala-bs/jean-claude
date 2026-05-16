@@ -4,6 +4,10 @@ import { useCallback, useMemo, useState } from 'react';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import {
+  DetailPlaceholder,
+  ListDetailLayout,
+} from '@/common/ui/list-detail-layout';
+import {
   useAllManagedSkills,
   useDeleteSkill,
   useDisableSkill,
@@ -181,89 +185,90 @@ export function SkillsSettings() {
     railMode === 'installed' && effectiveSelectedSkill;
 
   return (
-    <div className="border-line-soft relative flex min-h-0 flex-1 border-t">
-      {/* ── Skill Rail ── */}
-      <SkillRail
-        builtinSkills={builtinSkills}
-        mySkills={mySkills}
-        installedSkills={installedSkills}
-        selectedPath={effectiveSelectedPath}
-        onSelect={handleSelect}
-        onAdd={handleCreate}
-        onCreateWithAgent={() => openAgentDialog({ mode: 'create' })}
-        mode={railMode}
-        onModeChange={handleModeChange}
-        selectedRegistrySkillId={selectedRegistrySkill?.id ?? null}
-        onSelectRegistrySkill={handleSelectRegistrySkill}
-        installedNames={installedNames}
-      />
-
-      {/* ── Detail Pane ── */}
-      {showRegistryDetail ? (
-        <RegistrySkillDetails
-          key={selectedRegistrySkill.id}
-          skill={selectedRegistrySkill}
+    <ListDetailLayout
+      list={
+        <SkillRail
+          builtinSkills={builtinSkills}
+          mySkills={mySkills}
+          installedSkills={installedSkills}
+          selectedPath={effectiveSelectedPath}
+          onSelect={handleSelect}
+          onAdd={handleCreate}
+          onCreateWithAgent={() => openAgentDialog({ mode: 'create' })}
+          mode={railMode}
+          onModeChange={handleModeChange}
+          selectedRegistrySkillId={selectedRegistrySkill?.id ?? null}
+          onSelectRegistrySkill={handleSelectRegistrySkill}
           installedNames={installedNames}
-          onInstalled={() => {
-            setRailMode('installed');
-            setSelectedRegistrySkill(null);
-          }}
         />
-      ) : showInstalledDetail ? (
-        <SkillDetails
-          key={effectiveSelectedSkill.skillPath}
-          skill={effectiveSelectedSkill}
-          onToggleEnabled={handleToggleEnabled}
-          onDelete={handleDelete}
-          onImproveWithAgent={(skillPath, skillName) =>
-            openAgentDialog({
-              mode: 'improve',
-              sourceSkillPath: skillPath,
-              sourceSkillName: skillName,
-            })
-          }
-        />
-      ) : (
-        <div className="flex min-w-0 flex-1 items-center justify-center bg-black/[0.18]">
-          <div className="text-center">
-            <p className="text-ink-3 mb-4 text-sm">
-              {railMode === 'browse'
+      }
+      detail={
+        showRegistryDetail ? (
+          <RegistrySkillDetails
+            key={selectedRegistrySkill.id}
+            skill={selectedRegistrySkill}
+            installedNames={installedNames}
+            onInstalled={() => {
+              setRailMode('installed');
+              setSelectedRegistrySkill(null);
+            }}
+          />
+        ) : showInstalledDetail ? (
+          <SkillDetails
+            key={effectiveSelectedSkill.skillPath}
+            skill={effectiveSelectedSkill}
+            onToggleEnabled={handleToggleEnabled}
+            onDelete={handleDelete}
+            onImproveWithAgent={(skillPath, skillName) =>
+              openAgentDialog({
+                mode: 'improve',
+                sourceSkillPath: skillPath,
+                sourceSkillName: skillName,
+              })
+            }
+          />
+        ) : (
+          <DetailPlaceholder
+            message={
+              railMode === 'browse'
                 ? 'Search and select a skill to preview it.'
-                : 'No skills found. Get started by adding one.'}
-            </p>
-            {railMode === 'installed' && (
-              <div className="flex items-center justify-center gap-2">
-                <Button
-                  type="button"
-                  onClick={() => handleModeChange('browse')}
-                  size="sm"
-                  icon={<Search size={14} />}
-                >
-                  Browse
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => openAgentDialog({ mode: 'create' })}
-                  size="sm"
-                  icon={<Bot size={14} />}
-                >
-                  Create with Agent
-                </Button>
-                <Button
-                  type="button"
-                  onClick={handleCreate}
-                  size="sm"
-                  variant="primary"
-                  icon={<Plus size={14} />}
-                >
-                  Add
-                </Button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
+                : 'No skills found. Get started by adding one.'
+            }
+            actions={
+              railMode === 'installed' ? (
+                <div className="flex items-center justify-center gap-2">
+                  <Button
+                    type="button"
+                    onClick={() => handleModeChange('browse')}
+                    size="sm"
+                    icon={<Search size={14} />}
+                  >
+                    Browse
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => openAgentDialog({ mode: 'create' })}
+                    size="sm"
+                    icon={<Bot size={14} />}
+                  >
+                    Create with Agent
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleCreate}
+                    size="sm"
+                    variant="primary"
+                    icon={<Plus size={14} />}
+                  >
+                    Add
+                  </Button>
+                </div>
+              ) : undefined
+            }
+          />
+        )
+      }
+    >
       {/* ── Legacy migration banner ── */}
       {hasLegacySkills && !showMigrationDialog && (
         <div className="border-status-run/30 bg-status-run/10 absolute right-4 bottom-4 z-10 rounded-lg border p-3">
@@ -287,6 +292,6 @@ export function SkillsSettings() {
       {isAgentDialogOpen && (
         <CreateWithAgentDialog onClose={closeAgentDialog} />
       )}
-    </div>
+    </ListDetailLayout>
   );
 }

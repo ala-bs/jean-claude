@@ -1,6 +1,10 @@
-import clsx from 'clsx';
 import { Wand2 } from 'lucide-react';
 import type { ReactNode } from 'react';
+
+import {
+  ListGroupHeader,
+  ListItemButton,
+} from '@/common/ui/list-detail-layout';
 
 export function SkillRow({
   label,
@@ -16,41 +20,36 @@ export function SkillRow({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <ListItemButton
+      label={label}
+      isActive={isActive}
+      isDimmed={!isEnabled}
+      size="compact"
       onClick={onClick}
-      className={clsx(
-        'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors',
-        isActive
-          ? 'border-acc bg-acc-soft text-ink-0 border-l-2 font-medium'
-          : 'text-ink-2 hover:bg-glass-light hover:text-ink-1 border-l-2 border-transparent',
+      renderIcon={({ isActive: active, isDimmed }) => (
+        <Wand2
+          size={14}
+          className="shrink-0"
+          style={{
+            color: isDimmed
+              ? 'oklch(0.4 0.01 280)'
+              : active
+                ? 'oklch(0.78 0.18 295)'
+                : 'oklch(0.78 0.16 295)',
+          }}
+        />
       )}
-    >
-      <Wand2
-        size={14}
-        className={clsx('shrink-0', isEnabled ? 'text-acc-ink' : 'text-ink-4')}
-      />
-      <span className="truncate">{label}</span>
-      {suffix}
-    </button>
+      suffix={suffix}
+    />
   );
 }
 
 export function GroupHeader({
   label,
-  accent = false,
+  accent,
 }: {
   label: string;
   accent?: boolean;
 }) {
-  return (
-    <div
-      className={clsx(
-        'px-3 pt-3 pb-1 font-mono text-[10px] font-semibold tracking-wider uppercase',
-        accent ? 'text-acc' : 'text-ink-3',
-      )}
-    >
-      {label}
-    </div>
-  );
+  return <ListGroupHeader label={label} accent={accent} />;
 }

@@ -1,6 +1,10 @@
 import { useCallback, useState } from 'react';
 
 import {
+  DetailPlaceholder,
+  ListDetailLayout,
+} from '@/common/ui/list-detail-layout';
+import {
   usePromptSnippetsSetting,
   useUpdatePromptSnippetsSetting,
 } from '@/hooks/use-settings';
@@ -86,37 +90,34 @@ export function PromptSnippetsSettings() {
   );
 
   return (
-    <div
-      className="flex min-h-0 flex-1 border-t"
-      style={{ borderColor: 'oklch(1 0 0 / 0.05)' }}
-    >
-      <SnippetRail
-        snippets={snippets}
-        selectedId={effectiveSelectedId}
-        onSelect={setSelectedId}
-        onAdd={handleCreate}
-      />
-
-      {selectedSnippet ? (
-        <SnippetDetail
-          key={selectedSnippet.id}
-          snippet={selectedSnippet}
-          onUpdate={(updates) => handleUpdate(selectedSnippet.id, updates)}
-          onDelete={() => handleDelete(selectedSnippet.id)}
-          onDuplicate={() => handleDuplicate(selectedSnippet.id)}
+    <ListDetailLayout
+      list={
+        <SnippetRail
+          snippets={snippets}
+          selectedId={effectiveSelectedId}
+          onSelect={setSelectedId}
+          onAdd={handleCreate}
         />
-      ) : (
-        <div
-          className="flex min-w-0 flex-1 items-center justify-center"
-          style={{ background: 'oklch(0 0 0 / 0.18)' }}
-        >
-          <p className="text-sm" style={{ color: 'oklch(0.55 0.01 280)' }}>
-            {snippets.length === 0
-              ? 'No snippets yet. Click + to create one.'
-              : 'Select a snippet to edit'}
-          </p>
-        </div>
-      )}
-    </div>
+      }
+      detail={
+        selectedSnippet ? (
+          <SnippetDetail
+            key={selectedSnippet.id}
+            snippet={selectedSnippet}
+            onUpdate={(updates) => handleUpdate(selectedSnippet.id, updates)}
+            onDelete={() => handleDelete(selectedSnippet.id)}
+            onDuplicate={() => handleDuplicate(selectedSnippet.id)}
+          />
+        ) : (
+          <DetailPlaceholder
+            message={
+              snippets.length === 0
+                ? 'No snippets yet. Click + to create one.'
+                : 'Select a snippet to edit'
+            }
+          />
+        )
+      }
+    />
   );
 }
