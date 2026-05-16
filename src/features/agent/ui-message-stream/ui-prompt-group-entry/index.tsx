@@ -3,6 +3,7 @@ import type { MouseEvent } from 'react';
 import { useCallback, useMemo, useState } from 'react';
 
 import { formatModelName } from '@/hooks/use-model';
+import { extractImagesFromMarkdown } from '@/lib/markdown-images';
 import { formatNumber } from '@/lib/number';
 import { ensureUtc, formatDuration } from '@/lib/time';
 import type {
@@ -247,12 +248,13 @@ function PromptSection({
   ) => void;
 }) {
   const promptText = group.promptEntry.value;
-  const isLong = promptText.length > PROMPT_MAX_CHARS;
+  const promptContent = useMemo(
+    () => extractImagesFromMarkdown(promptText),
+    [promptText],
+  );
+  const visiblePromptText = promptContent.contentWithoutImages;
+  const isLong = visiblePromptText.length > PROMPT_MAX_CHARS;
   const [open, setOpen] = useState(false);
-  const displayText =
-    open || !isLong
-      ? promptText
-      : promptText.slice(0, PROMPT_MAX_CHARS).trimEnd();
 
   return (
     <div
@@ -288,8 +290,11 @@ function PromptSection({
         {/* Prompt text */}
         <div className="text-ink-1 pr-14 text-[12.5px] leading-relaxed">
           <MarkdownContent
-            content={displayText}
+            content={promptText}
             onFilePathClick={onFilePathClick}
+            imagePresentation="footer-thumbnails"
+            truncateToChars={open || !isLong ? undefined : PROMPT_MAX_CHARS}
+            extractedContent={promptContent}
           />
           {isLong && !open && <span className="text-ink-3">&hellip;</span>}
         </div>

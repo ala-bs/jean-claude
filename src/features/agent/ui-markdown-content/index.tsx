@@ -1,10 +1,15 @@
 import clsx from 'clsx';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { codeToHtml } from 'shiki';
 
 import { Modal } from '@/common/ui/modal';
+import {
+  extractImagesFromMarkdown,
+  type ExtractedMarkdownContent,
+} from '@/lib/markdown-images';
+import { sanitizeMarkdownUrl } from '@/lib/markdown-urls';
 
 // Pattern to match file paths like src/foo.ts:42-50 or just src/foo.ts:42 or src/foo.ts
 const FILE_PATH_PATTERN =
@@ -153,32 +158,13 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   );
 }
 
-// Custom URL transform that allows our azure-image-proxy:// protocol
-// By default, react-markdown only allows http, https, mailto, and tel protocols
 function customUrlTransform(url: string): string {
-  // Allow our custom protocol
-  if (url.startsWith('azure-image-proxy://')) {
-    return url;
+  const sanitizedUrl = sanitizeMarkdownUrl(url);
+  if (!sanitizedUrl) {
+    console.log('[MarkdownContent] Blocking URL with unsafe protocol:', url);
   }
-  // Allow data: URIs (used for inline image attachments)
-  if (url.startsWith('data:image/')) {
-    return url;
-  }
-  // For other URLs, only allow safe protocols
-  const safeProtocols = ['http:', 'https:', 'mailto:', 'tel:'];
-  try {
-    const parsed = new URL(url);
-    if (safeProtocols.includes(parsed.protocol)) {
-      return url;
-    }
-  } catch {
-    // Relative URLs are fine
-    if (!url.includes(':')) {
-      return url;
-    }
-  }
-  console.log('[MarkdownContent] Blocking URL with unsafe protocol:', url);
-  return '';
+
+  return sanitizedUrl;
 }
 
 export function MarkdownContent({
@@ -186,6 +172,9 @@ export function MarkdownContent({
   onFilePathClick,
   imageClassName,
   enableImageModal = false,
+  imagePresentation = 'inline',
+  truncateToChars,
+  extractedContent,
 }: {
   content: string;
   onFilePathClick?: (
@@ -195,11 +184,42 @@ export function MarkdownContent({
   ) => void;
   imageClassName?: string;
   enableImageModal?: boolean;
+  imagePresentation?: 'inline' | 'footer-thumbnails';
+  truncateToChars?: number;
+  extractedContent?: ExtractedMarkdownContent;
 }) {
   const [selectedImage, setSelectedImage] = useState<{
     src: string;
     alt: string;
   } | null>(null);
+  const resolvedExtractedContent = useMemo(
+    () =>
+      (extractedContent ?? imagePresentation === 'footer-thumbnails')
+        ? extractImagesFromMarkdown(content)
+        : { contentWithoutImages: content, images: [] },
+    [content, extractedContent, imagePresentation],
+  );
+  const renderedContent = useMemo(() => {
+    if (
+      !truncateToChars ||
+      resolvedExtractedContent.contentWithoutImages.length <= truncateToChars
+    ) {
+      return resolvedExtractedContent.contentWithoutImages;
+    }
+
+    return resolvedExtractedContent.contentWithoutImages
+      .slice(0, truncateToChars)
+      .trimEnd();
+  }, [resolvedExtractedContent.contentWithoutImages, truncateToChars]);
+  const interactiveImages =
+    enableImageModal || imagePresentation === 'footer-thumbnails';
+  const footerImages = useMemo(
+    () =>
+      resolvedExtractedContent.images.filter((image) =>
+        sanitizeMarkdownUrl(image.src),
+      ),
+    [resolvedExtractedContent.images],
+  );
 
   return (
     <>
@@ -305,6 +325,10 @@ export function MarkdownContent({
             ),
             hr: () => <hr className="border-glass-border my-4" />,
             img: ({ src, alt, ...props }) => {
+              if (imagePresentation === 'footer-thumbnails') {
+                return null;
+              }
+
               // Don't render if src is empty or undefined
               if (!src) {
                 console.log('[MarkdownContent] Skipping img with empty src');
@@ -312,7 +336,7 @@ export function MarkdownContent({
               }
 
               const resolvedAlt = alt || '';
-              const interactive = enableImageModal;
+              const interactive = interactiveImages;
 
               return (
                 <img
@@ -356,9 +380,33 @@ export function MarkdownContent({
             },
           }}
         >
-          {content}
+          {renderedContent}
         </ReactMarkdown>
       </div>
+
+      {imagePresentation === 'footer-thumbnails' && footerImages.length > 0 && (
+        <div className="border-glass-border mt-3 flex flex-wrap items-center gap-2 border-t pt-2.5">
+          {footerImages.map((image, index) => (
+            <button
+              key={`${image.src}-${index}`}
+              type="button"
+              className="group/thumb border-glass-border bg-bg-1 hover:border-glass-border-strong relative h-12 w-12 shrink-0 overflow-hidden rounded border transition-colors"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSelectedImage(image);
+              }}
+              aria-label={image.alt || `Open image ${index + 1}`}
+            >
+              <img
+                src={image.src}
+                alt={image.alt}
+                className="h-full w-full object-cover"
+              />
+            </button>
+          ))}
+        </div>
+      )}
 
       <Modal
         isOpen={selectedImage !== null}
