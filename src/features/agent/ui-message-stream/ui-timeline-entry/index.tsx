@@ -631,6 +631,19 @@ function ToolEntry({
                 ? response.join(', ')
                 : response;
 
+              const selectedAnswers = Array.isArray(response)
+                ? response
+                : response
+                  ? [response]
+                  : [];
+              const hasOptions = question.options.length > 0;
+              const isCustomAnswer =
+                hasOptions &&
+                responseText != null &&
+                !question.options.some((opt) =>
+                  selectedAnswers.includes(opt.label),
+                );
+
               return (
                 <div
                   key={`${question.question}-${index}`}
@@ -644,7 +657,38 @@ function ToolEntry({
                   <div className="text-ink-1 rounded bg-black/30 p-2 whitespace-pre-wrap">
                     {question.question}
                   </div>
-                  {ask.result && (
+                  {ask.result && hasOptions && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {question.options.map((option) => {
+                        const isSelected = selectedAnswers.includes(
+                          option.label,
+                        );
+                        return (
+                          <span
+                            key={option.label}
+                            className={`rounded px-2 py-1 text-xs ${
+                              isSelected
+                                ? 'bg-teal-600 text-white'
+                                : 'text-ink-3 bg-black/20'
+                            }`}
+                          >
+                            {option.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {ask.result && isCustomAnswer && (
+                    <div>
+                      <div className="text-ink-3 mb-1 font-medium">
+                        Custom response
+                      </div>
+                      <div className="text-ink-1 rounded bg-black/30 p-2 whitespace-pre-wrap">
+                        {responseText}
+                      </div>
+                    </div>
+                  )}
+                  {ask.result && !hasOptions && (
                     <div>
                       <div className="text-ink-3 mb-1 font-medium">
                         Response

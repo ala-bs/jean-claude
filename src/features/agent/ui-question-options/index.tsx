@@ -56,7 +56,7 @@ function QuestionInput({
                   selectedLabels.includes(option.label)
                     ? 'bg-acc text-white'
                     : isActive && activeOptionIndex === index
-                      ? 'bg-bg-3 text-ink-0'
+                      ? 'bg-acc/20 text-ink-0 ring-acc ring-2'
                       : 'bg-glass-medium text-ink-1 hover:bg-bg-3'
                 }`}
                 title={option.description}
@@ -92,7 +92,7 @@ function QuestionInput({
               value === option.label && !isOtherOpen
                 ? 'bg-acc text-white'
                 : isActive && activeOptionIndex === index
-                  ? 'bg-bg-3 text-ink-0'
+                  ? 'bg-acc/20 text-ink-0 ring-acc ring-2'
                   : 'bg-glass-medium text-ink-1 hover:bg-bg-3'
             }`}
             title={option.description}
@@ -117,7 +117,7 @@ function QuestionInput({
             isOtherOpen
               ? 'bg-acc text-white'
               : isActive && activeOptionIndex === optionCount - 1
-                ? 'bg-bg-3 text-ink-0'
+                ? 'bg-acc/20 text-ink-0 ring-acc ring-2'
                 : 'bg-glass-medium text-ink-1 hover:bg-bg-3'
           }`}
         >
