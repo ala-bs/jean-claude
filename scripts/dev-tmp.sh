@@ -8,6 +8,7 @@
 set -e
 
 AUTO_REUSE_EXISTING_DB=false
+AUTO_OVERRIDE_DB=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -15,13 +16,18 @@ while [[ $# -gt 0 ]]; do
       AUTO_REUSE_EXISTING_DB=true
       shift
       ;;
+    --auto-override-db|-o)
+      AUTO_OVERRIDE_DB=true
+      shift
+      ;;
     --help|-h)
       cat <<EOF
 Usage: ./scripts/dev-tmp.sh [options]
 
 Options:
-  -r, --auto-reuse-db  Automatically reuse existing temporary DB if detected
-  -h, --help           Show this help message
+  -r, --auto-reuse-db      Automatically reuse existing temporary DB if detected
+  -o, --auto-override-db   Automatically override existing temporary DB with fresh copy
+  -h, --help               Show this help message
 EOF
       exit 0
       ;;
@@ -72,7 +78,11 @@ mkdir -p "$TMP_DIR"
 
 if [[ -f "$TMP_DB" ]]; then
   echo "Existing temporary database found at: $TMP_DB"
-  if [[ "$AUTO_REUSE_EXISTING_DB" == true ]]; then
+  if [[ "$AUTO_OVERRIDE_DB" == true ]]; then
+    echo "Auto-override enabled: replacing existing temporary database"
+    rm -f "$TMP_DB" "$TMP_DB_WAL" "$TMP_DB_SHM"
+    copy_source_db
+  elif [[ "$AUTO_REUSE_EXISTING_DB" == true ]]; then
     echo "Auto-reuse enabled: keeping existing temporary database"
   else
     while true; do
