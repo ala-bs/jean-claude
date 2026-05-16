@@ -38,10 +38,16 @@ export function AzureHtmlContent({
   const markdown = useMemo(() => {
     if (!html) return '';
 
+    // Azure DevOps TCM content uses uppercase tags (<DIV>, <P>, <STRONG>)
+    // that Turndown cannot parse — lowercase them first
+    const lowered = html.replace(/<\/?[A-Z][A-Z0-9]*\b[^>]*>/g, (tag) =>
+      tag.toLowerCase(),
+    );
+
     // Rewrite Azure DevOps image URLs to use the proxy protocol
     const processedHtml = providerId
-      ? rewriteAzureImageUrls(html, providerId)
-      : html;
+      ? rewriteAzureImageUrls(lowered, providerId)
+      : lowered;
 
     return turndown.turndown(processedHtml);
   }, [html, providerId]);

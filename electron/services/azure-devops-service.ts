@@ -2,6 +2,8 @@
 
 import { spawn } from 'child_process';
 
+import TurndownService from 'turndown';
+
 import type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
@@ -317,10 +319,26 @@ function lowercaseHtmlTags(html: string): string {
   );
 }
 
+/** Shared Turndown instance for converting test step HTML to Markdown. */
+const turndown = new TurndownService({
+  headingStyle: 'atx',
+  codeBlockStyle: 'fenced',
+});
+
+/**
+ * Convert Azure DevOps HTML content to Markdown.
+ * Lowercases tags first (Azure uses uppercase), then converts via Turndown.
+ */
+function htmlToMarkdown(html: string): string {
+  if (!html) return '';
+  const lowered = lowercaseHtmlTags(html.trim());
+  return turndown.turndown(lowered).trim();
+}
+
 /**
  * Parse Azure DevOps TCM Steps XML into structured test steps.
  * Each step has two parameterizedString elements (action + expected result)
- * containing HTML content.
+ * containing HTML content, which is converted to Markdown.
  */
 function parseTestSteps(stepsXml: string): TestStep[] {
   const stepRegex =
@@ -329,8 +347,8 @@ function parseTestSteps(stepsXml: string): TestStep[] {
   let match;
   while ((match = stepRegex.exec(stepsXml)) !== null) {
     steps.push({
-      action: lowercaseHtmlTags((match[1] || '').trim()),
-      expectedResult: lowercaseHtmlTags((match[2] || '').trim()),
+      action: htmlToMarkdown(match[1] || ''),
+      expectedResult: htmlToMarkdown(match[2] || ''),
     });
   }
   return steps;
