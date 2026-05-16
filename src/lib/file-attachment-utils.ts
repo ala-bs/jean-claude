@@ -3,6 +3,30 @@ import type { PromptFilePart } from '@shared/agent-backend-types';
 export const MAX_FILES = 10;
 export const MAX_FILE_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50 MB
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('Attachment reader returned a non-string result'));
+        return;
+      }
+
+      const commaIndex = reader.result.indexOf(',');
+      resolve(
+        commaIndex >= 0 ? reader.result.slice(commaIndex + 1) : reader.result,
+      );
+    };
+
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('Failed to read attachment file'));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
 /** Escape a string for safe use inside an XML attribute value. */
 function escapeXmlAttr(value: string): string {
   return value
@@ -65,12 +89,10 @@ export async function processAttachmentFile(
     return;
   }
 
-  // Fallback: read file as binary (base64) and write via IPC.
-  // This handles cases where File.path is not available (shouldn't happen
-  // in Electron, but kept as a safety net).
+  // Fallback: read the file as base64 and write via IPC.
+  // This handles cases where File.path is not available.
   try {
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    const base64 = await readFileAsBase64(file);
     const filePath = await window.api.fs.writeAttachmentFile(
       projectPath,
       file.name,
