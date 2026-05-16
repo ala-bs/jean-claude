@@ -495,8 +495,8 @@ export function FeedItemCard({
                       ? 'feed-unread-row border-transparent'
                       : !showRail && 'border-line-soft',
               isSelected
-                ? 'border-l-2 border-l-[var(--color-acc)]'
-                : 'border-l-2 border-l-transparent',
+                ? 'border-l-[3px] border-l-[var(--color-acc)]'
+                : 'border-l-[3px] border-l-transparent',
               !isSelected &&
                 !isRunning &&
                 !needsAttention &&
@@ -554,8 +554,9 @@ export function FeedItemCard({
             {/* ─ Content column ─ */}
             <div
               className={clsx(
-                'flex min-w-0 flex-1 flex-col gap-0.5',
+                'flex min-w-0 flex-1 flex-col gap-0.5 transition-[padding] duration-150',
                 isSubtask ? 'py-2 pr-3 pl-1' : 'py-2.5 pr-3.5',
+                isSelected && 'pl-3',
               )}
             >
               {/* Work item chips row */}
@@ -574,7 +575,7 @@ export function FeedItemCard({
                 </div>
               )}
 
-              {/* Title + time */}
+              {/* Title */}
               <div className="flex items-start gap-1.5">
                 {item.taskType === 'skill-creation' && (
                   <Bot className="text-status-pr mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -591,12 +592,9 @@ export function FeedItemCard({
                 >
                   {item.title}
                 </span>
-                <span className="text-ink-3 mt-0.5 shrink-0 font-mono text-[9.5px]">
-                  {formatRelativeTime(item.timestamp)}
-                </span>
               </div>
 
-              {/* Bottom row: project + PR chip + attention indicators */}
+              {/* Bottom row: project + time + status */}
               <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                 {!isSubtask && (
                   <span
@@ -611,6 +609,9 @@ export function FeedItemCard({
                     {item.projectName}
                   </span>
                 )}
+                <span className="text-ink-3/80 ml-auto shrink-0 font-mono text-[9.5px]">
+                  {formatRelativeTime(item.timestamp)}
+                </span>
 
                 {/* PR status badges for work items (non-task) */}
                 {item.source === 'work-item' &&

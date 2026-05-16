@@ -138,8 +138,8 @@ export function FeedNoteCard({
             'group/row relative flex cursor-pointer border-b transition-colors',
             'border-line-soft',
             isSelected
-              ? 'border-l-2 border-l-[var(--color-acc)]'
-              : 'border-l-2 border-l-transparent',
+              ? 'border-l-[3px] border-l-[var(--color-acc)]'
+              : 'border-l-[3px] border-l-transparent',
             !isSelected && 'hover:bg-glass-light',
           )}
           style={{ minHeight: 50 }}
@@ -153,8 +153,13 @@ export function FeedNoteCard({
           </div>
 
           {/* Content column */}
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-2.5 pr-3.5">
-            {/* Title + time */}
+          <div
+            className={clsx(
+              'flex min-w-0 flex-1 flex-col gap-0.5 py-2.5 pr-3.5 pl-0 transition-[padding] duration-150',
+              isSelected && 'pl-3',
+            )}
+          >
+            {/* Title */}
             <div className="flex items-start gap-1.5">
               <span
                 className={clsx(
@@ -163,9 +168,6 @@ export function FeedNoteCard({
                 )}
               >
                 {notePreview.title}
-              </span>
-              <span className="text-ink-3 mt-0.5 shrink-0 font-mono text-[9.5px]">
-                {formatRelativeTime(item.timestamp)}
               </span>
             </div>
 
@@ -182,6 +184,12 @@ export function FeedNoteCard({
                 )}
               </div>
             )}
+
+            <div className="flex justify-end pt-0.5">
+              <span className="text-ink-3/80 font-mono text-[9.5px]">
+                {formatRelativeTime(item.timestamp)}
+              </span>
+            </div>
           </div>
         </div>
       )}
