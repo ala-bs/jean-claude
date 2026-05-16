@@ -10,7 +10,8 @@ import {
 } from 'react';
 
 import {
-  KeyboardBindingLayer,
+  KeyboardLayerProvider,
+  useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
 import { Kbd } from '@/common/ui/kbd';
@@ -81,11 +82,24 @@ export function ModalProvider({ children }: { children: ReactNode }) {
     <ModalContext.Provider value={value}>
       {children}
       {currentModal && (
-        <KeyboardBindingLayer exclusive>
-          <ModalRenderer modal={currentModal} onClose={removeFromQueue} />
-        </KeyboardBindingLayer>
+        <ModalExclusiveLayer modal={currentModal} onClose={removeFromQueue} />
       )}
     </ModalContext.Provider>
+  );
+}
+
+function ModalExclusiveLayer({
+  modal,
+  onClose,
+}: {
+  modal: QueuedModal;
+  onClose: () => void;
+}) {
+  const layer = useKeyboardLayer('dialog', { exclusive: true });
+  return (
+    <KeyboardLayerProvider layer={layer}>
+      <ModalRenderer modal={modal} onClose={onClose} />
+    </KeyboardLayerProvider>
   );
 }
 

@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -156,6 +157,7 @@ export function AddStepDialog({
   projectRoot?: string | null;
   projectId?: string;
 }) {
+  const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
   const [promptTemplate, setPromptTemplate] = useState('');
   const [presetType, setPresetType] =
     useState<AddStepPresetType>('new-session');
@@ -290,16 +292,20 @@ export function AddStepDialog({
     setImages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  useCommands('add-step-dialog', [
-    isOpen && {
-      label: 'Toggle Auto-start',
-      shortcut: 'cmd+shift+s',
-      hideInCommandPalette: true,
-      handler: () => {
-        setAutoStart((prev) => !prev);
+  useCommands(
+    'add-step-dialog',
+    [
+      isOpen && {
+        label: 'Toggle Auto-start',
+        shortcut: 'cmd+shift+s',
+        hideInCommandPalette: true,
+        handler: () => {
+          setAutoStart((prev) => !prev);
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
 

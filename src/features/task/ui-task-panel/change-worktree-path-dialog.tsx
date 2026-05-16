@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
@@ -20,6 +21,7 @@ export function ChangeWorktreePathDialog({
   currentPath: string;
   isPending: boolean;
 }) {
+  const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
   const [selectedPath, setSelectedPath] = useState<string>(currentPath);
 
   const handleBrowse = async () => {
@@ -34,16 +36,20 @@ export function ChangeWorktreePathDialog({
     onConfirm(selectedPath);
   };
 
-  useCommands('change-worktree-path-dialog', [
-    isOpen && {
-      label: 'Confirm Change Worktree Path',
-      shortcut: 'cmd+enter',
-      hideInCommandPalette: true,
-      handler: () => {
-        handleConfirm();
+  useCommands(
+    'change-worktree-path-dialog',
+    [
+      isOpen && {
+        label: 'Confirm Change Worktree Path',
+        shortcut: 'cmd+enter',
+        hideInCommandPalette: true,
+        handler: () => {
+          handleConfirm();
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
 

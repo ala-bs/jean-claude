@@ -2,7 +2,8 @@ import { ChevronDown, ChevronRight, Send, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
-  KeyboardBindingLayer,
+  KeyboardLayerProvider,
+  useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
 import {
@@ -34,10 +35,11 @@ export function ReviewSubmitOverlay(props: {
   ) => void;
   onClose: () => void;
 }) {
+  const layer = useKeyboardLayer('dialog', { exclusive: true });
   return (
-    <KeyboardBindingLayer exclusive>
+    <KeyboardLayerProvider layer={layer}>
       <ReviewSubmitOverlayContent {...props} />
-    </KeyboardBindingLayer>
+    </KeyboardLayerProvider>
   );
 }
 

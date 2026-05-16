@@ -22,7 +22,10 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { RemoveScroll } from 'react-remove-scroll';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { Kbd } from '@/common/ui/kbd';
 import { Select, type SelectOption } from '@/common/ui/select';
 import {
@@ -263,6 +266,11 @@ function GlobalContentInner({ menuItem }: { menuItem: GlobalMenuItem }) {
 }
 
 export function SettingsOverlay({ onClose }: { onClose: () => void }) {
+  const layer = useKeyboardLayer('overlay', {
+    exclusive: true,
+    passthrough: ['global-nav'],
+  });
+
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
@@ -333,42 +341,46 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
     [activeTab, globalMenuItem, projectMenuItem],
   );
 
-  useRegisterKeyboardBindings('settings-overlay', {
-    escape: () => {
-      onClose();
-      return true;
-    },
-    'cmd+1': {
-      handler: () => {
-        setActiveTab('global');
+  useRegisterKeyboardBindings(
+    'settings-overlay',
+    {
+      escape: () => {
+        onClose();
         return true;
       },
-      ignoreIfInput: true,
-    },
-    'cmd+2': {
-      handler: () => {
-        if (hasProjectTab) {
-          handleProjectTab();
-        }
-        return true;
+      'cmd+1': {
+        handler: () => {
+          setActiveTab('global');
+          return true;
+        },
+        ignoreIfInput: true,
       },
-      ignoreIfInput: true,
-    },
-    up: {
-      handler: () => {
-        navigateMenu('up');
-        return true;
+      'cmd+2': {
+        handler: () => {
+          if (hasProjectTab) {
+            handleProjectTab();
+          }
+          return true;
+        },
+        ignoreIfInput: true,
       },
-      ignoreIfInput: true,
-    },
-    down: {
-      handler: () => {
-        navigateMenu('down');
-        return true;
+      up: {
+        handler: () => {
+          navigateMenu('up');
+          return true;
+        },
+        ignoreIfInput: true,
       },
-      ignoreIfInput: true,
+      down: {
+        handler: () => {
+          navigateMenu('down');
+          return true;
+        },
+        ignoreIfInput: true,
+      },
     },
-  });
+    { layer },
+  );
 
   const handlePanelClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();

@@ -10,44 +10,69 @@ import {
   type RefObject,
 } from 'react';
 
+import type { LayerName } from './layers';
 import type { BindingKey } from './types';
 import { formatKeyboardEvent, isTypingInInput } from './utils';
 
-// --- Layer Context ---
-const KeyboardBindingLayerContext = createContext<{ layerId: string } | null>(
-  null,
-);
+export type { LayerName } from './layers';
 
-const RootKeyboardBindingsContext = createContext<{
+// --- Types ---
+
+export type KeyboardLayer = {
+  readonly id: string;
+  readonly name: LayerName;
+};
+
+type BindingHandler = (event: KeyboardEvent) => boolean | void;
+
+interface BindingConfig {
+  handler: BindingHandler;
+  ignoreIfInput?: boolean;
+}
+
+type Bindings = {
+  [key in BindingKey]?: BindingHandler | BindingConfig;
+};
+
+// --- Root Context ---
+
+interface RootContextValue {
   register: (
     id: string,
     bindings: RefObject<Bindings>,
     options?: { layerId?: string },
   ) => () => void;
-  addExclusiveLayer: (layerId: string) => void;
-  removeExclusiveLayer: (layerId: string) => void;
-} | null>(null);
-
-type BindingHandler = (event: KeyboardEvent) => boolean | void;
-interface BindingConfig {
-  handler: BindingHandler;
-  /** If true, skip this binding when focus is on an input/textarea */
-  ignoreIfInput?: boolean;
+  registerLayer: (layer: {
+    id: string;
+    name: LayerName;
+    exclusive?: boolean;
+    passthrough?: LayerName[];
+  }) => () => void;
 }
-type Bindings = {
-  [key in BindingKey]?: BindingHandler | BindingConfig;
-};
+
+const RootKeyboardBindingsContext = createContext<RootContextValue | null>(
+  null,
+);
+
+// --- Layer Context (for wrapper sugar) ---
+
+const KeyboardLayerContext = createContext<KeyboardLayer | null>(null);
+
+// --- Root Provider ---
 
 export function RootKeyboardBindings({ children }: { children: ReactNode }) {
-  const contextsRef = useRef<
-    {
-      id: string;
-      bindings: RefObject<Bindings>;
-      layerId?: string;
-    }[]
+  const bindingsRef = useRef<
+    { id: string; bindings: RefObject<Bindings>; layerId?: string }[]
   >([]);
 
-  const exclusiveLayerIdsRef = useRef(new Set<string>());
+  const layersRef = useRef<
+    {
+      id: string;
+      name: LayerName;
+      exclusive?: boolean;
+      passthrough?: LayerName[];
+    }[]
+  >([]);
 
   const register = useCallback(
     (
@@ -55,60 +80,76 @@ export function RootKeyboardBindings({ children }: { children: ReactNode }) {
       bindings: RefObject<Bindings>,
       options?: { layerId?: string },
     ) => {
-      // Remove existing if re-registering
-      contextsRef.current = contextsRef.current.filter((c) => c.id !== id);
-
-      // Add to end of list
-      contextsRef.current.push({
-        id,
-        bindings,
-        layerId: options?.layerId,
-      });
-
-      // Return unsubscribe
+      bindingsRef.current = bindingsRef.current.filter((c) => c.id !== id);
+      bindingsRef.current.push({ id, bindings, layerId: options?.layerId });
       return () => {
-        contextsRef.current = contextsRef.current.filter((c) => c.id !== id);
+        bindingsRef.current = bindingsRef.current.filter((c) => c.id !== id);
       };
     },
     [],
   );
 
-  const addExclusiveLayer = useCallback((layerId: string) => {
-    exclusiveLayerIdsRef.current.add(layerId);
-  }, []);
-
-  const removeExclusiveLayer = useCallback((layerId: string) => {
-    exclusiveLayerIdsRef.current.delete(layerId);
-  }, []);
+  const registerLayer = useCallback(
+    (layer: {
+      id: string;
+      name: LayerName;
+      exclusive?: boolean;
+      passthrough?: LayerName[];
+    }) => {
+      layersRef.current = layersRef.current.filter((l) => l.id !== layer.id);
+      layersRef.current.push(layer);
+      return () => {
+        layersRef.current = layersRef.current.filter((l) => l.id !== layer.id);
+      };
+    },
+    [],
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const key = formatKeyboardEvent(event);
       const inInput = isTypingInInput(event);
 
-      const exclusiveIds = exclusiveLayerIdsRef.current;
-      const hasExclusive = exclusiveIds.size > 0;
+      // Find topmost exclusive layer (last in array = most recent mount)
+      let topmostExclusive: (typeof layersRef.current)[number] | null = null;
+      for (let i = layersRef.current.length - 1; i >= 0; i--) {
+        if (layersRef.current[i].exclusive) {
+          topmostExclusive = layersRef.current[i];
+          break;
+        }
+      }
 
-      // Loop from end (most recently registered first)
-      for (let i = contextsRef.current.length - 1; i >= 0; i--) {
-        const context = contextsRef.current[i];
+      // Build set of allowed layer IDs
+      let allowedLayerIds: Set<string> | null = null;
+      if (topmostExclusive) {
+        allowedLayerIds = new Set<string>([topmostExclusive.id]);
+        if (topmostExclusive.passthrough) {
+          // Passthrough matches by layer NAME
+          for (const layer of layersRef.current) {
+            if (topmostExclusive.passthrough.includes(layer.name)) {
+              allowedLayerIds.add(layer.id);
+            }
+          }
+        }
+      }
 
-        // If exclusive layers active, skip non-exclusive bindings
-        if (
-          hasExclusive &&
-          (!context.layerId || !exclusiveIds.has(context.layerId))
-        ) {
-          continue;
+      // Loop LIFO (most recently registered first)
+      for (let i = bindingsRef.current.length - 1; i >= 0; i--) {
+        const entry = bindingsRef.current[i];
+
+        // If exclusive layer active, filter
+        if (allowedLayerIds) {
+          if (!entry.layerId || !allowedLayerIds.has(entry.layerId)) {
+            continue;
+          }
         }
 
-        const binding = context.bindings.current?.[key];
+        const binding = entry.bindings.current?.[key];
         if (!binding) continue;
 
-        // Normalize to config object
         const config: BindingConfig =
           typeof binding === 'function' ? { handler: binding } : binding;
 
-        // Skip if ignoreIfInput is set and we're in an input
         if (config.ignoreIfInput && inInput) continue;
 
         const handled = config.handler(event);
@@ -120,7 +161,6 @@ export function RootKeyboardBindings({ children }: { children: ReactNode }) {
       }
     };
 
-    // Use capture phase so we handle events before input elements
     document.addEventListener('keydown', handleKeyDown, true);
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true);
@@ -128,8 +168,8 @@ export function RootKeyboardBindings({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ register, addExclusiveLayer, removeExclusiveLayer }),
-    [register, addExclusiveLayer, removeExclusiveLayer],
+    () => ({ register, registerLayer }),
+    [register, registerLayer],
   );
 
   return (
@@ -139,47 +179,71 @@ export function RootKeyboardBindings({ children }: { children: ReactNode }) {
   );
 }
 
-// --- KeyboardBindingLayer ---
+// --- useKeyboardLayer ---
 
-/**
- * Creates a keyboard binding layer. When `exclusive` is true, only bindings
- * registered within this layer's subtree will fire — all other bindings are blocked.
- *
- * Useful for modal dialogs that must prevent background keybindings from firing.
- *
- * @example
- * ```tsx
- * <KeyboardBindingLayer exclusive>
- *   <ConfirmDialog />
- * </KeyboardBindingLayer>
- * ```
- */
-export function KeyboardBindingLayer({
-  exclusive,
-  children,
-}: {
-  exclusive?: boolean;
-  children: ReactNode;
-}) {
-  const layerId = useId();
+export function useKeyboardLayer(
+  name: LayerName,
+  options?: { exclusive?: boolean; passthrough?: LayerName[] },
+): KeyboardLayer {
+  const id = useId();
   const root = useRootKeyboardBindings();
 
+  const exclusive = options?.exclusive;
+  const passthroughKey = options?.passthrough?.join(',') ?? '';
+  const passthroughRef = useRef(options?.passthrough);
+  passthroughRef.current = options?.passthrough;
+
   useEffect(() => {
-    if (!exclusive) return;
-    root.addExclusiveLayer(layerId);
-    return () => {
-      root.removeExclusiveLayer(layerId);
-    };
-  }, [exclusive, layerId, root]);
+    return root.registerLayer({
+      id,
+      name,
+      exclusive,
+      passthrough: passthroughRef.current,
+    });
+  }, [id, name, exclusive, passthroughKey, root]);
 
-  const value = useMemo(() => ({ layerId }), [layerId]);
+  return useMemo(() => ({ id, name }), [id, name]);
+}
 
+// --- KeyboardLayerProvider (wrapper sugar) ---
+
+export function KeyboardLayerProvider({
+  layer,
+  children,
+}: {
+  layer: KeyboardLayer;
+  children: ReactNode;
+}) {
   return (
-    <KeyboardBindingLayerContext.Provider value={value}>
+    <KeyboardLayerContext.Provider value={layer}>
       {children}
-    </KeyboardBindingLayerContext.Provider>
+    </KeyboardLayerContext.Provider>
   );
 }
+
+// --- useRegisterKeyboardBindings ---
+
+export function useRegisterKeyboardBindings(
+  id: string,
+  bindings: Bindings,
+  options?: { enabled?: boolean; layer?: KeyboardLayer },
+): void {
+  const root = useRootKeyboardBindings();
+  const contextLayer = useContext(KeyboardLayerContext);
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
+
+  const enabled = options?.enabled ?? true;
+  const layer = options?.layer ?? contextLayer;
+  const layerId = layer?.id;
+
+  useEffect(() => {
+    if (!enabled) return;
+    return root.register(id, bindingsRef, { layerId });
+  }, [id, root, enabled, layerId]);
+}
+
+// --- Internal ---
 
 function useRootKeyboardBindings() {
   const context = useContext(RootKeyboardBindingsContext);
@@ -189,36 +253,4 @@ function useRootKeyboardBindings() {
     );
   }
   return context;
-}
-
-/**
- * @example
- * ```
- * useRegisterKeyboardBindings('my-component', {
- *   'cmd+k': () => {
- *     // Do something
- *    return true; // Indicate handled
- *   },
- * })
- *
- * // Conditionally enable bindings (re-registers at end of LIFO stack when enabled)
- * useRegisterKeyboardBindings('my-component', { ... }, { enabled: isOpen })
- */
-export function useRegisterKeyboardBindings(
-  id: string,
-  bindings: Bindings,
-  options?: { enabled?: boolean },
-): void {
-  const root = useRootKeyboardBindings();
-  const layer = useContext(KeyboardBindingLayerContext);
-  const bindingsRef = useRef(bindings);
-  bindingsRef.current = bindings;
-
-  const enabled = options?.enabled ?? true;
-  const layerId = layer?.layerId;
-
-  useEffect(() => {
-    if (!enabled) return;
-    return root.register(id, bindingsRef, { layerId });
-  }, [id, root, enabled, layerId]);
 }

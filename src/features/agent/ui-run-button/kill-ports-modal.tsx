@@ -1,6 +1,9 @@
 import { AlertTriangle, Loader2 } from 'lucide-react';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import type { PortsInUseErrorData } from '@shared/run-command-types';
@@ -16,12 +19,18 @@ export function KillPortsModal({
   onCancel: () => void;
   isLoading: boolean;
 }) {
-  useRegisterKeyboardBindings('kill-ports-modal', {
-    'cmd+enter': () => {
-      if (isLoading) return false;
-      onConfirm();
+  const layer = useKeyboardLayer('dialog', { exclusive: true });
+
+  useRegisterKeyboardBindings(
+    'kill-ports-modal',
+    {
+      'cmd+enter': () => {
+        if (isLoading) return false;
+        onConfirm();
+      },
     },
-  });
+    { layer },
+  );
 
   return (
     <Modal

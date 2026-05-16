@@ -13,7 +13,10 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { RemoveScroll } from 'react-remove-scroll';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { Button } from '@/common/ui/button';
 import { useProjects } from '@/hooks/use-projects';
 import { ensureUtc } from '@/lib/time';
@@ -259,17 +262,26 @@ export function NotificationCenterOverlay({
 }: {
   onClose: () => void;
 }) {
+  const layer = useKeyboardLayer('overlay', {
+    exclusive: true,
+    passthrough: ['global-nav'],
+  });
+
   const [activeTab, setActiveTab] = useState<Tab>('notifications');
   const markAsRead = useNotificationsStore((s) => s.markAsRead);
   const unreadCount = useNotificationsStore((s) => s.unreadCount);
   const logCount = useDebugLogsStore((s) => s.logs.length);
 
-  useRegisterKeyboardBindings('notification-center', {
-    escape: () => {
-      onClose();
-      return true;
+  useRegisterKeyboardBindings(
+    'notification-center',
+    {
+      escape: () => {
+        onClose();
+        return true;
+      },
     },
-  });
+    { layer },
+  );
 
   const handleItemClick = useCallback(
     (notification: AppNotification) => {

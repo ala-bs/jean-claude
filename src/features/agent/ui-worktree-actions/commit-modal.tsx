@@ -1,6 +1,7 @@
 import { Loader2, Sparkles } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -24,6 +25,7 @@ export function CommitModal({
   canAutoGenerate: boolean;
   contentRef?: React.RefObject<HTMLDivElement | null>;
 }) {
+  const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
   const [message, setMessage] = useState('');
   const [stageAll, setStageAll] = useState(true);
   const generateMutation = useGenerateCommitMessage();
@@ -74,16 +76,20 @@ export function CommitModal({
     }
   };
 
-  useCommands('commit-modal', [
-    isOpen && {
-      label: 'Commit',
-      shortcut: 'cmd+enter',
-      hideInCommandPalette: true,
-      handler: () => {
-        handleSubmit();
+  useCommands(
+    'commit-modal',
+    [
+      isOpen && {
+        label: 'Commit',
+        shortcut: 'cmd+enter',
+        hideInCommandPalette: true,
+        handler: () => {
+          handleSubmit();
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
 

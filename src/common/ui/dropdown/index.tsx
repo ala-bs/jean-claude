@@ -143,6 +143,16 @@ export function Dropdown({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key.length !== 1 || !/[a-zA-Z]/.test(e.key)) return;
 
+      // Skip if focus moved outside dropdown (e.g., overlay opened on top)
+      const active = document.activeElement;
+      if (
+        active &&
+        !contentRef.current?.contains(active) &&
+        !triggerRef.current?.contains(active)
+      ) {
+        return;
+      }
+
       e.preventDefault();
       e.stopPropagation();
 

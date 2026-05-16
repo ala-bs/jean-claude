@@ -1,6 +1,7 @@
 import { Loader2 } from 'lucide-react';
 import { type RefObject, useEffect, useRef, useState } from 'react';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -39,6 +40,7 @@ export function MergeConfirmDialog({
   canAutoGenerateCommitMessage: boolean;
   contentRef?: RefObject<HTMLDivElement | null>;
 }) {
+  const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
   const [squash, setSquash] = useState(true);
   const [commitMessage, setCommitMessage] = useState('');
   const [commitAllUnstaged, setCommitAllUnstaged] =
@@ -172,16 +174,20 @@ export function MergeConfirmDialog({
     }
   };
 
-  useCommands('merge-confirm-dialog', [
-    isOpen && {
-      label: 'Merge',
-      shortcut: 'cmd+enter',
-      hideInCommandPalette: true,
-      handler: () => {
-        handleConfirm();
+  useCommands(
+    'merge-confirm-dialog',
+    [
+      isOpen && {
+        label: 'Merge',
+        shortcut: 'cmd+enter',
+        hideInCommandPalette: true,
+        handler: () => {
+          handleConfirm();
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
 

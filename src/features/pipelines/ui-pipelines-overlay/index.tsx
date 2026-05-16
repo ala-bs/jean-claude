@@ -4,7 +4,10 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { RemoveScroll } from 'react-remove-scroll';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
 import { Separator } from '@/common/ui/separator';
@@ -66,6 +69,11 @@ function findNavIndex(items: NavItem[], filter: SidebarFilter): number {
 }
 
 export function PipelinesOverlay({ onClose }: { onClose: () => void }) {
+  const layer = useKeyboardLayer('overlay', {
+    exclusive: true,
+    passthrough: ['global-nav'],
+  });
+
   const { data: allProjects = [] } = useProjects();
   const reorderProjects = useReorderProjects();
 
@@ -158,24 +166,28 @@ export function PipelinesOverlay({ onClose }: { onClose: () => void }) {
     [navItems, filter],
   );
 
-  useRegisterKeyboardBindings('pipelines-overlay', {
-    escape: () => {
-      if (triggerPipeline) {
-        setTriggerPipeline(null);
+  useRegisterKeyboardBindings(
+    'pipelines-overlay',
+    {
+      escape: () => {
+        if (triggerPipeline) {
+          setTriggerPipeline(null);
+          return true;
+        }
+        onClose();
         return true;
-      }
-      onClose();
-      return true;
+      },
+      'cmd+up': () => {
+        navigate(-1);
+        return true;
+      },
+      'cmd+down': () => {
+        navigate(1);
+        return true;
+      },
     },
-    'cmd+up': () => {
-      navigate(-1);
-      return true;
-    },
-    'cmd+down': () => {
-      navigate(1);
-      return true;
-    },
-  });
+    { layer },
+  );
 
   const handleBackdropClick = useCallback(() => {
     onClose();

@@ -23,7 +23,10 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { RemoveScroll } from 'react-remove-scroll';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { useProjects } from '@/hooks/use-projects';
 import { api } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/time';
@@ -335,6 +338,11 @@ export function ActivityCenterOverlay({
   onClose: () => void;
   initialTab?: Tab;
 }) {
+  const layer = useKeyboardLayer('overlay', {
+    exclusive: true,
+    passthrough: ['global-nav'],
+  });
+
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -506,72 +514,76 @@ export function ActivityCenterOverlay({
     [activeTab],
   );
 
-  useRegisterKeyboardBindings('activity-center-overlay', {
-    escape: () => {
-      onClose();
-      return true;
-    },
-    left: {
-      handler: () => {
-        cycleTab(-1);
+  useRegisterKeyboardBindings(
+    'activity-center-overlay',
+    {
+      escape: () => {
+        onClose();
         return true;
       },
-      ignoreIfInput: true,
-    },
-    right: {
-      handler: () => {
+      left: {
+        handler: () => {
+          cycleTab(-1);
+          return true;
+        },
+        ignoreIfInput: true,
+      },
+      right: {
+        handler: () => {
+          cycleTab(1);
+          return true;
+        },
+        ignoreIfInput: true,
+      },
+      tab: () => {
         cycleTab(1);
         return true;
       },
-      ignoreIfInput: true,
-    },
-    tab: () => {
-      cycleTab(1);
-      return true;
-    },
-    'shift+tab': () => {
-      cycleTab(-1);
-      return true;
-    },
-    down: () => {
-      setSelectedIndex((prev) => {
-        const next = Math.min(prev + 1, selectableItems.length - 1);
-        scrollToSelected(next);
-        return next;
-      });
-      return true;
-    },
-    up: () => {
-      setSelectedIndex((prev) => {
-        const next = Math.max(prev - 1, -1);
-        if (next >= 0) scrollToSelected(next);
-        return next;
-      });
-      return true;
-    },
-    enter: () => {
-      if (selectedIndex < 0 || selectedIndex >= selectableItems.length)
-        return false;
-      const id = selectableItems[selectedIndex];
-      if (id.startsWith('job-')) {
-        const jobId = id.slice(4);
-        const job = jobs.find((j) => j.id === jobId);
-        if (
-          job?.type === 'task-creation' &&
-          job.status === 'succeeded' &&
-          job.projectId &&
-          job.taskId
-        ) {
-          handleOpenTask(job.projectId, job.taskId);
+      'shift+tab': () => {
+        cycleTab(-1);
+        return true;
+      },
+      down: () => {
+        setSelectedIndex((prev) => {
+          const next = Math.min(prev + 1, selectableItems.length - 1);
+          scrollToSelected(next);
+          return next;
+        });
+        return true;
+      },
+      up: () => {
+        setSelectedIndex((prev) => {
+          const next = Math.max(prev - 1, -1);
+          if (next >= 0) scrollToSelected(next);
+          return next;
+        });
+        return true;
+      },
+      enter: () => {
+        if (selectedIndex < 0 || selectedIndex >= selectableItems.length)
+          return false;
+        const id = selectableItems[selectedIndex];
+        if (id.startsWith('job-')) {
+          const jobId = id.slice(4);
+          const job = jobs.find((j) => j.id === jobId);
+          if (
+            job?.type === 'task-creation' &&
+            job.status === 'succeeded' &&
+            job.projectId &&
+            job.taskId
+          ) {
+            handleOpenTask(job.projectId, job.taskId);
+          }
+        } else if (id.startsWith('notif-')) {
+          const notifId = id.slice(6);
+          const notif = notifications.find((n) => n.id === notifId);
+          if (notif) handleNotificationClick(notif);
         }
-      } else if (id.startsWith('notif-')) {
-        const notifId = id.slice(6);
-        const notif = notifications.find((n) => n.id === notifId);
-        if (notif) handleNotificationClick(notif);
-      }
-      return true;
+        return true;
+      },
     },
-  });
+    { layer },
+  );
 
   // --- Handlers ---
   const handleOpenTask = useCallback(

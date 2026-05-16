@@ -14,8 +14,13 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
+import FocusLock from 'react-focus-lock';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { useModal } from '@/common/context/modal';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
@@ -184,6 +189,11 @@ export function BacklogOverlay({
   initialProjectId: string;
   onClose: () => void;
 }) {
+  const layer = useKeyboardLayer('overlay', {
+    exclusive: true,
+    passthrough: ['global-nav'],
+  });
+
   const [projectId, setProjectId] = useState(initialProjectId);
   const { data: projects = [] } = useProjects();
 
@@ -261,155 +271,163 @@ export function BacklogOverlay({
       : null;
 
   // Register keyboard shortcuts (Cmd+B is handled by the container's toggle).
-  useCommands('backlog-overlay', [
-    {
-      label: 'Close Backlog',
-      shortcut: 'escape',
-      handler: () => {
-        if (editingId) {
-          cancelEdit();
-          return;
-        }
-        onClose();
+  useCommands(
+    'backlog-overlay',
+    [
+      {
+        label: 'Close Backlog',
+        shortcut: 'escape',
+        handler: () => {
+          if (editingId) {
+            cancelEdit();
+            return;
+          }
+          onClose();
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-    {
-      label: 'Open Todo Actions',
-      shortcut: 'enter',
-      handler: () => {
-        // If editing, save the edit
-        if (editingId) {
-          saveEdit();
-          return;
-        }
-        // If an item is selected, open its dropdown
-        if (selectedTodo) {
-          triggerRefs.current.get(selectedTodo.id)?.click();
-          return;
-        }
+      {
+        label: 'Open Todo Actions',
+        shortcut: 'enter',
+        handler: () => {
+          // If editing, save the edit
+          if (editingId) {
+            saveEdit();
+            return;
+          }
+          // If an item is selected, open its dropdown
+          if (selectedTodo) {
+            triggerRefs.current.get(selectedTodo.id)?.click();
+            return;
+          }
 
-        return false;
-      },
-      hideInCommandPalette: true,
-    },
-    {
-      label: 'Edit Selected Item',
-      shortcut: 'shift+enter',
-      handler: () => {
-        if (editingId) {
           return false;
-        }
-        if (!selectedTodo) {
+        },
+        hideInCommandPalette: true,
+      },
+      {
+        label: 'Edit Selected Item',
+        shortcut: 'shift+enter',
+        handler: () => {
+          if (editingId) {
+            return false;
+          }
+          if (!selectedTodo) {
+            return false;
+          }
+
+          startEdit(selectedTodo);
+        },
+        hideInCommandPalette: true,
+      },
+      {
+        label: selectedTodo
+          ? 'Convert Selected Item to Task'
+          : 'Add Backlog Item',
+        shortcut: 'cmd+enter',
+        handler: () => {
+          if (editingId) {
+            saveEdit();
+            return;
+          }
+
+          if (selectedTodo) {
+            handleConvertToTask(selectedTodo);
+            return;
+          }
+
+          if (inputValue.trim()) {
+            handleAdd();
+            return;
+          }
+
           return false;
-        }
-
-        startEdit(selectedTodo);
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-    {
-      label: selectedTodo
-        ? 'Convert Selected Item to Task'
-        : 'Add Backlog Item',
-      shortcut: 'cmd+enter',
-      handler: () => {
-        if (editingId) {
-          saveEdit();
-          return;
-        }
-
-        if (selectedTodo) {
-          handleConvertToTask(selectedTodo);
-          return;
-        }
-
-        if (inputValue.trim()) {
-          handleAdd();
-          return;
-        }
-
-        return false;
-      },
-      hideInCommandPalette: true,
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   // Navigation bindings: up/down skip when typing in an input (ignoreIfInput),
   // cmd+up/cmd+down reorder the selected item, tab toggles focus.
-  useRegisterKeyboardBindings('backlog-overlay-navigation', {
-    up: {
-      handler: () => {
-        if (selectedIndex <= 0) {
-          if (!inputValue.trim()) {
-            lastSelectedIndexRef.current = 0;
-            setSelectedIndex(-1);
-            inputRef.current?.focus();
+  useRegisterKeyboardBindings(
+    'backlog-overlay-navigation',
+    {
+      up: {
+        handler: () => {
+          if (selectedIndex <= 0) {
+            if (!inputValue.trim()) {
+              lastSelectedIndexRef.current = 0;
+              setSelectedIndex(-1);
+              inputRef.current?.focus();
+            }
+            return;
           }
-          return;
+          setSelectedIndex((i) => i - 1);
+        },
+        ignoreIfInput: true,
+      },
+      down: {
+        handler: () => {
+          setSelectedIndex((i) => Math.min(todos.length - 1, i + 1));
+        },
+        ignoreIfInput: true,
+      },
+      'cmd+up': {
+        handler: () => {
+          if (selectedIndex <= 0 || todos.length < 2) return;
+          const ids = todos.map((t) => t.id);
+          const newIds = [...ids];
+          [newIds[selectedIndex - 1], newIds[selectedIndex]] = [
+            newIds[selectedIndex],
+            newIds[selectedIndex - 1],
+          ];
+          reorderTodos.mutate({ projectId, orderedIds: newIds });
+          setSelectedIndex(selectedIndex - 1);
+        },
+        ignoreIfInput: true,
+      },
+      'cmd+down': {
+        handler: () => {
+          if (selectedIndex < 0 || selectedIndex >= todos.length - 1) return;
+          const ids = todos.map((t) => t.id);
+          const newIds = [...ids];
+          [newIds[selectedIndex], newIds[selectedIndex + 1]] = [
+            newIds[selectedIndex + 1],
+            newIds[selectedIndex],
+          ];
+          reorderTodos.mutate({ projectId, orderedIds: newIds });
+          setSelectedIndex(selectedIndex + 1);
+        },
+        ignoreIfInput: true,
+      },
+      tab: () => {
+        if (todos.length === 0) return;
+        if (selectedIndex >= 0) {
+          // List → Input: remember position, focus textarea
+          lastSelectedIndexRef.current = selectedIndex;
+          setSelectedIndex(-1);
+          inputRef.current?.focus();
+        } else {
+          // Input → List: restore last position (or first item)
+          const idx = Math.min(lastSelectedIndexRef.current, todos.length - 1);
+          setSelectedIndex(idx >= 0 ? idx : 0);
+          inputRef.current?.blur();
         }
-        setSelectedIndex((i) => i - 1);
       },
-      ignoreIfInput: true,
-    },
-    down: {
-      handler: () => {
-        setSelectedIndex((i) => Math.min(todos.length - 1, i + 1));
+      'cmd+backspace': {
+        handler: () => {
+          if (!selectedTodo || editingId) {
+            return false;
+          }
+          handleDelete(selectedTodo);
+        },
+        ignoreIfInput: true,
       },
-      ignoreIfInput: true,
     },
-    'cmd+up': {
-      handler: () => {
-        if (selectedIndex <= 0 || todos.length < 2) return;
-        const ids = todos.map((t) => t.id);
-        const newIds = [...ids];
-        [newIds[selectedIndex - 1], newIds[selectedIndex]] = [
-          newIds[selectedIndex],
-          newIds[selectedIndex - 1],
-        ];
-        reorderTodos.mutate({ projectId, orderedIds: newIds });
-        setSelectedIndex(selectedIndex - 1);
-      },
-      ignoreIfInput: true,
-    },
-    'cmd+down': {
-      handler: () => {
-        if (selectedIndex < 0 || selectedIndex >= todos.length - 1) return;
-        const ids = todos.map((t) => t.id);
-        const newIds = [...ids];
-        [newIds[selectedIndex], newIds[selectedIndex + 1]] = [
-          newIds[selectedIndex + 1],
-          newIds[selectedIndex],
-        ];
-        reorderTodos.mutate({ projectId, orderedIds: newIds });
-        setSelectedIndex(selectedIndex + 1);
-      },
-      ignoreIfInput: true,
-    },
-    tab: () => {
-      if (todos.length === 0) return;
-      if (selectedIndex >= 0) {
-        // List → Input: remember position, focus textarea
-        lastSelectedIndexRef.current = selectedIndex;
-        setSelectedIndex(-1);
-        inputRef.current?.focus();
-      } else {
-        // Input → List: restore last position (or first item)
-        const idx = Math.min(lastSelectedIndexRef.current, todos.length - 1);
-        setSelectedIndex(idx >= 0 ? idx : 0);
-        inputRef.current?.blur();
-      }
-    },
-    'cmd+backspace': {
-      handler: () => {
-        if (!selectedTodo || editingId) {
-          return false;
-        }
-        handleDelete(selectedTodo);
-      },
-      ignoreIfInput: true,
-    },
-  });
+    { layer },
+  );
 
   // Add todo
   const handleAdd = useCallback(() => {
@@ -530,112 +548,115 @@ export function BacklogOverlay({
     e.stopPropagation();
   }, []);
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
-      onClick={handleOverlayClick}
-    >
+  return createPortal(
+    <FocusLock returnFocus>
       <div
-        className="border-glass-border bg-bg-1 flex max-h-[60svh] w-[90svw] max-w-[720px] flex-col overflow-hidden rounded-lg border shadow-2xl"
-        onClick={handleModalClick}
+        className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+        onClick={handleOverlayClick}
       >
-        {/* Project selector header */}
-        <div className="border-glass-border flex items-center border-b px-4 py-2">
-          <Select
-            value={projectId}
-            options={projectOptions}
-            onChange={handleProjectChange}
-            label="Project"
-            className="text-ink-1 hover:bg-glass-medium border-none bg-transparent px-1 py-0.5 hover:border-none"
-          />
-        </div>
+        <div
+          className="border-glass-border bg-bg-1 flex max-h-[60svh] w-[90svw] max-w-[720px] flex-col overflow-hidden rounded-lg border shadow-2xl"
+          onClick={handleModalClick}
+        >
+          {/* Project selector header */}
+          <div className="border-glass-border flex items-center border-b px-4 py-2">
+            <Select
+              value={projectId}
+              options={projectOptions}
+              onChange={handleProjectChange}
+              label="Project"
+              className="text-ink-1 hover:bg-glass-medium border-none bg-transparent px-1 py-0.5 hover:border-none"
+            />
+          </div>
 
-        {/* Quick-add input */}
-        <div className="border-glass-border flex items-center border-b px-4 py-3">
-          <textarea
-            ref={inputRef}
-            placeholder="Add a todo..."
-            autoFocus
-            rows={1}
-            value={inputValue}
-            onKeyDown={(e) => {
-              if (e.key !== 'ArrowDown') return;
-              if (inputValue.trim()) return;
-              if (todos.length === 0) return;
+          {/* Quick-add input */}
+          <div className="border-glass-border flex items-center border-b px-4 py-3">
+            <textarea
+              ref={inputRef}
+              placeholder="Add a todo..."
+              autoFocus
+              rows={1}
+              value={inputValue}
+              onKeyDown={(e) => {
+                if (e.key !== 'ArrowDown') return;
+                if (inputValue.trim()) return;
+                if (todos.length === 0) return;
 
-              e.preventDefault();
-              setSelectedIndex(0);
-              inputRef.current?.blur();
-            }}
-            onFocus={() => {
-              if (selectedIndex < 0) return;
-              lastSelectedIndexRef.current = selectedIndex;
-              setSelectedIndex(-1);
-            }}
-            onChange={(e) => {
-              setInputValue(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = `${e.target.scrollHeight}px`;
-            }}
-            className="placeholder:text-muted-foreground max-h-32 flex-1 resize-none bg-transparent text-sm outline-none"
-          />
-        </div>
+                e.preventDefault();
+                setSelectedIndex(0);
+                inputRef.current?.blur();
+              }}
+              onFocus={() => {
+                if (selectedIndex < 0) return;
+                lastSelectedIndexRef.current = selectedIndex;
+                setSelectedIndex(-1);
+              }}
+              onChange={(e) => {
+                setInputValue(e.target.value);
+                e.target.style.height = 'auto';
+                e.target.style.height = `${e.target.scrollHeight}px`;
+              }}
+              className="placeholder:text-muted-foreground max-h-32 flex-1 resize-none bg-transparent text-sm outline-none"
+            />
+          </div>
 
-        {/* Todo list */}
-        <div ref={listRef} className="overflow-y-auto p-2">
-          {todos.length === 0 ? (
-            <div className="text-ink-3 py-8 text-center text-sm">
-              No backlog items yet. Type above and press Cmd+Enter to add one.
-            </div>
-          ) : (
-            todos.map((todo, index) => (
-              <BacklogTodoRow
-                key={todo.id}
-                todo={todo}
-                isSelected={index === selectedIndex}
-                isEditing={editingId === todo.id}
-                editValue={editValue}
-                dragOverId={dragOverId}
-                triggerRefs={triggerRefs}
-                onSelect={() => setSelectedIndex(index)}
-                onEditChange={setEditValue}
-                onEditBlur={saveEdit}
-                onStartEdit={() => startEdit(todo)}
-                onConvertToTask={() => handleConvertToTask(todo)}
-                onDelete={() => handleDelete(todo)}
-                onDragStart={() => handleDragStart(todo.id)}
-                onDragOver={(e) => handleDragOver(e, todo.id)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, todo.id)}
-                onDragEnd={handleDragEnd}
-              />
-            ))
-          )}
-        </div>
+          {/* Todo list */}
+          <div ref={listRef} className="overflow-y-auto p-2">
+            {todos.length === 0 ? (
+              <div className="text-ink-3 py-8 text-center text-sm">
+                No backlog items yet. Type above and press Cmd+Enter to add one.
+              </div>
+            ) : (
+              todos.map((todo, index) => (
+                <BacklogTodoRow
+                  key={todo.id}
+                  todo={todo}
+                  isSelected={index === selectedIndex}
+                  isEditing={editingId === todo.id}
+                  editValue={editValue}
+                  dragOverId={dragOverId}
+                  triggerRefs={triggerRefs}
+                  onSelect={() => setSelectedIndex(index)}
+                  onEditChange={setEditValue}
+                  onEditBlur={saveEdit}
+                  onStartEdit={() => startEdit(todo)}
+                  onConvertToTask={() => handleConvertToTask(todo)}
+                  onDelete={() => handleDelete(todo)}
+                  onDragStart={() => handleDragStart(todo.id)}
+                  onDragOver={(e) => handleDragOver(e, todo.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, todo.id)}
+                  onDragEnd={handleDragEnd}
+                />
+              ))
+            )}
+          </div>
 
-        <div className="border-glass-border text-ink-2 flex flex-wrap items-center gap-3 border-t px-4 py-2 text-xs">
-          <span className="inline-flex items-center gap-1.5">
-            <Kbd shortcut="tab" /> Switch Input/List Focus
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <Kbd shortcut="cmd+enter" />
-            {selectedTodo ? 'Convert Selected Item To Task' : 'Add Item'}
-          </span>
-          {selectedTodo && (
-            <>
-              <span className="inline-flex items-center gap-1.5">
-                <Kbd shortcut="shift+enter" /> Edit Selected Item
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <Kbd shortcut="enter" /> Open Selected Item Actions
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <Kbd shortcut="cmd+backspace" /> Delete Selected Item
-              </span>
-            </>
-          )}
+          <div className="border-glass-border text-ink-2 flex flex-wrap items-center gap-3 border-t px-4 py-2 text-xs">
+            <span className="inline-flex items-center gap-1.5">
+              <Kbd shortcut="tab" /> Switch Input/List Focus
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <Kbd shortcut="cmd+enter" />
+              {selectedTodo ? 'Convert Selected Item To Task' : 'Add Item'}
+            </span>
+            {selectedTodo && (
+              <>
+                <span className="inline-flex items-center gap-1.5">
+                  <Kbd shortcut="shift+enter" /> Edit Selected Item
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <Kbd shortcut="enter" /> Open Selected Item Actions
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <Kbd shortcut="cmd+backspace" /> Delete Selected Item
+                </span>
+              </>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </FocusLock>,
+    document.body,
   );
 }

@@ -3,7 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -397,12 +400,17 @@ function TriggerRunDialogInner({
   ]);
 
   // Escape key
-  useRegisterKeyboardBindings('trigger-run-dialog', {
-    escape: () => {
-      onClose();
-      return true;
+  const layer = useKeyboardLayer('dialog', { exclusive: true });
+  useRegisterKeyboardBindings(
+    'trigger-run-dialog',
+    {
+      escape: () => {
+        onClose();
+        return true;
+      },
     },
-  });
+    { layer },
+  );
 
   const hasParams =
     processInputs.length > 0 ||

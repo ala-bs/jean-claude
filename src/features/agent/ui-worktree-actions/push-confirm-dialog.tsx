@@ -1,3 +1,4 @@
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
@@ -18,6 +19,8 @@ export function PushConfirmDialog({
   showPushOnly: boolean;
   isPending: boolean;
 }) {
+  const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
+
   const handleCommitAndPush = () => {
     if (isPending) return;
     onCommitAndPush();
@@ -28,16 +31,20 @@ export function PushConfirmDialog({
     onPushOnly();
   };
 
-  useCommands('push-confirm-dialog', [
-    isOpen && {
-      label: 'Commit And Push',
-      shortcut: 'cmd+enter',
-      hideInCommandPalette: true,
-      handler: () => {
-        handleCommitAndPush();
+  useCommands(
+    'push-confirm-dialog',
+    [
+      isOpen && {
+        label: 'Commit And Push',
+        shortcut: 'cmd+enter',
+        hideInCommandPalette: true,
+        handler: () => {
+          handleCommitAndPush();
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
 

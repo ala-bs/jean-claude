@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-router';
 import { useCallback, useEffect } from 'react';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
@@ -76,40 +77,51 @@ function RootErrorBoundary({ error }: { error: Error }) {
 }
 
 function CommandPaletteContainer() {
+  const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore((s) => s.activeOverlay === 'command-palette');
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
 
-  useCommands('command-palette-trigger', [
-    {
-      shortcut: 'cmd+p',
-      label: 'Open Command Palette',
-      handler: () => {
-        toggle('command-palette');
+  useCommands(
+    'command-palette-trigger',
+    [
+      {
+        shortcut: 'cmd+p',
+        label: 'Open Command Palette',
+        handler: () => {
+          toggle('command-palette');
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
   return <CommandPaletteOverlay onClose={() => close('command-palette')} />;
 }
 
 function GlobalCommands() {
+  const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
-  useCommands('global-commands', [
-    {
-      label: 'Settings',
-      shortcut: 'cmd+,',
-      handler: () => {
-        toggle('settings');
+  useCommands(
+    'global-commands',
+    [
+      {
+        label: 'Settings',
+        shortcut: 'cmd+,',
+        handler: () => {
+          toggle('settings');
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
   return null;
 }
 
 function NewTaskContainer() {
+  const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore((s) => s.activeOverlay === 'new-task');
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
@@ -127,15 +139,19 @@ function NewTaskContainer() {
     close('new-task');
   }, [discardDraft, close]);
 
-  useCommands('new-task-trigger', [
-    {
-      shortcut: 'cmd+n',
-      label: 'New Task',
-      handler: () => {
-        toggle('new-task');
+  useCommands(
+    'new-task-trigger',
+    [
+      {
+        shortcut: 'cmd+n',
+        label: 'New Task',
+        handler: () => {
+          toggle('new-task');
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
   return (
@@ -144,42 +160,52 @@ function NewTaskContainer() {
 }
 
 function ProjectOverlayContainer() {
+  const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore(
     (s) => s.activeOverlay === 'project-switcher',
   );
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
 
-  useCommands('project-overlay-trigger', [
-    {
-      shortcut: 'cmd+o',
-      label: 'Open Project Overlay',
-      section: 'Projects',
-      handler: () => {
-        toggle('project-switcher');
+  useCommands(
+    'project-overlay-trigger',
+    [
+      {
+        shortcut: 'cmd+o',
+        label: 'Open Project Overlay',
+        section: 'Projects',
+        handler: () => {
+          toggle('project-switcher');
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
   return <ProjectOverlay onClose={() => close('project-switcher')} />;
 }
 
 function ActivityCenterContainer() {
+  const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore((s) => s.activeOverlay === 'activity-center');
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
 
-  useCommands('activity-center-trigger', [
-    {
-      shortcut: 'cmd+j',
-      label: 'Activity Center',
-      section: 'General',
-      handler: () => {
-        toggle('activity-center');
+  useCommands(
+    'activity-center-trigger',
+    [
+      {
+        shortcut: 'cmd+j',
+        label: 'Activity Center',
+        section: 'General',
+        handler: () => {
+          toggle('activity-center');
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
   return <ActivityCenterOverlay onClose={() => close('activity-center')} />;
@@ -194,23 +220,28 @@ function SettingsContainer() {
 }
 
 function ProjectBacklogContainer() {
+  const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore((s) => s.activeOverlay === 'project-backlog');
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
   const projectId = useBacklogProjectId();
 
-  useCommands('project-backlog-trigger', [
-    {
-      shortcut: 'cmd+b',
-      label: 'Open Project Backlog',
-      section: 'Projects',
-      handler: () => {
-        if (projectId) {
-          toggle('project-backlog');
-        }
+  useCommands(
+    'project-backlog-trigger',
+    [
+      {
+        shortcut: 'cmd+b',
+        label: 'Open Project Backlog',
+        section: 'Projects',
+        handler: () => {
+          if (projectId) {
+            toggle('project-backlog');
+          }
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen || !projectId) return null;
   return (
@@ -222,42 +253,52 @@ function ProjectBacklogContainer() {
 }
 
 function RunningCommandsContainer() {
+  const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore(
     (s) => s.activeOverlay === 'running-commands',
   );
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
 
-  useCommands('running-commands-trigger', [
-    {
-      shortcut: 'cmd+shift+r',
-      label: 'Open Running Commands',
-      section: 'General',
-      handler: () => {
-        toggle('running-commands');
+  useCommands(
+    'running-commands-trigger',
+    [
+      {
+        shortcut: 'cmd+shift+r',
+        label: 'Open Running Commands',
+        section: 'General',
+        handler: () => {
+          toggle('running-commands');
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
   return <RunningCommandsOverlay onClose={() => close('running-commands')} />;
 }
 
 function PipelinesOverlayContainer() {
+  const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore((s) => s.activeOverlay === 'pipelines');
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
 
-  useCommands('pipelines-trigger', [
-    {
-      shortcut: 'cmd+shift+y',
-      label: 'Open Pipelines',
-      section: 'Navigation',
-      handler: () => {
-        toggle('pipelines');
+  useCommands(
+    'pipelines-trigger',
+    [
+      {
+        shortcut: 'cmd+shift+y',
+        label: 'Open Pipelines',
+        section: 'Navigation',
+        handler: () => {
+          toggle('pipelines');
+        },
       },
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
   return <PipelinesOverlay onClose={() => close('pipelines')} />;

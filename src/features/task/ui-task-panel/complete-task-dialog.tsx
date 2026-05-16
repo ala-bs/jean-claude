@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -19,6 +20,7 @@ export function CompleteTaskDialog({
   hasWorktree: boolean;
   isPending: boolean;
 }) {
+  const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
   const [cleanupWorktree, setCleanupWorktree] = useState(true);
 
   // Reset state when dialog opens
@@ -33,26 +35,30 @@ export function CompleteTaskDialog({
     onConfirm({ cleanupWorktree: hasWorktree ? cleanupWorktree : false });
   };
 
-  useCommands('complete-task-dialog', [
-    isOpen && {
-      label: 'Confirm Complete',
-      shortcut: 'cmd+enter',
-      hideInCommandPalette: true,
-      handler: () => {
-        handleConfirm();
-      },
-    },
-    isOpen &&
-      hasWorktree && {
-        label: 'Toggle Worktree Cleanup',
-        shortcut: 'cmd+shift+w',
+  useCommands(
+    'complete-task-dialog',
+    [
+      isOpen && {
+        label: 'Confirm Complete',
+        shortcut: 'cmd+enter',
         hideInCommandPalette: true,
         handler: () => {
-          if (isPending) return false;
-          setCleanupWorktree((value) => !value);
+          handleConfirm();
         },
       },
-  ]);
+      isOpen &&
+        hasWorktree && {
+          label: 'Toggle Worktree Cleanup',
+          shortcut: 'cmd+shift+w',
+          hideInCommandPalette: true,
+          handler: () => {
+            if (isPending) return false;
+            setCleanupWorktree((value) => !value);
+          },
+        },
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
 

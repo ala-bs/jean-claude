@@ -2,12 +2,20 @@ import clsx from 'clsx';
 import Fuse from 'fuse.js';
 import { groupBy, map } from 'lodash-es';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import FocusLock from 'react-focus-lock';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands, useCommandSources } from '@/common/hooks/use-commands';
 import { Input } from '@/common/ui/input';
 import { Kbd } from '@/common/ui/kbd';
 
 export function CommandPaletteOverlay({ onClose }: { onClose: () => void }) {
+  const layer = useKeyboardLayer('overlay', {
+    exclusive: true,
+    passthrough: ['global-nav'],
+  });
+
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -68,127 +76,134 @@ export function CommandPaletteOverlay({ onClose }: { onClose: () => void }) {
     });
   }, [selectedIndex, filteredCmds.length]);
 
-  useCommands('command-palette-overlay', [
-    {
-      label: 'Close Command Palette',
-      shortcut: ['escape', 'cmd+p'],
-      handler: () => {
-        onClose();
+  useCommands(
+    'command-palette-overlay',
+    [
+      {
+        label: 'Close Command Palette',
+        shortcut: ['escape', 'cmd+p'],
+        handler: () => {
+          onClose();
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-    {
-      label: 'Execute Selected Command',
-      shortcut: 'enter',
-      handler: () => {
-        const cmd = filteredCmds[selectedIndex];
-        if (cmd) handleSelect(cmd);
+      {
+        label: 'Execute Selected Command',
+        shortcut: 'enter',
+        handler: () => {
+          const cmd = filteredCmds[selectedIndex];
+          if (cmd) handleSelect(cmd);
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-    {
-      label: 'Select Previous Command',
-      shortcut: 'up',
-      handler: () => {
-        setSelectedIndex((i) => Math.max(0, i - 1));
+      {
+        label: 'Select Previous Command',
+        shortcut: 'up',
+        handler: () => {
+          setSelectedIndex((i) => Math.max(0, i - 1));
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-    {
-      label: 'Select Next Command',
-      shortcut: 'down',
-      handler: () => {
-        setSelectedIndex((i) => Math.min(filteredCmds.length - 1, i + 1));
+      {
+        label: 'Select Next Command',
+        shortcut: 'down',
+        handler: () => {
+          setSelectedIndex((i) => Math.min(filteredCmds.length - 1, i + 1));
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-    {
-      label: 'Select First Command',
-      shortcut: 'cmd+up',
-      handler: () => {
-        setSelectedIndex(0);
+      {
+        label: 'Select First Command',
+        shortcut: 'cmd+up',
+        handler: () => {
+          setSelectedIndex(0);
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-    {
-      label: 'Select Last Command',
-      shortcut: 'cmd+down',
-      handler: () => {
-        setSelectedIndex(filteredCmds.length - 1);
+      {
+        label: 'Select Last Command',
+        shortcut: 'cmd+down',
+        handler: () => {
+          setSelectedIndex(filteredCmds.length - 1);
+        },
+        hideInCommandPalette: true,
       },
-      hideInCommandPalette: true,
-    },
-  ]);
+    ],
+    { layer },
+  );
 
   let itemIndex = 0;
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
-      onClick={onClose}
-    >
+  return createPortal(
+    <FocusLock returnFocus>
       <div
-        className="border-glass-border bg-bg-1 flex max-h-[60svh] w-[90svw] max-w-[1280px] flex-col overflow-hidden rounded-lg border shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+        onClick={onClose}
       >
-        {/* Search input */}
-        <div className="border-glass-border flex items-center border-b px-4 py-3">
-          <Input
-            ref={inputRef}
-            placeholder="Search..."
-            autoFocus
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSelectedIndex(0);
-            }}
-            className="flex-1 border-none bg-transparent"
-          />
-        </div>
+        <div
+          className="border-glass-border bg-bg-1 flex max-h-[60svh] w-[90svw] max-w-[1280px] flex-col overflow-hidden rounded-lg border shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Search input */}
+          <div className="border-glass-border flex items-center border-b px-4 py-3">
+            <Input
+              ref={inputRef}
+              placeholder="Search..."
+              autoFocus
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSelectedIndex(0);
+              }}
+              className="flex-1 border-none bg-transparent"
+            />
+          </div>
 
-        {/* Results */}
-        <div ref={listRef} className="my-2 overflow-y-auto p-2">
-          {filteredCmds.length === 0 ? (
-            <div className="text-muted-foreground py-6 text-center text-sm">
-              No matching commands
-            </div>
-          ) : (
-            map(bySection, (sectionCmds, sectionName) => {
-              // const cmds = groupedCommands[section];
-              return (
-                <div key={sectionName} className="mt-4 mb-2 first:mt-0">
-                  <div className="text-ink-3 mb-2 px-2 text-[11px] font-semibold tracking-wider uppercase">
-                    {sectionName}
-                    {/* {SECTION_LABELS[section] ?? section} */}
+          {/* Results */}
+          <div ref={listRef} className="my-2 overflow-y-auto p-2">
+            {filteredCmds.length === 0 ? (
+              <div className="text-muted-foreground py-6 text-center text-sm">
+                No matching commands
+              </div>
+            ) : (
+              map(bySection, (sectionCmds, sectionName) => {
+                // const cmds = groupedCommands[section];
+                return (
+                  <div key={sectionName} className="mt-4 mb-2 first:mt-0">
+                    <div className="text-ink-3 mb-2 px-2 text-[11px] font-semibold tracking-wider uppercase">
+                      {sectionName}
+                      {/* {SECTION_LABELS[section] ?? section} */}
+                    </div>
+                    {sectionCmds.map((cmd) => {
+                      const currentIndex = itemIndex++;
+                      const isSelected = currentIndex === selectedIndex;
+                      return (
+                        <button
+                          key={cmd.id}
+                          data-selected={isSelected}
+                          onClick={() => handleSelect(cmd)}
+                          className={clsx(
+                            'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm',
+                            isSelected
+                              ? 'bg-glass-medium text-ink-0'
+                              : 'text-ink-1 hover:bg-glass-medium/50',
+                          )}
+                        >
+                          <span>{cmd.label}</span>
+                          {cmd.shortcuts.map((shortcut, i) => (
+                            <Kbd key={i} shortcut={shortcut} />
+                          ))}
+                        </button>
+                      );
+                    })}
                   </div>
-                  {sectionCmds.map((cmd) => {
-                    const currentIndex = itemIndex++;
-                    const isSelected = currentIndex === selectedIndex;
-                    return (
-                      <button
-                        key={cmd.id}
-                        data-selected={isSelected}
-                        onClick={() => handleSelect(cmd)}
-                        className={clsx(
-                          'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm',
-                          isSelected
-                            ? 'bg-glass-medium text-ink-0'
-                            : 'text-ink-1 hover:bg-glass-medium/50',
-                        )}
-                      >
-                        <span>{cmd.label}</span>
-                        {cmd.shortcuts.map((shortcut, i) => (
-                          <Kbd key={i} shortcut={shortcut} />
-                        ))}
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })
-          )}
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </FocusLock>,
+    document.body,
   );
 }

@@ -1,7 +1,10 @@
 import { RefObject, useEffect, useRef } from 'react';
 import { create } from 'zustand/react';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  useRegisterKeyboardBindings,
+  type KeyboardLayer,
+} from '@/common/context/keyboard-bindings';
 import { BindingKey } from '@/common/context/keyboard-bindings/types';
 
 type Command = {
@@ -51,6 +54,7 @@ const useCommandPalette = (id: string, commands: Command[]) => {
 export const useCommands = (
   id: string,
   commands: (Command | false | null | undefined)[],
+  options?: { layer?: KeyboardLayer },
 ) => {
   const filtered = commands.filter((v) => !!v);
   useCommandPalette(id, filtered);
@@ -76,6 +80,7 @@ export const useCommands = (
       },
       {} as Parameters<typeof useRegisterKeyboardBindings>[1],
     ),
+    { layer: options?.layer },
   );
 };
 

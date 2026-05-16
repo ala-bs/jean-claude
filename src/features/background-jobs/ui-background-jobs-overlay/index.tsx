@@ -3,7 +3,10 @@ import { useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { CheckCircle2, CircleAlert, Copy, Loader2, X } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import FocusLock from 'react-focus-lock';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { IconButton } from '@/common/ui/icon-button';
@@ -17,6 +20,11 @@ import {
 import { useToastStore } from '@/stores/toasts';
 
 export function BackgroundJobsOverlay({ onClose }: { onClose: () => void }) {
+  const layer = useKeyboardLayer('overlay', {
+    exclusive: true,
+    passthrough: ['global-nav'],
+  });
+
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const jobs = useBackgroundJobsStore((state) => state.jobs);
@@ -32,139 +40,148 @@ export function BackgroundJobsOverlay({ onClose }: { onClose: () => void }) {
 
   const runningCount = useMemo(() => getRunningJobsCount(jobs), [jobs]);
 
-  useCommands('background-jobs-overlay', [
-    {
-      label: 'Close Background Jobs Overlay',
-      shortcut: 'escape',
-      handler: () => onClose(),
-    },
-  ]);
+  useCommands(
+    'background-jobs-overlay',
+    [
+      {
+        label: 'Close Background Jobs Overlay',
+        shortcut: 'escape',
+        handler: () => onClose(),
+      },
+    ],
+    { layer },
+  );
 
-  return (
-    <div
-      className="bg-bg-0/40 fixed inset-0 z-50 flex items-start justify-center p-4 pt-[12vh]"
-      onClick={onClose}
-    >
+  return createPortal(
+    <FocusLock returnFocus>
       <div
-        className="bg-bg-0/85 flex max-h-[70svh] w-[min(900px,96vw)] flex-col overflow-hidden rounded-xl border border-white/10 shadow-2xl shadow-black/50 backdrop-blur-xl"
-        onClick={(event) => event.stopPropagation()}
+        className="bg-bg-0/40 fixed inset-0 z-50 flex items-start justify-center p-4 pt-[12vh]"
+        onClick={onClose}
       >
-        <div className="flex items-center justify-between border-b border-white/10 bg-gradient-to-r from-white/5 to-transparent px-4 py-3">
-          <div>
-            <h2 className="text-ink-0 text-sm font-semibold">
-              Background Jobs
-            </h2>
-            <p className="text-ink-2 mt-0.5 text-xs">
-              {runningCount > 0 ? `${runningCount} running` : 'No running jobs'}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={clearFinished}>
-              Clear Finished
-            </Button>
-            <IconButton
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-              icon={<X />}
-              tooltip="Close"
-            />
-          </div>
-        </div>
-
-        <div className="overflow-y-auto p-3">
-          {jobs.length === 0 ? (
-            <div className="text-ink-3 rounded-lg border border-dashed border-white/10 px-4 py-8 text-center text-sm">
-              No background jobs yet.
+        <div
+          className="bg-bg-0/85 flex max-h-[70svh] w-[min(900px,96vw)] flex-col overflow-hidden rounded-xl border border-white/10 shadow-2xl shadow-black/50 backdrop-blur-xl"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-center justify-between border-b border-white/10 bg-gradient-to-r from-white/5 to-transparent px-4 py-3">
+            <div>
+              <h2 className="text-ink-0 text-sm font-semibold">
+                Background Jobs
+              </h2>
+              <p className="text-ink-2 mt-0.5 text-xs">
+                {runningCount > 0
+                  ? `${runningCount} running`
+                  : 'No running jobs'}
+              </p>
             </div>
-          ) : (
-            <div className="space-y-2">
-              {jobs.map((job) => (
-                <JobRow
-                  key={job.id}
-                  job={job}
-                  onCopyPrompt={async (targetJob) => {
-                    if (targetJob.type !== 'task-creation') return;
-                    const prompt = targetJob.details.creationInput.prompt;
-                    if (!prompt.trim()) return;
-
-                    try {
-                      await navigator.clipboard.writeText(prompt);
-                      addToast({
-                        type: 'success',
-                        message: 'Prompt copied to clipboard',
-                      });
-                    } catch {
-                      addToast({
-                        type: 'error',
-                        message: 'Failed to copy prompt',
-                      });
-                    }
-                  }}
-                  onRetryTaskCreation={async (targetJob) => {
-                    if (targetJob.type !== 'task-creation') return;
-                    markJobRunning(targetJob.id);
-
-                    try {
-                      const task = await api.tasks.createWithWorktree({
-                        ...targetJob.details.creationInput,
-                        updatedAt: new Date().toISOString(),
-                      });
-
-                      markJobSucceeded(targetJob.id, {
-                        taskId: task.id,
-                        projectId: task.projectId,
-                      });
-                      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-                      queryClient.invalidateQueries({
-                        queryKey: ['tasks', { projectId: task.projectId }],
-                      });
-                    } catch (error) {
-                      const message =
-                        error instanceof Error
-                          ? error.message
-                          : 'Failed to create task';
-                      markJobFailed(targetJob.id, message);
-                    }
-                  }}
-                  onRetryTaskDeletion={async (targetJob) => {
-                    if (targetJob.type !== 'task-deletion') return;
-                    if (!targetJob.taskId) return;
-                    markJobRunning(targetJob.id);
-
-                    try {
-                      await api.tasks.delete(targetJob.taskId, {
-                        deleteWorktree: targetJob.details.deleteWorktree,
-                      });
-
-                      markJobSucceeded(targetJob.id);
-                      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-                    } catch (error) {
-                      const message =
-                        error instanceof Error
-                          ? error.message
-                          : 'Failed to delete task';
-                      markJobFailed(targetJob.id, message);
-                    }
-                  }}
-                  onOpenTask={(targetJob) => {
-                    if (!targetJob.projectId || !targetJob.taskId) return;
-                    navigate({
-                      to: '/projects/$projectId/tasks/$taskId',
-                      params: {
-                        projectId: targetJob.projectId,
-                        taskId: targetJob.taskId,
-                      },
-                    });
-                    onClose();
-                  }}
-                />
-              ))}
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={clearFinished}>
+                Clear Finished
+              </Button>
+              <IconButton
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
+                icon={<X />}
+                tooltip="Close"
+              />
             </div>
-          )}
+          </div>
+
+          <div className="overflow-y-auto p-3">
+            {jobs.length === 0 ? (
+              <div className="text-ink-3 rounded-lg border border-dashed border-white/10 px-4 py-8 text-center text-sm">
+                No background jobs yet.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {jobs.map((job) => (
+                  <JobRow
+                    key={job.id}
+                    job={job}
+                    onCopyPrompt={async (targetJob) => {
+                      if (targetJob.type !== 'task-creation') return;
+                      const prompt = targetJob.details.creationInput.prompt;
+                      if (!prompt.trim()) return;
+
+                      try {
+                        await navigator.clipboard.writeText(prompt);
+                        addToast({
+                          type: 'success',
+                          message: 'Prompt copied to clipboard',
+                        });
+                      } catch {
+                        addToast({
+                          type: 'error',
+                          message: 'Failed to copy prompt',
+                        });
+                      }
+                    }}
+                    onRetryTaskCreation={async (targetJob) => {
+                      if (targetJob.type !== 'task-creation') return;
+                      markJobRunning(targetJob.id);
+
+                      try {
+                        const task = await api.tasks.createWithWorktree({
+                          ...targetJob.details.creationInput,
+                          updatedAt: new Date().toISOString(),
+                        });
+
+                        markJobSucceeded(targetJob.id, {
+                          taskId: task.id,
+                          projectId: task.projectId,
+                        });
+                        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+                        queryClient.invalidateQueries({
+                          queryKey: ['tasks', { projectId: task.projectId }],
+                        });
+                      } catch (error) {
+                        const message =
+                          error instanceof Error
+                            ? error.message
+                            : 'Failed to create task';
+                        markJobFailed(targetJob.id, message);
+                      }
+                    }}
+                    onRetryTaskDeletion={async (targetJob) => {
+                      if (targetJob.type !== 'task-deletion') return;
+                      if (!targetJob.taskId) return;
+                      markJobRunning(targetJob.id);
+
+                      try {
+                        await api.tasks.delete(targetJob.taskId, {
+                          deleteWorktree: targetJob.details.deleteWorktree,
+                        });
+
+                        markJobSucceeded(targetJob.id);
+                        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+                      } catch (error) {
+                        const message =
+                          error instanceof Error
+                            ? error.message
+                            : 'Failed to delete task';
+                        markJobFailed(targetJob.id, message);
+                      }
+                    }}
+                    onOpenTask={(targetJob) => {
+                      if (!targetJob.projectId || !targetJob.taskId) return;
+                      navigate({
+                        to: '/projects/$projectId/tasks/$taskId',
+                        params: {
+                          projectId: targetJob.projectId,
+                          taskId: targetJob.taskId,
+                        },
+                      });
+                      onClose();
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </FocusLock>,
+    document.body,
   );
 }
 

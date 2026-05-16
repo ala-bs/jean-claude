@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -21,6 +22,7 @@ export function DeleteTaskDialog({
   hasWorktree: boolean;
   isPending: boolean;
 }) {
+  const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
   const [deleteWorktree, setDeleteWorktree] = useState(true);
 
   // Reset state when dialog opens
@@ -35,26 +37,30 @@ export function DeleteTaskDialog({
     onConfirm({ deleteWorktree: hasWorktree ? deleteWorktree : false });
   };
 
-  useCommands('delete-task-dialog', [
-    isOpen && {
-      label: 'Confirm Delete',
-      shortcut: ['cmd+enter', 'cmd+backspace'],
-      hideInCommandPalette: true,
-      handler: () => {
-        handleConfirm();
-      },
-    },
-    isOpen &&
-      hasWorktree && {
-        label: 'Toggle Worktree Cleanup',
-        shortcut: 'cmd+shift+w',
+  useCommands(
+    'delete-task-dialog',
+    [
+      isOpen && {
+        label: 'Confirm Delete',
+        shortcut: ['cmd+enter', 'cmd+backspace'],
         hideInCommandPalette: true,
         handler: () => {
-          if (isPending) return false;
-          setDeleteWorktree((value) => !value);
+          handleConfirm();
         },
       },
-  ]);
+      isOpen &&
+        hasWorktree && {
+          label: 'Toggle Worktree Cleanup',
+          shortcut: 'cmd+shift+w',
+          hideInCommandPalette: true,
+          handler: () => {
+            if (isPending) return false;
+            setDeleteWorktree((value) => !value);
+          },
+        },
+    ],
+    { layer },
+  );
 
   if (!isOpen) return null;
 
