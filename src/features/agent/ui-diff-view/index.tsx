@@ -196,34 +196,54 @@ export function DiffView({
             onClose={closeSearch}
           />
         )}
-        <button
-          onClick={() =>
-            setSetting(
-              'diffViewMode',
-              viewMode === 'inline'
-                ? 'side-by-side'
-                : viewMode === 'side-by-side'
-                  ? 'current-state'
-                  : 'inline',
-            )
-          }
-          className="bg-glass-medium/70 text-ink-1 hover:bg-bg-3 hover:text-ink-0 rounded p-1"
-          aria-label={
-            viewMode === 'inline'
-              ? 'Switch to side-by-side view'
-              : viewMode === 'side-by-side'
-                ? 'Switch to current state view'
-                : 'Switch to inline view'
-          }
+        <div
+          className="bg-glass-medium/70 flex items-center rounded p-0.5"
+          role="radiogroup"
+          aria-label="Diff view mode"
         >
-          {viewMode === 'inline' ? (
-            <Columns2 className="h-4 w-4" aria-hidden />
-          ) : viewMode === 'side-by-side' ? (
-            <FileText className="h-4 w-4" aria-hidden />
-          ) : (
-            <AlignJustify className="h-4 w-4" aria-hidden />
-          )}
-        </button>
+          <button
+            onClick={() => setSetting('diffViewMode', 'inline')}
+            className={clsx(
+              'rounded p-1 transition-colors',
+              viewMode === 'inline'
+                ? 'bg-bg-3 text-ink-0'
+                : 'text-ink-3 hover:text-ink-1',
+            )}
+            aria-label="Inline diff"
+            aria-checked={viewMode === 'inline'}
+            role="radio"
+          >
+            <AlignJustify className="h-3.5 w-3.5" aria-hidden />
+          </button>
+          <button
+            onClick={() => setSetting('diffViewMode', 'side-by-side')}
+            className={clsx(
+              'rounded p-1 transition-colors',
+              viewMode === 'side-by-side'
+                ? 'bg-bg-3 text-ink-0'
+                : 'text-ink-3 hover:text-ink-1',
+            )}
+            aria-label="Side-by-side diff"
+            aria-checked={viewMode === 'side-by-side'}
+            role="radio"
+          >
+            <Columns2 className="h-3.5 w-3.5" aria-hidden />
+          </button>
+          <button
+            onClick={() => setSetting('diffViewMode', 'current-state')}
+            className={clsx(
+              'rounded p-1 transition-colors',
+              viewMode === 'current-state'
+                ? 'bg-bg-3 text-ink-0'
+                : 'text-ink-3 hover:text-ink-1',
+            )}
+            aria-label="Current state"
+            aria-checked={viewMode === 'current-state'}
+            role="radio"
+          >
+            <FileText className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </div>
       </div>
 
       <div

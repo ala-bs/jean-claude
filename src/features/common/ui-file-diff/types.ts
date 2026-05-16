@@ -7,6 +7,8 @@ export interface DiffFile {
   path: string;
   status: DiffFileStatus;
   originalPath?: string; // For renames
+  additions?: number;
+  deletions?: number;
 }
 
 export interface CommentThread {

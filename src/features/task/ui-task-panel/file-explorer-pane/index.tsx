@@ -1,23 +1,34 @@
+import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { FolderTree, RefreshCw, X } from 'lucide-react';
-import { useCallback } from 'react';
+import { File, FolderTree, RefreshCw, X } from 'lucide-react';
+import { useCallback, useMemo } from 'react';
 
 import { IconButton } from '@/common/ui/icon-button';
 import { Separator } from '@/common/ui/separator';
+import { FileDiffContent } from '@/features/common/ui-file-diff';
+import type {
+  DiffFile,
+  DiffFileStatus,
+} from '@/features/common/ui-file-diff/types';
+import { normalizeWorktreeStatus } from '@/features/common/ui-file-diff/types';
 import { useInvalidateDirectoryListings } from '@/hooks/use-directory-listing';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
+import {
+  useWorktreeDiff,
+  useWorktreeFileContent,
+} from '@/hooks/use-worktree-diff';
+import { api } from '@/lib/api';
 import {
   useFileExplorerPaneWidth,
   useFileExplorerTreeWidth,
   useTaskFileExplorerState,
 } from '@/stores/navigation';
 
-import { FileContentViewer } from './file-content-viewer';
 import { FileTree } from './file-tree';
 
 const MIN_TREE_WIDTH = 150;
-const MIN_PANE_WIDTH = 250;
+const MIN_PANE_WIDTH = 400;
 
 export function FileExplorerPane({
   taskId,
@@ -32,8 +43,41 @@ export function FileExplorerPane({
     useFileExplorerTreeWidth();
   const { width: paneWidth, setWidth: setPaneWidth } =
     useFileExplorerPaneWidth();
-  const { selectedFilePath, expandedDirs, selectFile, toggleDir } =
-    useTaskFileExplorerState(taskId);
+  const {
+    selectedFilePath,
+    expandedDirs,
+    selectFile,
+    toggleDir,
+    hideUnchanged,
+    toggleHideUnchanged,
+  } = useTaskFileExplorerState(taskId);
+
+  const { data: diffData } = useWorktreeDiff(taskId, true);
+
+  const { diffFilesMap, summary } = useMemo(() => {
+    const map = new Map<
+      string,
+      { status: DiffFileStatus; additions: number; deletions: number }
+    >();
+    let totalAdds = 0;
+    let totalDels = 0;
+    if (rootPath && diffData?.files) {
+      for (const f of diffData.files) {
+        const absPath = rootPath + '/' + f.path;
+        map.set(absPath, {
+          status: normalizeWorktreeStatus(f.status),
+          additions: f.additions,
+          deletions: f.deletions,
+        });
+        totalAdds += f.additions;
+        totalDels += f.deletions;
+      }
+    }
+    return {
+      diffFilesMap: map,
+      summary: { changed: map.size, adds: totalAdds, dels: totalDels },
+    };
+  }, [rootPath, diffData?.files]);
 
   const handleToggleDir = useCallback(
     (dirPath: string) => {
@@ -121,6 +165,55 @@ export function FileExplorerPane({
       </div>
       <Separator />
 
+      {/* Summary strip with filter toggle */}
+      <div className="bg-bg-1 text-ink-3 flex shrink-0 items-center gap-2.5 border-b border-[var(--line-soft)] px-3 py-1.5 font-mono text-[11px]">
+        <div
+          className="flex items-center rounded border border-[var(--line)]"
+          role="radiogroup"
+          aria-label="File tree filter"
+        >
+          <button
+            onClick={() => {
+              if (hideUnchanged) toggleHideUnchanged();
+            }}
+            className={clsx(
+              'rounded-l px-2 py-0.5 text-[10px] transition-colors',
+              !hideUnchanged
+                ? 'bg-bg-3 text-ink-0 font-medium'
+                : 'text-ink-3 hover:text-ink-1',
+            )}
+            role="radio"
+            aria-checked={!hideUnchanged}
+          >
+            All
+          </button>
+          <button
+            onClick={() => {
+              if (!hideUnchanged) toggleHideUnchanged();
+            }}
+            className={clsx(
+              'rounded-r px-2 py-0.5 text-[10px] transition-colors',
+              hideUnchanged
+                ? 'bg-bg-3 text-ink-0 font-medium'
+                : 'text-ink-3 hover:text-ink-1',
+            )}
+            role="radio"
+            aria-checked={hideUnchanged}
+          >
+            Changed
+          </button>
+        </div>
+        {summary.changed > 0 && (
+          <>
+            <span>
+              <span className="text-ink-1">{summary.changed}</span> changed
+            </span>
+            <span className="text-green-400">+{summary.adds}</span>
+            <span className="text-red-400">&minus;{summary.dels}</span>
+          </>
+        )}
+      </div>
+
       {/* Content area */}
       <div
         ref={containerRef}
@@ -142,6 +235,8 @@ export function FileExplorerPane({
               onSelectFile={handleSelectFile}
               expandedDirs={expandedDirs}
               onToggleDir={handleToggleDir}
+              diffFiles={diffFilesMap}
+              hideUnchanged={hideUnchanged}
             />
           ) : (
             <div className="text-ink-3 px-3 py-2 text-xs">
@@ -161,11 +256,179 @@ export function FileExplorerPane({
             />
             {/* File content panel */}
             <div className="panel-edge-shadow flex min-w-0 flex-1 flex-col overflow-hidden">
-              <FileContentViewer filePath={selectedFilePath} />
+              <FileExplorerContentPane
+                taskId={taskId}
+                filePath={selectedFilePath}
+                rootPath={rootPath}
+                diffInfo={diffFilesMap.get(selectedFilePath)}
+              />
             </div>
           </>
         )}
       </div>
+
+      {/* Bottom status bar */}
+      <div className="bg-bg-1 text-ink-3 flex shrink-0 items-center gap-3.5 border-t border-[var(--line)] px-3.5 py-1 font-mono text-[10.5px]">
+        <span>{summary.changed} changed</span>
+        <span className="text-green-400">+{summary.adds}</span>
+        <span className="text-red-400">&minus;{summary.dels}</span>
+      </div>
+    </div>
+  );
+}
+
+function FileExplorerContentPane({
+  taskId,
+  filePath,
+  rootPath,
+  diffInfo,
+}: {
+  taskId: string;
+  filePath: string;
+  rootPath: string;
+  diffInfo?: { status: DiffFileStatus; additions: number; deletions: number };
+}) {
+  const relativePath = filePath.startsWith(rootPath + '/')
+    ? filePath.slice(rootPath.length + 1)
+    : filePath;
+
+  return (
+    <div className="flex h-full flex-col">
+      <ExplorerContentHeader
+        relativePath={relativePath}
+        status={diffInfo?.status}
+        additions={diffInfo?.additions}
+        deletions={diffInfo?.deletions}
+      />
+      {diffInfo ? (
+        <ExplorerDiffViewer
+          taskId={taskId}
+          filePath={relativePath}
+          status={diffInfo.status}
+        />
+      ) : (
+        <ExplorerFileViewer filePath={filePath} />
+      )}
+    </div>
+  );
+}
+
+function ExplorerContentHeader({
+  relativePath,
+  status,
+  additions,
+  deletions,
+}: {
+  relativePath: string;
+  status?: DiffFileStatus;
+  additions?: number;
+  deletions?: number;
+}) {
+  return (
+    <div
+      className="bg-bg-1 flex shrink-0 items-center gap-2.5 border-b border-[var(--line)] px-3.5 py-2"
+      style={{ minHeight: 40 }}
+    >
+      <File className="text-ink-3 h-3.5 w-3.5 shrink-0" />
+      <span className="text-ink-1 truncate font-mono text-xs">
+        {relativePath}
+      </span>
+      {status && (
+        <span
+          className={clsx(
+            'shrink-0 rounded px-1 font-mono text-[9.5px] font-semibold',
+            status === 'modified' && 'bg-orange-500/15 text-orange-400',
+            status === 'added' && 'bg-green-500/15 text-green-400',
+            status === 'deleted' && 'bg-red-500/15 text-red-400',
+          )}
+        >
+          {status === 'modified' ? 'M' : status === 'added' ? 'A' : 'D'}
+        </span>
+      )}
+      {(additions != null || deletions != null) && (
+        <span className="flex gap-1 font-mono text-[10px]">
+          {additions != null && additions > 0 ? (
+            <span className="text-green-400">+{additions}</span>
+          ) : null}
+          {deletions != null && deletions > 0 ? (
+            <span className="text-red-400">&minus;{deletions}</span>
+          ) : null}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ExplorerDiffViewer({
+  taskId,
+  filePath,
+  status,
+}: {
+  taskId: string;
+  filePath: string;
+  status: DiffFileStatus;
+}) {
+  const worktreeStatus: 'added' | 'modified' | 'deleted' =
+    status === 'added'
+      ? 'added'
+      : status === 'deleted'
+        ? 'deleted'
+        : 'modified';
+  const { data, isLoading } = useWorktreeFileContent(
+    taskId,
+    filePath,
+    worktreeStatus,
+  );
+
+  const diffFile: DiffFile = { path: filePath, status };
+
+  return (
+    <FileDiffContent
+      file={diffFile}
+      oldContent={data?.oldContent ?? ''}
+      newContent={data?.newContent ?? ''}
+      isLoading={isLoading}
+      isBinary={data?.isBinary}
+    />
+  );
+}
+
+function ExplorerFileViewer({ filePath }: { filePath: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['file-content', filePath],
+    queryFn: () => api.fs.readFile(filePath),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="text-ink-3 flex flex-1 items-center justify-center text-sm">
+        Loading...
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="text-ink-3 flex flex-1 items-center justify-center text-sm">
+        Unable to read file
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-auto bg-black/30 font-mono text-xs">
+      <pre className="p-3 leading-5">
+        {data.content.split('\n').map((line, i) => (
+          <div key={i} className="flex">
+            <span className="text-ink-4 mr-4 inline-block w-8 shrink-0 text-right select-none">
+              {i + 1}
+            </span>
+            <span className="text-ink-2">{line || ' '}</span>
+          </div>
+        ))}
+      </pre>
     </div>
   );
 }

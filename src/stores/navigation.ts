@@ -43,6 +43,7 @@ interface DiffViewState {
 interface FileExplorerState {
   selectedFilePath: string | null;
   expandedDirs: Set<string>;
+  hideUnchanged: boolean;
 }
 
 type TaskViewMode = 'diff' | 'pr' | undefined;
@@ -81,6 +82,7 @@ const defaultDiffViewState: DiffViewState = {
 const defaultFileExplorerState: FileExplorerState = {
   selectedFilePath: null,
   expandedDirs: new Set<string>(),
+  hideUnchanged: false,
 };
 
 const defaultTaskState: TaskState = {
@@ -105,8 +107,8 @@ const DEFAULT_FILE_EXPLORER_TREE_WIDTH = 224;
 const MIN_FILE_EXPLORER_TREE_WIDTH = 150;
 
 // Constants for file explorer pane width
-const DEFAULT_FILE_EXPLORER_PANE_WIDTH = 300;
-const MIN_FILE_EXPLORER_PANE_WIDTH = 250;
+const DEFAULT_FILE_EXPLORER_PANE_WIDTH = 700;
+const MIN_FILE_EXPLORER_PANE_WIDTH = 400;
 
 // Constants for run command logs pane width
 const DEFAULT_COMMAND_LOGS_PANE_WIDTH = 520;
@@ -212,6 +214,10 @@ interface NavigationState {
     filePath: string | null,
   ) => void;
   toggleFileExplorerExpandedDir: (taskId: string, dirPath: string) => void;
+  setFileExplorerHideUnchanged: (
+    taskId: string,
+    hideUnchanged: boolean,
+  ) => void;
   setActiveStepId: (taskId: string, stepId: string | null) => void;
   setPrDraft: (taskId: string, draft: PrDraft) => void;
   setPrSelectedFile: (prKey: string, filePath: string | null) => void;
@@ -431,6 +437,22 @@ const useStore = create<NavigationState>()(
             },
           };
         }),
+
+      setFileExplorerHideUnchanged: (taskId, hideUnchanged) =>
+        set((state) => ({
+          taskState: {
+            ...state.taskState,
+            [taskId]: {
+              ...defaultTaskState,
+              ...state.taskState[taskId],
+              fileExplorer: {
+                ...(state.taskState[taskId]?.fileExplorer ??
+                  defaultFileExplorerState),
+                hideUnchanged,
+              },
+            },
+          },
+        })),
 
       setActiveStepId: (taskId, stepId) =>
         set((state) => ({
@@ -863,6 +885,9 @@ export function useTaskFileExplorerState(taskId: string) {
   const toggleFileExplorerExpandedDirAction = useStore(
     (state) => state.toggleFileExplorerExpandedDir,
   );
+  const setFileExplorerHideUnchangedAction = useStore(
+    (state) => state.setFileExplorerHideUnchanged,
+  );
 
   const selectFile = useCallback(
     (filePath: string | null) =>
@@ -875,11 +900,26 @@ export function useTaskFileExplorerState(taskId: string) {
     [taskId, toggleFileExplorerExpandedDirAction],
   );
 
+  const toggleHideUnchanged = useCallback(
+    () =>
+      setFileExplorerHideUnchangedAction(
+        taskId,
+        !fileExplorerState.hideUnchanged,
+      ),
+    [
+      taskId,
+      fileExplorerState.hideUnchanged,
+      setFileExplorerHideUnchangedAction,
+    ],
+  );
+
   return {
     selectedFilePath: fileExplorerState.selectedFilePath,
     expandedDirs: fileExplorerState.expandedDirs,
+    hideUnchanged: fileExplorerState.hideUnchanged,
     selectFile,
     toggleDir,
+    toggleHideUnchanged,
   };
 }
 

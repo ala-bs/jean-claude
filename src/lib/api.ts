@@ -105,6 +105,8 @@ export interface PackageJson {
 export interface WorktreeDiffFile {
   path: string;
   status: 'added' | 'modified' | 'deleted';
+  additions: number;
+  deletions: number;
 }
 
 export interface WorktreeDiffResult {

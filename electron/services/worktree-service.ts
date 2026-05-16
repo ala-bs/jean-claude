@@ -255,6 +255,8 @@ export function generateWorktreeNameFromTaskName(taskName: string): string {
 export interface WorktreeDiffFile {
   path: string;
   status: 'added' | 'modified' | 'deleted';
+  additions: number;
+  deletions: number;
 }
 
 export interface WorktreeDiffResult {
@@ -387,6 +389,26 @@ export async function getWorktreeDiff(
     );
     dbg.worktree('git diff output length: %d', diffOutput.length);
 
+    // Get per-file line counts
+    const { stdout: numstatOutput } = await execAsync(
+      `git diff --numstat ${baseCommit}`,
+      { cwd: worktreePath, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 },
+    );
+
+    const numstatMap = new Map<
+      string,
+      { additions: number; deletions: number }
+    >();
+    for (const line of numstatOutput.split('\n')) {
+      if (!line.trim()) continue;
+      const [adds, dels, ...pathParts] = line.split('\t');
+      const filePath = pathParts.join('\t'); // handle paths with tabs
+      numstatMap.set(filePath, {
+        additions: adds === '-' ? 0 : parseInt(adds, 10),
+        deletions: dels === '-' ? 0 : parseInt(dels, 10),
+      });
+    }
+
     // Also get untracked files which git diff doesn't show
     // Use --untracked-files=all to list individual files in new directories
     // (default mode shows new directories as "folder/" which can't be diffed)
@@ -430,7 +452,16 @@ export async function getWorktreeDiff(
           status = 'modified';
         }
 
-        filesMap.set(filePath, { path: filePath, status });
+        const stats = numstatMap.get(filePath) ?? {
+          additions: 0,
+          deletions: 0,
+        };
+        filesMap.set(filePath, {
+          path: filePath,
+          status,
+          additions: stats.additions,
+          deletions: stats.deletions,
+        });
         dbg.worktree('From git diff: %o', { filePath, status });
       }
     }
@@ -465,10 +496,20 @@ export async function getWorktreeDiff(
               },
             );
             // File existed at baseCommit, so this is modified (shouldn't happen for ??)
-            filesMap.set(filePath, { path: filePath, status: 'modified' });
+            filesMap.set(filePath, {
+              path: filePath,
+              status: 'modified',
+              additions: 0,
+              deletions: 0,
+            });
           } catch {
             // File didn't exist at baseCommit, so it's added
-            filesMap.set(filePath, { path: filePath, status: 'added' });
+            filesMap.set(filePath, {
+              path: filePath,
+              status: 'added',
+              additions: 0,
+              deletions: 0,
+            });
           }
           dbg.worktree('From git status (untracked): %o', {
             filePath,

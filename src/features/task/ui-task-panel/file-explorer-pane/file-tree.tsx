@@ -8,7 +8,26 @@ import {
   Loader2,
 } from 'lucide-react';
 
+import type { DiffFileStatus } from '@/features/common/ui-file-diff/types';
 import { useDirectoryListing } from '@/hooks/use-directory-listing';
+
+type DiffInfo = {
+  status: DiffFileStatus;
+  additions: number;
+  deletions: number;
+};
+
+function countChangedDescendants(
+  dirPath: string,
+  diffFiles: Map<string, DiffInfo>,
+): number {
+  let count = 0;
+  const prefix = dirPath + '/';
+  for (const path of diffFiles.keys()) {
+    if (path.startsWith(prefix)) count++;
+  }
+  return count;
+}
 
 export function FileTree({
   rootPath,
@@ -19,6 +38,8 @@ export function FileTree({
   onToggleDir,
   commentCountsByFile,
   filterPaths,
+  diffFiles,
+  hideUnchanged,
 }: {
   rootPath: string;
   projectRoot: string;
@@ -30,6 +51,10 @@ export function FileTree({
   commentCountsByFile?: Map<string, number>;
   /** Optional: when set, only show entries whose path is in this set */
   filterPaths?: Set<string> | null;
+  /** Map of ABSOLUTE path -> diff info for changed files */
+  diffFiles?: Map<string, DiffInfo>;
+  /** When true, only show files that have changes (and their ancestor dirs) */
+  hideUnchanged?: boolean;
 }) {
   const { entries, isLoading } = useDirectoryListing({
     dirPath: rootPath,
@@ -48,12 +73,21 @@ export function FileTree({
     return <div className="text-ink-3 px-3 py-2 text-xs">Empty directory</div>;
   }
 
-  const filtered = filterPaths
+  let filtered = filterPaths
     ? entries.filter((e) => filterPaths.has(e.path))
     : entries;
 
+  if (hideUnchanged && diffFiles && diffFiles.size > 0) {
+    filtered = filtered.filter((e) => {
+      if (e.isDirectory) {
+        return countChangedDescendants(e.path, diffFiles) > 0;
+      }
+      return diffFiles.has(e.path);
+    });
+  }
+
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col pb-8">
       {filtered.map((entry) => (
         <FileTreeNode
           key={entry.path}
@@ -66,6 +100,8 @@ export function FileTree({
           onToggleDir={onToggleDir}
           commentCountsByFile={commentCountsByFile}
           filterPaths={filterPaths}
+          diffFiles={diffFiles}
+          hideUnchanged={hideUnchanged}
         />
       ))}
     </div>
@@ -82,6 +118,8 @@ function FileTreeNode({
   onToggleDir,
   commentCountsByFile,
   filterPaths,
+  diffFiles,
+  hideUnchanged,
 }: {
   entry: { name: string; path: string; isDirectory: boolean };
   projectRoot: string;
@@ -92,11 +130,20 @@ function FileTreeNode({
   onToggleDir: (path: string) => void;
   commentCountsByFile?: Map<string, number>;
   filterPaths?: Set<string> | null;
+  diffFiles?: Map<string, DiffInfo>;
+  hideUnchanged?: boolean;
 }) {
   // When filtering, force directories open so matches are visible
   const isExpanded = filterPaths ? true : expandedDirs.has(entry.path);
   const isSelected = entry.path === selectedFilePath;
   const commentCount = commentCountsByFile?.get(entry.path) ?? 0;
+
+  const fileDiffInfo = diffFiles?.get(entry.path);
+  const changedDescendantCount =
+    entry.isDirectory && diffFiles
+      ? countChangedDescendants(entry.path, diffFiles)
+      : 0;
+  const hasChangedDescendants = changedDescendantCount > 0;
 
   // For collapsed directories, check if any descendant file has comments
   const hasDescendantComments =
@@ -117,8 +164,9 @@ function FileTreeNode({
       <div>
         <button
           onClick={() => onToggleDir(entry.path)}
+          aria-expanded={isExpanded}
           className="text-ink-2 hover:bg-glass-medium/50 flex w-full items-center gap-1 py-0.5 text-left text-sm"
-          style={{ paddingLeft: 8 + depth * 16 }}
+          style={{ paddingLeft: 8 + depth * 8 }}
         >
           {isExpanded ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0" />
@@ -130,8 +178,17 @@ function FileTreeNode({
           ) : (
             <Folder className="h-3.5 w-3.5 shrink-0" />
           )}
-          <span className="text-ink-1 truncate">{entry.name}</span>
-          {hasDescendantComments && (
+          <span
+            className={clsx('truncate', hasChangedDescendants && 'font-medium')}
+          >
+            {entry.name}
+          </span>
+          {!isExpanded && hasChangedDescendants && (
+            <span className="mr-2 ml-auto shrink-0 rounded-full bg-orange-500/15 px-1.5 py-px font-mono text-[9px] leading-none font-medium text-orange-400">
+              {changedDescendantCount}
+            </span>
+          )}
+          {hasDescendantComments && !(!isExpanded && hasChangedDescendants) && (
             <span
               className="bg-acc mr-2 ml-auto h-1.5 w-1.5 shrink-0 rounded-full"
               aria-label="Contains commented files"
@@ -149,25 +206,51 @@ function FileTreeNode({
             onToggleDir={onToggleDir}
             commentCountsByFile={commentCountsByFile}
             filterPaths={filterPaths}
+            diffFiles={diffFiles}
+            hideUnchanged={hideUnchanged}
           />
         )}
       </div>
     );
   }
 
+  const isDeleted = fileDiffInfo?.status === 'deleted';
+
   return (
     <button
       onClick={() => onSelectFile(entry.path)}
       className={clsx(
-        'flex w-full items-center gap-1 py-0.5 text-left text-sm',
+        'flex w-full items-center gap-1 border-l-2 py-0.5 text-left text-sm',
         isSelected
           ? 'text-ink-0 bg-glass-medium'
-          : 'text-ink-2 hover:bg-glass-medium/50 hover:text-ink-1',
+          : 'text-ink-1 hover:bg-glass-medium/50',
+        fileDiffInfo?.status === 'modified' && 'border-l-orange-400',
+        fileDiffInfo?.status === 'added' && 'border-l-green-400',
+        fileDiffInfo?.status === 'deleted' && 'border-l-red-400',
+        !fileDiffInfo && 'border-l-transparent',
       )}
-      style={{ paddingLeft: 8 + depth * 16 + 14 }}
+      style={{ paddingLeft: 6 + depth * 8 + 10 }}
     >
       <File className="text-ink-3 h-3.5 w-3.5 shrink-0" />
-      <span className="truncate">{entry.name}</span>
+      <span className={clsx('truncate', isDeleted && 'line-through')}>
+        {entry.name}
+      </span>
+      {fileDiffInfo && (
+        <span
+          className={clsx(
+            'mr-2 ml-auto shrink-0 text-xs',
+            fileDiffInfo.status === 'modified' && 'text-orange-400',
+            fileDiffInfo.status === 'added' && 'text-green-400',
+            fileDiffInfo.status === 'deleted' && 'text-red-400',
+          )}
+        >
+          {fileDiffInfo.status === 'modified'
+            ? 'M'
+            : fileDiffInfo.status === 'added'
+              ? 'A'
+              : 'D'}
+        </span>
+      )}
       {commentCount > 0 && (
         <span className="bg-acc/20 text-acc-ink mr-2 ml-auto shrink-0 rounded-full px-1.5 py-px text-[9px] leading-none font-medium">
           {commentCount}
@@ -187,6 +270,8 @@ function DirectoryChildren({
   onToggleDir,
   commentCountsByFile,
   filterPaths,
+  diffFiles,
+  hideUnchanged,
 }: {
   dirPath: string;
   projectRoot: string;
@@ -197,6 +282,8 @@ function DirectoryChildren({
   onToggleDir: (path: string) => void;
   commentCountsByFile?: Map<string, number>;
   filterPaths?: Set<string> | null;
+  diffFiles?: Map<string, DiffInfo>;
+  hideUnchanged?: boolean;
 }) {
   const { entries, isLoading } = useDirectoryListing({
     dirPath,
@@ -207,7 +294,7 @@ function DirectoryChildren({
     return (
       <div
         className="text-ink-3 flex items-center gap-1 py-0.5 text-xs"
-        style={{ paddingLeft: 8 + depth * 16 }}
+        style={{ paddingLeft: 8 + depth * 8 }}
       >
         <Loader2 className="h-3 w-3 animate-spin" />
         <span>Loading...</span>
@@ -219,16 +306,25 @@ function DirectoryChildren({
     return (
       <div
         className="text-ink-4 py-0.5 text-xs italic"
-        style={{ paddingLeft: 8 + depth * 16 + 14 }}
+        style={{ paddingLeft: 8 + depth * 8 + 10 }}
       >
         Empty
       </div>
     );
   }
 
-  const filtered = filterPaths
+  let filtered = filterPaths
     ? entries.filter((e) => filterPaths.has(e.path))
     : entries;
+
+  if (hideUnchanged && diffFiles && diffFiles.size > 0) {
+    filtered = filtered.filter((e) => {
+      if (e.isDirectory) {
+        return countChangedDescendants(e.path, diffFiles) > 0;
+      }
+      return diffFiles.has(e.path);
+    });
+  }
 
   return (
     <>
@@ -244,6 +340,8 @@ function DirectoryChildren({
           onToggleDir={onToggleDir}
           commentCountsByFile={commentCountsByFile}
           filterPaths={filterPaths}
+          diffFiles={diffFiles}
+          hideUnchanged={hideUnchanged}
         />
       ))}
     </>
