@@ -1,3 +1,20 @@
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+} from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS as DndCSS } from '@dnd-kit/utilities';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Search } from 'lucide-react';
 import React, {
@@ -36,7 +53,11 @@ import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useCreateFeedNote } from '@/hooks/use-feed-notes';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
-import { useProjects, useProjectBranches } from '@/hooks/use-projects';
+import {
+  useProjects,
+  useProjectBranches,
+  useReorderProjects,
+} from '@/hooks/use-projects';
 import {
   useBackendsSetting,
   useCompletionSetting,
@@ -182,6 +203,7 @@ export function NewTaskOverlay({
   } = useNewTaskDraft();
 
   const { data: projects = [] } = useProjects();
+  const reorderProjectsMutation = useReorderProjects();
   const createTaskMutation = useCreateTaskWithWorktree();
   const createNoteMutation = useCreateFeedNote();
   const deleteBacklogTodo = useDeleteProjectTodo();
@@ -1279,6 +1301,9 @@ export function NewTaskOverlay({
                 sortedProjects={sortedProjects}
                 selectedProjectId={selectedProjectId}
                 onSelectProject={setSelectedProjectId}
+                onReorderProjects={(orderedIds) =>
+                  reorderProjectsMutation.mutate(orderedIds)
+                }
               />
             )}
 
@@ -1599,16 +1624,108 @@ export function NewTaskOverlay({
   );
 }
 
+function ProjectButtonContent({
+  project,
+  isSelected,
+}: {
+  project: Project;
+  isSelected: boolean;
+}) {
+  return (
+    <>
+      <span
+        className="h-[7px] w-[7px] shrink-0 rounded-full"
+        style={{
+          backgroundColor: project.color,
+          boxShadow: isSelected ? `0 0 6px ${project.color}` : 'none',
+        }}
+      />
+      <span className="truncate">{project.name}</span>
+    </>
+  );
+}
+
+function getProjectButtonStyle(project: Project, isSelected: boolean) {
+  return isSelected
+    ? {
+        background: `color-mix(in oklch, ${project.color} 18%, transparent)`,
+        border: `1px solid color-mix(in oklch, ${project.color} 45%, transparent)`,
+        color: 'oklch(0.99 0 0)',
+        fontWeight: 500,
+      }
+    : {
+        background: 'transparent',
+        border: '1px solid transparent',
+        color: 'oklch(0.78 0.01 280)',
+        fontWeight: 400,
+      };
+}
+
+function SortableProjectButton({
+  project,
+  isSelected,
+  onSelect,
+}: {
+  project: Project;
+  isSelected: boolean;
+  onSelect: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.id });
+
+  return (
+    <button
+      ref={setNodeRef}
+      data-project-tab={project.id}
+      onClick={isDragging ? undefined : onSelect}
+      className="flex min-w-0 items-center gap-[7px] rounded-md px-[11px] py-[5px] text-left text-[12.5px] tracking-tight"
+      style={{
+        ...getProjectButtonStyle(project, isSelected),
+        transform: DndCSS.Translate.toString(transform),
+        transition: transition ?? undefined,
+        opacity: isDragging ? 0.5 : 1,
+        zIndex: isDragging ? 10 : undefined,
+        boxShadow: isDragging ? '0 4px 16px oklch(0 0 0 / 0.4)' : undefined,
+      }}
+      {...attributes}
+      {...listeners}
+    >
+      <ProjectButtonContent project={project} isSelected={isSelected} />
+    </button>
+  );
+}
+
 function ProjectGrid({
   sortedProjects,
   selectedProjectId,
   onSelectProject,
+  onReorderProjects,
 }: {
   sortedProjects: Project[];
   selectedProjectId: string | null;
   onSelectProject: (projectId: string | null) => void;
+  onReorderProjects: (orderedIds: string[]) => void;
 }) {
   const projectGridRef = useRef<HTMLDivElement>(null);
+
+  // Require 8px movement before drag starts so clicks aren't hijacked
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const projectIds = useMemo(
+    () => sortedProjects.map((p) => p.id),
+    [sortedProjects],
+  );
 
   useEffect(() => {
     const gridContainer = projectGridRef.current;
@@ -1627,54 +1744,46 @@ function ProjectGrid({
     });
   }, [selectedProjectId, sortedProjects.length]);
 
-  return (
-    <div
-      ref={projectGridRef}
-      className="grid max-h-[180px] shrink-0 grid-cols-7 gap-1 overflow-y-auto px-3 py-2 sm:grid-cols-8 lg:grid-cols-10"
-      style={{
-        borderTop: '1px solid oklch(1 0 0 / 0.04)',
-        borderBottom: '1px solid oklch(1 0 0 / 0.04)',
-        background: 'oklch(0 0 0 / 0.2)',
-      }}
-    >
-      <button
-        data-project-tab="note"
-        onClick={() => onSelectProject(null)}
-        className="flex min-w-0 items-center gap-[7px] rounded-md px-[11px] py-[5px] text-[12.5px] tracking-tight transition-colors"
-        style={
-          selectedProjectId === null
-            ? {
-                background: 'oklch(1 0 0 / 0.08)',
-                border: '1px solid oklch(1 0 0 / 0.14)',
-                color: 'oklch(0.99 0 0)',
-                fontWeight: 500,
-              }
-            : {
-                background: 'transparent',
-                border: '1px solid transparent',
-                color: 'oklch(0.78 0.01 280)',
-                fontWeight: 400,
-              }
-        }
-      >
-        <span
-          className="h-[7px] w-[7px] shrink-0 rounded-full"
-          style={{ background: 'oklch(0.55 0.01 280)' }}
-        />
-        <span className="truncate">Note</span>
-      </button>
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
 
-      {sortedProjects.map((project) => (
+      const oldIndex = projectIds.indexOf(active.id as string);
+      const newIndex = projectIds.indexOf(over.id as string);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reordered = arrayMove(projectIds, oldIndex, newIndex);
+      onReorderProjects(reordered);
+    },
+    [projectIds, onReorderProjects],
+  );
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+      autoScroll={false}
+    >
+      <div
+        ref={projectGridRef}
+        className="grid max-h-[180px] shrink-0 grid-cols-7 gap-1 overflow-y-auto px-3 py-2 sm:grid-cols-8 lg:grid-cols-10"
+        style={{
+          borderTop: '1px solid oklch(1 0 0 / 0.04)',
+          borderBottom: '1px solid oklch(1 0 0 / 0.04)',
+          background: 'oklch(0 0 0 / 0.2)',
+        }}
+      >
         <button
-          key={project.id}
-          data-project-tab={project.id}
-          onClick={() => onSelectProject(project.id)}
-          className="flex min-w-0 items-center gap-[7px] rounded-md px-[11px] py-[5px] text-left text-[12.5px] tracking-tight transition-colors"
+          data-project-tab="note"
+          onClick={() => onSelectProject(null)}
+          className="flex min-w-0 items-center gap-[7px] rounded-md px-[11px] py-[5px] text-[12.5px] tracking-tight transition-colors"
           style={
-            selectedProjectId === project.id
+            selectedProjectId === null
               ? {
-                  background: `color-mix(in oklch, ${project.color} 18%, transparent)`,
-                  border: `1px solid color-mix(in oklch, ${project.color} 45%, transparent)`,
+                  background: 'oklch(1 0 0 / 0.08)',
+                  border: '1px solid oklch(1 0 0 / 0.14)',
                   color: 'oklch(0.99 0 0)',
                   fontWeight: 500,
                 }
@@ -1688,18 +1797,23 @@ function ProjectGrid({
         >
           <span
             className="h-[7px] w-[7px] shrink-0 rounded-full"
-            style={{
-              backgroundColor: project.color,
-              boxShadow:
-                selectedProjectId === project.id
-                  ? `0 0 6px ${project.color}`
-                  : 'none',
-            }}
+            style={{ background: 'oklch(0.55 0.01 280)' }}
           />
-          <span className="truncate">{project.name}</span>
+          <span className="truncate">Note</span>
         </button>
-      ))}
-    </div>
+
+        <SortableContext items={projectIds} strategy={rectSortingStrategy}>
+          {sortedProjects.map((project) => (
+            <SortableProjectButton
+              key={project.id}
+              project={project}
+              isSelected={selectedProjectId === project.id}
+              onSelect={() => onSelectProject(project.id)}
+            />
+          ))}
+        </SortableContext>
+      </div>
+    </DndContext>
   );
 }
 
