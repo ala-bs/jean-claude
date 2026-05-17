@@ -19,6 +19,7 @@ export function Sparkline({
   referenceColor = 'var(--color-ink-3)',
   positiveDeltaFillColor,
   positiveDeltaFillOpacity = 0.2,
+  gapRanges,
   max: maxOverride,
 }: {
   data: number[];
@@ -34,9 +35,10 @@ export function Sparkline({
   referenceColor?: string;
   positiveDeltaFillColor?: string;
   positiveDeltaFillOpacity?: number;
+  gapRanges?: { startMs: number; endMs: number }[];
   max?: number;
 }) {
-  const { points, referencePoints, areaPath, positiveDeltaPaths } =
+  const { points, referencePoints, areaPath, positiveDeltaPaths, gapRects } =
     useMemo(() => {
       if (data.length === 0) {
         return {
@@ -44,6 +46,7 @@ export function Sparkline({
           referencePoints: '',
           areaPath: '',
           positiveDeltaPaths: [] as string[],
+          gapRects: [] as { x: number; width: number }[],
         };
       }
 
@@ -178,11 +181,18 @@ export function Sparkline({
         }
       }
 
+      const gapRects = (gapRanges ?? []).map((gap) => {
+        const x1 = padding + ((gap.startMs - minX) / xRange) * drawWidth;
+        const x2 = padding + ((gap.endMs - minX) / xRange) * drawWidth;
+        return { x: x1, width: Math.max(x2 - x1, 1) };
+      });
+
       return {
         points: linePoints.join(' '),
         referencePoints: computedReferencePoints,
         areaPath: `M ${firstX},${bottomY} L ${linePoints.join(' L ')} L ${lastX},${bottomY} Z`,
         positiveDeltaPaths: positiveDeltaSegments,
+        gapRects,
       };
     }, [
       data,
@@ -193,6 +203,7 @@ export function Sparkline({
       height,
       strokeWidth,
       maxOverride,
+      gapRanges,
     ]);
 
   if (data.length < 2) {
@@ -209,6 +220,17 @@ export function Sparkline({
       {fillOpacity > 0 && (
         <path d={areaPath} fill={color} opacity={fillOpacity} />
       )}
+      {gapRects.map((gap, i) => (
+        <rect
+          key={i}
+          x={gap.x}
+          y={strokeWidth}
+          width={gap.width}
+          height={height - strokeWidth * 2}
+          fill="var(--color-ink-3)"
+          opacity={0.08}
+        />
+      ))}
       {positiveDeltaFillColor &&
         positiveDeltaPaths.map((path) => (
           <path

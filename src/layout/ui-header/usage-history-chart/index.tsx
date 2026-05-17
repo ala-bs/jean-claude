@@ -5,6 +5,8 @@ import { Sparkline } from '@/common/ui/sparkline';
 import { useUsageHistory } from '@/hooks/use-usage-history';
 import type { UsageProviderType } from '@shared/usage-types';
 
+import { interpolateResets } from './utils-interpolate-resets';
+
 const HISTORY_LOOKBACK_MS = 10 * 60 * 60 * 1000;
 const OVER_PACE_COLOR = 'var(--color-status-fail)';
 
@@ -50,14 +52,28 @@ export function UsageHistoryChart({
 
   const chartData = useMemo(() => {
     if (!history || history.length < 2) return null;
+    const interpolated = interpolateResets(history);
+
+    // Compute gap ranges where data is inferred (synthetic points)
+    const gapRanges: { startMs: number; endMs: number }[] = [];
+    let gapStart: number | null = null;
+    for (const point of interpolated) {
+      const ms = new Date(point.recordedAt).getTime();
+      if (point.synthetic && gapStart === null) {
+        gapStart = ms;
+      } else if (!point.synthetic && gapStart !== null) {
+        gapRanges.push({ startMs: gapStart, endMs: ms });
+        gapStart = null;
+      }
+    }
+
     return {
-      timestamps: history.map((snapshot) =>
-        new Date(snapshot.recordedAt).getTime(),
+      timestamps: interpolated.map((s) => new Date(s.recordedAt).getTime()),
+      usage: interpolated.map((s) => s.utilization),
+      linear: interpolated.map((s) =>
+        getLinearUtilization(s, windowDurationMs),
       ),
-      usage: history.map((snapshot) => snapshot.utilization),
-      linear: history.map((snapshot) =>
-        getLinearUtilization(snapshot, windowDurationMs),
-      ),
+      gapRanges,
     };
   }, [history, windowDurationMs]);
 
@@ -93,6 +109,7 @@ export function UsageHistoryChart({
         referenceColor={OVER_PACE_COLOR}
         positiveDeltaFillColor={OVER_PACE_COLOR}
         positiveDeltaFillOpacity={0.25}
+        gapRanges={chartData.gapRanges}
         className={clsx('w-full')}
       />
       <div className="text-ink-3 flex items-center justify-between text-[10px]">
