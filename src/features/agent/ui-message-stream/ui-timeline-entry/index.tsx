@@ -23,6 +23,7 @@ import type {
 import { computeDiff } from '../../ui-diff-view/diff-utils';
 import { getLanguageFromPath } from '../../ui-diff-view/language-utils';
 import { MarkdownContent } from '../../ui-markdown-content';
+import { CommentableTextEntry } from '../ui-commentable-text-entry';
 import { TodoListEntry } from '../ui-todo-list-entry';
 
 import { getToolSummary } from './tool-summary';
@@ -1029,6 +1030,7 @@ export function TimelineEntry({
   resultDurationMs,
   onFilePathClick,
   onToolDiffClick,
+  taskId,
 }: {
   entry: NormalizedEntry;
   resultDurationMs?: number;
@@ -1042,6 +1044,8 @@ export function TimelineEntry({
     oldString: string,
     newString: string,
   ) => void;
+  /** Task ID for comment anchoring in assistant messages */
+  taskId?: string;
 }) {
   switch (entry.type) {
     case 'user-prompt':
@@ -1049,6 +1053,16 @@ export function TimelineEntry({
       return <UserEntry text={entry.value} onFilePathClick={onFilePathClick} />;
     case 'assistant-message':
       if (!entry.value.trim()) return null;
+      if (taskId) {
+        return (
+          <CommentableTextEntry
+            text={entry.value}
+            entryId={entry.id}
+            taskId={taskId}
+            onFilePathClick={onFilePathClick}
+          />
+        );
+      }
       return <TextEntry text={entry.value} onFilePathClick={onFilePathClick} />;
     case 'thinking':
       if (!entry.value.trim()) return null;

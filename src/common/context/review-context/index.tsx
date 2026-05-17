@@ -27,6 +27,12 @@ export interface MessageCommentParams {
   anchorLabel: string;
   /** Quoted text from the message */
   selectedText?: string;
+  /** Line number within the message text (1-based) */
+  lineStart?: number;
+  lineEnd?: number;
+  /** Character offset of the selection start within the message container's
+   *  combined text content. Used for precise highlight placement. */
+  charOffset?: number;
   body: string;
   presets: string[];
   images?: PromptImagePart[];

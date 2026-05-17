@@ -14,6 +14,7 @@ import type {
 
 import { MarkdownContent } from '../../ui-markdown-content';
 import type { DisplayMessage, PromptGroup } from '../message-merger';
+import { CommentableWrapper } from '../ui-commentable-text-entry';
 import { RunningTimer } from '../ui-running-timer';
 import { SkillEntry } from '../ui-skill-entry';
 import { SubagentEntry } from '../ui-subagent-entry';
@@ -214,9 +215,9 @@ function getRunningActivity(childMessages: DisplayMessage[]): {
   return { subagents, runningTools, todos, isCompacting, latestMessage };
 }
 
-function getLastAssistantMessageText(
+function getLastAssistantMessage(
   childMessages: DisplayMessage[],
-): string | null {
+): { text: string; entryId: string } | null {
   for (let i = childMessages.length - 1; i >= 0; i--) {
     const dm = childMessages[i];
     if (
@@ -224,7 +225,7 @@ function getLastAssistantMessageText(
       dm.entry.type === 'assistant-message' &&
       dm.entry.value.trim()
     ) {
-      return dm.entry.value;
+      return { text: dm.entry.value, entryId: dm.entry.id };
     }
   }
 
@@ -513,6 +514,8 @@ function ResultBlock({
   stats,
   isError,
   onFilePathClick,
+  entryId,
+  taskId,
 }: {
   resultText: string | null;
   stats: string | null;
@@ -522,6 +525,10 @@ function ResultBlock({
     lineStart?: number,
     lineEnd?: number,
   ) => void;
+  /** Entry ID for comment anchoring */
+  entryId?: string;
+  /** Task ID for comment anchoring */
+  taskId?: string;
 }) {
   if (isError) {
     return (
@@ -531,7 +538,8 @@ function ResultBlock({
       </div>
     );
   }
-  return (
+
+  const content = (
     <div className="text-ink-1 font-mono text-xs leading-relaxed">
       <div className="flex items-baseline gap-2">
         <span className="text-acc-ink w-3 shrink-0 text-center">✓</span>
@@ -553,6 +561,16 @@ function ResultBlock({
       )}
     </div>
   );
+
+  if (entryId && taskId) {
+    return (
+      <CommentableWrapper entryId={entryId} taskId={taskId}>
+        {content}
+      </CommentableWrapper>
+    );
+  }
+
+  return content;
 }
 
 /** Running summary — subagent cards, todo checklist, latest message */
@@ -701,6 +719,7 @@ export function PromptGroupEntry({
   onToolUseContextMenu,
   onResultContextMenu,
   rootPath,
+  taskId,
 }: {
   group: PromptGroup;
   isLast?: boolean;
@@ -722,6 +741,8 @@ export function PromptGroupEntry({
   onToolUseContextMenu?: (e: MouseEvent, toolUse: NormalizedToolUse) => void;
   onResultContextMenu?: (e: MouseEvent, entry: NormalizedEntry) => void;
   rootPath?: string | null;
+  /** Task ID for comment anchoring in assistant messages */
+  taskId?: string;
 }) {
   const isError = group.status === 'error';
   const isInterrupted = group.status === 'interrupted';
@@ -742,13 +763,14 @@ export function PromptGroupEntry({
     if (!group.resultEntry) {
       if (group.status !== 'completed') return null;
 
-      const text = getLastAssistantMessageText(group.childMessages);
-      if (!text) return null;
+      const lastMsg = getLastAssistantMessage(group.childMessages);
+      if (!lastMsg) return null;
 
       return {
         isError: false,
         stats: null,
-        text,
+        text: lastMsg.text,
+        entryId: lastMsg.entryId,
       };
     }
 
@@ -758,6 +780,7 @@ export function PromptGroupEntry({
         isError: true,
         stats: null,
         text: entry.value || 'Unknown error',
+        entryId: entry.id,
       };
     }
     const cost = entry.cost?.toFixed(2) || '0.00';
@@ -769,6 +792,7 @@ export function PromptGroupEntry({
       isError: false,
       stats: `${tokens} tok · ${formatDuration(durationMs)} · $${cost}`,
       text: entry.value || null,
+      entryId: entry.id,
     };
   }, [group.childMessages, group.durationMs, group.resultEntry, group.status]);
 
@@ -1031,6 +1055,7 @@ export function PromptGroupEntry({
                           onFilePathClick={onFilePathClick}
                           onToolDiffClick={onToolDiffClick}
                           onEntryContextMenu={onEntryContextMenu}
+                          taskId={taskId}
                         />
                       </div>
                     );
@@ -1048,6 +1073,7 @@ export function PromptGroupEntry({
                         entry={dm.entry}
                         onFilePathClick={onFilePathClick}
                         onToolDiffClick={onToolDiffClick}
+                        taskId={taskId}
                       />
                     </div>
                   );
@@ -1067,6 +1093,8 @@ export function PromptGroupEntry({
                       stats={resultSummary?.stats ?? null}
                       isError={resultSummary?.isError ?? false}
                       onFilePathClick={onFilePathClick}
+                      entryId={resultSummary?.entryId}
+                      taskId={taskId}
                     />
                   </div>
                 )}
@@ -1104,6 +1132,8 @@ export function PromptGroupEntry({
                     stats={resultSummary.stats}
                     isError={resultSummary.isError}
                     onFilePathClick={onFilePathClick}
+                    entryId={resultSummary.entryId}
+                    taskId={taskId}
                   />
                 ) : isInterrupted ? (
                   <span className="text-ink-3 text-xs">Interrupted</span>

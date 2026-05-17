@@ -44,8 +44,12 @@ export type ReviewCommentStatus =
 /** @deprecated Use FileCommentAnchor from utils-comment-store instead */
 export type ReviewCommentAnchor = FileCommentAnchor;
 
+export type ReviewCommentKind = 'diff' | 'message';
+
 export interface ReviewComment {
   id: string;
+  /** 'diff' for file/code comments, 'message' for agent message comments */
+  commentKind: ReviewCommentKind;
   anchor: FileCommentAnchor;
   body: string;
   images?: PromptImagePart[];
@@ -259,12 +263,70 @@ export function useReviewCommentsByFile(taskId: string) {
   }, [comments]);
 }
 
+/** Synthesize a single comment into XML lines based on its kind. */
+function synthesizeComment(
+  c: ReviewComment,
+  index: number,
+): { textLines: string[]; imageParts: PromptImagePart[] } {
+  const textLines: string[] = [];
+  const imageParts: PromptImagePart[] = [];
+
+  if (c.commentKind === 'message') {
+    // Message comment — quote-based anchor
+    textLines.push(`<comment index="${index}" type="message">`);
+    if (c.anchor.selectedText?.trim()) {
+      textLines.push('  <quoted_text>');
+      textLines.push(escapePromptTagContent(c.anchor.selectedText));
+      textLines.push('  </quoted_text>');
+    }
+  } else {
+    // File/diff comment — file path + line range anchor
+    const lineLabel = formatPromptLineRange(
+      c.anchor.lineStart,
+      c.anchor.lineEnd,
+    );
+    textLines.push(
+      `<comment index="${index}" type="file" file_path="${escapePromptTagContent(c.anchor.filePath)}" line_range="${lineLabel}">`,
+    );
+    if (c.presets.length > 0) {
+      textLines.push(
+        `  <tags>${escapePromptTagContent(c.presets.join(', '))}</tags>`,
+      );
+    }
+    if (c.anchor.selectedText?.trim()) {
+      textLines.push('  <selected_lines>');
+      textLines.push(escapePromptTagContent(c.anchor.selectedText));
+      textLines.push('  </selected_lines>');
+    }
+  }
+
+  const body =
+    c.body ||
+    (c.presets.length > 0 ? `${c.presets.join(' and ')} this code` : '');
+  textLines.push('  <instruction>');
+  textLines.push(escapePromptTagContent(body));
+  if (c.images && c.images.length > 0) {
+    textLines.push('  [see attached image]');
+  }
+  textLines.push('  </instruction>');
+  textLines.push('</comment>');
+  textLines.push('');
+
+  if (c.images) {
+    imageParts.push(...c.images);
+  }
+
+  return { textLines, imageParts };
+}
+
 /** Synthesize a structured prompt from all open comments. Returns null if no open comments. */
 export function synthesizeReviewPrompt(
   comments: ReviewComment[],
   globalIntent?: string,
 ): PromptPart[] | null {
-  const openComments = comments.filter((c) => !c.resolved);
+  const openComments = comments
+    .filter((c) => !c.resolved)
+    .sort((a, b) => a.createdAt - b.createdAt);
   if (openComments.length === 0) return null;
 
   const textLines: string[] = [];
@@ -277,45 +339,15 @@ export function synthesizeReviewPrompt(
     textLines.push('');
   }
 
-  textLines.push('<inline_review_comments>');
+  textLines.push('<user_review>');
 
   openComments.forEach((c, i) => {
-    const lineLabel = formatPromptLineRange(
-      c.anchor.lineStart,
-      c.anchor.lineEnd,
-    );
-    textLines.push(
-      `<comment index="${i + 1}" file_path="${escapePromptTagContent(c.anchor.filePath)}" line_range="${lineLabel}">`,
-    );
-    if (c.presets.length > 0) {
-      textLines.push(
-        `  <tags>${escapePromptTagContent(c.presets.join(', '))}</tags>`,
-      );
-    }
-    if (c.anchor.selectedText?.trim()) {
-      textLines.push('  <selected_lines>');
-      textLines.push(escapePromptTagContent(c.anchor.selectedText));
-      textLines.push('  </selected_lines>');
-    }
-    // When body is empty but presets exist, generate instruction from presets
-    const body =
-      c.body ||
-      (c.presets.length > 0 ? `${c.presets.join(' and ')} this code` : '');
-    textLines.push('  <instruction>');
-    textLines.push(escapePromptTagContent(body));
-    if (c.images && c.images.length > 0) {
-      textLines.push('  [see attached image]');
-    }
-    textLines.push('  </instruction>');
-    textLines.push('</comment>');
-    textLines.push('');
-
-    if (c.images) {
-      imageParts.push(...c.images);
-    }
+    const result = synthesizeComment(c, i + 1);
+    textLines.push(...result.textLines);
+    imageParts.push(...result.imageParts);
   });
 
-  textLines.push('</inline_review_comments>');
+  textLines.push('</user_review>');
 
   const result: PromptPart[] = [{ type: 'text', text: textLines.join('\n') }];
 

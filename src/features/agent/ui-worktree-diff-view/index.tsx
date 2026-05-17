@@ -121,6 +121,7 @@ export function WorktreeDiffView({
       images?: PromptImagePart[];
     }) => {
       addComment(taskId, {
+        commentKind: 'diff',
         anchor: {
           filePath: params.filePath,
           lineStart: params.lineStart,

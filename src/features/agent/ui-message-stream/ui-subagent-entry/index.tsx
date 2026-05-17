@@ -40,6 +40,7 @@ export function SubagentEntry({
   onFilePathClick,
   onToolDiffClick,
   onEntryContextMenu,
+  taskId,
 }: {
   toolUse: NormalizedToolUse;
   childEntries: NormalizedEntry[];
@@ -54,6 +55,8 @@ export function SubagentEntry({
     newString: string,
   ) => void;
   onEntryContextMenu?: (e: MouseEvent, entry: NormalizedEntry) => void;
+  /** Task ID for comment anchoring in assistant messages */
+  taskId?: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -222,6 +225,7 @@ export function SubagentEntry({
                 entry={entry}
                 onFilePathClick={onFilePathClick}
                 onToolDiffClick={onToolDiffClick}
+                taskId={taskId}
               />
             </div>
           ))}

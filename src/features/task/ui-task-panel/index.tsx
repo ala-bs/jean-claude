@@ -1014,6 +1014,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       addComment: (params: ReviewCommentParams) => {
         if (params.kind === 'diff') {
           return addReviewCommentAction(taskId, {
+            commentKind: 'diff',
             anchor: {
               filePath: params.filePath,
               lineStart: params.lineStart,
@@ -1030,10 +1031,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         // Message comment — store anchor info in the filePath field as a
         // synthetic path so it flows through the existing comment store.
         return addReviewCommentAction(taskId, {
+          commentKind: 'message',
           anchor: {
             filePath: `__message__:${params.entryId}`,
-            lineStart: 0,
+            lineStart: params.lineStart ?? 0,
+            lineEnd: params.lineEnd,
             selectedText: params.selectedText,
+            charOffset: params.charOffset,
           },
           body: params.body,
           images: params.images,
@@ -1490,6 +1494,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 pendingQuestion={questionProps}
                 onAddBashToPermissions={handleAddBashToPermissions}
                 rootPath={taskRootPath}
+                taskId={taskId}
               />
             ) : (
               <div

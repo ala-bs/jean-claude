@@ -32,10 +32,16 @@ function getKindAccent(kind: PillKind) {
 export function reviewCommentToPill(comment: ReviewComment): ReviewPillData {
   // Message comments use a synthetic filePath like "__message__:entryId"
   if (comment.anchor.filePath.startsWith('__message__:')) {
+    const lineLabel =
+      comment.anchor.lineStart > 0
+        ? comment.anchor.lineEnd
+          ? `:L${comment.anchor.lineStart}-${comment.anchor.lineEnd}`
+          : `:L${comment.anchor.lineStart}`
+        : '';
     return {
       id: comment.id,
       kind: 'message',
-      anchorLabel: comment.anchor.filePath.replace('__message__:', ''),
+      anchorLabel: `msg${lineLabel}`,
       body: comment.body || comment.presets.join(', '),
       source: {
         kind: 'message',

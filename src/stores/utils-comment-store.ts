@@ -9,6 +9,9 @@ export interface FileCommentAnchor {
   lineStart: number;
   lineEnd?: number;
   selectedText?: string;
+  /** Character offset of the selection start within the container's combined
+   *  text content. Used by message comments for precise highlight placement. */
+  charOffset?: number;
 }
 
 // -- Keyed-collection store factory --

@@ -152,12 +152,14 @@ export function InlineCommentComposer({
 
   return (
     <div className="flex flex-col gap-2">
-      <span
-        className="font-mono text-[10px]"
-        style={{ color: COMMENT_ACCENT.text }}
-      >
-        {lineLabel}
-      </span>
+      {lineStart > 0 && (
+        <span
+          className="font-mono text-[10px]"
+          style={{ color: COMMENT_ACCENT.text }}
+        >
+          {lineLabel}
+        </span>
+      )}
 
       {renderBeforeTextarea}
 
@@ -249,6 +251,7 @@ export function InlineCommentBubble({
   lineEnd,
   body,
   images,
+  selectedText,
   onRemove,
   onEdit,
   renderHeaderExtras,
@@ -259,6 +262,8 @@ export function InlineCommentBubble({
   lineEnd?: number;
   body: string;
   images?: PromptImagePart[];
+  /** Quoted text from the original content this comment was anchored to */
+  selectedText?: string;
   onRemove?: () => void;
   /** Called with the new body text and images when the user saves an edit. */
   onEdit?: (newBody: string, newImages: PromptImagePart[]) => void;
@@ -386,18 +391,22 @@ export function InlineCommentBubble({
 
   return (
     <div className="group/bubble flex items-start gap-2 rounded px-3 py-1.5">
-      <div
-        className="mt-1 h-3 w-0.5 shrink-0 rounded-full"
-        style={{ background: COMMENT_ACCENT.bar }}
-      />
+      {!selectedText && (
+        <div
+          className="mt-1 h-3 w-0.5 shrink-0 rounded-full"
+          style={{ background: COMMENT_ACCENT.bar }}
+        />
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span
-            className="mr-2 font-mono text-[10px]"
-            style={{ color: COMMENT_ACCENT.text }}
-          >
-            {lineLabel}
-          </span>
+          {lineStart > 0 && (
+            <span
+              className="mr-2 font-mono text-[10px]"
+              style={{ color: COMMENT_ACCENT.text }}
+            >
+              {lineLabel}
+            </span>
+          )}
           {renderHeaderExtras}
           <div className="flex-1" />
           {!isEditing && (onEdit || onRemove || renderExtraActions) && (
@@ -509,6 +518,14 @@ export function InlineCommentBubble({
           </div>
         ) : (
           <>
+            {selectedText && (
+              <div
+                className="text-ink-3 mb-1 border-l-2 pl-2 font-mono text-[10px] italic"
+                style={{ borderColor: COMMENT_ACCENT.barSoft }}
+              >
+                <span className="line-clamp-2">{selectedText}</span>
+              </div>
+            )}
             <div className="text-ink-0 text-xs whitespace-pre-wrap">{body}</div>
             {currentImages.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">

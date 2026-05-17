@@ -92,6 +92,7 @@ export const MessageStream = memo(function MessageStream({
   pendingQuestion,
   onAddBashToPermissions,
   rootPath,
+  taskId,
 }: {
   messages: NormalizedEntry[];
   isRunning?: boolean;
@@ -119,6 +120,8 @@ export const MessageStream = memo(function MessageStream({
   onAddBashToPermissions?: (command: string) => void;
   /** Root path (worktree or project) used to relativize file paths in diff modals */
   rootPath?: string | null;
+  /** Task ID for comment anchoring in assistant messages */
+  taskId?: string;
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -384,6 +387,7 @@ export const MessageStream = memo(function MessageStream({
                     onToolUseContextMenu={handleToolUseContextMenu}
                     onResultContextMenu={handleEntryContextMenu}
                     rootPath={rootPath}
+                    taskId={taskId}
                   />
                 </div>
               );
@@ -428,6 +432,7 @@ export const MessageStream = memo(function MessageStream({
                     onFilePathClick={onFilePathClick}
                     onToolDiffClick={onToolDiffClick}
                     onEntryContextMenu={handleEntryContextMenu}
+                    taskId={taskId}
                   />
                 </div>
               );
@@ -441,6 +446,7 @@ export const MessageStream = memo(function MessageStream({
                   entry={streamMessage.entry}
                   onFilePathClick={onFilePathClick}
                   onToolDiffClick={onToolDiffClick}
+                  taskId={taskId}
                 />
               </div>
             );
