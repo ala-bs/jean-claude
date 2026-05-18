@@ -939,7 +939,11 @@ export function PromptGroupEntry({
         )}
 
         <div
-          className="min-w-0 flex-1 rounded-md"
+          className={
+            isLast && showRunningHeader
+              ? 'task-agent-running-shell min-w-0 flex-1 rounded-md'
+              : 'min-w-0 flex-1 rounded-md'
+          }
           style={{
             background: 'oklch(0.06 0.01 280 / 0.5)',
             border: '1px solid oklch(1 0 0 / 0.10)',

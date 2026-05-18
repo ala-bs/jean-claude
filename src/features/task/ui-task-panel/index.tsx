@@ -1443,136 +1443,140 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           />
           <Separator />
 
-          {/* Main content area: PR view OR Diff view OR Message stream */}
           <div className="min-h-0 flex-1">
-            {isPrViewOpen ? (
-              <TaskPrView
-                taskId={taskId}
-                projectId={project.id}
-                onClose={closePrView}
-                bottomPadding={footerHeight}
-              />
-            ) : isDiffViewOpen && task.worktreePath ? (
-              <WorktreeDiffView
-                taskId={taskId}
-                projectId={project.id}
-                selectedFilePath={diffSelectedFile}
-                onSelectFile={selectDiffFile}
-                collapsedFolders={diffCollapsedFolders}
-                onToggleFolder={toggleDiffCollapsedFolder}
-                branchName={
-                  task.branchName ??
-                  getBranchFromWorktreePath(task.worktreePath)
-                }
-                sourceBranch={task.sourceBranch}
-                defaultBranch={project.defaultBranch}
-                protectedBranches={project.protectedBranches}
-                taskName={task.name}
-                hasRepoLink={hasRepoLink}
-                pullRequestUrl={task.pullRequestUrl}
-                onMergeStarted={handleMergeStarted}
-                onOpenPrView={openPrView}
-                bottomPadding={footerHeight}
-              />
-            ) : activeStep?.type === 'pr-review' ? (
-              <PrReviewValidation step={activeStep} />
-            ) : agentState.isLoading ? (
-              <div className="flex h-full items-center justify-center">
-                <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
-              </div>
-            ) : hasMessages ? (
-              <MessageStream
-                messages={agentState.messages}
-                isRunning={isRunning}
-                queuedPrompts={agentState.queuedPrompts}
-                onFilePathClick={handleFilePathClick}
-                onToolDiffClick={handleToolDiffClick}
-                onCancelQueuedPrompt={cancelQueuedPrompt}
-                onShowRawMessage={openDebugMessages}
-                bottomPadding={footerHeight}
-                pendingPermission={permissionProps}
-                pendingQuestion={questionProps}
-                onAddBashToPermissions={handleAddBashToPermissions}
-                rootPath={taskRootPath}
-                taskId={taskId}
-              />
-            ) : (
-              <div
-                className="h-full overflow-y-auto p-6"
-                style={
-                  footerHeight > 0 ? { paddingBottom: footerHeight } : undefined
-                }
-              >
-                <div className="text-ink-2 mb-2 text-sm font-medium">
-                  {activeStep?.name ?? 'Prompt'}
+            {/* Main content area: PR view OR Diff view OR Message stream */}
+            <div className="h-full min-h-0">
+              {isPrViewOpen ? (
+                <TaskPrView
+                  taskId={taskId}
+                  projectId={project.id}
+                  onClose={closePrView}
+                  bottomPadding={footerHeight}
+                />
+              ) : isDiffViewOpen && task.worktreePath ? (
+                <WorktreeDiffView
+                  taskId={taskId}
+                  projectId={project.id}
+                  selectedFilePath={diffSelectedFile}
+                  onSelectFile={selectDiffFile}
+                  collapsedFolders={diffCollapsedFolders}
+                  onToggleFolder={toggleDiffCollapsedFolder}
+                  branchName={
+                    task.branchName ??
+                    getBranchFromWorktreePath(task.worktreePath)
+                  }
+                  sourceBranch={task.sourceBranch}
+                  defaultBranch={project.defaultBranch}
+                  protectedBranches={project.protectedBranches}
+                  taskName={task.name}
+                  hasRepoLink={hasRepoLink}
+                  pullRequestUrl={task.pullRequestUrl}
+                  onMergeStarted={handleMergeStarted}
+                  onOpenPrView={openPrView}
+                  bottomPadding={footerHeight}
+                />
+              ) : activeStep?.type === 'pr-review' ? (
+                <PrReviewValidation step={activeStep} />
+              ) : agentState.isLoading ? (
+                <div className="flex h-full items-center justify-center">
+                  <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
                 </div>
-                <div className="border-glass-border bg-bg-1 rounded-lg border p-4">
-                  <pre className="overflow-x-hidden font-sans text-xs whitespace-pre-wrap">
-                    {activeStep?.promptTemplate ?? task.prompt}
-                  </pre>
+              ) : hasMessages ? (
+                <MessageStream
+                  messages={agentState.messages}
+                  isRunning={isRunning}
+                  queuedPrompts={agentState.queuedPrompts}
+                  onFilePathClick={handleFilePathClick}
+                  onToolDiffClick={handleToolDiffClick}
+                  onCancelQueuedPrompt={cancelQueuedPrompt}
+                  onShowRawMessage={openDebugMessages}
+                  bottomPadding={footerHeight}
+                  pendingPermission={permissionProps}
+                  pendingQuestion={questionProps}
+                  onAddBashToPermissions={handleAddBashToPermissions}
+                  rootPath={taskRootPath}
+                  taskId={taskId}
+                />
+              ) : (
+                <div
+                  className="h-full overflow-y-auto p-6"
+                  style={
+                    footerHeight > 0
+                      ? { paddingBottom: footerHeight }
+                      : undefined
+                  }
+                >
+                  <div className="text-ink-2 mb-2 text-sm font-medium">
+                    {activeStep?.name ?? 'Prompt'}
+                  </div>
+                  <div className="border-glass-border bg-bg-1 rounded-lg border p-4">
+                    <pre className="overflow-x-hidden font-sans text-xs whitespace-pre-wrap">
+                      {activeStep?.promptTemplate ?? task.prompt}
+                    </pre>
+                  </div>
+                  {isRunning ? (
+                    <div className="border-glass-border mt-6 flex items-center justify-center gap-2 rounded-lg border border-dashed p-8">
+                      <Loader2 className="text-ink-2 h-4 w-4 animate-spin" />
+                      <p className="text-ink-2">Starting agent...</p>
+                    </div>
+                  ) : activeStep?.status === 'ready' ? (
+                    <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
+                      <Button
+                        onClick={() => void start()}
+                        disabled={isStarting}
+                        loading={isStarting}
+                        variant="primary"
+                        icon={<Play />}
+                      >
+                        {isStarting ? 'Starting...' : 'Start Step'}
+                      </Button>
+                    </div>
+                  ) : activeStep?.status === 'pending' ? (
+                    <div className="border-glass-border mt-6 flex items-center justify-center rounded-lg border border-dashed p-8">
+                      <p className="text-ink-3 text-sm">
+                        Waiting for dependencies to complete
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
+                      <p className="text-ink-2">No messages loaded</p>
+                      <Button
+                        onClick={agentState.refetch}
+                        variant="secondary"
+                        icon={<RefreshCw />}
+                      >
+                        Reload messages
+                      </Button>
+                    </div>
+                  )}
+                  {/* Fallback banners when no messages yet */}
+                  {agentState.pendingPermission && (
+                    <div className="mt-4 overflow-hidden rounded-lg">
+                      <PermissionBar
+                        request={agentState.pendingPermission}
+                        onRespond={respondToPermission}
+                        onAllowForSession={handleAllowToolsForSession}
+                        onAllowForProject={handleAllowForProject}
+                        onAllowForProjectWorktrees={
+                          handleAllowForProjectWorktrees
+                        }
+                        onAllowGlobally={handleAllowGlobally}
+                        onSetMode={handleSetMode}
+                        worktreePath={task.worktreePath}
+                      />
+                    </div>
+                  )}
+                  {agentState.pendingQuestion && (
+                    <div className="mt-4 overflow-hidden rounded-lg">
+                      <QuestionOptions
+                        request={agentState.pendingQuestion}
+                        onRespond={respondToQuestion}
+                      />
+                    </div>
+                  )}
                 </div>
-                {isRunning ? (
-                  <div className="border-glass-border mt-6 flex items-center justify-center gap-2 rounded-lg border border-dashed p-8">
-                    <Loader2 className="text-ink-2 h-4 w-4 animate-spin" />
-                    <p className="text-ink-2">Starting agent...</p>
-                  </div>
-                ) : activeStep?.status === 'ready' ? (
-                  <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
-                    <Button
-                      onClick={() => void start()}
-                      disabled={isStarting}
-                      loading={isStarting}
-                      variant="primary"
-                      icon={<Play />}
-                    >
-                      {isStarting ? 'Starting...' : 'Start Step'}
-                    </Button>
-                  </div>
-                ) : activeStep?.status === 'pending' ? (
-                  <div className="border-glass-border mt-6 flex items-center justify-center rounded-lg border border-dashed p-8">
-                    <p className="text-ink-3 text-sm">
-                      Waiting for dependencies to complete
-                    </p>
-                  </div>
-                ) : (
-                  <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
-                    <p className="text-ink-2">No messages loaded</p>
-                    <Button
-                      onClick={agentState.refetch}
-                      variant="secondary"
-                      icon={<RefreshCw />}
-                    >
-                      Reload messages
-                    </Button>
-                  </div>
-                )}
-                {/* Fallback banners when no messages yet */}
-                {agentState.pendingPermission && (
-                  <div className="mt-4 overflow-hidden rounded-lg">
-                    <PermissionBar
-                      request={agentState.pendingPermission}
-                      onRespond={respondToPermission}
-                      onAllowForSession={handleAllowToolsForSession}
-                      onAllowForProject={handleAllowForProject}
-                      onAllowForProjectWorktrees={
-                        handleAllowForProjectWorktrees
-                      }
-                      onAllowGlobally={handleAllowGlobally}
-                      onSetMode={handleSetMode}
-                      worktreePath={task.worktreePath}
-                    />
-                  </div>
-                )}
-                {agentState.pendingQuestion && (
-                  <div className="mt-4 overflow-hidden rounded-lg">
-                    <QuestionOptions
-                      request={agentState.pendingQuestion}
-                      onRespond={respondToQuestion}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* Message input — floats above content so messages scroll underneath */}
