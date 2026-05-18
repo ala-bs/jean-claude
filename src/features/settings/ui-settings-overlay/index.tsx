@@ -206,7 +206,7 @@ function GlobalContent({ menuItem }: { menuItem: GlobalMenuItem }) {
 
   if (fillHeight) {
     return (
-      <div className="flex h-full min-h-0 flex-1">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <GlobalContentInner menuItem={menuItem} />
       </div>
     );
@@ -511,7 +511,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             </div>
 
             {/* Main body: sidebar + content */}
-            <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               {/* Left sidebar menu */}
               <div
                 className="flex w-[200px] shrink-0 flex-col"
@@ -601,8 +601,8 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                     FILL_HEIGHT_SECTIONS.includes(globalMenuItem)) ||
                   (activeTab === 'project' &&
                     FILL_HEIGHT_PROJECT_SECTIONS.includes(projectMenuItem))
-                    ? 'flex min-h-0 flex-1 flex-col'
-                    : 'flex-1 overflow-y-auto'
+                    ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
+                    : 'min-w-0 flex-1 overflow-y-auto'
                 }
                 style={
                   (activeTab === 'global' &&

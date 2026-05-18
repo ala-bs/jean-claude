@@ -578,7 +578,11 @@ export function ProjectSettings({
   const fillHeight = menuItem === 'skills';
 
   return (
-    <div className={fillHeight ? 'flex min-h-0 flex-1 flex-col' : 'space-y-6'}>
+    <div
+      className={
+        fillHeight ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'space-y-6'
+      }
+    >
       {fillHeight ? (
         content
       ) : (

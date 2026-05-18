@@ -188,7 +188,7 @@ export function SkillEditor({
   });
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
       {/* Top bar */}
       <div className="border-glass-border flex shrink-0 items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-3">
@@ -268,7 +268,7 @@ export function SkillEditor({
       {/* Resizable split: markdown editor + live preview */}
       <div
         ref={containerRef}
-        className={`flex min-h-0 flex-1 ${isDragging ? 'select-none' : ''}`}
+        className={`flex min-h-0 min-w-0 flex-1 overflow-hidden ${isDragging ? 'select-none' : ''}`}
       >
         {/* Left pane: markdown textarea */}
         {leftWidth > 0 && (
@@ -299,7 +299,7 @@ export function SkillEditor({
           <div className="border-glass-border flex shrink-0 items-center border-b px-3 py-2">
             <span className="text-ink-2 text-xs font-medium">Preview</span>
           </div>
-          <div className="text-ink-1 flex-1 overflow-y-auto p-4 text-sm">
+          <div className="text-ink-1 flex-1 overflow-auto p-4 text-sm break-words">
             {deferredContent ? (
               <MarkdownContent content={deferredContent} />
             ) : (
