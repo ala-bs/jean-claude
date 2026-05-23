@@ -110,11 +110,33 @@ async function detectOpenCodeProjects(): Promise<
 async function readFirstLine(filePath: string): Promise<string | null> {
   const handle = await fs.open(filePath, 'r');
   try {
-    const buffer = Buffer.alloc(8192);
-    const { bytesRead } = await handle.read(buffer, 0, 8192, 0);
-    const chunk = buffer.slice(0, bytesRead).toString('utf-8');
-    const newlineIdx = chunk.indexOf('\n');
-    return newlineIdx === -1 ? chunk.trim() : chunk.slice(0, newlineIdx).trim();
+    const chunks: Buffer[] = [];
+    let position = 0;
+
+    while (true) {
+      const buffer = Buffer.alloc(8192);
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        buffer.length,
+        position,
+      );
+      if (bytesRead === 0) break;
+
+      const chunk = buffer.subarray(0, bytesRead);
+      const newlineIdx = chunk.indexOf('\n');
+      if (newlineIdx === -1) {
+        chunks.push(chunk);
+        position += bytesRead;
+        continue;
+      }
+
+      chunks.push(chunk.subarray(0, newlineIdx));
+      break;
+    }
+
+    const line = Buffer.concat(chunks).toString('utf-8').trim();
+    return line || null;
   } finally {
     await handle.close();
   }

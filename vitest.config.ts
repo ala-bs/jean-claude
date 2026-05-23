@@ -16,5 +16,6 @@ export default defineConfig({
       'electron/**/*.test.ts',
       'src/**/*.test.ts',
     ],
+    setupFiles: ['./vitest.setup.ts'],
   },
 });
