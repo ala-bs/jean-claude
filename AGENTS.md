@@ -11,6 +11,7 @@ Jean-Claude is an Electron desktop app for managing coding agents across multipl
 <IMPORTANT>
 Once you are done with your task
 First run `pnpm install`.
+Then run `pnpm test`.
 Then run `pnpm lint --fix` to automatically fix linting errors.
 Then run `pnpm ts-check` to verify that there are no TypeScript errors.
 And then run `pnpm lint` to see if there are any remaining linting errors that need to be fixed.
@@ -118,14 +119,17 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await sql`PRAGMA foreign_keys = OFF`.execute(db);
   await db.transaction().execute(async (trx) => {
     await sql`DROP TABLE IF EXISTS tablename_new`.execute(trx);
-    await trx.schema.createTable('tablename_new')
+    await trx.schema
+      .createTable('tablename_new')
       // ... columns ...
       .execute();
     await sql`INSERT INTO tablename_new SELECT ... FROM tablename`.execute(trx);
     await trx.schema.dropTable('tablename').execute();
     await sql`ALTER TABLE tablename_new RENAME TO tablename`.execute(trx);
 
-    const fkCheck = await sql<{ table: string }>`PRAGMA foreign_key_check`.execute(trx);
+    const fkCheck = await sql<{
+      table: string;
+    }>`PRAGMA foreign_key_check`.execute(trx);
     if (fkCheck.rows.length > 0) {
       throw new Error(`Foreign key violation: ${JSON.stringify(fkCheck.rows)}`);
     }
@@ -199,7 +203,7 @@ docs/plans/              # Design and implementation documents
 - See `ROADMAP.md` for feature phases and `docs/plans/` for detailed designs
 - Don't try to run `pnpm dev` — focus on implementing features
 - When writing design/implementation docs, no need to commit
-- When implementation is done, run `pnpm lint --fix` first
+- When implementation is done, run `pnpm test` before `pnpm lint --fix`
 - To verify TypeScript, run `pnpm ts-check` (not `tsc` directly)
 
 ## Coding Guidelines

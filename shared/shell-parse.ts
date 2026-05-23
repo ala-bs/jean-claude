@@ -28,42 +28,128 @@ export function stripRedirections(command: string): string {
     .trim();
 }
 
+function isEscaped(command: string, index: number): boolean {
+  let slashCount = 0;
+  for (let i = index - 1; i >= 0 && command[i] === '\\'; i -= 1) {
+    slashCount += 1;
+  }
+  return slashCount % 2 === 1;
+}
+
 /**
- * Parse a compound shell command into individual sub-commands.
+ * Parse compound shell command into top-level sub-commands.
  *
- * Splits on `&&`, `||`, `;`, and `|` operators using `shell-quote`,
- * which correctly handles quoting (single, double), escape sequences,
- * command substitutions, and other shell syntax.
- *
- * Returns an array of trimmed, non-empty sub-command strings.
- * If the command has no compound operators, returns a single-element array.
+ * Splits only on top-level `&&`, `||`, `;`, and `|` operators. Operators
+ * inside quotes, backticks, or command substitutions like `$(...)` stay part
+ * of current command so exact permission patterns still match original text.
  */
 export function parseCompoundCommand(command: string): string[] {
   const cleaned = stripRedirections(command);
-  const parsed = shellParse(cleaned);
   const commands: string[] = [];
-  let currentTokens: string[] = [];
+  let segmentStart = 0;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBacktick = false;
+  let commandSubstitutionDepth = 0;
 
-  for (const token of parsed) {
-    if (typeof token === 'object' && token !== null && 'op' in token) {
-      // Operator token — flush current command
-      if (currentTokens.length > 0) {
-        commands.push(currentTokens.join(' '));
-        currentTokens = [];
-      }
-    } else if (typeof token === 'string') {
-      currentTokens.push(token);
+  const pushSegment = (end: number): void => {
+    const segment = cleaned.slice(segmentStart, end).trim();
+    if (segment) {
+      commands.push(segment);
     }
-    // Skip other token types (glob patterns, etc.)
+  };
+
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const char = cleaned[i];
+    const nextChar = cleaned[i + 1];
+
+    if (char === '\\' && !isEscaped(cleaned, i)) {
+      i += 1;
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (char === "'" && !isEscaped(cleaned, i)) {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (inBacktick) {
+      if (char === '`' && !isEscaped(cleaned, i)) {
+        inBacktick = false;
+      }
+      continue;
+    }
+
+    if (char === "'" && !inDoubleQuote) {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (char === '`' && !inSingleQuote) {
+      inBacktick = true;
+      continue;
+    }
+
+    if (char === '"' && !isEscaped(cleaned, i)) {
+      inDoubleQuote = !inDoubleQuote;
+      continue;
+    }
+
+    if (char === '$' && nextChar === '(' && !inSingleQuote && !inBacktick) {
+      commandSubstitutionDepth += 1;
+      i += 1;
+      continue;
+    }
+
+    if (
+      char === '(' &&
+      commandSubstitutionDepth > 0 &&
+      !inSingleQuote &&
+      !inBacktick
+    ) {
+      commandSubstitutionDepth += 1;
+      continue;
+    }
+
+    if (
+      char === ')' &&
+      commandSubstitutionDepth > 0 &&
+      !inSingleQuote &&
+      !inBacktick
+    ) {
+      commandSubstitutionDepth -= 1;
+      continue;
+    }
+
+    if (
+      !inDoubleQuote &&
+      !inSingleQuote &&
+      !inBacktick &&
+      commandSubstitutionDepth === 0
+    ) {
+      const isDoubleOperator =
+        (char === '&' && nextChar === '&') ||
+        (char === '|' && nextChar === '|');
+
+      if (isDoubleOperator) {
+        pushSegment(i);
+        segmentStart = i + 2;
+        i += 1;
+        continue;
+      }
+
+      if (char === ';' || char === '|') {
+        pushSegment(i);
+        segmentStart = i + 1;
+      }
+    }
   }
 
-  // Push the last segment
-  if (currentTokens.length > 0) {
-    commands.push(currentTokens.join(' '));
-  }
+  pushSegment(cleaned.length);
 
-  const result = commands.length > 0 ? commands : [command.trim()];
-  return [...new Set(result)];
+  return commands.length > 0 ? commands : [cleaned.trim()];
 }
 
 /**

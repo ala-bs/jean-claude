@@ -34,6 +34,8 @@
     "package:win": "electron-vite build && electron-builder --win",
     "package:linux": "electron-vite build && electron-builder --linux",
     "icons": "rm -rf resources/icons && npx electron-icon-builder --output=./resources --flatten --input",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "ts-check": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
@@ -143,6 +145,7 @@
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
     "vite": "^6.4.1",
-    "vite-plugin-svgr": "^4.5.0"
+    "vite-plugin-svgr": "^4.5.0",
+    "vitest": "^3.2.4"
   }
 }
