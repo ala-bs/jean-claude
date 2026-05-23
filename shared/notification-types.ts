@@ -17,3 +17,8 @@ export interface AppNotification {
   meta: Record<string, unknown> | null;
   createdAt: string;
 }
+
+export interface TaskNotificationTarget {
+  taskId: string;
+  projectId: string;
+}

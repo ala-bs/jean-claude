@@ -3,6 +3,7 @@ import {
   Outlet,
   useNavigate,
   useRouter,
+  useRouterState,
 } from '@tanstack/react-router';
 import { useCallback, useEffect } from 'react';
 
@@ -352,6 +353,7 @@ function RootLayout() {
 
   return (
     <div className="aurora-app-bg flex h-screen w-screen overflow-hidden">
+      <NotificationTaskOpenBridge />
       <TaskMessageManager />
       <GlobalPromptFromBackModal />
       <GlobalCommands />
@@ -379,6 +381,36 @@ function RootLayout() {
       </div>
     </div>
   );
+}
+
+function NotificationTaskOpenBridge() {
+  const navigate = useNavigate();
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+
+  useEffect(() => {
+    return api.notifications.onOpenTask(({ taskId, projectId }) => {
+      const shouldStayInProjectContext =
+        pathname.startsWith('/projects/') &&
+        !pathname.startsWith('/projects/new');
+
+      if (shouldStayInProjectContext) {
+        void navigate({
+          to: '/projects/$projectId/tasks/$taskId',
+          params: { projectId, taskId },
+        });
+        return;
+      }
+
+      void navigate({
+        to: '/all/$taskId',
+        params: { taskId },
+      });
+    });
+  }, [navigate, pathname]);
+
+  return null;
 }
 
 function NotFoundRedirect() {

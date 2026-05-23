@@ -34,7 +34,10 @@ import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
-import type { AppNotification } from '@shared/notification-types';
+import type {
+  AppNotification,
+  TaskNotificationTarget,
+} from '@shared/notification-types';
 import type {
   TrackedPipeline,
   AzureBuildRun,
@@ -1051,6 +1054,9 @@ export interface Api {
     markRead: (id: string | 'all') => Promise<void>;
     delete: (id: string) => Promise<void>;
     onNew: (callback: (notification: AppNotification) => void) => () => void;
+    onOpenTask: (
+      callback: (target: TaskNotificationTarget) => void,
+    ) => () => void;
   };
   trackedPipelines: {
     list: (projectId: string) => Promise<TrackedPipeline[]>;
@@ -1604,6 +1610,7 @@ export const api: Api = hasWindowApi
         markRead: async () => {},
         delete: async () => {},
         onNew: () => () => {},
+        onOpenTask: () => () => {},
       },
       trackedPipelines: {
         list: async () => [],

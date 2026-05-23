@@ -6,7 +6,10 @@ import type {
   GlobalPrompt,
   GlobalPromptResponse,
 } from '@shared/global-prompt-types';
-import type { AppNotification } from '@shared/notification-types';
+import type {
+  AppNotification,
+  TaskNotificationTarget,
+} from '@shared/notification-types';
 import type {
   GetYamlParametersIpcParams,
   QueueBuildIpcParams,
@@ -805,6 +808,13 @@ contextBridge.exposeInMainWorld('api', {
         callback(notification);
       ipcRenderer.on('notifications:new', handler);
       return () => ipcRenderer.removeListener('notifications:new', handler);
+    },
+    onOpenTask: (callback: (target: TaskNotificationTarget) => void) => {
+      const handler = (_: unknown, target: TaskNotificationTarget) =>
+        callback(target);
+      ipcRenderer.on('notifications:open-task', handler);
+      return () =>
+        ipcRenderer.removeListener('notifications:open-task', handler);
     },
   },
   trackedPipelines: {

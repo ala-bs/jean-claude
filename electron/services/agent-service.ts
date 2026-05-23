@@ -71,6 +71,13 @@ import { assertValidWorkspacePath } from './system-project-service';
  *  field which crosses IPC to the renderer for display. */
 const queuedPromptParts = new Map<string, PromptPart[]>();
 
+const TASK_NOTIFICATION_TITLE_PREFIX: Record<TaskNotificationEvent, string> = {
+  completed: '✅',
+  'permission-required': '🔐',
+  question: '❓',
+  errored: '❌',
+};
+
 /**
  * Build the runtime MCP servers config for the Jean-Claude Agent Tools server.
  * Returns a config object that can be passed directly to the agent backend.
@@ -349,13 +356,31 @@ class AgentService {
       return;
     }
 
-    const displayName = await this.resolveTaskDisplayName(taskId, stepId);
+    const task = await TaskRepository.findById(taskId);
+    const displayName = task?.name
+      ? task.name
+      : await this.resolveTaskDisplayName(taskId, stepId);
     notificationService.notify({
       id: notificationId,
-      title,
+      title: `${TASK_NOTIFICATION_TITLE_PREFIX[event]} ${title}`,
       body: body.replace('{taskName}', displayName),
       onClick: () => {
-        if (this.isMainWindowAlive()) this.mainWindow!.focus();
+        if (!this.isMainWindowAlive()) {
+          return;
+        }
+
+        const mainWindow = this.mainWindow!;
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore();
+        }
+        mainWindow.focus();
+
+        if (task) {
+          mainWindow.webContents.send('notifications:open-task', {
+            taskId,
+            projectId: task.projectId,
+          });
+        }
       },
     });
   }
