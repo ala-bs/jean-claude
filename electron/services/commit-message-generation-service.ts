@@ -240,9 +240,23 @@ export async function generateMergeMessageForTask(
     if (result) {
       return `${result.title}\n\n${result.body}`;
     }
+
+    dbg.agent(
+      'Merge message generation returned no parsed result for task %s (backend=%s model=%s skill=%s branch=%s target=%s changedFiles=%d commitLogChars=%d diffChars=%d)',
+      task.projectId,
+      slotConfig.backend,
+      slotConfig.model,
+      slotConfig.skillName ?? '(none)',
+      task.branchName ?? 'unknown',
+      targetBranch,
+      changedFiles.length,
+      commitLog.length,
+      unifiedDiff.length,
+    );
   } catch (error) {
     dbg.agent(
-      'Failed to generate merge message for task, using fallback: %O',
+      'Failed to generate merge message for task %s, using fallback: %O',
+      task.projectId,
       error,
     );
   }
@@ -362,9 +376,20 @@ export async function generateCommitMessageForTask(
         ? `${parsed.title}\n\n${parsed.body}`
         : parsed.title;
     }
+
+    dbg.agent(
+      'Commit message generation returned no parsed result for task %s (backend=%s model=%s skill=%s stageAll=%s diffChars=%d)',
+      task.projectId,
+      slotConfig.backend,
+      slotConfig.model,
+      slotConfig.skillName ?? '(none)',
+      stageAll ? 'yes' : 'no',
+      diff.length,
+    );
   } catch (error) {
     dbg.agent(
-      'Failed to generate commit message for task, using fallback: %O',
+      'Failed to generate commit message for task %s, using fallback: %O',
+      task.projectId,
       error,
     );
   }

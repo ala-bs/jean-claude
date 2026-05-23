@@ -62,10 +62,24 @@ export async function generateText({
     }
   } catch (error) {
     if (abortController.signal.aborted) {
-      dbg.agent('generateText timed out after %dms', timeoutMs);
+      dbg.agent(
+        'generateText timed out after %dms (backend=%s model=%s skill=%s structured=%s)',
+        timeoutMs,
+        backend,
+        model,
+        skillName ?? '(none)',
+        outputSchema ? 'yes' : 'no',
+      );
       return null;
     }
-    dbg.agent('generateText failed: %O', error);
+    dbg.agent(
+      'generateText failed (backend=%s model=%s skill=%s structured=%s): %O',
+      backend,
+      model,
+      skillName ?? '(none)',
+      outputSchema ? 'yes' : 'no',
+      error,
+    );
     return null;
   } finally {
     clearTimeout(timeout);
@@ -139,16 +153,14 @@ async function generateWithOpenCode({
   abortController: AbortController;
 }): Promise<unknown | null> {
   const { client } = await getOrCreateServer();
+  const parsedModel = parseOpenCodeModel(model);
 
-  let effectivePrompt = skillName
+  const effectivePrompt = skillName
     ? `Use the "${skillName}" skill to help with this task.\n\n${prompt}`
     : prompt;
-
-  // OpenCode doesn't support native JSON schema output, so we ask for JSON
-  // in the prompt and parse it manually.
-  if (outputSchema) {
-    effectivePrompt += `\n\nRespond with ONLY a valid JSON object matching this schema (no markdown, no code fences):\n${JSON.stringify(outputSchema, null, 2)}`;
-  }
+  const promptWithStructuredFallback = outputSchema
+    ? `${effectivePrompt}\n\nRespond with ONLY a valid JSON object matching this schema (no markdown, no code fences):\n${JSON.stringify(outputSchema, null, 2)}`
+    : effectivePrompt;
 
   // Create a temporary session for this one-off generation
   const cwd = homedir();
@@ -168,31 +180,38 @@ async function generateWithOpenCode({
   abortController.signal.addEventListener('abort', onAbort, { once: true });
 
   try {
-    const parsedModel = parseOpenCodeModel(model);
     const response = await client.session.prompt({
       sessionID: sessionId,
       directory: cwd,
-      parts: [{ type: 'text', text: effectivePrompt }],
+      parts: [{ type: 'text', text: promptWithStructuredFallback }],
+      ...(outputSchema && {
+        format: {
+          type: 'json_schema' as const,
+          schema: outputSchema,
+          retryCount: 1,
+        },
+      }),
       ...(parsedModel ? { model: parsedModel } : {}),
     });
 
-    const textParts = (response.data?.parts ?? [])
-      .filter((part) => part.type === 'text')
-      .map((part) => (part as { text?: string }).text?.trim() ?? '')
-      .filter(Boolean)
-      .join('\n\n')
-      .trim();
-
-    if (!textParts) {
-      return null;
-    }
-
-    // If we requested structured output, parse the JSON response
-    if (outputSchema) {
-      return parseJsonResponse(textParts);
-    }
-
-    return textParts;
+    return extractOpenCodeResponseOutput({
+      response,
+      outputSchema,
+      sessionId,
+      model,
+      skillName,
+    });
+  } catch (error) {
+    dbg.agent(
+      'OpenCode generation failed (session=%s model=%s resolvedModel=%O skill=%s structured=%s): %O',
+      sessionId,
+      model,
+      parsedModel ?? null,
+      skillName ?? '(none)',
+      outputSchema ? 'yes' : 'no',
+      error,
+    );
+    throw error;
   } finally {
     abortController.signal.removeEventListener('abort', onAbort);
 
@@ -207,6 +226,65 @@ async function generateWithOpenCode({
         );
       });
   }
+}
+
+function extractOpenCodeResponseOutput({
+  response,
+  outputSchema,
+  sessionId,
+  model,
+  skillName,
+}: {
+  response: {
+    data?: {
+      info?: { structured?: unknown };
+      parts?: Array<{ type?: string; text?: string }>;
+    };
+  };
+  outputSchema?: Record<string, unknown>;
+  sessionId: string;
+  model: string;
+  skillName?: string | null;
+}): unknown | null {
+  if (outputSchema && response.data?.info?.structured !== undefined) {
+    return response.data.info.structured;
+  }
+
+  const textParts = (response.data?.parts ?? [])
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text?.trim() ?? '')
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+
+  if (!textParts) {
+    dbg.agent(
+      'OpenCode generation returned no usable output (session=%s model=%s skill=%s structured=%s parts=%d)',
+      sessionId,
+      model,
+      skillName ?? '(none)',
+      outputSchema ? 'yes' : 'no',
+      response.data?.parts?.length ?? 0,
+    );
+    return null;
+  }
+
+  if (outputSchema) {
+    dbg.agent(
+      'OpenCode structured output missing; falling back to JSON text parsing (session=%s model=%s skill=%s preview=%s)',
+      sessionId,
+      model,
+      skillName ?? '(none)',
+      summarizeForDebug(textParts),
+    );
+    return parseJsonResponse(textParts);
+  }
+
+  return textParts;
+}
+
+function summarizeForDebug(text: string, maxLength = 240): string {
+  return text.replace(/\s+/g, ' ').slice(0, maxLength);
 }
 
 /**
@@ -232,8 +310,13 @@ function parseJsonResponse(text: string): unknown | null {
 
   try {
     return JSON.parse(jsonStr);
-  } catch {
-    dbg.agent('Failed to parse JSON from response: %s', jsonStr);
+  } catch (error) {
+    dbg.agent(
+      'Failed to parse JSON from response (length=%d preview=%s): %O',
+      jsonStr.length,
+      summarizeForDebug(jsonStr),
+      error,
+    );
     return null;
   }
 }
