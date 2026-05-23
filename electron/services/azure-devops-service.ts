@@ -2241,6 +2241,40 @@ export async function getWorkItem(params: {
   };
 }
 
+export async function updateWorkItemState(params: {
+  providerId: string;
+  workItemId: number;
+  state: string;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const patchOps = [
+    {
+      op: 'add',
+      path: '/fields/System.State',
+      value: params.state,
+    },
+  ];
+
+  const url = `https://dev.azure.com/${orgName}/_apis/wit/workitems/${params.workItemId}?api-version=7.0`;
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json-patch+json',
+    },
+    body: JSON.stringify(patchOps),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(
+      `Failed to update work item ${params.workItemId} state to ${params.state}: ${error}`,
+    );
+  }
+}
+
 export async function activateWorkItem(params: {
   providerId: string;
   workItemId: number;

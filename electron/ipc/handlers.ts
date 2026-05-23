@@ -1859,6 +1859,18 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:updateWorkItemState',
+    async (
+      _event,
+      params: { providerId: string; workItemId: number; state: string },
+    ) => {
+      const { updateWorkItemState } =
+        await import('../services/azure-devops-service');
+      return updateWorkItemState(params);
+    },
+  );
+
+  ipcMain.handle(
     'azureDevOps:getRelatedTestCases',
     async (
       _event,

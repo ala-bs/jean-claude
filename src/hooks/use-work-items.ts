@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   api,
@@ -7,6 +7,7 @@ import {
   type AzureDevOpsIteration,
   type WorkItemComment,
 } from '@/lib/api';
+import { useToastStore } from '@/stores/toasts';
 
 export function useWorkItems(params: {
   providerId: string;
@@ -184,5 +185,50 @@ export function useCurrentAzureUser(providerId: string | null) {
     queryFn: () => api.azureDevOps.getCurrentUser(providerId!),
     enabled: !!providerId,
     staleTime: 5 * 60_000, // 5 minutes - user info doesn't change often
+  });
+}
+
+export function useUpdateWorkItemState() {
+  const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+
+  return useMutation({
+    mutationFn: (params: {
+      providerId: string;
+      workItemId: number;
+      state: string;
+    }) => api.azureDevOps.updateWorkItemState(params),
+    onMutate: async (variables) => {
+      const queryKey = [
+        'work-item',
+        variables.providerId,
+        variables.workItemId,
+      ];
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<AzureDevOpsWorkItem | null>(
+        queryKey,
+      );
+      if (previous) {
+        queryClient.setQueryData<AzureDevOpsWorkItem>(queryKey, {
+          ...previous,
+          fields: { ...previous.fields, state: variables.state },
+        });
+      }
+      return { previous, queryKey };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous);
+      }
+      addToast({ message: 'Failed to update work item status', type: 'error' });
+    },
+    onSettled: (_data, _error, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ['work-item', variables.providerId, variables.workItemId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['work-items'],
+      });
+    },
   });
 }

@@ -3,6 +3,7 @@ import {
   Bug,
   BookOpen,
   CheckSquare,
+  ChevronDown,
   ChevronRight,
   ExternalLink,
   FileText,
@@ -11,15 +12,17 @@ import {
   MessagesSquare,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Chip } from '@/common/ui/chip';
+import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProject } from '@/hooks/use-projects';
 import {
   useRelatedTestCases,
+  useUpdateWorkItemState,
   useWorkItemById,
   useWorkItemComments,
 } from '@/hooks/use-work-items';
@@ -52,23 +55,91 @@ function WorkItemTypeIcon({
   }
 }
 
-function StateBadge({ state }: { state: string }) {
-  let color: 'neutral' | 'blue' | 'yellow' | 'green' = 'neutral';
-  let ringClass = '';
+const WORK_ITEM_STATES = ['New', 'Active', 'Resolved', 'Done', 'Closed'];
+
+function getStateColor(state: string): {
+  color: 'neutral' | 'blue' | 'yellow' | 'green';
+  ringClass: string;
+} {
   if (state === 'Active') {
-    color = 'blue';
-    ringClass = 'ring-1 ring-acc/30';
+    return { color: 'blue', ringClass: 'ring-1 ring-acc/30' };
   } else if (state === 'New') {
-    color = 'yellow';
-    ringClass = 'ring-1 ring-status-run/30';
+    return { color: 'yellow', ringClass: 'ring-1 ring-status-run/30' };
   } else if (state === 'Resolved' || state === 'Done' || state === 'Closed') {
-    color = 'green';
-    ringClass = 'ring-1 ring-status-done/30';
+    return { color: 'green', ringClass: 'ring-1 ring-status-done/30' };
   }
+  return { color: 'neutral', ringClass: '' };
+}
+
+function StateBadge({ state }: { state: string }) {
+  const { color, ringClass } = getStateColor(state);
   return (
     <Chip size="sm" color={color} className={ringClass}>
       {state}
     </Chip>
+  );
+}
+
+function EditableStateBadge({
+  state,
+  providerId,
+  workItemId,
+}: {
+  state: string;
+  providerId: string;
+  workItemId: number;
+}) {
+  const updateState = useUpdateWorkItemState();
+  const { color, ringClass } = getStateColor(state);
+  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
+
+  const handleSelect = useCallback(
+    (s: string) => {
+      dropdownRef.current?.toggle();
+      if (s !== state) {
+        updateState.mutate({ providerId, workItemId, state: s });
+      }
+    },
+    [state, providerId, workItemId, updateState],
+  );
+
+  return (
+    <Dropdown
+      dropdownRef={dropdownRef}
+      trigger={
+        <button
+          type="button"
+          className="flex cursor-pointer items-center gap-1"
+        >
+          <Chip
+            size="sm"
+            color={color}
+            className={clsx(
+              ringClass,
+              '[&>span]:flex [&>span]:items-center [&>span]:gap-1',
+            )}
+            icon={
+              updateState.isPending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : undefined
+            }
+          >
+            {state}
+            <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
+          </Chip>
+        </button>
+      }
+    >
+      {WORK_ITEM_STATES.map((s) => (
+        <DropdownItem
+          key={s}
+          onClick={() => handleSelect(s)}
+          checked={s === state}
+        >
+          {s}
+        </DropdownItem>
+      ))}
+    </Dropdown>
   );
 }
 
@@ -189,7 +260,15 @@ export function WorkItemDetails({
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <StateBadge state={fields.state} />
+          {providerId ? (
+            <EditableStateBadge
+              state={fields.state}
+              providerId={providerId}
+              workItemId={workItem.id}
+            />
+          ) : (
+            <StateBadge state={fields.state} />
+          )}
           <div className="flex items-center gap-1.5 text-xs">
             <span className="text-ink-3">Assigned to:</span>
             <span className="text-ink-1">

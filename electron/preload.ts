@@ -233,6 +233,11 @@ contextBridge.exposeInMainWorld('api', {
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
     getWorkItemById: (params: { providerId: string; workItemId: number }) =>
       ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    updateWorkItemState: (params: {
+      providerId: string;
+      workItemId: number;
+      state: string;
+    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemState', params),
     getRelatedTestCases: (params: {
       providerId: string;
       projectName: string;

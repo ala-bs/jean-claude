@@ -541,6 +541,11 @@ export interface Api {
       providerId: string;
       workItemId: number;
     }) => Promise<AzureDevOpsWorkItem | null>;
+    updateWorkItemState: (params: {
+      providerId: string;
+      workItemId: number;
+      state: string;
+    }) => Promise<void>;
     getRelatedTestCases: (params: {
       providerId: string;
       projectName: string;
@@ -1316,6 +1321,9 @@ export const api: Api = hasWindowApi
         },
         queryWorkItems: async () => [],
         getWorkItemById: async () => null,
+        updateWorkItemState: async () => {
+          throw new Error('API not available');
+        },
         getRelatedTestCases: async () => [],
         getWorkItemComments: async () => [],
         getIterations: async () => [],
