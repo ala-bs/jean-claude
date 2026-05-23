@@ -205,11 +205,11 @@ export function Header() {
       </div>
 
       {/* CENTER — Activity (absolutely centered) */}
-      <div
-        className="pointer-events-none absolute inset-0 flex items-center justify-center"
-        style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-      >
-        <div className="pointer-events-auto">
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div
+          className="pointer-events-auto"
+          style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+        >
           <ActivityButton />
         </div>
       </div>
