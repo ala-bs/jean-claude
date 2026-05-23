@@ -16,5 +16,5 @@ function AllNoteEditor() {
     FEED_NAVIGATION_DEBOUNCE_MS,
   );
 
-  return <FeedNoteEditor noteId={debouncedNoteId} />;
+  return <FeedNoteEditor key={debouncedNoteId} noteId={debouncedNoteId} />;
 }

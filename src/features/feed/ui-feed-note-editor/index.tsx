@@ -36,6 +36,13 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
     }
   }, [note, hasInitialized]);
 
+  // Keep refs for unmount flush and auto-save
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  const noteIdRef = useRef(noteId);
+  noteIdRef.current = noteId;
+
   // Auto-save via debounced value
   const debouncedValue = useDebouncedValue(value, 500);
 
@@ -44,16 +51,9 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
     const trimmed = debouncedValue.trim();
     if (trimmed && trimmed !== lastSavedRef.current) {
       lastSavedRef.current = trimmed;
-      mutateRef.current({ id: noteId, content: trimmed });
+      mutateRef.current({ id: noteIdRef.current, content: trimmed });
     }
-  }, [debouncedValue, hasInitialized, noteId]);
-
-  // Keep refs for unmount flush
-  const valueRef = useRef(value);
-  valueRef.current = value;
-
-  const noteIdRef = useRef(noteId);
-  noteIdRef.current = noteId;
+  }, [debouncedValue, hasInitialized]);
 
   // Flush pending save on unmount only
   useEffect(() => {
