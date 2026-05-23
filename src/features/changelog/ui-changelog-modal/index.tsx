@@ -14,15 +14,23 @@ const typeIcons = {
 } as const;
 
 const typeColors = {
-  feature: 'text-blue-400',
-  fix: 'text-amber-400',
-  improvement: 'text-emerald-400',
+  feature: 'text-blue-300',
+  fix: 'text-amber-300',
+  improvement: 'text-emerald-300',
 } as const;
 
 function EntryIcon({ type }: { type: ChangelogEntry['type'] }) {
   const Icon = typeIcons[type];
   const color = typeColors[type];
   return <Icon className={`h-4 w-4 shrink-0 ${color}`} aria-hidden />;
+}
+
+function formatScope(scope: string) {
+  return scope
+    .split(/[-\s]+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 export function ChangelogModal() {
@@ -129,8 +137,8 @@ export function ChangelogModal() {
   if (!isOpen || changelog.length === 0) return null;
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Changelog" size="lg">
-      <div className="-m-4 flex" style={{ height: '60vh' }}>
+    <Modal isOpen={isOpen} onClose={handleClose} title="Changelog" size="xl">
+      <div className="-m-4 flex" style={{ height: '68vh' }}>
         {/* Sidebar — day list */}
         <nav className="border-glass-border flex w-40 shrink-0 flex-col overflow-y-auto border-r py-2">
           {changelog.map((day) => (
@@ -174,9 +182,31 @@ export function ChangelogModal() {
                 </h3>
                 <ul className="space-y-2">
                   {day.entries.map((entry, i) => (
-                    <li key={i} className="flex items-start gap-2.5">
-                      <EntryIcon type={entry.type} />
-                      <span className="text-ink-1 text-sm">{entry.text}</span>
+                    <li
+                      key={i}
+                      className="border-glass-border bg-glass-light rounded-xl border p-3"
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <EntryIcon type={entry.type} />
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="border-glass-border bg-glass-medium text-ink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold tracking-[0.22em] uppercase shadow-sm">
+                              {formatScope(entry.scope)}
+                            </span>
+                          </div>
+                          <ul className="space-y-1">
+                            {entry.bullets.map((bullet, bulletIndex) => (
+                              <li
+                                key={`${entry.scope}-${entry.type}-${bulletIndex}`}
+                                className="text-ink-1 flex gap-2 text-sm leading-6"
+                              >
+                                <span className="text-ink-3 mt-0.5">-</span>
+                                <span>{bullet}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
                     </li>
                   ))}
                 </ul>

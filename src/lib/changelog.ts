@@ -1,8 +1,9 @@
 export type ChangelogEntryType = 'feature' | 'fix' | 'improvement';
 
 export interface ChangelogEntry {
-  text: string;
   type: ChangelogEntryType;
+  scope: string;
+  bullets: string[];
 }
 
 export interface ChangelogDay {
@@ -40,23 +41,58 @@ function parseEntryType(tag: string): ChangelogEntryType {
   return 'improvement';
 }
 
-function parseChangelogFile(content: string): ChangelogEntry[] {
-  return content
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('- '))
-    .map((line) => {
-      const text = line.slice(2); // remove "- "
-      // Match optional [type] prefix
-      const tagMatch = text.match(/^\[(\w+)]\s*(.+)$/);
-      if (tagMatch) {
-        return {
-          type: parseEntryType(tagMatch[1]),
-          text: tagMatch[2],
-        };
-      }
-      return { type: 'improvement' as const, text };
-    });
+function normalizeScope(scope: string | undefined): string {
+  const trimmed = scope?.trim();
+  if (!trimmed) return 'general';
+  return trimmed;
+}
+
+function parseTopLevelEntry(line: string): {
+  type: ChangelogEntryType;
+  scope: string;
+  inlineBullet: string | null;
+} | null {
+  const match = line.match(/^-\s+\[(\w+)\](?:\s+\[([^\]]+)\])?\s*(.*)$/);
+  if (!match) return null;
+
+  const [, typeTag, scopeTag, rest] = match;
+  const inlineBullet = rest.trim();
+  return {
+    type: parseEntryType(typeTag),
+    scope: normalizeScope(scopeTag),
+    inlineBullet: inlineBullet.length > 0 ? inlineBullet : null,
+  };
+}
+
+function parseNestedBullet(line: string): string | null {
+  const match = line.match(/^\s+-\s+(.+)$/);
+  if (!match) return null;
+  return match[1].trim();
+}
+
+export function parseChangelogFile(content: string): ChangelogEntry[] {
+  const entries: ChangelogEntry[] = [];
+  let currentEntry: ChangelogEntry | null = null;
+
+  for (const rawLine of content.split('\n')) {
+    const topLevelEntry = parseTopLevelEntry(rawLine);
+    if (topLevelEntry) {
+      currentEntry = {
+        type: topLevelEntry.type,
+        scope: topLevelEntry.scope,
+        bullets: topLevelEntry.inlineBullet ? [topLevelEntry.inlineBullet] : [],
+      };
+      entries.push(currentEntry);
+      continue;
+    }
+
+    const nestedBullet = parseNestedBullet(rawLine);
+    if (nestedBullet && currentEntry) {
+      currentEntry.bullets.push(nestedBullet);
+    }
+  }
+
+  return entries.filter((entry) => entry.bullets.length > 0);
 }
 
 function buildChangelog(): ChangelogDay[] {

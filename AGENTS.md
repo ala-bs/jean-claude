@@ -257,23 +257,39 @@ When making user-facing changes (new features, bug fixes, UI improvements), upda
 1. **Check the current date** — run `date +%Y-%m-%d` to get today's date. Do NOT assume the year; always verify via the shell before creating or naming changelog files.
 2. If today's date already has a file `changelogs/YYYY-MM-DD.md`, append to it
 3. Otherwise, create a new file `changelogs/YYYY-MM-DD.md`
-4. Each line is a markdown list item with a `[type]` prefix: `[feature]`, `[fix]`, or `[improvement]`
-5. Keep entry text concise (one sentence)
+4. Keep **one top-level changelog entry per branch/work item**. If you make more changes for the same branch later (even across multiple agent sessions), update the existing entry instead of adding a second top-level entry for that same work.
+5. Each top-level entry must start with `[type]` and `[scope]`: `[feature]`, `[fix]`, or `[improvement]`, plus a concise scope like `[project]`, `[task details]`, `[settings]`, or `[pr details]`
+6. Under each top-level entry, add short nested bullet points for the user-visible details. Prefer a few concise bullets over one long sentence.
 
 Example (`changelogs/2026-06-01.md`):
 ```md
-- [feature] Added dark mode toggle in settings
-- [fix] Fixed sidebar not collapsing on narrow screens
+- [feature] [settings]
+  - Added dark mode toggle in Settings > General
+  - Saved theme preference between app launches
+- [fix] [project]
+  - Fixed sidebar layout collapsing on narrow project views
 ```
 
 **Writing good entries:**
 
+- Merge follow-up tweaks for same branch into existing top-level entry instead of creating another one
 - Be concise but include actionable details the user needs
+- Keep scopes short and product-facing
+- Keep nested bullets focused on visible outcomes, not implementation details
 - Mention keybindings if the feature has one (e.g. "⌘K to toggle")
 - Mention where to find it (e.g. "via command palette", "in Settings > General")
 - Mention the trigger or context (e.g. "on startup", "when hovering a task")
-- Bad: `Added changelog modal` — user doesn't know how to access it
-- Good: `Added "Changelog" modal — opens on startup when there are new changes, or anytime via ⌘P → "Changelog"`
+- Bad:
+  ```md
+  - [feature] [changelog]
+    - Improved changelog
+  ```
+- Good:
+  ```md
+  - [feature] [changelog]
+    - Added "Changelog" modal that opens on startup when new changes land
+    - Added command palette action so you can reopen it anytime
+  ```
 
 The changelog modal shows on startup only when the content hash differs from last seen. Persistence via `changelog-store` in localStorage.
 
