@@ -28,6 +28,7 @@ import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import {
   type InteractionMode,
+  type TaskNotificationEvent,
   type ReviewStepMeta,
   isSkillCreationStepMeta,
 } from '@shared/types';
@@ -43,6 +44,7 @@ import {
   AgentMessageRepository,
   RawMessageRepository,
 } from '../database/repositories';
+import { SettingsRepository } from '../database/repositories/settings';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 import { dbg } from '../lib/debug';
 import { pathExists } from '../lib/fs';
@@ -303,6 +305,61 @@ class AgentService {
     }
   }
 
+  private async shouldNotifyTaskEvent(
+    event: TaskNotificationEvent,
+  ): Promise<boolean> {
+    const settings = await SettingsRepository.get('taskEventNotifications');
+    const mode = settings.modes[event];
+
+    if (mode === 'disabled') {
+      return false;
+    }
+
+    if (
+      mode === 'background' &&
+      this.isMainWindowAlive() &&
+      this.mainWindow!.isFocused()
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private async notifyTaskEvent({
+    taskId,
+    stepId,
+    event,
+    notificationId,
+    title,
+    body,
+  }: {
+    taskId: string;
+    stepId: string;
+    event: TaskNotificationEvent;
+    notificationId: string;
+    title: string;
+    body: string;
+  }): Promise<void> {
+    if (!this.isMainWindowAlive()) {
+      return;
+    }
+
+    if (!(await this.shouldNotifyTaskEvent(event))) {
+      return;
+    }
+
+    const displayName = await this.resolveTaskDisplayName(taskId, stepId);
+    notificationService.notify({
+      id: notificationId,
+      title,
+      body: body.replace('{taskName}', displayName),
+      onClick: () => {
+        if (this.isMainWindowAlive()) this.mainWindow!.focus();
+      },
+    });
+  }
+
   private async handleAutoStartFailure(
     stepId: string,
     error: unknown,
@@ -324,6 +381,14 @@ class AgentService {
         type: 'status',
         status: 'errored',
         error: `Auto-start failed: ${errorMessage}`,
+      });
+      await this.notifyTaskEvent({
+        taskId: step.taskId,
+        stepId,
+        event: 'errored',
+        notificationId: `${step.taskId}:auto-start-error:${stepId}`,
+        title: 'Task Failed',
+        body: 'Task "{taskName}" encountered an error',
       });
     } catch (handlerError) {
       dbg.agent(
@@ -623,18 +688,14 @@ class AgentService {
           ...request,
         });
 
-        // Send desktop notification if window not focused
-        if (this.isMainWindowAlive() && !this.mainWindow!.isFocused()) {
-          const displayName = await this.resolveTaskDisplayName(taskId, stepId);
-          notificationService.notify({
-            id: `${taskId}:permission`,
-            title: 'Permission Required',
-            body: `Task "${displayName}" needs approval for ${request.toolName}`,
-            onClick: () => {
-              if (this.isMainWindowAlive()) this.mainWindow!.focus();
-            },
-          });
-        }
+        await this.notifyTaskEvent({
+          taskId,
+          stepId,
+          event: 'permission-required',
+          notificationId: `${taskId}:permission`,
+          title: 'Permission Required',
+          body: `Task "{taskName}" needs approval for ${request.toolName}`,
+        });
         break;
       }
 
@@ -669,18 +730,14 @@ class AgentService {
           questions,
         });
 
-        // Send desktop notification if window not focused
-        if (this.isMainWindowAlive() && !this.mainWindow!.isFocused()) {
-          const displayName = await this.resolveTaskDisplayName(taskId, stepId);
-          notificationService.notify({
-            id: `${taskId}:question`,
-            title: 'Question from Agent',
-            body: `Task "${displayName}" has a question`,
-            onClick: () => {
-              if (this.isMainWindowAlive()) this.mainWindow!.focus();
-            },
-          });
-        }
+        await this.notifyTaskEvent({
+          taskId,
+          stepId,
+          event: 'question',
+          notificationId: `${taskId}:question`,
+          title: 'Question from Agent',
+          body: 'Task "{taskName}" has a question',
+        });
         break;
       }
 
@@ -774,18 +831,17 @@ class AgentService {
           });
         }
 
-        // Notify on completion
-        if (this.isMainWindowAlive() && !this.mainWindow!.isFocused()) {
-          const displayName = await this.resolveTaskDisplayName(taskId, stepId);
-          notificationService.notify({
-            id: `${taskId}:complete`,
-            title: status === 'completed' ? 'Task Completed' : 'Task Failed',
-            body: `Task "${displayName}" ${status === 'completed' ? 'finished successfully' : 'encountered an error'}`,
-            onClick: () => {
-              if (this.isMainWindowAlive()) this.mainWindow!.focus();
-            },
-          });
-        }
+        await this.notifyTaskEvent({
+          taskId,
+          stepId,
+          event: status === 'completed' ? 'completed' : 'errored',
+          notificationId: `${taskId}:complete`,
+          title: status === 'completed' ? 'Task Completed' : 'Task Failed',
+          body:
+            status === 'completed'
+              ? 'Task "{taskName}" finished successfully'
+              : 'Task "{taskName}" encountered an error',
+        });
         break;
       }
 
@@ -807,6 +863,14 @@ class AgentService {
           type: 'status',
           status: 'errored',
           error: event.error,
+        });
+        await this.notifyTaskEvent({
+          taskId,
+          stepId,
+          event: 'errored',
+          notificationId: `${taskId}:error`,
+          title: 'Task Failed',
+          body: 'Task "{taskName}" encountered an error',
         });
         break;
       }
@@ -939,6 +1003,14 @@ class AgentService {
           type: 'status',
           status: 'errored',
           error: errorMessage,
+        });
+        await this.notifyTaskEvent({
+          taskId: session.taskId,
+          stepId,
+          event: 'errored',
+          notificationId: `${session.taskId}:start-error:${stepId}`,
+          title: 'Task Failed',
+          body: 'Task "{taskName}" encountered an error',
         });
       } finally {
         this.sessions.delete(stepId);
@@ -1161,6 +1233,14 @@ class AgentService {
         type: 'status',
         status: 'errored',
         error: errorMessage,
+      });
+      await this.notifyTaskEvent({
+        taskId,
+        stepId,
+        event: 'errored',
+        notificationId: `${taskId}:send-error:${stepId}`,
+        title: 'Task Failed',
+        body: 'Task "{taskName}" encountered an error',
       });
     } finally {
       this.sessions.delete(stepId);

@@ -557,6 +557,28 @@ export interface SummaryModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
+export type TaskNotificationEvent =
+  | 'completed'
+  | 'permission-required'
+  | 'question'
+  | 'errored';
+
+export type TaskNotificationMode = 'disabled' | 'background' | 'always';
+
+export interface TaskEventNotificationsSetting {
+  modes: Record<TaskNotificationEvent, TaskNotificationMode>;
+}
+
+export const DEFAULT_TASK_NOTIFICATION_MODES: Record<
+  TaskNotificationEvent,
+  TaskNotificationMode
+> = {
+  completed: 'background',
+  'permission-required': 'background',
+  question: 'background',
+  errored: 'background',
+};
+
 export interface AiSkillSlotConfig {
   backend: AgentBackendType;
   model: string;
@@ -638,6 +660,33 @@ function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
   if (!obj.models || typeof obj.models !== 'object') return false;
   const models = obj.models as Record<string, unknown>;
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+}
+
+const VALID_TASK_NOTIFICATION_EVENTS: TaskNotificationEvent[] = [
+  'completed',
+  'permission-required',
+  'question',
+  'errored',
+];
+
+const VALID_TASK_NOTIFICATION_MODES: TaskNotificationMode[] = [
+  'disabled',
+  'background',
+  'always',
+];
+
+function isTaskEventNotificationsSetting(
+  v: unknown,
+): v is TaskEventNotificationsSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  if (!obj.modes || typeof obj.modes !== 'object') return false;
+  const modes = obj.modes as Record<string, unknown>;
+  return VALID_TASK_NOTIFICATION_EVENTS.every((event) =>
+    VALID_TASK_NOTIFICATION_MODES.includes(
+      modes[event] as TaskNotificationMode,
+    ),
+  );
 }
 
 const VALID_SLOT_KEYS: AiSkillSlotKey[] = [
@@ -767,6 +816,12 @@ export const SETTINGS_DEFINITIONS = {
       },
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
+  },
+  taskEventNotifications: {
+    defaultValue: {
+      modes: DEFAULT_TASK_NOTIFICATION_MODES,
+    } as TaskEventNotificationsSetting,
+    validate: isTaskEventNotificationsSetting,
   },
   aiSkillSlots: {
     defaultValue: {} as AiSkillSlotsSetting,

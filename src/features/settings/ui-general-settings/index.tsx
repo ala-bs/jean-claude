@@ -2,6 +2,7 @@ import {
   Check,
   FolderOpen,
   GitBranch,
+  Bell,
   Search,
   Star,
   Trash2,
@@ -25,9 +26,11 @@ import {
   getEditorLabel,
   useBackendsSetting,
   useEditorSetting,
+  useTaskEventNotificationsSetting,
   useSummaryModelsSetting,
   useUpdateBackendsSetting,
   useUpdateEditorSetting,
+  useUpdateTaskEventNotificationsSetting,
   useUpdateSummaryModelsSetting,
   useAvailableEditors,
   useUsageDisplaySetting,
@@ -35,8 +38,62 @@ import {
 } from '@/hooks/use-settings';
 import { api, type NonExistentClaudeProject } from '@/lib/api';
 import type { AgentBackendType } from '@shared/agent-backend-types';
-import { PRESET_EDITORS } from '@shared/types';
+import {
+  DEFAULT_TASK_NOTIFICATION_MODES,
+  PRESET_EDITORS,
+  type TaskNotificationEvent,
+  type TaskNotificationMode,
+} from '@shared/types';
 import { USAGE_PROVIDERS, type UsageProviderType } from '@shared/usage-types';
+
+const TASK_NOTIFICATION_OPTIONS: Array<{
+  event: TaskNotificationEvent;
+  label: string;
+  description: string;
+}> = [
+  {
+    event: 'completed',
+    label: 'Task done',
+    description: 'Notify when a task finishes successfully.',
+  },
+  {
+    event: 'permission-required',
+    label: 'Waiting for permission',
+    description: 'Notify when an agent pauses for tool approval.',
+  },
+  {
+    event: 'question',
+    label: 'Waiting for answers',
+    description: 'Notify when an agent asks you a question.',
+  },
+  {
+    event: 'errored',
+    label: 'Task error',
+    description: 'Notify when a task stops because of an error.',
+  },
+];
+
+const TASK_NOTIFICATION_MODES: Array<{
+  value: TaskNotificationMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'always',
+    label: 'Always',
+    description: 'Show task notifications even while app window is focused.',
+  },
+  {
+    value: 'background',
+    label: 'When not focused',
+    description: 'Only show task notifications when app window is not focused.',
+  },
+  {
+    value: 'disabled',
+    label: 'Disabled',
+    description: 'Never show desktop notifications for task events.',
+  },
+];
 
 export function GeneralSettings() {
   const { data: editorSetting, isLoading } = useEditorSetting();
@@ -170,6 +227,12 @@ export function GeneralSettings() {
       {/* Divider */}
       <div className="border-line-soft my-8 border-t" />
 
+      {/* Task Notifications */}
+      <TaskNotificationSettings />
+
+      {/* Divider */}
+      <div className="border-line-soft my-8 border-t" />
+
       {/* Usage Display */}
       <UsageDisplaySettings />
 
@@ -260,6 +323,108 @@ function BackendsSettings() {
                   {dflt ? 'Default' : 'Set as default'}
                 </Button>
               )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TaskNotificationSettings() {
+  const { data: taskNotificationsSetting } = useTaskEventNotificationsSetting();
+  const updateTaskNotifications = useUpdateTaskEventNotificationsSetting();
+
+  const modes =
+    taskNotificationsSetting?.modes ?? DEFAULT_TASK_NOTIFICATION_MODES;
+
+  const handleModeChange = ({
+    event,
+    mode,
+  }: {
+    event: TaskNotificationEvent;
+    mode: TaskNotificationMode;
+  }) => {
+    updateTaskNotifications.mutate({
+      modes: {
+        ...modes,
+        [event]: mode,
+      },
+    });
+  };
+
+  return (
+    <div>
+      <div className="flex items-start gap-3">
+        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+          <Bell className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-ink-1 text-lg font-semibold">
+            Task Notifications
+          </h2>
+          <p className="text-ink-3 mt-1 text-sm">
+            Choose delivery mode for each kind of task notification.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {TASK_NOTIFICATION_OPTIONS.map((option) => {
+          const selectedMode = modes[option.event];
+
+          return (
+            <div
+              key={option.event}
+              className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3"
+            >
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0 lg:max-w-[260px]">
+                  <div className="text-ink-1 text-sm font-medium">
+                    {option.label}
+                  </div>
+                  <div className="text-ink-3 mt-1 text-xs">
+                    {option.description}
+                  </div>
+                </div>
+
+                <div
+                  className="flex flex-wrap gap-2 lg:justify-end"
+                  role="radiogroup"
+                  aria-label={`${option.label} notification mode`}
+                >
+                  {TASK_NOTIFICATION_MODES.map((modeOption) => {
+                    const isSelected = selectedMode === modeOption.value;
+
+                    return (
+                      <label
+                        key={modeOption.value}
+                        className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors ${
+                          isSelected
+                            ? 'border-acc bg-acc/12 text-acc-ink'
+                            : 'border-line-soft bg-bg-0 text-ink-2 hover:bg-glass-medium'
+                        }`}
+                        title={modeOption.description}
+                      >
+                        <input
+                          type="radio"
+                          name={`task-notification-mode-${option.event}`}
+                          value={modeOption.value}
+                          checked={isSelected}
+                          onChange={() =>
+                            handleModeChange({
+                              event: option.event,
+                              mode: modeOption.value,
+                            })
+                          }
+                          className="border-glass-border bg-glass-medium text-acc focus:ring-acc/30 h-3.5 w-3.5"
+                        />
+                        <span className="font-medium">{modeOption.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           );
         })}

@@ -10,6 +10,7 @@ import type {
   EditorSetting,
   PromptSnippetsSetting,
   SummaryModelsSetting,
+  TaskEventNotificationsSetting,
   UsageDisplaySetting,
 } from '@shared/types';
 import { PRESET_EDITORS } from '@shared/types';
@@ -116,6 +117,39 @@ export function useUpdateSummaryModelsSetting() {
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['settings', 'summaryModels'],
+      });
+    },
+  });
+}
+
+export function useTaskEventNotificationsSetting() {
+  return useSetting('taskEventNotifications');
+}
+
+export function useUpdateTaskEventNotificationsSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: TaskEventNotificationsSetting) =>
+      api.settings.set('taskEventNotifications', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'taskEventNotifications'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous =
+        queryClient.getQueryData<TaskEventNotificationsSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ['settings', 'taskEventNotifications'],
+          context.previous,
+        );
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'taskEventNotifications'],
       });
     },
   });
