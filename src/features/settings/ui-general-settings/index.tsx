@@ -215,15 +215,6 @@ export function GeneralSettings() {
       {/* Divider */}
       <div className="border-line-soft my-8 border-t" />
 
-      {/* Agent Backends */}
-      <BackendsSettings />
-
-      {/* Divider */}
-      <div className="border-line-soft my-8 border-t" />
-
-      {/* Template summary models */}
-      <SummaryModelsSettings />
-
       {/* Divider */}
       <div className="border-line-soft my-8 border-t" />
 
@@ -251,7 +242,7 @@ export function GeneralSettings() {
   );
 }
 
-function BackendsSettings() {
+export function BackendsSettings() {
   const { data: backendsSetting } = useBackendsSetting();
   const updateBackends = useUpdateBackendsSetting();
 
@@ -481,7 +472,7 @@ function UsageDisplaySettings() {
   );
 }
 
-function SummaryModelsSettings() {
+export function SummaryModelsSettings() {
   const { data: summaryModelsSetting } = useSummaryModelsSetting();
   const updateSummaryModels = useUpdateSummaryModelsSetting();
   const { data: claudeDynamicModels } = useBackendModels('claude-code');

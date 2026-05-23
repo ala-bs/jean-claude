@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { api } from '@/lib/api';
 import { BUILTIN_SNIPPETS, BUILTIN_SNIPPET_IDS } from '@/lib/builtin-snippets';
 import type {
+  BackendModelPresetsSetting,
   AiSkillSlotsSetting,
   AppSettings,
   BackendsSetting,
@@ -117,6 +118,23 @@ export function useUpdateSummaryModelsSetting() {
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['settings', 'summaryModels'],
+      });
+    },
+  });
+}
+
+export function useBackendModelPresetsSetting() {
+  return useSetting('backendModelPresets');
+}
+
+export function useUpdateBackendModelPresetsSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: BackendModelPresetsSetting) =>
+      api.settings.set('backendModelPresets', value),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'backendModelPresets'],
       });
     },
   });

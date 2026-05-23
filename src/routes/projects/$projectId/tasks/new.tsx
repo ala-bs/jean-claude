@@ -8,17 +8,20 @@ import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
-import { BackendSelector } from '@/features/agent/ui-backend-selector';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
-import { ModelSelector } from '@/features/agent/ui-model-selector';
 import { WorkItemsBrowser } from '@/features/agent/ui-work-items-browser';
 import { PromptTextarea } from '@/features/common/ui-prompt-textarea';
 import { useProject, useProjectBranches } from '@/hooks/use-projects';
-import { useBackendsSetting, useCompletionSetting } from '@/hooks/use-settings';
+import {
+  useBackendModelPresetsSetting,
+  useBackendsSetting,
+  useCompletionSetting,
+} from '@/hooks/use-settings';
 import { useProjectSkills } from '@/hooks/use-skills';
 import { useCreateTaskWithWorktree } from '@/hooks/use-tasks';
 import { useNewTaskFormStore } from '@/stores/new-task-form';
-import type { AgentBackendType } from '@shared/agent-backend-types';
 import { normalizeInteractionModeForBackend } from '@shared/types';
 
 export const Route = createFileRoute('/projects/$projectId/tasks/new')({
@@ -49,6 +52,7 @@ function NewTask() {
     sourceBranch,
     interactionMode,
     modelPreference,
+    backendModelPresetId,
     agentBackend,
     workItemIds,
     workItemUrls,
@@ -57,8 +61,11 @@ function NewTask() {
 
   // Sync draft backend with project→global default on mount
   const { data: backendsSetting } = useBackendsSetting();
+  const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
   const resolvedDefaultBackend =
     project?.defaultAgentBackend ?? backendsSetting?.defaultBackend;
+  const resolvedDefaultModelPreference =
+    project?.defaultAgentModelPreference ?? 'default';
   const effectiveAgentBackend =
     agentBackend ??
     (resolvedDefaultBackend &&
@@ -66,7 +73,15 @@ function NewTask() {
       ? resolvedDefaultBackend
       : backendsSetting?.enabledBackends[0]) ??
     'claude-code';
-
+  const effectiveBackendModelPresetId =
+    draft.shouldAutoSelectBackendModelPreset === false
+      ? backendModelPresetId
+      : (backendModelPresetId ??
+        findMatchingBackendModelPresetId({
+          presets: backendModelPresets,
+          backend: agentBackend ?? project?.defaultAgentBackend,
+          model: modelPreference ?? project?.defaultAgentModelPreference,
+        }));
   useEffect(() => {
     if (!backendsSetting || !project || hasDraft) return;
 
@@ -76,22 +91,26 @@ function NewTask() {
 
     setDraft({
       agentBackend: resolved,
+      modelPreference: project.defaultAgentModelPreference ?? 'default',
+      backendModelPresetId: findMatchingBackendModelPresetId({
+        presets: backendModelPresets,
+        backend: project.defaultAgentBackend,
+        model: project.defaultAgentModelPreference,
+      }),
+      shouldAutoSelectBackendModelPreset: true,
       interactionMode: normalizeInteractionModeForBackend({
         backend: resolved,
         mode: interactionMode,
       }),
     });
-  }, [backendsSetting, hasDraft, interactionMode, project, setDraft]);
-
-  const handleBackendChange = (backend: AgentBackendType) => {
-    setDraft({
-      agentBackend: backend,
-      interactionMode: normalizeInteractionModeForBackend({
-        backend,
-        mode: interactionMode,
-      }),
-    });
-  };
+  }, [
+    backendModelPresets,
+    backendsSetting,
+    hasDraft,
+    interactionMode,
+    project,
+    setDraft,
+  ]);
 
   // Determine the effective source branch (draft value or project default)
   const effectiveSourceBranch =
@@ -286,13 +305,23 @@ function NewTask() {
               onChange={(mode) => setDraft({ interactionMode: mode })}
               backend={effectiveAgentBackend}
             />
-            <ModelSelector
-              value={modelPreference}
-              onChange={(model) => setDraft({ modelPreference: model })}
-            />
-            <BackendSelector
-              value={effectiveAgentBackend}
-              onChange={handleBackendChange}
+            <BackendModelPresetPicker
+              backend={effectiveAgentBackend}
+              model={modelPreference || resolvedDefaultModelPreference}
+              selectedPresetId={effectiveBackendModelPresetId}
+              onChange={(selection) => {
+                setDraft({
+                  agentBackend: selection.backend,
+                  backendModelPresetId: selection.presetId,
+                  shouldAutoSelectBackendModelPreset:
+                    selection.presetId !== null,
+                  modelPreference: selection.model,
+                  interactionMode: normalizeInteractionModeForBackend({
+                    backend: selection.backend,
+                    mode: interactionMode,
+                  }),
+                });
+              }}
             />
             <Button
               variant="secondary"

@@ -54,6 +54,7 @@ import * as m052 from './migrations/052_task_parent_task_id';
 import * as m053 from './migrations/053_migrate_prompt_snippets_format';
 import * as m054 from './migrations/054_tracked_pipeline_sort_order';
 import * as m055 from './migrations/055_usage_snapshots';
+import * as m056 from './migrations/056_project_default_model_preference';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -110,6 +111,7 @@ const migrations: Record<string, Migration> = {
   '053_migrate_prompt_snippets_format': m053,
   '054_tracked_pipeline_sort_order': m054,
   '055_usage_snapshots': m055,
+  '056_project_default_model_preference': m056,
 };
 
 export const migrationProvider: MigrationProvider = {

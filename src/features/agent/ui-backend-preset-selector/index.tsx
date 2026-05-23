@@ -1,0 +1,176 @@
+import { forwardRef, useMemo } from 'react';
+
+import type { KeyboardLayer } from '@/common/context/keyboard-bindings';
+import type { BindingKey } from '@/common/context/keyboard-bindings/types';
+import { Select, type SelectOption, type SelectRef } from '@/common/ui/select';
+import { AVAILABLE_BACKENDS } from '@/features/agent/ui-backend-selector';
+import {
+  useBackendModelPresetsSetting,
+  useBackendsSetting,
+} from '@/hooks/use-settings';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import type { BackendModelPreset, ModelPreference } from '@shared/types';
+
+export type { SelectRef } from '@/common/ui/select';
+
+const BACKEND_VALUE_PREFIX = 'backend:';
+const PRESET_VALUE_PREFIX = 'preset:';
+
+function toBackendValue(backend: AgentBackendType) {
+  return `${BACKEND_VALUE_PREFIX}${backend}`;
+}
+
+function toPresetValue(presetId: string) {
+  return `${PRESET_VALUE_PREFIX}${presetId}`;
+}
+
+export function findMatchingBackendModelPresetId({
+  presets,
+  backend,
+  model,
+}: {
+  presets: BackendModelPreset[];
+  backend: AgentBackendType | null | undefined;
+  model: ModelPreference | null | undefined;
+}) {
+  if (!backend || !model) {
+    return null;
+  }
+
+  return (
+    presets.find(
+      (preset) => preset.backend === backend && preset.model === model,
+    )?.id ?? null
+  );
+}
+
+export const BackendPresetSelector = forwardRef<
+  SelectRef,
+  {
+    backend: AgentBackendType;
+    selectedPresetId?: string | null;
+    enabledBackends?: AgentBackendType[];
+    onChange: (selection: {
+      backend: AgentBackendType;
+      presetId: string | null;
+      modelPreference?: ModelPreference;
+    }) => void;
+    disabled?: boolean;
+    shortcut?: BindingKey | BindingKey[];
+    shortcutBehavior?: 'cycle' | 'open';
+    side?: 'top' | 'bottom';
+    className?: string;
+    layer?: KeyboardLayer;
+  }
+>(function BackendPresetSelector(
+  {
+    backend,
+    selectedPresetId,
+    enabledBackends: enabledBackendsOverride,
+    onChange,
+    disabled,
+    shortcut,
+    shortcutBehavior,
+    side,
+    className,
+    layer,
+  },
+  ref,
+) {
+  const { data: backendsSetting } = useBackendsSetting();
+  const { data: presets = [] } = useBackendModelPresetsSetting();
+
+  const enabledBackends = useMemo(
+    () =>
+      enabledBackendsOverride ??
+      backendsSetting?.enabledBackends ??
+      ([backend] as AgentBackendType[]),
+    [backend, backendsSetting?.enabledBackends, enabledBackendsOverride],
+  );
+
+  const visibleBackends = useMemo(
+    () =>
+      AVAILABLE_BACKENDS.filter((option) =>
+        enabledBackends.includes(option.value),
+      ),
+    [enabledBackends],
+  );
+
+  const visiblePresets = useMemo(
+    () => presets.filter((preset) => enabledBackends.includes(preset.backend)),
+    [enabledBackends, presets],
+  );
+
+  const options = useMemo(() => {
+    const presetOptions: SelectOption<string>[] = visiblePresets.map(
+      (preset) => {
+        const backendOption = AVAILABLE_BACKENDS.find(
+          (option) => option.value === preset.backend,
+        );
+
+        return {
+          value: toPresetValue(preset.id),
+          label: preset.name.trim() || 'Untitled preset',
+          description: `${backendOption?.label ?? preset.backend} - ${preset.model}`,
+          group: 'Presets',
+        };
+      },
+    );
+
+    const backendOptions: SelectOption<string>[] = visibleBackends.map(
+      (option) => ({
+        value: toBackendValue(option.value),
+        label: option.label,
+        description: option.description,
+        group: presetOptions.length > 0 ? 'Backends' : undefined,
+      }),
+    );
+
+    return [...presetOptions, ...backendOptions];
+  }, [visibleBackends, visiblePresets]);
+
+  const selectedPreset = visiblePresets.find(
+    (preset) => preset.id === selectedPresetId,
+  );
+  const value = selectedPreset
+    ? toPresetValue(selectedPreset.id)
+    : toBackendValue(backend);
+
+  if (options.length <= 1 && visiblePresets.length === 0) {
+    return null;
+  }
+
+  return (
+    <Select
+      ref={ref}
+      value={value}
+      options={options}
+      onChange={(nextValue) => {
+        if (nextValue.startsWith(PRESET_VALUE_PREFIX)) {
+          const presetId = nextValue.slice(PRESET_VALUE_PREFIX.length);
+          const preset = visiblePresets.find((item) => item.id === presetId);
+          if (!preset) return;
+
+          onChange({
+            backend: preset.backend,
+            presetId: preset.id,
+            modelPreference: preset.model,
+          });
+          return;
+        }
+
+        const nextBackend = nextValue.slice(
+          BACKEND_VALUE_PREFIX.length,
+        ) as AgentBackendType;
+        onChange({ backend: nextBackend, presetId: null });
+      }}
+      disabled={disabled}
+      label="Agent backend or preset"
+      shortcut={shortcut}
+      shortcutBehavior={shortcutBehavior}
+      side={side}
+      className={className}
+      layer={layer}
+    />
+  );
+});

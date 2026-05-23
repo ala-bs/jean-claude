@@ -39,12 +39,10 @@ import {
 } from '@/common/ui/branch-or-task-select';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
-import {
-  BackendSelector,
-  getModelsForBackend,
-} from '@/features/agent/ui-backend-selector';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
+import { getModelsForBackend } from '@/features/agent/ui-backend-selector';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
-import { ModelSelector } from '@/features/agent/ui-model-selector';
 import {
   PromptTextarea,
   type PromptTextareaRef,
@@ -59,6 +57,7 @@ import {
   useReorderProjects,
 } from '@/hooks/use-projects';
 import {
+  useBackendModelPresetsSetting,
   useBackendsSetting,
   useCompletionSetting,
   usePromptSnippetsSetting,
@@ -480,6 +479,7 @@ export function NewTaskOverlay({
 
   // Enabled backends from settings
   const { data: backendsSetting } = useBackendsSetting();
+  const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
 
   const defaultBackend = useMemo(() => {
     if (!backendsSetting) {
@@ -522,13 +522,36 @@ export function NewTaskOverlay({
     backend: currentBackend,
     mode: draft?.interactionMode ?? 'ask',
   });
+  const currentBackendPresetId =
+    draft?.shouldAutoSelectBackendModelPreset === false
+      ? (draft.backendModelPresetId ?? null)
+      : (draft?.backendModelPresetId ??
+        findMatchingBackendModelPresetId({
+          presets: backendModelPresets,
+          backend: draft?.agentBackend ?? selectedProject?.defaultAgentBackend,
+          model:
+            draft?.modelPreference ??
+            selectedProject?.defaultAgentModelPreference,
+        }));
   const currentModelPreference = useMemo(() => {
-    const draftModelPreference = draft?.modelPreference ?? 'default';
+    const draftModelPreference =
+      draft?.modelPreference ??
+      selectedProject?.defaultAgentModelPreference ??
+      'default';
+
+    if (currentBackendPresetId) {
+      return draftModelPreference;
+    }
 
     return availableModelPreferences.includes(draftModelPreference)
       ? draftModelPreference
       : 'default';
-  }, [draft?.modelPreference, availableModelPreferences]);
+  }, [
+    selectedProject?.defaultAgentModelPreference,
+    currentBackendPresetId,
+    draft?.modelPreference,
+    availableModelPreferences,
+  ]);
 
   const currentSourceBranch = useMemo(() => {
     const draftSourceBranch = draft?.sourceBranch;
@@ -543,22 +566,6 @@ export function NewTaskOverlay({
 
     return branches[0] ?? null;
   }, [draft?.sourceBranch, selectedProject?.defaultBranch, branches]);
-
-  // Handle backend change — always reset model to default since model lists differ per backend
-  const handleBackendChange = useCallback(
-    (backend: AgentBackendType) => {
-      const normalizedMode = normalizeInteractionModeForBackend({
-        backend,
-        mode: currentInteractionMode,
-      });
-      updateDraft({
-        agentBackend: backend,
-        interactionMode: normalizedMode,
-        modelPreference: 'default',
-      });
-    },
-    [currentInteractionMode, updateDraft],
-  );
 
   // Toggle selection of highlighted work item
   const toggleHighlightedWorkItem = useCallback(() => {
@@ -1404,28 +1411,33 @@ export function NewTaskOverlay({
                   />
                 )}
 
-                {/* Model selector */}
-                {!isNoteMode && (
-                  <ModelSelector
-                    value={currentModelPreference}
-                    onChange={(model) =>
-                      updateDraft({ modelPreference: model })
-                    }
-                    models={getModelsForBackend(currentBackend, dynamicModels)}
-                    shortcut="cmd+l"
-                    side="top"
-                    layer={layer}
-                  />
-                )}
-
                 {/* Agent backend selector — only show when multiple backends enabled */}
                 {!isNoteMode && (
-                  <BackendSelector
-                    value={currentBackend}
-                    onChange={handleBackendChange}
-                    shortcut="cmd+j"
+                  <BackendModelPresetPicker
+                    backend={currentBackend}
+                    model={currentModelPreference}
+                    selectedPresetId={currentBackendPresetId}
+                    backendShortcut="cmd+j"
+                    modelShortcut="cmd+l"
                     side="top"
                     layer={layer}
+                    onChange={(selection) => {
+                      const normalizedMode = normalizeInteractionModeForBackend(
+                        {
+                          backend: selection.backend,
+                          mode: currentInteractionMode,
+                        },
+                      );
+
+                      updateDraft({
+                        agentBackend: selection.backend,
+                        backendModelPresetId: selection.presetId,
+                        shouldAutoSelectBackendModelPreset:
+                          selection.presetId !== null,
+                        interactionMode: normalizedMode,
+                        modelPreference: selection.model,
+                      });
+                    }}
                   />
                 )}
 

@@ -39,6 +39,7 @@ import { DebugDatabase } from '@/features/settings/ui-debug-database';
 import { GeneralSettings } from '@/features/settings/ui-general-settings';
 import { GlobalPermissionsSettings } from '@/features/settings/ui-global-permissions-settings';
 import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings';
+import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';
 import { SkillsSettings } from '@/features/settings/ui-skills-settings';
 import { TokensTab } from '@/features/settings/ui-tokens-tab';
@@ -47,6 +48,7 @@ import { useCurrentSettingsProject } from './use-current-settings-project';
 
 type GlobalMenuItem =
   | 'general'
+  | 'coding-agents'
   | 'ai-generation'
   | 'permissions'
   | 'skills'
@@ -70,6 +72,13 @@ const GLOBAL_MENU_ITEMS: {
     icon: Settings,
     title: 'General',
     subtitle: 'Editor preferences and app behavior',
+  },
+  {
+    id: 'coding-agents',
+    label: 'Coding Agents',
+    icon: Grid3X3,
+    title: 'Coding Agents',
+    subtitle: 'Backends and saved backend/model combinations',
   },
   {
     id: 'ai-generation',
@@ -245,6 +254,8 @@ function GlobalContentInner({ menuItem }: { menuItem: GlobalMenuItem }) {
   switch (menuItem) {
     case 'general':
       return <GeneralSettings />;
+    case 'coding-agents':
+      return <ModelPresetsSettings />;
     case 'ai-generation':
       return <AiGenerationSettings />;
     case 'permissions':

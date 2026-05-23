@@ -6,12 +6,8 @@ import {
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
-import {
-  BackendSelector,
-  getModelLabel,
-  getModelsForBackend,
-} from '@/features/agent/ui-backend-selector';
-import { ModelSelector } from '@/features/agent/ui-model-selector';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { getModelsForBackend } from '@/features/agent/ui-backend-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackendsSetting } from '@/hooks/use-settings';
 import type { ReviewComment } from '@/stores/review-comments';
@@ -70,6 +66,7 @@ function ReviewSubmitOverlayContent({
     useState<AgentBackendType | null>(null);
   const [newStepModelOverride, setNewStepModelOverride] =
     useState<ModelPreference | null>(null);
+  const [newStepPresetId, setNewStepPresetId] = useState<string | null>(null);
   const [targetSelection, setTargetSelection] = useState<
     | { type: 'follow-active' }
     | { type: 'existing'; stepId: string }
@@ -110,35 +107,6 @@ function ReviewSubmitOverlayContent({
       ? (activeStep?.modelPreference ?? 'default')
       : 'default';
   const effectiveNewStepModel = newStepModelOverride ?? defaultNewStepModel;
-  const modelOptions = useMemo(() => {
-    if (
-      availableModels.some((model) => model.value === effectiveNewStepModel)
-    ) {
-      return availableModels;
-    }
-
-    return [
-      {
-        value: effectiveNewStepModel,
-        label: getModelLabel(
-          effectiveNewStepModel,
-          effectiveNewStepBackend,
-          dynamicModels,
-        ),
-        description: backendModelsQuery.isFetched
-          ? 'Previously selected model'
-          : 'Loading available models',
-      },
-      ...availableModels,
-    ];
-  }, [
-    availableModels,
-    backendModelsQuery.isFetched,
-    dynamicModels,
-    effectiveNewStepBackend,
-    effectiveNewStepModel,
-  ]);
-
   useEffect(() => {
     const hasResolvedModels =
       effectiveNewStepBackend === 'claude-code' || backendModelsQuery.isFetched;
@@ -309,19 +277,17 @@ function ReviewSubmitOverlayContent({
               New step settings
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <BackendSelector
-                value={effectiveNewStepBackend}
-                onChange={(backend) => {
-                  setNewStepBackendOverride(backend);
-                  setNewStepModelOverride('default');
+              <BackendModelPresetPicker
+                backend={effectiveNewStepBackend}
+                model={effectiveNewStepModel}
+                selectedPresetId={newStepPresetId}
+                side="top"
+                modelClassName="w-[130px]"
+                onChange={(selection) => {
+                  setNewStepBackendOverride(selection.backend);
+                  setNewStepPresetId(selection.presetId);
+                  setNewStepModelOverride(selection.model);
                 }}
-                side="top"
-              />
-              <ModelSelector
-                value={effectiveNewStepModel}
-                onChange={setNewStepModelOverride}
-                models={modelOptions}
-                side="top"
               />
             </div>
             {!backendsSettingQuery.isFetched ? (

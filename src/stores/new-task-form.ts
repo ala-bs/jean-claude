@@ -12,6 +12,8 @@ interface NewTaskFormDraft {
   sourceBranch: string | null; // null means use project's default branch
   interactionMode: InteractionMode;
   modelPreference: ModelPreference;
+  backendModelPresetId: string | null;
+  shouldAutoSelectBackendModelPreset: boolean;
   agentBackend?: AgentBackendType;
   workItemIds: string[] | null;
   workItemUrls: string[] | null;
@@ -32,6 +34,8 @@ const defaultDraft: NewTaskFormDraft = {
   sourceBranch: null,
   interactionMode: 'ask',
   modelPreference: 'default',
+  backendModelPresetId: null,
+  shouldAutoSelectBackendModelPreset: true,
   workItemIds: null,
   workItemUrls: null,
   updateWorkItemStatus: true,

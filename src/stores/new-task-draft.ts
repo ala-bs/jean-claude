@@ -17,6 +17,8 @@ export interface NewTaskDraft {
   inputMode: InputMode;
   interactionMode: InteractionMode;
   modelPreference: ModelPreference;
+  backendModelPresetId: string | null;
+  shouldAutoSelectBackendModelPreset: boolean;
   agentBackend: AgentBackendType;
   // Search mode state
   workItemIds: string[]; // Changed from workItemId: string | null

@@ -4,8 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/common/ui/button';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
-import { getModelsForBackend } from '@/features/agent/ui-backend-selector';
-import { useBackendModels } from '@/hooks/use-backend-models';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { useManagedSkills } from '@/hooks/use-managed-skills';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { AiSkillSlotConfig, AiSkillSlotKey } from '@shared/types';
@@ -69,6 +68,7 @@ export function SlotRow({
   const [localModel, setLocalModel] = useState(
     config?.model ?? DEFAULT_CLAUDE_CODE_MODEL,
   );
+  const [localPresetId, setLocalPresetId] = useState<string | null>(null);
   const [localSkillName, setLocalSkillName] = useState<string | null>(
     config?.skillName ?? null,
   );
@@ -78,20 +78,10 @@ export function SlotRow({
     if (!expanded) {
       setLocalBackend(config?.backend ?? 'claude-code');
       setLocalModel(config?.model ?? DEFAULT_CLAUDE_CODE_MODEL);
+      setLocalPresetId(null);
       setLocalSkillName(config?.skillName ?? null);
     }
   }, [config, expanded]);
-
-  // Dynamic models for the selected backend
-  const { data: dynamicModels } = useBackendModels(localBackend);
-  const modelOptions = useMemo(
-    () =>
-      getModelsForBackend(localBackend, dynamicModels).map((m) => ({
-        value: m.value,
-        label: m.label,
-      })),
-    [localBackend, dynamicModels],
-  );
 
   // Skills for the selected backend (enabled or builtin)
   const { data: skills } = useManagedSkills(localBackend);
@@ -120,15 +110,6 @@ export function SlotRow({
     return [{ value: NO_SKILL_VALUE, label: 'None' }, ...builtin, ...other];
   }, [enabledSkills]);
 
-  const handleBackendChange = useCallback((backend: string) => {
-    const backendType = backend as AgentBackendType;
-    setLocalBackend(backendType);
-    setLocalModel(
-      backendType === 'claude-code' ? DEFAULT_CLAUDE_CODE_MODEL : 'default',
-    );
-    setLocalSkillName(null);
-  }, []);
-
   const handleSave = useCallback(() => {
     onUpdate({
       backend: localBackend,
@@ -142,6 +123,7 @@ export function SlotRow({
     // Reset to current config
     setLocalBackend(config?.backend ?? 'claude-code');
     setLocalModel(config?.model ?? DEFAULT_CLAUDE_CODE_MODEL);
+    setLocalPresetId(null);
     setLocalSkillName(config?.skillName ?? null);
     setExpanded(false);
   }, [config]);
@@ -168,6 +150,7 @@ export function SlotRow({
       // Opening: reset local state from config
       setLocalBackend(config?.backend ?? 'claude-code');
       setLocalModel(config?.model ?? DEFAULT_CLAUDE_CODE_MODEL);
+      setLocalPresetId(null);
       setLocalSkillName(config?.skillName ?? null);
     }
     setExpanded((prev) => !prev);
@@ -182,11 +165,6 @@ export function SlotRow({
         config.skillName ?? 'Builtin',
       ].join(' \u00b7 ')
     : 'Not configured';
-
-  const backendOptions = enabledBackends.map((b) => ({
-    value: b.value,
-    label: b.label,
-  }));
 
   // Allow enabling even without a skill (slots can use builtin/default prompt)
   const canEnable = true;
@@ -225,22 +203,17 @@ export function SlotRow({
             {/* Backend */}
             <div className="flex items-center justify-between">
               <label className="text-ink-2 text-sm">Backend</label>
-              <Select
-                value={localBackend}
-                options={backendOptions}
-                onChange={handleBackendChange}
-                label="Backend"
-              />
-            </div>
-
-            {/* Model */}
-            <div className="flex items-center justify-between">
-              <label className="text-ink-2 text-sm">Model</label>
-              <Select
-                value={localModel}
-                options={modelOptions}
-                onChange={setLocalModel}
-                label="Model"
+              <BackendModelPresetPicker
+                backend={localBackend}
+                model={localModel}
+                selectedPresetId={localPresetId}
+                enabledBackends={enabledBackends.map((b) => b.value)}
+                onChange={(selection) => {
+                  setLocalBackend(selection.backend);
+                  setLocalModel(selection.model);
+                  setLocalPresetId(selection.presetId);
+                  setLocalSkillName(null);
+                }}
               />
             </div>
 

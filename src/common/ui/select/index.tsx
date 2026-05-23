@@ -25,6 +25,7 @@ export interface SelectOption<T extends string> {
   value: T;
   label: string;
   description?: string;
+  group?: string;
 }
 
 export interface SelectRef {
@@ -296,48 +297,60 @@ export const Select = forwardRef<
               maxHeight: position.maxHeight,
             }}
           >
-            {options.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="option"
-                tabIndex={-1}
-                aria-selected={option.value === value}
-                onClick={() => {
-                  onChange(option.value);
-                  close();
-                }}
-                className={clsx(
-                  'hover:bg-glass-medium focus:bg-glass-medium flex w-full items-center text-left transition-colors focus:outline-none',
-                  s.text,
-                  s.gap,
-                  s.px,
-                  s.py,
-                  option.value === value ? 'text-ink-1' : 'text-ink-2',
-                )}
-              >
-                <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                  {option.value === value && <Check className="h-3 w-3" />}
-                </span>
-                <div className="flex flex-col">
-                  <span
+            {options.map((option, index) => {
+              const previousGroup = index > 0 ? options[index - 1].group : null;
+              const showGroupLabel =
+                option.group && option.group !== previousGroup;
+
+              return (
+                <React.Fragment key={option.value}>
+                  {showGroupLabel && (
+                    <div className="text-ink-4 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[0.14em] uppercase first:pt-1">
+                      {option.group}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    role="option"
+                    tabIndex={-1}
+                    aria-selected={option.value === value}
+                    onClick={() => {
+                      onChange(option.value);
+                      close();
+                    }}
                     className={clsx(
+                      'hover:bg-glass-medium focus:bg-glass-medium flex w-full items-center text-left transition-colors focus:outline-none',
                       s.text,
-                      option.value === value
-                        ? 'text-ink-1 font-medium'
-                        : 'text-ink-1',
+                      s.gap,
+                      s.px,
+                      s.py,
+                      option.value === value ? 'text-ink-1' : 'text-ink-2',
                     )}
                   >
-                    {option.label}
-                  </span>
-                  {option.description && (
-                    <span className="text-ink-3 text-xs">
-                      {option.description}
+                    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                      {option.value === value && <Check className="h-3 w-3" />}
                     </span>
-                  )}
-                </div>
-              </button>
-            ))}
+                    <div className="flex flex-col">
+                      <span
+                        className={clsx(
+                          s.text,
+                          option.value === value
+                            ? 'text-ink-1 font-medium'
+                            : 'text-ink-1',
+                        )}
+                      >
+                        {option.label}
+                      </span>
+                      {option.description && (
+                        <span className="text-ink-3 text-xs">
+                          {option.description}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                </React.Fragment>
+              );
+            })}
           </div>,
           document.body,
         )}

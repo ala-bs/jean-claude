@@ -191,6 +191,7 @@ export interface Project {
   showWorkItemsInFeed: boolean;
   showPrsInFeed: boolean;
   defaultAgentBackend: AgentBackendType | null; // null = use global default
+  defaultAgentModelPreference: ModelPreference | null;
   completionContext: string | null;
   aiSkillSlots: AiSkillSlotsSetting | null;
   protectedBranches: string[];
@@ -222,6 +223,7 @@ export interface NewProject {
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   defaultAgentBackend?: AgentBackendType | null;
+  defaultAgentModelPreference?: ModelPreference | null;
   completionContext?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
   protectedBranches?: string[];
@@ -253,6 +255,7 @@ export interface UpdateProject {
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   defaultAgentBackend?: AgentBackendType | null;
+  defaultAgentModelPreference?: ModelPreference | null;
   completionContext?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
   protectedBranches?: string[];
@@ -557,6 +560,15 @@ export interface SummaryModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
+export interface BackendModelPreset {
+  id: string;
+  name: string;
+  backend: AgentBackendType;
+  model: ModelPreference;
+}
+
+export type BackendModelPresetsSetting = BackendModelPreset[];
+
 export type TaskNotificationEvent =
   | 'completed'
   | 'permission-required'
@@ -660,6 +672,26 @@ function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
   if (!obj.models || typeof obj.models !== 'object') return false;
   const models = obj.models as Record<string, unknown>;
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+}
+
+function isBackendModelPresetsSetting(
+  v: unknown,
+): v is BackendModelPresetsSetting {
+  if (!Array.isArray(v)) return false;
+
+  return v.every((preset) => {
+    if (!preset || typeof preset !== 'object') return false;
+
+    const obj = preset as Record<string, unknown>;
+
+    return (
+      typeof obj.id === 'string' &&
+      typeof obj.name === 'string' &&
+      typeof obj.model === 'string' &&
+      typeof obj.backend === 'string' &&
+      VALID_BACKENDS.includes(obj.backend as AgentBackendType)
+    );
+  });
 }
 
 const VALID_TASK_NOTIFICATION_EVENTS: TaskNotificationEvent[] = [
@@ -816,6 +848,10 @@ export const SETTINGS_DEFINITIONS = {
       },
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
+  },
+  backendModelPresets: {
+    defaultValue: [] as BackendModelPresetsSetting,
+    validate: isBackendModelPresetsSetting,
   },
   taskEventNotifications: {
     defaultValue: {

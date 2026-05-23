@@ -16,13 +16,12 @@ import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import { Select, type SelectOption } from '@/common/ui/select';
 import { Textarea } from '@/common/ui/textarea';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import {
   AVAILABLE_BACKENDS,
-  BackendSelector,
   getModelsForBackend,
 } from '@/features/agent/ui-backend-selector';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
-import { ModelSelector } from '@/features/agent/ui-model-selector';
 import {
   PromptTextarea,
   type PromptTextareaRef,
@@ -168,6 +167,9 @@ export function AddStepDialog({
     useState<InteractionMode>('ask');
   const [backend, setBackend] = useState<AgentBackendType>(defaultBackend);
   const [model, setModel] = useState<ModelPreference>(defaultModel);
+  const [backendModelPresetId, setBackendModelPresetId] = useState<
+    string | null
+  >(null);
   const [images, setImages] = useState<PromptImagePart[]>([]);
   const [autoStart, setAutoStart] = useState(true);
   const [reviewers, setReviewers] = useState<ReviewerConfig[]>(
@@ -175,7 +177,6 @@ export function AddStepDialog({
   );
   const textareaRef = useRef<PromptTextareaRef>(null);
 
-  const { data: dynamicModels } = useBackendModels(backend);
   const { data: backendsSetting } = useBackendsSetting();
   const enabledBackends =
     backendsSetting?.enabledBackends ??
@@ -219,18 +220,13 @@ export function AddStepDialog({
       setInteractionMode('ask');
       setBackend(defaultBackend);
       setModel(defaultModel);
+      setBackendModelPresetId(null);
       setImages([]);
       setAutoStart(true);
       setReviewers(createDefaultReviewers(defaultBackend));
       setTimeout(() => textareaRef.current?.focus(), 0);
     }
   }, [isOpen, defaultBackend, defaultModel]);
-
-  // Reset model to default when backend changes
-  const handleBackendChange = (newBackend: AgentBackendType) => {
-    setBackend(newBackend);
-    setModel('default');
-  };
 
   const canSubmit =
     presetType === 'review-changes'
@@ -495,20 +491,19 @@ export function AddStepDialog({
               side="top"
               layer={layer}
             />
-            <BackendSelector
-              value={backend}
-              onChange={handleBackendChange}
-              shortcut="cmd+j"
+            <BackendModelPresetPicker
+              backend={backend}
+              model={model}
+              selectedPresetId={backendModelPresetId}
+              backendShortcut="cmd+j"
+              modelShortcut="cmd+l"
               side="top"
               layer={layer}
-            />
-            <ModelSelector
-              value={model}
-              onChange={setModel}
-              models={getModelsForBackend(backend, dynamicModels)}
-              shortcut="cmd+l"
-              side="top"
-              layer={layer}
+              onChange={(selection) => {
+                setBackend(selection.backend);
+                setBackendModelPresetId(selection.presetId);
+                setModel(selection.model);
+              }}
             />
           </div>
           <div className="flex items-center justify-between pt-1">

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 
 import { SLOT_DEFINITIONS, SlotRow } from '@/features/common/ui-ai-skill-slot';
+import { SummaryModelsSettings } from '@/features/settings/ui-general-settings';
 import { useEnabledBackends } from '@/hooks/use-enabled-backends';
 import {
   useAiSkillSlotsSetting,
@@ -53,6 +54,10 @@ export function AiGenerationSettings() {
           />
         ))}
       </div>
+
+      <div className="border-line-soft my-8 border-t" />
+
+      <SummaryModelsSettings />
     </div>
   );
 }

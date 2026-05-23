@@ -12,10 +12,9 @@ import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
 import { Select } from '@/common/ui/select';
 import { Textarea } from '@/common/ui/textarea';
-import {
-  AVAILABLE_BACKENDS,
-  getModelsForBackend,
-} from '@/features/agent/ui-backend-selector';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
+import { AVAILABLE_BACKENDS } from '@/features/agent/ui-backend-selector';
 import { SLOT_DEFINITIONS } from '@/features/common/ui-ai-skill-slot';
 import { ProjectMcpSettings } from '@/features/project/ui-project-mcp-settings';
 import { ProjectPermissionsSettings } from '@/features/project/ui-project-permissions-settings';
@@ -25,7 +24,6 @@ import { ProjectWorktreeSettings } from '@/features/project/ui-project-worktree-
 import { RepoLink } from '@/features/project/ui-repo-link';
 import { RunCommandsConfig } from '@/features/project/ui-run-commands-config';
 import { WorkItemsLink } from '@/features/project/ui-work-items-link';
-import { useBackendModels } from '@/hooks/use-backend-models';
 import { useEnabledBackends } from '@/hooks/use-enabled-backends';
 import { useAllManagedSkills } from '@/hooks/use-managed-skills';
 import {
@@ -35,7 +33,10 @@ import {
   useDeleteProject,
   useDeleteProjectWorktreesFolder,
 } from '@/hooks/use-projects';
-import { useBackendsSetting } from '@/hooks/use-settings';
+import {
+  useBackendModelPresetsSetting,
+  useBackendsSetting,
+} from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import { PROJECT_COLORS } from '@/lib/colors';
 import { useNavigationStore } from '@/stores/navigation';
@@ -47,6 +48,7 @@ import type {
   AiSkillSlotConfig,
   AiSkillSlotKey,
   AiSkillSlotsSetting,
+  ModelPreference,
 } from '@shared/types';
 
 import { FavoriteBranchesInput } from './favorite-branches-input';
@@ -99,6 +101,11 @@ export function ProjectSettings({
   const [defaultBranch, setDefaultBranch] = useState('');
   const [defaultAgentBackend, setDefaultAgentBackend] =
     useState<AgentBackendType | null>(null);
+  const [defaultAgentModelPreference, setDefaultAgentModelPreference] =
+    useState<ModelPreference | null>(null);
+  const [defaultAgentPresetId, setDefaultAgentPresetId] = useState<
+    string | null
+  >(null);
   const [worktreesPath, setWorktreesPath] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [completionContext, setCompletionContext] = useState('');
@@ -113,6 +120,7 @@ export function ProjectSettings({
   const [isGeneratingContext, setIsGeneratingContext] = useState(false);
 
   const { data: backendsSetting } = useBackendsSetting();
+  const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
   const enabledBackends = useEnabledBackends();
 
   // Sync local state when project loads or changes
@@ -123,6 +131,14 @@ export function ProjectSettings({
       setColor(project.color);
       setDefaultBranch(project.defaultBranch ?? '');
       setDefaultAgentBackend(project.defaultAgentBackend);
+      setDefaultAgentModelPreference(project.defaultAgentModelPreference);
+      setDefaultAgentPresetId(
+        findMatchingBackendModelPresetId({
+          presets: backendModelPresets,
+          backend: project.defaultAgentBackend,
+          model: project.defaultAgentModelPreference,
+        }),
+      );
       setPrPriority(project.prPriority ?? 'normal');
       setWorkItemPriority(project.workItemPriority ?? 'normal');
       setCompletionContext(project.completionContext ?? '');
@@ -131,7 +147,7 @@ export function ProjectSettings({
       setFavoriteBranches(project.favoriteBranches ?? []);
       setAiSkillSlots(project.aiSkillSlots);
     }
-  }, [project]);
+  }, [backendModelPresets, project]);
 
   // Initialize default branch when branches load
   useEffect(() => {
@@ -175,6 +191,7 @@ export function ProjectSettings({
         color,
         defaultBranch: defaultBranch || null,
         defaultAgentBackend,
+        defaultAgentModelPreference,
         prPriority,
         workItemPriority,
         completionContext: completionContext || null,
@@ -220,6 +237,7 @@ export function ProjectSettings({
     color !== project.color ||
     defaultBranch !== (project.defaultBranch ?? '') ||
     defaultAgentBackend !== project.defaultAgentBackend ||
+    defaultAgentModelPreference !== project.defaultAgentModelPreference ||
     prPriority !== (project.prPriority ?? 'normal') ||
     workItemPriority !== (project.workItemPriority ?? 'normal') ||
     completionContext !== (project.completionContext ?? '') ||
@@ -387,29 +405,55 @@ export function ProjectSettings({
 
           <div>
             <label className="text-ink-1 mb-1 block text-sm font-medium">
-              Default agent backend
+              Default coding agent
             </label>
             <Select
-              value={defaultAgentBackend ?? ''}
+              value={defaultAgentBackend === null ? 'global' : 'project'}
               options={[
                 {
-                  value: '',
+                  value: 'global',
                   label: `Use global default${backendsSetting?.defaultBackend ? ` (${AVAILABLE_BACKENDS.find((b) => b.value === backendsSetting.defaultBackend)?.label ?? backendsSetting.defaultBackend})` : ''}`,
                 },
-                ...enabledBackends.map((b) => ({
-                  value: b.value,
-                  label: b.label,
-                })),
+                { value: 'project', label: 'Use project default' },
               ]}
-              onChange={(value) =>
+              onChange={(value) => {
+                if (value === 'global') {
+                  setDefaultAgentBackend(null);
+                  setDefaultAgentModelPreference(null);
+                  setDefaultAgentPresetId(null);
+                  return;
+                }
+
                 setDefaultAgentBackend(
-                  value === '' ? null : (value as AgentBackendType),
-                )
-              }
+                  defaultAgentBackend ??
+                    enabledBackends[0]?.value ??
+                    'claude-code',
+                );
+                setDefaultAgentModelPreference(
+                  defaultAgentModelPreference ?? 'default',
+                );
+              }}
               className="w-full justify-between"
             />
+            {defaultAgentBackend !== null && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <BackendModelPresetPicker
+                  backend={defaultAgentBackend}
+                  model={defaultAgentModelPreference ?? 'default'}
+                  selectedPresetId={defaultAgentPresetId}
+                  enabledBackends={enabledBackends.map((b) => b.value)}
+                  className="w-full justify-between sm:w-auto"
+                  modelClassName="w-full justify-between sm:w-auto"
+                  onChange={(selection) => {
+                    setDefaultAgentBackend(selection.backend);
+                    setDefaultAgentModelPreference(selection.model);
+                    setDefaultAgentPresetId(selection.presetId);
+                  }}
+                />
+              </div>
+            )}
             <p className="text-ink-3 mt-1 text-xs">
-              The agent backend used for new tasks in this project
+              Used to prefill backend and model for new tasks in this project.
             </p>
           </div>
 
@@ -677,21 +721,18 @@ function ProjectSlotRow({
   onUpdate: (config: AiSkillSlotConfig | null) => void;
 }) {
   const [expanded, setExpanded] = useState(config !== null);
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
 
   // Keep expanded state in sync when config is removed externally
   useEffect(() => {
     if (config === null) {
       setExpanded(false);
+      setSelectedPresetId(null);
     }
   }, [config]);
 
   const selectedBackend =
     config?.backend ?? enabledBackends[0]?.value ?? 'claude-code';
-  const { data: dynamicModels } = useBackendModels(selectedBackend);
-  const modelOptions = useMemo(
-    () => getModelsForBackend(selectedBackend, dynamicModels),
-    [selectedBackend, dynamicModels],
-  );
 
   const skillOptions = useMemo(() => {
     return allSkills
@@ -701,6 +742,7 @@ function ProjectSlotRow({
 
   const handleConfigure = () => {
     const defaultBackend = enabledBackends[0]?.value ?? 'claude-code';
+    setSelectedPresetId(null);
     onUpdate({
       backend: defaultBackend,
       model: 'default',
@@ -710,6 +752,7 @@ function ProjectSlotRow({
   };
 
   const handleRemove = () => {
+    setSelectedPresetId(null);
     onUpdate(null);
     setExpanded(false);
   };
@@ -762,37 +805,25 @@ function ProjectSlotRow({
             <label className="text-ink-2 mb-1 block text-xs font-medium">
               Backend
             </label>
-            <Select
-              value={config.backend}
-              options={enabledBackends.map((b) => ({
-                value: b.value,
-                label: b.label,
-              }))}
-              onChange={(value) =>
-                onUpdate({
-                  ...config,
-                  backend: value as AgentBackendType,
-                  model: 'default',
-                  skillName: null,
-                })
-              }
-              className="w-full justify-between"
-            />
-          </div>
-
-          <div>
-            <label className="text-ink-2 mb-1 block text-xs font-medium">
-              Model
-            </label>
-            <Select
-              value={config.model}
-              options={modelOptions.map((m) => ({
-                value: m.value,
-                label: m.label,
-              }))}
-              onChange={(value) => onUpdate({ ...config, model: value })}
-              className="w-full justify-between"
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <BackendModelPresetPicker
+                backend={config.backend}
+                model={config.model}
+                selectedPresetId={selectedPresetId}
+                enabledBackends={enabledBackends.map((b) => b.value)}
+                className="w-full justify-between sm:w-auto"
+                modelClassName="w-full justify-between sm:w-auto"
+                onChange={(selection) => {
+                  setSelectedPresetId(selection.presetId);
+                  onUpdate({
+                    ...config,
+                    backend: selection.backend,
+                    model: selection.model,
+                    skillName: null,
+                  });
+                }}
+              />
+            </div>
           </div>
 
           <div>

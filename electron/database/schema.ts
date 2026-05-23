@@ -91,6 +91,7 @@ export interface ProjectTable {
   workItemProjectName: string | null;
   // Agent backend (null = use global default)
   defaultAgentBackend: string | null;
+  defaultAgentModelPreference: string | null;
   completionContext: string | null;
   aiSkillSlots: string | null; // JSON text
   protectedBranches: string | null; // JSON array of branch names
