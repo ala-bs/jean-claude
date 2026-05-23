@@ -12,6 +12,7 @@ import { Button } from '@/common/ui/button';
 import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
 import { ActivityCenterOverlay } from '@/features/activity-center/ui-activity-center-overlay';
 import { TaskMessageManager } from '@/features/agent/task-message-manager';
+import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
 import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-palette-overlay';
 import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
 import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
@@ -24,6 +25,7 @@ import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { api } from '@/lib/api';
 import { resolveLastLocationRedirect } from '@/lib/navigation';
+import { useChangelogStore } from '@/stores/changelog';
 import {
   useCurrentVisibleProject,
   useNavigationStore,
@@ -110,6 +112,7 @@ function CommandPaletteContainer() {
 function GlobalCommands() {
   const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
+  const openChangelog = useChangelogStore((s) => s.open);
   useCommands(
     'global-commands',
     [
@@ -118,6 +121,13 @@ function GlobalCommands() {
         shortcut: 'cmd+,',
         handler: () => {
           toggle('settings');
+        },
+      },
+      {
+        label: 'Changelog',
+        section: 'General',
+        handler: () => {
+          openChangelog();
         },
       },
     ],
@@ -346,6 +356,9 @@ function RootLayout() {
       <GlobalPromptFromBackModal />
       <GlobalCommands />
       {/* <TaskCommands /> */}
+
+      {/* Changelog modal (startup only) */}
+      <ChangelogModal />
 
       {/* Overlay containers */}
       <NewTaskContainer />

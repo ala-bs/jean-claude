@@ -183,6 +183,7 @@ src/                     # Renderer (React)
     common/              # Shared feature components (file-diff, prompt-textarea)
     new-task/            # New task overlay
     pull-request/        # PR viewing
+    changelog/           # Startup changelog modal
   common/                # Shared infrastructure
     context/             # React contexts (keyboard-bindings, modal, overlay)
     hooks/               # Shared hooks (use-commands/)
@@ -248,6 +249,32 @@ Push logic down to the most specific child component. Keep parents focused on co
 - All schema changes require a migration
 - Repository methods return plain objects, not database rows
 - Handle errors at repository level
+
+### Changelog
+
+When making user-facing changes (new features, bug fixes, UI improvements), update `changelogs/`:
+
+1. If today's date already has a file `changelogs/YYYY-MM-DD.md`, append to it
+2. Otherwise, create a new file `changelogs/YYYY-MM-DD.md`
+3. Each line is a markdown list item with a `[type]` prefix: `[feature]`, `[fix]`, or `[improvement]`
+4. Keep entry text concise (one sentence)
+
+Example (`changelogs/2025-06-01.md`):
+```md
+- [feature] Added dark mode toggle in settings
+- [fix] Fixed sidebar not collapsing on narrow screens
+```
+
+**Writing good entries:**
+
+- Be concise but include actionable details the user needs
+- Mention keybindings if the feature has one (e.g. "⌘K to toggle")
+- Mention where to find it (e.g. "via command palette", "in Settings > General")
+- Mention the trigger or context (e.g. "on startup", "when hovering a task")
+- Bad: `Added changelog modal` — user doesn't know how to access it
+- Good: `Added "Changelog" modal — opens on startup when there are new changes, or anytime via ⌘P → "Changelog"`
+
+The changelog modal shows on startup only when the content hash differs from last seen. Persistence via `changelog-store` in localStorage.
 
 ### Claude Agent SDK
 
