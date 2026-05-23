@@ -51,7 +51,12 @@ interface NewTaskDraftState {
 
   // Actions
   setSelectedProjectId: (projectId: string | null) => void;
-  setDraft: (key: string, update: Partial<NewTaskDraft>) => void;
+  setDraft: (
+    key: string,
+    update:
+      | Partial<NewTaskDraft>
+      | ((prev: Partial<NewTaskDraft> | undefined) => Partial<NewTaskDraft>),
+  ) => void;
   clearDraft: (key: string) => void;
   clearAllDrafts: () => void;
 }
@@ -66,15 +71,19 @@ const useStore = create<NewTaskDraftState>()(
         set({ selectedProjectId: projectId }),
 
       setDraft: (key, update) =>
-        set((state) => ({
-          drafts: {
-            ...state.drafts,
-            [key]: {
-              ...state.drafts[key],
-              ...update,
+        set((state) => {
+          const prev = state.drafts[key];
+          const resolved = typeof update === 'function' ? update(prev) : update;
+          return {
+            drafts: {
+              ...state.drafts,
+              [key]: {
+                ...prev,
+                ...resolved,
+              },
             },
-          },
-        })),
+          };
+        }),
 
       clearDraft: (key) =>
         set((state) => {
@@ -121,7 +130,11 @@ export function useNewTaskDraft() {
   );
 
   const updateDraft = useCallback(
-    (update: Partial<NewTaskDraft>) => setDraftAction(key, update),
+    (
+      update:
+        | Partial<NewTaskDraft>
+        | ((prev: Partial<NewTaskDraft> | undefined) => Partial<NewTaskDraft>),
+    ) => setDraftAction(key, update),
     [key, setDraftAction],
   );
 

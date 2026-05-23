@@ -563,12 +563,14 @@ export function NewTaskOverlay({
   // Toggle selection of highlighted work item
   const toggleHighlightedWorkItem = useCallback(() => {
     if (!highlightedWorkItemId) return;
-    const currentIds = draft?.workItemIds ?? [];
-    const newIds = currentIds.includes(highlightedWorkItemId)
-      ? currentIds.filter((id) => id !== highlightedWorkItemId)
-      : [...currentIds, highlightedWorkItemId];
-    updateDraft({ workItemIds: newIds });
-  }, [highlightedWorkItemId, draft?.workItemIds, updateDraft]);
+    updateDraft((prev) => {
+      const currentIds = prev?.workItemIds ?? [];
+      const newIds = currentIds.includes(highlightedWorkItemId)
+        ? currentIds.filter((id) => id !== highlightedWorkItemId)
+        : [...currentIds, highlightedWorkItemId];
+      return { workItemIds: newIds };
+    });
+  }, [highlightedWorkItemId, updateDraft]);
 
   // Open highlighted work item in browser
   const openHighlightedWorkItem = useCallback(() => {
@@ -585,13 +587,15 @@ export function NewTaskOverlay({
   const handleWorkItemToggle = useCallback(
     (workItem: AzureDevOpsWorkItem) => {
       const workItemId = workItem.id.toString();
-      const currentIds = draft?.workItemIds ?? [];
-      const newIds = currentIds.includes(workItemId)
-        ? currentIds.filter((id) => id !== workItemId)
-        : [...currentIds, workItemId];
-      updateDraft({ workItemIds: newIds });
+      updateDraft((prev) => {
+        const currentIds = prev?.workItemIds ?? [];
+        const newIds = currentIds.includes(workItemId)
+          ? currentIds.filter((id) => id !== workItemId)
+          : [...currentIds, workItemId];
+        return { workItemIds: newIds };
+      });
     },
-    [draft?.workItemIds, updateDraft],
+    [updateDraft],
   );
 
   const handleClearSelectedWorkItems = useCallback(() => {
@@ -743,13 +747,15 @@ export function NewTaskOverlay({
   // Comment selection handlers
   const handleCommentToggle = useCallback(
     (commentSelectionId: string) => {
-      const current = draft?.selectedCommentIds ?? [];
-      const next = current.includes(commentSelectionId)
-        ? current.filter((id) => id !== commentSelectionId)
-        : [...current, commentSelectionId];
-      updateDraft({ selectedCommentIds: next });
+      updateDraft((prev) => {
+        const current = prev?.selectedCommentIds ?? [];
+        const next = current.includes(commentSelectionId)
+          ? current.filter((id) => id !== commentSelectionId)
+          : [...current, commentSelectionId];
+        return { selectedCommentIds: next };
+      });
     },
-    [draft?.selectedCommentIds, updateDraft],
+    [updateDraft],
   );
 
   const handleSelectAllComments = useCallback(() => {
@@ -1045,38 +1051,38 @@ export function NewTaskOverlay({
 
   const handleImageAttach = useCallback(
     (image: PromptImagePart) => {
-      updateDraft({
-        images: [...(draft?.images ?? []), image],
-      });
+      updateDraft((prev) => ({
+        images: [...(prev?.images ?? []), image],
+      }));
     },
-    [draft?.images, updateDraft],
+    [updateDraft],
   );
 
   const handleImageRemove = useCallback(
     (index: number) => {
-      updateDraft({
-        images: (draft?.images ?? []).filter((_, i) => i !== index),
-      });
+      updateDraft((prev) => ({
+        images: (prev?.images ?? []).filter((_, i) => i !== index),
+      }));
     },
-    [draft?.images, updateDraft],
+    [updateDraft],
   );
 
   const handleFileAttach = useCallback(
     (file: PromptFilePart) => {
-      updateDraft({
-        files: [...(draft?.files ?? []), file],
-      });
+      updateDraft((prev) => ({
+        files: [...(prev?.files ?? []), file],
+      }));
     },
-    [draft?.files, updateDraft],
+    [updateDraft],
   );
 
   const handleFileRemove = useCallback(
     (index: number) => {
-      updateDraft({
-        files: (draft?.files ?? []).filter((_, i) => i !== index),
-      });
+      updateDraft((prev) => ({
+        files: (prev?.files ?? []).filter((_, i) => i !== index),
+      }));
     },
-    [draft?.files, updateDraft],
+    [updateDraft],
   );
 
   // Get current input value
