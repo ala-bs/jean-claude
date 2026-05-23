@@ -969,6 +969,13 @@ class AgentService {
       queuedPrompts: [],
     });
 
+    // Close any pending permission/question notifications
+    notificationService.close(`${taskId}:permission`);
+    notificationService.close(`${taskId}:question`);
+
+    // Clear pending requests
+    session.pendingRequests = [];
+
     session.abortController.abort();
 
     // Stop the backend

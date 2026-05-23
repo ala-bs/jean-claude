@@ -263,6 +263,11 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             ...step,
             status,
             error,
+            // Clear pending permission/question when stopped by user
+            ...(status === 'interrupted' && {
+              pendingPermission: null,
+              pendingQuestion: null,
+            }),
           },
         },
       };

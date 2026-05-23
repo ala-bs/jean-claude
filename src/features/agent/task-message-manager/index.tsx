@@ -78,8 +78,8 @@ export function TaskMessageManager() {
           if (isLoaded(stepId)) {
             setStatus(stepId, event.status, event.error);
           }
-          // When task moves away from waiting, clear any tracked pending request
-          if (event.status !== 'waiting') {
+          // Clear pending requests when stopped by user
+          if (event.status === 'interrupted') {
             clearPendingRequestForTask(taskId);
           }
           // Also invalidate task queries so task-level status updates
