@@ -1,5 +1,11 @@
 import clsx from 'clsx';
-import { CalendarClock, ChevronDown, ChevronUp, MapPin } from 'lucide-react';
+import {
+  CalendarClock,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  MapPin,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
@@ -127,78 +133,147 @@ function statusClasses(tone: 'soon' | 'live' | 'normal'): string {
 
 function MeetingRow({
   meeting,
-  isExpanded,
-  onToggle,
-  onOpen,
+  isSelected,
+  onSelect,
 }: {
   meeting: UpcomingMeeting;
-  isExpanded: boolean;
-  onToggle: () => void;
-  onOpen: () => void;
+  isSelected: boolean;
+  onSelect: () => void;
 }) {
   const status = getMeetingStatus(meeting);
 
   return (
-    <div className="border-glass-border/70 rounded-lg border">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="hover:bg-glass-medium flex w-full items-start justify-between gap-3 rounded-lg px-3 py-2.5 text-left transition-colors"
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <div className="text-ink-1 truncate text-sm font-medium">
-              {meeting.title}
-            </div>
-            {status.label && (
-              <span
-                className={clsx(
-                  'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
-                  statusClasses(status.tone),
-                )}
-              >
-                {status.label}
-              </span>
-            )}
-          </div>
-          <div className="text-ink-3 mt-1 text-xs">
-            {formatMeetingDate(meeting.startAt)}
-          </div>
-          <div className="text-ink-2 mt-0.5 text-xs">
-            {formatMeetingTimeRange(meeting.startAt, meeting.endAt)}
-          </div>
-          <div className="text-ink-3 mt-1 flex items-center gap-1 text-xs">
-            <MapPin className="h-3 w-3 shrink-0" />
-            <span className="truncate">
-              {meeting.location || 'No location'}
-            </span>
-          </div>
-        </div>
-        {isExpanded ? (
-          <ChevronUp className="text-ink-3 mt-0.5 h-4 w-4 shrink-0" />
-        ) : (
-          <ChevronDown className="text-ink-3 mt-0.5 h-4 w-4 shrink-0" />
-        )}
-      </button>
-
-      {isExpanded && (
-        <div className="border-glass-border/70 border-t px-3 pt-2 pb-3 text-xs">
-          <div className="text-ink-3">
-            Calendar: <span className="text-ink-2">{meeting.calendarName}</span>
-          </div>
-          {meeting.notes && (
-            <div className="text-ink-3 mt-2 whitespace-pre-wrap">
-              {meeting.notes}
-            </div>
-          )}
-          <div className="mt-3">
-            <Button size="sm" variant="secondary" onClick={onOpen}>
-              Open in Calendar
-            </Button>
-          </div>
-        </div>
+    <button
+      type="button"
+      onClick={onSelect}
+      className={clsx(
+        'border-glass-border/70 hover:bg-glass-medium flex w-full items-start justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors',
+        isSelected && 'border-acc/50 bg-acc/10 hover:bg-acc/12',
       )}
-    </div>
+      aria-pressed={isSelected}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <div className="text-ink-1 truncate text-sm font-medium">
+            {meeting.title}
+          </div>
+          {status.label && (
+            <span
+              className={clsx(
+                'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                statusClasses(status.tone),
+              )}
+            >
+              {status.label}
+            </span>
+          )}
+        </div>
+        <div className="text-ink-3 mt-1 text-xs">
+          {formatMeetingDate(meeting.startAt)}
+        </div>
+        <div className="text-ink-2 mt-0.5 text-xs">
+          {formatMeetingTimeRange(meeting.startAt, meeting.endAt)}
+        </div>
+        <div className="text-ink-3 mt-1 flex items-center gap-1 text-xs">
+          <MapPin className="h-3 w-3 shrink-0" />
+          <span className="truncate">{meeting.location || 'No location'}</span>
+        </div>
+      </div>
+      {isSelected ? (
+        <ChevronUp className="text-acc-ink mt-0.5 h-4 w-4 shrink-0" />
+      ) : (
+        <ChevronDown className="text-ink-3 mt-0.5 h-4 w-4 shrink-0" />
+      )}
+    </button>
+  );
+}
+
+function MeetingDetailsPane({
+  meeting,
+  onOpen,
+}: {
+  meeting: UpcomingMeeting;
+  onOpen: () => void;
+}) {
+  const status = getMeetingStatus(meeting);
+  const detailItems = [
+    {
+      label: 'Date',
+      value: formatMeetingDate(meeting.startAt),
+      icon: <CalendarClock className="h-4 w-4" />,
+    },
+    {
+      label: 'Time',
+      value: formatMeetingTimeRange(meeting.startAt, meeting.endAt),
+      icon: <Clock className="h-4 w-4" />,
+    },
+    {
+      label: 'Location',
+      value: meeting.location || 'No location',
+      icon: <MapPin className="h-4 w-4" />,
+    },
+    {
+      label: 'Calendar',
+      value: meeting.calendarName,
+      icon: <CalendarClock className="h-4 w-4" />,
+    },
+  ];
+
+  return (
+    <aside className="border-glass-border/70 bg-bg-2 flex min-h-0 flex-col overflow-hidden rounded-xl border">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-acc-ink text-[11px] font-semibold tracking-wide uppercase">
+              Meeting details
+            </div>
+            <h3 className="text-ink-1 mt-1.5 text-xl leading-tight font-semibold tracking-[-0.02em]">
+              {meeting.title}
+            </h3>
+          </div>
+          {status.label && (
+            <span
+              className={clsx(
+                'shrink-0 rounded-full px-2 py-1 text-[11px] font-medium',
+                statusClasses(status.tone),
+              )}
+            >
+              {status.label}
+            </span>
+          )}
+        </div>
+
+        <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+          {detailItems.map((item) => (
+            <div
+              key={item.label}
+              className="border-glass-border/70 bg-glass-subtle rounded-lg border p-2.5"
+            >
+              <div className="text-ink-3 flex items-center gap-2 text-[11px] font-medium">
+                {item.icon}
+                {item.label}
+              </div>
+              <div className="text-ink-1 mt-1.5 text-sm leading-snug font-semibold">
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="border-glass-border/70 bg-glass-subtle mt-3 rounded-lg border p-2.5">
+          <div className="text-ink-3 text-[11px] font-medium">Notes</div>
+          <div className="text-ink-1 mt-1.5 text-xs leading-5 whitespace-pre-wrap">
+            {meeting.notes || 'No notes for this meeting.'}
+          </div>
+        </div>
+      </div>
+
+      <div className="border-glass-border/70 bg-bg-2/95 shrink-0 border-t p-3">
+        <Button size="sm" variant="secondary" onClick={onOpen}>
+          Open in Calendar
+        </Button>
+      </div>
+    </aside>
   );
 }
 
@@ -208,7 +283,7 @@ export function NextMeetingButton() {
   const enabled = calendarNotificationsSetting?.enabled ?? false;
   const canShow = enabled && api.platform === 'darwin';
   const [meetings, setMeetings] = useState<UpcomingMeeting[]>([]);
-  const [expandedMeetingId, setExpandedMeetingId] = useState<string | null>(
+  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(
     null,
   );
   const [isLoading, setIsLoading] = useState(false);
@@ -228,11 +303,12 @@ export function NextMeetingButton() {
       try {
         const nextMeetings = await api.calendar.listUpcomingMeetings();
         if (!isCancelled) {
-          setMeetings([...nextMeetings].sort(compareMeetings));
-          setExpandedMeetingId((current) =>
-            current && nextMeetings.some((meeting) => meeting.id === current)
+          const sortedMeetings = [...nextMeetings].sort(compareMeetings);
+          setMeetings(sortedMeetings);
+          setSelectedMeetingId((current) =>
+            current && sortedMeetings.some((meeting) => meeting.id === current)
               ? current
-              : null,
+              : (sortedMeetings[0]?.id ?? null),
           );
         }
       } catch (error) {
@@ -269,6 +345,19 @@ export function NextMeetingButton() {
 
   const nextMeeting = meetings[0];
   const nextMeetingStatus = nextMeeting ? getMeetingStatus(nextMeeting) : null;
+  const selectedMeeting =
+    meetings.find((meeting) => meeting.id === selectedMeetingId) ?? nextMeeting;
+  const openMeeting = (meeting: UpcomingMeeting) => {
+    void api.calendar.revealMeeting(meeting).catch((error) => {
+      addToast({
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Could not open meeting in Calendar',
+        type: 'error',
+      });
+    });
+  };
 
   return (
     <Dropdown
@@ -309,7 +398,7 @@ export function NextMeetingButton() {
           )}
         </Button>
       }
-      className="max-h-[80vh] w-[560px] p-2"
+      className="flex h-[88vh] !max-h-[calc(100vh-32px)] w-[920px] max-w-[calc(100vw-32px)] flex-col !overflow-hidden p-3"
     >
       <div className="px-2 pt-1 pb-2">
         <div className="text-ink-1 text-sm font-semibold">
@@ -329,30 +418,23 @@ export function NextMeetingButton() {
           No upcoming meetings found.
         </div>
       ) : (
-        <div className="flex flex-col gap-2 px-2 pb-2">
-          {meetings.map((meeting) => (
-            <MeetingRow
-              key={meeting.id}
-              meeting={meeting}
-              isExpanded={expandedMeetingId === meeting.id}
-              onToggle={() =>
-                setExpandedMeetingId((current) =>
-                  current === meeting.id ? null : meeting.id,
-                )
-              }
-              onOpen={() => {
-                void api.calendar.revealMeeting(meeting).catch((error) => {
-                  addToast({
-                    message:
-                      error instanceof Error
-                        ? error.message
-                        : 'Could not open meeting in Calendar',
-                    type: 'error',
-                  });
-                });
-              }}
+        <div className="grid min-h-0 flex-1 gap-3 px-2 pb-2 md:grid-cols-[minmax(260px,360px)_1fr]">
+          <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pr-1">
+            {meetings.map((meeting) => (
+              <MeetingRow
+                key={meeting.id}
+                meeting={meeting}
+                isSelected={selectedMeeting?.id === meeting.id}
+                onSelect={() => setSelectedMeetingId(meeting.id)}
+              />
+            ))}
+          </div>
+          {selectedMeeting && (
+            <MeetingDetailsPane
+              meeting={selectedMeeting}
+              onOpen={() => openMeeting(selectedMeeting)}
             />
-          ))}
+          )}
         </div>
       )}
     </Dropdown>
