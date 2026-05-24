@@ -237,6 +237,7 @@ export const AGENT_CHANNELS = {
   GET_MESSAGES: 'agent:getMessages',
   GET_MESSAGE_COUNT: 'agent:getMessageCount',
   QUEUE_PROMPT: 'agent:queuePrompt',
+  UPDATE_QUEUED_PROMPT: 'agent:updateQueuedPrompt',
   CANCEL_QUEUED_PROMPT: 'agent:cancelQueuedPrompt',
   GET_PENDING_REQUEST: 'agent:getPendingRequest',
   GET_MESSAGES_WITH_RAW_DATA: 'agent:getMessagesWithRawData',

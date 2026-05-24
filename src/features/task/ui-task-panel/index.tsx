@@ -331,6 +331,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     respondToQuestion,
     sendMessage,
     queuePrompt,
+    updateQueuedPrompt,
     cancelQueuedPrompt,
     isStarting,
     isStopping,
@@ -1527,6 +1528,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onFilePathClick={handleFilePathClick}
                   onToolDiffClick={handleToolDiffClick}
                   onCancelQueuedPrompt={cancelQueuedPrompt}
+                  onUpdateQueuedPrompt={updateQueuedPrompt}
                   onShowRawMessage={openDebugMessages}
                   bottomPadding={footerHeight}
                   pendingPermission={permissionProps}
@@ -1637,6 +1639,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   canSendMessage={!!canSendMessage}
                   onSend={sendMessage}
                   onQueue={queuePrompt}
+                  queuedPrompts={agentState.queuedPrompts}
                   onStop={handleStop}
                   contextUsage={contextUsage}
                   projectRoot={taskRootPath}
@@ -1796,6 +1799,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   canSendMessage,
   onSend,
   onQueue,
+  queuedPrompts,
   onStop,
   contextUsage,
   projectRoot,
@@ -1808,6 +1812,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   canSendMessage: boolean;
   onSend: (parts: PromptPart[]) => void;
   onQueue: (parts: PromptPart[]) => void;
+  queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
   contextUsage: ContextUsage;
   projectRoot: string | null;
@@ -1971,6 +1976,18 @@ const TaskInputFooter = memo(function TaskInputFooter({
     [clearPromptDraft, onQueue],
   );
 
+  const handleStop = useCallback(async () => {
+    if (queuedPrompts.length > 0) {
+      setPromptDraft(
+        [promptDraft, ...queuedPrompts.map((prompt) => prompt.content)]
+          .filter((part) => part.trim().length > 0)
+          .join('\n\n'),
+      );
+    }
+
+    await onStop();
+  }, [onStop, promptDraft, queuedPrompts, setPromptDraft]);
+
   const [inputFocused, setInputFocused] = useState(false);
 
   // Allow send with just pills (no typed text)
@@ -2009,7 +2026,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
         <MessageInput
           onSend={handleSendMessage}
           onQueue={handleQueuePrompt}
-          onStop={onStop}
+          onStop={handleStop}
           disabled={!effectiveCanSend}
           allowEmptySubmit={openReviewComments.length > 0}
           placeholder="Send a follow-up message..."

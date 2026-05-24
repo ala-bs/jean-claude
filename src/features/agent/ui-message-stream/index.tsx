@@ -86,6 +86,7 @@ export const MessageStream = memo(function MessageStream({
   onFilePathClick,
   onToolDiffClick,
   onCancelQueuedPrompt,
+  onUpdateQueuedPrompt,
   onShowRawMessage,
   bottomPadding = 0,
   pendingPermission,
@@ -109,6 +110,7 @@ export const MessageStream = memo(function MessageStream({
     newString: string,
   ) => void;
   onCancelQueuedPrompt?: (promptId: string) => void;
+  onUpdateQueuedPrompt?: (promptId: string, content: string) => void;
   /** Callback when user wants to see a message's raw data in the debug pane */
   onShowRawMessage?: (entryId: string) => void;
   /** Extra bottom padding (px) so content can scroll behind a floating footer */
@@ -460,6 +462,7 @@ export const MessageStream = memo(function MessageStream({
               key={prompt.id}
               prompt={prompt}
               onCancel={onCancelQueuedPrompt ?? (() => {})}
+              onUpdate={onUpdateQueuedPrompt ?? (() => {})}
             />
           ))}
           {/* Permission request (in-stream banner) */}

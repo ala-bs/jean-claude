@@ -2595,6 +2595,14 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    AGENT_CHANNELS.UPDATE_QUEUED_PROMPT,
+    (_, stepId: string, promptId: string, content: string) => {
+      dbg.ipc('agent:updateQueuedPrompt step=%s, prompt=%s', stepId, promptId);
+      return agentService.updateQueuedPrompt(stepId, promptId, content);
+    },
+  );
+
+  ipcMain.handle(
     AGENT_CHANNELS.CANCEL_QUEUED_PROMPT,
     (_, stepId: string, promptId: string) => {
       dbg.ipc('agent:cancelQueuedPrompt step=%s, prompt=%s', stepId, promptId);

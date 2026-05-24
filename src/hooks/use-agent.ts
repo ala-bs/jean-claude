@@ -144,6 +144,14 @@ export function useAgentControls({
     [stepId],
   );
 
+  const updateQueuedPrompt = useCallback(
+    async (promptId: string, content: string) => {
+      if (!stepId) return;
+      await api.agent.updateQueuedPrompt(stepId, promptId, content);
+    },
+    [stepId],
+  );
+
   return {
     start,
     stop,
@@ -151,6 +159,7 @@ export function useAgentControls({
     respondToQuestion,
     sendMessage,
     queuePrompt,
+    updateQueuedPrompt,
     cancelQueuedPrompt,
     isStarting,
     isStopping,

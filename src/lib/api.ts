@@ -831,6 +831,11 @@ export interface Api {
       stepId: string,
       parts: PromptPart[],
     ) => Promise<{ promptId: string }>;
+    updateQueuedPrompt: (
+      stepId: string,
+      promptId: string,
+      content: string,
+    ) => Promise<void>;
     cancelQueuedPrompt: (stepId: string, promptId: string) => Promise<void>;
     getBackendModels: (
       backend: string,
@@ -1503,6 +1508,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         queuePrompt: async () => {
+          throw new Error('API not available');
+        },
+        updateQueuedPrompt: async () => {
           throw new Error('API not available');
         },
         cancelQueuedPrompt: async () => {

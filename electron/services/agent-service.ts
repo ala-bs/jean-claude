@@ -1330,6 +1330,43 @@ class AgentService {
   }
 
   /**
+   * Update a queued prompt before it is sent.
+   */
+  updateQueuedPrompt(stepId: string, promptId: string, content: string): void {
+    const session = this.sessions.get(stepId);
+    if (!session) {
+      throw new Error(`No active session for step ${stepId}`);
+    }
+
+    const queuedPrompt = session.queuedPrompts.find((p) => p.id === promptId);
+    if (!queuedPrompt) {
+      throw new Error(`Queued prompt ${promptId} not found`);
+    }
+
+    const existingParts =
+      queuedPromptParts.get(promptId) ?? textPrompt(queuedPrompt.content);
+    const textPartIndex = existingParts.findIndex(
+      (part) => part.type === 'text',
+    );
+    const updatedParts = [...existingParts];
+
+    if (textPartIndex >= 0) {
+      updatedParts[textPartIndex] = { type: 'text', text: content };
+    } else {
+      updatedParts.unshift({ type: 'text', text: content });
+    }
+
+    queuedPrompt.content = content;
+    queuedPromptParts.set(promptId, updatedParts);
+    this.emitEvent(session.taskId, stepId, {
+      type: 'queue-update',
+      queuedPrompts: session.queuedPrompts,
+    });
+
+    dbg.agent('Updated queued prompt %s for step %s', promptId, stepId);
+  }
+
+  /**
    * Cancel a specific queued prompt.
    */
   cancelQueuedPrompt(stepId: string, promptId: string): void {
