@@ -1,11 +1,11 @@
 import {
   AlertTriangle,
   Box,
+  ChevronDown,
+  ChevronRight,
   Cpu,
   Diamond,
-  FileText,
   Folder,
-  GitBranch,
   Grid3X3,
   List,
   MoreHorizontal,
@@ -36,126 +36,174 @@ import { AiGenerationSettings } from '@/features/settings/ui-ai-generation-setti
 import { AutocompleteSettings } from '@/features/settings/ui-autocomplete-settings';
 import { AzureDevOpsTab } from '@/features/settings/ui-azure-devops-tab';
 import { DebugDatabase } from '@/features/settings/ui-debug-database';
-import { GeneralSettings } from '@/features/settings/ui-general-settings';
+import {
+  EditorSettings,
+  NotificationsSettings,
+  CalendarSettings,
+  UsageDisplaySettings,
+  MaintenanceSettings,
+  BackendsSettings,
+} from '@/features/settings/ui-general-settings';
 import { GlobalPermissionsSettings } from '@/features/settings/ui-global-permissions-settings';
 import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings';
 import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';
 import { SkillsSettings } from '@/features/settings/ui-skills-settings';
 import { TokensTab } from '@/features/settings/ui-tokens-tab';
+import { api } from '@/lib/api';
 
 import { useCurrentSettingsProject } from './use-current-settings-project';
 
-type GlobalMenuItem =
-  | 'general'
-  | 'coding-agents'
-  | 'ai-generation'
-  | 'permissions'
-  | 'skills'
-  | 'prompt-snippets'
-  | 'mcp-servers'
-  | 'tokens'
-  | 'azure-devops'
-  | 'autocomplete'
-  | 'debug';
+/* ── Types ── */
 
-const GLOBAL_MENU_ITEMS: {
-  id: GlobalMenuItem;
+type GlobalSubItem = {
+  id: string;
+  label: string;
+};
+
+type GlobalSection = {
+  id: string;
   label: string;
   icon: React.ElementType;
   title: string;
   subtitle: string;
-}[] = [
-  {
-    id: 'general',
-    label: 'General',
-    icon: Settings,
-    title: 'General',
-    subtitle: 'Editor preferences and app behavior',
-  },
-  {
-    id: 'coding-agents',
-    label: 'Coding Agents',
-    icon: Grid3X3,
-    title: 'Coding Agents',
-    subtitle: 'Backends and saved backend/model combinations',
-  },
-  {
-    id: 'ai-generation',
-    label: 'AI Generation',
-    icon: Sparkles,
-    title: 'AI Generation',
-    subtitle: 'Configure AI-powered content generation',
-  },
-  {
-    id: 'permissions',
-    label: 'Permissions',
-    icon: Zap,
-    title: 'Permissions',
-    subtitle: 'Manage global tool and command permissions',
-  },
-  {
-    id: 'skills',
-    label: 'Skills',
-    icon: Box,
-    title: 'Skills',
-    subtitle: 'Manage and discover agent skills',
-  },
-  {
-    id: 'prompt-snippets',
-    label: 'Snippets',
-    icon: Terminal,
-    title: 'Prompt Snippets',
-    subtitle: 'Reusable prompt templates with variables',
-  },
-  {
-    id: 'mcp-servers',
-    label: 'MCP Servers',
-    icon: Cpu,
-    title: 'MCP Servers',
-    subtitle: 'Model Context Protocol server templates',
-  },
-  {
-    id: 'tokens',
-    label: 'Tokens',
-    icon: MoreHorizontal,
-    title: 'Tokens',
-    subtitle: 'Provider authentication tokens',
-  },
-  {
-    id: 'azure-devops',
-    label: 'Azure DevOps',
-    icon: Diamond,
-    title: 'Azure DevOps',
-    subtitle: 'Organization and PAT management',
-  },
-  {
-    id: 'autocomplete',
-    label: 'Autocomplete',
-    icon: Terminal,
-    title: 'Autocomplete',
-    subtitle: 'Inline code completion configuration',
-  },
-  {
-    id: 'debug',
-    label: 'Debug',
-    icon: List,
-    title: 'Debug',
-    subtitle: 'Database viewer and diagnostics',
-  },
-];
+  subs?: GlobalSubItem[];
+};
 
-const PROJECT_MENU_ITEMS: {
-  id: ProjectSettingsMenuItem;
+type ProjectSubItem = {
+  id: string;
+  label: string;
+};
+
+type ProjectSection = {
+  id: string;
   label: string;
   icon: React.ElementType;
-}[] = [
-  { id: 'details', label: 'Details', icon: FileText },
+  subs?: ProjectSubItem[];
+};
+
+/* ── Section definitions ── */
+
+let _cachedGlobalSections: GlobalSection[] | null = null;
+
+function getGlobalSections(): GlobalSection[] {
+  if (_cachedGlobalSections) return _cachedGlobalSections;
+
+  const generalSubs: GlobalSubItem[] = [
+    { id: 'editor', label: 'Editor' },
+    { id: 'backends', label: 'Agent Backends' },
+    { id: 'notifications', label: 'Notifications' },
+    ...(api.platform === 'darwin'
+      ? [{ id: 'calendar', label: 'Calendar' }]
+      : []),
+    { id: 'usage', label: 'Usage Display' },
+    { id: 'maintenance', label: 'Maintenance' },
+  ];
+
+  _cachedGlobalSections = [
+    {
+      id: 'general',
+      label: 'General',
+      icon: Settings,
+      title: 'General',
+      subtitle: 'Editor preferences and app behavior',
+      subs: generalSubs,
+    },
+    {
+      id: 'coding-agents',
+      label: 'Coding Agents',
+      icon: Grid3X3,
+      title: 'Coding Agents',
+      subtitle: 'Saved backend/model preset combinations',
+    },
+    {
+      id: 'ai-generation',
+      label: 'AI Generation',
+      icon: Sparkles,
+      title: 'AI Generation',
+      subtitle: 'Configure AI-powered content generation',
+    },
+    {
+      id: 'permissions',
+      label: 'Permissions',
+      icon: Zap,
+      title: 'Permissions',
+      subtitle: 'Manage global tool and command permissions',
+    },
+    {
+      id: 'skills',
+      label: 'Skills',
+      icon: Box,
+      title: 'Skills',
+      subtitle: 'Manage and discover agent skills',
+    },
+    {
+      id: 'prompt-snippets',
+      label: 'Snippets',
+      icon: Terminal,
+      title: 'Prompt Snippets',
+      subtitle: 'Reusable prompt templates with variables',
+    },
+    {
+      id: 'mcp-servers',
+      label: 'MCP Servers',
+      icon: Cpu,
+      title: 'MCP Servers',
+      subtitle: 'Model Context Protocol server templates',
+    },
+    {
+      id: 'tokens',
+      label: 'Tokens',
+      icon: MoreHorizontal,
+      title: 'Tokens',
+      subtitle: 'Provider authentication tokens',
+    },
+    {
+      id: 'azure-devops',
+      label: 'Azure DevOps',
+      icon: Diamond,
+      title: 'Azure DevOps',
+      subtitle: 'Organization and PAT management',
+    },
+    {
+      id: 'autocomplete',
+      label: 'Autocomplete',
+      icon: Terminal,
+      title: 'Autocomplete',
+      subtitle: 'Inline code completion configuration',
+    },
+    {
+      id: 'debug',
+      label: 'Debug',
+      icon: List,
+      title: 'Debug',
+      subtitle: 'Database viewer and diagnostics',
+    },
+  ];
+  return _cachedGlobalSections;
+}
+
+const PROJECT_SECTIONS: ProjectSection[] = [
+  {
+    id: 'project-general',
+    label: 'General',
+    icon: Settings,
+    subs: [
+      { id: 'details', label: 'Details' },
+      { id: 'worktree', label: 'Worktree' },
+      { id: 'autocomplete', label: 'Autocomplete' },
+    ],
+  },
   { id: 'permissions', label: 'Permissions', icon: Zap },
-  { id: 'worktree', label: 'Worktree', icon: Folder },
-  { id: 'autocomplete', label: 'Autocomplete', icon: Terminal },
-  { id: 'integrations', label: 'Integrations', icon: Plug },
-  { id: 'pipelines', label: 'Pipelines', icon: GitBranch },
+  {
+    id: 'project-integrations',
+    label: 'Integrations',
+    icon: Plug,
+    subs: [
+      { id: 'integrations', label: 'Repo & Work Items' },
+      { id: 'pipelines', label: 'Pipelines' },
+    ],
+  },
   { id: 'run-commands', label: 'Run Commands', icon: Play },
   { id: 'skills', label: 'Skills', icon: Box },
   { id: 'mcp-overrides', label: 'MCP Overrides', icon: Cpu },
@@ -163,7 +211,7 @@ const PROJECT_MENU_ITEMS: {
   { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle },
 ];
 
-/* ── Shared style constants (avoid recreating objects every render) ── */
+/* ── Shared style constants ── */
 
 const SEGMENTED_TAB_ACTIVE: React.CSSProperties = {
   background:
@@ -178,21 +226,42 @@ const SEGMENTED_TAB_INACTIVE: React.CSSProperties = {
   color: 'oklch(0.7 0.01 280)',
 };
 
-const NAV_ITEM_ACTIVE: React.CSSProperties = {
-  background:
-    'linear-gradient(135deg, color-mix(in oklch, oklch(0.78 0.18 295) 22%, transparent), color-mix(in oklch, oklch(0.78 0.18 295) 4%, transparent))',
-  border:
-    '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 35%, transparent)',
+const NAV_SECTION_ACTIVE: React.CSSProperties = {
+  background: 'oklch(1 0 0 / 0.06)',
   color: 'oklch(0.99 0 0)',
   fontWeight: 500,
-  boxShadow:
-    '0 0 20px color-mix(in oklch, oklch(0.78 0.18 295) 15%, transparent)',
 };
 
-const NAV_ITEM_INACTIVE: React.CSSProperties = {
+const NAV_SECTION_INACTIVE: React.CSSProperties = {
+  background: 'transparent',
+  color: 'oklch(0.72 0.01 280)',
+};
+
+const NAV_SECTION_ACTIVE_LEAF: React.CSSProperties = {
+  background: 'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
+  border:
+    '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
+  borderLeft: '2px solid oklch(0.78 0.18 295)',
+  color: 'oklch(0.99 0 0)',
+  fontWeight: 500,
+};
+
+const NAV_SUB_ACTIVE: React.CSSProperties = {
+  background: 'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
+  border:
+    '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
+  borderLeft: '2px solid oklch(0.78 0.18 295)',
+  paddingLeft: 9,
+  color: 'oklch(0.99 0 0)',
+  fontWeight: 500,
+};
+
+const NAV_SUB_INACTIVE: React.CSSProperties = {
   background: 'transparent',
   border: '1px solid transparent',
-  color: 'oklch(0.72 0.01 280)',
+  borderLeft: '2px solid transparent',
+  paddingLeft: 9,
+  color: 'oklch(0.62 0.01 280)',
 };
 
 const NAV_ICON_ACTIVE: React.CSSProperties = {
@@ -203,57 +272,135 @@ const NAV_ICON_INACTIVE: React.CSSProperties = {
   color: 'oklch(0.55 0.01 280)',
 };
 
-/* ── Components ── */
+/* ── Active selection state ── */
 
-// Skills needs a fill-height flex layout so its columns scroll independently
-const FILL_HEIGHT_SECTIONS: GlobalMenuItem[] = ['skills', 'prompt-snippets'];
-const FILL_HEIGHT_PROJECT_SECTIONS: ProjectSettingsMenuItem[] = ['skills'];
+type ActiveSelection = {
+  sectionId: string;
+  subId?: string;
+};
 
-function GlobalContent({ menuItem }: { menuItem: GlobalMenuItem }) {
-  const item = GLOBAL_MENU_ITEMS.find((i) => i.id === menuItem);
-  const fillHeight = FILL_HEIGHT_SECTIONS.includes(menuItem);
+function getDefaultSelection(sections: GlobalSection[]): ActiveSelection {
+  const first = sections[0];
+  return first.subs
+    ? { sectionId: first.id, subId: first.subs[0].id }
+    : { sectionId: first.id };
+}
+
+function getDefaultProjectSelection(): {
+  sectionId: string;
+  subId?: string;
+} {
+  const first = PROJECT_SECTIONS[0];
+  return first.subs
+    ? { sectionId: first.id, subId: first.subs[0].id }
+    : { sectionId: first.id };
+}
+
+/* ── Content rendering ── */
+
+// Skills / snippets need fill-height flex layout
+function isFillHeightGlobal(sel: ActiveSelection): boolean {
+  return sel.sectionId === 'skills' || sel.sectionId === 'prompt-snippets';
+}
+
+function isFillHeightProject(menuItem: ProjectSettingsMenuItem): boolean {
+  return menuItem === 'skills';
+}
+
+function GlobalContent({ selection }: { selection: ActiveSelection }) {
+  const section = getGlobalSections().find((s) => s.id === selection.sectionId);
+  const fillHeight = isFillHeightGlobal(selection);
 
   if (fillHeight) {
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        <GlobalContentInner menuItem={menuItem} />
+        <GlobalContentInner selection={selection} />
       </div>
     );
   }
 
+  // Determine breadcrumb + title
+  const subItem = section?.subs?.find((s) => s.id === selection.subId);
+
   return (
     <div>
-      {item && (
+      {section && (
         <div className="mb-5">
-          <div
-            className="mb-1 font-mono text-[10.5px] font-semibold tracking-wide uppercase"
-            style={{ color: 'oklch(0.78 0.18 295)' }}
-          >
-            Section
-          </div>
+          {/* Breadcrumb for sub-items */}
+          {subItem && (
+            <div
+              className="mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase"
+              style={{ color: 'oklch(0.55 0.01 280)' }}
+            >
+              <span>{section.label}</span>
+              <ChevronRight size={10} style={{ opacity: 0.5 }} />
+              <span style={{ color: 'oklch(0.78 0.18 295)' }}>
+                {subItem.label}
+              </span>
+            </div>
+          )}
           <div
             className="text-[18px] font-semibold tracking-tight"
             style={{ color: 'oklch(0.97 0.01 280)' }}
           >
-            {item.title}
+            {subItem?.label ?? section.title}
           </div>
           <div
             className="text-[12.5px]"
             style={{ color: 'oklch(0.62 0.01 280)' }}
           >
-            {item.subtitle}
+            {subItem
+              ? getGlobalSubtitle(selection.sectionId, selection.subId!)
+              : section.subtitle}
           </div>
         </div>
       )}
-      <GlobalContentInner menuItem={menuItem} />
+      <GlobalContentInner selection={selection} />
     </div>
   );
 }
 
-function GlobalContentInner({ menuItem }: { menuItem: GlobalMenuItem }) {
-  switch (menuItem) {
-    case 'general':
-      return <GeneralSettings />;
+function getGlobalSubtitle(sectionId: string, subId: string): string {
+  if (sectionId === 'general') {
+    switch (subId) {
+      case 'editor':
+        return 'Where projects open and how they launch.';
+      case 'backends':
+        return 'Enable or disable agent backends for task creation.';
+      case 'notifications':
+        return 'How and when jean-claude lets you know about runs.';
+      case 'calendar':
+        return 'Meeting reminders from your macOS Calendar.';
+      case 'usage':
+        return 'Rate-limit pills shown in the title bar.';
+      case 'maintenance':
+        return 'Cleanup, gitignore, and housekeeping tools.';
+    }
+  }
+  return '';
+}
+
+function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
+  // Handle sub-items for sections with subs
+  if (selection.subId) {
+    switch (`${selection.sectionId}:${selection.subId}`) {
+      case 'general:editor':
+        return <EditorSettings />;
+      case 'general:backends':
+        return <BackendsSettings />;
+      case 'general:notifications':
+        return <NotificationsSettings />;
+      case 'general:calendar':
+        return <CalendarSettings />;
+      case 'general:usage':
+        return <UsageDisplaySettings />;
+      case 'general:maintenance':
+        return <MaintenanceSettings />;
+    }
+  }
+
+  // Handle leaf sections (no subs)
+  switch (selection.sectionId) {
     case 'coding-agents':
       return <ModelPresetsSettings />;
     case 'ai-generation':
@@ -274,8 +421,31 @@ function GlobalContentInner({ menuItem }: { menuItem: GlobalMenuItem }) {
       return <AutocompleteSettings />;
     case 'debug':
       return <DebugDatabase />;
+    default:
+      return null;
   }
 }
+
+/* ── Resolve project menu item from section selection ── */
+
+function resolveProjectMenuItem(sel: {
+  sectionId: string;
+  subId?: string;
+}): ProjectSettingsMenuItem {
+  // For sections with subs, the subId is the actual menu item
+  if (sel.subId) return sel.subId as ProjectSettingsMenuItem;
+
+  // For leaf sections, map sectionId to menu item
+  const section = PROJECT_SECTIONS.find((s) => s.id === sel.sectionId);
+  if (section && !section.subs) {
+    // For leaf project sections, the sectionId IS the menu item (e.g. 'permissions', 'skills')
+    return sel.sectionId as ProjectSettingsMenuItem;
+  }
+
+  return 'details';
+}
+
+/* ── Main component ── */
 
 export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const layer = useKeyboardLayer('overlay', {
@@ -290,7 +460,6 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
     overrideProjectId: selectedProjectId,
   });
 
-  // Auto-select first project when none is inferred (e.g. opening from /all route)
   const resolvedProject =
     currentProject ?? (projects.length > 0 ? projects[0] : null);
   const resolvedProjectId = resolvedProject?.id ?? null;
@@ -298,10 +467,26 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const [activeTab, setActiveTab] = useState<'global' | 'project'>(
     resolvedProject !== null ? 'project' : 'global',
   );
-  const [globalMenuItem, setGlobalMenuItem] =
-    useState<GlobalMenuItem>('general');
-  const [projectMenuItem, setProjectMenuItem] =
-    useState<ProjectSettingsMenuItem>('details');
+
+  // Global: track active selection + which section is expanded
+  const [globalSelection, setGlobalSelection] = useState<ActiveSelection>(() =>
+    getDefaultSelection(getGlobalSections()),
+  );
+  const [expandedGlobalSection, setExpandedGlobalSection] = useState<
+    string | null
+  >(() => {
+    const sections = getGlobalSections();
+    return sections[0].subs ? sections[0].id : null;
+  });
+
+  // Project: track active selection + which section is expanded
+  const [projectSelection, setProjectSelection] = useState<{
+    sectionId: string;
+    subId?: string;
+  }>(getDefaultProjectSelection());
+  const [expandedProjectSection, setExpandedProjectSection] = useState<
+    string | null
+  >(PROJECT_SECTIONS[0].subs ? PROJECT_SECTIONS[0].id : null);
 
   const hasProjectTab = projects.length > 0;
   const projectOptions = useMemo<SelectOption<string>[]>(
@@ -318,7 +503,6 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
     setActiveTab('project');
   }, []);
 
-  // When switching to project tab, ensure a project is selected
   const handleProjectTab = useCallback(() => {
     if (!resolvedProjectId && projects.length > 0) {
       setSelectedProjectId(projects[0].id);
@@ -326,31 +510,172 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
     setActiveTab('project');
   }, [resolvedProjectId, projects]);
 
+  // Click a global section
+  const handleGlobalSectionClick = useCallback(
+    (section: GlobalSection) => {
+      if (section.subs) {
+        // Toggle expand. If expanding and not already selected in this section, select first sub
+        if (expandedGlobalSection === section.id) {
+          setExpandedGlobalSection(null);
+        } else {
+          setExpandedGlobalSection(section.id);
+          if (globalSelection.sectionId !== section.id) {
+            setGlobalSelection({
+              sectionId: section.id,
+              subId: section.subs[0].id,
+            });
+          }
+        }
+      } else {
+        // Leaf section — select it directly
+        setExpandedGlobalSection(null);
+        setGlobalSelection({ sectionId: section.id });
+      }
+    },
+    [expandedGlobalSection, globalSelection.sectionId],
+  );
+
+  // Click a global sub-item
+  const handleGlobalSubClick = useCallback(
+    (sectionId: string, subId: string) => {
+      setGlobalSelection({ sectionId, subId });
+    },
+    [],
+  );
+
+  // Click a project section
+  const handleProjectSectionClick = useCallback(
+    (section: ProjectSection) => {
+      if (section.subs) {
+        if (expandedProjectSection === section.id) {
+          setExpandedProjectSection(null);
+        } else {
+          setExpandedProjectSection(section.id);
+          if (projectSelection.sectionId !== section.id) {
+            setProjectSelection({
+              sectionId: section.id,
+              subId: section.subs[0].id,
+            });
+          }
+        }
+      } else {
+        setExpandedProjectSection(null);
+        setProjectSelection({ sectionId: section.id });
+      }
+    },
+    [expandedProjectSection, projectSelection.sectionId],
+  );
+
+  // Click a project sub-item
+  const handleProjectSubClick = useCallback(
+    (sectionId: string, subId: string) => {
+      setProjectSelection({ sectionId, subId });
+    },
+    [],
+  );
+
+  // Flatten sections + subs for keyboard navigation
+  const flatGlobalItems = useMemo(() => {
+    const items: ActiveSelection[] = [];
+    for (const section of getGlobalSections()) {
+      if (section.subs && expandedGlobalSection === section.id) {
+        for (const sub of section.subs) {
+          items.push({ sectionId: section.id, subId: sub.id });
+        }
+      } else {
+        items.push({ sectionId: section.id });
+      }
+    }
+    return items;
+  }, [expandedGlobalSection]);
+
+  const flatProjectItems = useMemo(() => {
+    const items: { sectionId: string; subId?: string }[] = [];
+    for (const section of PROJECT_SECTIONS) {
+      if (section.subs && expandedProjectSection === section.id) {
+        for (const sub of section.subs) {
+          items.push({ sectionId: section.id, subId: sub.id });
+        }
+      } else {
+        items.push({ sectionId: section.id });
+      }
+    }
+    return items;
+  }, [expandedProjectSection]);
+
   const navigateMenu = useCallback(
     (direction: 'up' | 'down') => {
       if (activeTab === 'global') {
-        const currentIndex = GLOBAL_MENU_ITEMS.findIndex(
-          (item) => item.id === globalMenuItem,
+        let currentIndex = flatGlobalItems.findIndex(
+          (item) =>
+            item.sectionId === globalSelection.sectionId &&
+            item.subId === globalSelection.subId,
         );
+        // If current selection not in flat list (parent collapsed), start from top
+        if (currentIndex === -1) currentIndex = 0;
         const nextIndex =
           direction === 'down'
-            ? (currentIndex + 1) % GLOBAL_MENU_ITEMS.length
-            : (currentIndex - 1 + GLOBAL_MENU_ITEMS.length) %
-              GLOBAL_MENU_ITEMS.length;
-        setGlobalMenuItem(GLOBAL_MENU_ITEMS[nextIndex].id);
+            ? (currentIndex + 1) % flatGlobalItems.length
+            : (currentIndex - 1 + flatGlobalItems.length) %
+              flatGlobalItems.length;
+        const next = flatGlobalItems[nextIndex];
+        if (next.subId) {
+          // Navigating to a sub-item: ensure its section is expanded
+          setExpandedGlobalSection(next.sectionId);
+          setGlobalSelection(next);
+        } else {
+          // Navigating to a leaf section
+          const section = getGlobalSections().find(
+            (s) => s.id === next.sectionId,
+          );
+          if (section?.subs) {
+            // Expanding into a section with subs — select first sub
+            setExpandedGlobalSection(section.id);
+            setGlobalSelection({
+              sectionId: section.id,
+              subId: section.subs[0].id,
+            });
+          } else {
+            setGlobalSelection(next);
+          }
+        }
       } else if (activeTab === 'project') {
-        const currentIndex = PROJECT_MENU_ITEMS.findIndex(
-          (item) => item.id === projectMenuItem,
+        let currentIndex = flatProjectItems.findIndex(
+          (item) =>
+            item.sectionId === projectSelection.sectionId &&
+            item.subId === projectSelection.subId,
         );
+        if (currentIndex === -1) currentIndex = 0;
         const nextIndex =
           direction === 'down'
-            ? (currentIndex + 1) % PROJECT_MENU_ITEMS.length
-            : (currentIndex - 1 + PROJECT_MENU_ITEMS.length) %
-              PROJECT_MENU_ITEMS.length;
-        setProjectMenuItem(PROJECT_MENU_ITEMS[nextIndex].id);
+            ? (currentIndex + 1) % flatProjectItems.length
+            : (currentIndex - 1 + flatProjectItems.length) %
+              flatProjectItems.length;
+        const next = flatProjectItems[nextIndex];
+        if (next.subId) {
+          setExpandedProjectSection(next.sectionId);
+          setProjectSelection(next);
+        } else {
+          const section = PROJECT_SECTIONS.find((s) => s.id === next.sectionId);
+          if (section?.subs) {
+            setExpandedProjectSection(section.id);
+            setProjectSelection({
+              sectionId: section.id,
+              subId: section.subs[0].id,
+            });
+          } else {
+            setProjectSelection(next);
+          }
+        }
       }
     },
-    [activeTab, globalMenuItem, projectMenuItem],
+    [
+      activeTab,
+      flatGlobalItems,
+      flatProjectItems,
+      globalSelection,
+      projectSelection,
+    ],
   );
 
   useRegisterKeyboardBindings(
@@ -401,6 +726,11 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const handleProjectDeleted = useCallback(() => {
     onClose();
   }, [onClose]);
+
+  const projectMenuItem = resolveProjectMenuItem(projectSelection);
+  const fillHeight =
+    (activeTab === 'global' && isFillHeightGlobal(globalSelection)) ||
+    (activeTab === 'project' && isFillHeightProject(projectMenuItem));
 
   return createPortal(
     <FocusLock returnFocus>
@@ -525,7 +855,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               {/* Left sidebar menu */}
               <div
-                className="flex w-[200px] shrink-0 flex-col"
+                className="flex w-[220px] shrink-0 flex-col"
                 style={{
                   backgroundColor: 'oklch(0 0 0 / 0.2)',
                   borderRight: '1px solid oklch(1 0 0 / 0.05)',
@@ -533,7 +863,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                 }}
               >
                 <div
-                  className="mb-2 px-2 font-mono text-[9.5px] uppercase"
+                  className="mb-2 px-2 font-mono text-[9.5px] font-semibold uppercase"
                   style={{
                     letterSpacing: '0.1em',
                     color: 'oklch(0.5 0.01 280)',
@@ -549,104 +879,69 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                       ? 'Project settings sections'
                       : 'Global settings sections'
                   }
-                  {...(activeTab === 'project' && hasProjectTab
-                    ? { role: 'tablist' as const }
-                    : {})}
                 >
                   {activeTab === 'global' &&
-                    GLOBAL_MENU_ITEMS.map((item) => {
-                      const Icon = item.icon;
-                      const isActive = globalMenuItem === item.id;
-                      return (
-                        <button
-                          key={item.id}
-                          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors"
-                          style={isActive ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}
-                          aria-current={isActive ? 'true' : undefined}
-                          onClick={() => setGlobalMenuItem(item.id)}
-                        >
-                          <Icon
-                            size={14}
-                            style={
-                              isActive ? NAV_ICON_ACTIVE : NAV_ICON_INACTIVE
-                            }
-                          />
-                          {item.label}
-                        </button>
-                      );
-                    })}
+                    getGlobalSections().map((section) => (
+                      <GlobalNavSection
+                        key={section.id}
+                        section={section}
+                        isExpanded={expandedGlobalSection === section.id}
+                        isActive={globalSelection.sectionId === section.id}
+                        activeSubId={
+                          globalSelection.sectionId === section.id
+                            ? globalSelection.subId
+                            : undefined
+                        }
+                        onSectionClick={() => handleGlobalSectionClick(section)}
+                        onSubClick={(subId) =>
+                          handleGlobalSubClick(section.id, subId)
+                        }
+                      />
+                    ))}
 
                   {activeTab === 'project' &&
                     hasProjectTab &&
-                    PROJECT_MENU_ITEMS.map((item) => {
-                      const Icon = item.icon;
-                      const isActive = projectMenuItem === item.id;
-                      return (
-                        <button
-                          key={item.id}
-                          id={`project-settings-tab-${item.id}`}
-                          role="tab"
-                          aria-selected={isActive}
-                          aria-controls={`project-settings-panel-${item.id}`}
-                          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors"
-                          style={isActive ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}
-                          onClick={() => setProjectMenuItem(item.id)}
-                        >
-                          <Icon
-                            size={14}
-                            style={
-                              isActive ? NAV_ICON_ACTIVE : NAV_ICON_INACTIVE
-                            }
-                          />
-                          {item.label}
-                        </button>
-                      );
-                    })}
+                    PROJECT_SECTIONS.map((section) => (
+                      <ProjectNavSection
+                        key={section.id}
+                        section={section}
+                        isExpanded={expandedProjectSection === section.id}
+                        isActive={projectSelection.sectionId === section.id}
+                        activeSubId={
+                          projectSelection.sectionId === section.id
+                            ? projectSelection.subId
+                            : undefined
+                        }
+                        onSectionClick={() =>
+                          handleProjectSectionClick(section)
+                        }
+                        onSubClick={(subId) =>
+                          handleProjectSubClick(section.id, subId)
+                        }
+                      />
+                    ))}
                 </nav>
               </div>
 
               {/* Right content area */}
               <div
                 className={
-                  (activeTab === 'global' &&
-                    FILL_HEIGHT_SECTIONS.includes(globalMenuItem)) ||
-                  (activeTab === 'project' &&
-                    FILL_HEIGHT_PROJECT_SECTIONS.includes(projectMenuItem))
+                  fillHeight
                     ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
                     : 'min-w-0 flex-1 overflow-y-auto'
                 }
                 style={
-                  (activeTab === 'global' &&
-                    FILL_HEIGHT_SECTIONS.includes(globalMenuItem)) ||
-                  (activeTab === 'project' &&
-                    FILL_HEIGHT_PROJECT_SECTIONS.includes(projectMenuItem))
-                    ? { padding: 0 }
-                    : { padding: '20px 28px 28px' }
-                }
-                role={
-                  activeTab === 'project' && hasProjectTab
-                    ? 'tabpanel'
-                    : undefined
-                }
-                id={
-                  activeTab === 'project' && hasProjectTab
-                    ? `project-settings-panel-${projectMenuItem}`
-                    : undefined
-                }
-                aria-labelledby={
-                  activeTab === 'project' && hasProjectTab
-                    ? `project-settings-tab-${projectMenuItem}`
-                    : undefined
+                  fillHeight ? { padding: 0 } : { padding: '20px 28px 28px' }
                 }
               >
                 {activeTab === 'global' && (
-                  <GlobalContent menuItem={globalMenuItem} />
+                  <GlobalContent selection={globalSelection} />
                 )}
 
                 {activeTab === 'project' && resolvedProject && (
-                  <ProjectSettings
+                  <ProjectContent
                     projectId={resolvedProject.id}
-                    menuItem={projectMenuItem}
+                    selection={projectSelection}
                     onProjectDeleted={handleProjectDeleted}
                   />
                 )}
@@ -684,5 +979,210 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       </RemoveScroll>
     </FocusLock>,
     document.body,
+  );
+}
+
+/* ── Project content wrapper ── */
+
+function ProjectContent({
+  projectId,
+  selection,
+  onProjectDeleted,
+}: {
+  projectId: string;
+  selection: { sectionId: string; subId?: string };
+  onProjectDeleted: () => void;
+}) {
+  const menuItem = resolveProjectMenuItem(selection);
+  const section = PROJECT_SECTIONS.find((s) => s.id === selection.sectionId);
+  const subItem = section?.subs?.find((s) => s.id === selection.subId);
+  const fillHeight = isFillHeightProject(menuItem);
+
+  return (
+    <>
+      {!fillHeight && section && (
+        <div className="mb-5">
+          {subItem && (
+            <div
+              className="mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase"
+              style={{ color: 'oklch(0.55 0.01 280)' }}
+            >
+              <span>{section.label}</span>
+              <ChevronRight size={10} style={{ opacity: 0.5 }} />
+              <span style={{ color: 'oklch(0.78 0.18 295)' }}>
+                {subItem.label}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+      <ProjectSettings
+        projectId={projectId}
+        menuItem={menuItem}
+        onProjectDeleted={onProjectDeleted}
+      />
+    </>
+  );
+}
+
+/* ── Nav section components ── */
+
+function GlobalNavSection({
+  section,
+  isExpanded,
+  isActive,
+  activeSubId,
+  onSectionClick,
+  onSubClick,
+}: {
+  section: GlobalSection;
+  isExpanded: boolean;
+  isActive: boolean;
+  activeSubId?: string;
+  onSectionClick: () => void;
+  onSubClick: (subId: string) => void;
+}) {
+  const Icon = section.icon;
+  const hasSubs = !!section.subs;
+  const isLeafActive = isActive && !hasSubs;
+
+  return (
+    <>
+      <button
+        className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors"
+        style={
+          isLeafActive
+            ? NAV_SECTION_ACTIVE_LEAF
+            : isActive && hasSubs
+              ? NAV_SECTION_ACTIVE
+              : NAV_SECTION_INACTIVE
+        }
+        aria-current={isActive ? 'true' : undefined}
+        aria-expanded={hasSubs ? isExpanded : undefined}
+        onClick={onSectionClick}
+      >
+        <Icon
+          size={14}
+          style={isActive ? NAV_ICON_ACTIVE : NAV_ICON_INACTIVE}
+        />
+        <span className="flex-1">{section.label}</span>
+        {hasSubs &&
+          (isExpanded ? (
+            <ChevronDown size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+          ) : (
+            <ChevronRight size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+          ))}
+      </button>
+
+      {/* Sub-items */}
+      {isExpanded && section.subs && (
+        <div className="relative my-0.5 mb-1.5" style={{ paddingLeft: 24 }}>
+          {/* Vertical rail line */}
+          <div
+            className="absolute"
+            style={{
+              left: 16,
+              top: 4,
+              bottom: 4,
+              width: 1,
+              background: 'oklch(1 0 0 / 0.08)',
+            }}
+          />
+          {section.subs.map((sub) => {
+            const isSubActive = activeSubId === sub.id;
+            return (
+              <button
+                key={sub.id}
+                className="flex w-full items-center gap-1.5 rounded-[5px] px-2.5 py-[6px] text-left text-[12.5px] transition-colors"
+                style={isSubActive ? NAV_SUB_ACTIVE : NAV_SUB_INACTIVE}
+                aria-current={isSubActive ? 'true' : undefined}
+                onClick={() => onSubClick(sub.id)}
+              >
+                {sub.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ProjectNavSection({
+  section,
+  isExpanded,
+  isActive,
+  activeSubId,
+  onSectionClick,
+  onSubClick,
+}: {
+  section: ProjectSection;
+  isExpanded: boolean;
+  isActive: boolean;
+  activeSubId?: string;
+  onSectionClick: () => void;
+  onSubClick: (subId: string) => void;
+}) {
+  const Icon = section.icon;
+  const hasSubs = !!section.subs;
+  const isLeafActive = isActive && !hasSubs;
+
+  return (
+    <>
+      <button
+        className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors"
+        style={
+          isLeafActive
+            ? NAV_SECTION_ACTIVE_LEAF
+            : isActive && hasSubs
+              ? NAV_SECTION_ACTIVE
+              : NAV_SECTION_INACTIVE
+        }
+        aria-current={isActive ? 'true' : undefined}
+        aria-expanded={hasSubs ? isExpanded : undefined}
+        onClick={onSectionClick}
+      >
+        <Icon
+          size={14}
+          style={isActive ? NAV_ICON_ACTIVE : NAV_ICON_INACTIVE}
+        />
+        <span className="flex-1">{section.label}</span>
+        {hasSubs &&
+          (isExpanded ? (
+            <ChevronDown size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+          ) : (
+            <ChevronRight size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+          ))}
+      </button>
+
+      {isExpanded && section.subs && (
+        <div className="relative my-0.5 mb-1.5" style={{ paddingLeft: 24 }}>
+          <div
+            className="absolute"
+            style={{
+              left: 16,
+              top: 4,
+              bottom: 4,
+              width: 1,
+              background: 'oklch(1 0 0 / 0.08)',
+            }}
+          />
+          {section.subs.map((sub) => {
+            const isSubActive = activeSubId === sub.id;
+            return (
+              <button
+                key={sub.id}
+                className="flex w-full items-center gap-1.5 rounded-[5px] px-2.5 py-[6px] text-left text-[12.5px] transition-colors"
+                style={isSubActive ? NAV_SUB_ACTIVE : NAV_SUB_INACTIVE}
+                aria-current={isSubActive ? 'true' : undefined}
+                onClick={() => onSubClick(sub.id)}
+              >
+                {sub.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

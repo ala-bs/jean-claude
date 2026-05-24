@@ -106,7 +106,7 @@ const TASK_NOTIFICATION_MODES: Array<{
   },
 ];
 
-export function GeneralSettings() {
+export function EditorSettings() {
   const { data: editorSetting, isLoading } = useEditorSetting();
   const { data: availableEditors } = useAvailableEditors();
   const updateEditor = useUpdateEditorSetting();
@@ -154,7 +154,6 @@ export function GeneralSettings() {
         Choose which editor to open projects in
       </p>
 
-      {/* Preset editors */}
       <div className="mt-4 flex flex-wrap gap-2">
         {PRESET_EDITORS.map((editor) => {
           const available = isEditorAvailable(editor.id);
@@ -179,7 +178,6 @@ export function GeneralSettings() {
         })}
       </div>
 
-      {/* Custom command */}
       <div className="mt-6">
         <label className="text-ink-2 block text-sm font-medium">
           Custom command
@@ -201,14 +199,12 @@ export function GeneralSettings() {
         </div>
       </div>
 
-      {/* Browse for app */}
       <div className="mt-4">
         <Button onClick={handleBrowseApp} icon={<FolderOpen />}>
           Browse for application...
         </Button>
       </div>
 
-      {/* Current selection */}
       {editorSetting && (
         <div className="border-glass-border bg-bg-1/50 mt-6 rounded-lg border px-4 py-3">
           <span className="text-ink-3 text-sm">Current editor: </span>
@@ -222,43 +218,39 @@ export function GeneralSettings() {
           )}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* Divider */}
-      <div className="border-line-soft my-8 border-t" />
-
-      {/* Divider */}
-      <div className="border-line-soft my-8 border-t" />
-
-      {/* Task Notifications */}
+export function NotificationsSettings() {
+  return (
+    <div className="space-y-8">
       <TaskNotificationSettings />
+    </div>
+  );
+}
 
-      {/* Divider */}
-      <div className="border-line-soft my-8 border-t" />
+export { CalendarNotificationSettings as CalendarSettings };
 
-      {api.platform === 'darwin' && (
-        <>
-          {/* Calendar Notifications */}
-          <CalendarNotificationSettings />
-
-          {/* Divider */}
-          <div className="border-line-soft my-8 border-t" />
-        </>
-      )}
-
-      {/* Usage Display */}
-      <UsageDisplaySettings />
-
-      {/* Divider */}
-      <div className="border-line-soft my-8 border-t" />
-
-      {/* Claude Projects Cleanup */}
+export function MaintenanceSettings() {
+  return (
+    <div className="space-y-8">
       <ClaudeProjectsCleanup />
-
-      {/* Divider */}
-      <div className="border-line-soft my-8 border-t" />
-
-      {/* Global Gitignore */}
       <GlobalGitignoreSetup />
+    </div>
+  );
+}
+
+export function GeneralSettings() {
+  return (
+    <div>
+      <EditorSettings />
+      <div className="border-line-soft my-8 border-t" />
+      <NotificationsSettings />
+      <div className="border-line-soft my-8 border-t" />
+      <UsageDisplaySettings />
+      <div className="border-line-soft my-8 border-t" />
+      <MaintenanceSettings />
     </div>
   );
 }
@@ -657,7 +649,7 @@ function TaskNotificationSettings() {
   );
 }
 
-function UsageDisplaySettings() {
+export function UsageDisplaySettings() {
   const { data: usageDisplaySetting } = useUsageDisplaySetting();
   const updateUsageDisplay = useUpdateUsageDisplaySetting();
   const enabledProviders = usageDisplaySetting?.enabledProviders ?? [];
