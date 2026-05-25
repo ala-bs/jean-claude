@@ -115,7 +115,8 @@ export async function complete({
     const text = typeof content === 'string' ? content : null;
     dbg.completion('FIM result: %s', text?.slice(0, 80));
 
-    return text?.trim() || null;
+    const completion = text?.trimEnd();
+    return completion && completion.trim().length > 0 ? completion : null;
   } catch (error) {
     dbg.completion('FIM completion error: %O', error);
     return null;

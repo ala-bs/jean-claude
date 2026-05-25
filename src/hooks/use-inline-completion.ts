@@ -18,11 +18,17 @@ const completionCache = new Map<string, CacheEntry>();
 
 function makeCacheKey(
   prompt: string,
+  suffix: string,
   projectId: string | undefined,
   contextBeforePrompt: string | undefined,
 ): string {
   // JSON.stringify avoids collisions from inputs containing the separator
-  return JSON.stringify([projectId ?? '', contextBeforePrompt ?? '', prompt]);
+  return JSON.stringify([
+    projectId ?? '',
+    contextBeforePrompt ?? '',
+    prompt,
+    suffix,
+  ]);
 }
 
 function getCached(key: string): string | null {
@@ -60,30 +66,54 @@ export function clearCompletionCache(): void {
 
 export function useInlineCompletion({
   text,
+  cursorPosition,
+  triggerId,
   enabled,
   projectId,
   getContextBeforePrompt,
 }: {
   text: string;
+  cursorPosition: number;
+  triggerId: number;
   enabled: boolean;
   projectId?: string;
   getContextBeforePrompt?: () => string;
 }) {
   const [completion, setCompletion] = useState<string | null>(null);
+  const [completionPosition, setCompletionPosition] = useState<number | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(false);
   const requestIdRef = useRef(0);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const getContextBeforePromptRef = useRef(getContextBeforePrompt);
+  const textRef = useRef(text);
+  const cursorPositionRef = useRef(cursorPosition);
 
   useEffect(() => {
     getContextBeforePromptRef.current = getContextBeforePrompt;
   }, [getContextBeforePrompt]);
 
-  // Clear completion and debounce a new request when text changes
+  useEffect(() => {
+    textRef.current = text;
+    cursorPositionRef.current = cursorPosition;
+  }, [text, cursorPosition]);
+
+  // Clear completion and debounce a new request only after typing.
   useEffect(() => {
     setCompletion(null);
+    setCompletionPosition(null);
 
-    if (!enabled || text.length < MIN_INPUT_LENGTH) {
+    const currentText = textRef.current;
+    const currentCursorPosition = cursorPositionRef.current;
+    const safeCursorPosition = Math.min(
+      Math.max(currentCursorPosition, 0),
+      currentText.length,
+    );
+    const prompt = currentText.slice(0, safeCursorPosition);
+    const suffix = currentText.slice(safeCursorPosition);
+
+    if (!enabled || triggerId === 0 || prompt.length < MIN_INPUT_LENGTH) {
       // Invalidate any in-flight request
       requestIdRef.current++;
       setIsLoading(false);
@@ -91,7 +121,7 @@ export function useInlineCompletion({
     }
 
     // Don't trigger if text starts with / (slash command)
-    if (text.startsWith('/')) {
+    if (currentText.startsWith('/')) {
       requestIdRef.current++;
       setIsLoading(false);
       return;
@@ -103,21 +133,27 @@ export function useInlineCompletion({
 
     debounceTimerRef.current = setTimeout(async () => {
       const contextBeforePrompt = getContextBeforePromptRef.current?.();
-      const cacheKey = makeCacheKey(text, projectId, contextBeforePrompt);
+      const cacheKey = makeCacheKey(
+        prompt,
+        suffix,
+        projectId,
+        contextBeforePrompt,
+      );
 
       // Check cache first — skip IPC + API call entirely
       const cached = getCached(cacheKey);
       if (cached !== null) {
         if (requestIdRef.current === currentRequestId) {
           setCompletion(cached);
+          setCompletionPosition(safeCursorPosition);
           setIsLoading(false);
         }
         return;
       }
 
-      // Always complete from the end of the text — cursor position is ignored
       const result = await api.completion.complete({
-        prompt: text,
+        prompt,
+        suffix,
         projectId,
         contextBeforePrompt,
       });
@@ -127,6 +163,7 @@ export function useInlineCompletion({
         if (result) {
           setCached(cacheKey, result);
           setCompletion(result);
+          setCompletionPosition(safeCursorPosition);
         }
         setIsLoading(false);
       }
@@ -137,20 +174,22 @@ export function useInlineCompletion({
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [text, enabled, projectId]);
+  }, [triggerId, enabled, projectId]);
 
   const accept = useCallback(() => {
     const current = completion;
     setCompletion(null);
+    setCompletionPosition(null);
     return current;
   }, [completion]);
 
   const dismiss = useCallback(() => {
     setCompletion(null);
+    setCompletionPosition(null);
     // Invalidate any in-flight request so a stale result doesn't appear
     requestIdRef.current++;
     setIsLoading(false);
   }, []);
 
-  return { completion, isLoading, accept, dismiss };
+  return { completion, completionPosition, isLoading, accept, dismiss };
 }

@@ -197,6 +197,8 @@ export const PromptTextarea = forwardRef<
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [dropdownDismissed, setDropdownDismissed] = useState(false);
   const [cursorPosition, setCursorPosition] = useState(0);
+  const [completionTriggerId, setCompletionTriggerId] = useState(0);
+  const [completionCursorPosition, setCompletionCursorPosition] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -253,11 +255,14 @@ export const PromptTextarea = forwardRef<
   // Inline completion hook — paused when slash dropdown is open
   const {
     completion,
+    completionPosition,
     isLoading: isCompletionLoading,
     accept,
     dismiss,
   } = useInlineCompletion({
     text: value,
+    cursorPosition: completionCursorPosition,
+    triggerId: completionTriggerId,
     enabled: enableCompletion && !showDropdown,
     projectId,
     getContextBeforePrompt: getCompletionContextBeforePrompt,
@@ -487,13 +492,14 @@ export const PromptTextarea = forwardRef<
       if (e.key === 'Tab') {
         e.preventDefault();
         const completionText = accept();
-        if (completionText) {
-          // Always append completion at the end of text
-          const newValue = value + completionText;
+        if (completionText && completionPosition !== null) {
+          const insertAt = Math.min(completionPosition, value.length);
+          const newValue =
+            value.slice(0, insertAt) + completionText + value.slice(insertAt);
           onChange(newValue);
-          // Move cursor to end of text
-          const newCursorPos = newValue.length;
+          const newCursorPos = insertAt + completionText.length;
           setCursorPosition(newCursorPos);
+          setCompletionCursorPosition(newCursorPos);
           // Set cursor position in textarea after React re-renders
           requestAnimationFrame(() => {
             if (textareaRef.current) {
@@ -596,12 +602,22 @@ export const PromptTextarea = forwardRef<
 
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     onChange(e.target.value);
-    setCursorPosition(e.target.selectionStart);
+    const nextCursorPosition = e.target.selectionStart;
+    setCursorPosition(nextCursorPosition);
+    setCompletionCursorPosition(nextCursorPosition);
+    setCompletionTriggerId((id) => id + 1);
     adjustHeight();
   };
 
   const handleSelect = (e: SyntheticEvent<HTMLTextAreaElement>) => {
-    setCursorPosition(e.currentTarget.selectionStart);
+    const nextCursorPosition = e.currentTarget.selectionStart;
+    setCursorPosition(nextCursorPosition);
+    if (
+      nextCursorPosition !== completionCursorPosition &&
+      (completion || isCompletionLoading)
+    ) {
+      dismiss();
+    }
   };
 
   // --- Image attachment handlers ---
@@ -1037,6 +1053,7 @@ export const PromptTextarea = forwardRef<
             className ??
               'border-glass-border bg-glass-light focus:border-glass-border-strong focus:ring-acc/10 rounded-lg border px-3 py-2 focus:ring-1',
             isDragOver && 'border-acc bg-acc-soft',
+            completion && 'caret-ink-1 text-transparent',
           )}
           style={{ ...style, paddingRight: trailingPaddingRight }}
           {...textareaProps}
@@ -1054,8 +1071,13 @@ export const PromptTextarea = forwardRef<
               paddingRight: trailingPaddingRight,
             }}
           >
-            <span className="invisible">{value}</span>
+            <span className="text-ink-1">
+              {value.slice(0, completionPosition ?? value.length)}
+            </span>
             <span className="text-ink-3">{completion}</span>
+            <span className="text-ink-1">
+              {value.slice(completionPosition ?? value.length)}
+            </span>
           </div>
         )}
         {/* Completion loader + file picker buttons */}
