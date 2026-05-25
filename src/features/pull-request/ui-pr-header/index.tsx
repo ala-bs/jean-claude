@@ -1,5 +1,6 @@
 import { useNavigate } from '@tanstack/react-router';
 import {
+  AlertTriangle,
   ExternalLink,
   Eye,
   FolderOpen,
@@ -220,8 +221,19 @@ export function PrHeader({
       <div className="border-glass-border/50 border-b px-5 py-5">
         <div className="flex items-start gap-3.5">
           {/* Status pill */}
-          <div className="mt-0.5 shrink-0">
+          <div className="mt-0.5 flex shrink-0 flex-wrap gap-1.5">
             {getStatusBadge(pr.status, pr.isDraft)}
+            {pr.mergeStatus === 'conflicts' && (
+              <Chip
+                size="sm"
+                color="red"
+                pill
+                icon={<AlertTriangle />}
+                title="Azure DevOps reports merge conflicts for this pull request"
+              >
+                Merge conflicts
+              </Chip>
+            )}
           </div>
 
           <div className="min-w-0 flex-1">
