@@ -9,6 +9,8 @@ export interface FileCommentAnchor {
   lineStart: number;
   lineEnd?: number;
   selectedText?: string;
+  /** Omit line_range when synthesizing prompt if source line numbers are unreliable. */
+  omitLineRangeFromPrompt?: boolean;
   /** Character offset of the selection start within the container's combined
    *  text content. Used by message comments for precise highlight placement. */
   charOffset?: number;

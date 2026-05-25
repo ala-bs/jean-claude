@@ -342,15 +342,15 @@ function synthesizeComment(
     }
   } else {
     // File/diff comment — file path + line range anchor
-    const lineLabel = formatPromptLineRange(
-      c.anchor.lineStart,
-      c.anchor.lineEnd,
-    );
+    const lineLabel = c.anchor.omitLineRangeFromPrompt
+      ? null
+      : formatPromptLineRange(c.anchor.lineStart, c.anchor.lineEnd);
     const commitAttr = c.commitHash
       ? ` commit="${escapePromptTagContent(c.commitHash)}"`
       : '';
+    const lineRangeAttr = lineLabel ? ` line_range="${lineLabel}"` : '';
     textLines.push(
-      `<comment index="${index}" type="file" file_path="${escapePromptTagContent(c.anchor.filePath)}" line_range="${lineLabel}"${commitAttr}>`,
+      `<comment index="${index}" type="file" file_path="${escapePromptTagContent(c.anchor.filePath)}"${lineRangeAttr}${commitAttr}>`,
     );
     if (c.presets.length > 0) {
       textLines.push(

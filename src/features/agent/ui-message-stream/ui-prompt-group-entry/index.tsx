@@ -1215,6 +1215,7 @@ export function PromptGroupEntry({
           onClose={() => setDiffModalOpen(false)}
           childMessages={group.childMessages}
           rootPath={rootPath}
+          taskId={taskId}
         />
       )}
     </div>

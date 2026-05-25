@@ -198,9 +198,12 @@ export function SideBySideDiffTable({
       </colgroup>
       <tbody>
         {rows.map((row, rowIndex) => {
-          // Use right side newLineNumber for comments (consistent with inline mode)
+          // Prefer new line anchors; fall back to old lines so deleted rows can
+          // still receive review comments.
           const newLineNumber =
-            row.right?.newLineNumber ?? row.left?.newLineNumber;
+            row.right?.newLineNumber ??
+            row.left?.newLineNumber ??
+            row.left?.oldLineNumber;
 
           // Check if this line is hidden by a collapsed fold
           if (newLineNumber && folding.isLineHidden(newLineNumber)) {

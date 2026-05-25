@@ -440,8 +440,9 @@ function InlineDiffTable({
     >
       <tbody>
         {lines.map((line, i) => {
-          // Use newLineNumber for comments (the line in the new version)
-          const lineNumber = line.newLineNumber;
+          // Prefer new line anchors; fall back to old lines so deleted rows can
+          // still receive review comments.
+          const lineNumber = line.newLineNumber ?? line.oldLineNumber;
 
           // Check if this line is hidden by a collapsed fold.
           // For deletion lines (no newLineNumber), check if the surrounding

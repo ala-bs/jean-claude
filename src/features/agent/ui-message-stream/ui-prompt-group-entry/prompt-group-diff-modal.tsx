@@ -2,13 +2,20 @@ import { Check, Copy, File, FileText } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 
 import { Modal } from '@/common/ui/modal';
-import { DiffView } from '@/features/agent/ui-diff-view';
 import { parseUnifiedPatchToStrings } from '@/features/agent/ui-diff-view/diff-utils';
+import { FileDiffContent } from '@/features/common/ui-file-diff';
 import { DiffFileTree } from '@/features/common/ui-file-diff/file-tree';
 import type {
   DiffFile,
   DiffFileStatus,
 } from '@/features/common/ui-file-diff/types';
+import {
+  useReviewCommentsForFile,
+  useReviewCommentsStore,
+  type ReviewPresetId,
+} from '@/stores/review-comments';
+import { getSelectedTextForRange } from '@/stores/utils-comment-prompt';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 import type {
   NormalizedEntry,
   ToolUseByName,
@@ -184,11 +191,13 @@ export function PromptGroupDiffModal({
   onClose,
   childMessages,
   rootPath,
+  taskId,
 }: {
   isOpen: boolean;
   onClose: () => void;
   childMessages: DisplayMessage[];
   rootPath?: string | null;
+  taskId?: string;
 }) {
   const fileChanges = useMemo(
     () => extractFileChanges(childMessages, rootPath),
@@ -319,18 +328,16 @@ export function PromptGroupDiffModal({
             <div className="min-h-0 flex-1 overflow-hidden">
               {selectedChange ? (
                 selectedChange.hasStructuredDiff ? (
-                  <DiffView
-                    filePath={selectedChange.displayPath}
-                    oldString={selectedChange.oldContent}
-                    newString={selectedChange.newContent}
-                    withMinimap
+                  <PromptGroupFileDiffContent
+                    taskId={taskId}
+                    change={selectedChange}
                   />
                 ) : selectedPatchDiff ? (
-                  <DiffView
-                    filePath={selectedChange.displayPath}
-                    oldString={selectedPatchDiff.oldString}
-                    newString={selectedPatchDiff.newString}
-                    withMinimap
+                  <PromptGroupFileDiffContent
+                    taskId={taskId}
+                    change={selectedChange}
+                    oldContent={selectedPatchDiff.oldString}
+                    newContent={selectedPatchDiff.newString}
                   />
                 ) : selectedChange.rawPatch ? (
                   <div className="h-full overflow-auto p-4">
@@ -384,5 +391,104 @@ export function PromptGroupDiffModal({
         </div>
       </Modal>
     </>
+  );
+}
+
+function PromptGroupFileDiffContent({
+  taskId,
+  change,
+  oldContent = change.oldContent,
+  newContent = change.newContent,
+}: {
+  taskId?: string;
+  change: FileChange;
+  oldContent?: string;
+  newContent?: string;
+}) {
+  const reviewComments = useReviewCommentsForFile(
+    taskId ?? '',
+    change.displayPath,
+  );
+  const addComment = useReviewCommentsStore((s) => s.addComment);
+  const removeComment = useReviewCommentsStore((s) => s.removeComment);
+  const updateComment = useReviewCommentsStore((s) => s.updateComment);
+  const resolveComment = useReviewCommentsStore((s) => s.resolveComment);
+
+  const handleAddReviewComment = useCallback(
+    (params: {
+      filePath: string;
+      lineStart: number;
+      lineEnd?: number;
+      selectedText?: string;
+      body: string;
+      presets: ReviewPresetId[];
+      images?: PromptImagePart[];
+    }) => {
+      if (!taskId) return;
+      const contentForSelection =
+        change.status === 'deleted' ? oldContent : newContent;
+      addComment(taskId, {
+        commentKind: 'diff',
+        anchor: {
+          filePath: params.filePath,
+          lineStart: params.lineStart,
+          lineEnd: params.lineEnd,
+          omitLineRangeFromPrompt: true,
+          selectedText:
+            params.selectedText ??
+            getSelectedTextForRange(
+              contentForSelection,
+              params.lineStart,
+              params.lineEnd,
+            ),
+        },
+        body: params.body,
+        images: params.images,
+        presets: params.presets,
+        status: 'open',
+        resolved: false,
+      });
+    },
+    [taskId, change.status, oldContent, newContent, addComment],
+  );
+
+  const handleDeleteReviewComment = useCallback(
+    (commentId: string) => {
+      if (!taskId) return;
+      removeComment(taskId, commentId);
+    },
+    [taskId, removeComment],
+  );
+
+  const handleEditReviewComment = useCallback(
+    (commentId: string, newBody: string, newImages: PromptImagePart[]) => {
+      if (!taskId) return;
+      updateComment(taskId, commentId, {
+        body: newBody,
+        images: newImages.length > 0 ? newImages : undefined,
+      });
+    },
+    [taskId, updateComment],
+  );
+
+  const handleResolveReviewComment = useCallback(
+    (commentId: string) => {
+      if (!taskId) return;
+      resolveComment(taskId, commentId);
+    },
+    [taskId, resolveComment],
+  );
+
+  return (
+    <FileDiffContent
+      file={{ path: change.displayPath, status: change.status }}
+      oldContent={oldContent}
+      newContent={newContent}
+      reviewComments={taskId ? reviewComments : undefined}
+      onAddReviewComment={taskId ? handleAddReviewComment : undefined}
+      onDeleteReviewComment={handleDeleteReviewComment}
+      onEditReviewComment={handleEditReviewComment}
+      onResolveReviewComment={handleResolveReviewComment}
+    />
   );
 }

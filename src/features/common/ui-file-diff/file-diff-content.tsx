@@ -244,7 +244,7 @@ export function FileDiffContent({
               ? commentFormLineRange.end
               : undefined,
           selectedText: getSelectedTextForRange(
-            newContent,
+            file.status === 'deleted' ? oldContent : newContent,
             commentFormLineRange.start,
             commentFormLineRange.end !== commentFormLineRange.start
               ? commentFormLineRange.end
@@ -257,7 +257,14 @@ export function FileDiffContent({
         setCommentFormLineRange(null);
       }
     },
-    [file.path, commentFormLineRange, newContent, onAddReviewComment],
+    [
+      file.path,
+      file.status,
+      commentFormLineRange,
+      oldContent,
+      newContent,
+      onAddReviewComment,
+    ],
   );
 
   // Render comment form inline
