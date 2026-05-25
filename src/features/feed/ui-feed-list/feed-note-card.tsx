@@ -7,21 +7,23 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 import { useDeleteFeedNote, useUpdateFeedNote } from '@/hooks/use-feed-notes';
 import { useProjects } from '@/hooks/use-projects';
+import {
+  getFeedNoteTaskIndex,
+  parseFeedNoteLines,
+  toggleFeedNoteContentCheckbox,
+} from '@/lib/feed-note-checkboxes';
 import { formatRelativeTime } from '@/lib/time';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
 import type { FeedItem } from '@shared/feed-types';
 
 function parseNotePreview(text: string): {
-  title: string;
-  contentLines: string[];
+  title: ReturnType<typeof parseFeedNoteLines>[number];
+  contentLines: ReturnType<typeof parseFeedNoteLines>;
   hasMore: boolean;
 } {
-  const lines = text
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  const title = lines[0] ?? text.trim().slice(0, 100);
+  const lines = parseFeedNoteLines(text);
+  const title = lines[0] ?? { lineIndex: 0, text: text.trim().slice(0, 100) };
   const contentLines = lines.slice(1, 3);
   const hasMore = lines.length > 3;
   return { title, contentLines, hasMore };
@@ -94,6 +96,26 @@ export function FeedNoteCard({
     menuRef.current?.toggle();
   }, [item.noteId, updateNote]);
 
+  const handleToggleCheckbox = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>, lineIndex: number) => {
+      e.stopPropagation();
+      if (!item.noteId) return;
+
+      updateNote.mutate({
+        id: item.noteId,
+        content: toggleFeedNoteContentCheckbox({
+          content: item.noteContent ?? '',
+          taskIndex: getFeedNoteTaskIndex({
+            content: item.title,
+            lineIndex,
+          }),
+          checked: e.target.checked,
+        }),
+      });
+    },
+    [item.noteContent, item.noteId, item.title, updateNote],
+  );
+
   const handleConvertToTask = useCallback(
     (projectId: string) => {
       setSelectedProjectId(projectId);
@@ -161,22 +183,59 @@ export function FeedNoteCard({
           >
             {/* Title */}
             <div className="flex items-start gap-1.5">
+              {notePreview.title.task && (
+                <input
+                  type="checkbox"
+                  checked={notePreview.title.task.checked}
+                  onChange={(e) =>
+                    handleToggleCheckbox(e, notePreview.title.lineIndex)
+                  }
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  className="border-glass-border bg-glass-medium text-acc-ink mt-0.5 h-3 w-3 shrink-0 rounded focus:ring-0"
+                  aria-label={`Toggle ${notePreview.title.text || 'note item'}`}
+                />
+              )}
               <span
                 className={clsx(
                   'min-w-0 flex-1 truncate text-[12.5px] leading-snug',
+                  notePreview.title.task?.checked && 'text-ink-3 line-through',
                   isSelected ? 'text-ink-0 font-medium' : 'text-ink-1',
                 )}
               >
-                {notePreview.title}
+                {notePreview.title.text}
               </span>
             </div>
 
             {/* Content preview */}
             {notePreview.contentLines.length > 0 && (
               <div className="text-ink-3 text-[11px] leading-snug">
-                {notePreview.contentLines.map((line, i) => (
-                  <div key={i} className="truncate">
-                    {line}
+                {notePreview.contentLines.map((line) => (
+                  <div
+                    key={line.lineIndex}
+                    className="flex items-center gap-1 truncate"
+                  >
+                    {line.task && (
+                      <input
+                        type="checkbox"
+                        checked={line.task.checked}
+                        onChange={(e) =>
+                          handleToggleCheckbox(e, line.lineIndex)
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        className="border-glass-border bg-glass-medium text-acc-ink h-3 w-3 shrink-0 rounded focus:ring-0"
+                        aria-label={`Toggle ${line.text || 'note item'}`}
+                      />
+                    )}
+                    <span
+                      className={clsx(
+                        'truncate',
+                        line.task?.checked && 'line-through opacity-70',
+                      )}
+                    >
+                      {line.text}
+                    </span>
                   </div>
                 ))}
                 {notePreview.hasMore && (

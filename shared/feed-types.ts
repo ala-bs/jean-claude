@@ -39,6 +39,7 @@ export interface FeedItem {
   pullRequestId?: number;
   pullRequestUrl?: string;
   noteId?: string;
+  noteContent?: string;
   isCompleted?: boolean;
 
   // Work item tracking

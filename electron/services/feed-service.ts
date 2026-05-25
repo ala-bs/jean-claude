@@ -1,3 +1,7 @@
+import {
+  blockNoteJsonToMarkdown,
+  markdownToBlockNoteJson,
+} from '@shared/feed-note-blocknote';
 import type { FeedItem, FeedItemAttention, FeedNote } from '@shared/feed-types';
 import type { TaskStatus, TaskStep, TaskStepStatus } from '@shared/types';
 
@@ -406,18 +410,23 @@ async function fetchNoteFeedItems(): Promise<FeedItem[]> {
   const notes = await FeedNoteRepository.findAll();
   return notes
     .filter((note) => !note.completedAt)
-    .map((note) => ({
-      id: `note:${note.id}`,
-      source: 'note' as const,
-      attention: 'note' as const,
-      timestamp: note.updatedAt,
-      projectId: '',
-      projectName: '',
-      projectColor: '',
-      projectPriority: 'normal' as const,
-      title: note.content,
-      noteId: note.id,
-    }));
+    .map((note) => {
+      const markdown = blockNoteJsonToMarkdown(note.content);
+
+      return {
+        id: `note:${note.id}`,
+        source: 'note' as const,
+        attention: 'note' as const,
+        timestamp: note.updatedAt,
+        projectId: '',
+        projectName: '',
+        projectColor: '',
+        projectPriority: 'normal' as const,
+        title: markdown,
+        noteId: note.id,
+        noteContent: note.content,
+      };
+    });
 }
 
 // --- Feed note CRUD ---
@@ -431,7 +440,9 @@ export async function createFeedNote({
 }: {
   content: string;
 }): Promise<FeedNote> {
-  return FeedNoteRepository.create({ content });
+  return FeedNoteRepository.create({
+    content: markdownToBlockNoteJson(content),
+  });
 }
 
 export async function updateFeedNote({

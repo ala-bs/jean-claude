@@ -141,6 +141,35 @@ button {
   cursor: pointer;
 }
 
+.feed-note-blocknote {
+  overflow-x: hidden;
+}
+
+.feed-note-blocknote .bn-container {
+  --bn-colors-editor-background: transparent;
+  --bn-colors-menu-background: var(--color-bg-2);
+  --bn-colors-tooltip-background: var(--color-bg-2);
+  --bn-colors-hovered-background: var(--color-glass-light);
+  --bn-colors-selected-background: var(--color-acc-soft);
+  --bn-colors-border: var(--color-glass-border);
+  --bn-colors-text: var(--color-ink-1);
+  --bn-colors-side-menu: var(--color-ink-3);
+  --bn-colors-highlights-gray-text: var(--color-ink-3);
+  --bn-colors-highlights-gray-background: var(--color-glass-medium);
+  --bn-font-family: var(--font-sans);
+}
+
+.feed-note-blocknote .bn-editor {
+  min-height: 100%;
+  padding-right: 0.5rem;
+  padding-left: 3rem;
+  background: transparent;
+}
+
+.feed-note-blocknote .bn-block-content {
+  font-size: 0.875rem;
+}
+
 @utility no-scrollbar {
   @apply [scrollbar-width:none] [&::-webkit-scrollbar]:hidden;
 }

@@ -3964,13 +3964,17 @@ export function registerIpcHandlers() {
     'feed:updateNote',
     async (
       _event,
-      params: { id: string; content?: string; completedAt?: string | null },
+      params: {
+        id: string;
+        content?: string;
+        completedAt?: string | null;
+      },
     ) => {
       const id = validateFeedNoteId(params.id);
       const content =
         params.content === undefined
           ? undefined
-          : validateFeedNoteContent(params.content);
+          : validateFeedNoteBlockNoteContent(params.content);
       const completedAt = validateFeedNoteCompletedAt(params.completedAt);
       return updateFeedNote({ id, content, completedAt });
     },
@@ -4553,6 +4557,23 @@ function validateFeedNoteContent(content: string): string {
   }
 
   return trimmed;
+}
+
+function validateFeedNoteBlockNoteContent(content: string): string {
+  if (typeof content !== 'string') {
+    throw new Error('Invalid note content');
+  }
+
+  if (content.length > 100_000) {
+    throw new Error('Note content is too long');
+  }
+
+  const parsed = JSON.parse(content) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error('Invalid note content');
+  }
+
+  return content;
 }
 
 function validateFeedNoteCompletedAt(

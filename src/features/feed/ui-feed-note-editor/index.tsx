@@ -1,6 +1,9 @@
+import '@blocknote/core/fonts/inter.css';
+import { BlockNoteView } from '@blocknote/mantine';
+import '@blocknote/mantine/style.css';
+import { useCreateBlockNote } from '@blocknote/react';
 import { useNavigate } from '@tanstack/react-router';
 import { X } from 'lucide-react';
-import type { ChangeEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
@@ -17,11 +20,13 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
   const { note, isLoading } = useFeedNoteById(noteId);
   const updateNote = useUpdateFeedNote();
   const deleteNote = useDeleteFeedNote();
+  const editor = useCreateBlockNote();
 
   const [value, setValue] = useState('');
   const [hasInitialized, setHasInitialized] = useState(false);
   const lastSavedRef = useRef('');
   const isDeletedRef = useRef(false);
+  const isLoadingEditorRef = useRef(false);
 
   // Stable ref for mutate so cleanup effect doesn't re-fire every render
   const mutateRef = useRef(updateNote.mutate);
@@ -30,11 +35,19 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
   // Initialize value from note content
   useEffect(() => {
     if (note && !hasInitialized) {
-      setValue(note.title);
-      lastSavedRef.current = note.title;
+      const content = note.noteContent ?? note.title;
+      const blocks = JSON.parse(content) as Parameters<
+        typeof editor.replaceBlocks
+      >[1];
+
+      isLoadingEditorRef.current = true;
+      editor.replaceBlocks(editor.document, blocks);
+      isLoadingEditorRef.current = false;
+      setValue(content);
+      lastSavedRef.current = content;
       setHasInitialized(true);
     }
-  }, [note, hasInitialized]);
+  }, [editor, note, hasInitialized]);
 
   // Keep refs for unmount flush and auto-save
   const valueRef = useRef(value);
@@ -48,10 +61,12 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
 
   useEffect(() => {
     if (!hasInitialized || isDeletedRef.current) return;
-    const trimmed = debouncedValue.trim();
-    if (trimmed && trimmed !== lastSavedRef.current) {
-      lastSavedRef.current = trimmed;
-      mutateRef.current({ id: noteIdRef.current, content: trimmed });
+    if (debouncedValue && debouncedValue !== lastSavedRef.current) {
+      lastSavedRef.current = debouncedValue;
+      mutateRef.current({
+        id: noteIdRef.current,
+        content: debouncedValue,
+      });
     }
   }, [debouncedValue, hasInitialized]);
 
@@ -59,17 +74,20 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
   useEffect(() => {
     return () => {
       if (isDeletedRef.current) return;
-      const trimmed = valueRef.current.trim();
-      if (trimmed && trimmed !== lastSavedRef.current) {
-        lastSavedRef.current = trimmed;
-        mutateRef.current({ id: noteIdRef.current, content: trimmed });
+      if (valueRef.current && valueRef.current !== lastSavedRef.current) {
+        lastSavedRef.current = valueRef.current;
+        mutateRef.current({
+          id: noteIdRef.current,
+          content: valueRef.current,
+        });
       }
     };
   }, []);
 
-  const handleChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
-    setValue(e.target.value);
-  }, []);
+  const handleEditorChange = useCallback(() => {
+    if (isLoadingEditorRef.current) return;
+    setValue(JSON.stringify(editor.document));
+  }, [editor]);
 
   const handleDelete = useCallback(() => {
     isDeletedRef.current = true;
@@ -122,14 +140,12 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
         </div>
       </div>
 
-      {/* Editor */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <textarea
-          value={value}
-          onChange={handleChange}
-          placeholder="Write your note..."
-          autoFocus
-          className="text-ink-1 placeholder-ink-4 h-full w-full resize-none bg-transparent font-mono text-sm leading-relaxed outline-none"
+      <div className="feed-note-blocknote flex-1 overflow-y-auto px-2 py-3">
+        <BlockNoteView
+          editor={editor}
+          theme="dark"
+          onChange={handleEditorChange}
+          className="h-full"
         />
       </div>
     </div>
