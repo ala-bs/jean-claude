@@ -1,5 +1,6 @@
 import {
   ClipboardList,
+  X,
   Menu,
   RefreshCw,
   SlidersHorizontal,
@@ -38,12 +39,151 @@ import { NextMeetingButton } from './next-meeting-button';
 import { RamUsageDisplay } from './ram-usage-display';
 import { UsageDisplay } from './usage-display';
 
+const reloadPhases = [
+  { label: 'Snapshot workspace', meta: 'session changes' },
+  { label: 'Stop dev server', meta: 'preview process' },
+  { label: 'Install dependencies', meta: 'pnpm install' },
+  { label: 'Rebuild preview', meta: 'vite build' },
+  { label: 'Restart preview', meta: 'updated app' },
+];
+
+function formatReloadElapsed(ms: number) {
+  const seconds = ms / 1000;
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+}
+
+function useReloadTicker(startedAt: number) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const elapsedMs = Math.max(0, now - startedAt);
+  const phaseIndex =
+    Math.floor((elapsedMs % 9000) / (9000 / reloadPhases.length)) %
+    reloadPhases.length;
+  const progress = Math.min(92, 12 + ((elapsedMs % 14000) / 14000) * 80);
+
+  return {
+    elapsed: formatReloadElapsed(elapsedMs),
+    phase: reloadPhases[phaseIndex],
+    phaseIndex,
+    progress,
+  };
+}
+
+function ReloadPreviewModal({
+  error,
+  startedAt,
+  onBack,
+  onRetry,
+}: {
+  error: string | null;
+  startedAt: number;
+  onBack: () => void;
+  onRetry: () => void;
+}) {
+  const { elapsed, phase, phaseIndex, progress } = useReloadTicker(startedAt);
+
+  return (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-[oklch(0.08_0.012_280_/_0.62)] px-6 backdrop-blur-[2px]"
+      style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+    >
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(oklch(1_0_0_/_0.02)_1px,transparent_1px),linear-gradient(90deg,oklch(1_0_0_/_0.02)_1px,transparent_1px)] bg-[size:28px_28px] opacity-50" />
+      {error ? (
+        <div
+          role="alert"
+          aria-label="Reload failed"
+          className="reload-fade-up bg-bg-1 border-glass-border relative w-full max-w-[380px] overflow-hidden rounded-[9px] border px-4 pt-3.5 pb-2.5 shadow-[0_24px_60px_oklch(0_0_0_/_0.55),0_0_0_1px_oklch(0_0_0_/_0.4)]"
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="bg-status-fail-soft text-status-fail inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full">
+              <X className="h-2 w-2" aria-hidden />
+            </span>
+            <div className="text-ink-0 min-w-0 flex-1 text-[12.5px] font-medium">
+              Build failed
+            </div>
+            <div className="text-ink-4 font-mono text-[10.5px]">
+              rebuild preview
+            </div>
+          </div>
+
+          <div className="bg-status-fail-soft border-status-fail/25 text-status-fail mt-2 rounded-[5px] border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] break-words">
+            {error}
+          </div>
+
+          <div className="border-line-soft mt-2.5 flex items-center justify-between border-t pt-2">
+            <span className="text-ink-4 text-[10.5px]">
+              Previous preview still running
+            </span>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={onBack}
+                className="text-ink-3 hover:bg-glass-medium rounded px-2 py-1 text-[11px]"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={onRetry}
+                className="border-acc-line bg-acc-soft text-acc-ink rounded border px-2.5 py-1 text-[11px] font-medium"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div
+          role="status"
+          aria-label="Reloading preview"
+          className="reload-fade-up bg-bg-1 border-glass-border relative w-full max-w-[360px] overflow-hidden rounded-[9px] border px-4 pt-3.5 pb-3 shadow-[0_24px_60px_oklch(0_0_0_/_0.55),0_0_0_1px_oklch(0_0_0_/_0.4)]"
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="bg-acc relative h-2 w-2 shrink-0 rounded-full shadow-[0_0_10px_var(--color-acc)]">
+              <span className="reload-ring bg-acc absolute -inset-1 rounded-full opacity-40" />
+            </span>
+            <div className="text-ink-0 min-w-0 flex-1 text-[12.5px] font-medium">
+              Reloading preview
+            </div>
+            <div className="text-ink-3 font-mono text-[10.5px] tabular-nums">
+              {elapsed}
+            </div>
+          </div>
+
+          <div className="mt-2 flex items-center gap-1.5 overflow-hidden pl-[18px] font-mono text-[11px] whitespace-nowrap">
+            <span className="text-ink-4">
+              {String(phaseIndex + 1).padStart(2, '0')}/
+              {String(reloadPhases.length).padStart(2, '0')}
+            </span>
+            <span className="text-ink-1">{phase.label.toLowerCase()}</span>
+            <span className="text-ink-4">·</span>
+            <span className="text-ink-3 truncate">{phase.meta}</span>
+          </div>
+
+          <div className="mt-3 h-0.5 overflow-hidden rounded-full bg-white/5">
+            <div
+              className="bg-acc h-full rounded-full transition-[width] duration-[400ms] ease-out"
+              style={{ width: `${progress.toFixed(1)}%` }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Header() {
   const isMac = api.platform === 'darwin';
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [isReloadingPreview, setIsReloadingPreview] = useState(false);
   const [reloadError, setReloadError] = useState<string | null>(null);
+  const [reloadStartedAt, setReloadStartedAt] = useState(() => Date.now());
   const { projectId } = useCurrentVisibleProject();
   const { data: projects = [] } = useProjects();
   const openOverlay = useOverlaysStore((state) => state.open);
@@ -75,6 +215,17 @@ export function Header() {
     }
     return count;
   }, [runCommandRunning]);
+
+  const startPreviewReload = () => {
+    setReloadError(null);
+    setReloadStartedAt(Date.now());
+    setIsReloadingPreview(true);
+    api.app.reloadPreview().catch((error) => {
+      setReloadError(
+        error instanceof Error ? error.message : 'Reload failed. Check logs.',
+      );
+    });
+  };
 
   const selectedProjectLabel = useMemo(() => {
     if (projectId === 'all') {
@@ -200,17 +351,7 @@ export function Header() {
                       'This will run pnpm install, rebuild, and restart the app. Any unsaved state will be lost.',
                     confirmLabel: 'Reload',
                     variant: 'danger',
-                    onConfirm: () => {
-                      setReloadError(null);
-                      setIsReloadingPreview(true);
-                      api.app.reloadPreview().catch((error) => {
-                        setReloadError(
-                          error instanceof Error
-                            ? error.message
-                            : 'Reload failed. Check logs for details.',
-                        );
-                      });
-                    },
+                    onConfirm: startPreviewReload,
                   });
                 }}
               >
@@ -258,38 +399,15 @@ export function Header() {
       </div>
 
       {isReloadingPreview && (
-        <div
-          className="bg-bg-0/95 fixed inset-0 z-[9999] flex items-center justify-center px-6 backdrop-blur-md"
-          style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-        >
-          <div className="border-glass-border bg-bg-1/90 flex w-full max-w-md flex-col items-center rounded-3xl border px-8 py-10 text-center shadow-2xl shadow-black/50">
-            <div className="border-glass-border bg-bg-2 mb-6 rounded-full border p-4 shadow-inner">
-              <RefreshCw className="text-acc h-8 w-8 animate-spin" />
-            </div>
-            <h2 className="text-ink-1 text-lg font-semibold">
-              Preparing app reload
-            </h2>
-            <p className="text-ink-3 mt-3 text-sm leading-6">
-              Running pnpm install and rebuilding the preview. The window will
-              close only when the updated app is ready to launch.
-            </p>
-            {reloadError && (
-              <>
-                <p className="text-status-fail mt-5 text-sm">{reloadError}</p>
-                <Button
-                  className="mt-6"
-                  variant="secondary"
-                  onClick={() => {
-                    setIsReloadingPreview(false);
-                    setReloadError(null);
-                  }}
-                >
-                  Back to app
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
+        <ReloadPreviewModal
+          error={reloadError}
+          startedAt={reloadStartedAt}
+          onBack={() => {
+            setIsReloadingPreview(false);
+            setReloadError(null);
+          }}
+          onRetry={startPreviewReload}
+        />
       )}
     </header>
   );

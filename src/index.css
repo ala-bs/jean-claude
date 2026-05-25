@@ -189,6 +189,37 @@ button {
   }
 }
 
+@keyframes reload-ring {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  80%,
+  100% {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+
+@keyframes reload-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reload-ring {
+  animation: reload-ring 1.6s ease-out infinite;
+}
+
+.reload-fade-up {
+  animation: reload-fade-up 0.24s ease-out;
+}
+
 @utility cat-bongo-badge {
   display: inline-flex;
   color: color-mix(
