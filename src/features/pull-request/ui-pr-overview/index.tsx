@@ -139,79 +139,86 @@ export function PrOverview({
   );
 
   return (
-    <div className="flex h-full flex-col">
-      <div
-        className="flex-1 overflow-y-auto"
-        style={bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined}
-      >
-        <div className="grid grid-cols-[1fr_280px] gap-5 p-5">
-          {/* Main column */}
-          <div className="flex min-w-0 flex-col gap-4">
-            {/* Checks */}
-            <PrChecks
-              evaluations={evaluationsWithOptimistic}
-              isLoading={isChecksLoading}
-              onRequeue={handleRequeue}
-              onQueueAll={handleQueueAll}
-              isRequeuing={requeueMutation.isPending}
-              expandedBuildId={providerId ? expandedBuildId : undefined}
-              onExpandCheck={providerId ? handleExpandCheck : undefined}
-              renderExpanded={
-                providerId && azureProjectId
-                  ? (buildId) => (
-                      <CIInlinePanel
-                        providerId={providerId}
-                        azureProjectId={azureProjectId}
-                        buildId={buildId}
-                        onClose={() => setExpandedBuildId(null)}
-                      />
-                    )
-                  : undefined
-              }
-            />
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="grid min-h-0 flex-1 grid-cols-[1fr_280px] gap-5 overflow-hidden p-5">
+        {/* Main column */}
+        <div
+          className="min-h-0 min-w-0 space-y-4 overflow-y-auto pr-1"
+          style={
+            bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined
+          }
+        >
+          {/* Checks */}
+          <PrChecks
+            evaluations={evaluationsWithOptimistic}
+            isLoading={isChecksLoading}
+            onRequeue={handleRequeue}
+            onQueueAll={handleQueueAll}
+            isRequeuing={requeueMutation.isPending}
+            expandedBuildId={providerId ? expandedBuildId : undefined}
+            onExpandCheck={providerId ? handleExpandCheck : undefined}
+            renderExpanded={
+              providerId && azureProjectId
+                ? (buildId) => (
+                    <CIInlinePanel
+                      providerId={providerId}
+                      azureProjectId={azureProjectId}
+                      buildId={buildId}
+                      onClose={() => setExpandedBuildId(null)}
+                    />
+                  )
+                : undefined
+            }
+          />
 
-            {/* Description */}
-            <div className="border-glass-border bg-bg-1 overflow-hidden rounded-lg border">
-              <div className="border-glass-border/50 flex items-center gap-2.5 border-b px-3.5 py-2.5">
-                <span className="text-ink-0 text-[13px] font-medium">
-                  Description
-                </span>
-                <div className="flex-1" />
-                <span className="text-ink-3 text-[11.5px]">
-                  by {pr.createdBy.displayName}
-                </span>
-              </div>
-              <div className="p-4">
-                {pr.description.trim() ? (
-                  <AzureMarkdownContent
-                    markdown={pr.description}
-                    providerId={providerId}
-                    className="text-ink-1 text-sm"
-                  />
-                ) : (
-                  <p className="text-ink-3 text-sm italic">No description</p>
-                )}
-              </div>
+          {/* Description */}
+          <div className="border-glass-border bg-bg-1 overflow-hidden rounded-lg border">
+            <div className="border-glass-border/50 flex items-center gap-2.5 border-b px-3.5 py-2.5">
+              <span className="text-ink-0 text-[13px] font-medium">
+                Description
+              </span>
+              <div className="flex-1" />
+              <span className="text-ink-3 text-[11.5px]">
+                by {pr.createdBy.displayName}
+              </span>
             </div>
-
-            {/* Comments */}
-            <PrComments
-              threads={threads}
-              providerId={providerId}
-              projectId={projectId}
-              prId={prId}
-            />
-
-            {/* Comment form */}
-            {onAddComment && (
-              <PrCommentForm
-                onSubmit={onAddComment}
-                isSubmitting={isAddingComment}
-              />
-            )}
+            <div className="p-4">
+              {pr.description.trim() ? (
+                <AzureMarkdownContent
+                  markdown={pr.description}
+                  providerId={providerId}
+                  className="text-ink-1 text-sm"
+                />
+              ) : (
+                <p className="text-ink-3 text-sm italic">No description</p>
+              )}
+            </div>
           </div>
 
-          {/* Right meta sidebar */}
+          {/* Comments */}
+          <PrComments
+            threads={threads}
+            providerId={providerId}
+            projectId={projectId}
+            prId={prId}
+          />
+
+          {/* Comment form */}
+          {onAddComment && (
+            <PrCommentForm
+              onSubmit={onAddComment}
+              isSubmitting={isAddingComment}
+            />
+          )}
+        </div>
+
+        {/* Right meta sidebar */}
+        <div
+          className="min-h-0 min-w-0 overflow-y-auto"
+          style={
+            bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined
+          }
+        >
           <PrMetaPanel pr={pr} fileCount={fileCount} providerId={providerId} />
         </div>
       </div>
