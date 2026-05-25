@@ -66,4 +66,44 @@ describe('generateTaskName', () => {
 
     expect(name).toBe('fix task name truncation');
   });
+
+  it('rejects partial JSON returned inside the name field', async () => {
+    generateTextMock.mockResolvedValue({
+      name: '{',
+    });
+
+    const name = await generateTaskName('fix partial JSON task names');
+
+    expect(name).toBeNull();
+  });
+
+  it('rejects truncated JSON returned inside the name field', async () => {
+    generateTextMock.mockResolvedValue({
+      name: '{"name":"fix partial JSON task names"',
+    });
+
+    const name = await generateTaskName('fix partial JSON task names');
+
+    expect(name).toBeNull();
+  });
+
+  it('rejects JSON object text without a name field', async () => {
+    generateTextMock.mockResolvedValue({
+      name: '{"title":"fix partial JSON task names"}',
+    });
+
+    const name = await generateTaskName('fix partial JSON task names');
+
+    expect(name).toBeNull();
+  });
+
+  it('preserves non-JSON names that start with a brace', async () => {
+    generateTextMock.mockResolvedValue({
+      name: '{api} fix auth route',
+    });
+
+    const name = await generateTaskName('fix auth route');
+
+    expect(name).toBe('{api} fix auth route');
+  });
 });

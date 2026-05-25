@@ -110,8 +110,9 @@ async function getBuiltinSkillPrompt(): Promise<string> {
   return cachedBuiltinPrompt;
 }
 
-function normalizeGeneratedTaskName(name: string): string {
+function normalizeGeneratedTaskName(name: string): string | null {
   const unwrappedName = unwrapJsonTaskName(name);
+  if (unwrappedName === null) return null;
 
   return unwrappedName
     .trim()
@@ -122,9 +123,10 @@ function normalizeGeneratedTaskName(name: string): string {
     .trim();
 }
 
-function unwrapJsonTaskName(name: string): string {
+function unwrapJsonTaskName(name: string): string | null {
   const trimmed = name.trim();
-  if (!trimmed.startsWith('{')) return name;
+  const looksLikeJsonObject = trimmed === '{' || /^\{\s*"/.test(trimmed);
+  if (!looksLikeJsonObject) return name;
 
   try {
     const parsed = JSON.parse(trimmed) as unknown;
@@ -137,8 +139,8 @@ function unwrapJsonTaskName(name: string): string {
       return (parsed as { name: string }).name;
     }
   } catch {
-    return name;
+    return null;
   }
 
-  return name;
+  return null;
 }
