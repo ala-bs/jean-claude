@@ -1,4 +1,4 @@
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import clsx from 'clsx';
 import {
   Loader2,
@@ -219,6 +219,9 @@ function getLastAssistantMessage(messages: NormalizedEntry[]): string {
 
 export function TaskPanel({ taskId }: { taskId: string }) {
   const navigate = useNavigate();
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
   const modal = useModal();
   const { data: task } = useTask(taskId);
   const projectId = task?.projectId;
@@ -434,11 +437,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
   // Track this location for navigation restoration
   useEffect(() => {
+    if (pathname.startsWith('/all')) {
+      setLastLocation({ type: 'all', taskId });
+      return;
+    }
+
     if (projectId) {
       setLastLocation({ type: 'project', projectId, taskId });
       setLastTaskForProject(projectId, taskId);
     }
-  }, [projectId, taskId, setLastLocation, setLastTaskForProject]);
+  }, [pathname, projectId, taskId, setLastLocation, setLastTaskForProject]);
 
   // Reset work items editor when switching tasks
   useEffect(() => {

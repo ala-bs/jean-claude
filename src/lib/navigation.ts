@@ -6,6 +6,8 @@ import { LastLocation, useNavigationStore } from '@/stores/navigation';
 // Type-safe redirect targets using TanStack Router's types
 // These are the routes that the restore navigation logic can redirect to
 type RestoreNavigationRoutes =
+  | '/all'
+  | '/all/$taskId'
   | '/projects/$projectId'
   | '/projects/$projectId/tasks/$taskId'
   | '/projects/new';
@@ -38,6 +40,20 @@ export async function resolveLocationRedirect({
   lastLocation: LastLocation;
   setLastLocation?: (location: LastLocation) => void;
 }): Promise<RedirectTarget> {
+  if (lastLocation.type === 'all') {
+    if (lastLocation.taskId) {
+      const task = await api.tasks.findById(lastLocation.taskId);
+      if (task) {
+        return {
+          to: '/all/$taskId',
+          params: { taskId: lastLocation.taskId },
+        };
+      }
+    }
+
+    return { to: '/all' };
+  }
+
   if (lastLocation.type === 'project') {
     // Validate project still exists
     const project = await api.projects.findById(lastLocation.projectId);

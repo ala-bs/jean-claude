@@ -14,6 +14,7 @@ import { useCommands } from '@/common/hooks/use-commands';
 import { useFeed } from '@/hooks/use-feed';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useFeedStore } from '@/stores/feed';
+import { useNavigationStore } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
 import type { FeedItem } from '@shared/feed-types';
 
@@ -136,6 +137,7 @@ export function FeedList() {
   const unpin = useFeedStore((s) => s.unpin);
   const dismiss = useFeedStore((s) => s.dismiss);
   const toggleLowPriority = useFeedStore((s) => s.toggleLowPriority);
+  const setLastLocation = useNavigationStore((s) => s.setLastLocation);
   const pinnedIdSet = useMemo(
     () => new Set(pinned.map((item) => item.id)),
     [pinned],
@@ -152,6 +154,10 @@ export function FeedList() {
   const [_dragOverId, setDragOverId] = useState<string | null>(null);
   const [dragOverPinZone, setDragOverPinZone] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setLastLocation({ type: 'all', taskId: currentTaskId ?? null });
+  }, [currentTaskId, setLastLocation]);
 
   // --- Drag handlers for pinned zone items ---
   const handlePinnedDragStart = useCallback((id: string) => {

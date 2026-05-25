@@ -147,6 +147,7 @@ const MAX_SIDEBAR_WIDTH = 400;
 // Discriminated union for last location
 export type LastLocation =
   | { type: 'project'; projectId: string; taskId: string | null }
+  | { type: 'all'; taskId: string | null }
   | { type: 'none' };
 
 interface NavigationState {
