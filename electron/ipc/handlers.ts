@@ -4116,6 +4116,10 @@ export function registerIpcHandlers() {
 
     previewReloadInProgress = true;
     const projectRoot = app.getAppPath();
+
+    dbg.ipc('app:reloadPreview — stopping all running commands');
+    await runCommandService.stopAllCommands();
+
     dbg.ipc(
       'app:reloadPreview — running pnpm install && pnpm build in %s',
       projectRoot,
