@@ -979,6 +979,24 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('app:getIsPreviewMode') as Promise<boolean>,
     reloadPreview: () =>
       ipcRenderer.invoke('app:reloadPreview') as Promise<void>,
+    onReloadPreviewProgress: (
+      callback: (progress: {
+        step:
+          | 'starting'
+          | 'stopping-commands'
+          | 'building'
+          | 'launching'
+          | 'restarting';
+        label: string;
+        detail?: string;
+      }) => void,
+    ) => {
+      const handler = (_: unknown, progress: Parameters<typeof callback>[0]) =>
+        callback(progress);
+      ipcRenderer.on('app:reloadPreviewProgress', handler);
+      return () =>
+        ipcRenderer.removeListener('app:reloadPreviewProgress', handler);
+    },
   },
   system: {
     getMemoryUsage: () => ipcRenderer.invoke('system:getMemoryUsage'),

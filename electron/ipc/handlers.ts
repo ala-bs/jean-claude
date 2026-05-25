@@ -4120,21 +4120,38 @@ export function registerIpcHandlers() {
     return !!process.env.JC_PREVIEW;
   });
 
-  ipcMain.handle('app:reloadPreview', async () => {
+  ipcMain.handle('app:reloadPreview', async (event) => {
     if (previewReloadInProgress) {
       return;
     }
 
     previewReloadInProgress = true;
     const projectRoot = app.getAppPath();
+    const sendReloadProgress = (progress: {
+      step: 'stopping-commands' | 'building' | 'launching' | 'restarting';
+      label: string;
+      detail?: string;
+    }) => {
+      event.sender.send('app:reloadPreviewProgress', progress);
+    };
 
     dbg.ipc('app:reloadPreview — stopping all running commands');
+    sendReloadProgress({
+      step: 'stopping-commands',
+      label: 'Stopping running commands',
+      detail: 'Waiting for project commands to stop',
+    });
     await runCommandService.stopAllCommands();
 
     dbg.ipc(
       'app:reloadPreview — running pnpm install && pnpm build in %s',
       projectRoot,
     );
+    sendReloadProgress({
+      step: 'building',
+      label: 'Installing and building',
+      detail: 'pnpm install && pnpm build',
+    });
 
     await new Promise<void>((resolve, reject) => {
       const child = spawn('pnpm install && pnpm build', [], {
@@ -4165,6 +4182,11 @@ export function registerIpcHandlers() {
     });
 
     dbg.ipc('app:reloadPreview — launching pnpm preview in %s', projectRoot);
+    sendReloadProgress({
+      step: 'launching',
+      label: 'Launching preview',
+      detail: 'pnpm preview',
+    });
     app.releaseSingleInstanceLock();
     const child = spawn('pnpm preview', [], {
       cwd: projectRoot,
@@ -4174,6 +4196,11 @@ export function registerIpcHandlers() {
     });
     child.unref();
 
+    sendReloadProgress({
+      step: 'restarting',
+      label: 'Restarting app',
+      detail: 'New preview is starting',
+    });
     setTimeout(() => {
       app.exit(0);
     }, 500);

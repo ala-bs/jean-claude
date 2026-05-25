@@ -28,7 +28,7 @@ import { Kbd } from '@/common/ui/kbd';
 import { useBacklogProjectId } from '@/hooks/use-backlog-project-id';
 import { useProjectTodoCount } from '@/hooks/use-project-todos';
 import { useProjects } from '@/hooks/use-projects';
-import { api } from '@/lib/api';
+import { api, type ReloadPreviewProgress } from '@/lib/api';
 import { useCurrentVisibleProject } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
@@ -39,13 +39,19 @@ import { NextMeetingButton } from './next-meeting-button';
 import { RamUsageDisplay } from './ram-usage-display';
 import { UsageDisplay } from './usage-display';
 
-const reloadPhases = [
-  { label: 'Snapshot workspace', meta: 'session changes' },
-  { label: 'Stop dev server', meta: 'preview process' },
-  { label: 'Install dependencies', meta: 'pnpm install' },
-  { label: 'Rebuild preview', meta: 'vite build' },
-  { label: 'Restart preview', meta: 'updated app' },
-];
+const reloadStepNumbers: Record<ReloadPreviewProgress['step'], number> = {
+  starting: 1,
+  'stopping-commands': 2,
+  building: 3,
+  launching: 4,
+  restarting: 5,
+};
+
+const initialReloadProgress: ReloadPreviewProgress = {
+  step: 'starting',
+  label: 'Starting reload',
+  detail: 'Preparing preview reload',
+};
 
 function formatReloadElapsed(ms: number) {
   const seconds = ms / 1000;
@@ -61,16 +67,9 @@ function useReloadTicker(startedAt: number) {
   }, []);
 
   const elapsedMs = Math.max(0, now - startedAt);
-  const phaseIndex =
-    Math.floor((elapsedMs % 9000) / (9000 / reloadPhases.length)) %
-    reloadPhases.length;
-  const progress = Math.min(92, 12 + ((elapsedMs % 14000) / 14000) * 80);
 
   return {
     elapsed: formatReloadElapsed(elapsedMs),
-    phase: reloadPhases[phaseIndex],
-    phaseIndex,
-    progress,
   };
 }
 
@@ -85,7 +84,18 @@ function ReloadPreviewModal({
   onBack: () => void;
   onRetry: () => void;
 }) {
-  const { elapsed, phase, phaseIndex, progress } = useReloadTicker(startedAt);
+  const [progress, setProgress] = useState<ReloadPreviewProgress>(
+    initialReloadProgress,
+  );
+  const { elapsed } = useReloadTicker(startedAt);
+  const stepNumber = reloadStepNumbers[progress.step];
+
+  useEffect(() => {
+    setProgress(initialReloadProgress);
+    return api.app.onReloadPreviewProgress((nextProgress) => {
+      setProgress(nextProgress);
+    });
+  }, [startedAt]);
 
   return (
     <div
@@ -157,18 +167,22 @@ function ReloadPreviewModal({
 
           <div className="mt-2 flex items-center gap-1.5 overflow-hidden pl-[18px] font-mono text-[11px] whitespace-nowrap">
             <span className="text-ink-4">
-              {String(phaseIndex + 1).padStart(2, '0')}/
-              {String(reloadPhases.length).padStart(2, '0')}
+              {String(stepNumber).padStart(2, '0')}/05
             </span>
-            <span className="text-ink-1">{phase.label.toLowerCase()}</span>
-            <span className="text-ink-4">·</span>
-            <span className="text-ink-3 truncate">{phase.meta}</span>
+            <span className="text-ink-1">{progress.label}</span>
+            {progress.detail && (
+              <>
+                <span className="text-ink-4">·</span>
+                <span className="text-ink-3 truncate">{progress.detail}</span>
+              </>
+            )}
           </div>
 
           <div className="mt-3 h-0.5 overflow-hidden rounded-full bg-white/5">
             <div
-              className="bg-acc h-full rounded-full transition-[width] duration-[400ms] ease-out"
-              style={{ width: `${progress.toFixed(1)}%` }}
+              className="bg-acc h-full rounded-full opacity-80 transition-[width] duration-200"
+              style={{ width: `${(stepNumber / 5) * 100}%` }}
+              aria-hidden
             />
           </div>
         </div>

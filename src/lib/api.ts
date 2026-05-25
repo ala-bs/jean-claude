@@ -1198,6 +1198,9 @@ export interface Api {
     isDevMode: boolean;
     getIsPreviewMode: () => Promise<boolean>;
     reloadPreview: () => Promise<void>;
+    onReloadPreviewProgress: (
+      callback: (progress: ReloadPreviewProgress) => void,
+    ) => () => void;
   };
   system: {
     getMemoryUsage: () => Promise<{
@@ -1219,6 +1222,17 @@ export interface Api {
     getFoldRanges: (content: string, language: string) => Promise<FoldRange[]>;
   };
 }
+
+export type ReloadPreviewProgress = {
+  step:
+    | 'starting'
+    | 'stopping-commands'
+    | 'building'
+    | 'launching'
+    | 'restarting';
+  label: string;
+  detail?: string;
+};
 
 declare global {
   interface Window {
@@ -1761,6 +1775,7 @@ export const api: Api = hasWindowApi
         isDevMode: false,
         getIsPreviewMode: async () => false,
         reloadPreview: async () => {},
+        onReloadPreviewProgress: () => () => {},
       },
       system: {
         getMemoryUsage: async () => ({
