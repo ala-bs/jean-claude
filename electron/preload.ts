@@ -299,6 +299,30 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:getPullRequest', params),
+    updatePullRequestTitle: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      title: string;
+    }) => ipcRenderer.invoke('azureDevOps:updatePullRequestTitle', params),
+    updatePullRequestDescription: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      description: string;
+    }) =>
+      ipcRenderer.invoke('azureDevOps:updatePullRequestDescription', params),
+    uploadPullRequestAttachment: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      fileName: string;
+      mimeType: string;
+      dataBase64: string;
+    }) => ipcRenderer.invoke('azureDevOps:uploadPullRequestAttachment', params),
     getPullRequestCommits: (params: {
       providerId: string;
       projectId: string;

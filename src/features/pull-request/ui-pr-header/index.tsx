@@ -12,13 +12,23 @@ import {
   GitBranch,
   ArrowRight,
   Clock,
+  Edit3,
+  Save,
+  X,
 } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
+import { Button } from '@/common/ui/button';
 import { Chip } from '@/common/ui/chip';
+import { Input } from '@/common/ui/input';
 import { UserAvatar } from '@/common/ui/user-avatar';
 import { useProject } from '@/hooks/use-projects';
-import { usePublishPullRequest } from '@/hooks/use-pull-requests';
+import {
+  useCurrentAzureUser,
+  usePublishPullRequest,
+  useUpdatePullRequestTitle,
+} from '@/hooks/use-pull-requests';
 import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
@@ -82,9 +92,28 @@ export function PrHeader({
   const { setDraft: setNewTaskDraft } = useNewTaskFormStore(projectId);
   const { data: editorSetting } = useEditorSetting();
   const publishMutation = usePublishPullRequest(projectId, pr.id);
+  const updateTitle = useUpdatePullRequestTitle(projectId, pr.id);
+  const { data: currentUser } = useCurrentAzureUser(projectId);
   const [isCreating, setIsCreating] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(pr.title);
+  const [titleError, setTitleError] = useState<string | null>(null);
   const sourceBranch = getBranchName(pr.sourceRefName);
   const targetBranch = getBranchName(pr.targetRefName);
+  const currentUserEmail = currentUser?.emailAddress.toLowerCase();
+  const ownerEmail = pr.createdBy.uniqueName.toLowerCase();
+  const canEditTitle =
+    !!currentUser &&
+    (currentUser.identityId === pr.createdBy.id ||
+      currentUser.id === pr.createdBy.id ||
+      currentUserEmail === ownerEmail);
+
+  useEffect(() => {
+    if (!isEditingTitle) {
+      setTitleDraft(pr.title);
+      setTitleError(null);
+    }
+  }, [isEditingTitle, pr.title]);
 
   const handleOpenInEditor = useCallback(() => {
     if (project?.path) {
@@ -139,6 +168,28 @@ export function PrHeader({
       params: { projectId },
     });
   }, [navigate, pr.id, pr.title, projectId, setNewTaskDraft, sourceBranch]);
+
+  const handleSaveTitle = useCallback(
+    (event?: FormEvent) => {
+      event?.preventDefault();
+      const nextTitle = titleDraft.trim();
+      if (!nextTitle) {
+        setTitleError('Title is required');
+        return;
+      }
+
+      setTitleError(null);
+      updateTitle.mutate(nextTitle, {
+        onSuccess: () => {
+          setIsEditingTitle(false);
+        },
+        onError: (error) => {
+          setTitleError(error.message);
+        },
+      });
+    },
+    [titleDraft, updateTitle],
+  );
 
   return (
     <>
@@ -238,9 +289,67 @@ export function PrHeader({
 
           <div className="min-w-0 flex-1">
             {/* Title */}
-            <h1 className="text-ink-0 font-mono text-xl leading-tight font-semibold tracking-tight break-words">
-              {pr.title}
-            </h1>
+            {isEditingTitle ? (
+              <form className="space-y-2" onSubmit={handleSaveTitle}>
+                <div className="flex items-start gap-2">
+                  <Input
+                    value={titleDraft}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      setTitleDraft(event.target.value)
+                    }
+                    className="font-mono text-base font-semibold"
+                    disabled={updateTitle.isPending}
+                    autoFocus
+                  />
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    icon={
+                      updateTitle.isPending ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Save className="h-3.5 w-3.5" />
+                      )
+                    }
+                    disabled={updateTitle.isPending}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    icon={<X className="h-3.5 w-3.5" />}
+                    onClick={() => setIsEditingTitle(false)}
+                    disabled={updateTitle.isPending}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+                {titleError && (
+                  <p className="text-xs text-red-400">{titleError}</p>
+                )}
+              </form>
+            ) : (
+              <div className="flex items-start gap-2">
+                <h1 className="text-ink-0 min-w-0 font-mono text-xl leading-tight font-semibold tracking-tight break-words">
+                  {pr.title}
+                </h1>
+                {canEditTitle && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    icon={<Edit3 className="h-3.5 w-3.5" />}
+                    onClick={() => setIsEditingTitle(true)}
+                    className="mt-0.5 shrink-0"
+                  >
+                    Edit
+                  </Button>
+                )}
+              </div>
+            )}
 
             {/* Meta row */}
             <div className="text-ink-3 mt-2.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs">

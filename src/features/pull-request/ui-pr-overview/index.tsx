@@ -1,9 +1,16 @@
+import { Edit3, Image, Loader2, Save, X } from 'lucide-react';
+import type { ChangeEvent } from 'react';
 import { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 
+import { Button } from '@/common/ui/button';
+import { Textarea } from '@/common/ui/textarea';
 import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
 import {
+  useCurrentAzureUser,
   usePullRequestPolicyEvaluations,
   useRequeuePolicyEvaluation,
+  useUpdatePullRequestDescription,
+  useUploadPullRequestAttachment,
 } from '@/hooks/use-pull-requests';
 import type {
   AzureDevOpsPullRequestDetails,
@@ -41,6 +48,29 @@ export function PrOverview({
 }) {
   // Track which build is expanded inline in the checks block
   const [expandedBuildId, setExpandedBuildId] = useState<number | null>(null);
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(pr.description);
+  const [descriptionError, setDescriptionError] = useState<string | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+
+  const { data: currentUser } = useCurrentAzureUser(projectId);
+  const updateDescription = useUpdatePullRequestDescription(projectId, prId);
+  const uploadAttachment = useUploadPullRequestAttachment(projectId, prId);
+
+  const currentUserEmail = currentUser?.emailAddress.toLowerCase();
+  const ownerEmail = pr.createdBy.uniqueName.toLowerCase();
+  const canEditDescription =
+    !!currentUser &&
+    (currentUser.identityId === pr.createdBy.id ||
+      currentUser.id === pr.createdBy.id ||
+      currentUserEmail === ownerEmail);
+
+  useEffect(() => {
+    if (!isEditingDescription) {
+      setDescriptionDraft(pr.description);
+      setDescriptionError(null);
+    }
+  }, [isEditingDescription, pr.description]);
 
   const handleExpandCheck = useCallback((buildId: number | null) => {
     setExpandedBuildId(buildId);
@@ -126,6 +156,67 @@ export function PrOverview({
     [requeueMutation],
   );
 
+  const handleSaveDescription = useCallback(() => {
+    if (uploadAttachment.isPending) return;
+
+    setDescriptionError(null);
+    updateDescription.mutate(descriptionDraft, {
+      onSuccess: () => {
+        setIsEditingDescription(false);
+      },
+      onError: (error) => {
+        setDescriptionError(error.message);
+      },
+    });
+  }, [descriptionDraft, updateDescription, uploadAttachment.isPending]);
+
+  const handleImageSelection = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? []);
+      if (files.length === 0) return;
+
+      let markdownImages: string[];
+      try {
+        markdownImages = await Promise.all(
+          files.map(async (file) => {
+            const dataBase64 = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                if (typeof reader.result !== 'string') {
+                  reject(new Error(`Failed to read ${file.name}`));
+                  return;
+                }
+                resolve(reader.result.split(',')[1] ?? '');
+              };
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(file);
+            });
+            const attachment = await uploadAttachment.mutateAsync({
+              fileName: file.name,
+              mimeType: file.type || 'application/octet-stream',
+              dataBase64,
+            });
+            const alt = file.name.replace(/[[\]()\\]/g, '_');
+            return `![${alt}](${attachment.url})`;
+          }),
+        );
+      } catch (error) {
+        setDescriptionError(
+          error instanceof Error ? error.message : 'Failed to read image',
+        );
+        event.target.value = '';
+        return;
+      }
+
+      setDescriptionDraft((current) => {
+        const separator = current.trim() ? '\n\n' : '';
+        return `${current.trimEnd()}${separator}${markdownImages.join('\n\n')}`;
+      });
+      event.target.value = '';
+    },
+    [uploadAttachment],
+  );
+
   // Merge optimistic queued state with server data
   const evaluationsWithOptimistic = useMemo(
     () =>
@@ -181,13 +272,102 @@ export function PrOverview({
               <span className="text-ink-3 text-[11.5px]">
                 by {pr.createdBy.displayName}
               </span>
+              {canEditDescription && !isEditingDescription && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  icon={<Edit3 className="h-3.5 w-3.5" />}
+                  onClick={() => setIsEditingDescription(true)}
+                >
+                  Edit
+                </Button>
+              )}
             </div>
             <div className="p-4">
-              {pr.description.trim() ? (
+              {isEditingDescription ? (
+                <div className="space-y-3">
+                  <Textarea
+                    value={descriptionDraft}
+                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
+                      setDescriptionDraft(event.target.value)
+                    }
+                    rows={10}
+                    className="min-h-56 font-mono text-xs"
+                    placeholder="Describe the pull request..."
+                    disabled={
+                      updateDescription.isPending || uploadAttachment.isPending
+                    }
+                  />
+                  {descriptionError && (
+                    <p className="text-xs text-red-400">{descriptionError}</p>
+                  )}
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={handleImageSelection}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      icon={<Image className="h-3.5 w-3.5" />}
+                      onClick={() => imageInputRef.current?.click()}
+                      disabled={
+                        updateDescription.isPending ||
+                        uploadAttachment.isPending
+                      }
+                    >
+                      {uploadAttachment.isPending
+                        ? 'Uploading...'
+                        : 'Add image'}
+                    </Button>
+                    <div className="flex-1" />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      icon={<X className="h-3.5 w-3.5" />}
+                      onClick={() => setIsEditingDescription(false)}
+                      disabled={
+                        updateDescription.isPending ||
+                        uploadAttachment.isPending
+                      }
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      icon={
+                        updateDescription.isPending ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Save className="h-3.5 w-3.5" />
+                        )
+                      }
+                      onClick={handleSaveDescription}
+                      disabled={
+                        updateDescription.isPending ||
+                        uploadAttachment.isPending
+                      }
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              ) : pr.description.trim() ? (
                 <AzureMarkdownContent
                   markdown={pr.description}
                   providerId={providerId}
                   className="text-ink-1 text-sm"
+                  imageClassName="max-h-[520px] object-contain"
+                  enableImageModal
                 />
               ) : (
                 <p className="text-ink-3 text-sm italic">No description</p>

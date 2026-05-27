@@ -130,6 +130,77 @@ export function usePullRequest(projectId: string, prId: number) {
   });
 }
 
+export function useUpdatePullRequestTitle(projectId: string, prId: number) {
+  const queryClient = useQueryClient();
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useMutation({
+    mutationFn: (title: string) =>
+      api.azureDevOps.updatePullRequestTitle({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        title,
+      }),
+    onSuccess: (updatedPr) => {
+      queryClient.setQueryData(['pull-request', projectId, prId], updatedPr);
+      queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
+      queryClient.invalidateQueries({
+        queryKey: ['all-projects-pull-requests'],
+      });
+    },
+  });
+}
+
+export function useUpdatePullRequestDescription(
+  projectId: string,
+  prId: number,
+) {
+  const queryClient = useQueryClient();
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useMutation({
+    mutationFn: (description: string) =>
+      api.azureDevOps.updatePullRequestDescription({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        description,
+      }),
+    onSuccess: (updatedPr) => {
+      queryClient.setQueryData(['pull-request', projectId, prId], updatedPr);
+      queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
+      queryClient.invalidateQueries({
+        queryKey: ['all-projects-pull-requests'],
+      });
+    },
+  });
+}
+
+export function useUploadPullRequestAttachment(
+  projectId: string,
+  prId: number,
+) {
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useMutation({
+    mutationFn: (params: {
+      fileName: string;
+      mimeType: string;
+      dataBase64: string;
+    }) =>
+      api.azureDevOps.uploadPullRequestAttachment({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        ...params,
+      }),
+  });
+}
+
 export function usePullRequestCommits(projectId: string, prId: number) {
   const repoInfo = useProjectRepoInfo(projectId);
 

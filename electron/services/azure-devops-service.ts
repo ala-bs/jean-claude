@@ -1645,6 +1645,136 @@ export async function getPullRequest(params: {
   return mapPullRequestResponse(pr, webUrl);
 }
 
+async function assertCurrentUserOwnsPullRequest(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<void> {
+  const [currentUser, pullRequest] = await Promise.all([
+    getCurrentUser(params.providerId),
+    getPullRequest(params),
+  ]);
+  const currentUserEmail = currentUser.emailAddress.toLowerCase();
+  const ownerEmail = pullRequest.createdBy.uniqueName.toLowerCase();
+
+  if (
+    currentUser.identityId !== pullRequest.createdBy.id &&
+    currentUser.id !== pullRequest.createdBy.id &&
+    currentUserEmail !== ownerEmail
+  ) {
+    throw new Error('Only the pull request owner can edit this pull request');
+  }
+}
+
+export async function updatePullRequestTitle(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  title: string;
+}): Promise<AzureDevOpsPullRequestDetails> {
+  const title = params.title.trim();
+  if (!title) {
+    throw new Error('Pull request title is required');
+  }
+
+  await assertCurrentUserOwnsPullRequest(params);
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ title }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to update pull request title: ${error}`);
+  }
+
+  const pr: PullRequestResponse = await response.json();
+  const webUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_git/${params.repoId}/pullrequest/${pr.pullRequestId}`;
+
+  return mapPullRequestResponse(pr, webUrl);
+}
+
+export async function updatePullRequestDescription(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  description: string;
+}): Promise<AzureDevOpsPullRequestDetails> {
+  await assertCurrentUserOwnsPullRequest(params);
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ description: params.description }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to update pull request description: ${error}`);
+  }
+
+  const pr: PullRequestResponse = await response.json();
+  const webUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_git/${params.repoId}/pullrequest/${pr.pullRequestId}`;
+
+  return mapPullRequestResponse(pr, webUrl);
+}
+
+export async function uploadPullRequestAttachment(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  fileName: string;
+  mimeType: string;
+  dataBase64: string;
+}): Promise<{ url: string }> {
+  await assertCurrentUserOwnsPullRequest(params);
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const encodedFileName = encodeURIComponent(params.fileName);
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/attachments/${encodedFileName}?api-version=7.1-preview.1`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': params.mimeType || 'application/octet-stream',
+    },
+    body: Buffer.from(params.dataBase64, 'base64'),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to upload pull request attachment: ${error}`);
+  }
+
+  const attachment: { url?: string } = await response.json();
+  if (!attachment.url) {
+    throw new Error('Azure DevOps did not return an attachment URL');
+  }
+
+  return { url: attachment.url };
+}
+
 export async function votePullRequest(params: {
   providerId: string;
   projectId: string;

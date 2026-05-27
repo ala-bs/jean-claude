@@ -623,6 +623,29 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<AzureDevOpsPullRequestDetails>;
+    updatePullRequestTitle: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      title: string;
+    }) => Promise<AzureDevOpsPullRequestDetails>;
+    updatePullRequestDescription: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      description: string;
+    }) => Promise<AzureDevOpsPullRequestDetails>;
+    uploadPullRequestAttachment: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      fileName: string;
+      mimeType: string;
+      dataBase64: string;
+    }) => Promise<{ url: string }>;
     getPullRequestCommits: (params: {
       providerId: string;
       projectId: string;
@@ -1436,6 +1459,15 @@ export const api: Api = hasWindowApi
         },
         listPullRequests: async () => [],
         getPullRequest: async () => {
+          throw new Error('API not available');
+        },
+        updatePullRequestTitle: async () => {
+          throw new Error('API not available');
+        },
+        updatePullRequestDescription: async () => {
+          throw new Error('API not available');
+        },
+        uploadPullRequestAttachment: async () => {
           throw new Error('API not available');
         },
         getPullRequestCommits: async () => [],

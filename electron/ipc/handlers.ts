@@ -99,6 +99,9 @@ import {
   cloneRepository,
   listPullRequests,
   getPullRequest,
+  updatePullRequestTitle,
+  updatePullRequestDescription,
+  uploadPullRequestAttachment,
   getPullRequestWorkItems,
   getPullRequestPolicyEvaluations,
   requeuePolicyEvaluation,
@@ -2016,6 +2019,50 @@ export function registerIpcHandlers() {
         pullRequestId: number;
       },
     ) => getPullRequest(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:updatePullRequestTitle',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        title: string;
+      },
+    ) => updatePullRequestTitle(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:updatePullRequestDescription',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        description: string;
+      },
+    ) => updatePullRequestDescription(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:uploadPullRequestAttachment',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        fileName: string;
+        mimeType: string;
+        dataBase64: string;
+      },
+    ) => uploadPullRequestAttachment(params),
   );
 
   ipcMain.handle(
