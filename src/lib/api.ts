@@ -1255,6 +1255,7 @@ export type ReloadPreviewProgress = {
   step:
     | 'starting'
     | 'stopping-commands'
+    | 'pulling'
     | 'building'
     | 'launching'
     | 'restarting';

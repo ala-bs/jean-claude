@@ -1012,6 +1012,7 @@ contextBridge.exposeInMainWorld('api', {
         step:
           | 'starting'
           | 'stopping-commands'
+          | 'pulling'
           | 'building'
           | 'launching'
           | 'restarting';

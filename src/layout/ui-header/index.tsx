@@ -43,10 +43,13 @@ import { UsageDisplay } from './usage-display';
 const reloadStepNumbers: Record<ReloadPreviewProgress['step'], number> = {
   starting: 1,
   'stopping-commands': 2,
-  building: 3,
-  launching: 4,
-  restarting: 5,
+  pulling: 3,
+  building: 4,
+  launching: 5,
+  restarting: 6,
 };
+
+const reloadStepCount = 6;
 
 const initialReloadProgress: ReloadPreviewProgress = {
   step: 'starting',
@@ -117,10 +120,10 @@ function ReloadPreviewModal({
               <X className="h-2 w-2" aria-hidden />
             </span>
             <div className="text-ink-0 min-w-0 flex-1 text-[12.5px] font-medium">
-              Build failed
+              Reload failed
             </div>
             <div className="text-ink-4 font-mono text-[10.5px]">
-              rebuild preview
+              reload preview
             </div>
           </div>
 
@@ -170,7 +173,8 @@ function ReloadPreviewModal({
 
           <div className="mt-2 flex items-center gap-1.5 overflow-hidden pl-[18px] font-mono text-[11px] whitespace-nowrap">
             <span className="text-ink-4">
-              {String(stepNumber).padStart(2, '0')}/05
+              {String(stepNumber).padStart(2, '0')}/
+              {String(reloadStepCount).padStart(2, '0')}
             </span>
             <span className="text-ink-1">{progress.label}</span>
             {progress.detail && (
@@ -184,7 +188,7 @@ function ReloadPreviewModal({
           <div className="mt-3 h-0.5 overflow-hidden rounded-full bg-white/5">
             <div
               className="bg-acc h-full rounded-full opacity-80 transition-[width] duration-200"
-              style={{ width: `${(stepNumber / 5) * 100}%` }}
+              style={{ width: `${(stepNumber / reloadStepCount) * 100}%` }}
               aria-hidden
             />
           </div>
@@ -365,7 +369,7 @@ export function Header() {
                   modal.confirm({
                     title: 'Reload App',
                     content:
-                      'This will run pnpm install, rebuild, and restart the app. Any unsaved state will be lost.',
+                      'This will pull latest changes, run pnpm install, rebuild, and restart the app. Any unsaved state will be lost.',
                     confirmLabel: 'Reload',
                     variant: 'danger',
                     onConfirm: startPreviewReload,

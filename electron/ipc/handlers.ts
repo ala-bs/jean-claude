@@ -4192,7 +4192,12 @@ export function registerIpcHandlers() {
     previewReloadInProgress = true;
     const projectRoot = app.getAppPath();
     const sendReloadProgress = (progress: {
-      step: 'stopping-commands' | 'building' | 'launching' | 'restarting';
+      step:
+        | 'stopping-commands'
+        | 'pulling'
+        | 'building'
+        | 'launching'
+        | 'restarting';
       label: string;
       detail?: string;
     }) => {
@@ -4206,6 +4211,46 @@ export function registerIpcHandlers() {
       detail: 'Waiting for project commands to stop',
     });
     await runCommandService.stopAllCommands();
+
+    dbg.ipc('app:reloadPreview — running git pull in %s', projectRoot);
+    sendReloadProgress({
+      step: 'pulling',
+      label: 'Pulling latest changes',
+      detail: 'git pull',
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('git', ['pull'], {
+        cwd: projectRoot,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      child.stdout?.on('data', (data: Buffer) => {
+        dbg.ipc(
+          'app:reloadPreview git pull stdout: %s',
+          data.toString().trim(),
+        );
+      });
+      child.stderr?.on('data', (data: Buffer) => {
+        dbg.ipc(
+          'app:reloadPreview git pull stderr: %s',
+          data.toString().trim(),
+        );
+      });
+
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        reject(new Error(`Git pull failed with exit code ${code}`));
+      });
+    }).catch((error) => {
+      previewReloadInProgress = false;
+      throw error;
+    });
 
     dbg.ipc(
       'app:reloadPreview — running pnpm install && pnpm build in %s',
