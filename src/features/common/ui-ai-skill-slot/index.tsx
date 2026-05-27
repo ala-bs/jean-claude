@@ -55,22 +55,34 @@ export function SlotDetail({
   config,
   enabledBackends,
   onUpdate,
+  projectPath,
+  fallbackBackend = 'claude-code',
+  fallbackModel = DEFAULT_CLAUDE_CODE_MODEL,
+  emptySummary = 'Not configured',
+  emptyBadgeLabel = 'Disabled',
+  toggleLabel = 'Enabled',
+  toggleDescription = 'Disabled slots skip AI generation for this feature.',
 }: {
   label: string;
   description: string;
   config: AiSkillSlotConfig | null;
   enabledBackends: { value: AgentBackendType; label: string }[];
   onUpdate: (config: AiSkillSlotConfig | null) => void;
+  projectPath?: string;
+  fallbackBackend?: AgentBackendType;
+  fallbackModel?: string;
+  emptySummary?: string;
+  emptyBadgeLabel?: string;
+  toggleLabel?: string;
+  toggleDescription?: string;
 }) {
   const isEnabled = config !== null;
 
   // Local editing state
   const [localBackend, setLocalBackend] = useState<AgentBackendType>(
-    config?.backend ?? 'claude-code',
+    config?.backend ?? fallbackBackend,
   );
-  const [localModel, setLocalModel] = useState(
-    config?.model ?? DEFAULT_CLAUDE_CODE_MODEL,
-  );
+  const [localModel, setLocalModel] = useState(config?.model ?? fallbackModel);
   const [localPresetId, setLocalPresetId] = useState<string | null>(null);
   const [localSkillName, setLocalSkillName] = useState<string | null>(
     config?.skillName ?? null,
@@ -78,14 +90,14 @@ export function SlotDetail({
 
   // Sync local state when external config changes (e.g., query refetch)
   useEffect(() => {
-    setLocalBackend(config?.backend ?? 'claude-code');
-    setLocalModel(config?.model ?? DEFAULT_CLAUDE_CODE_MODEL);
+    setLocalBackend(config?.backend ?? fallbackBackend);
+    setLocalModel(config?.model ?? fallbackModel);
     setLocalPresetId(null);
     setLocalSkillName(config?.skillName ?? null);
-  }, [config]);
+  }, [config, fallbackBackend, fallbackModel]);
 
   // Skills for the selected backend (enabled or builtin)
-  const { data: skills } = useManagedSkills(localBackend);
+  const { data: skills } = useManagedSkills(localBackend, projectPath);
   const enabledSkills = useMemo(
     () =>
       (skills ?? []).filter(
@@ -121,11 +133,11 @@ export function SlotDetail({
 
   const handleCancel = useCallback(() => {
     // Reset to current config
-    setLocalBackend(config?.backend ?? 'claude-code');
-    setLocalModel(config?.model ?? DEFAULT_CLAUDE_CODE_MODEL);
+    setLocalBackend(config?.backend ?? fallbackBackend);
+    setLocalModel(config?.model ?? fallbackModel);
     setLocalPresetId(null);
     setLocalSkillName(config?.skillName ?? null);
-  }, [config]);
+  }, [config, fallbackBackend, fallbackModel]);
 
   const handleToggleEnabled = useCallback(
     (checked: boolean) => {
@@ -152,7 +164,7 @@ export function SlotDetail({
         config.model,
         config.skillName ?? 'Builtin',
       ].join(' \u00b7 ')
-    : 'Not configured';
+    : emptySummary;
 
   // Allow enabling even without a skill (slots can use builtin/default prompt)
   const canEnable = true;
@@ -169,7 +181,7 @@ export function SlotDetail({
             <span className="text-ink-2 text-xs">{summary}</span>
             {!config && (
               <span className="text-ink-3 bg-glass-medium rounded px-1.5 py-0.5 text-xs">
-                Disabled
+                {emptyBadgeLabel}
               </span>
             )}
           </div>
@@ -228,10 +240,8 @@ export function SlotDetail({
 
             <div className="flex items-center justify-between gap-4">
               <div>
-                <label className="text-ink-2 text-sm">Enabled</label>
-                <p className="text-ink-3 mt-0.5 text-xs">
-                  Disabled slots skip AI generation for this feature.
-                </p>
+                <label className="text-ink-2 text-sm">{toggleLabel}</label>
+                <p className="text-ink-3 mt-0.5 text-xs">{toggleDescription}</p>
               </div>
               <Switch
                 checked={isEnabled}

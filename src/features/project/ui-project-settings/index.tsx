@@ -1,5 +1,5 @@
 import isEqual from 'lodash-es/isEqual';
-import { ChevronDown, ChevronRight, FolderOpen, Trash2 } from 'lucide-react';
+import { FolderOpen, Sparkles, Trash2 } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -10,12 +10,21 @@ import {
 
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
+import {
+  ListDetailLayout,
+  ListGroupHeader,
+  ListItemButton,
+  ListPane,
+} from '@/common/ui/list-detail-layout';
 import { Select } from '@/common/ui/select';
 import { Textarea } from '@/common/ui/textarea';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
 import { AVAILABLE_BACKENDS } from '@/features/agent/ui-backend-selector';
-import { SLOT_DEFINITIONS } from '@/features/common/ui-ai-skill-slot';
+import {
+  SLOT_DEFINITIONS,
+  SlotDetail,
+} from '@/features/common/ui-ai-skill-slot';
 import { ProjectMcpSettings } from '@/features/project/ui-project-mcp-settings';
 import { ProjectPermissionsSettings } from '@/features/project/ui-project-permissions-settings';
 import { ProjectPipelineSettings } from '@/features/project/ui-project-pipeline-settings';
@@ -25,7 +34,6 @@ import { RepoLink } from '@/features/project/ui-repo-link';
 import { RunCommandsConfig } from '@/features/project/ui-run-commands-config';
 import { WorkItemsLink } from '@/features/project/ui-work-items-link';
 import { useEnabledBackends } from '@/hooks/use-enabled-backends';
-import { useAllManagedSkills } from '@/hooks/use-managed-skills';
 import {
   useProject,
   useProjectBranches,
@@ -43,7 +51,6 @@ import { useNavigationStore } from '@/stores/navigation';
 import { useToastStore } from '@/stores/toasts';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { ProjectPriority } from '@shared/feed-types';
-import type { ManagedSkill } from '@shared/skill-types';
 import type {
   AiSkillSlotConfig,
   AiSkillSlotKey,
@@ -619,7 +626,7 @@ export function ProjectSettings({
       assertNever(menuItem);
   }
 
-  const fillHeight = menuItem === 'skills';
+  const fillHeight = menuItem === 'skills' || menuItem === 'ai-generation';
 
   return (
     <div
@@ -628,7 +635,23 @@ export function ProjectSettings({
       }
     >
       {fillHeight ? (
-        content
+        <>
+          {content}
+          {menuItem === 'ai-generation' && hasChanges && (
+            <div className="border-glass-border bg-bg-0/95 border-t p-4">
+              <Button
+                variant="primary"
+                size="md"
+                onClick={handleSave}
+                disabled={updateProject.isPending}
+                loading={updateProject.isPending}
+                className="w-full"
+              >
+                {updateProject.isPending ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </div>
+          )}
+        </>
       ) : (
         <>
           {content}
@@ -662,7 +685,9 @@ function ProjectAiGenerationSettings({
   onUpdate: (slots: AiSkillSlotsSetting | null) => void;
 }) {
   const enabledBackends = useEnabledBackends();
-  const { data: allSkills } = useAllManagedSkills(projectPath);
+  const [selectedSlotKey, setSelectedSlotKey] = useState<AiSkillSlotKey>(
+    SLOT_DEFINITIONS[0].key,
+  );
 
   const handleSlotUpdate = useCallback(
     (slotKey: AiSkillSlotKey, config: AiSkillSlotConfig | null) => {
@@ -678,175 +703,93 @@ function ProjectAiGenerationSettings({
     [aiSkillSlots, onUpdate],
   );
 
+  const selectedSlot = SLOT_DEFINITIONS.find(
+    (slot) => slot.key === selectedSlotKey,
+  );
+
   return (
-    <div>
-      <h2 className="text-ink-1 text-lg font-semibold">AI Generation</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Override AI generation settings for this project. Remove a slot to use
-        the global default.
-      </p>
-      <div className="mt-4 space-y-2">
-        {SLOT_DEFINITIONS.map((slot) => {
-          const config = aiSkillSlots?.[slot.key] ?? null;
-          return (
-            <ProjectSlotRow
-              key={slot.key}
-              label={slot.label}
-              description={slot.description}
-              config={config}
-              enabledBackends={enabledBackends}
-              allSkills={allSkills ?? []}
-              onUpdate={(cfg) => handleSlotUpdate(slot.key, cfg)}
-            />
-          );
-        })}
-      </div>
-    </div>
+    <ListDetailLayout
+      list={
+        <ProjectAiGenerationRail
+          slots={aiSkillSlots ?? {}}
+          selectedSlotKey={selectedSlotKey}
+          onSelect={setSelectedSlotKey}
+        />
+      }
+      detail={
+        selectedSlot ? (
+          <SlotDetail
+            key={selectedSlot.key}
+            label={selectedSlot.label}
+            description={selectedSlot.description}
+            config={aiSkillSlots?.[selectedSlot.key] ?? null}
+            enabledBackends={enabledBackends}
+            projectPath={projectPath}
+            fallbackBackend={enabledBackends[0]?.value ?? 'claude-code'}
+            fallbackModel="default"
+            emptySummary="Using global default"
+            emptyBadgeLabel="Global default"
+            toggleLabel="Project override"
+            toggleDescription="Turn off to inherit the global AI generation setting for this slot."
+            onUpdate={(config) => handleSlotUpdate(selectedSlot.key, config)}
+          />
+        ) : null
+      }
+    />
   );
 }
 
-function ProjectSlotRow({
-  label,
-  description,
-  config,
-  enabledBackends,
-  allSkills,
-  onUpdate,
+function ProjectAiGenerationRail({
+  slots,
+  selectedSlotKey,
+  onSelect,
 }: {
-  label: string;
-  description: string;
-  config: AiSkillSlotConfig | null;
-  enabledBackends: { value: AgentBackendType; label: string }[];
-  allSkills: ManagedSkill[];
-  onUpdate: (config: AiSkillSlotConfig | null) => void;
+  slots: Partial<Record<AiSkillSlotKey, AiSkillSlotConfig>>;
+  selectedSlotKey: AiSkillSlotKey;
+  onSelect: (slotKey: AiSkillSlotKey) => void;
 }) {
-  const [expanded, setExpanded] = useState(config !== null);
-  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
-
-  // Keep expanded state in sync when config is removed externally
-  useEffect(() => {
-    if (config === null) {
-      setExpanded(false);
-      setSelectedPresetId(null);
-    }
-  }, [config]);
-
-  const selectedBackend =
-    config?.backend ?? enabledBackends[0]?.value ?? 'claude-code';
-
-  const skillOptions = useMemo(() => {
-    return allSkills
-      .filter((s) => s.enabledBackends[selectedBackend])
-      .map((s) => ({ value: s.name, label: s.name }));
-  }, [allSkills, selectedBackend]);
-
-  const handleConfigure = () => {
-    const defaultBackend = enabledBackends[0]?.value ?? 'claude-code';
-    setSelectedPresetId(null);
-    onUpdate({
-      backend: defaultBackend,
-      model: 'default',
-      skillName: null,
-    });
-    setExpanded(true);
-  };
-
-  const handleRemove = () => {
-    setSelectedPresetId(null);
-    onUpdate(null);
-    setExpanded(false);
-  };
+  const [width, setWidth] = useState(280);
 
   return (
-    <div className="border-glass-border bg-bg-1/50 rounded-lg border p-3">
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => config !== null && setExpanded(!expanded)}
-          className="flex cursor-pointer items-center gap-2 text-left"
-        >
-          {config !== null && expanded ? (
-            <ChevronDown className="text-ink-2 h-4 w-4" />
-          ) : (
-            <ChevronRight className="text-ink-2 h-4 w-4" />
-          )}
-          <div>
-            <span className="text-ink-1 text-sm font-medium">{label}</span>
-            <p className="text-ink-3 text-xs">{description}</p>
-          </div>
-        </button>
-        {config === null ? (
-          <button
-            type="button"
-            onClick={handleConfigure}
-            className="border-glass-border text-ink-1 hover:bg-glass-medium cursor-pointer rounded-md border px-2 py-1 text-xs transition-colors"
-          >
-            Configure override
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleRemove}
-            className="text-status-fail border-status-fail/50 hover:bg-status-fail/50 flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors"
-          >
-            <Trash2 className="h-3 w-3" />
-            Remove override
-          </button>
-        )}
-      </div>
-
-      {config === null && (
-        <p className="text-ink-3 mt-2 text-xs italic">Using global default</p>
-      )}
-
-      {config !== null && expanded && (
-        <div className="border-glass-border mt-3 space-y-3 border-t pt-3">
-          <div>
-            <label className="text-ink-2 mb-1 block text-xs font-medium">
-              Backend
-            </label>
-            <div className="flex flex-wrap items-center gap-2">
-              <BackendModelPresetPicker
-                backend={config.backend}
-                model={config.model}
-                selectedPresetId={selectedPresetId}
-                enabledBackends={enabledBackends.map((b) => b.value)}
-                className="w-full justify-between sm:w-auto"
-                modelClassName="w-full justify-between sm:w-auto"
-                onChange={(selection) => {
-                  setSelectedPresetId(selection.presetId);
-                  onUpdate({
-                    ...config,
-                    backend: selection.backend,
-                    model: selection.model,
-                    skillName: null,
-                  });
-                }}
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="text-ink-2 mb-1 block text-xs font-medium">
-              Skill (optional)
-            </label>
-            <Select
-              value={config.skillName ?? ''}
-              options={[
-                { value: '', label: 'Built-in default' },
-                ...skillOptions,
-              ]}
-              onChange={(value) =>
-                onUpdate({ ...config, skillName: value || null })
-              }
-              className="w-full justify-between"
+    <ListPane
+      width={width}
+      minWidth={220}
+      maxWidth={420}
+      onWidthChange={setWidth}
+      title="AI Generation"
+      count={SLOT_DEFINITIONS.length}
+      headerSupplement={
+        <p className="text-[12px] leading-relaxed text-white/45">
+          Override AI generation by project. Empty slots inherit global
+          settings.
+        </p>
+      }
+    >
+      <ListGroupHeader label={`Overrides (${SLOT_DEFINITIONS.length})`} />
+      {SLOT_DEFINITIONS.map((slot) => (
+        <ListItemButton
+          key={slot.key}
+          label={slot.label}
+          isActive={selectedSlotKey === slot.key}
+          isDimmed={!slots[slot.key]}
+          size="compact"
+          onClick={() => onSelect(slot.key)}
+          renderIcon={({ isActive, isDimmed }) => (
+            <Sparkles
+              size={14}
+              className="shrink-0"
+              style={{
+                color: isDimmed
+                  ? 'oklch(0.4 0.01 280)'
+                  : isActive
+                    ? 'oklch(0.78 0.18 295)'
+                    : 'oklch(0.78 0.16 295)',
+                opacity: isDimmed ? 0.6 : 1,
+              }}
             />
-            <p className="text-ink-4 mt-1 text-xs">
-              Override the prompt used for generation
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
+          )}
+        />
+      ))}
+    </ListPane>
   );
 }

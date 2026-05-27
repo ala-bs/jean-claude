@@ -308,7 +308,7 @@ function isFillHeightGlobal(sel: ActiveSelection): boolean {
 }
 
 function isFillHeightProject(menuItem: ProjectSettingsMenuItem): boolean {
-  return menuItem === 'skills';
+  return menuItem === 'skills' || menuItem === 'ai-generation';
 }
 
 function GlobalContent({ selection }: { selection: ActiveSelection }) {
