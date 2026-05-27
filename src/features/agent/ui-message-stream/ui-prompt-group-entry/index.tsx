@@ -222,6 +222,42 @@ function parseDateMs(date: string | undefined): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+function formatMessageTime(date: string): string {
+  const parsedDate = new Date(ensureUtc(date));
+  const hours = String(parsedDate.getHours()).padStart(2, '0');
+  const minutes = String(parsedDate.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function getDisplayMessageDate(dm: DisplayMessage): string | undefined {
+  if (dm.kind === 'entry') return dm.entry.date;
+  if (dm.kind === 'compacting') return dm.startEntry.date;
+  if (dm.kind === 'skill') {
+    return 'date' in dm.skillToolUse
+      ? (dm.skillToolUse as NormalizedEntry).date
+      : dm.promptEntry?.date;
+  }
+  return 'date' in dm.toolUse
+    ? (dm.toolUse as NormalizedEntry).date
+    : undefined;
+}
+
+function MessageTime({ date }: { date?: string }) {
+  if (!date) {
+    return <div className="w-10 shrink-0" />;
+  }
+
+  return (
+    <time
+      dateTime={ensureUtc(date)}
+      className="text-ink-4 w-10 shrink-0 pt-1 text-right font-mono text-[10px] leading-4 tabular-nums select-none"
+      title={new Date(ensureUtc(date)).toLocaleString()}
+    >
+      {formatMessageTime(date)}
+    </time>
+  );
+}
+
 function getLastAssistantMessage(
   childMessages: DisplayMessage[],
 ): { text: string; entryId: string } | null {
@@ -1058,21 +1094,26 @@ export function PromptGroupEntry({
               /* Expanded: full child timeline */
               <div className="flex flex-col gap-0.5">
                 {group.childMessages.map((dm, index) => {
+                  const messageDate = getDisplayMessageDate(dm);
                   if (dm.kind === 'skill') {
                     return (
                       <div
                         key={index}
+                        className="flex items-start gap-2"
                         onContextMenu={
                           onToolUseContextMenu
                             ? (e) => onToolUseContextMenu(e, dm.skillToolUse)
                             : undefined
                         }
                       >
-                        <SkillEntry
-                          skillToolUse={dm.skillToolUse}
-                          promptEntry={dm.promptEntry}
-                          onFilePathClick={onFilePathClick}
-                        />
+                        <div className="min-w-0 flex-1">
+                          <SkillEntry
+                            skillToolUse={dm.skillToolUse}
+                            promptEntry={dm.promptEntry}
+                            onFilePathClick={onFilePathClick}
+                          />
+                        </div>
+                        <MessageTime date={messageDate} />
                       </div>
                     );
                   }
@@ -1081,38 +1122,46 @@ export function PromptGroupEntry({
                     return (
                       <div
                         key={index}
+                        className="flex items-start gap-2"
                         onContextMenu={
                           onToolUseContextMenu
                             ? (e) => onToolUseContextMenu(e, dm.toolUse)
                             : undefined
                         }
                       >
-                        <SubagentEntry
-                          toolUse={dm.toolUse}
-                          childEntries={dm.childEntries}
-                          onFilePathClick={onFilePathClick}
-                          onToolDiffClick={onToolDiffClick}
-                          onEntryContextMenu={onEntryContextMenu}
-                          taskId={taskId}
-                        />
+                        <div className="min-w-0 flex-1">
+                          <SubagentEntry
+                            toolUse={dm.toolUse}
+                            childEntries={dm.childEntries}
+                            onFilePathClick={onFilePathClick}
+                            onToolDiffClick={onToolDiffClick}
+                            onEntryContextMenu={onEntryContextMenu}
+                            taskId={taskId}
+                          />
+                        </div>
+                        <MessageTime date={messageDate} />
                       </div>
                     );
                   }
                   return (
                     <div
                       key={index}
+                      className="flex items-start gap-2"
                       onContextMenu={
                         onEntryContextMenu
                           ? (e) => onEntryContextMenu(e, dm.entry)
                           : undefined
                       }
                     >
-                      <TimelineEntry
-                        entry={dm.entry}
-                        onFilePathClick={onFilePathClick}
-                        onToolDiffClick={onToolDiffClick}
-                        taskId={taskId}
-                      />
+                      <div className="min-w-0 flex-1">
+                        <TimelineEntry
+                          entry={dm.entry}
+                          onFilePathClick={onFilePathClick}
+                          onToolDiffClick={onToolDiffClick}
+                          taskId={taskId}
+                        />
+                      </div>
+                      <MessageTime date={messageDate} />
                     </div>
                   );
                 })}
