@@ -33,6 +33,7 @@ export function useFeed() {
   const pinned = useFeedStore((s) => s.pinned);
   const dismissed = useFeedStore((s) => s.dismissed);
   const lowPriority = useFeedStore((s) => s.lowPriority);
+  const hiddenProjectIds = useFeedStore((s) => s.hiddenProjectIds);
   const reconcile = useFeedStore((s) => s.reconcile);
   const lastAttention = useFeedStore((s) => s.lastAttention);
   const taskSteps = useTaskMessagesStore((s) => s.steps);
@@ -43,6 +44,10 @@ export function useFeed() {
   const pinnedIds = useMemo(() => new Set(pinned.map((p) => p.id)), [pinned]);
   const dismissedIds = useMemo(() => new Set(dismissed), [dismissed]);
   const lowPriorityIds = useMemo(() => new Set(lowPriority), [lowPriority]);
+  const hiddenProjectIdSet = useMemo(
+    () => new Set(hiddenProjectIds),
+    [hiddenProjectIds],
+  );
 
   const query = useQuery({
     queryKey: ['feed', 'items'],
@@ -170,6 +175,40 @@ export function useFeed() {
     return ids;
   }, [refinedItems]);
 
+  const projectOptions = useMemo(() => {
+    const byProjectId = new Map<
+      string,
+      { id: string; name: string; color: string; itemCount: number }
+    >();
+
+    for (const item of refinedItems) {
+      const existing = byProjectId.get(item.projectId);
+      if (existing) {
+        existing.itemCount += 1;
+        continue;
+      }
+
+      byProjectId.set(item.projectId, {
+        id: item.projectId,
+        name: item.source === 'note' ? 'Notes' : item.projectName,
+        color:
+          item.source === 'note' ? 'var(--color-ink-3)' : item.projectColor,
+        itemCount: 1,
+      });
+    }
+
+    return Array.from(byProjectId.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }, [refinedItems]);
+
+  const filteredOutCount = useMemo(
+    () =>
+      refinedItems.filter((item) => hiddenProjectIdSet.has(item.projectId))
+        .length,
+    [refinedItems, hiddenProjectIdSet],
+  );
+
   const {
     pinnedItems,
     actionNeededItems,
@@ -179,7 +218,9 @@ export function useFeed() {
     lowPriorityItems,
     dismissedCount,
   } = useMemo(() => {
-    const items = refinedItems;
+    const items = refinedItems.filter(
+      (item) => !hiddenProjectIdSet.has(item.projectId),
+    );
 
     const itemsById = new Map<string, FeedItem>();
     for (const item of items) {
@@ -272,6 +313,7 @@ export function useFeed() {
     pinned,
     pinnedIds,
     dismissedIds,
+    hiddenProjectIdSet,
     lowPriorityIds,
     taskOwnedPrIds,
   ]);
@@ -303,5 +345,8 @@ export function useFeed() {
     lowPriorityItems,
     dismissedCount,
     allVisibleItems,
+    projectOptions,
+    hiddenProjectIds,
+    filteredOutCount,
   };
 }

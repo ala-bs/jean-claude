@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import {
   ChevronDown,
   ChevronRight,
+  Filter,
   ListTodo,
   Loader2,
   Plus,
@@ -11,6 +12,7 @@ import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useCommands } from '@/common/hooks/use-commands';
+import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 import { useFeed } from '@/hooks/use-feed';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useFeedStore } from '@/stores/feed';
@@ -122,6 +124,9 @@ export function FeedList() {
     normalItems,
     lowPriorityItems,
     allVisibleItems,
+    projectOptions,
+    hiddenProjectIds,
+    filteredOutCount,
     isLoading,
   } = useFeed();
   const reorderPinned = useFeedStore((s) => s.reorderPinned);
@@ -143,7 +148,13 @@ export function FeedList() {
   const unpin = useFeedStore((s) => s.unpin);
   const dismiss = useFeedStore((s) => s.dismiss);
   const toggleLowPriority = useFeedStore((s) => s.toggleLowPriority);
+  const toggleProjectHidden = useFeedStore((s) => s.toggleProjectHidden);
+  const clearHiddenProjects = useFeedStore((s) => s.clearHiddenProjects);
   const setLastLocation = useNavigationStore((s) => s.setLastLocation);
+  const hiddenProjectIdSet = useMemo(
+    () => new Set(hiddenProjectIds),
+    [hiddenProjectIds],
+  );
   const pinnedIdSet = useMemo(
     () => new Set(pinned.map((item) => item.id)),
     [pinned],
@@ -519,6 +530,84 @@ export function FeedList() {
           'linear-gradient(to bottom, transparent 0px, black 8px, black calc(100% - 8px), transparent 100%)',
       }}
     >
+      {/* Section header with + button */}
+      {(totalCount > 0 || projectOptions.length > 0) && (
+        <div className="flex items-center justify-between px-3 pb-1">
+          <span className="text-ink-3 text-[10px] font-semibold tracking-wider uppercase">
+            {pinnedItems.length > 0 ? 'Pinned' : 'Feed'}
+          </span>
+          <div className="flex items-center gap-1">
+            {projectOptions.length > 0 && (
+              <Dropdown
+                align="left"
+                className="max-w-72 min-w-64"
+                trigger={
+                  <button
+                    type="button"
+                    className={clsx(
+                      'text-ink-3 hover:bg-glass-medium hover:text-ink-1 relative flex h-5 w-5 items-center justify-center rounded transition-colors',
+                      hiddenProjectIds.length > 0 && 'text-acc-ink',
+                    )}
+                    title="Filter projects"
+                  >
+                    <Filter size={12} strokeWidth={2.5} />
+                    {hiddenProjectIds.length > 0 && (
+                      <span className="bg-acc text-acc-ink absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full" />
+                    )}
+                  </button>
+                }
+              >
+                <div className="px-3 py-2">
+                  <div className="text-ink-1 text-xs font-semibold">
+                    Project filter
+                  </div>
+                  <div className="text-ink-3 mt-0.5 text-[11px]">
+                    Uncheck projects to hide them from feed.
+                  </div>
+                </div>
+                <DropdownDivider />
+                {projectOptions.map((project) => (
+                  <DropdownItem
+                    key={project.id}
+                    checked={!hiddenProjectIdSet.has(project.id)}
+                    onClick={() => toggleProjectHidden(project.id)}
+                    icon={
+                      <span
+                        className="block h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: project.color }}
+                      />
+                    }
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate">{project.name}</span>
+                      <span className="text-ink-3 ml-auto text-xs">
+                        {project.itemCount}
+                      </span>
+                    </span>
+                  </DropdownItem>
+                ))}
+                {hiddenProjectIds.length > 0 && (
+                  <>
+                    <DropdownDivider />
+                    <DropdownItem onClick={clearHiddenProjects}>
+                      Show all projects
+                    </DropdownItem>
+                  </>
+                )}
+              </Dropdown>
+            )}
+            <button
+              type="button"
+              onClick={() => openOverlay('new-task')}
+              className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 flex h-5 w-5 items-center justify-center rounded transition-colors"
+              title="New task"
+            >
+              <Plus size={13} strokeWidth={2.5} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Initial loading state */}
       {isLoading && totalCount === 0 && (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center">
@@ -534,25 +623,22 @@ export function FeedList() {
         runningVerificationNoteCount === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center">
             <ListTodo className="text-ink-3 h-6 w-6" />
-            <span className="text-ink-2 text-sm">No active tasks or notes</span>
+            <span className="text-ink-2 text-sm">
+              {filteredOutCount > 0
+                ? 'No feed items match filters'
+                : 'No active tasks or notes'}
+            </span>
+            {filteredOutCount > 0 && (
+              <button
+                type="button"
+                onClick={clearHiddenProjects}
+                className="text-acc-ink hover:text-acc-ink/80 text-xs font-medium transition-colors"
+              >
+                Clear project filters
+              </button>
+            )}
           </div>
         )}
-
-      {/* Section header with + button */}
-      {totalCount > 0 && (
-        <div className="flex items-center justify-between px-3 pb-1">
-          <span className="text-ink-3 text-[10px] font-semibold tracking-wider uppercase">
-            {pinnedItems.length > 0 ? 'Pinned' : 'Feed'}
-          </span>
-          <button
-            type="button"
-            onClick={() => openOverlay('new-task')}
-            className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 flex h-5 w-5 items-center justify-center rounded transition-colors"
-          >
-            <Plus size={13} strokeWidth={2.5} />
-          </button>
-        </div>
-      )}
 
       {/* Pinned zone - visible when items are pinned or when dragging */}
       {(pinnedItems.length > 0 || draggedId) && (

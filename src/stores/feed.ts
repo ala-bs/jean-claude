@@ -12,6 +12,7 @@ interface FeedOverridesState {
   pinned: PinnedItem[];
   dismissed: string[];
   lowPriority: string[];
+  hiddenProjectIds: string[];
   lastAttention: Record<string, FeedItemAttention>;
 
   pin: (id: string) => void;
@@ -20,6 +21,8 @@ interface FeedOverridesState {
   dismiss: (id: string) => void;
   undismiss: (id: string) => void;
   toggleLowPriority: (id: string) => void;
+  toggleProjectHidden: (projectId: string) => void;
+  clearHiddenProjects: () => void;
   reconcile: (items: { id: string; attention: FeedItemAttention }[]) => void;
 }
 
@@ -29,6 +32,7 @@ export const useFeedStore = create<FeedOverridesState>()(
       pinned: [],
       dismissed: [],
       lowPriority: [],
+      hiddenProjectIds: [],
       lastAttention: {},
 
       pin: (id) =>
@@ -74,6 +78,18 @@ export const useFeedStore = create<FeedOverridesState>()(
               : [...state.lowPriority, id],
           };
         }),
+
+      toggleProjectHidden: (projectId) =>
+        set((state) => {
+          const isHidden = state.hiddenProjectIds.includes(projectId);
+          return {
+            hiddenProjectIds: isHidden
+              ? state.hiddenProjectIds.filter((id) => id !== projectId)
+              : [...state.hiddenProjectIds, projectId],
+          };
+        }),
+
+      clearHiddenProjects: () => set({ hiddenProjectIds: [] }),
 
       reconcile: (items) =>
         set((state) => {
@@ -124,6 +140,7 @@ export const useFeedStore = create<FeedOverridesState>()(
         pinned: state.pinned,
         dismissed: state.dismissed,
         lowPriority: state.lowPriority,
+        hiddenProjectIds: state.hiddenProjectIds,
         lastAttention: state.lastAttention,
       }),
     },
