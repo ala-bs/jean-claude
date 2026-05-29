@@ -158,6 +158,7 @@ import {
   resetClient as resetCompletionClient,
   getDailyUsage as getCompletionDailyUsage,
 } from '../services/completion-service';
+import { closeEditorWindowsForWorktree } from '../services/editor-window-service';
 import {
   createFeedNote,
   deleteFeedNote,
@@ -277,6 +278,23 @@ function assertValidSkillCreationInput(data: {
   if (data.mode === 'improve' && !data.sourceSkillPath) {
     throw new Error('sourceSkillPath is required for improve mode');
   }
+}
+
+async function closeEditorWindowsForTaskWorktree(task: {
+  id: string;
+  worktreePath: string | null;
+}): Promise<void> {
+  if (!task.worktreePath) return;
+
+  const automationSetting = await SettingsRepository.get('editorAutomation');
+  if (!automationSetting.closeWindowsOnTaskCompletion) return;
+
+  const editorSetting = await SettingsRepository.get('editor');
+  await closeEditorWindowsForWorktree({
+    worktreePath: task.worktreePath,
+    editorSetting,
+  });
+  dbg.ipc('Closed editor windows for task %s worktree', task.id);
 }
 
 function buildSkillCreationPrompt({
@@ -949,6 +967,7 @@ export function registerIpcHandlers() {
       const task = await TaskRepository.findById(id);
 
       if (task?.worktreePath) {
+        await closeEditorWindowsForTaskWorktree(task);
         const project = await ProjectRepository.findById(task.projectId);
         if (project) {
           await cleanupWorktree({
@@ -1097,6 +1116,7 @@ export function registerIpcHandlers() {
 
     if (isCompleting) {
       await runCommandService.stopCommandsForTask(id);
+      await closeEditorWindowsForTaskWorktree(taskBefore);
     }
 
     // Perform the toggle
@@ -1116,6 +1136,7 @@ export function registerIpcHandlers() {
 
       // Stop running commands and compact messages
       await runCommandService.stopCommandsForTask(id);
+      await closeEditorWindowsForTaskWorktree(task);
       const updatedTask = await TaskRepository.toggleUserCompleted(id);
       await agentService.compactRawMessages(id);
 
@@ -1786,6 +1807,7 @@ export function registerIpcHandlers() {
       // worktree fields, detects the directory as missing, and
       // incorrectly prompts the user for orphan cleanup.
       if (result.success) {
+        await closeEditorWindowsForTaskWorktree(task);
         await TaskRepository.update(taskId, {
           worktreePath: null,
           branchName: null,

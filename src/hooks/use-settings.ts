@@ -9,6 +9,7 @@ import type {
   AppSettings,
   BackendsSetting,
   CalendarNotificationsSetting,
+  EditorAutomationSetting,
   EditorSetting,
   PromptSnippetsSetting,
   SummaryModelsSetting,
@@ -58,6 +59,44 @@ export function useUpdateEditorSetting() {
     mutationFn: (value: EditorSetting) => api.settings.set('editor', value),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings', 'editor'] });
+    },
+  });
+}
+
+export function useEditorAutomationSetting() {
+  return useSetting('editorAutomation');
+}
+
+export function useUpdateEditorAutomationSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: EditorAutomationSetting) =>
+      api.settings.set('editorAutomation', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'editorAutomation'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const hadPrevious = queryClient.getQueryData(queryKey) !== undefined;
+      const previous =
+        queryClient.getQueryData<EditorAutomationSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { hadPrevious, previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.hadPrevious) {
+        queryClient.setQueryData(
+          ['settings', 'editorAutomation'],
+          context.previous,
+        );
+      } else {
+        queryClient.removeQueries({
+          queryKey: ['settings', 'editorAutomation'],
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'editorAutomation'],
+      });
     },
   });
 }

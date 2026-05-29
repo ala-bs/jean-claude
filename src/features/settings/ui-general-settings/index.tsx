@@ -31,12 +31,14 @@ import {
   getEditorLabel,
   useBackendsSetting,
   useCalendarNotificationsSetting,
+  useEditorAutomationSetting,
   useEditorSetting,
   useTaskEventNotificationsSetting,
   useSummaryModelsSetting,
   useThinkingSettingsSetting,
   useUpdateBackendsSetting,
   useUpdateCalendarNotificationsSetting,
+  useUpdateEditorAutomationSetting,
   useUpdateEditorSetting,
   useUpdateTaskEventNotificationsSetting,
   useUpdateSummaryModelsSetting,
@@ -118,8 +120,10 @@ const TASK_NOTIFICATION_MODES: Array<{
 
 export function EditorSettings() {
   const { data: editorSetting, isLoading } = useEditorSetting();
+  const { data: editorAutomationSetting } = useEditorAutomationSetting();
   const { data: availableEditors } = useAvailableEditors();
   const updateEditor = useUpdateEditorSetting();
+  const updateEditorAutomation = useUpdateEditorAutomationSetting();
   const [customCommand, setCustomCommand] = useState('');
 
   const handleSelectPreset = (id: string) => {
@@ -152,6 +156,9 @@ export function EditorSettings() {
   const isEditorAvailable = (id: string): boolean => {
     return availableEditors?.find((e) => e.id === id)?.available ?? false;
   };
+
+  const closeWindowsOnTaskCompletion =
+    editorAutomationSetting?.closeWindowsOnTaskCompletion ?? false;
 
   if (isLoading) {
     return <p className="text-ink-3">Loading...</p>;
@@ -228,6 +235,21 @@ export function EditorSettings() {
           )}
         </div>
       )}
+
+      <div className="border-line-soft mt-6 border-t pt-6">
+        <h3 className="text-ink-1 text-sm font-semibold">Task cleanup</h3>
+        <Checkbox
+          className="mt-3"
+          checked={closeWindowsOnTaskCompletion}
+          onChange={(checked) =>
+            updateEditorAutomation.mutate({
+              closeWindowsOnTaskCompletion: checked,
+            })
+          }
+          label="Close editor windows when completing or deleting tasks"
+          description="Uses the selected editor and closes matching worktree windows when possible. macOS only."
+        />
+      </div>
     </div>
   );
 }

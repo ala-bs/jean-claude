@@ -571,6 +571,10 @@ export interface SummaryModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
+export interface EditorAutomationSetting {
+  closeWindowsOnTaskCompletion: boolean;
+}
+
 export interface ThinkingSettingsSetting {
   efforts: Record<AgentBackendType, Record<string, ThinkingEffort>>;
 }
@@ -696,6 +700,12 @@ function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
   if (!obj.models || typeof obj.models !== 'object') return false;
   const models = obj.models as Record<string, unknown>;
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+}
+
+function isEditorAutomationSetting(v: unknown): v is EditorAutomationSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return typeof obj.closeWindowsOnTaskCompletion === 'boolean';
 }
 
 const VALID_THINKING_EFFORTS: ThinkingEffort[] = [
@@ -914,6 +924,12 @@ export const SETTINGS_DEFINITIONS = {
       },
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
+  },
+  editorAutomation: {
+    defaultValue: {
+      closeWindowsOnTaskCompletion: false,
+    } as EditorAutomationSetting,
+    validate: isEditorAutomationSetting,
   },
   thinkingSettings: {
     defaultValue: {
