@@ -40,6 +40,9 @@ export function InlineCommentComposer({
   canSubmitEmpty = false,
   initialBody = '',
   initialImages = [],
+  allowImages = true,
+  isSubmitting = false,
+  showCancel = true,
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -61,6 +64,12 @@ export function InlineCommentComposer({
   initialBody?: string;
   /** Initial image attachments (for editing existing comments). */
   initialImages?: PromptImagePart[];
+  /** Whether users can attach images to the comment. */
+  allowImages?: boolean;
+  /** Whether submit is in progress. */
+  isSubmitting?: boolean;
+  /** Whether to show cancel action. */
+  showCancel?: boolean;
 }) {
   const [body, setBody] = useState(initialBody);
   const [images, setImages] = useState<PromptImagePart[]>(initialImages);
@@ -74,22 +83,28 @@ export function InlineCommentComposer({
 
   const lineLabel = formatLineRangeLabel(lineStart, lineEnd);
 
-  const handleImageAttach = useCallback((image: PromptImagePart) => {
-    setImages((prev) => (prev.length < MAX_IMAGES ? [...prev, image] : prev));
-  }, []);
+  const handleImageAttach = useCallback(
+    (image: PromptImagePart) => {
+      if (!allowImages) return;
+      setImages((prev) => (prev.length < MAX_IMAGES ? [...prev, image] : prev));
+    },
+    [allowImages],
+  );
 
   const handleImageRemove = useCallback((index: number) => {
     setImages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
   const handleSubmit = useCallback(() => {
+    if (isSubmitting) return;
     const trimmed = body.trim();
     if (!trimmed && images.length === 0 && !canSubmitEmpty) return;
     onSubmit(trimmed, images);
-  }, [body, images, canSubmitEmpty, onSubmit]);
+  }, [body, images, canSubmitEmpty, isSubmitting, onSubmit]);
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
+      if (!allowImages) return;
       const files = Array.from(e.clipboardData.files);
       const imageFiles = files.filter((f) => f.type.startsWith('image/'));
       if (imageFiles.length === 0) return;
@@ -99,11 +114,12 @@ export function InlineCommentComposer({
         void processImageFile(file, handleImageAttach);
       }
     },
-    [images.length, handleImageAttach],
+    [allowImages, images.length, handleImageAttach],
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
+      if (!allowImages) return;
       e.preventDefault();
       const files = Array.from(e.dataTransfer.files);
       const imageFiles = files.filter((f) => f.type.startsWith('image/'));
@@ -112,15 +128,20 @@ export function InlineCommentComposer({
         void processImageFile(file, handleImageAttach);
       }
     },
-    [images.length, handleImageAttach],
+    [allowImages, images.length, handleImageAttach],
   );
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-  }, []);
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!allowImages) return;
+      e.preventDefault();
+    },
+    [allowImages],
+  );
 
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!allowImages) return;
       const files = Array.from(e.target.files ?? []);
       const allowed = MAX_IMAGES - images.length;
       for (const file of files.slice(0, allowed)) {
@@ -128,7 +149,7 @@ export function InlineCommentComposer({
       }
       e.target.value = '';
     },
-    [images.length, handleImageAttach],
+    [allowImages, images.length, handleImageAttach],
   );
 
   // Register cmd+enter and escape at the top of the keyboard binding stack.
@@ -142,12 +163,14 @@ export function InlineCommentComposer({
       return true;
     },
     escape: () => {
+      if (isSubmitting) return true;
       onCancel();
       return true;
     },
   });
 
-  const isDisabled = !body.trim() && images.length === 0 && !canSubmitEmpty;
+  const isDisabled =
+    isSubmitting || (!body.trim() && images.length === 0 && !canSubmitEmpty);
 
   return (
     <div className="flex flex-col gap-2">
@@ -171,6 +194,7 @@ export function InlineCommentComposer({
         onPaste={handlePaste}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
+        disabled={isSubmitting}
       />
 
       {images.length > 0 && (
@@ -209,30 +233,37 @@ export function InlineCommentComposer({
             {'\u2318\u21B5'}
           </kbd>
         </button>
-        <button
-          type="button"
-          className="text-ink-3 hover:text-ink-1 p-1"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={images.length >= MAX_IMAGES}
-          title="Attach image"
-        >
-          <ImagePlus className="h-3.5 w-3.5" />
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="hidden"
-          onChange={handleFileSelect}
-        />
-        <button
-          type="button"
-          className="text-ink-3 hover:text-ink-1 rounded px-2 py-1 text-xs"
-          onClick={onCancel}
-        >
-          Cancel
-        </button>
+        {allowImages && (
+          <>
+            <button
+              type="button"
+              className="text-ink-3 hover:text-ink-1 p-1"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={images.length >= MAX_IMAGES || isSubmitting}
+              title="Attach image"
+            >
+              <ImagePlus className="h-3.5 w-3.5" />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleFileSelect}
+            />
+          </>
+        )}
+        {showCancel && (
+          <button
+            type="button"
+            className="text-ink-3 hover:text-ink-1 rounded px-2 py-1 text-xs"
+            onClick={onCancel}
+            disabled={isSubmitting}
+          >
+            Cancel
+          </button>
+        )}
         {renderAfterActions}
       </div>
     </div>

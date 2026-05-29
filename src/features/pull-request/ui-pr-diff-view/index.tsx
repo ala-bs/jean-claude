@@ -9,6 +9,7 @@ import type {
   AzureDevOpsFileChange,
   AzureDevOpsCommentThread,
 } from '@/lib/api';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 
 import { PrCommentForm } from '../ui-pr-comment-form';
 
@@ -40,6 +41,7 @@ export function PrDiffView({
   isLoadingContent,
   threads,
   onAddFileComment,
+  onUploadImage,
   isAddingComment,
 }: {
   file: AzureDevOpsFileChange;
@@ -53,6 +55,7 @@ export function PrDiffView({
     lineEnd?: number;
     content: string;
   }) => void;
+  onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   isAddingComment?: boolean;
 }) {
   // Convert to unified DiffFile type
@@ -81,7 +84,9 @@ export function PrDiffView({
       threads={fileThreads}
       onAddComment={onAddFileComment}
       isAddingComment={isAddingComment}
-      CommentForm={PrCommentForm}
+      CommentForm={(props) => (
+        <PrCommentForm {...props} uploadImage={onUploadImage} />
+      )}
     />
   );
 }

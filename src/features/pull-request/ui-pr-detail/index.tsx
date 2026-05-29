@@ -21,9 +21,11 @@ import {
   usePullRequestThreads,
   useAddPullRequestComment,
   useAddPullRequestFileComment,
+  useUploadPullRequestAttachment,
 } from '@/hooks/use-pull-requests';
 import { usePrDetailState } from '@/stores/navigation';
 import type { PrDetailTab } from '@/stores/navigation';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 import type { FeedItem } from '@shared/feed-types';
 
 import { PrCommits } from '../ui-pr-commits';
@@ -148,6 +150,7 @@ export function PrDetail({
   // Mutations
   const addComment = useAddPullRequestComment(projectId, prId);
   const addFileComment = useAddPullRequestFileComment(projectId, prId);
+  const uploadAttachment = useUploadPullRequestAttachment(projectId, prId);
 
   const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
     initialWidth: fileTreeWidth,
@@ -173,6 +176,18 @@ export function PrDetail({
       addFileComment.mutate(params);
     },
     [addFileComment],
+  );
+
+  const handleUploadImage = useCallback(
+    async (image: PromptImagePart, fileName: string) => {
+      const attachment = await uploadAttachment.mutateAsync({
+        fileName,
+        mimeType: image.mimeType || 'application/octet-stream',
+        dataBase64: image.data,
+      });
+      return attachment.url;
+    },
+    [uploadAttachment],
   );
 
   // Convert PR files to unified DiffFile format for the tree
@@ -245,6 +260,7 @@ export function PrDetail({
             threads={threads}
             onAddComment={handleAddComment}
             isAddingComment={addComment.isPending}
+            onUploadImage={handleUploadImage}
             bottomPadding={bottomPadding}
             fileCount={files.length}
           />
@@ -294,6 +310,7 @@ export function PrDetail({
                   isLoadingContent={isBaseLoading || isHeadLoading}
                   threads={threads}
                   onAddFileComment={handleAddFileComment}
+                  onUploadImage={handleUploadImage}
                   isAddingComment={addFileComment.isPending}
                 />
               ) : (

@@ -19,6 +19,7 @@ import type {
   AzureDevOpsPullRequestDetails,
   AzureDevOpsCommentThread,
 } from '@/lib/api';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 
 import { PrChecks } from '../ui-pr-checks';
 import { CIInlinePanel } from '../ui-pr-ci-inline';
@@ -36,6 +37,7 @@ export function PrOverview({
   azureProjectName,
   threads = [],
   onAddComment,
+  onUploadImage,
   isAddingComment,
   bottomPadding = 0,
   fileCount = 0,
@@ -49,6 +51,7 @@ export function PrOverview({
   azureProjectName?: string;
   threads?: AzureDevOpsCommentThread[];
   onAddComment?: (content: string) => void;
+  onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   isAddingComment?: boolean;
   bottomPadding?: number;
   fileCount?: number;
@@ -401,6 +404,7 @@ export function PrOverview({
             <PrCommentForm
               onSubmit={onAddComment}
               isSubmitting={isAddingComment}
+              uploadImage={onUploadImage}
             />
           )}
         </div>

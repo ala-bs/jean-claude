@@ -1,4 +1,4 @@
-import { Loader2, X } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import { useState, useCallback, useMemo } from 'react';
 
@@ -68,6 +68,9 @@ export function FileDiffContent({
   isAddingComment?: boolean;
   CommentForm?: ComponentType<{
     onSubmit: (content: string) => void;
+    onCancel: () => void;
+    lineStart: number;
+    lineEnd?: number;
     isSubmitting?: boolean;
     placeholder?: string;
   }>;
@@ -223,15 +226,6 @@ export function FileDiffContent({
     return set;
   }, [threadComments, annotationComments, reviewComments]);
 
-  // Format the line range label
-  const lineRangeLabel = useMemo(() => {
-    if (!commentFormLineRange) return '';
-    if (commentFormLineRange.start === commentFormLineRange.end) {
-      return `line ${commentFormLineRange.start}`;
-    }
-    return `lines ${commentFormLineRange.start}-${commentFormLineRange.end}`;
-  }, [commentFormLineRange]);
-
   // Handle review comment submission
   const handleAddReviewComment = useCallback(
     (body: string, presets: ReviewPresetId[], images: PromptImagePart[]) => {
@@ -290,31 +284,24 @@ export function FileDiffContent({
     if (!hasCommentSupport || !CommentForm) return undefined;
 
     return (
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-ink-2 text-xs font-medium">
-            Add comment on {lineRangeLabel}
-          </span>
-          <button
-            onClick={handleCancelComment}
-            className="text-ink-3 hover:text-ink-1 hover:bg-glass-medium rounded p-0.5"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-        <CommentForm
-          onSubmit={handleAddComment}
-          isSubmitting={isAddingComment}
-          placeholder="Write a comment..."
-        />
-      </div>
+      <CommentForm
+        onSubmit={handleAddComment}
+        onCancel={handleCancelComment}
+        lineStart={commentFormLineRange.start}
+        lineEnd={
+          commentFormLineRange.end !== commentFormLineRange.start
+            ? commentFormLineRange.end
+            : undefined
+        }
+        isSubmitting={isAddingComment}
+        placeholder="Write a comment..."
+      />
     );
   }, [
     commentFormLineRange,
     hasReviewSupport,
     hasCommentSupport,
     CommentForm,
-    lineRangeLabel,
     handleAddComment,
     handleAddReviewComment,
     handleCancelComment,
