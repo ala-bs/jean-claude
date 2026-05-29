@@ -258,6 +258,10 @@ function MessageTime({ date }: { date?: string }) {
   );
 }
 
+function shouldRenderChildMessage(dm: DisplayMessage): boolean {
+  return dm.kind !== 'entry' || dm.entry.type !== 'session-summary';
+}
+
 function getLastAssistantMessage(
   childMessages: DisplayMessage[],
 ): { text: string; entryId: string } | null {
@@ -842,6 +846,11 @@ export function PromptGroupEntry({
     return getRunningActivity(group.childMessages);
   }, [isRunning, group.childMessages]);
 
+  const visibleChildMessages = useMemo(
+    () => group.childMessages.filter(shouldRenderChildMessage),
+    [group.childMessages],
+  );
+
   // Extract todos for collapsed non-running state
   const completedTodos = useMemo(() => {
     if (isRunning) return null;
@@ -883,7 +892,7 @@ export function PromptGroupEntry({
   );
 
   // Compute step count for header
-  const stepCount = group.childMessages.length;
+  const stepCount = visibleChildMessages.length;
 
   const runningStartDate = useMemo(
     () =>
@@ -1093,7 +1102,7 @@ export function PromptGroupEntry({
             {detailsExpanded ? (
               /* Expanded: full child timeline */
               <div className="flex flex-col gap-0.5">
-                {group.childMessages.map((dm, index) => {
+                {visibleChildMessages.map((dm, index) => {
                   const messageDate = getDisplayMessageDate(dm);
                   if (dm.kind === 'skill') {
                     return (
