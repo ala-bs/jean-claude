@@ -19,8 +19,7 @@ const PR_DESCRIPTION_SCHEMA = {
     },
     description: {
       type: 'string',
-      description:
-        'Markdown PR description with ## What I Did and ## Key Decisions sections',
+      description: 'Markdown PR description',
     },
   },
   required: ['title', 'description'],
