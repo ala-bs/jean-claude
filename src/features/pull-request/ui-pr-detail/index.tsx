@@ -32,6 +32,7 @@ import { PrCommits } from '../ui-pr-commits';
 import { PrDiffView } from '../ui-pr-diff-view';
 import { PrHeader } from '../ui-pr-header';
 import { PrOverview } from '../ui-pr-overview';
+import { getCommentCountByPrFile } from '../utils-pr-comment-counts';
 
 const PR_DETAIL_TABS: PrDetailTab[] = ['overview', 'files', 'commits'];
 
@@ -199,6 +200,10 @@ export function PrDetail({
     }));
   }, [files]);
 
+  const commentCountByFile = useMemo(() => {
+    return getCommentCountByPrFile({ files, threads });
+  }, [files, threads]);
+
   if (isPrLoading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -289,6 +294,7 @@ export function PrDetail({
                   files={diffFiles}
                   selectedPath={selectedFile}
                   onSelectFile={setSelectedFile}
+                  commentCountByFile={commentCountByFile}
                 />
               )}
               {/* Resize handle */}
@@ -310,6 +316,9 @@ export function PrDetail({
                   headContent={headContent}
                   isLoadingContent={isBaseLoading || isHeadLoading}
                   threads={threads}
+                  projectId={projectId}
+                  prId={prId}
+                  providerId={project?.repoProviderId ?? undefined}
                   onAddFileComment={handleAddFileComment}
                   onUploadImage={handleUploadImage}
                   isAddingComment={addFileComment.isPending}

@@ -4,7 +4,7 @@ import {
   FileDiffContent,
   normalizeAzureChangeType,
 } from '@/features/common/ui-file-diff';
-import type { DiffFile, CommentThread } from '@/features/common/ui-file-diff';
+import type { DiffFile } from '@/features/common/ui-file-diff';
 import type {
   AzureDevOpsFileChange,
   AzureDevOpsCommentThread,
@@ -12,27 +12,10 @@ import type {
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
 import { PrCommentForm } from '../ui-pr-comment-form';
-
-// Convert Azure DevOps threads to the unified CommentThread format
-function convertThreads(
-  threads: AzureDevOpsCommentThread[],
-  filePath: string,
-): CommentThread[] {
-  return threads
-    .filter(
-      (t) =>
-        t.threadContext?.filePath === filePath ||
-        t.threadContext?.filePath === `/${filePath}`,
-    )
-    .map((thread) => ({
-      id: thread.id,
-      line: thread.threadContext?.rightFileStart?.line,
-      comments: thread.comments.map((c) => ({
-        author: c.author.displayName,
-        content: c.content,
-      })),
-    }));
-}
+import {
+  convertPrThreadsForFile,
+  PrInlineCommentThread,
+} from '../ui-pr-inline-comment-thread';
 
 export function PrDiffView({
   file,
@@ -40,6 +23,9 @@ export function PrDiffView({
   headContent,
   isLoadingContent,
   threads,
+  projectId,
+  prId,
+  providerId,
   onAddFileComment,
   onUploadImage,
   isAddingComment,
@@ -49,6 +35,9 @@ export function PrDiffView({
   headContent: string;
   isLoadingContent: boolean;
   threads: AzureDevOpsCommentThread[];
+  projectId: string;
+  prId: number;
+  providerId?: string;
   onAddFileComment: (params: {
     filePath: string;
     line: number;
@@ -70,7 +59,7 @@ export function PrDiffView({
 
   // Convert threads to unified format
   const fileThreads = useMemo(
-    () => convertThreads(threads, file.path),
+    () => convertPrThreadsForFile(threads, file.path),
     [threads, file.path],
   );
 
@@ -82,6 +71,14 @@ export function PrDiffView({
       isLoading={isLoadingContent}
       headerClassName="h-[40px] shrink-0"
       threads={fileThreads}
+      renderThread={(thread) => (
+        <PrInlineCommentThread
+          thread={thread}
+          projectId={projectId}
+          prId={prId}
+          providerId={providerId}
+        />
+      )}
       onAddComment={onAddFileComment}
       isAddingComment={isAddingComment}
       CommentForm={(props) => (

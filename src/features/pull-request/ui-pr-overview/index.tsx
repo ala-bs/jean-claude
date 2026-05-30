@@ -9,7 +9,6 @@ import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
 import {
   FileDiffContent,
   normalizeAzureChangeType,
-  type CommentThread,
   type DiffFile,
 } from '@/features/common/ui-file-diff';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
@@ -37,7 +36,11 @@ import type { PromptImagePart } from '@shared/agent-backend-types';
 
 import { PrChecks } from '../ui-pr-checks';
 import { CIInlinePanel } from '../ui-pr-ci-inline';
-import { PrComments, PrInlineCommentTimeline } from '../ui-pr-comments';
+import { PrComments } from '../ui-pr-comments';
+import {
+  convertPrThreadsForFile,
+  PrInlineCommentThread,
+} from '../ui-pr-inline-comment-thread';
 import { PrMetaPanel } from '../ui-pr-meta-panel';
 
 export function PrOverview({
@@ -579,8 +582,8 @@ function PrFilePreviewPane({
     };
   }, [filePath, files]);
 
-  const fileThreads = useMemo<CommentThread[]>(
-    () => convertThreadsForFile(threads, filePath),
+  const fileThreads = useMemo(
+    () => convertPrThreadsForFile(threads, filePath),
     [threads, filePath],
   );
 
@@ -616,25 +619,10 @@ function PrFilePreviewPane({
           headerClassName="hidden"
           threads={fileThreads}
           renderThread={(thread) => (
-            <PrInlineCommentTimeline
-              threadId={thread.id}
+            <PrInlineCommentThread
+              thread={thread}
               projectId={projectId}
               prId={prId}
-              canResolve={isActiveThreadStatus(thread.status)}
-              comments={thread.comments.map((comment) => ({
-                id: comment.id ?? 0,
-                content: comment.content,
-                commentType: 'text',
-                author: {
-                  displayName: comment.author,
-                  uniqueName: comment.uniqueName ?? comment.author,
-                  imageUrl: comment.imageUrl,
-                },
-                publishedDate:
-                  comment.publishedDate ?? new Date().toISOString(),
-                lastUpdatedDate:
-                  comment.publishedDate ?? new Date().toISOString(),
-              }))}
               providerId={providerId}
               mentionDisplayNames={mentionDisplayNames}
             />
@@ -646,36 +634,6 @@ function PrFilePreviewPane({
   );
 }
 
-function convertThreadsForFile(
-  threads: AzureDevOpsCommentThread[],
-  filePath: string,
-): CommentThread[] {
-  const normalizedPath = stripLeadingSlash(filePath);
-  return threads
-    .filter(
-      (thread) =>
-        stripLeadingSlash(thread.threadContext?.filePath ?? '') ===
-          normalizedPath && thread.threadContext?.rightFileStart?.line,
-    )
-    .map((thread) => ({
-      id: thread.id,
-      line: thread.threadContext?.rightFileStart?.line,
-      status: thread.status,
-      comments: thread.comments.map((comment) => ({
-        id: comment.id,
-        author: comment.author.displayName,
-        content: comment.content,
-        publishedDate: comment.publishedDate,
-        imageUrl: comment.author.imageUrl,
-        uniqueName: comment.author.uniqueName,
-      })),
-    }));
-}
-
 function stripLeadingSlash(value: string) {
   return value.replace(/^\/+/, '');
-}
-
-function isActiveThreadStatus(status: string | undefined) {
-  return status === 'active' || status === 'pending' || status === 'unknown';
 }

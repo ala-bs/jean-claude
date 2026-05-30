@@ -33,7 +33,7 @@ export function DiffFileTree({
   onSelectFile: (path: string) => void;
   /** Set of file paths that have annotations */
   filesWithAnnotations?: Set<string>;
-  /** Number of unresolved review comments per file path */
+  /** Number of comments to show per file path */
   commentCountByFile?: Record<string, number>;
   /** Externally-managed set of collapsed folder paths (for persistence). When provided, takes precedence over local state. */
   collapsedFolders?: Set<string>;
