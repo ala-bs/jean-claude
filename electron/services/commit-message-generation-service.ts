@@ -48,15 +48,18 @@ function sanitizeForPrompt(text: string): string {
 function parseTitleBodyResult(
   result: unknown,
 ): { title: string; body: string } | null {
-  if (
-    result &&
-    typeof result === 'object' &&
-    'title' in result &&
-    'body' in result
-  ) {
-    const typed = result as { title: string; body: string };
+  if (result && typeof result === 'object') {
+    const typed = result as { title?: unknown; body?: unknown };
+    if (
+      typeof typed.title !== 'string' ||
+      !typed.title.trim() ||
+      typeof typed.body !== 'string'
+    ) {
+      return null;
+    }
+
     return {
-      title: typed.title.slice(0, 72),
+      title: typed.title.trim().slice(0, 72),
       // Models sometimes return literal "\n" escape sequences instead of real
       // newlines in structured JSON output — normalise them.
       body: typed.body.replace(/\\n/g, '\n'),
@@ -147,15 +150,22 @@ export async function generateMergeCommitMessage({
     prompt,
     skillName,
     outputSchema: COMMIT_MESSAGE_SCHEMA,
+    throwOnError: true,
   });
 
-  return parseTitleBodyResult(result);
+  const parsed = parseTitleBodyResult(result);
+  if (!parsed?.body.trim()) {
+    return null;
+  }
+  return parsed;
 }
 
 /**
  * Generate a merge commit message for a task by gathering its diff, commit log,
  * and changed files, then calling the AI generation service.
- * Returns a formatted "title\n\nbody" string, or a fallback message.
+ * Returns a formatted "title\n\nbody" string, or undefined when auto-generation
+ * is not configured. If configured generation fails, throws so callers can abort
+ * the merge instead of silently using git's fallback squash message.
  */
 export async function generateMergeMessageForTask(
   task: {
@@ -170,20 +180,22 @@ export async function generateMergeMessageForTask(
   },
   targetBranch: string,
 ): Promise<string | undefined> {
+  const slotConfig = await resolveAiSkillSlot(
+    'merge-commit-message',
+    project.aiSkillSlots ?? null,
+  );
+
+  if (!slotConfig) {
+    return undefined; // Not configured → use default
+  }
+
   if (!task.worktreePath || !task.startCommitHash) {
-    return undefined;
+    throw new Error(
+      'Failed to generate merge commit message: task is missing worktree diff context',
+    );
   }
 
   try {
-    const slotConfig = await resolveAiSkillSlot(
-      'merge-commit-message',
-      project.aiSkillSlots ?? null,
-    );
-
-    if (!slotConfig) {
-      return undefined; // Not configured → use default
-    }
-
     // Fetch git data in parallel
     const [commitLogRaw, diff, unifiedDiffRaw] = await Promise.all([
       getWorktreeCommitLog(task.worktreePath, task.startCommitHash),
@@ -211,6 +223,9 @@ export async function generateMergeMessageForTask(
 
     // Truncate changed file list
     let changedFiles = diff.files.map((f) => `${f.status}: ${f.path}`);
+    if (changedFiles.length === 0) {
+      throw new Error('task has no changed files for merge message generation');
+    }
     if (changedFiles.length > MERGE_MESSAGE_LIMITS.MAX_CHANGED_FILES) {
       changedFiles = [
         ...changedFiles.slice(0, MERGE_MESSAGE_LIMITS.MAX_CHANGED_FILES),
@@ -241,27 +256,18 @@ export async function generateMergeMessageForTask(
       return `${result.title}\n\n${result.body}`;
     }
 
-    dbg.agent(
-      'Merge message generation returned no parsed result for task %s (backend=%s model=%s skill=%s branch=%s target=%s changedFiles=%d commitLogChars=%d diffChars=%d)',
-      task.projectId,
-      slotConfig.backend,
-      slotConfig.model,
-      slotConfig.skillName ?? '(none)',
-      task.branchName ?? 'unknown',
-      targetBranch,
-      changedFiles.length,
-      commitLog.length,
-      unifiedDiff.length,
+    throw new Error(
+      'AI did not return a valid merge commit message. Please try again or enter a message manually.',
     );
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     dbg.agent(
-      'Failed to generate merge message for task %s, using fallback: %O',
+      'Failed to generate merge message for task %s, aborting merge: %O',
       task.projectId,
       error,
     );
+    throw new Error(`Failed to generate merge commit message: ${message}`);
   }
-
-  return undefined;
 }
 
 // ---------------------------------------------------------------------------

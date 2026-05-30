@@ -1864,18 +1864,6 @@ export function registerIpcHandlers() {
         throw new Error(`Task ${taskId} does not have a worktree`);
       }
 
-      await runCommandService.stopCommandsForTask(taskId);
-
-      if (params.commitAllUnstaged) {
-        const status = await getWorktreeStatus(task.worktreePath);
-        if (status.hasUnstagedChanges) {
-          await commitWorktreeChanges({
-            worktreePath: task.worktreePath,
-            message: 'chore: commit unstaged changes before merge',
-            stageAll: true,
-          });
-        }
-      }
       const project = await ProjectRepository.findById(task.projectId);
       if (!project) {
         throw new Error(`Project ${task.projectId} not found`);
@@ -1901,6 +1889,19 @@ export function registerIpcHandlers() {
           project,
           params.targetBranch,
         );
+      }
+
+      await runCommandService.stopCommandsForTask(taskId);
+
+      if (params.commitAllUnstaged) {
+        const status = await getWorktreeStatus(task.worktreePath);
+        if (status.hasUnstagedChanges) {
+          await commitWorktreeChanges({
+            worktreePath: task.worktreePath,
+            message: 'chore: commit unstaged changes before merge',
+            stageAll: true,
+          });
+        }
       }
 
       const result = await mergeWorktree({
@@ -2567,29 +2568,17 @@ export function registerIpcHandlers() {
         );
       }
 
-      // Step 1: Check for uncommitted changes — commit them if requested
+      // Step 1: Check for uncommitted changes. Commit them after any AI
+      // generation so AI failures abort without creating local commits.
       const status = await getWorktreeStatus(task.worktreePath);
-      if (status.hasUncommittedChanges) {
-        if (params.commitUnstaged) {
-          await commitWorktreeChanges({
-            worktreePath: task.worktreePath,
-            message: 'chore: commit unstaged changes before PR creation',
-            stageAll: true,
-          });
-        } else {
-          throw new Error(
-            'You have uncommitted changes. Please commit your changes before creating a pull request.',
-          );
-        }
+      if (status.hasUncommittedChanges && !params.commitUnstaged) {
+        throw new Error(
+          'You have uncommitted changes. Please commit your changes before creating a pull request.',
+        );
       }
 
-      // Step 2: Push branch to remote
-      await pushBranch({
-        worktreePath: task.worktreePath,
-        branchName: task.branchName,
-      });
-
-      // Step 3: Generate title/description with AI if not provided
+      // Step 2: Generate title/description with AI if not provided. Do this
+      // before pushing so AI failures abort PR creation without side effects.
       let { title, description } = params;
       if (!title.trim() || !description.trim()) {
         const generated = await generatePrDescriptionForTask(task, project);
@@ -2602,6 +2591,20 @@ export function registerIpcHandlers() {
           title = task.name ?? task.branchName ?? 'Pull Request';
         }
       }
+
+      if (status.hasUncommittedChanges) {
+        await commitWorktreeChanges({
+          worktreePath: task.worktreePath,
+          message: 'chore: commit unstaged changes before PR creation',
+          stageAll: true,
+        });
+      }
+
+      // Step 3: Push branch to remote
+      await pushBranch({
+        worktreePath: task.worktreePath,
+        branchName: task.branchName,
+      });
 
       // Step 4: Create PR via Azure DevOps
       const targetBranch = task.sourceBranch ?? project.defaultBranch ?? 'main';

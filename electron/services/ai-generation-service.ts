@@ -21,6 +21,7 @@ export async function generateText({
   skillName,
   outputSchema,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  throwOnError = false,
 }: {
   backend: AgentBackendType;
   model: string;
@@ -28,6 +29,7 @@ export async function generateText({
   skillName?: string | null;
   outputSchema?: Record<string, unknown>;
   timeoutMs?: number;
+  throwOnError?: boolean;
 }): Promise<unknown | null> {
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
@@ -70,6 +72,11 @@ export async function generateText({
         skillName ?? '(none)',
         outputSchema ? 'yes' : 'no',
       );
+      if (throwOnError) {
+        throw new Error(
+          `AI generation timed out after ${timeoutMs}ms (backend=${backend}, model=${model})`,
+        );
+      }
       return null;
     }
     dbg.agent(
@@ -80,6 +87,10 @@ export async function generateText({
       outputSchema ? 'yes' : 'no',
       error,
     );
+    if (throwOnError) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`AI generation failed: ${message}`);
+    }
     return null;
   } finally {
     clearTimeout(timeout);
