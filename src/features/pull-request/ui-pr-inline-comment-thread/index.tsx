@@ -1,5 +1,6 @@
 import type { CommentThread } from '@/features/common/ui-file-diff';
 import type { AzureDevOpsCommentThread } from '@/lib/api';
+import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
 
 import { PrInlineCommentTimeline } from '../ui-pr-comments';
 
@@ -8,11 +9,13 @@ export function PrInlineCommentThread({
   projectId,
   prId,
   providerId,
+  mentionDisplayNames,
 }: {
   thread: CommentThread;
   projectId: string;
   prId: number;
   providerId?: string;
+  mentionDisplayNames?: MentionDisplayNames;
 }) {
   return (
     <PrInlineCommentTimeline
@@ -33,6 +36,7 @@ export function PrInlineCommentThread({
         lastUpdatedDate: comment.publishedDate ?? new Date().toISOString(),
       }))}
       providerId={providerId}
+      mentionDisplayNames={mentionDisplayNames}
     />
   );
 }

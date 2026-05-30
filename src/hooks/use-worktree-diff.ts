@@ -36,12 +36,14 @@ export function useWorktreeDiff(
   });
 
   const refresh = useCallback(() => {
+    if (!enabled || !taskId) return;
+
     refetchQuery();
     // Also invalidate file content cache so files show updated content
     queryClient.invalidateQueries({
       queryKey: ['worktree-file-content', taskId],
     });
-  }, [refetchQuery, queryClient, taskId]);
+  }, [enabled, refetchQuery, queryClient, taskId]);
 
   return {
     data,
@@ -71,14 +73,17 @@ export function useWorktreeFileContent(
   });
 }
 
-export function useWorktreeCommits(taskId: string | null) {
+export function useWorktreeCommits(
+  taskId: string | null,
+  enabled: boolean = true,
+) {
   return useQuery<WorktreeCommit[]>({
     queryKey: ['worktree-commits', taskId],
     queryFn: () => {
       if (!taskId) return [];
       return api.tasks.worktree.getCommits(taskId);
     },
-    enabled: !!taskId,
+    enabled: enabled && !!taskId,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
   });

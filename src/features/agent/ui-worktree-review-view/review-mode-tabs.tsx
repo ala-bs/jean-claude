@@ -11,28 +11,38 @@ export function ReviewModeTabs({
   onModeChange,
   changedFilesCount,
   commitsCount,
+  showGitModes = true,
 }: {
   activeMode: ReviewMode;
   onModeChange: (mode: ReviewMode) => void;
   changedFilesCount?: number;
   commitsCount?: number;
+  showGitModes?: boolean;
 }) {
   const options: SelectOption<ReviewMode>[] = [
-    {
-      value: 'changes',
-      label: 'Changes',
-      description: formatCount(changedFilesCount, 'changed file'),
-    },
+    ...(showGitModes
+      ? [
+          {
+            value: 'changes' as const,
+            label: 'Changes',
+            description: formatCount(changedFilesCount, 'changed file'),
+          },
+        ]
+      : []),
     {
       value: 'files',
       label: 'Files',
-      description: 'Browse worktree files',
+      description: showGitModes ? 'Browse worktree files' : 'Browse files',
     },
-    {
-      value: 'commits',
-      label: 'Commits',
-      description: formatCount(commitsCount, 'commit'),
-    },
+    ...(showGitModes
+      ? [
+          {
+            value: 'commits' as const,
+            label: 'Commits',
+            description: formatCount(commitsCount, 'commit'),
+          },
+        ]
+      : []),
   ];
 
   return (

@@ -71,7 +71,7 @@ import { useAgentStream, useAgentControls } from '@/hooks/use-agent';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useContextUsage, type ContextUsage } from '@/hooks/use-context-usage';
 import { useModel, formatModelName } from '@/hooks/use-model';
-import { useProject } from '@/hooks/use-projects';
+import { useProject, useProjectIsGitRepository } from '@/hooks/use-projects';
 import {
   getEditorLabel,
   useEditorSetting,
@@ -244,6 +244,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   );
   const closePermissionModal = useCallback(() => setPermissionModal(null), []);
   const { data: project } = useProject(projectId ?? '');
+  const { data: projectIsGitRepository } = useProjectIsGitRepository(
+    projectId ?? null,
+  );
   const { data: editorSetting } = useEditorSetting();
   const deleteTask = useDeleteTask();
   const deleteWorktree = useDeleteWorktree();
@@ -314,6 +317,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     toggleCollapsedFolder: toggleDiffCollapsedFolder,
     setReviewMode,
   } = useDiffViewState(taskId);
+  const hasGitReviewModes =
+    !!task?.worktreePath || projectIsGitRepository === true;
+
+  useEffect(() => {
+    if (!hasGitReviewModes && reviewMode !== 'files') {
+      setReviewMode('files');
+    }
+  }, [hasGitReviewModes, reviewMode, setReviewMode]);
 
   // PR view state
   const {
@@ -924,11 +935,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       },
     },
     {
-      label: 'Toggle Review Changes',
+      label: hasGitReviewModes ? 'Toggle Review Changes' : 'Toggle Review',
       shortcut: 'cmd+d',
       section: 'Task',
       handler: () => {
-        if (!task?.worktreePath) return;
+        if (!hasGitReviewModes) {
+          if (isDiffViewOpen) {
+            closeDiffView();
+            return;
+          }
+          setReviewMode('files');
+          openDiffView();
+          return;
+        }
         if (isDiffViewOpen && reviewMode === 'changes') {
           closeDiffView();
           return;
@@ -942,7 +961,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       shortcut: 'cmd+f',
       section: 'Task',
       handler: () => {
-        if (!task?.worktreePath) return;
         if (isDiffViewOpen && reviewMode === 'files') {
           closeDiffView();
           return;
@@ -972,7 +990,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       section: 'Task',
       handler: () => {
         if (!isDiffViewOpen) return;
-        const MODES: ReviewMode[] = ['changes', 'files', 'commits'];
+        const MODES: ReviewMode[] = hasGitReviewModes
+          ? ['changes', 'files', 'commits']
+          : ['files'];
         const next = MODES[(MODES.indexOf(reviewMode) + 1) % MODES.length]!;
         setReviewMode(next);
       },
@@ -1347,16 +1367,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 >
                   Files
                 </DropdownItem>
-                {task.worktreePath && (
-                  <DropdownItem
-                    icon={<GitCompare />}
-                    onClick={toggleDiffView}
-                    checked={isDiffViewOpen}
-                    shortcut="cmd+d"
-                  >
-                    Review
-                  </DropdownItem>
-                )}
+                <DropdownItem
+                  icon={<GitCompare />}
+                  onClick={toggleDiffView}
+                  checked={isDiffViewOpen}
+                  shortcut="cmd+d"
+                >
+                  Review
+                </DropdownItem>
                 {task.worktreePath && hasRepoLink && (
                   <DropdownItem
                     icon={<GitPullRequest />}
@@ -1521,7 +1539,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onClose={closePrView}
                   bottomPadding={footerHeight}
                 />
-              ) : isDiffViewOpen && task.worktreePath ? (
+              ) : isDiffViewOpen ? (
                 <WorktreeReviewView
                   taskId={taskId}
                   projectId={project.id}
@@ -1541,8 +1559,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     explorerToggleHideUnchanged
                   }
                   branchName={
-                    task.branchName ??
-                    getBranchFromWorktreePath(task.worktreePath)
+                    task.worktreePath
+                      ? (task.branchName ??
+                        getBranchFromWorktreePath(task.worktreePath))
+                      : (task.branchName ?? project.defaultBranch ?? 'main')
                   }
                   sourceBranch={task.sourceBranch}
                   defaultBranch={project.defaultBranch}
@@ -1553,6 +1573,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onMergeStarted={handleMergeStarted}
                   onOpenPrView={openPrView}
                   bottomPadding={footerHeight}
+                  showWorktreeActions={!!task.worktreePath}
+                  gitReviewEnabled={hasGitReviewModes}
                 />
               ) : activeStep?.type === 'pr-review' ? (
                 <PrReviewValidation step={activeStep} />

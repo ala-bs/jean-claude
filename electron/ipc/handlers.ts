@@ -524,7 +524,20 @@ export function registerIpcHandlers() {
         updateWorkItemStatus,
         ...taskData
       } = data;
-      const task = await TaskRepository.create(taskData);
+      const project = await ProjectRepository.findById(taskData.projectId);
+      if (!project) {
+        throw new Error(`Project ${taskData.projectId} not found`);
+      }
+
+      let startCommitHash: string | null = null;
+      if (await isGitRepository(project.path)) {
+        startCommitHash = await getCurrentCommitHash(project.path);
+      }
+
+      const task = await TaskRepository.create({
+        ...taskData,
+        startCommitHash: taskData.startCommitHash ?? startCommitHash,
+      });
 
       // Auto-create a single step for the task
       await StepService.create({
@@ -584,9 +597,22 @@ export function registerIpcHandlers() {
       let task;
 
       if (!useWorktree) {
-        // No worktree requested, just create the task normally
+        // No worktree requested, diff against the main repo from task creation.
         dbg.ipc('Creating task without worktree');
-        task = await TaskRepository.create(taskData);
+        const project = await ProjectRepository.findById(taskData.projectId);
+        if (!project) {
+          throw new Error(`Project ${taskData.projectId} not found`);
+        }
+
+        let startCommitHash: string | null = null;
+        if (await isGitRepository(project.path)) {
+          startCommitHash = await getCurrentCommitHash(project.path);
+        }
+
+        task = await TaskRepository.create({
+          ...taskData,
+          startCommitHash: taskData.startCommitHash ?? startCommitHash,
+        });
       } else {
         // Get the project to access its path and name
         const project = await ProjectRepository.findById(taskData.projectId);
@@ -1593,13 +1619,24 @@ export function registerIpcHandlers() {
   // Task worktree operations - resolve paths internally from taskId
   ipcMain.handle('tasks:worktree:getDiff', async (_, taskId: string) => {
     const task = await TaskRepository.findById(taskId);
-    if (!task?.worktreePath || !task?.startCommitHash) {
-      throw new Error(`Task ${taskId} does not have a worktree`);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
     }
+
+    const project = task.worktreePath
+      ? null
+      : await ProjectRepository.findById(task.projectId);
+    const diffRootPath = task.worktreePath ?? project?.path;
+    if (!diffRootPath) {
+      throw new Error(`Task ${taskId} does not have a diff root`);
+    }
+
+    const startCommitHash =
+      task.startCommitHash ?? (await getCurrentCommitHash(diffRootPath));
     return getWorktreeDiff(
-      task.worktreePath,
-      task.startCommitHash,
-      task.sourceBranch,
+      diffRootPath,
+      startCommitHash,
+      task.worktreePath ? task.sourceBranch : null,
     );
   });
 
@@ -1653,15 +1690,26 @@ export function registerIpcHandlers() {
       status: 'added' | 'modified' | 'deleted',
     ) => {
       const task = await TaskRepository.findById(taskId);
-      if (!task?.worktreePath || !task?.startCommitHash) {
-        throw new Error(`Task ${taskId} does not have a worktree`);
+      if (!task) {
+        throw new Error(`Task ${taskId} not found`);
       }
+
+      const project = task.worktreePath
+        ? null
+        : await ProjectRepository.findById(task.projectId);
+      const diffRootPath = task.worktreePath ?? project?.path;
+      if (!diffRootPath) {
+        throw new Error(`Task ${taskId} does not have a diff root`);
+      }
+
+      const startCommitHash =
+        task.startCommitHash ?? (await getCurrentCommitHash(diffRootPath));
       return getWorktreeFileContent(
-        task.worktreePath,
-        task.startCommitHash,
+        diffRootPath,
+        startCommitHash,
         filePath,
         status,
-        task.sourceBranch,
+        task.worktreePath ? task.sourceBranch : null,
       );
     },
   );
@@ -3195,17 +3243,25 @@ export function registerIpcHandlers() {
   ipcMain.handle('tasks:summary:generate', async (_, taskId: string) => {
     dbg.ipc('tasks:summary:generate %s', taskId);
 
-    // Get the task to access worktree info
+    // Get the task to access diff root info.
     const task = await TaskRepository.findById(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
-    if (!task.worktreePath || !task.startCommitHash) {
-      throw new Error(`Task ${taskId} does not have a worktree`);
+    const project = task.worktreePath
+      ? null
+      : await ProjectRepository.findById(task.projectId);
+    const diffRootPath = task.worktreePath ?? project?.path;
+    if (!diffRootPath) {
+      throw new Error(`Task ${taskId} does not have a diff root`);
     }
 
-    // Get current commit hash in worktree
-    const currentCommitHash = await getCurrentCommitHash(task.worktreePath);
+    const startCommitHash =
+      task.startCommitHash ?? (await getCurrentCommitHash(diffRootPath));
+    const sourceBranch = task.worktreePath ? task.sourceBranch : null;
+
+    // Get current commit hash in the diff root.
+    const currentCommitHash = await getCurrentCommitHash(diffRootPath);
 
     // Check if we already have a summary for this commit
     const existingSummary = await TaskSummaryRepository.findByTaskAndCommit(
@@ -3219,17 +3275,17 @@ export function registerIpcHandlers() {
 
     // Get the worktree diff (file list and status)
     const diff = await getWorktreeDiff(
-      task.worktreePath,
-      task.startCommitHash,
-      task.sourceBranch,
+      diffRootPath,
+      startCommitHash,
+      sourceBranch,
     );
     dbg.ipc('Got diff with %d files', diff.files.length);
 
     // Get the unified diff content for AI analysis
     const unifiedDiff = await getWorktreeUnifiedDiff(
-      task.worktreePath,
-      task.startCommitHash,
-      task.sourceBranch,
+      diffRootPath,
+      startCommitHash,
+      sourceBranch,
     );
     dbg.ipc('Got unified diff, length: %d', unifiedDiff.length);
 

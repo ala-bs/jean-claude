@@ -79,6 +79,8 @@ export function WorktreeReviewView({
   onFileExplorerToggleDir,
   fileExplorerHideUnchanged,
   onFileExplorerToggleHideUnchanged: _onFileExplorerToggleHideUnchanged,
+  showWorktreeActions = true,
+  gitReviewEnabled = true,
 }: {
   taskId: string;
   projectId: string;
@@ -107,11 +109,19 @@ export function WorktreeReviewView({
   onFileExplorerToggleDir: (path: string) => void;
   fileExplorerHideUnchanged: boolean;
   onFileExplorerToggleHideUnchanged: () => void;
+  showWorktreeActions?: boolean;
+  gitReviewEnabled?: boolean;
 }) {
-  const { data, isLoading, error, refresh } = useWorktreeDiff(taskId, true);
+  const effectiveReviewMode = gitReviewEnabled ? reviewMode : 'files';
+  const { data, isLoading, error, refresh } = useWorktreeDiff(
+    taskId,
+    gitReviewEnabled,
+  );
   const { data: summary, isLoading: isSummaryLoading } = useTaskSummary(taskId);
-  const { data: commits, isLoading: isCommitsLoading } =
-    useWorktreeCommits(taskId);
+  const { data: commits, isLoading: isCommitsLoading } = useWorktreeCommits(
+    taskId,
+    gitReviewEnabled,
+  );
 
   // Commit selection state
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(
@@ -236,7 +246,7 @@ export function WorktreeReviewView({
 
   // Handle summary generation
   const handleGenerateSummary = useCallback(() => {
-    if (isSummaryJobRunning) {
+    if (!gitReviewEnabled || isSummaryJobRunning) {
       return;
     }
 
@@ -267,6 +277,7 @@ export function WorktreeReviewView({
         markJobFailed(jobId, message);
       });
   }, [
+    gitReviewEnabled,
     isSummaryJobRunning,
     addRunningJob,
     taskId,
@@ -277,17 +288,22 @@ export function WorktreeReviewView({
   ]);
 
   // Keyboard shortcut for generating summary (cmd+shift+s)
-  useCommands('worktree-diff-view-summary', [
-    {
-      label: 'Generate Summary',
-      shortcut: 'cmd+shift+s',
-      handler: () => {
-        if (!summary && !isSummaryJobRunning) {
-          handleGenerateSummary();
-        }
-      },
-    },
-  ]);
+  useCommands(
+    'worktree-diff-view-summary',
+    gitReviewEnabled
+      ? [
+          {
+            label: 'Generate Summary',
+            shortcut: 'cmd+shift+s',
+            handler: () => {
+              if (!summary && !isSummaryJobRunning) {
+                handleGenerateSummary();
+              }
+            },
+          },
+        ]
+      : [],
+  );
 
   // Keyboard shortcut for opening submit review overlay (cmd+enter)
   const selectedFile = useMemo(() => {
@@ -375,7 +391,7 @@ export function WorktreeReviewView({
 
   const files = data?.files ?? [];
 
-  if (files.length === 0 && reviewMode === 'changes') {
+  if (files.length === 0 && effectiveReviewMode === 'changes') {
     return (
       <div className="text-ink-3 flex h-full flex-col items-center justify-center gap-3">
         <FileX className="h-8 w-8" />
@@ -408,18 +424,21 @@ export function WorktreeReviewView({
           )}
         >
           <ReviewModeTabs
-            activeMode={reviewMode}
+            activeMode={effectiveReviewMode}
             onModeChange={onReviewModeChange}
             changedFilesCount={files.length}
             commitsCount={commits?.length}
+            showGitModes={gitReviewEnabled}
           />
-          <button
-            onClick={refresh}
-            className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1 transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
+          {gitReviewEnabled && (
+            <button
+              onClick={refresh}
+              className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1 transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
         <Separator />
         <div
@@ -428,7 +447,7 @@ export function WorktreeReviewView({
             bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined
           }
         >
-          {reviewMode === 'changes' && (
+          {effectiveReviewMode === 'changes' && (
             <>
               <DiffFileTree
                 files={diffFiles}
@@ -439,21 +458,23 @@ export function WorktreeReviewView({
                 collapsedFolders={collapsedFolders}
                 onToggleFolder={onToggleFolder}
               />
-              <WorktreeActions
-                taskId={taskId}
-                projectId={projectId}
-                branchName={branchName}
-                sourceBranch={sourceBranch}
-                defaultBranch={defaultBranch}
-                protectedBranches={protectedBranches}
-                hasRepoLink={hasRepoLink}
-                pullRequestUrl={pullRequestUrl}
-                onMergeStarted={onMergeStarted}
-                onOpenPrView={onOpenPrView}
-              />
+              {showWorktreeActions && (
+                <WorktreeActions
+                  taskId={taskId}
+                  projectId={projectId}
+                  branchName={branchName}
+                  sourceBranch={sourceBranch}
+                  defaultBranch={defaultBranch}
+                  protectedBranches={protectedBranches}
+                  hasRepoLink={hasRepoLink}
+                  pullRequestUrl={pullRequestUrl}
+                  onMergeStarted={onMergeStarted}
+                  onOpenPrView={onOpenPrView}
+                />
+              )}
             </>
           )}
-          {reviewMode === 'files' && fileExplorerRootPath && (
+          {effectiveReviewMode === 'files' && fileExplorerRootPath && (
             <ReviewFilesTree
               rootPath={fileExplorerRootPath}
               selectedFilePath={fileExplorerSelectedFile}
@@ -465,7 +486,7 @@ export function WorktreeReviewView({
               commentCountsByFile={fileExplorerCommentCountByFile}
             />
           )}
-          {reviewMode === 'commits' && (
+          {effectiveReviewMode === 'commits' && (
             <CommitsSidebarSplit
               commits={commits ?? []}
               isCommitsLoading={isCommitsLoading}
@@ -491,7 +512,7 @@ export function WorktreeReviewView({
 
       {/* Diff content */}
       <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-        {reviewMode === 'changes' && (
+        {effectiveReviewMode === 'changes' && (
           <>
             {/* Summary panel at top */}
             <SummaryPanel
@@ -526,7 +547,7 @@ export function WorktreeReviewView({
             </div>
           </>
         )}
-        {reviewMode === 'files' && (
+        {effectiveReviewMode === 'files' && (
           <div
             className="flex-1 overflow-auto"
             style={
@@ -552,7 +573,7 @@ export function WorktreeReviewView({
             )}
           </div>
         )}
-        {reviewMode === 'commits' && (
+        {effectiveReviewMode === 'commits' && (
           <div
             className="flex-1 overflow-auto"
             style={
