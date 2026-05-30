@@ -45,4 +45,25 @@ describe('partitionFeedItems', () => {
     ]);
     expect(result.lowPriorityItems.map((item) => item.id)).toEqual([]);
   });
+
+  it('treats draft PRs as low priority in the carousel', async () => {
+    const draft = prItem({ id: 'pr:project-1:1', isDraft: true });
+    const normal = prItem({ id: 'pr:project-1:2' });
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [draft, normal],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      taskOwnedPrIds: new Set(),
+    });
+
+    expect(result.prReviewItems.map((item) => item.id)).toEqual([
+      normal.id,
+      draft.id,
+    ]);
+    expect(result.lowPriorityItems.map((item) => item.id)).toEqual([]);
+  });
 });

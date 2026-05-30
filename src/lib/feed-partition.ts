@@ -19,13 +19,6 @@ const PRIORITY_ORDER: Record<FeedItem['projectPriority'], number> = {
   low: 2,
 };
 
-const byPriorityThenTimestamp = (a: FeedItem, b: FeedItem) => {
-  const priority =
-    PRIORITY_ORDER[a.projectPriority] - PRIORITY_ORDER[b.projectPriority];
-  if (priority !== 0) return priority;
-  return b.timestamp < a.timestamp ? -1 : b.timestamp > a.timestamp ? 1 : 0;
-};
-
 const byManualLowPriorityThenProjectPriority = (
   lowPriorityIds: Set<string>,
 ) => {
@@ -33,7 +26,13 @@ const byManualLowPriorityThenProjectPriority = (
     const manualLow =
       Number(lowPriorityIds.has(a.id)) - Number(lowPriorityIds.has(b.id));
     if (manualLow !== 0) return manualLow;
-    return byPriorityThenTimestamp(a, b);
+
+    const aPriority = a.isDraft ? 'low' : a.projectPriority;
+    const bPriority = b.isDraft ? 'low' : b.projectPriority;
+    const priority = PRIORITY_ORDER[aPriority] - PRIORITY_ORDER[bPriority];
+    if (priority !== 0) return priority;
+
+    return b.timestamp < a.timestamp ? -1 : b.timestamp > a.timestamp ? 1 : 0;
   };
 };
 
