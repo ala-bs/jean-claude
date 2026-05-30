@@ -55,6 +55,7 @@ export interface AzureDevOpsPullRequest {
   sourceRefName: string; // refs/heads/feature-branch
   targetRefName: string; // refs/heads/main
   url: string; // Web URL to PR
+  mergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   reviewers: Array<{
     id: string;
     displayName: string;
@@ -67,7 +68,6 @@ export interface AzureDevOpsPullRequest {
 
 export interface AzureDevOpsPullRequestDetails extends AzureDevOpsPullRequest {
   description: string;
-  mergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   autoCompleteSetBy?: {
     displayName: string;
     id: string;

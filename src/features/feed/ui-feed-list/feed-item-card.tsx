@@ -296,6 +296,8 @@ export function FeedItemCard({
   const hasChildren = !isSubtask && (item.children?.length ?? 0) > 0;
   const hasPr = isTask && !!item.pullRequestId;
   const prMerged = item.workItemPrStatus === 'completed';
+  const prHasConflicts = item.pullRequestMergeStatus === 'conflicts';
+  const prApprovalCount = item.approvedBy?.length ?? 0;
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
 
@@ -798,6 +800,27 @@ export function FeedItemCard({
                 {item.isDraft && (
                   <span className="border-glass-border text-ink-3 rounded border px-1 py-0 text-[9px]">
                     Draft
+                  </span>
+                )}
+                {prApprovalCount > 0 && (
+                  <span
+                    className="text-status-done flex items-center gap-0.5"
+                    title={item.approvedBy
+                      ?.map((reviewer) => reviewer.displayName)
+                      .join(', ')}
+                  >
+                    <CheckCircle2 className="h-2.5 w-2.5" />
+                    <span className="text-[9.5px]">
+                      {prApprovalCount === 1
+                        ? 'Approved'
+                        : `${prApprovalCount} approvals`}
+                    </span>
+                  </span>
+                )}
+                {prHasConflicts && (
+                  <span className="text-status-fail flex items-center gap-0.5">
+                    <XCircle className="h-2.5 w-2.5" />
+                    <span className="text-[9.5px]">Conflicts</span>
                   </span>
                 )}
                 {(item.activeThreadCount ?? 0) > 0 && (

@@ -440,32 +440,28 @@ function extractLinkedTestCaseIds(relations?: WorkItemRelation[]): number[] {
 /**
  * Fetch PR statuses using project-scoped API (more reliable than org-level).
  * Each LinkedPr carries the project and repo GUIDs extracted from the vstfs URL.
- * Returns a map of PR ID → { status, url }.
+ * Returns a map of PR ID → status metadata.
  */
+type PullRequestStatusMetadata = {
+  status: 'active' | 'completed' | 'abandoned';
+  url: string;
+  isDraft: boolean;
+  mergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
+  approvedBy: Array<{
+    displayName: string;
+    uniqueName: string;
+    imageUrl?: string;
+  }>;
+};
+
 export async function getPullRequestStatuses(params: {
   providerId: string;
   linkedPrs: LinkedPr[];
-}): Promise<
-  Map<
-    number,
-    {
-      status: 'active' | 'completed' | 'abandoned';
-      url: string;
-      isDraft: boolean;
-    }
-  >
-> {
+}): Promise<Map<string, PullRequestStatusMetadata>> {
   if (params.linkedPrs.length === 0) return new Map();
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
 
-  const results = new Map<
-    number,
-    {
-      status: 'active' | 'completed' | 'abandoned';
-      url: string;
-      isDraft: boolean;
-    }
-  >();
+  const results = new Map<string, PullRequestStatusMetadata>();
 
   // Fetch in chunks to avoid too many concurrent requests
   for (let i = 0; i < params.linkedPrs.length; i += 10) {
@@ -490,8 +486,10 @@ export async function getPullRequestStatuses(params: {
           const pr: {
             status: string;
             isDraft?: boolean;
+            mergeStatus?: string;
             repository?: { project?: { name?: string }; name?: string };
             pullRequestId: number;
+            reviewers?: PullRequestResponse['reviewers'];
           } = await response.json();
           const projectName = pr.repository?.project?.name ?? '';
           const repoName = pr.repository?.name ?? '';
@@ -500,11 +498,28 @@ export async function getPullRequestStatuses(params: {
               ? `https://dev.azure.com/${orgName}/${encodeURIComponent(projectName)}/_git/${encodeURIComponent(repoName)}/pullrequest/${linkedPr.prId}`
               : '';
           const mappedStatus = mapPrStatus(pr.status);
-          results.set(linkedPr.prId, {
-            status: mappedStatus,
-            url,
-            isDraft: !!pr.isDraft,
-          });
+          results.set(
+            `${linkedPr.projectId}:${linkedPr.repoId}:${linkedPr.prId}`,
+            {
+              status: mappedStatus,
+              url,
+              isDraft: !!pr.isDraft,
+              mergeStatus:
+                pr.mergeStatus as PullRequestStatusMetadata['mergeStatus'],
+              approvedBy: (pr.reviewers ?? [])
+                .filter(
+                  (r) =>
+                    !r.isContainer &&
+                    (mapVoteToStatus(r.vote) === 'approved' ||
+                      mapVoteToStatus(r.vote) === 'approved-with-suggestions'),
+                )
+                .map((r) => ({
+                  displayName: r.displayName,
+                  uniqueName: r.uniqueName,
+                  imageUrl: r.imageUrl,
+                })),
+            },
+          );
         } catch (err) {
           dbg.azure(
             'getPullRequestStatuses: exception fetching PR#%d: %O',
@@ -1641,6 +1656,7 @@ export async function listPullRequests(params: {
     sourceRefName: pr.sourceRefName,
     targetRefName: pr.targetRefName,
     url: `https://dev.azure.com/${orgName}/${params.projectId}/_git/${params.repoId}/pullrequest/${pr.pullRequestId}`,
+    mergeStatus: pr.mergeStatus as AzureDevOpsPullRequest['mergeStatus'],
     reviewers: (pr.reviewers ?? []).map((r) => ({
       id: r.id,
       displayName: r.displayName,

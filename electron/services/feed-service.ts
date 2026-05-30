@@ -77,6 +77,10 @@ function isNewerActivity({
   return latest > viewed;
 }
 
+function linkedPrKey(linkedPr: LinkedPr): string {
+  return `${linkedPr.projectId}:${linkedPr.repoId}:${linkedPr.prId}`;
+}
+
 /**
  * Derives the attention level for a task based on its own status and its steps' statuses.
  * Priority order: errored > needs-permission > completed > running > waiting
@@ -297,7 +301,15 @@ export async function getFeedItems(): Promise<FeedItem[]> {
   const activePrMap = new Map(
     prItems
       .filter((p) => p.pullRequestId)
-      .map((p) => [p.pullRequestId as number, { isDraft: !!p.isDraft }]),
+      .map((p) => [
+        `${p.projectId}:${p.pullRequestId as number}`,
+        {
+          isDraft: !!p.isDraft,
+          mergeStatus: p.pullRequestMergeStatus,
+          approvedBy: p.approvedBy,
+          activeThreadCount: p.activeThreadCount,
+        },
+      ]),
   );
 
   // Collect task PRs that need status fetching (not already active in feed)
@@ -315,11 +327,16 @@ export async function getFeedItems(): Promise<FeedItem[]> {
 
     // Case 1: task has pullRequestId directly — check if we know the status
     if (item.pullRequestId) {
-      const activePrInfo = activePrMap.get(item.pullRequestId);
+      const activePrInfo = activePrMap.get(
+        `${item.projectId}:${item.pullRequestId}`,
+      );
       if (activePrInfo) {
         // PR is active in the feed — mark it
         item.workItemPrStatus = 'active';
         item.isDraft = activePrInfo.isDraft;
+        item.pullRequestMergeStatus = activePrInfo.mergeStatus;
+        item.approvedBy = activePrInfo.approvedBy;
+        item.activeThreadCount = activePrInfo.activeThreadCount;
       } else {
         // Need to fetch status — parse project/repo from the task's project config
         const project = projectsById.get(item.projectId);
@@ -368,10 +385,12 @@ export async function getFeedItems(): Promise<FeedItem[]> {
           linkedPrs: entries.map((e) => e.linkedPr),
         });
         for (const entry of entries) {
-          const status = statuses.get(entry.linkedPr.prId);
+          const status = statuses.get(linkedPrKey(entry.linkedPr));
           if (status) {
             entry.item.workItemPrStatus = status.status;
             entry.item.isDraft = status.isDraft;
+            entry.item.pullRequestMergeStatus = status.mergeStatus;
+            entry.item.approvedBy = status.approvedBy;
             if (status.url) {
               entry.item.workItemPrUrl = status.url;
             }
@@ -529,6 +548,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
             isDraft: pr.isDraft,
             pullRequestId: pr.id,
             pullRequestUrl: pr.url,
+            pullRequestMergeStatus: pr.mergeStatus,
             approvedBy: pr.reviewers
               .filter(
                 (r) =>
@@ -723,12 +743,12 @@ async function fetchWorkItemFeedItems(
 
   // Build a map of known active PRs from the already-fetched PR feed items
   const knownActivePrs = new Map<
-    number,
+    string,
     { status: 'active' | 'completed' | 'abandoned'; url: string }
   >();
   for (const prItem of prFeedItems) {
     if (prItem.pullRequestId) {
-      knownActivePrs.set(prItem.pullRequestId, {
+      knownActivePrs.set(String(prItem.pullRequestId), {
         status: 'active',
         url: prItem.pullRequestUrl ?? '',
       });
@@ -759,7 +779,7 @@ async function fetchWorkItemFeedItems(
           workItemPrMap.set(wi.id, wi.linkedPrs);
           const providerId = project.workItemProviderId!;
           for (const lpr of wi.linkedPrs) {
-            if (!knownActivePrs.has(lpr.prId)) {
+            if (!knownActivePrs.has(String(lpr.prId))) {
               if (!unknownPrsByProvider.has(providerId)) {
                 unknownPrsByProvider.set(providerId, []);
               }
@@ -804,8 +824,8 @@ async function fetchWorkItemFeedItems(
         providerId,
         linkedPrs,
       });
-      for (const [prId, status] of statuses) {
-        allPrStatuses.set(prId, status);
+      for (const [key, status] of statuses) {
+        allPrStatuses.set(key, status);
       }
     } catch (err) {
       dbg.feed(
@@ -826,7 +846,9 @@ async function fetchWorkItemFeedItems(
     let bestStatus: 'active' | 'completed' | 'abandoned' | undefined;
     let bestUrl: string | undefined;
     for (const lpr of linkedPrs) {
-      const prInfo = allPrStatuses.get(lpr.prId);
+      const prInfo =
+        allPrStatuses.get(linkedPrKey(lpr)) ??
+        allPrStatuses.get(String(lpr.prId));
       if (!prInfo) continue;
       // Prefer completed (merged), then active, then abandoned
       if (

@@ -38,6 +38,7 @@ export interface FeedItem {
   pendingMessage?: string;
   pullRequestId?: number;
   pullRequestUrl?: string;
+  pullRequestMergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   noteId?: string;
   noteContent?: string;
   isCompleted?: boolean;
