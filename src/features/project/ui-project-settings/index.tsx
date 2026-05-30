@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
 } from 'react';
@@ -94,7 +95,7 @@ export function ProjectSettings({
     () => branchInfos?.map((b) => b.name),
     [branchInfos],
   );
-  const updateProject = useUpdateProject();
+  const { mutateAsync: updateProject } = useUpdateProject();
   const deleteProject = useDeleteProject();
   const deleteWorktreesFolder = useDeleteProjectWorktreesFolder();
   const clearProjectNavHistoryState = useNavigationStore(
@@ -125,14 +126,81 @@ export function ProjectSettings({
   const [protectedBranches, setProtectedBranches] = useState<string[]>([]);
   const [favoriteBranches, setFavoriteBranches] = useState<string[]>([]);
   const [isGeneratingContext, setIsGeneratingContext] = useState(false);
+  const initializedProjectIdRef = useRef<string | null>(null);
 
   const { data: backendsSetting } = useBackendsSetting();
   const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
   const enabledBackends = useEnabledBackends();
 
+  const projectData = useMemo(() => {
+    if (!project) return null;
+
+    return {
+      name: project.name,
+      path: project.path,
+      color: project.color,
+      defaultBranch: project.defaultBranch ?? null,
+      defaultAgentBackend: project.defaultAgentBackend,
+      defaultAgentModelPreference: project.defaultAgentModelPreference,
+      prPriority: project.prPriority ?? 'normal',
+      workItemPriority: project.workItemPriority ?? 'normal',
+      completionContext: project.completionContext ?? null,
+      worktreesPath: project.worktreesPath ?? null,
+      protectedBranches: project.protectedBranches ?? [],
+      favoriteBranches: project.favoriteBranches ?? [],
+      aiSkillSlots: project.aiSkillSlots,
+    };
+  }, [project]);
+
+  const draftData = useMemo(
+    () => ({
+      name,
+      path,
+      color,
+      defaultBranch: defaultBranch || null,
+      defaultAgentBackend,
+      defaultAgentModelPreference,
+      prPriority,
+      workItemPriority,
+      completionContext: completionContext || null,
+      worktreesPath: worktreesPath || null,
+      protectedBranches,
+      favoriteBranches,
+      aiSkillSlots,
+    }),
+    [
+      aiSkillSlots,
+      color,
+      completionContext,
+      defaultAgentBackend,
+      defaultAgentModelPreference,
+      defaultBranch,
+      favoriteBranches,
+      name,
+      path,
+      prPriority,
+      protectedBranches,
+      workItemPriority,
+      worktreesPath,
+    ],
+  );
+
+  const hasChanges = projectData ? !isEqual(draftData, projectData) : false;
+  const hasChangesRef = useRef(false);
+  const savingProjectRef = useRef(false);
+  const pendingProjectSaveRef = useRef<typeof draftData | null>(null);
+
+  useEffect(() => {
+    hasChangesRef.current = hasChanges;
+  }, [hasChanges]);
+
   // Sync local state when project loads or changes
   useEffect(() => {
     if (project) {
+      const isInitialProjectLoad =
+        initializedProjectIdRef.current !== project.id;
+      if (!isInitialProjectLoad && hasChangesRef.current) return;
+
       setName(project.name);
       setPath(project.path);
       setColor(project.color);
@@ -153,22 +221,49 @@ export function ProjectSettings({
       setProtectedBranches(project.protectedBranches ?? []);
       setFavoriteBranches(project.favoriteBranches ?? []);
       setAiSkillSlots(project.aiSkillSlots);
+      initializedProjectIdRef.current = project.id;
     }
   }, [backendModelPresets, project]);
 
-  // Initialize default branch when branches load
+  const saveProjectSettings = useCallback(
+    async (data: typeof draftData) => {
+      pendingProjectSaveRef.current = data;
+      if (savingProjectRef.current) return;
+
+      savingProjectRef.current = true;
+      try {
+        while (pendingProjectSaveRef.current) {
+          const nextData = pendingProjectSaveRef.current;
+          pendingProjectSaveRef.current = null;
+          await updateProject({
+            id: projectId,
+            data: nextData,
+          });
+        }
+      } catch (error) {
+        addToast({
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Failed to save project settings',
+          type: 'error',
+        });
+      } finally {
+        savingProjectRef.current = false;
+      }
+    },
+    [addToast, projectId, updateProject],
+  );
+
   useEffect(() => {
-    if (branches && branches.length > 0 && !defaultBranch) {
-      const initial =
-        project?.defaultBranch ??
-        (branches.includes('main')
-          ? 'main'
-          : branches.includes('master')
-            ? 'master'
-            : branches[0]);
-      setDefaultBranch(initial);
-    }
-  }, [branches, project?.defaultBranch, defaultBranch]);
+    if (!projectData || !hasChanges) return;
+
+    const saveTimeout = window.setTimeout(() => {
+      void saveProjectSettings(draftData);
+    }, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [draftData, hasChanges, projectData, saveProjectSettings]);
 
   useEffect(() => {
     if (menuItem !== 'danger-zone' && showDeleteConfirm) {
@@ -187,27 +282,6 @@ export function ProjectSettings({
   async function handlePickFolder() {
     const selected = await api.dialog.openDirectory();
     if (selected) setPath(selected);
-  }
-
-  async function handleSave() {
-    await updateProject.mutateAsync({
-      id: projectId,
-      data: {
-        name,
-        path,
-        color,
-        defaultBranch: defaultBranch || null,
-        defaultAgentBackend,
-        defaultAgentModelPreference,
-        prPriority,
-        workItemPriority,
-        completionContext: completionContext || null,
-        worktreesPath: worktreesPath || null,
-        protectedBranches,
-        favoriteBranches,
-        aiSkillSlots,
-      },
-    });
   }
 
   async function handleDelete() {
@@ -237,21 +311,6 @@ export function ProjectSettings({
       setIsGeneratingContext(false);
     }
   }
-
-  const hasChanges =
-    name !== project.name ||
-    path !== project.path ||
-    color !== project.color ||
-    defaultBranch !== (project.defaultBranch ?? '') ||
-    defaultAgentBackend !== project.defaultAgentBackend ||
-    defaultAgentModelPreference !== project.defaultAgentModelPreference ||
-    prPriority !== (project.prPriority ?? 'normal') ||
-    workItemPriority !== (project.workItemPriority ?? 'normal') ||
-    completionContext !== (project.completionContext ?? '') ||
-    worktreesPath !== (project.worktreesPath ?? '') ||
-    !isEqual(protectedBranches, project.protectedBranches ?? []) ||
-    !isEqual(favoriteBranches, project.favoriteBranches ?? []) ||
-    !isEqual(aiSkillSlots, project.aiSkillSlots ?? null);
 
   let content: ReactElement;
 
@@ -620,41 +679,7 @@ export function ProjectSettings({
         fillHeight ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'space-y-6'
       }
     >
-      {fillHeight ? (
-        <>
-          {content}
-          {menuItem === 'ai-generation' && hasChanges && (
-            <div className="border-glass-border bg-bg-0/95 border-t p-4">
-              <Button
-                variant="primary"
-                size="md"
-                onClick={handleSave}
-                disabled={updateProject.isPending}
-                loading={updateProject.isPending}
-                className="w-full"
-              >
-                {updateProject.isPending ? 'Saving...' : 'Save Changes'}
-              </Button>
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          {content}
-          {hasChanges && (
-            <Button
-              variant="primary"
-              size="md"
-              onClick={handleSave}
-              disabled={updateProject.isPending}
-              loading={updateProject.isPending}
-              className="w-full"
-            >
-              {updateProject.isPending ? 'Saving...' : 'Save Changes'}
-            </Button>
-          )}
-        </>
-      )}
+      {content}
     </div>
   );
 }

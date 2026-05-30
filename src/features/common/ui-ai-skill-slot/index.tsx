@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { Button } from '@/common/ui/button';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
@@ -123,7 +122,7 @@ export function SlotDetail({
     return [{ value: NO_SKILL_VALUE, label: 'None' }, ...builtin, ...other];
   }, [enabledSkills]);
 
-  const handleSave = useCallback(() => {
+  const saveLocalConfig = useCallback(() => {
     onUpdate({
       backend: localBackend,
       model: localModel,
@@ -131,13 +130,19 @@ export function SlotDetail({
     });
   }, [localBackend, localModel, localSkillName, onUpdate]);
 
-  const handleCancel = useCallback(() => {
-    // Reset to current config
-    setLocalBackend(config?.backend ?? fallbackBackend);
-    setLocalModel(config?.model ?? fallbackModel);
-    setLocalPresetId(null);
-    setLocalSkillName(config?.skillName ?? null);
-  }, [config, fallbackBackend, fallbackModel]);
+  const hasChanges =
+    config !== null &&
+    (localBackend !== config.backend ||
+      localModel !== config.model ||
+      localSkillName !== (config.skillName ?? null));
+
+  useEffect(() => {
+    if (!hasChanges) return;
+
+    const saveTimeout = window.setTimeout(saveLocalConfig, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [hasChanges, saveLocalConfig]);
 
   const handleToggleEnabled = useCallback(
     (checked: boolean) => {
@@ -250,23 +255,11 @@ export function SlotDetail({
               />
             </div>
           </div>
-
-          <div className="mt-4 flex items-center justify-end">
-            <div className="flex gap-2">
-              <Button
-                onClick={handleCancel}
-                className="text-ink-2 hover:text-ink-1 hover:bg-glass-medium cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleSave}
-                className="bg-acc text-ink-0 hover:bg-acc cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium"
-              >
-                Save
-              </Button>
+          {hasChanges && (
+            <div className="text-ink-3 mt-4 text-right text-xs">
+              Changes save automatically
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

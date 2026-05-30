@@ -54,6 +54,17 @@ export function SkillEditor({
   // Track whether user has made changes (for unsaved confirmation)
   const [hasChanges, setHasChanges] = useState(false);
   const initializedRef = useRef(false);
+  const currentDraftRef = useRef({ name, description, content });
+  const savingSkillRef = useRef(false);
+  const pendingSkillSaveRef = useRef<{
+    name: string;
+    description: string;
+    content: string;
+  } | null>(null);
+
+  useEffect(() => {
+    currentDraftRef.current = { name, description, content };
+  }, [content, description, name]);
 
   useEffect(() => {
     if (existing) {
@@ -119,6 +130,12 @@ export function SkillEditor({
   };
 
   const handleBack = () => {
+    if (isEditing) {
+      if (hasChanges && isValid && !isPending) void handleSave(false);
+      onClose();
+      return;
+    }
+
     if (hasChanges) {
       const confirmed = window.confirm(
         'You have unsaved changes. Discard them?',
@@ -128,38 +145,83 @@ export function SkillEditor({
     onClose();
   };
 
-  const handleSave = async () => {
-    if (!isEditing && formEnabledBackends.length === 0) return;
-    try {
+  const handleSave = useCallback(
+    async (closeAfterSave = true) => {
+      if (!isEditing && formEnabledBackends.length === 0) return;
       if (isEditing && skillPath) {
-        await updateSkill.mutateAsync({
-          skillPath,
-          backendType: enabledBackends?.[0] ?? 'claude-code',
-          name,
-          description,
-          content,
-        });
-      } else {
-        await createSkill.mutateAsync({
-          enabledBackends: formEnabledBackends,
-          scope,
-          projectPath,
-          name,
-          description,
-          content,
-        });
+        pendingSkillSaveRef.current = { name, description, content };
+        if (savingSkillRef.current) return;
+        savingSkillRef.current = true;
       }
-      onSaved();
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to save skill';
-      addToast({ message, type: 'error' });
-    }
-  };
+
+      try {
+        if (isEditing && skillPath) {
+          while (pendingSkillSaveRef.current !== null) {
+            const draftToSave = pendingSkillSaveRef.current;
+            pendingSkillSaveRef.current = null;
+            await updateSkill.mutateAsync({
+              skillPath,
+              backendType: enabledBackends?.[0] ?? 'claude-code',
+              name: draftToSave.name,
+              description: draftToSave.description,
+              content: draftToSave.content,
+            });
+            if (
+              JSON.stringify(currentDraftRef.current) ===
+              JSON.stringify(draftToSave)
+            ) {
+              setHasChanges(false);
+            }
+          }
+        } else {
+          await createSkill.mutateAsync({
+            enabledBackends: formEnabledBackends,
+            scope,
+            projectPath,
+            name,
+            description,
+            content,
+          });
+        }
+        if (closeAfterSave) onSaved();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to save skill';
+        addToast({ message, type: 'error' });
+      } finally {
+        if (isEditing && skillPath) savingSkillRef.current = false;
+      }
+    },
+    [
+      addToast,
+      content,
+      createSkill,
+      description,
+      enabledBackends,
+      formEnabledBackends,
+      isEditing,
+      name,
+      onSaved,
+      projectPath,
+      scope,
+      skillPath,
+      updateSkill,
+    ],
+  );
 
   const isValid =
     name.trim().length > 0 && (isEditing || formEnabledBackends.length > 0);
   const isPending = createSkill.isPending || updateSkill.isPending;
+
+  useEffect(() => {
+    if (!isEditing || !hasChanges || !isValid || isPending) return;
+
+    const saveTimeout = window.setTimeout(() => {
+      void handleSave(false);
+    }, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [handleSave, hasChanges, isEditing, isPending, isValid]);
 
   // Defer preview rendering so typing stays responsive
   const deferredContent = useDeferredValue(content);
@@ -204,17 +266,25 @@ export function SkillEditor({
         </div>
         <div className="flex items-center gap-2">
           <Button type="button" onClick={handleBack}>
-            Cancel
+            {isEditing ? 'Close' : 'Cancel'}
           </Button>
-          <Button
-            type="button"
-            onClick={handleSave}
-            disabled={!isValid || isPending}
-            loading={isPending}
-            variant="primary"
-          >
-            {isPending ? 'Saving...' : 'Save'}
-          </Button>
+          {isEditing ? (
+            (hasChanges || isPending) && (
+              <span className="text-ink-3 text-xs">
+                {isPending ? 'Saving...' : 'Changes save automatically'}
+              </span>
+            )
+          ) : (
+            <Button
+              type="button"
+              onClick={() => handleSave()}
+              disabled={!isValid || isPending}
+              loading={isPending}
+              variant="primary"
+            >
+              {isPending ? 'Saving...' : 'Save'}
+            </Button>
+          )}
         </div>
       </div>
 

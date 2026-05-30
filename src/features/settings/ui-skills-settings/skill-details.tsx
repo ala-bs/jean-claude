@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { BookOpen, Pencil, Save, Trash2, Undo2, Wand2 } from 'lucide-react';
+import { BookOpen, Pencil, Trash2, Undo2, Wand2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -76,6 +76,13 @@ export function SkillDetails({
   const [hasChanges, setHasChanges] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const initializedRef = useRef(false);
+  const currentEditedContentRef = useRef(editedContent);
+  const savingContentRef = useRef(false);
+  const pendingContentSaveRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentEditedContentRef.current = editedContent;
+  }, [editedContent]);
 
   // Load content into editor when data arrives
   useEffect(() => {
@@ -91,28 +98,53 @@ export function SkillDetails({
     if (initializedRef.current) setHasChanges(true);
   }, []);
 
-  const handleSave = useCallback(async () => {
-    if (!skill.editable) return;
-    try {
-      const backendType =
-        (Object.keys(skill.enabledBackends).find(
-          (k) => skill.enabledBackends[k as AgentBackendType],
-        ) as AgentBackendType) ?? 'claude-code';
-      await updateSkill.mutateAsync({
-        skillPath: skill.skillPath,
-        backendType,
-        name: data?.name ?? skill.name,
-        description: data?.description ?? skill.description,
-        content: editedContent,
-      });
-      setHasChanges(false);
-      addToast({ message: 'Skill saved', type: 'success' });
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to save skill';
-      addToast({ message, type: 'error' });
-    }
-  }, [skill, data, editedContent, updateSkill, addToast]);
+  const handleSave = useCallback(
+    async (showToast = true) => {
+      if (!skill.editable) return;
+      pendingContentSaveRef.current = editedContent;
+      if (savingContentRef.current) return;
+
+      savingContentRef.current = true;
+      try {
+        const backendType =
+          (Object.keys(skill.enabledBackends).find(
+            (k) => skill.enabledBackends[k as AgentBackendType],
+          ) as AgentBackendType) ?? 'claude-code';
+        while (pendingContentSaveRef.current !== null) {
+          const contentToSave = pendingContentSaveRef.current;
+          pendingContentSaveRef.current = null;
+          await updateSkill.mutateAsync({
+            skillPath: skill.skillPath,
+            backendType,
+            name: data?.name ?? skill.name,
+            description: data?.description ?? skill.description,
+            content: contentToSave,
+          });
+          if (currentEditedContentRef.current === contentToSave) {
+            setHasChanges(false);
+          }
+        }
+        if (showToast) addToast({ message: 'Skill saved', type: 'success' });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Failed to save skill';
+        addToast({ message, type: 'error' });
+      } finally {
+        savingContentRef.current = false;
+      }
+    },
+    [skill, data, editedContent, updateSkill, addToast],
+  );
+
+  useEffect(() => {
+    if (!mode || mode !== 'edit' || !hasChanges || !skill.editable) return;
+
+    const saveTimeout = window.setTimeout(() => {
+      void handleSave(false);
+    }, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [handleSave, hasChanges, mode, skill.editable]);
 
   const handleDiscard = useCallback(() => {
     if (data?.content) {
@@ -280,17 +312,6 @@ export function SkillDetails({
               <div className="mt-3 flex shrink-0 items-center gap-2">
                 <Button
                   type="button"
-                  onClick={handleSave}
-                  disabled={!hasChanges || updateSkill.isPending}
-                  loading={updateSkill.isPending}
-                  variant="primary"
-                  size="sm"
-                  icon={<Save size={13} />}
-                >
-                  Save changes
-                </Button>
-                <Button
-                  type="button"
                   onClick={handleDiscard}
                   disabled={!hasChanges}
                   size="sm"
@@ -299,6 +320,13 @@ export function SkillDetails({
                   Discard
                 </Button>
                 <div className="flex-1" />
+                {(hasChanges || updateSkill.isPending) && (
+                  <span className="text-ink-4 font-mono text-[11px]">
+                    {updateSkill.isPending
+                      ? 'Saving...'
+                      : 'Changes save automatically'}
+                  </span>
+                )}
                 <span className="text-ink-4 font-mono text-[11px]">
                   {lineCount} lines · {charCount} chars
                 </span>

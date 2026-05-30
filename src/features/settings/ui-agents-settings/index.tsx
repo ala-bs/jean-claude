@@ -6,7 +6,6 @@ import {
   Pencil,
   Plus,
   RefreshCw,
-  Save,
   Trash2,
   Undo2,
 } from 'lucide-react';
@@ -237,44 +236,98 @@ function AgentEditor({
     'claude-code',
     'opencode',
   ]);
+  const [hasChanges, setHasChanges] = useState(false);
+  const initializedRef = useRef(false);
+  const currentContentRef = useRef(content);
+  const savingEditorRef = useRef(false);
+  const pendingEditorSaveRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentContentRef.current = content;
+  }, [content]);
 
   useEffect(() => {
     if (data) {
       setName(data.name);
       setDescription(data.description);
       setContent(data.content);
+      initializedRef.current = true;
+      setHasChanges(false);
     } else if (!agent) {
       setName('');
       setDescription('');
       setContent('');
+      initializedRef.current = true;
+      setHasChanges(false);
     }
   }, [agent, data]);
 
-  const save = async () => {
-    try {
+  const save = useCallback(
+    async (closeAfterSave = true) => {
       if (agent) {
-        await updateAgent.mutateAsync({ agentPath: agent.agentPath, content });
-      } else {
-        await createAgent.mutateAsync({
-          enabledBackends,
-          name,
-          description,
-          content,
-        });
+        pendingEditorSaveRef.current = content;
+        if (savingEditorRef.current) return;
+        savingEditorRef.current = true;
       }
-      onSaved();
-    } catch (error) {
-      addToast({
-        message:
-          error instanceof Error ? error.message : 'Failed to save agent',
-        type: 'error',
-      });
-    }
-  };
+
+      try {
+        if (agent) {
+          while (pendingEditorSaveRef.current !== null) {
+            const contentToSave = pendingEditorSaveRef.current;
+            pendingEditorSaveRef.current = null;
+            await updateAgent.mutateAsync({
+              agentPath: agent.agentPath,
+              content: contentToSave,
+            });
+            if (currentContentRef.current === contentToSave) {
+              setHasChanges(false);
+            }
+          }
+        } else {
+          await createAgent.mutateAsync({
+            enabledBackends,
+            name,
+            description,
+            content,
+          });
+        }
+        if (closeAfterSave) onSaved();
+      } catch (error) {
+        addToast({
+          message:
+            error instanceof Error ? error.message : 'Failed to save agent',
+          type: 'error',
+        });
+      } finally {
+        if (agent) savingEditorRef.current = false;
+      }
+    },
+    [
+      addToast,
+      agent,
+      content,
+      createAgent,
+      description,
+      enabledBackends,
+      name,
+      onSaved,
+      updateAgent,
+    ],
+  );
 
   const valid =
     isEditing || (name.trim().length > 0 && enabledBackends.length > 0);
   const pending = createAgent.isPending || updateAgent.isPending;
+
+  useEffect(() => {
+    if (!isEditing || !hasChanges || !agent) return;
+
+    const saveTimeout = window.setTimeout(() => {
+      void save(false);
+    }, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [agent, hasChanges, isEditing, save]);
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
@@ -292,17 +345,25 @@ function AgentEditor({
         </div>
         <div className="flex items-center gap-2">
           <Button type="button" onClick={onClose}>
-            Cancel
+            {isEditing ? 'Close' : 'Cancel'}
           </Button>
-          <Button
-            type="button"
-            onClick={save}
-            disabled={!valid || pending}
-            loading={pending}
-            variant="primary"
-          >
-            {pending ? 'Saving...' : 'Save'}
-          </Button>
+          {isEditing ? (
+            (hasChanges || pending) && (
+              <span className="text-ink-3 text-xs">
+                {pending ? 'Saving...' : 'Changes save automatically'}
+              </span>
+            )
+          ) : (
+            <Button
+              type="button"
+              onClick={() => save()}
+              disabled={!valid || pending}
+              loading={pending}
+              variant="primary"
+            >
+              {pending ? 'Saving...' : 'Save'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -356,7 +417,10 @@ function AgentEditor({
         </div>
         <textarea
           value={content}
-          onChange={(event) => setContent(event.target.value)}
+          onChange={(event) => {
+            setContent(event.target.value);
+            if (isEditing && initializedRef.current) setHasChanges(true);
+          }}
           spellCheck={false}
           placeholder="---\nname: agent-name\ndescription: When to use this agent\n---\n\nAgent instructions..."
           className="border-glass-border bg-bg-0/60 text-ink-1 caret-acc min-h-0 flex-1 resize-none rounded-b-lg border p-4 font-mono text-sm leading-relaxed focus:outline-none"
@@ -383,6 +447,13 @@ function AgentDetails({
   const [hasChanges, setHasChanges] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const initializedRef = useRef(false);
+  const currentEditedContentRef = useRef(editedContent);
+  const savingContentRef = useRef(false);
+  const pendingContentSaveRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentEditedContentRef.current = editedContent;
+  }, [editedContent]);
 
   useEffect(() => {
     if (data?.content) {
@@ -392,22 +463,47 @@ function AgentDetails({
     }
   }, [data?.content]);
 
-  const handleSave = useCallback(async () => {
-    try {
-      await updateAgent.mutateAsync({
-        agentPath: agent.agentPath,
-        content: editedContent,
-      });
-      setHasChanges(false);
-      addToast({ message: 'Agent saved', type: 'success' });
-    } catch (error) {
-      addToast({
-        message:
-          error instanceof Error ? error.message : 'Failed to save agent',
-        type: 'error',
-      });
-    }
-  }, [addToast, agent.agentPath, editedContent, updateAgent]);
+  const handleSave = useCallback(
+    async (showToast = true) => {
+      pendingContentSaveRef.current = editedContent;
+      if (savingContentRef.current) return;
+
+      savingContentRef.current = true;
+      try {
+        while (pendingContentSaveRef.current !== null) {
+          const contentToSave = pendingContentSaveRef.current;
+          pendingContentSaveRef.current = null;
+          await updateAgent.mutateAsync({
+            agentPath: agent.agentPath,
+            content: contentToSave,
+          });
+          if (currentEditedContentRef.current === contentToSave) {
+            setHasChanges(false);
+          }
+        }
+        if (showToast) addToast({ message: 'Agent saved', type: 'success' });
+      } catch (error) {
+        addToast({
+          message:
+            error instanceof Error ? error.message : 'Failed to save agent',
+          type: 'error',
+        });
+      } finally {
+        savingContentRef.current = false;
+      }
+    },
+    [addToast, agent.agentPath, editedContent, updateAgent],
+  );
+
+  useEffect(() => {
+    if (mode !== 'edit' || !hasChanges) return;
+
+    const saveTimeout = window.setTimeout(() => {
+      void handleSave(false);
+    }, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [handleSave, hasChanges, mode]);
 
   const handleDiscard = useCallback(() => {
     if (data?.content) {
@@ -532,17 +628,6 @@ function AgentDetails({
               <div className="mt-3 flex shrink-0 items-center gap-2">
                 <Button
                   type="button"
-                  onClick={handleSave}
-                  disabled={!hasChanges || updateAgent.isPending}
-                  loading={updateAgent.isPending}
-                  variant="primary"
-                  size="sm"
-                  icon={<Save size={13} />}
-                >
-                  Save changes
-                </Button>
-                <Button
-                  type="button"
                   onClick={handleDiscard}
                   disabled={!hasChanges}
                   size="sm"
@@ -551,6 +636,13 @@ function AgentDetails({
                   Discard
                 </Button>
                 <div className="flex-1" />
+                {(hasChanges || updateAgent.isPending) && (
+                  <span className="text-ink-4 font-mono text-[11px]">
+                    {updateAgent.isPending
+                      ? 'Saving...'
+                      : 'Changes save automatically'}
+                  </span>
+                )}
                 <span className="text-ink-4 font-mono text-[11px]">
                   {lineCount} lines · {charCount} chars
                 </span>

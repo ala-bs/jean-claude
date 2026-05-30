@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
@@ -30,6 +30,14 @@ export function ProjectWorktreeSettings({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const currentEntriesRef = useRef(entries);
+  const savingEntriesRef = useRef(false);
+  const pendingEntriesSaveRef = useRef<[string, string][] | null>(null);
+
+  useEffect(() => {
+    currentEntriesRef.current = entries;
+  }, [entries]);
 
   // Load entries on mount
   useEffect(() => {
@@ -38,6 +46,7 @@ export function ProjectWorktreeSettings({
     api.worktreeConfig.getCopyEntries(projectPath).then((result) => {
       if (cancelled) return;
       setEntries(result.map(entryToTuple));
+      setDirty(false);
       setLoading(false);
     });
     return () => {
@@ -47,12 +56,14 @@ export function ProjectWorktreeSettings({
 
   const handleAdd = useCallback(() => {
     setEntries((prev) => [...prev, ['', '']]);
-    setDirty(true);
   }, []);
 
   const handleRemove = useCallback((index: number) => {
-    setEntries((prev) => prev.filter((_, i) => i !== index));
-    setDirty(true);
+    setEntries((prev) => {
+      const removedEntry = prev[index];
+      if (removedEntry?.[0].trim() !== '') setDirty(true);
+      return prev.filter((_, i) => i !== index);
+    });
   }, []);
 
   const handleChange = useCallback(
@@ -68,24 +79,63 @@ export function ProjectWorktreeSettings({
     [],
   );
 
-  const handleSave = useCallback(async () => {
-    setSaving(true);
-    try {
-      const storageEntries: WorktreeFileCopyEntry[] = entries
-        .filter(([src]) => src.trim() !== '')
-        .map(([src, dest]) =>
-          tupleToEntry(src.trim(), dest.trim() || src.trim()),
+  const saveEntries = useCallback(
+    async (entriesToSave: [string, string][]) => {
+      pendingEntriesSaveRef.current = entriesToSave;
+      if (savingEntriesRef.current) return;
+
+      savingEntriesRef.current = true;
+      setSaving(true);
+      setSaveError(null);
+      try {
+        while (pendingEntriesSaveRef.current) {
+          const nextEntries = pendingEntriesSaveRef.current;
+          pendingEntriesSaveRef.current = null;
+          const storageEntries: WorktreeFileCopyEntry[] = nextEntries
+            .filter(([src]) => src.trim() !== '')
+            .map(([src, dest]) =>
+              tupleToEntry(src.trim(), dest.trim() || src.trim()),
+            );
+
+          const result = await api.worktreeConfig.setCopyEntries(
+            projectPath,
+            storageEntries,
+          );
+
+          const currentEntries = currentEntriesRef.current;
+          const savedCurrentDraft =
+            JSON.stringify(nextEntries) === JSON.stringify(currentEntries);
+          if (
+            savedCurrentDraft &&
+            currentEntries.every(([src]) => src.trim() !== '')
+          ) {
+            setEntries(result.map(entryToTuple));
+          }
+          if (savedCurrentDraft) setDirty(false);
+        }
+      } catch (error) {
+        setSaveError(
+          error instanceof Error
+            ? error.message
+            : 'Failed to save worktree settings',
         );
-      const result = await api.worktreeConfig.setCopyEntries(
-        projectPath,
-        storageEntries,
-      );
-      setEntries(result.map(entryToTuple));
-      setDirty(false);
-    } finally {
-      setSaving(false);
-    }
-  }, [entries, projectPath]);
+      } finally {
+        savingEntriesRef.current = false;
+        setSaving(false);
+      }
+    },
+    [projectPath],
+  );
+
+  useEffect(() => {
+    if (!dirty || loading) return;
+
+    const saveTimeout = window.setTimeout(async () => {
+      await saveEntries(entries);
+    }, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [dirty, entries, loading, saveEntries]);
 
   if (loading) {
     return (
@@ -146,18 +196,12 @@ export function ProjectWorktreeSettings({
         </Button>
       </div>
 
-      {dirty && (
-        <Button
-          variant="primary"
-          size="md"
-          onClick={handleSave}
-          disabled={saving}
-          loading={saving}
-          className="w-full"
-        >
-          {saving ? 'Saving...' : 'Save Worktree Settings'}
-        </Button>
+      {(dirty || saving) && (
+        <div className="text-ink-3 text-xs">
+          {saving ? 'Saving...' : 'Changes save automatically'}
+        </div>
       )}
+      {saveError && <div className="text-status-fail text-xs">{saveError}</div>}
     </div>
   );
 }

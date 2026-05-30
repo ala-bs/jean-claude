@@ -1,5 +1,5 @@
 import { RefreshCw, Trash2, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useModal } from '@/common/context/modal';
 import { Button } from '@/common/ui/button';
@@ -22,29 +22,29 @@ export function EditTokenPane({
     token.expiresAt ? token.expiresAt.split('T')[0] : '',
   );
   const [error, setError] = useState<string | null>(null);
+  const currentDraftRef = useRef({ label, newToken, expiresAt });
+  const savingTokenRef = useRef(false);
+  const pendingTokenSaveRef = useRef<{
+    label: string;
+    newToken: string;
+    expiresAt: string;
+  } | null>(null);
 
   const modal = useModal();
   const updateToken = useUpdateToken();
   const deleteToken = useDeleteToken();
   const getExpiration = useGetAzureDevOpsTokenExpiration();
 
-  const handleSave = async () => {
+  useEffect(() => {
+    currentDraftRef.current = { label, newToken, expiresAt };
+  }, [expiresAt, label, newToken]);
+
+  useEffect(() => {
+    setLabel(token.label);
+    setNewToken('');
+    setExpiresAt(token.expiresAt ? token.expiresAt.split('T')[0] : '');
     setError(null);
-    try {
-      await updateToken.mutateAsync({
-        id: token.id,
-        data: {
-          label,
-          ...(newToken ? { token: newToken } : {}),
-          expiresAt: expiresAt || null,
-          updatedAt: new Date().toISOString(),
-        },
-      });
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update token');
-    }
-  };
+  }, [token]);
 
   const handleRefreshExpiration = async () => {
     try {
@@ -75,10 +75,54 @@ export function EditTokenPane({
     });
   };
 
-  const hasChanges =
-    label !== token.label ||
-    newToken !== '' ||
-    expiresAt !== (token.expiresAt ? token.expiresAt.split('T')[0] : '');
+  const hasChanges = useMemo(
+    () =>
+      label !== token.label ||
+      newToken !== '' ||
+      expiresAt !== (token.expiresAt ? token.expiresAt.split('T')[0] : ''),
+    [expiresAt, label, newToken, token.expiresAt, token.label],
+  );
+
+  useEffect(() => {
+    if (!hasChanges) return;
+
+    const saveTimeout = window.setTimeout(async () => {
+      pendingTokenSaveRef.current = { label, newToken, expiresAt };
+      if (savingTokenRef.current) return;
+
+      savingTokenRef.current = true;
+      setError(null);
+      try {
+        while (pendingTokenSaveRef.current) {
+          const draftToSave = pendingTokenSaveRef.current;
+          pendingTokenSaveRef.current = null;
+          await updateToken.mutateAsync({
+            id: token.id,
+            data: {
+              label: draftToSave.label,
+              ...(draftToSave.newToken ? { token: draftToSave.newToken } : {}),
+              expiresAt: draftToSave.expiresAt || null,
+              updatedAt: new Date().toISOString(),
+            },
+          });
+
+          if (
+            draftToSave.newToken &&
+            JSON.stringify(currentDraftRef.current) ===
+              JSON.stringify(draftToSave)
+          ) {
+            setNewToken('');
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update token');
+      } finally {
+        savingTokenRef.current = false;
+      }
+    }, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [expiresAt, hasChanges, label, newToken, token.id, updateToken]);
 
   return (
     <>
@@ -151,15 +195,13 @@ export function EditTokenPane({
               variant="danger"
               tooltip="Delete token"
             />
-            <Button
-              onClick={handleSave}
-              disabled={!hasChanges || updateToken.isPending}
-              loading={updateToken.isPending}
-              variant="primary"
-              className="flex-1"
-            >
-              Save Changes
-            </Button>
+            {(hasChanges || updateToken.isPending) && (
+              <span className="text-ink-3 flex flex-1 items-center text-xs">
+                {updateToken.isPending
+                  ? 'Saving...'
+                  : 'Changes save automatically'}
+              </span>
+            )}
           </div>
         </div>
       </div>

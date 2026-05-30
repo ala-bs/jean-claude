@@ -1,5 +1,5 @@
 import { FolderOpen, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -99,6 +99,16 @@ export function McpTemplateForm({
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [installOnCreateWorktree, setInstallOnCreateWorktree] = useState(true);
   const [presetId, setPresetId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const savingTemplateRef = useRef(false);
+  const pendingTemplateSaveRef = useRef<{
+    name: string;
+    commandTemplate: string;
+    variables: Record<string, string>;
+    installOnCreateWorktree: boolean;
+    presetId: string | null;
+    updatedAt: string;
+  } | null>(null);
 
   // Initialize from template or reset
   useEffect(() => {
@@ -119,6 +129,26 @@ export function McpTemplateForm({
 
   const userDefinedVars = getUserDefinedVariables(commandTemplate);
   const currentPreset = presets?.find((p) => p.id === presetId);
+  const formData = useMemo(
+    () => ({
+      name,
+      commandTemplate,
+      variables,
+      installOnCreateWorktree,
+      presetId,
+      updatedAt: new Date().toISOString(),
+    }),
+    [commandTemplate, installOnCreateWorktree, name, presetId, variables],
+  );
+
+  const hasChanges =
+    !!template &&
+    (name !== template.name ||
+      commandTemplate !== template.commandTemplate ||
+      installOnCreateWorktree !== template.installOnCreateWorktree ||
+      presetId !== template.presetId ||
+      JSON.stringify(variables) !== JSON.stringify(template.variables));
+  const isValid = name.trim() && commandTemplate.trim();
 
   const handleApplyPreset = (preset: McpPreset) => {
     setName(preset.name);
@@ -141,24 +171,49 @@ export function McpTemplateForm({
   };
 
   const handleSave = async () => {
-    const data = {
-      name,
-      commandTemplate,
-      variables,
-      installOnCreateWorktree,
-      presetId,
-      updatedAt: new Date().toISOString(),
-    };
-
     if (template) {
-      await updateTemplate.mutateAsync({ id: template.id, data });
+      await updateTemplate.mutateAsync({ id: template.id, data: formData });
     } else {
-      await createTemplate.mutateAsync(data);
+      await createTemplate.mutateAsync(formData);
     }
     onSaved();
   };
 
-  const isValid = name.trim() && commandTemplate.trim();
+  const saveTemplate = useCallback(
+    async (data: typeof formData) => {
+      if (!template) return;
+
+      pendingTemplateSaveRef.current = data;
+      if (savingTemplateRef.current) return;
+
+      savingTemplateRef.current = true;
+      setSaveError(null);
+      try {
+        while (pendingTemplateSaveRef.current) {
+          const nextData = pendingTemplateSaveRef.current;
+          pendingTemplateSaveRef.current = null;
+          await updateTemplate.mutateAsync({ id: template.id, data: nextData });
+        }
+      } catch (error) {
+        setSaveError(
+          error instanceof Error ? error.message : 'Failed to save MCP server',
+        );
+      } finally {
+        savingTemplateRef.current = false;
+      }
+    },
+    [template, updateTemplate],
+  );
+
+  useEffect(() => {
+    if (!template || !hasChanges || !isValid) return;
+
+    const saveTimeout = window.setTimeout(() => {
+      void saveTemplate(formData);
+    }, 500);
+
+    return () => window.clearTimeout(saveTimeout);
+  }, [formData, hasChanges, isValid, saveTemplate, template]);
 
   return (
     <div className="flex h-full flex-col">
@@ -284,21 +339,30 @@ export function McpTemplateForm({
         </div>
       </div>
 
-      {/* Save button */}
+      {saveError && (
+        <div className="text-status-fail mt-3 text-xs">{saveError}</div>
+      )}
+
       <div className="border-glass-border mt-4 flex justify-end gap-2 border-t pt-4">
-        <Button onClick={onClose}>Cancel</Button>
-        <Button
-          onClick={handleSave}
-          disabled={
-            !isValid || createTemplate.isPending || updateTemplate.isPending
-          }
-          loading={createTemplate.isPending || updateTemplate.isPending}
-          variant="primary"
-        >
-          {createTemplate.isPending || updateTemplate.isPending
-            ? 'Saving...'
-            : 'Save'}
-        </Button>
+        <Button onClick={onClose}>{template ? 'Close' : 'Cancel'}</Button>
+        {template ? (
+          (hasChanges || updateTemplate.isPending) && (
+            <span className="text-ink-3 flex items-center text-xs">
+              {updateTemplate.isPending
+                ? 'Saving...'
+                : 'Changes save automatically'}
+            </span>
+          )
+        ) : (
+          <Button
+            onClick={handleSave}
+            disabled={!isValid || createTemplate.isPending}
+            loading={createTemplate.isPending}
+            variant="primary"
+          >
+            {createTemplate.isPending ? 'Saving...' : 'Save'}
+          </Button>
+        )}
       </div>
     </div>
   );

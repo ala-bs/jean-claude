@@ -48,7 +48,7 @@ export function AutocompleteSettings() {
     try {
       await api.completion.saveSettings({
         enabled,
-        apiKey: apiKey.trim(), // Empty string means keep existing
+        apiKey: apiKey.trim(),
         model: model.trim() || 'codestral-latest',
         serverUrl: serverUrl.trim(),
       });
@@ -59,7 +59,6 @@ export function AutocompleteSettings() {
       });
 
       if (enabled && (apiKey.trim() || hasApiKey)) {
-        // Test the connection
         const result = await api.completion.test();
         if (result.success) {
           setTestResult({ type: 'success', text: 'Connection successful!' });
@@ -224,7 +223,6 @@ export function AutocompleteSettings() {
         </div>
       </div>
 
-      {/* Save button */}
       <div className="mt-6 flex items-center gap-3">
         <Button
           onClick={handleSave}
