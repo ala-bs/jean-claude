@@ -35,6 +35,7 @@ export function MessageInput({
   onQueue,
   onStop,
   disabled = false,
+  forceDisabled = false,
   placeholder = 'Type a message... (Cmd+Enter to send)',
   isRunning = false,
   isStopping = false,
@@ -61,6 +62,8 @@ export function MessageInput({
   onQueue?: (parts: PromptPart[]) => void;
   onStop?: () => void;
   disabled?: boolean;
+  /** Disables input even while running, bypassing queue mode. */
+  forceDisabled?: boolean;
   placeholder?: string;
   isRunning?: boolean;
   isStopping?: boolean;
@@ -132,6 +135,8 @@ export function MessageInput({
   }, []);
 
   const handleSubmit = useCallback(() => {
+    if (forceDisabled) return;
+
     const trimmed = value.trim();
     if (
       !trimmed &&
@@ -175,6 +180,7 @@ export function MessageInput({
     images,
     attachedFiles,
     disabled,
+    forceDisabled,
     isRunning,
     onSend,
     onQueue,
@@ -216,6 +222,7 @@ export function MessageInput({
   };
 
   const isSubmitDisabled =
+    forceDisabled ||
     (!value.trim() &&
       images.length === 0 &&
       attachedFiles.length === 0 &&
@@ -293,7 +300,7 @@ export function MessageInput({
           ? 'Type to queue a follow-up... (Esc twice to stop)'
           : placeholder
       }
-      disabled={disabled && !isRunning}
+      disabled={forceDisabled || (disabled && !isRunning)}
       onFocus={() => onFocusChange?.(true)}
       onBlur={() => onFocusChange?.(false)}
       fillAvailableHeight={fillAvailableHeight}

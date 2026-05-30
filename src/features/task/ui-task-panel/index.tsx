@@ -2117,8 +2117,11 @@ const TaskInputFooter = memo(function TaskInputFooter({
     return () => ro.disconnect();
   }, []);
 
-  // Allow send with just pills (no typed text)
-  const effectiveCanSend = canSendMessage || openReviewComments.length > 0;
+  const isTaskCompleted = task?.userCompleted ?? false;
+
+  // Allow send with just pills (no typed text), unless task is completed.
+  const effectiveCanSend =
+    !isTaskCompleted && (canSendMessage || openReviewComments.length > 0);
 
   const selectorGroup = (
     <div className="[&>button:not(:last-child)]:border-glass-border flex items-center gap-0 rounded-md [&>button]:rounded-none [&>button:first-child]:rounded-l-md [&>button:last-child]:rounded-r-md [&>button:not(:last-child)]:border-r">
@@ -2126,20 +2129,21 @@ const TaskInputFooter = memo(function TaskInputFooter({
         value={effectiveMode}
         onChange={handleModeChange}
         backend={effectiveBackend}
-        disabled={isRunning}
+        disabled={isRunning || isTaskCompleted}
         size="sm"
       />
       <ModelSelector
         value={effectiveModel}
         onChange={handleModelChange}
         models={getModelsForBackend(effectiveBackend, dynamicModels)}
+        disabled={isTaskCompleted}
         size="sm"
       />
       <ThinkingSelector
         value={effectiveThinkingEffort}
         onChange={handleThinkingEffortChange}
         options={thinkingOptions}
-        disabled={isRunning || thinkingOptions.length <= 1}
+        disabled={isRunning || isTaskCompleted || thinkingOptions.length <= 1}
         size="sm"
       />
     </div>
@@ -2170,8 +2174,13 @@ const TaskInputFooter = memo(function TaskInputFooter({
             onQueue={handleQueuePrompt}
             onStop={handleStop}
             disabled={!effectiveCanSend}
+            forceDisabled={isTaskCompleted}
             allowEmptySubmit={openReviewComments.length > 0}
-            placeholder="Send a follow-up message..."
+            placeholder={
+              isTaskCompleted
+                ? 'Task is complete. Mark it active to send a follow-up.'
+                : 'Send a follow-up message...'
+            }
             isRunning={isRunning}
             isStopping={isStopping}
             skills={skills}
@@ -2197,7 +2206,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
                   thinkingOptions={thinkingOptions}
                   backend={effectiveBackend}
                   models={getModelsForBackend(effectiveBackend, dynamicModels)}
-                  disabled={isRunning}
+                  disabled={isRunning || isTaskCompleted}
                 />
               </>
             }
@@ -2216,8 +2225,13 @@ const TaskInputFooter = memo(function TaskInputFooter({
             onQueue={handleQueuePrompt}
             onStop={handleStop}
             disabled={!effectiveCanSend}
+            forceDisabled={isTaskCompleted}
             allowEmptySubmit={openReviewComments.length > 0}
-            placeholder="Send a follow-up message..."
+            placeholder={
+              isTaskCompleted
+                ? 'Task is complete. Mark it active to send a follow-up.'
+                : 'Send a follow-up message...'
+            }
             isRunning={isRunning}
             isStopping={isStopping}
             skills={skills}
