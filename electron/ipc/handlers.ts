@@ -4901,10 +4901,10 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('system:getMemoryUsage', async (event) => {
     const mainMem = process.memoryUsage();
+    const metrics = app.getAppMetrics();
+    const mainMetric = metrics.find((metric) => metric.pid === process.pid);
     const rendererPid = event.sender.getOSProcessId();
-    const rendererMetric = app
-      .getAppMetrics()
-      .find((metric) => metric.pid === rendererPid);
+    const rendererMetric = metrics.find((metric) => metric.pid === rendererPid);
     const rendererRssBytes =
       (rendererMetric?.memory?.workingSetSize ?? 0) * 1024;
     const rendererPrivateBytes =
@@ -4915,10 +4915,12 @@ export function registerIpcHandlers() {
       mainProcess: {
         heapUsedBytes: mainMem.heapUsed,
         rssBytes: mainMem.rss,
+        cpuPercent: mainMetric?.cpu?.percentCPUUsage ?? 0,
       },
       rendererProcess: {
         rssBytes: rendererRssBytes,
         privateBytes: rendererPrivateBytes,
+        cpuPercent: rendererMetric?.cpu?.percentCPUUsage ?? 0,
       },
     };
   });

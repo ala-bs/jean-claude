@@ -1342,10 +1342,12 @@ export interface Api {
       mainProcess: {
         heapUsedBytes: number;
         rssBytes: number;
+        cpuPercent: number;
       };
       rendererProcess: {
         rssBytes: number;
         privateBytes: number;
+        cpuPercent: number;
       };
     }>;
   };
@@ -2038,10 +2040,12 @@ export const api: Api = hasWindowApi
           mainProcess: {
             heapUsedBytes: 0,
             rssBytes: 0,
+            cpuPercent: 0,
           },
           rendererProcess: {
             rssBytes: 0,
             privateBytes: 0,
+            cpuPercent: 0,
           },
         }),
       },
