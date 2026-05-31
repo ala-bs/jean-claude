@@ -112,6 +112,7 @@ export interface AgentTaskContext {
     backendSessionId: string | null;
     rawData: unknown;
   }) => Promise<string>;
+  updateRaw?: (params: { rowId: string; rawData: unknown }) => Promise<void>;
 }
 
 export interface AgentBackend {

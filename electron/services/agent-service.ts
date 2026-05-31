@@ -470,6 +470,9 @@ class AgentService {
         });
         return row.id;
       },
+      updateRaw: async (params) => {
+        await RawMessageRepository.updateRawData(params.rowId, params.rawData);
+      },
     });
 
     const session: ActiveSession = {

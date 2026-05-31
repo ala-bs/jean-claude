@@ -183,6 +183,11 @@ interface OpenCodeSessionState {
   normalizationCtx: OpenCodeNormalizationContext;
   /** Current message index for raw persistence ordering */
   messageIndex: number;
+  /** First persisted row for each streaming text delta group */
+  rawDeltaRows: Map<
+    string,
+    { rowId: string; rawData: OpenCodeDeltaEvent; dirty: boolean }
+  >;
   /** Question request IDs already emitted as question AgentEvents (for dedup).
    *  Keyed by the QuestionRequest.id from `question.asked` SSE events. */
   emittedQuestionRequestIds: Set<string>;
@@ -295,6 +300,7 @@ export class OpenCodeBackend implements AgentBackend {
         totalCost: 0,
       },
       messageIndex: this.taskContext.sessionStartIndex,
+      rawDeltaRows: new Map(),
       emittedQuestionRequestIds: new Set(),
       permissionRules: config.permissionRules ?? [],
       serverHandle,
@@ -896,6 +902,8 @@ export class OpenCodeBackend implements AgentBackend {
       }
     }
 
+    await this.flushRawDeltaRows(state);
+
     const promptResult = hasCapturedPromptResult
       ? capturedPromptResult
       : idleTimedOut || sessionErrored || state.abortController.signal.aborted
@@ -1253,8 +1261,15 @@ export class OpenCodeBackend implements AgentBackend {
     state: OpenCodeSessionState,
     rawData: unknown,
   ): Promise<string | null> {
-    const messageIndex = state.messageIndex++;
     try {
+      const mergedDeltaId = await this.persistMergedDelta(state, rawData);
+      if (mergedDeltaId) {
+        return mergedDeltaId;
+      }
+
+      await this.flushRawDeltaRows(state);
+
+      const messageIndex = state.messageIndex++;
       return await this.taskContext.persistRaw({
         messageIndex,
         backendSessionId: state.session.id,
@@ -1265,6 +1280,101 @@ export class OpenCodeBackend implements AgentBackend {
       return null;
     }
   }
+
+  private async persistMergedDelta(
+    state: OpenCodeSessionState,
+    rawData: unknown,
+  ): Promise<string | null> {
+    if (!this.taskContext.updateRaw || !isOpenCodeDeltaEvent(rawData)) {
+      return null;
+    }
+
+    const key = getDeltaPersistenceKey(rawData);
+    const existing = state.rawDeltaRows.get(key);
+    if (!existing) {
+      const messageIndex = state.messageIndex++;
+      const rowId = await this.taskContext.persistRaw({
+        messageIndex,
+        backendSessionId: state.session.id,
+        rawData,
+      });
+      state.rawDeltaRows.set(key, {
+        rowId,
+        rawData: cloneDeltaEvent(rawData),
+        dirty: false,
+      });
+      return rowId;
+    }
+
+    existing.rawData = {
+      ...existing.rawData,
+      properties: {
+        ...existing.rawData.properties,
+        delta: existing.rawData.properties.delta + rawData.properties.delta,
+      },
+    };
+    existing.dirty = true;
+    return existing.rowId;
+  }
+
+  private async flushRawDeltaRows(state: OpenCodeSessionState): Promise<void> {
+    if (!this.taskContext.updateRaw) {
+      return;
+    }
+
+    for (const deltaRow of state.rawDeltaRows.values()) {
+      if (!deltaRow.dirty) {
+        continue;
+      }
+
+      await this.taskContext.updateRaw({
+        rowId: deltaRow.rowId,
+        rawData: deltaRow.rawData,
+      });
+      deltaRow.dirty = false;
+    }
+  }
+}
+
+type OpenCodeDeltaEvent = {
+  type: 'message.part.delta';
+  properties: {
+    sessionID: string;
+    messageID: string;
+    partID: string;
+    field: string;
+    delta: string;
+  };
+};
+
+function isOpenCodeDeltaEvent(value: unknown): value is OpenCodeDeltaEvent {
+  if (!value || typeof value !== 'object') return false;
+  const event = value as {
+    type?: unknown;
+    properties?: Record<string, unknown>;
+  };
+  if (event.type !== 'message.part.delta') return false;
+  const props = event.properties;
+  if (!props || typeof props !== 'object') return false;
+  return (
+    typeof props.sessionID === 'string' &&
+    typeof props.messageID === 'string' &&
+    typeof props.partID === 'string' &&
+    typeof props.field === 'string' &&
+    typeof props.delta === 'string'
+  );
+}
+
+function getDeltaPersistenceKey(event: OpenCodeDeltaEvent): string {
+  const { sessionID, messageID, partID, field } = event.properties;
+  return [sessionID, messageID, partID, field].join('::');
+}
+
+function cloneDeltaEvent(event: OpenCodeDeltaEvent): OpenCodeDeltaEvent {
+  return {
+    ...event,
+    properties: { ...event.properties },
+  };
 }
 
 function cloneOpenCodePart(part: OcPart): OcPart {

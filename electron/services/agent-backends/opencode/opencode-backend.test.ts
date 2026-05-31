@@ -1,7 +1,7 @@
 import type { Part } from '@opencode-ai/sdk/v2';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent } from '@shared/agent-backend-types';
+import type { AgentEvent, AgentTaskContext } from '@shared/agent-backend-types';
 
 vi.mock('../../../database/repositories', () => ({
   RawMessageRepository: {
@@ -42,6 +42,66 @@ describe('applyDeltaToMessageParts', () => {
 });
 
 describe('OpenCodeBackend event stream', () => {
+  it('updates one raw row for repeated OpenCode text deltas', async () => {
+    const rawIds = ['raw-1', 'raw-2'];
+    const persistRaw = vi.fn<AgentTaskContext['persistRaw']>(
+      async () => rawIds.shift() ?? 'raw-unexpected',
+    );
+    const updateRaw = vi.fn(async () => undefined);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw,
+      updateRaw,
+    });
+    const state = createOpenCodeState({});
+
+    const firstId = await persistRawForMessageForTest(backend, state, {
+      type: 'message.part.delta',
+      properties: {
+        sessionID: 'session-1',
+        messageID: 'msg-1',
+        partID: 'part-1',
+        field: 'text',
+        delta: 'hello',
+      },
+    });
+    const secondId = await persistRawForMessageForTest(backend, state, {
+      type: 'message.part.delta',
+      properties: {
+        sessionID: 'session-1',
+        messageID: 'msg-1',
+        partID: 'part-1',
+        field: 'text',
+        delta: ' world',
+      },
+    });
+    const statusId = await persistRawForMessageForTest(backend, state, {
+      type: 'session.status',
+      properties: { sessionID: 'session-1' },
+    });
+
+    expect(firstId).toBe('raw-1');
+    expect(secondId).toBe('raw-1');
+    expect(statusId).toBe('raw-2');
+    expect(persistRaw).toHaveBeenCalledTimes(2);
+    expect(updateRaw).toHaveBeenCalledWith({
+      rowId: 'raw-1',
+      rawData: {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-1',
+          messageID: 'msg-1',
+          partID: 'part-1',
+          field: 'text',
+          delta: 'hello world',
+        },
+      },
+    });
+    expect(updateRaw).toHaveBeenCalledOnce();
+    expect(state.messageIndex).toBe(2);
+  });
+
   it('completes after idle timeout if session.prompt never resolves', async () => {
     vi.useFakeTimers();
 
@@ -258,6 +318,7 @@ function createOpenCodeState(client: unknown) {
       totalCost: 0,
     },
     messageIndex: 0,
+    rawDeltaRows: new Map(),
     emittedQuestionRequestIds: new Set(),
     permissionRules: [],
     serverHandle: {
@@ -295,4 +356,19 @@ async function collectEvents(stream: AsyncGenerator<AgentEvent>) {
     events.push(event);
   }
   return events;
+}
+
+function persistRawForMessageForTest(
+  backend: OpenCodeBackend,
+  state: unknown,
+  rawData: unknown,
+) {
+  return (
+    backend as unknown as {
+      persistRawForMessage: (
+        state: unknown,
+        rawData: unknown,
+      ) => Promise<string | null>;
+    }
+  ).persistRawForMessage(state, rawData);
 }
