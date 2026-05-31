@@ -426,7 +426,10 @@ export function ProjectSettings({
 
     void generateProjectLogo
       .mutateAsync(projectId)
-      .then(() => {
+      .then((updatedProject) => {
+        setSummary((current) =>
+          current.trim() ? current : (updatedProject.summary ?? ''),
+        );
         markJobSucceeded(jobId, { projectId });
       })
       .catch((error: unknown) => {

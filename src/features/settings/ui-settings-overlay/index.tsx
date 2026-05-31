@@ -1027,6 +1027,7 @@ function ProjectContent({
         </div>
       )}
       <ProjectSettings
+        key={projectId}
         projectId={projectId}
         menuItem={menuItem}
         onProjectDeleted={onProjectDeleted}
