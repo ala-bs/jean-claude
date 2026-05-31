@@ -250,7 +250,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 
   return (
     <div
-      className="border-glass-border mb-3 overflow-x-auto rounded border [&_pre]:p-2 [&_pre]:whitespace-pre"
+      className="border-glass-border mb-3 overflow-x-auto rounded border [&_pre]:w-max [&_pre]:min-w-full [&_pre]:p-2 [&_pre]:whitespace-pre"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
