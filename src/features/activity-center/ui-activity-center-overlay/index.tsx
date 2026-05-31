@@ -28,6 +28,7 @@ import {
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
+import { ProjectLogo } from '@/features/project/ui-project-logo';
 import { useProjects } from '@/hooks/use-projects';
 import { api } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/time';
@@ -37,6 +38,7 @@ import {
 } from '@/stores/background-jobs';
 import { useDebugLogsStore } from '@/stores/debug-logs';
 import { useNotificationsStore } from '@/stores/notifications';
+import { useOverlaysStore } from '@/stores/overlays';
 import { useToastStore } from '@/stores/toasts';
 import type { DebugLogEntry } from '@shared/debug-log-types';
 import type { AppNotification } from '@shared/notification-types';
@@ -115,14 +117,32 @@ function StatusIcon({
   return <XCircle className="text-status-fail h-[18px] w-[18px] shrink-0" />;
 }
 
-function ProjectPill({ project }: { project: Project | undefined }) {
+function ProjectPill({
+  project,
+  onOpenSettings,
+}: {
+  project: Project | undefined;
+  onOpenSettings?: (projectId: string) => void;
+}) {
   if (!project) return null;
+
+  if (onOpenSettings) {
+    return (
+      <button
+        type="button"
+        onClick={() => onOpenSettings(project.id)}
+        className="bg-glass-medium hover:bg-glass-light inline-flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] transition-colors"
+        aria-label={`Open ${project.name} project settings`}
+      >
+        <ProjectLogo project={project} size="xs" className="rounded-full" />
+        <span className="text-ink-2 truncate">{project.name}</span>
+      </button>
+    );
+  }
+
   return (
     <span className="bg-glass-medium inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px]">
-      <span
-        className="inline-block h-2 w-2 rounded-full"
-        style={{ backgroundColor: project.color }}
-      />
+      <ProjectLogo project={project} size="xs" className="rounded-full" />
       <span className="text-ink-2 truncate">{project.name}</span>
     </span>
   );
@@ -148,6 +168,7 @@ function JobRow({
   project,
   isSelected,
   onOpenTask,
+  onOpenProjectSettings,
   onRetry,
   onCopyPrompt,
 }: {
@@ -155,6 +176,7 @@ function JobRow({
   project: Project | undefined;
   isSelected?: boolean;
   onOpenTask: (projectId: string, taskId: string) => void;
+  onOpenProjectSettings: (projectId: string) => void;
   onRetry: (job: BackgroundJob) => void;
   onCopyPrompt: (prompt: string) => void;
 }) {
@@ -190,7 +212,10 @@ function JobRow({
           )}
 
         <div className="mt-1 flex items-center gap-2">
-          <ProjectPill project={project} />
+          <ProjectPill
+            project={project}
+            onOpenSettings={onOpenProjectSettings}
+          />
 
           {/* Action buttons */}
           {isTaskCreation &&
@@ -352,6 +377,7 @@ export function ActivityCenterOverlay({
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const openOverlay = useOverlaysStore((s) => s.open);
 
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState('');
@@ -604,6 +630,18 @@ export function ActivityCenterOverlay({
     [navigate, onClose],
   );
 
+  const handleOpenProjectSettings = useCallback(
+    (projectId: string) => {
+      void navigate({
+        to: '/projects/$projectId',
+        params: { projectId },
+      }).finally(() => {
+        openOverlay('settings');
+      });
+    },
+    [navigate, openOverlay],
+  );
+
   const handleRetry = useCallback(
     async (job: BackgroundJob) => {
       markJobRunning(job.id);
@@ -685,6 +723,7 @@ export function ActivityCenterOverlay({
         project={job.projectId ? projectMap.get(job.projectId) : undefined}
         isSelected={isRowSelected(`job-${job.id}`)}
         onOpenTask={handleOpenTask}
+        onOpenProjectSettings={handleOpenProjectSettings}
         onRetry={handleRetry}
         onCopyPrompt={handleCopyPrompt}
       />
