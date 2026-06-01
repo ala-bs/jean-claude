@@ -11,4 +11,15 @@ describe('Content-Security-Policy', () => {
       "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
     );
   });
+
+  it('uses bundled Monaco instead of the default CDN loader', () => {
+    const editor = readFileSync(
+      resolve(__dirname, '../common/ui/handlebars-editor/index.tsx'),
+      'utf8',
+    );
+
+    expect(editor).toContain("import * as monaco from 'monaco-editor'");
+    expect(editor).toContain('loader.config({ monaco })');
+    expect(editor).not.toContain('cdn.jsdelivr.net');
+  });
 });

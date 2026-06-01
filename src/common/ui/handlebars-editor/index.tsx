@@ -1,6 +1,9 @@
-import Editor, { type OnMount } from '@monaco-editor/react';
+import Editor, { loader, type OnMount } from '@monaco-editor/react';
+import * as monaco from 'monaco-editor';
 import type { editor, IDisposable, languages } from 'monaco-editor';
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+loader.config({ monaco });
 
 const VARIABLE_SUGGESTIONS: Array<{
   label: string;
