@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
-import { Select } from '@/common/ui/select';
+import { Combobox } from '@/common/ui/combobox';
 import { useUpdateProject } from '@/hooks/use-projects';
 import { useProviders, useProviderDetails } from '@/hooks/use-providers';
 import { useToastStore } from '@/stores/toasts';
@@ -162,7 +162,7 @@ export function RepoLink({ project }: { project: Project }) {
 
       <div className="space-y-3">
         {/* Organization (Provider) */}
-        <Select
+        <Combobox
           value={selectedProviderId}
           options={[
             { value: '', label: 'Select organization...' },
@@ -172,16 +172,21 @@ export function RepoLink({ project }: { project: Project }) {
             })),
           ]}
           onChange={handleProviderChange}
+          label="Organization"
+          placeholder="Select organization..."
+          searchPlaceholder="Search organizations..."
           className="w-full justify-between"
         />
 
         {/* Project */}
-        <Select
+        <Combobox
           value={selectedProjectId}
           options={[
             {
               value: '',
-              label: detailsLoading ? 'Loading projects…' : 'Select project...',
+              label: detailsLoading
+                ? 'Loading projects...'
+                : 'Select project...',
             },
             ...projects.map((p) => ({
               value: p.project.id,
@@ -189,18 +194,26 @@ export function RepoLink({ project }: { project: Project }) {
             })),
           ]}
           onChange={handleProjectChange}
+          label="Project"
+          placeholder={
+            detailsLoading ? 'Loading projects...' : 'Select project...'
+          }
+          searchPlaceholder="Search projects..."
           disabled={!selectedProviderId || detailsLoading}
           className="w-full justify-between"
         />
 
         {/* Repository */}
-        <Select
+        <Combobox
           value={selectedRepoId}
           options={[
             { value: '', label: 'Select repository...' },
             ...repos.map((repo) => ({ value: repo.id, label: repo.name })),
           ]}
           onChange={setSelectedRepoId}
+          label="Repository"
+          placeholder="Select repository..."
+          searchPlaceholder="Search repositories..."
           disabled={!selectedProjectId}
           className="w-full justify-between"
         />
