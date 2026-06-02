@@ -46,21 +46,7 @@ const VOTE_OPTIONS = [
   },
 ] as const;
 
-const VOTE_BUTTON_STYLES: Record<ReviewerVoteStatus, string> = {
-  approved: 'bg-green-600 hover:bg-green-700 text-white',
-  'approved-with-suggestions': 'bg-emerald-600 hover:bg-emerald-700 text-white',
-  waiting: 'bg-amber-600 hover:bg-amber-700 text-white',
-  rejected: 'bg-red-600 hover:bg-red-700 text-white',
-  none: 'bg-glass-medium hover:bg-bg-3 text-ink-1',
-};
-
-const VOTE_LABELS: Record<ReviewerVoteStatus, string> = {
-  approved: 'Approved',
-  'approved-with-suggestions': 'Approved',
-  waiting: 'Waiting',
-  rejected: 'Rejected',
-  none: 'Vote',
-};
+const APPROVE_VOTE = 10;
 
 export function PrVoteDropdown({
   pr,
@@ -104,43 +90,54 @@ export function PrVoteDropdown({
   if (!voterId) return null;
 
   return (
-    <Dropdown
-      align="right"
-      trigger={
-        <button
-          className={clsx(
-            'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
-            VOTE_BUTTON_STYLES[currentVote],
-            voteMutation.isPending && 'opacity-50',
-          )}
-          disabled={voteMutation.isPending}
-        >
-          {VOTE_LABELS[currentVote]}
-          <ChevronDown className="h-3 w-3" />
-        </button>
-      }
-    >
-      {VOTE_OPTIONS.map((option) => (
-        <DropdownItem
-          key={option.vote}
-          onClick={() => handleVote(option.vote)}
-          icon={<option.icon className={clsx('h-4 w-4', option.color)} />}
-          checked={currentVote === option.status}
-        >
-          {option.label}
-        </DropdownItem>
-      ))}
-      {currentVote !== 'none' && (
-        <>
-          <DropdownDivider />
-          <DropdownItem
-            onClick={handleReset}
-            icon={<RotateCcw className="text-ink-3 h-4 w-4" />}
+    <div className="flex h-7 items-stretch">
+      <button
+        className={clsx(
+          'flex h-full items-center rounded-l-lg bg-green-600 px-3 text-xs font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50',
+          currentVote === 'approved' && 'bg-green-700',
+        )}
+        disabled={voteMutation.isPending}
+        onClick={() => handleVote(APPROVE_VOTE)}
+      >
+        {currentVote === 'approved' ? 'Approved' : 'Approve'}
+      </button>
+      <Dropdown
+        align="right"
+        trigger={
+          <button
+            className={clsx(
+              'flex h-full items-center justify-center rounded-r-lg border-l border-white/20 bg-green-600 px-2 text-white transition-colors hover:bg-green-700 disabled:opacity-50',
+              currentVote === 'approved' && 'bg-green-700',
+            )}
+            disabled={voteMutation.isPending}
+            aria-label="More vote options"
           >
-            Reset vote
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        }
+      >
+        {VOTE_OPTIONS.map((option) => (
+          <DropdownItem
+            key={option.vote}
+            onClick={() => handleVote(option.vote)}
+            icon={<option.icon className={clsx('h-4 w-4', option.color)} />}
+            checked={currentVote === option.status}
+          >
+            {option.label}
           </DropdownItem>
-        </>
-      )}
-    </Dropdown>
+        ))}
+        {currentVote !== 'none' && (
+          <>
+            <DropdownDivider />
+            <DropdownItem
+              onClick={handleReset}
+              icon={<RotateCcw className="text-ink-3 h-4 w-4" />}
+            >
+              Reset vote
+            </DropdownItem>
+          </>
+        )}
+      </Dropdown>
+    </div>
   );
 }
