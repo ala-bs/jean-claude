@@ -20,11 +20,14 @@ export function useCurrentSettingsProject({
       : visibleProjectId;
 
   const projectId = overrideProjectId ?? inferredProjectId;
+  const focusKey = routeTaskId
+    ? `task:${routeTaskId}`
+    : `project:${inferredProjectId}`;
 
   const currentProject =
     projectId !== 'all'
       ? (projects.find((project) => project.id === projectId) ?? null)
       : null;
 
-  return { currentProject, projects };
+  return { currentProject, projects, focusKey };
 }

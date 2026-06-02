@@ -18,7 +18,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { RemoveScroll } from 'react-remove-scroll';
@@ -286,6 +286,20 @@ type ActiveSelection = {
   subId?: string;
 };
 
+type SettingsTab = 'global' | 'project';
+
+type SettingsNavState = {
+  focusKey: string;
+  selectedProjectId: string | null;
+  activeTab: SettingsTab;
+  globalSelection: ActiveSelection;
+  expandedGlobalSection: string | null;
+  projectSelection: ActiveSelection;
+  expandedProjectSection: string | null;
+};
+
+let lastSettingsNavState: SettingsNavState | null = null;
+
 function getDefaultSelection(sections: GlobalSection[]): ActiveSelection {
   const first = sections[0];
   return first.subs
@@ -463,28 +477,42 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
     passthrough: ['global-nav'],
   });
 
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    null,
+  const {
+    currentProject: defaultCurrentProject,
+    projects,
+    focusKey,
+  } = useCurrentSettingsProject();
+  const [initialNavState] = useState<SettingsNavState | null>(() =>
+    lastSettingsNavState?.focusKey === focusKey ? lastSettingsNavState : null,
   );
-  const { currentProject, projects } = useCurrentSettingsProject({
-    overrideProjectId: selectedProjectId,
-  });
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    () => initialNavState?.selectedProjectId ?? null,
+  );
+  const shouldRestoreNavState = initialNavState !== null;
+  const currentProject = selectedProjectId
+    ? (projects.find((project) => project.id === selectedProjectId) ?? null)
+    : defaultCurrentProject;
 
   const resolvedProject =
     currentProject ?? (projects.length > 0 ? projects[0] : null);
   const resolvedProjectId = resolvedProject?.id ?? null;
 
-  const [activeTab, setActiveTab] = useState<'global' | 'project'>(
-    resolvedProject !== null ? 'project' : 'global',
+  const [activeTab, setActiveTab] = useState<SettingsTab>(
+    () =>
+      initialNavState?.activeTab ??
+      (resolvedProject !== null ? 'project' : 'global'),
   );
 
   // Global: track active selection + which section is expanded
-  const [globalSelection, setGlobalSelection] = useState<ActiveSelection>(() =>
-    getDefaultSelection(getGlobalSections()),
+  const [globalSelection, setGlobalSelection] = useState<ActiveSelection>(
+    () =>
+      initialNavState?.globalSelection ??
+      getDefaultSelection(getGlobalSections()),
   );
   const [expandedGlobalSection, setExpandedGlobalSection] = useState<
     string | null
   >(() => {
+    if (initialNavState) return initialNavState.expandedGlobalSection;
     const sections = getGlobalSections();
     return sections[0].subs ? sections[0].id : null;
   });
@@ -493,12 +521,51 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const [projectSelection, setProjectSelection] = useState<{
     sectionId: string;
     subId?: string;
-  }>(getDefaultProjectSelection());
+  }>(() => initialNavState?.projectSelection ?? getDefaultProjectSelection());
   const [expandedProjectSection, setExpandedProjectSection] = useState<
     string | null
-  >(PROJECT_SECTIONS[0].subs ? PROJECT_SECTIONS[0].id : null);
+  >(
+    () =>
+      initialNavState?.expandedProjectSection ??
+      (PROJECT_SECTIONS[0].subs ? PROJECT_SECTIONS[0].id : null),
+  );
+  const [hasAutoSelectedProjectTab, setHasAutoSelectedProjectTab] =
+    useState(false);
+
+  useEffect(() => {
+    if (
+      !shouldRestoreNavState &&
+      !hasAutoSelectedProjectTab &&
+      resolvedProject
+    ) {
+      setActiveTab('project');
+      setHasAutoSelectedProjectTab(true);
+    }
+  }, [hasAutoSelectedProjectTab, resolvedProject, shouldRestoreNavState]);
+
+  useEffect(() => {
+    lastSettingsNavState = {
+      focusKey,
+      selectedProjectId,
+      activeTab,
+      globalSelection,
+      expandedGlobalSection,
+      projectSelection,
+      expandedProjectSection,
+    };
+  }, [
+    activeTab,
+    expandedGlobalSection,
+    expandedProjectSection,
+    focusKey,
+    globalSelection,
+    projectSelection,
+    selectedProjectId,
+  ]);
 
   const hasProjectTab = projects.length > 0;
+  const displayedActiveTab =
+    activeTab === 'project' && !hasProjectTab ? 'global' : activeTab;
   const projectOptions = useMemo<SelectOption<string>[]>(
     () =>
       projects.map((project) => ({
@@ -615,7 +682,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
 
   const navigateMenu = useCallback(
     (direction: 'up' | 'down') => {
-      if (activeTab === 'global') {
+      if (displayedActiveTab === 'global') {
         let currentIndex = flatGlobalItems.findIndex(
           (item) =>
             item.sectionId === globalSelection.sectionId &&
@@ -649,7 +716,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             setGlobalSelection(next);
           }
         }
-      } else if (activeTab === 'project') {
+      } else if (displayedActiveTab === 'project') {
         let currentIndex = flatProjectItems.findIndex(
           (item) =>
             item.sectionId === projectSelection.sectionId &&
@@ -680,7 +747,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       }
     },
     [
-      activeTab,
+      displayedActiveTab,
       flatGlobalItems,
       flatProjectItems,
       globalSelection,
@@ -739,8 +806,8 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
 
   const projectMenuItem = resolveProjectMenuItem(projectSelection);
   const fillHeight =
-    (activeTab === 'global' && isFillHeightGlobal(globalSelection)) ||
-    (activeTab === 'project' && isFillHeightProject(projectMenuItem));
+    (displayedActiveTab === 'global' && isFillHeightGlobal(globalSelection)) ||
+    (displayedActiveTab === 'project' && isFillHeightProject(projectMenuItem));
 
   return createPortal(
     <FocusLock returnFocus>
@@ -779,7 +846,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                 <button
                   className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all"
                   style={
-                    activeTab === 'global'
+                    displayedActiveTab === 'global'
                       ? SEGMENTED_TAB_ACTIVE
                       : SEGMENTED_TAB_INACTIVE
                   }
@@ -794,7 +861,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                   <button
                     className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all"
                     style={
-                      activeTab === 'project'
+                      displayedActiveTab === 'project'
                         ? SEGMENTED_TAB_ACTIVE
                         : SEGMENTED_TAB_INACTIVE
                     }
@@ -808,32 +875,34 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
               </div>
 
               {/* Project chip with dropdown */}
-              {hasProjectTab && resolvedProject && activeTab === 'project' && (
-                <div
-                  className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs transition-opacity"
-                  style={{
-                    color: 'oklch(0.8 0.01 280)',
-                  }}
-                >
-                  <span
-                    className="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-bold"
+              {hasProjectTab &&
+                resolvedProject &&
+                displayedActiveTab === 'project' && (
+                  <div
+                    className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs transition-opacity"
                     style={{
-                      backgroundColor: resolvedProject.color,
-                      color: 'oklch(1 0 0)',
+                      color: 'oklch(0.8 0.01 280)',
                     }}
                   >
-                    {resolvedProject.name.charAt(0).toUpperCase()}
-                  </span>
-                  <Select
-                    value={resolvedProjectId ?? resolvedProject.id}
-                    options={projectOptions}
-                    onChange={handleProjectChange}
-                    label="Select project"
-                    size="xs"
-                    className="max-w-[160px] bg-transparent px-0 py-0 text-xs hover:bg-transparent"
-                  />
-                </div>
-              )}
+                    <span
+                      className="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-bold"
+                      style={{
+                        backgroundColor: resolvedProject.color,
+                        color: 'oklch(1 0 0)',
+                      }}
+                    >
+                      {resolvedProject.name.charAt(0).toUpperCase()}
+                    </span>
+                    <Select
+                      value={resolvedProjectId ?? resolvedProject.id}
+                      options={projectOptions}
+                      onChange={handleProjectChange}
+                      label="Select project"
+                      size="xs"
+                      className="max-w-[160px] bg-transparent px-0 py-0 text-xs hover:bg-transparent"
+                    />
+                  </div>
+                )}
 
               <div className="flex-1" />
 
@@ -885,12 +954,12 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                 <nav
                   className="flex flex-1 flex-col gap-0.5 overflow-auto"
                   aria-label={
-                    activeTab === 'project'
+                    displayedActiveTab === 'project'
                       ? 'Project settings sections'
                       : 'Global settings sections'
                   }
                 >
-                  {activeTab === 'global' &&
+                  {displayedActiveTab === 'global' &&
                     getGlobalSections().map((section) => (
                       <GlobalNavSection
                         key={section.id}
@@ -909,7 +978,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                       />
                     ))}
 
-                  {activeTab === 'project' &&
+                  {displayedActiveTab === 'project' &&
                     hasProjectTab &&
                     PROJECT_SECTIONS.map((section) => (
                       <ProjectNavSection
@@ -944,11 +1013,11 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                   fillHeight ? { padding: 0 } : { padding: '20px 28px 28px' }
                 }
               >
-                {activeTab === 'global' && (
+                {displayedActiveTab === 'global' && (
                   <GlobalContent selection={globalSelection} />
                 )}
 
-                {activeTab === 'project' && resolvedProject && (
+                {displayedActiveTab === 'project' && resolvedProject && (
                   <ProjectContent
                     projectId={resolvedProject.id}
                     selection={projectSelection}
