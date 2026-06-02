@@ -1,7 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Trash2 } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 import { Checkbox } from '@/common/ui/checkbox';
 import { IconButton } from '@/common/ui/icon-button';
@@ -32,7 +32,6 @@ export function CommandRow({
     command.confirmMessage ?? '',
   );
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const {
     attributes,
@@ -91,7 +90,6 @@ export function CommandRow({
     setLocalCommand(suggestion);
     setShowSuggestions(false);
     onUpdate({ command: suggestion });
-    inputRef.current?.blur();
   };
 
   const handlePortsChange = (ports: number[]) => {
@@ -140,7 +138,6 @@ export function CommandRow({
           />
           <div className="relative min-w-0">
             <Input
-              ref={inputRef}
               size="md"
               value={localCommand}
               onChange={(e) => handleCommandChange(e.target.value)}
@@ -154,7 +151,10 @@ export function CommandRow({
                   <button
                     key={suggestion}
                     type="button"
-                    onMouseDown={() => handleSelectSuggestion(suggestion)}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleSelectSuggestion(suggestion);
+                    }}
                     className="text-ink-1 hover:bg-glass-medium w-full px-3 py-1.5 text-left text-sm"
                   >
                     {suggestion}
