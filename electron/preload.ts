@@ -14,6 +14,11 @@ import type {
   GetYamlParametersIpcParams,
   QueueBuildIpcParams,
 } from '@shared/pipeline-types';
+import type {
+  AddGitHubSourceParams,
+  InstallSourceItemsParams,
+  UpdateSourceInstallParams,
+} from '@shared/source-management-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 
 contextBridge.exposeInMainWorld('api', {
@@ -959,6 +964,19 @@ contextBridge.exposeInMainWorld('api', {
       mode: 'create' | 'improve';
       sourceSkillPath?: string;
     }) => ipcRenderer.invoke('skills:publishFromWorkspace', params),
+  },
+  sourceManagement: {
+    list: () => ipcRenderer.invoke('sources:list'),
+    addGithub: (params: AddGitHubSourceParams) =>
+      ipcRenderer.invoke('sources:addGithub', params),
+    refresh: (sourceId: string) =>
+      ipcRenderer.invoke('sources:refresh', sourceId),
+    installItems: (params: InstallSourceItemsParams) =>
+      ipcRenderer.invoke('sources:installItems', params),
+    updateInstall: (params: UpdateSourceInstallParams) =>
+      ipcRenderer.invoke('sources:updateInstall', params),
+    remove: (sourceId: string) =>
+      ipcRenderer.invoke('sources:remove', sourceId),
   },
   prSnapshots: {
     record: (params: {

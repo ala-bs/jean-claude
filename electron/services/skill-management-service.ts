@@ -21,6 +21,7 @@ import {
 } from '../lib/skill-frontmatter';
 
 import { JC_BUILTIN_SKILLS_DIR } from './builtin-skills-service';
+import { getSourceProvenanceByInstalledPathMap } from './source-manifest-store';
 
 // --- Jean-Claude canonical skill storage ---
 //
@@ -102,9 +103,78 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+async function symlinkPointsTo({
+  symlinkPath,
+  targetPath,
+}: {
+  symlinkPath: string;
+  targetPath: string;
+}): Promise<boolean> {
+  if (!(await isSymlink(symlinkPath))) return false;
+  try {
+    const [actualTarget, expectedTarget] = await Promise.all([
+      fs.realpath(symlinkPath),
+      fs.realpath(targetPath),
+    ]);
+    return actualTarget === expectedTarget;
+  } catch {
+    return false;
+  }
+}
+
+async function readSymlinkTargetPath(symlinkPath: string): Promise<string> {
+  const target = await fs.readlink(symlinkPath);
+  return path.isAbsolute(target)
+    ? path.resolve(target)
+    : path.resolve(path.dirname(symlinkPath), target);
+}
+
+function isPathInside({
+  rootPath,
+  targetPath,
+}: {
+  rootPath: string;
+  targetPath: string;
+}): boolean {
+  const relative = path.relative(
+    path.resolve(rootPath),
+    path.resolve(targetPath),
+  );
+  return (
+    relative === '' ||
+    (!relative.startsWith('..') && !path.isAbsolute(relative))
+  );
+}
+
+function isJcBuiltinSkillPath(targetPath: string): boolean {
+  return isPathInside({ rootPath: JC_BUILTIN_SKILLS_DIR, targetPath });
+}
+
 /** Converts a skill name into a safe directory name (lowercase, alphanumeric + dashes). */
 function normalizeSkillDirName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+}
+
+export function normalizeSkillTargetName(name: string): string {
+  return normalizeSkillDirName(name);
+}
+
+export function assertValidSkillTargetName(name: string): string {
+  const dirName = normalizeSkillTargetName(name);
+  if (!/[a-z0-9]/.test(dirName)) {
+    throw new Error(
+      'Invalid skill target name: must include a letter or number',
+    );
+  }
+  return dirName;
+}
+
+export function getUserSkillCanonicalPath(name: string): string {
+  return path.join(JC_USER_SKILLS_DIR, normalizeSkillTargetName(name));
+}
+
+export function getUserSkillCanonicalRoot(): string {
+  return JC_USER_SKILLS_DIR;
 }
 
 function getProjectSkillDirs(config: AgentSkillPathConfig): string[] {
@@ -246,6 +316,7 @@ async function createMigrationPreviewItem(candidate: {
  */
 async function discoverJcManagedUserSkills(): Promise<ManagedSkill[]> {
   const skills: ManagedSkill[] = [];
+  const sourceProvenanceByPath = await getSourceProvenanceByInstalledPathMap();
 
   try {
     const entries = await fs.readdir(JC_USER_SKILLS_DIR, {
@@ -262,8 +333,10 @@ async function discoverJcManagedUserSkills(): Promise<ManagedSkill[]> {
       const enabledBackends: Partial<Record<AgentBackendType, boolean>> = {};
       for (const [backend, config] of Object.entries(SKILL_PATH_CONFIGS)) {
         const symlinkPath = path.join(config.userSkillsDir, entry.name);
-        enabledBackends[backend as AgentBackendType] =
-          await isSymlink(symlinkPath);
+        enabledBackends[backend as AgentBackendType] = await symlinkPointsTo({
+          symlinkPath,
+          targetPath: canonicalPath,
+        });
       }
 
       skills.push({
@@ -271,6 +344,9 @@ async function discoverJcManagedUserSkills(): Promise<ManagedSkill[]> {
         source: 'user',
         skillPath: canonicalPath,
         enabledBackends,
+        sourceProvenance: sourceProvenanceByPath.get(
+          path.resolve(canonicalPath),
+        ),
         editable: true,
       });
     }
@@ -312,8 +388,10 @@ async function discoverBuiltinSkills(): Promise<ManagedSkill[]> {
       const enabledBackends: Partial<Record<AgentBackendType, boolean>> = {};
       for (const [backend, config] of Object.entries(SKILL_PATH_CONFIGS)) {
         const symlinkPath = path.join(config.userSkillsDir, entry.name);
-        enabledBackends[backend as AgentBackendType] =
-          await isSymlink(symlinkPath);
+        enabledBackends[backend as AgentBackendType] = await symlinkPointsTo({
+          symlinkPath,
+          targetPath: skillDir,
+        });
       }
 
       skills.push({
@@ -341,8 +419,10 @@ async function discoverBuiltinSkills(): Promise<ManagedSkill[]> {
  * Ensures all builtin skills are symlinked into every backend's skills
  * directory. Called on app startup after `upsertBuiltinSkills()`.
  *
- * Symlinks that already exist are left in place. Missing symlinks are
- * created. Broken symlinks (pointing to a different target) are replaced.
+ * Symlinks that already point to the builtin are left in place. Missing
+ * symlinks are created. Stale symlinks are replaced only when they point into
+ * Jean-Claude managed builtin skill storage. User, foreign, and real entries
+ * are left untouched.
  */
 export async function syncBuiltinSkillSymlinks(): Promise<void> {
   let entries: Array<{ name: string; isDirectory: () => boolean }>;
@@ -367,19 +447,19 @@ export async function syncBuiltinSkillSymlinks(): Promise<void> {
       try {
         await fs.mkdir(config.userSkillsDir, { recursive: true });
 
-        // Check if a symlink already exists and points to the right target
         if (await isSymlink(symlinkPath)) {
-          const target = await fs.readlink(symlinkPath);
-          if (target === canonicalPath) continue; // already correct
-          // If symlink points to a user skill, don't overwrite it
-          if (target.startsWith(JC_USER_SKILLS_DIR + path.sep)) {
+          const targetPath = await readSymlinkTargetPath(symlinkPath);
+          if (path.resolve(targetPath) === path.resolve(canonicalPath)) {
+            continue;
+          }
+          if (!isJcBuiltinSkillPath(targetPath)) {
             dbg.skill(
-              'Skipping builtin symlink %s: user skill symlink exists',
+              'Skipping builtin symlink %s: non-builtin symlink target exists (%s)',
               symlinkPath,
+              targetPath,
             );
             continue;
           }
-          // Points elsewhere — remove and recreate
           await fs.unlink(symlinkPath);
         } else if (await pathExists(symlinkPath)) {
           // A real directory/file exists at this path — skip to avoid conflict
@@ -431,7 +511,10 @@ async function discoverJcManagedUserSkillsForBackend(
       if (!info) continue;
 
       const symlinkPath = path.join(config.userSkillsDir, entry.name);
-      const enabled = await isSymlink(symlinkPath);
+      const enabled = await symlinkPointsTo({
+        symlinkPath,
+        targetPath: canonicalPath,
+      });
 
       skills.push({
         ...info,
@@ -1148,7 +1231,7 @@ export async function createSkill({
   description: string;
   content: string;
 }): Promise<ManagedSkill> {
-  const dirName = normalizeSkillDirName(name);
+  const dirName = assertValidSkillTargetName(name);
 
   if (scope === 'project') {
     // Project skills live directly in the project directory — no JC canonical store
@@ -1294,7 +1377,10 @@ export async function updateSkill({
   if (isJcManaged) {
     for (const [backend, cfg] of Object.entries(SKILL_PATH_CONFIGS)) {
       const sl = path.join(cfg.userSkillsDir, path.basename(skillPath));
-      enabledBackends[backend as AgentBackendType] = await isSymlink(sl);
+      enabledBackends[backend as AgentBackendType] = await symlinkPointsTo({
+        symlinkPath: sl,
+        targetPath: skillPath,
+      });
     }
   } else {
     enabledBackends[backendType] = true;
@@ -1331,7 +1417,7 @@ export async function deleteSkill({
     for (const cfg of Object.values(SKILL_PATH_CONFIGS)) {
       const symlinkPath = path.join(cfg.userSkillsDir, dirName);
       try {
-        if (await isSymlink(symlinkPath)) {
+        if (await symlinkPointsTo({ symlinkPath, targetPath: skillPath })) {
           await fs.unlink(symlinkPath);
         }
       } catch {
@@ -1360,7 +1446,7 @@ export async function disableSkill({
   const symlinkPath = path.join(config.userSkillsDir, path.basename(skillPath));
 
   try {
-    if (await isSymlink(symlinkPath)) {
+    if (await symlinkPointsTo({ symlinkPath, targetPath: skillPath })) {
       await fs.unlink(symlinkPath);
       dbg.skill(
         'Disabled skill %s (removed symlink %s)',
@@ -1368,7 +1454,7 @@ export async function disableSkill({
         symlinkPath,
       );
     }
-    // If the symlink doesn't exist the skill is already disabled — no-op
+    // If symlink is absent or points elsewhere, skill is already disabled here.
   } catch (error) {
     if (!isEnoent(error)) throw error;
   }
@@ -1396,9 +1482,13 @@ export async function enableSkill({
     dbg.skill('Enabled skill %s (created symlink %s)', skillPath, symlinkPath);
   } catch (error: unknown) {
     if ((error as { code?: string }).code === 'EEXIST') {
-      // Already enabled — no-op
-    } else {
-      throw error;
+      if (!(await symlinkPointsTo({ symlinkPath, targetPath: skillPath }))) {
+        throw new Error(
+          `Skill already exists for ${backendType}: ${symlinkPath}`,
+        );
+      }
+      return;
     }
+    throw error;
   }
 }

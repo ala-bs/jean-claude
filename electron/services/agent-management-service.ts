@@ -15,6 +15,8 @@ import { dbg } from '../lib/debug';
 import { isEnoent } from '../lib/fs';
 import { parseFrontmatter } from '../lib/skill-frontmatter';
 
+import { getSourceProvenanceByInstalledPathMap } from './source-manifest-store';
+
 const JC_USER_AGENTS_DIR = path.join(
   os.homedir(),
   '.config',
@@ -32,6 +34,12 @@ const AGENT_PATH_CONFIGS: Record<AgentBackendType, { userAgentsDir: string }> =
       userAgentsDir: path.join(os.homedir(), '.config', 'opencode', 'agents'),
     },
   };
+
+export function getAgentPathConfig(backendType: AgentBackendType): {
+  userAgentsDir: string;
+} {
+  return AGENT_PATH_CONFIGS[backendType];
+}
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -118,6 +126,32 @@ function normalizeAgentFileName(name: string): string {
   return `${name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}.md`;
 }
 
+function normalizeAgentFileBase(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+}
+
+export function normalizeAgentTargetFileName(name: string): string {
+  return normalizeAgentFileName(name);
+}
+
+export function assertValidAgentTargetName(name: string): string {
+  const fileBase = normalizeAgentFileBase(name);
+  if (!/[a-z0-9]/.test(fileBase)) {
+    throw new Error(
+      'Invalid agent target name: must include a letter or number',
+    );
+  }
+  return `${fileBase}.md`;
+}
+
+export function getUserAgentCanonicalPath(name: string): string {
+  return path.join(JC_USER_AGENTS_DIR, normalizeAgentTargetFileName(name));
+}
+
+export function getUserAgentCanonicalRoot(): string {
+  return JC_USER_AGENTS_DIR;
+}
+
 function createMigrationId({
   backendType,
   legacyPath,
@@ -164,6 +198,8 @@ async function listMarkdownFiles(dir: string): Promise<string[]> {
 
 async function discoverJcManagedAgents(): Promise<ManagedAgent[]> {
   const agents: ManagedAgent[] = [];
+  const sourceProvenanceByPath = await getSourceProvenanceByInstalledPathMap();
+
   for (const agentPath of await listMarkdownFiles(JC_USER_AGENTS_DIR)) {
     const info = await readAgentFile(agentPath);
     if (!info) continue;
@@ -183,6 +219,7 @@ async function discoverJcManagedAgents(): Promise<ManagedAgent[]> {
       agentPath,
       managed: true,
       enabledBackends,
+      sourceProvenance: sourceProvenanceByPath.get(path.resolve(agentPath)),
       editable: true,
     });
   }
@@ -292,7 +329,7 @@ export async function createAgent({
   description: string;
   content: string;
 }): Promise<ManagedAgent> {
-  const fileName = normalizeAgentFileName(name);
+  const fileName = assertValidAgentTargetName(name);
   const canonicalPath = path.join(JC_USER_AGENTS_DIR, fileName);
   if (await pathExists(canonicalPath)) {
     throw new Error(`Agent already exists: ${canonicalPath}`);

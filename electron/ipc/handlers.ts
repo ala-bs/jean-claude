@@ -38,6 +38,11 @@ import type {
   UpdateProjectCommand,
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
+import type {
+  AddGitHubSourceParams,
+  InstallSourceItemsParams,
+  UpdateSourceInstallParams,
+} from '@shared/source-management-types';
 import {
   PRESET_EDITORS,
   type InteractionMode,
@@ -246,6 +251,14 @@ import {
   fetchRegistrySkillContent,
   installFromRegistry,
 } from '../services/skill-registry-service';
+import {
+  addGitHubSource,
+  installSourceItems,
+  listSources,
+  refreshSource,
+  removeSource,
+  updateSourceInstall,
+} from '../services/source-management-service';
 import { StepService } from '../services/step-service';
 import { generateSummary } from '../services/summary-generation-service';
 import { systemCalendarService } from '../services/system-calendar-service';
@@ -401,6 +414,99 @@ function assertValidSkillCreationInput(data: {
   if (data.mode === 'improve' && !data.sourceSkillPath) {
     throw new Error('sourceSkillPath is required for improve mode');
   }
+}
+
+function assertPlainObject(
+  value: unknown,
+  name: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${name} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function assertNonEmptyString(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function assertOptionalBoolean(
+  value: unknown,
+  name: string,
+): boolean | undefined {
+  if (value !== undefined && typeof value !== 'boolean') {
+    throw new Error(`${name} must be a boolean`);
+  }
+  return value;
+}
+
+function assertValidBackendArray(
+  value: unknown,
+  name: string,
+): AgentBackendType[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${name} must be an array`);
+  }
+  for (const backend of value) {
+    if (typeof backend !== 'string' || !VALID_BACKENDS.has(backend)) {
+      throw new Error(`Invalid backend type: ${String(backend)}`);
+    }
+  }
+  return value as AgentBackendType[];
+}
+
+function validateAddGitHubSourceParams(value: unknown): AddGitHubSourceParams {
+  const params = assertPlainObject(value, 'params');
+  return { url: assertNonEmptyString(params.url, 'url') };
+}
+
+function validateInstallSourceItemsParams(
+  value: unknown,
+): InstallSourceItemsParams {
+  const params = assertPlainObject(value, 'params');
+  if (!Array.isArray(params.items)) {
+    throw new Error('items must be an array');
+  }
+  return {
+    items: params.items.map((item, index) => {
+      const itemParams = assertPlainObject(item, `items[${index}]`);
+      return {
+        sourceId: assertNonEmptyString(
+          itemParams.sourceId,
+          `items[${index}].sourceId`,
+        ),
+        sourceItemId: assertNonEmptyString(
+          itemParams.sourceItemId,
+          `items[${index}].sourceItemId`,
+        ),
+        targetName: assertNonEmptyString(
+          itemParams.targetName,
+          `items[${index}].targetName`,
+        ),
+        enabledBackends: assertValidBackendArray(
+          itemParams.enabledBackends,
+          `items[${index}].enabledBackends`,
+        ),
+      };
+    }),
+  };
+}
+
+function validateUpdateSourceInstallParams(
+  value: unknown,
+): UpdateSourceInstallParams {
+  const params = assertPlainObject(value, 'params');
+  return {
+    sourceId: assertNonEmptyString(params.sourceId, 'sourceId'),
+    installId: assertNonEmptyString(params.installId, 'installId'),
+    overwriteLocalChanges: assertOptionalBoolean(
+      params.overwriteLocalChanges,
+      'overwriteLocalChanges',
+    ),
+  };
 }
 
 async function closeEditorWindowsForTaskWorktree(task: {
@@ -4549,6 +4655,47 @@ export function registerIpcHandlers() {
       return results;
     },
   );
+
+  // Source Management
+
+  ipcMain.handle('sources:list', async () => {
+    dbg.ipc('sources:list');
+    return listSources();
+  });
+
+  ipcMain.handle('sources:addGithub', async (_, payload: unknown) => {
+    const params = validateAddGitHubSourceParams(payload);
+    dbg.ipc('sources:addGithub url=%s', params.url);
+    return addGitHubSource(params);
+  });
+
+  ipcMain.handle('sources:refresh', async (_, payload: unknown) => {
+    const sourceId = assertNonEmptyString(payload, 'sourceId');
+    dbg.ipc('sources:refresh sourceId=%s', sourceId);
+    return refreshSource({ sourceId });
+  });
+
+  ipcMain.handle('sources:installItems', async (_, payload: unknown) => {
+    const params = validateInstallSourceItemsParams(payload);
+    dbg.ipc('sources:installItems count=%d', params.items.length);
+    return installSourceItems(params);
+  });
+
+  ipcMain.handle('sources:updateInstall', async (_, payload: unknown) => {
+    const params = validateUpdateSourceInstallParams(payload);
+    dbg.ipc(
+      'sources:updateInstall sourceId=%s installId=%s',
+      params.sourceId,
+      params.installId,
+    );
+    return updateSourceInstall(params);
+  });
+
+  ipcMain.handle('sources:remove', async (_, payload: unknown) => {
+    const sourceId = assertNonEmptyString(payload, 'sourceId');
+    dbg.ipc('sources:remove sourceId=%s', sourceId);
+    return removeSource(sourceId);
+  });
 
   // Feed
   ipcMain.handle('feed:getItems', async () => {

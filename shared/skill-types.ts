@@ -1,6 +1,7 @@
 // Skill-related types shared between main and renderer processes
 
 import type { AgentBackendType } from './agent-backend-types';
+import type { SourceProvenance } from './source-management-types';
 
 /** Skill with management metadata */
 export interface ManagedSkill {
@@ -13,6 +14,7 @@ export interface ManagedSkill {
   skillPath: string;
   /** Per-backend enabled status. Key present = backend is relevant; value = enabled. */
   enabledBackends: Partial<Record<AgentBackendType, boolean>>;
+  sourceProvenance?: SourceProvenance;
   editable: boolean;
 }
 

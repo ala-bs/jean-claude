@@ -27,6 +27,10 @@ export const managedSkillsQueryKeys = {
     [...managedSkillsQueryKeys.all, 'content', skillPath] as const,
 };
 
+const sourcesQueryKeys = {
+  all: ['sources'] as const,
+};
+
 export function useManagedSkills(
   backendType: AgentBackendType,
   projectPath?: string,
@@ -72,6 +76,7 @@ export function useCreateSkill() {
       queryClient.invalidateQueries({
         queryKey: skillsQueryKeys.all,
       });
+      queryClient.invalidateQueries({ queryKey: sourcesQueryKeys.all });
     },
   });
 }
@@ -93,6 +98,7 @@ export function useUpdateSkill() {
       queryClient.invalidateQueries({
         queryKey: skillsQueryKeys.all,
       });
+      queryClient.invalidateQueries({ queryKey: sourcesQueryKeys.all });
     },
   });
 }
@@ -114,6 +120,7 @@ export function useDeleteSkill() {
       queryClient.invalidateQueries({
         queryKey: skillsQueryKeys.all,
       });
+      queryClient.invalidateQueries({ queryKey: sourcesQueryKeys.all });
     },
   });
 }

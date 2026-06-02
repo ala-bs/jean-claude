@@ -1,4 +1,5 @@
 import type { AgentBackendType } from './agent-backend-types';
+import type { SourceProvenance } from './source-management-types';
 
 export interface ManagedAgent {
   name: string;
@@ -6,6 +7,7 @@ export interface ManagedAgent {
   agentPath: string;
   managed: boolean;
   enabledBackends: Partial<Record<AgentBackendType, boolean>>;
+  sourceProvenance?: SourceProvenance;
   editable: boolean;
 }
 

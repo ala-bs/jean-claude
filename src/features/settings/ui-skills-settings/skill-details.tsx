@@ -22,6 +22,12 @@ function getSourceLabel(skill: ManagedSkill): string {
   return skill.source === 'user' ? 'User' : 'Project';
 }
 
+function getSourceProvenanceLabel(skill: ManagedSkill): string | undefined {
+  const provenance = skill.sourceProvenance;
+  if (!provenance) return undefined;
+  return `Source: ${provenance.owner}/${provenance.repo} @ ${provenance.commit.slice(0, 6)}`;
+}
+
 function ModeTab({
   mode,
   activeMode,
@@ -174,6 +180,7 @@ export function SkillDetails({
 
   const lineCount = editedContent.split('\n').length;
   const charCount = editedContent.length;
+  const sourceProvenanceLabel = getSourceProvenanceLabel(skill);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-black/[0.18]">
@@ -267,6 +274,11 @@ export function SkillDetails({
           );
         })}
         <div className="flex-1" />
+        {sourceProvenanceLabel && (
+          <span className="text-ink-4 font-mono text-[10px] tracking-wider">
+            {sourceProvenanceLabel}
+          </span>
+        )}
         <Chip size="xs" color="neutral">
           {getSourceLabel(skill)}
         </Chip>

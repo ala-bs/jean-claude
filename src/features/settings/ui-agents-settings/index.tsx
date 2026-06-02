@@ -514,6 +514,9 @@ function AgentDetails({
 
   const lineCount = editedContent.split('\n').length;
   const charCount = editedContent.length;
+  const sourceProvenanceLabel = agent.sourceProvenance
+    ? `Source: ${agent.sourceProvenance.owner}/${agent.sourceProvenance.repo} @ ${agent.sourceProvenance.commit.slice(0, 6)}`
+    : undefined;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-black/[0.18]">
@@ -582,6 +585,11 @@ function AgentDetails({
           />
         ))}
         <div className="flex-1" />
+        {sourceProvenanceLabel && (
+          <span className="text-ink-4 font-mono text-[10px] tracking-wider">
+            {sourceProvenanceLabel}
+          </span>
+        )}
         <Chip size="xs" color={agent.managed ? 'green' : 'amber'}>
           {agent.managed ? 'User' : 'Legacy'}
         </Chip>

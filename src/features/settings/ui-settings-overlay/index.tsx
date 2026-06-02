@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  Bot,
   Box,
   ChevronDown,
   ChevronRight,
@@ -50,6 +49,7 @@ import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings'
 import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';
 import { SkillsSettings } from '@/features/settings/ui-skills-settings';
+import { SourcesSettings } from '@/features/settings/ui-sources-settings';
 import { TokensTab } from '@/features/settings/ui-tokens-tab';
 import { api } from '@/lib/api';
 
@@ -131,18 +131,16 @@ function getGlobalSections(): GlobalSection[] {
       subtitle: 'Manage global tool and command permissions',
     },
     {
-      id: 'skills',
-      label: 'Skills',
+      id: 'skills-agents',
+      label: 'Skills & Agents',
       icon: Box,
-      title: 'Skills',
-      subtitle: 'Manage and discover agent skills',
-    },
-    {
-      id: 'agents',
-      label: 'Agents',
-      icon: Bot,
-      title: 'Agents',
-      subtitle: 'Manage backend subagents',
+      title: 'Skills & Agents',
+      subtitle: 'Manage skills, sources, and backend subagents',
+      subs: [
+        { id: 'sources', label: 'Sources' },
+        { id: 'skills', label: 'Skills' },
+        { id: 'agents', label: 'Agents' },
+      ],
     },
     {
       id: 'prompt-snippets',
@@ -322,8 +320,7 @@ function getDefaultProjectSelection(): {
 // List/detail settings need fill-height flex layout.
 function isFillHeightGlobal(sel: ActiveSelection): boolean {
   return (
-    sel.sectionId === 'skills' ||
-    sel.sectionId === 'agents' ||
+    sel.sectionId === 'skills-agents' ||
     sel.sectionId === 'prompt-snippets' ||
     sel.sectionId === 'ai-generation'
   );
@@ -418,6 +415,12 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <UsageDisplaySettings />;
       case 'general:maintenance':
         return <MaintenanceSettings />;
+      case 'skills-agents:skills':
+        return <SkillsSettings />;
+      case 'skills-agents:sources':
+        return <SourcesSettings />;
+      case 'skills-agents:agents':
+        return <AgentsSettings />;
     }
   }
 
@@ -429,10 +432,6 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
       return <AiGenerationSettings />;
     case 'permissions':
       return <GlobalPermissionsSettings />;
-    case 'skills':
-      return <SkillsSettings />;
-    case 'agents':
-      return <AgentsSettings />;
     case 'prompt-snippets':
       return <PromptSnippetsSettings />;
     case 'mcp-servers':

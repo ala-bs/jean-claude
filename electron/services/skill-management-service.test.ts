@@ -4,12 +4,17 @@ import * as path from 'path';
 
 import { describe, expect, it } from 'vitest';
 
+import { JC_BUILTIN_SKILLS_DIR } from './builtin-skills-service';
 import {
   createSkill,
+  deleteSkill,
+  disableSkill,
+  enableSkill,
   executeLegacySkillMigration,
   getAllManagedSkills,
   getAllManagedSkillsUnified,
   previewLegacySkillMigration,
+  syncBuiltinSkillSymlinks,
 } from './skill-management-service';
 
 async function writeSkill({
@@ -91,6 +96,170 @@ describe('skill management project skill discovery', () => {
       'claude-code': true,
       opencode: true,
     });
+  });
+
+  it('rejects skill creation when name normalizes without letters or numbers', async () => {
+    await expect(
+      createSkill({
+        enabledBackends: [],
+        scope: 'user',
+        name: '!!!',
+        description: 'Invalid skill',
+        content: 'Use invalid skill.',
+      }),
+    ).rejects.toThrow('Invalid skill target name');
+
+    await expect(
+      fs.lstat(
+        path.join(os.homedir(), '.config/jean-claude/skills/user/SKILL.md'),
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('skill management safety', () => {
+  it('does not treat a foreign backend symlink as enabled, overwrite it, or remove it', async () => {
+    const canonicalPath = path.join(
+      os.homedir(),
+      '.config/jean-claude/skills/user/safe-skill',
+    );
+    const foreignTarget = path.join(
+      os.homedir(),
+      '.config/jean-claude/skills/user/foreign-skill',
+    );
+    const backendPath = path.join(
+      os.homedir(),
+      '.config/opencode/skills/safe-skill',
+    );
+    const enabledBackendPath = path.join(
+      os.homedir(),
+      '.claude/skills/safe-skill',
+    );
+    await writeSkill({
+      projectPath: path.dirname(canonicalPath),
+      relativeDir: '',
+      dirName: path.basename(canonicalPath),
+      name: 'safe-skill',
+    });
+    await writeSkill({
+      projectPath: path.dirname(foreignTarget),
+      relativeDir: '',
+      dirName: path.basename(foreignTarget),
+      name: 'foreign-skill',
+    });
+    await fs.mkdir(path.dirname(backendPath), { recursive: true });
+    await fs.symlink(foreignTarget, backendPath);
+    await fs.mkdir(path.dirname(enabledBackendPath), { recursive: true });
+    await fs.symlink(canonicalPath, enabledBackendPath);
+
+    const backendSkills = await getAllManagedSkills({
+      backendType: 'opencode',
+    });
+    const backendSkill = backendSkills.find(
+      (entry) => entry.skillPath === canonicalPath,
+    );
+
+    expect(backendSkill?.enabledBackends).toEqual({
+      opencode: false,
+    });
+
+    const skills = await getAllManagedSkillsUnified({});
+    const skill = skills.find((entry) => entry.skillPath === canonicalPath);
+
+    expect(skill?.enabledBackends).toEqual({
+      'claude-code': true,
+      opencode: false,
+    });
+
+    await expect(
+      enableSkill({ skillPath: canonicalPath, backendType: 'opencode' }),
+    ).rejects.toThrow('Skill already exists for opencode');
+    await disableSkill({ skillPath: canonicalPath, backendType: 'opencode' });
+    await deleteSkill({ skillPath: canonicalPath, backendType: 'claude-code' });
+
+    await expect(fs.realpath(backendPath)).resolves.toBe(foreignTarget);
+  });
+
+  it('does not overwrite a foreign symlink with the same name as a builtin skill', async () => {
+    const builtinName = 'foreign-builtin-safety';
+    const builtinPath = await writeSkill({
+      projectPath: JC_BUILTIN_SKILLS_DIR,
+      relativeDir: '',
+      dirName: builtinName,
+      name: builtinName,
+    });
+    const foreignTarget = await writeSkill({
+      projectPath: os.homedir(),
+      relativeDir: '.config/foreign-skills',
+      dirName: builtinName,
+      name: 'foreign-builtin-safety-target',
+    });
+    const backendPath = path.join(
+      os.homedir(),
+      '.config/opencode/skills',
+      builtinName,
+    );
+    const claudeBackendPath = path.join(
+      os.homedir(),
+      '.claude/skills',
+      builtinName,
+    );
+    await fs.mkdir(path.dirname(backendPath), { recursive: true });
+    await fs.rm(backendPath, { force: true, recursive: true });
+    await fs.rm(claudeBackendPath, { force: true, recursive: true });
+    await fs.symlink(foreignTarget, backendPath);
+
+    try {
+      await syncBuiltinSkillSymlinks();
+
+      await expect(fs.realpath(backendPath)).resolves.toBe(foreignTarget);
+    } finally {
+      await fs.rm(builtinPath, { force: true, recursive: true });
+      await fs.rm(foreignTarget, { force: true, recursive: true });
+      await fs.rm(backendPath, { force: true });
+      await fs.rm(claudeBackendPath, { force: true });
+    }
+  });
+
+  it('does not overwrite a user skill symlink with the same name as a builtin skill', async () => {
+    const skillName = 'shared-user-builtin-safety';
+    const builtinPath = await writeSkill({
+      projectPath: JC_BUILTIN_SKILLS_DIR,
+      relativeDir: '',
+      dirName: skillName,
+      name: skillName,
+    });
+    const userSkillPath = await writeSkill({
+      projectPath: path.join(os.homedir(), '.config/jean-claude/skills/user'),
+      relativeDir: '',
+      dirName: skillName,
+      name: skillName,
+    });
+    const backendPath = path.join(
+      os.homedir(),
+      '.config/opencode/skills',
+      skillName,
+    );
+    const claudeBackendPath = path.join(
+      os.homedir(),
+      '.claude/skills',
+      skillName,
+    );
+    await fs.mkdir(path.dirname(backendPath), { recursive: true });
+    await fs.rm(backendPath, { force: true, recursive: true });
+    await fs.rm(claudeBackendPath, { force: true, recursive: true });
+    await fs.symlink(userSkillPath, backendPath);
+
+    try {
+      await syncBuiltinSkillSymlinks();
+
+      await expect(fs.realpath(backendPath)).resolves.toBe(userSkillPath);
+    } finally {
+      await fs.rm(builtinPath, { force: true, recursive: true });
+      await fs.rm(userSkillPath, { force: true, recursive: true });
+      await fs.rm(backendPath, { force: true });
+      await fs.rm(claudeBackendPath, { force: true });
+    }
   });
 });
 

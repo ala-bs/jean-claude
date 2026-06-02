@@ -61,6 +61,21 @@ describe('agent management safety', () => {
 
     await expect(fs.realpath(opencodeSymlink)).resolves.toBe(foreignTarget);
   });
+
+  it('rejects agent creation when name normalizes without letters or numbers', async () => {
+    await expect(
+      createAgent({
+        enabledBackends: [],
+        name: '!!!',
+        description: 'Invalid agent',
+        content: 'Use invalid agent.',
+      }),
+    ).rejects.toThrow('Invalid agent target name');
+
+    await expect(
+      fs.lstat(path.join(os.homedir(), '.config/jean-claude/agents/user/.md')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
 describe('legacy agent migration', () => {

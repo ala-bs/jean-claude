@@ -79,6 +79,12 @@ import type {
   SkillScope,
 } from '@shared/skill-types';
 import type {
+  AddGitHubSourceParams,
+  InstallSourceItemsParams,
+  SourceView,
+  UpdateSourceInstallParams,
+} from '@shared/source-management-types';
+import type {
   Project,
   NewProject,
   UpdateProject,
@@ -1229,6 +1235,14 @@ export interface Api {
       sourceSkillPath?: string;
     }) => Promise<ManagedSkill[]>;
   };
+  sourceManagement: {
+    list: () => Promise<SourceView[]>;
+    addGithub: (params: AddGitHubSourceParams) => Promise<SourceView>;
+    refresh: (sourceId: string) => Promise<SourceView>;
+    installItems: (params: InstallSourceItemsParams) => Promise<SourceView[]>;
+    updateInstall: (params: UpdateSourceInstallParams) => Promise<SourceView[]>;
+    remove: (sourceId: string) => Promise<void>;
+  };
   prSnapshots: {
     record: (params: {
       projectId: string;
@@ -1957,6 +1971,24 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         publishFromWorkspace: async () => [],
+      },
+      sourceManagement: {
+        list: async () => [],
+        addGithub: async () => {
+          throw new Error('API not available');
+        },
+        refresh: async () => {
+          throw new Error('API not available');
+        },
+        installItems: async () => {
+          throw new Error('API not available');
+        },
+        updateInstall: async () => {
+          throw new Error('API not available');
+        },
+        remove: async () => {
+          throw new Error('API not available');
+        },
       },
       prSnapshots: {
         record: async () => {},

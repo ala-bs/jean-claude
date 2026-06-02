@@ -13,6 +13,10 @@ export const managedAgentsQueryKeys = {
     [...managedAgentsQueryKeys.all, 'content', agentPath] as const,
 };
 
+const sourcesQueryKeys = {
+  all: ['sources'] as const,
+};
+
 export function useManagedAgents() {
   return useQuery({
     queryKey: managedAgentsQueryKeys.all,
@@ -51,6 +55,7 @@ export function useUpdateAgent() {
       api.agentManagement.update(params),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managedAgentsQueryKeys.all });
+      queryClient.invalidateQueries({ queryKey: sourcesQueryKeys.all });
     },
   });
 }
@@ -61,6 +66,7 @@ export function useDeleteAgent() {
     mutationFn: (agentPath: string) => api.agentManagement.delete(agentPath),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managedAgentsQueryKeys.all });
+      queryClient.invalidateQueries({ queryKey: sourcesQueryKeys.all });
     },
   });
 }
