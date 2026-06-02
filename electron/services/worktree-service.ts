@@ -415,41 +415,41 @@ export async function getWorktreeDiff(
   }
 
   try {
-    // Get the appropriate base commit for diffing
-    const baseCommit = await getDiffBaseCommit(
-      worktreePath,
-      startCommitHash,
-      sourceBranch ?? null,
-    );
-
-    // Get files that differ between working tree and source branch.
-    // Files whose content matches the source branch are merge artifacts
-    // (from merging source into this branch) and should be excluded.
-    const taskChangedFiles = await getTaskChangedFiles(
-      worktreePath,
-      sourceBranch ?? null,
-    );
+    const [baseCommit, taskChangedFiles] = await Promise.all([
+      getDiffBaseCommit(worktreePath, startCommitHash, sourceBranch ?? null),
+      // Files whose content matches the source branch are merge artifacts
+      // (from merging source into this branch) and should be excluded.
+      getTaskChangedFiles(worktreePath, sourceBranch ?? null),
+    ]);
 
     // We need to combine two sources to get all changes:
     // 1. git diff --name-status <commit> - changes from baseCommit to working tree
     // 2. git status --porcelain - shows untracked files that git diff doesn't see
     // Then filter to only include files with actual task changes (not merge artifacts)
 
-    const { stdout: diffOutput } = await execAsync(
-      `git diff --name-status ${baseCommit}`,
-      {
+    const [diffResult, numstatResult, statusResult] = await Promise.all([
+      execAsync(`git diff --name-status ${baseCommit}`, {
         cwd: worktreePath,
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large diffs
-      },
-    );
+      }),
+      execAsync(`git diff --numstat ${baseCommit}`, {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+      }),
+      // Use --untracked-files=all to list individual files in new directories
+      // (default mode shows new directories as "folder/" which can't be diffed)
+      execAsync('git status --porcelain --untracked-files=all', {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+      }),
+    ]);
+    const diffOutput = diffResult.stdout;
     dbg.worktree('git diff output length: %d', diffOutput.length);
 
-    // Get per-file line counts
-    const { stdout: numstatOutput } = await execAsync(
-      `git diff --numstat ${baseCommit}`,
-      { cwd: worktreePath, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 },
-    );
+    const numstatOutput = numstatResult.stdout;
 
     const numstatMap = new Map<
       string,
@@ -465,17 +465,8 @@ export async function getWorktreeDiff(
       });
     }
 
-    // Also get untracked files which git diff doesn't show
-    // Use --untracked-files=all to list individual files in new directories
-    // (default mode shows new directories as "folder/" which can't be diffed)
-    const { stdout: statusOutput } = await execAsync(
-      'git status --porcelain --untracked-files=all',
-      {
-        cwd: worktreePath,
-        encoding: 'utf-8',
-        maxBuffer: 10 * 1024 * 1024,
-      },
-    );
+    // Also get untracked files which git diff doesn't show.
+    const statusOutput = statusResult.stdout;
     dbg.worktree('git status output length: %d', statusOutput.length);
 
     const filesMap = new Map<string, WorktreeDiffFile>();
