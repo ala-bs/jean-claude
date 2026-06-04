@@ -379,6 +379,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     null,
   );
   const [addStepAtEnd, setAddStepAtEnd] = useState(false);
+  const [startingStepIds, setStartingStepIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [showWorkItemsEditor, setShowWorkItemsEditor] = useState(false);
   const [workItemsFilter, setWorkItemsFilter] = useState('');
   // Buffered selection state for work items modal (applied on submit)
@@ -857,6 +860,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         setAddStepAfterStepId(null);
         setAddStepAtEnd(false);
         setActiveStepId(step.id);
+        if (data.start) {
+          setStartingStepIds((prev) => new Set(prev).add(step.id));
+        }
       } catch (error) {
         addToast({
           type: 'error',
@@ -876,6 +882,29 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       addStepAtEnd,
     ],
   );
+
+  const handleStartStep = useCallback(async () => {
+    if (!activeStepId) return;
+    setStartingStepIds((prev) => new Set(prev).add(activeStepId));
+    const didStart = await start();
+    if (!didStart) {
+      setStartingStepIds((prev) => {
+        const next = new Set(prev);
+        next.delete(activeStepId);
+        return next;
+      });
+    }
+  }, [activeStepId, start]);
+
+  useEffect(() => {
+    if (!activeStepId || activeStep?.status === 'ready') return;
+    setStartingStepIds((prev) => {
+      if (!prev.has(activeStepId)) return prev;
+      const next = new Set(prev);
+      next.delete(activeStepId);
+      return next;
+    });
+  }, [activeStepId, activeStep?.status]);
 
   const handleMergeStarted = useCallback(() => {
     // Close the diff view when merge is dispatched (worktree will be deleted)
@@ -1138,10 +1167,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
   const isRunning =
     agentState.status === 'running' || activeStep?.status === 'running';
+  const isStepStarting =
+    isStarting || (!!activeStepId && startingStepIds.has(activeStepId));
   const isWaiting =
     agentState.status === 'waiting' || task.status === 'waiting';
   const taskRootPath = task.worktreePath ?? project.path;
   const hasMessages = agentState.messages.length > 0;
+  const activeStepError = agentState.error ?? 'No error details available.';
   const getCompletionContextBeforePrompt = () =>
     getLastAssistantMessage(agentState.messages);
   const canSendMessage = !isRunning && hasMessages && !!activeStep?.sessionId;
@@ -1605,13 +1637,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   ) : activeStep?.status === 'ready' ? (
                     <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
                       <Button
-                        onClick={() => void start()}
-                        disabled={isStarting}
-                        loading={isStarting}
+                        onClick={handleStartStep}
+                        disabled={isStepStarting}
+                        loading={isStepStarting}
                         variant="primary"
                         icon={<Play />}
                       >
-                        {isStarting ? 'Starting...' : 'Start Step'}
+                        {isStepStarting ? 'Starting...' : 'Start Step'}
                       </Button>
                     </div>
                   ) : activeStep?.status === 'pending' ? (
@@ -1619,6 +1651,24 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                       <p className="text-ink-3 text-sm">
                         Waiting for dependencies to complete
                       </p>
+                    </div>
+                  ) : activeStep?.status === 'errored' ? (
+                    <div className="border-status-fail/30 bg-status-fail-soft mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border p-8 text-center">
+                      <p className="text-status-fail text-sm font-medium">
+                        Step failed to start
+                      </p>
+                      <p className="text-ink-2 max-w-md text-xs">
+                        {activeStepError}
+                      </p>
+                      <Button
+                        onClick={handleStartStep}
+                        disabled={isStepStarting}
+                        loading={isStepStarting}
+                        variant="secondary"
+                        icon={<RefreshCw />}
+                      >
+                        {isStepStarting ? 'Retrying...' : 'Retry Start'}
+                      </Button>
                     </div>
                   ) : (
                     <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
