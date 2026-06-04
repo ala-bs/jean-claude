@@ -91,6 +91,11 @@ function BacklogTodoRow({
       onDrop={onDrop}
       onDragEnd={onDragEnd}
       onClick={onSelect}
+      onDoubleClick={(e) => {
+        if (isEditing || isCreating) return;
+        if (e.target instanceof Element && e.target.closest('button')) return;
+        onStartEdit();
+      }}
       className={clsx(
         'group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
         dragOverId === todo.id
