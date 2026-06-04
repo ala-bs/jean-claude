@@ -71,6 +71,8 @@ import {
   useAiGenerationSetting,
   useBackendModelPresetsSetting,
   useBackendsSetting,
+  useProjectPromptPrefaceSetting,
+  useUpdateProjectPromptPrefaceSetting,
 } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
@@ -91,10 +93,27 @@ import { FavoriteBranchesInput } from './favorite-branches-input';
 import { ProtectedBranchesInput } from './protected-branches-input';
 import { getProjectSettingsSaveData } from './utils-project-settings-save-data';
 
+const PROMPT_PREFACE_MODE_OPTIONS = [
+  { value: 'inherit', label: 'Use global' },
+  { value: 'extend', label: 'Extend global' },
+  { value: 'override', label: 'Override global' },
+];
+
+const PROMPT_PREFACE_PLACEMENT_OPTIONS = [
+  { value: 'before', label: 'Before user prompt' },
+  { value: 'after', label: 'After user prompt' },
+];
+
+const PROMPT_PREFACE_FREQUENCY_OPTIONS = [
+  { value: 'initial', label: 'Initial prompt only' },
+  { value: 'each', label: 'Each prompt' },
+];
+
 export type ProjectSettingsMenuItem =
   | 'details'
   | 'permissions'
   | 'worktree'
+  | 'prompt-preface'
   | 'autocomplete'
   | 'integrations'
   | 'pipelines'
@@ -106,6 +125,109 @@ export type ProjectSettingsMenuItem =
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled project settings menu item: ${String(value)}`);
+}
+
+function ProjectPromptPrefaceSettings({
+  projectPath,
+}: {
+  projectPath: string;
+}) {
+  const { data: setting, isLoading } =
+    useProjectPromptPrefaceSetting(projectPath);
+  const updateSetting = useUpdateProjectPromptPrefaceSetting(projectPath);
+  const [draftText, setDraftText] = useState('');
+
+  useEffect(() => {
+    if (setting) {
+      setDraftText(setting.text);
+    }
+  }, [setting]);
+
+  if (isLoading || !setting) {
+    return <p className="text-ink-3">Loading...</p>;
+  }
+
+  const controlsDisabled = setting.mode === 'inherit';
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-ink-1 text-lg font-semibold">Prompt Preface</h2>
+        <p className="text-ink-3 mt-1 text-sm">
+          Configure project instructions to inherit, extend, or replace the
+          global prompt preface.
+        </p>
+      </div>
+
+      <div>
+        <label className="text-ink-1 mb-1 block text-sm font-medium">
+          Project behavior
+        </label>
+        <Select
+          value={setting.mode}
+          options={PROMPT_PREFACE_MODE_OPTIONS}
+          onChange={(mode) =>
+            updateSetting.mutate({
+              ...setting,
+              text: draftText,
+              mode: mode as typeof setting.mode,
+            })
+          }
+          className="w-full justify-between sm:w-64"
+        />
+      </div>
+
+      <Textarea
+        size="md"
+        value={draftText}
+        disabled={controlsDisabled}
+        onChange={(e) => setDraftText(e.target.value)}
+        onBlur={() => updateSetting.mutate({ ...setting, text: draftText })}
+        placeholder="Example: In this project, prefer Zustand selectors and avoid unstable selector outputs."
+        rows={8}
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="text-ink-1 mb-1 block text-sm font-medium">
+            Placement
+          </label>
+          <Select
+            value={setting.placement}
+            options={PROMPT_PREFACE_PLACEMENT_OPTIONS}
+            disabled={controlsDisabled}
+            onChange={(placement) =>
+              updateSetting.mutate({
+                ...setting,
+                text: draftText,
+                placement: placement as typeof setting.placement,
+              })
+            }
+            className="w-full justify-between"
+          />
+        </div>
+
+        <div>
+          <label className="text-ink-1 mb-1 block text-sm font-medium">
+            Frequency
+          </label>
+          <Select
+            value={setting.frequency}
+            options={PROMPT_PREFACE_FREQUENCY_OPTIONS}
+            disabled={controlsDisabled}
+            onChange={(frequency) =>
+              updateSetting.mutate({
+                ...setting,
+                text: draftText,
+                frequency: frequency as typeof setting.frequency,
+              })
+            }
+            className="w-full justify-between"
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function ProjectSettings({
@@ -993,6 +1115,9 @@ export function ProjectSettings({
       break;
     case 'worktree':
       content = <ProjectWorktreeSettings projectPath={project.path} />;
+      break;
+    case 'prompt-preface':
+      content = <ProjectPromptPrefaceSettings projectPath={project.path} />;
       break;
     case 'autocomplete':
       content = (

@@ -63,6 +63,7 @@ import {
   resolveRules,
   normalizeToolRequest,
 } from './permission-settings-service';
+import { applyConfiguredPromptPreface } from './prompt-preface-service';
 import { textPrompt, getPromptText } from './prompt-utils';
 import { StepService } from './step-service';
 import { assertValidWorkspacePath } from './system-project-service';
@@ -512,7 +513,11 @@ class AgentService {
     stepId: string,
     parts: PromptPart[],
     session: ActiveSession,
-    options?: { generateNameOnInit?: boolean; initialPrompt?: string },
+    options?: {
+      generateNameOnInit?: boolean;
+      initialPrompt?: string;
+      isInitialPrompt?: boolean;
+    },
   ): Promise<void> {
     const { taskId } = session;
     const task = await TaskRepository.findById(taskId);
@@ -593,6 +598,12 @@ class AgentService {
 
     // Start the backend
     dbg.agentSession('Starting backend for step %s', stepId);
+    const effectiveParts = await applyConfiguredPromptPreface({
+      parts,
+      projectPath: project.path,
+      isInitialPrompt: options?.isInitialPrompt ?? false,
+    });
+
     const agentSession = await session.backend.start(
       {
         type: session.backendType,
@@ -617,7 +628,7 @@ class AgentService {
         permissionRules: rules,
         mcpServers,
       },
-      parts,
+      effectiveParts,
     );
 
     session.backendSessionId = agentSession.sessionId;
@@ -1050,6 +1061,7 @@ class AgentService {
         await this.runBackend(stepId, parts, session, {
           generateNameOnInit: isFirstStep,
           initialPrompt: step.promptTemplate,
+          isInitialPrompt: true,
         });
       } catch (error) {
         const errorMessage =

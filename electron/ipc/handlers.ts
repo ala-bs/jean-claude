@@ -216,6 +216,8 @@ import {
   editProjectPermissionRule,
   readSettings,
   writeSettings,
+  readProjectPromptPreface,
+  writeProjectPromptPreface,
 } from '../services/permission-settings-service';
 import { pipelineTrackingService } from '../services/pipeline-tracking-service';
 import { generatePrDescriptionForTask } from '../services/pr-description-generation-service';
@@ -3233,6 +3235,17 @@ export function registerIpcHandlers() {
       }
       return SettingsRepository.set(key, value);
     },
+  );
+  ipcMain.handle('projectPromptPreface:get', async (_, projectPath: string) =>
+    readProjectPromptPreface(projectPath),
+  );
+  ipcMain.handle(
+    'projectPromptPreface:set',
+    async (
+      _,
+      projectPath: string,
+      value: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
+    ) => writeProjectPromptPreface(projectPath, value),
   );
 
   // Shell

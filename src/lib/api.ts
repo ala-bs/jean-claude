@@ -839,6 +839,17 @@ export interface Api {
       value: AppSettings[K],
     ) => Promise<void>;
   };
+  projectPromptPreface: {
+    get: (
+      projectPath: string,
+    ) => Promise<
+      import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting
+    >;
+    set: (
+      projectPath: string,
+      value: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
+    ) => Promise<void>;
+  };
   globalPermissions: {
     get: () => Promise<import('@shared/permission-types').PermissionScope>;
     set: (
@@ -1673,6 +1684,14 @@ export const api: Api = hasWindowApi
         getPathForFile: () => null,
       },
       settings: {
+        get: async () => {
+          throw new Error('API not available');
+        },
+        set: async () => {
+          throw new Error('API not available');
+        },
+      },
+      projectPromptPreface: {
         get: async () => {
           throw new Error('API not available');
         },

@@ -1,3 +1,5 @@
+import type { ProjectPromptPrefaceSetting } from './prompt-preface-types';
+
 /**
  * Backend-agnostic permission system types.
  *
@@ -71,6 +73,7 @@ export interface JeanClaudeSettings {
   version: 1;
   permissions: PermissionSettings;
   worktree?: WorktreeConfig;
+  promptPreface?: ProjectPromptPrefaceSetting;
 }
 
 /**

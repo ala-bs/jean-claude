@@ -482,6 +482,14 @@ contextBridge.exposeInMainWorld('api', {
     set: (key: string, value: unknown) =>
       ipcRenderer.invoke('settings:set', key, value),
   },
+  projectPromptPreface: {
+    get: (projectPath: string) =>
+      ipcRenderer.invoke('projectPromptPreface:get', projectPath),
+    set: (
+      projectPath: string,
+      value: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
+    ) => ipcRenderer.invoke('projectPromptPreface:set', projectPath, value),
+  },
   globalPermissions: {
     get: () => ipcRenderer.invoke('globalPermissions:get'),
     set: (permissions: import('@shared/permission-types').PermissionScope) =>

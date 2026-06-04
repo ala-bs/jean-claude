@@ -43,6 +43,7 @@ import {
   CalendarSettings,
   UsageDisplaySettings,
   MaintenanceSettings,
+  PromptPrefaceSettings,
 } from '@/features/settings/ui-general-settings';
 import { GlobalPermissionsSettings } from '@/features/settings/ui-global-permissions-settings';
 import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings';
@@ -97,6 +98,7 @@ function getGlobalSections(): GlobalSection[] {
       ? [{ id: 'calendar', label: 'Calendar' }]
       : []),
     { id: 'usage', label: 'Usage Display' },
+    { id: 'prompt-preface', label: 'Prompt Preface' },
     { id: 'maintenance', label: 'Maintenance' },
   ];
 
@@ -196,6 +198,7 @@ const PROJECT_SECTIONS: ProjectSection[] = [
     subs: [
       { id: 'details', label: 'Details' },
       { id: 'worktree', label: 'Worktree' },
+      { id: 'prompt-preface', label: 'Prompt Preface' },
       { id: 'autocomplete', label: 'Autocomplete' },
     ],
   },
@@ -394,6 +397,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Meeting reminders from your macOS Calendar.';
       case 'usage':
         return 'Rate-limit pills shown in the title bar.';
+      case 'prompt-preface':
+        return 'Reusable instructions injected into agent prompts.';
       case 'maintenance':
         return 'Cleanup, gitignore, and housekeeping tools.';
     }
@@ -413,6 +418,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <CalendarSettings />;
       case 'general:usage':
         return <UsageDisplaySettings />;
+      case 'general:prompt-preface':
+        return <PromptPrefaceSettings />;
       case 'general:maintenance':
         return <MaintenanceSettings />;
       case 'skills-agents:skills':

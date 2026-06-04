@@ -13,6 +13,8 @@ import type {
   EditorAutomationSetting,
   EditorSetting,
   PromptSnippetsSetting,
+  ProjectPromptPrefaceSetting,
+  PromptPrefaceSetting,
   SummaryModelsSetting,
   TaskEventNotificationsSetting,
   ThinkingSettingsSetting,
@@ -184,6 +186,44 @@ export function useUpdateThinkingSettingsSetting() {
 
 export function useBackendModelPresetsSetting() {
   return useSetting('backendModelPresets');
+}
+
+export function usePromptPrefaceSetting() {
+  return useSetting('promptPreface');
+}
+
+export function useUpdatePromptPrefaceSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: PromptPrefaceSetting) =>
+      api.settings.set('promptPreface', value),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'promptPreface'],
+      });
+    },
+  });
+}
+
+export function useProjectPromptPrefaceSetting(projectPath: string) {
+  return useQuery({
+    queryKey: ['projectPromptPreface', projectPath],
+    queryFn: () => api.projectPromptPreface.get(projectPath),
+    enabled: !!projectPath,
+  });
+}
+
+export function useUpdateProjectPromptPrefaceSetting(projectPath: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: ProjectPromptPrefaceSetting) =>
+      api.projectPromptPreface.set(projectPath, value),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['projectPromptPreface', projectPath],
+      });
+    },
+  });
 }
 
 export function useUpdateBackendModelPresetsSetting() {

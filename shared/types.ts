@@ -10,6 +10,10 @@ import {
   type OpenAiLogoBaseImageId,
 } from './openai-logo-bases';
 import type { PermissionScope } from './permission-types';
+import {
+  DEFAULT_PROMPT_PREFACE_SETTING,
+  isPromptPrefaceSetting,
+} from './prompt-preface-types';
 import type { UsageProviderType } from './usage-types';
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
@@ -1055,7 +1059,16 @@ export const SETTINGS_DEFINITIONS = {
     defaultValue: [] as PromptSnippetsSetting,
     validate: isPromptSnippetsSetting,
   },
+  promptPreface: {
+    defaultValue: DEFAULT_PROMPT_PREFACE_SETTING,
+    validate: isPromptPrefaceSetting,
+  },
 } satisfies Record<string, SettingDefinition<unknown>>;
+
+export type {
+  PromptPrefaceSetting,
+  ProjectPromptPrefaceSetting,
+} from './prompt-preface-types';
 
 export type AppSettings = {
   [K in keyof typeof SETTINGS_DEFINITIONS]: (typeof SETTINGS_DEFINITIONS)[K]['defaultValue'];

@@ -5,6 +5,10 @@ import picomatch from 'picomatch';
 import writeFileAtomic from 'write-file-atomic';
 
 import {
+  DEFAULT_PROJECT_PROMPT_PREFACE_SETTING,
+  isProjectPromptPrefaceSetting,
+} from '@shared/prompt-preface-types';
+import {
   parseCompoundCommand,
   stripRedirections,
   validateSubpathArgs,
@@ -52,6 +56,9 @@ function normalizeSettingsShape(
         : {}),
     },
     ...(parsed.worktree ? { worktree: parsed.worktree } : {}),
+    ...(isProjectPromptPrefaceSetting(parsed.promptPreface)
+      ? { promptPreface: parsed.promptPreface }
+      : {}),
   };
 }
 
@@ -225,6 +232,28 @@ export async function writeSettings(
   await fs.mkdir(dir, { recursive: true });
   await writeFileAtomic(filePath, JSON.stringify(settings, null, 2) + '\n', {
     encoding: 'utf-8',
+  });
+}
+
+export async function readProjectPromptPreface(
+  rootDir: string,
+): Promise<import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting> {
+  const settings = await readSettings(rootDir);
+  return settings.promptPreface ?? DEFAULT_PROJECT_PROMPT_PREFACE_SETTING;
+}
+
+export async function writeProjectPromptPreface(
+  rootDir: string,
+  promptPreface: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
+): Promise<void> {
+  if (!isProjectPromptPrefaceSetting(promptPreface)) {
+    throw new Error('Invalid project prompt preface setting');
+  }
+
+  await withProjectWriteLock(rootDir, async () => {
+    const settings = await readSettings(rootDir);
+    settings.promptPreface = promptPreface;
+    await writeSettings(rootDir, settings);
   });
 }
 
