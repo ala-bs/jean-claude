@@ -802,7 +802,7 @@ function PrReviewCarouselCard({
         style={{
           borderLeft: `2px solid ${accent}`,
           boxShadow: isCenter
-            ? '0 12px 30px -14px oklch(0 0 0 / 0.75), inset 0 0 0 1px oklch(1 0 0 / 0.03)'
+            ? 'var(--theme-shadow-ambient)'
             : undefined,
         }}
       >

@@ -297,7 +297,7 @@ export function WeekView({
                       className="pointer-events-none absolute right-0 -left-1 z-10 flex items-center gap-1"
                       style={{ top: toY(new Date(now).toISOString()) }}
                     >
-                      <span className="bg-status-run h-2 w-2 rounded-full shadow-[0_0_6px_oklch(0.78_0.16_75)]" />
+                      <span className="bg-status-run shadow-[0_0_6px_color-mix(in_srgb,var(--color-status-run)_70%,transparent)] h-2 w-2 rounded-full" />
                       <span className="bg-status-run h-[1.5px] flex-1" />
                     </div>
                   )}

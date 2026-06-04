@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { Copy, Terminal, Trash2, X } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 
@@ -9,8 +10,6 @@ import {
   type SnippetVariableContext,
 } from '@/lib/resolve-snippet-template';
 import type { PromptSnippet } from '@shared/types';
-
-const ACCENT = 'oklch(0.78 0.18 295)';
 
 const VARIABLE_GROUPS = [
   {
@@ -87,20 +86,10 @@ const PREVIEW_CONTEXT: SnippetVariableContext = {
 function FieldLabel({ label, hint }: { label: string; hint?: string }) {
   return (
     <div className="mb-1.5 flex items-baseline gap-2">
-      <span
-        className="text-[11px] font-medium tracking-wide uppercase"
-        style={{ color: 'oklch(0.78 0.01 280)' }}
-      >
+      <span className="text-ink-1 text-[11px] font-medium tracking-wide uppercase">
         {label}
       </span>
-      {hint && (
-        <span
-          className="text-[10.5px]"
-          style={{ color: 'oklch(0.48 0.01 280)' }}
-        >
-          {hint}
-        </span>
-      )}
+      {hint && <span className="text-ink-3 text-[10.5px]">{hint}</span>}
     </div>
   );
 }
@@ -121,25 +110,18 @@ function ContextToggle({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex items-center gap-[7px] rounded-[5px] py-[5px] pr-2.5 pl-2 text-[11.5px] font-medium disabled:opacity-50"
-      style={{
-        background: on
-          ? `color-mix(in oklch, ${ACCENT} 16%, transparent)`
-          : 'oklch(1 0 0 / 0.03)',
-        border: on
-          ? `1px solid color-mix(in oklch, ${ACCENT} 35%, transparent)`
-          : '1px solid oklch(1 0 0 / 0.07)',
-        color: on ? ACCENT : 'oklch(0.65 0.01 280)',
-      }}
+      className={clsx(
+        'inline-flex items-center gap-[7px] rounded-[5px] border py-[5px] pr-2.5 pl-2 text-[11.5px] font-medium disabled:opacity-50',
+        on
+          ? 'bg-acc-soft border-acc-line text-acc'
+          : 'bg-glass-subtle border-glass-border text-ink-2',
+      )}
     >
       <span
-        className="inline-flex items-center justify-center rounded-[3px]"
-        style={{
-          width: 12,
-          height: 12,
-          background: on ? ACCENT : 'transparent',
-          border: on ? 'none' : '1.5px solid oklch(1 0 0 / 0.18)',
-        }}
+        className={clsx(
+          'inline-flex h-3 w-3 items-center justify-center rounded-[3px]',
+          on ? 'bg-acc text-on-acc' : 'border-line border-[1.5px] bg-transparent',
+        )}
       >
         {on && (
           <svg
@@ -147,7 +129,7 @@ function ContextToggle({
             height="9"
             viewBox="0 0 24 24"
             fill="none"
-            stroke="oklch(0.12 0 0)"
+            stroke="currentColor"
             strokeWidth="3"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -172,17 +154,12 @@ function SlugChip({
 }) {
   return (
     <span
-      className="inline-flex items-center gap-1 rounded font-mono text-[11.5px]"
-      style={{
-        padding: '3px 4px 3px 7px',
-        background: primary
-          ? `color-mix(in oklch, ${ACCENT} 18%, transparent)`
-          : 'oklch(1 0 0 / 0.05)',
-        border: primary
-          ? `1px solid color-mix(in oklch, ${ACCENT} 35%, transparent)`
-          : '1px solid oklch(1 0 0 / 0.08)',
-        color: primary ? ACCENT : 'oklch(0.78 0.008 280)',
-      }}
+      className={clsx(
+        'inline-flex items-center gap-1 rounded px-[7px] py-[3px] font-mono text-[11.5px]',
+        primary
+          ? 'bg-acc-soft border-acc-line text-acc border'
+          : 'bg-glass-light border-glass-border text-ink-2 border',
+      )}
     >
       /{slug}
       {onRemove && (
@@ -204,25 +181,21 @@ function VarTree() {
       {VARIABLE_GROUPS.map((g) => (
         <div key={g.group}>
           <div
-            className="mb-1 flex items-center gap-1.5 font-mono text-[9.5px] font-semibold uppercase"
-            style={{ color: 'oklch(0.5 0.01 280)', letterSpacing: '1px' }}
+            className="text-ink-3 mb-1 flex items-center gap-1.5 font-mono text-[9.5px] font-semibold tracking-[1px] uppercase"
           >
-            <span style={{ color: ACCENT }}>●</span>
+            <span className="text-acc">●</span>
             {g.group}
           </div>
           <div className="flex flex-col gap-px">
             {g.items.map((v) => (
               <div
                 key={v.name}
-                className="flex items-baseline gap-2 rounded px-1.5 py-1 font-mono text-[11px] transition-colors hover:bg-white/[0.04]"
+                className="hover:bg-glass-subtle flex items-baseline gap-2 rounded px-1.5 py-1 font-mono text-[11px] transition-colors"
               >
-                <span style={{ color: ACCENT, whiteSpace: 'nowrap' }}>
+                <span className="text-acc shrink-0 whitespace-nowrap">
                   {v.name}
                 </span>
-                <span
-                  className="truncate text-[10.5px]"
-                  style={{ color: 'oklch(0.5 0.01 280)' }}
-                >
+                <span className="text-ink-3 truncate text-[10.5px]">
                   {v.desc}
                 </span>
               </div>
@@ -283,41 +256,23 @@ export function SnippetDetail({
   );
 
   return (
-    <div
-      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
-      style={{ background: 'oklch(0 0 0 / 0.08)' }}
-    >
+    <div className="bg-bg-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
       <div className="flex min-w-0 flex-col gap-[18px] p-6">
         {/* Header */}
         <div className="flex items-start gap-3.5">
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex items-center gap-2.5">
-              <Terminal size={15} style={{ color: ACCENT }} />
-              <div
-                className="text-lg font-semibold"
-                style={{
-                  color: 'oklch(0.99 0 0)',
-                  letterSpacing: '-0.015em',
-                }}
-              >
+              <Terminal size={15} className="text-acc shrink-0" />
+              <div className="text-ink-0 text-lg font-semibold tracking-tight">
                 {snippet.name || 'Untitled snippet'}
               </div>
               {isBuiltin && (
-                <span
-                  className="rounded bg-white/5 px-[7px] py-0.5 font-mono text-[10px] uppercase"
-                  style={{
-                    color: 'oklch(0.55 0.01 280)',
-                    letterSpacing: '0.06em',
-                  }}
-                >
+                <span className="bg-glass-light text-ink-3 rounded px-[7px] py-0.5 font-mono text-[10px] tracking-wider uppercase">
                   built-in
                 </span>
               )}
             </div>
-            <div
-              className="text-[12.5px]"
-              style={{ color: 'oklch(0.65 0.01 280)' }}
-            >
+            <div className="text-ink-2 text-[12.5px]">
               {snippet.description || 'No description'}
             </div>
           </div>
@@ -325,8 +280,7 @@ export function SnippetDetail({
             <button
               type="button"
               onClick={onDuplicate}
-              className="rounded p-1.5 transition-colors hover:bg-white/[0.06]"
-              style={{ color: 'oklch(0.65 0.01 280)' }}
+              className="text-ink-3 hover:bg-glass-subtle rounded p-1.5 transition-colors"
               title="Duplicate"
             >
               <Copy size={14} />
@@ -340,12 +294,7 @@ export function SnippetDetail({
                     setConfirmingDelete(false);
                   }}
                   onBlur={() => setConfirmingDelete(false)}
-                  className="rounded px-2 py-1 text-xs font-medium"
-                  style={{
-                    background: 'oklch(0.72 0.18 25 / 0.16)',
-                    color: 'oklch(0.85 0.16 25)',
-                    border: '1px solid oklch(0.72 0.18 25 / 0.3)',
-                  }}
+                  className="bg-status-fail-soft text-status-fail border-status-fail/30 rounded border px-2 py-1 text-xs font-medium"
                   autoFocus
                 >
                   Delete?
@@ -354,8 +303,7 @@ export function SnippetDetail({
                 <button
                   type="button"
                   onClick={() => setConfirmingDelete(true)}
-                  className="rounded p-1.5 transition-colors hover:bg-red-500/10"
-                  style={{ color: 'oklch(0.65 0.01 280)' }}
+                  className="text-ink-3 hover:text-status-fail hover:bg-status-fail/10 rounded p-1.5 transition-colors"
                   title="Delete"
                 >
                   <Trash2 size={14} />
@@ -380,12 +328,7 @@ export function SnippetDetail({
                 onChange={(e) => onUpdate({ name: e.target.value })}
                 placeholder="My Snippet"
                 aria-label="Snippet name"
-                className="w-full rounded-md px-2.5 py-[7px] text-sm focus:outline-none"
-                style={{
-                  background: 'oklch(0 0 0 / 0.28)',
-                  border: '1px solid oklch(1 0 0 / 0.07)',
-                  color: 'oklch(0.95 0.008 280)',
-                }}
+                className="border-glass-border bg-bg-1 text-ink-0 placeholder:text-ink-3 w-full rounded-md border px-2.5 py-[7px] text-sm focus:outline-none"
               />
             </div>
             <div>
@@ -399,12 +342,7 @@ export function SnippetDetail({
                 onChange={(e) => onUpdate({ description: e.target.value })}
                 placeholder="Short description"
                 aria-label="Snippet description"
-                className="w-full rounded-md px-2.5 py-[7px] text-sm focus:outline-none"
-                style={{
-                  background: 'oklch(0 0 0 / 0.28)',
-                  border: '1px solid oklch(1 0 0 / 0.07)',
-                  color: 'oklch(0.95 0.008 280)',
-                }}
+                className="border-glass-border bg-bg-1 text-ink-0 placeholder:text-ink-3 w-full rounded-md border px-2.5 py-[7px] text-sm focus:outline-none"
               />
             </div>
           </div>
@@ -424,18 +362,9 @@ export function SnippetDetail({
                   : 'Handlebars syntax — type {{ to insert a variable'
               }
             />
-            <div
-              className="min-w-0 overflow-visible rounded-[7px]"
-              style={{
-                background: 'oklch(0 0 0 / 0.35)',
-                border: '1px solid oklch(1 0 0 / 0.08)',
-              }}
-            >
+            <div className="border-glass-border bg-code-bg min-w-0 overflow-visible rounded-[7px] border">
               {isBuiltin ? (
-                <pre
-                  className="overflow-auto p-3 font-mono text-xs leading-relaxed"
-                  style={{ color: 'oklch(0.85 0.008 280)' }}
-                >
+                <pre className="text-ink-0 overflow-auto p-3 font-mono text-xs leading-relaxed">
                   {snippet.template}
                 </pre>
               ) : (
@@ -453,12 +382,8 @@ export function SnippetDetail({
           <div>
             <FieldLabel label="Variables" hint="reference" />
             <div
-              className="overflow-auto rounded-[7px] p-2.5"
-              style={{
-                background: 'oklch(0 0 0 / 0.22)',
-                border: '1px solid oklch(1 0 0 / 0.06)',
-                maxHeight: 280,
-              }}
+              className="border-glass-border bg-bg-1 overflow-auto rounded-[7px] border p-2.5"
+              style={{ maxHeight: 280 }}
             >
               <VarTree />
             </div>
@@ -468,14 +393,7 @@ export function SnippetDetail({
         {/* Live Preview */}
         <div>
           <FieldLabel label="Preview" hint="Rendered against sample context" />
-          <div
-            className="rounded-[7px] p-3.5 text-[13px] leading-relaxed whitespace-pre-wrap"
-            style={{
-              background: `linear-gradient(135deg, oklch(0.78 0.18 295 / 0.06), transparent 60%), oklch(0 0 0 / 0.22)`,
-              border: '1px solid oklch(1 0 0 / 0.07)',
-              color: 'oklch(0.88 0.008 280)',
-            }}
-          >
+          <div className="border-glass-border bg-bg-1 text-ink-0 rounded-[7px] border p-3.5 text-[13px] leading-relaxed whitespace-pre-wrap">
             {previewResult.ok
               ? previewResult.output
               : `⚠ ${previewResult.error}`}
@@ -543,12 +461,7 @@ export function SnippetDetail({
                   }}
                   onBlur={handleAddSlug}
                   placeholder="+ add"
-                  className="rounded bg-transparent px-2 py-0.5 font-mono text-[11px] focus:outline-none"
-                  style={{
-                    border: '1px dashed oklch(1 0 0 / 0.12)',
-                    color: 'oklch(0.6 0.01 280)',
-                    width: 70,
-                  }}
+                  className="border-glass-border text-ink-3 placeholder:text-ink-4 w-[70px] rounded border border-dashed bg-transparent px-2 py-0.5 font-mono text-[11px] focus:outline-none"
                 />
               )}
             </div>

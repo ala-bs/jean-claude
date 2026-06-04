@@ -40,6 +40,7 @@ import { ActivityButton } from './activity-button';
 import { CompletionCostDisplay } from './completion-cost-display';
 import { NextMeetingButton } from './next-meeting-button';
 import { RamUsageDisplay } from './ram-usage-display';
+import { ThemeToggle } from './theme-toggle';
 import { UsageDisplay } from './usage-display';
 
 const reloadStepNumbers: Record<ReloadPreviewProgress['step'], number> = {
@@ -216,14 +217,14 @@ function ReloadPreviewModal({
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-[oklch(0.08_0.012_280_/_0.62)] px-6 backdrop-blur-[2px]"
+      className="bg-scrim-strong/60 fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden px-6 backdrop-blur-[2px]"
       style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
     >
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(oklch(1_0_0_/_0.02)_1px,transparent_1px),linear-gradient(90deg,oklch(1_0_0_/_0.02)_1px,transparent_1px)] bg-[size:28px_28px] opacity-50" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--color-glass-subtle)_1px,transparent_1px),linear-gradient(90deg,var(--color-glass-subtle)_1px,transparent_1px)] bg-[size:28px_28px] opacity-50" />
       <div
         role={error ? 'alert' : 'status'}
         aria-label={error ? 'Reload failed' : 'Reloading preview'}
-        className="reload-fade-up bg-bg-1 border-glass-border relative w-full max-w-[420px] overflow-hidden rounded-[9px] border shadow-[0_24px_60px_oklch(0_0_0_/_0.55),0_0_0_1px_oklch(0_0_0_/_0.4)]"
+        className="reload-fade-up bg-bg-1 border-glass-border relative w-full max-w-[420px] overflow-hidden rounded-[9px] border shadow-[var(--theme-shadow-ambient)]"
       >
         <div className="flex items-center gap-2.5 px-4 pt-3.5 pb-2.5">
           <ReloadStatusGlyph state={error ? 'fail' : 'run'} />
@@ -241,7 +242,7 @@ function ReloadPreviewModal({
 
         <div className="relative px-4 pt-1.5 pb-2.5">
           <div
-            className="absolute top-[19px] bottom-[23px] left-6 w-px bg-white/[0.07]"
+            className="absolute top-[19px] bottom-[23px] left-6 w-px bg-glass-border"
             aria-hidden
           />
           <div
@@ -345,7 +346,7 @@ function ReloadPreviewModal({
             <div className="bg-status-fail-soft border-status-fail/25 text-status-fail mx-4 mb-3 rounded-[5px] border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] break-words">
               {error}
             </div>
-            <div className="border-line-soft flex items-center justify-between border-t bg-white/[0.012] px-4 py-2.5">
+            <div className="border-line-soft bg-glass-subtle flex items-center justify-between border-t px-4 py-2.5">
               <span className="text-ink-4 text-[10.5px]">
                 Previous preview still running
               </span>
@@ -369,7 +370,7 @@ function ReloadPreviewModal({
           </>
         ) : (
           <div className="px-4 pb-3">
-            <div className="h-0.5 overflow-hidden rounded-full bg-white/5">
+            <div className="bg-glass-subtle h-0.5 overflow-hidden rounded-full">
               <div
                 className="bg-acc h-full rounded-full opacity-90 transition-[width] duration-300"
                 style={{ width: `${(stepNumber / reloadStepCount) * 100}%` }}
@@ -590,7 +591,7 @@ export function Header() {
           >
             Commands
             {runningCommandsCount > 0 && (
-              <span className="bg-acc text-bg-0 ml-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none shadow-[0_0_6px_oklch(0.6_0.2_264)]">
+              <span className="bg-acc text-on-acc ml-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none shadow-[0_0_6px_color-mix(in_oklch,var(--color-acc)_55%,transparent)]">
                 {runningCommandsCount}
               </span>
             )}
@@ -615,7 +616,7 @@ export function Header() {
                   Reload App
                   {typeof reloadUpdateCount === 'number' &&
                     reloadUpdateCount > 0 && (
-                      <span className="bg-acc text-bg-0 ml-auto rounded-full px-1.5 py-0.5 text-[10px] leading-none shadow-[0_0_6px_oklch(0.6_0.2_264)]">
+                      <span className="bg-acc text-on-acc ml-auto rounded-full px-1.5 py-0.5 text-[10px] leading-none shadow-[0_0_6px_color-mix(in_oklch,var(--color-acc)_55%,transparent)]">
                         {reloadUpdateCount}
                       </span>
                     )}
@@ -628,12 +629,13 @@ export function Header() {
         </Dropdown>
         {api.app.isDevMode && (
           <div
-            className="group relative ml-2 flex items-center gap-1 rounded-full border border-amber-400/50 bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] text-amber-200 shadow-[0_0_16px_oklch(0.8_0.18_80_/_0.22)]"
+            className="border-status-run/50 bg-status-run-soft text-status-run group relative ml-2 flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] shadow-[0_0_16px_color-mix(in_srgb,var(--color-status-run)_22%,transparent)]"
+            title="Jean-Claude is running in development mode"
             aria-label="Development mode"
             aria-describedby="dev-mode-tooltip"
             tabIndex={0}
           >
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-300 shadow-[0_0_8px_oklch(0.8_0.18_80)]" />
+            <span className="bg-status-run shadow-[0_0_8px_color-mix(in_srgb,var(--color-status-run)_70%,transparent)] h-1.5 w-1.5 rounded-full" />
             DEV
             <span
               id="dev-mode-tooltip"
@@ -674,6 +676,7 @@ export function Header() {
         <NextMeetingButton />
         <RamUsageDisplay />
         <CompletionCostDisplay />
+        <ThemeToggle />
         <UsageDisplay />
       </div>
 

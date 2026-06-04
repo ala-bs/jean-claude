@@ -185,7 +185,7 @@ export function AddPermissionModal({
           <button
             onClick={handleSubmit}
             disabled={checkedCount === 0 || isSubmitting}
-            className="bg-acc hover:bg-acc flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="bg-acc text-on-acc hover:bg-acc flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Shield className="h-3.5 w-3.5" />
             {isSubmitting

@@ -150,10 +150,10 @@ export function NextMeetingButton() {
             strokeWidth={2}
             color={
               state === 'live'
-                ? 'oklch(0.78 0.16 75)'
+                ? 'var(--color-status-run)'
                 : state === 'soon' || state === 'imminent'
-                  ? 'oklch(0.72 0.2 295)'
-                  : 'oklch(0.52 0.014 275)'
+                  ? 'var(--color-acc)'
+                  : 'var(--color-ink-3)'
             }
           />
           <span className="text-ink-3 shrink-0 font-mono text-[11px]">

@@ -200,9 +200,9 @@ export function TodayTimelineView({
                 className="pointer-events-none absolute right-0 -left-2 z-10 flex items-center gap-1.5"
                 style={{ top: toY(new Date(now).toISOString()) }}
               >
-                <span className="bg-status-run h-2.5 w-2.5 rounded-full shadow-[0_0_8px_oklch(0.78_0.16_75)]" />
-                <span className="bg-status-run h-[1.5px] flex-1 shadow-[0_0_6px_oklch(0.78_0.16_75/0.6)]" />
-                <span className="bg-status-run rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[oklch(0.18_0.05_75)]">
+                <span className="bg-status-run shadow-[0_0_8px_color-mix(in_srgb,var(--color-status-run)_70%,transparent)] h-2.5 w-2.5 rounded-full" />
+                <span className="bg-status-run shadow-[0_0_6px_color-mix(in_srgb,var(--color-status-run)_60%,transparent)] h-[1.5px] flex-1" />
+                <span className="bg-status-run text-on-acc rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold">
                   {formatTimeHHMM(new Date(now).toISOString())}
                 </span>
               </div>

@@ -59,7 +59,7 @@ export function DeleteWorktreeContent({
           type="button"
           onClick={onConfirm}
           disabled={isPending}
-          className="bg-status-fail flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="bg-status-fail text-on-acc hover:brightness-110 flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isPending && (
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden />

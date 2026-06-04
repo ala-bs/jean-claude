@@ -349,7 +349,7 @@ function PromptSection({
       onMouseOver={
         isLong
           ? (e) => {
-              e.currentTarget.style.background = 'oklch(1 0 0 / 0.06)';
+              e.currentTarget.style.background = 'var(--color-glass-border)';
             }
           : undefined
       }
@@ -426,9 +426,9 @@ function SubagentCard({
         background: `linear-gradient(135deg,
           color-mix(in oklch, var(--color-acc) 14%, transparent) 0%,
           color-mix(in oklch, var(--color-acc) 4%, transparent) 45%,
-          oklch(1 0 0 / 0.02) 100%)`,
+          var(--theme-agent-panel-bg) 100%)`,
         borderColor: `color-mix(in oklch, var(--color-acc) 28%, transparent)`,
-        boxShadow: `0 0 24px -8px color-mix(in oklch, var(--color-acc) 60%, transparent), inset 0 1px 0 oklch(1 0 0 / 0.04)`,
+        boxShadow: `0 0 24px -8px color-mix(in oklch, var(--color-acc) 60%, transparent), inset 0 1px 0 var(--color-glass-border)`,
       }}
     >
       {/* Shimmer sweep */}
@@ -459,7 +459,7 @@ function SubagentCard({
       <div className="relative flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="text-ink-1 flex items-baseline gap-2 overflow-hidden font-mono text-xs">
           <span className="truncate">{sa.name}</span>
-          <span className="text-ink-3 shrink-0 rounded bg-white/[0.06] px-1.5 py-px text-[9.5px] font-semibold tracking-wide uppercase">
+          <span className="text-ink-3 shrink-0 rounded bg-glass-subtle px-1.5 py-px text-[9.5px] font-semibold tracking-wide uppercase">
             {sa.kind}
           </span>
         </div>
@@ -509,7 +509,7 @@ function TodoRow({
             ? '1px solid var(--color-acc)'
             : todo.current
               ? '1px solid color-mix(in oklch, var(--color-acc) 60%, transparent)'
-              : '1px solid oklch(1 0 0 / 0.18)',
+              : '1px solid var(--theme-agent-todo-checkbox-border)',
           background: todo.done ? 'var(--color-acc)' : 'transparent',
           boxShadow:
             todo.current && !todo.done
@@ -521,7 +521,7 @@ function TodoRow({
           <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
             <path
               d="M2.5 6.5L5 9l4.5-5.5"
-              stroke="oklch(0.1 0 0)"
+              stroke="var(--color-on-acc)"
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -541,12 +541,12 @@ function TodoRow({
         className="min-w-0 flex-1 truncate"
         style={{
           color: todo.done
-            ? 'var(--color-ink-3)'
+            ? 'var(--color-ink-2)'
             : todo.current
-              ? 'var(--color-ink-1)'
-              : 'var(--color-ink-2)',
+              ? 'var(--color-ink-0)'
+              : 'var(--color-ink-1)',
           textDecoration: todo.done ? 'line-through' : 'none',
-          textDecorationColor: 'oklch(1 0 0 / 0.25)',
+          textDecorationColor: 'var(--theme-agent-todo-strike)',
         }}
       >
         {todo.text}
@@ -670,7 +670,7 @@ function RunningSummary({
         <div>
           <div className="text-ink-4 mb-1.5 flex items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase">
             <span>tools</span>
-            <span className="text-ink-3 inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
+            <span className="text-ink-3 inline-flex items-center gap-1 rounded-full bg-glass-subtle px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
               <span
                 className="bg-acc h-1 w-1 rounded-full"
                 style={{
@@ -709,7 +709,7 @@ function RunningSummary({
         <div>
           <div className="text-ink-4 mb-1.5 flex items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase">
             <span>todo</span>
-            <span className="text-ink-3 rounded-full bg-white/[0.06] px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
+            <span className="text-ink-3 rounded-full bg-glass-subtle px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
               {activity.todos.filter((t) => t.done).length}/
               {activity.todos.length}
             </span>
@@ -1031,7 +1031,7 @@ export function PromptGroupEntry({
               <button
                 type="button"
                 onClick={toggleDetails}
-                className="text-ink-2 hover:text-ink-1 flex h-7 w-6 cursor-pointer items-center justify-center rounded-md border border-white/12 bg-white/10 shadow-[0_6px_18px_rgba(0,0,0,0.22)] backdrop-blur-[6px] transition-all duration-150 hover:border-white/20 hover:bg-white/16 hover:shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
+                className="text-ink-2 hover:text-ink-1 flex h-7 w-6 cursor-pointer items-center justify-center rounded-md border border-glass-border-strong bg-glass-medium shadow-[0_6px_18px_rgba(0,0,0,0.22)] backdrop-blur-[6px] transition-all duration-150 hover:border-glass-border-strong hover:bg-glass-medium hover:shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
                 style={{
                   opacity: 0.72,
                 }}
@@ -1056,8 +1056,8 @@ export function PromptGroupEntry({
               : 'min-w-0 flex-1 rounded-md'
           }
           style={{
-            background: 'oklch(0.06 0.01 280 / 0.5)',
-            border: '1px solid oklch(1 0 0 / 0.10)',
+            background: 'var(--theme-agent-panel-bg)',
+            border: '1px solid var(--theme-agent-panel-border)',
           }}
         >
           {/* Header bar */}
@@ -1065,9 +1065,9 @@ export function PromptGroupEntry({
             className="text-ink-3 flex cursor-pointer items-center gap-2 px-3 py-1.5 font-mono text-[10.5px] tracking-wide uppercase select-none"
             style={{
               borderBottom: detailsExpanded
-                ? '1px solid oklch(1 0 0 / 0.06)'
+                ? '1px solid var(--color-glass-border)'
                 : 'none',
-              background: 'oklch(1 0 0 / 0.02)',
+              background: 'var(--theme-agent-panel-header-bg)',
             }}
             onClick={toggleDetails}
             onContextMenu={
@@ -1209,7 +1209,7 @@ export function PromptGroupEntry({
                 {/* Append result or running summary at bottom when expanded */}
                 {!isActiveGroup && group.resultEntry && (
                   <div
-                    className="mt-2.5 border-t border-dashed border-white/[0.08] pt-2.5"
+                    className="mt-2.5 border-t border-dashed border-glass-border pt-2.5"
                     onContextMenu={
                       onResultContextMenu
                         ? (e) => onResultContextMenu(e, group.resultEntry!)
@@ -1231,7 +1231,7 @@ export function PromptGroupEntry({
                   </div>
                 )}
                 {isActiveGroup && activity && (
-                  <div className="mt-2.5 border-t border-dashed border-white/[0.08] pt-2.5">
+                  <div className="mt-2.5 border-t border-dashed border-glass-border pt-2.5">
                     <RunningSummary activity={activity} />
                   </div>
                 )}
@@ -1246,7 +1246,7 @@ export function PromptGroupEntry({
                   <div>
                     <div className="text-ink-4 mb-1.5 flex items-center gap-1.5 font-mono text-[10px] tracking-wider uppercase">
                       <span>todo</span>
-                      <span className="text-ink-3 rounded-full bg-white/[0.06] px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
+                      <span className="text-ink-3 rounded-full bg-glass-subtle px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
                         {completedTodos.filter((t) => t.done).length}/
                         {completedTodos.length}
                       </span>
@@ -1280,7 +1280,7 @@ export function PromptGroupEntry({
               type="button"
               onClick={() => setDiffModalOpen(true)}
               className="text-ink-4 hover:text-ink-2 flex w-full cursor-pointer items-center gap-3 px-3.5 py-1.5 font-mono text-[10.5px] transition-colors"
-              style={{ borderTop: '1px solid oklch(1 0 0 / 0.06)' }}
+              style={{ borderTop: '1px solid var(--color-glass-border)' }}
             >
               <span>
                 {fileStats.fileCount}{' '}

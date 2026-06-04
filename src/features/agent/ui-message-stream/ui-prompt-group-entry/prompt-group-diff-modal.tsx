@@ -341,7 +341,7 @@ export function PromptGroupDiffModal({
                   />
                 ) : selectedChange.rawPatch ? (
                   <div className="h-full overflow-auto p-4">
-                    <pre className="text-ink-1 overflow-auto rounded bg-black/30 p-3 font-mono text-xs whitespace-pre-wrap">
+                    <pre className="text-ink-1 bg-code-bg overflow-auto rounded p-3 font-mono text-xs whitespace-pre-wrap">
                       {selectedChange.rawPatch}
                     </pre>
                   </div>
@@ -385,7 +385,7 @@ export function PromptGroupDiffModal({
               {rawDiffCopied ? 'Copied' : 'Copy raw'}
             </button>
           </div>
-          <pre className="text-ink-1 min-h-0 flex-1 overflow-auto bg-black/40 p-4 font-mono text-xs leading-5 whitespace-pre-wrap">
+          <pre className="text-ink-1 bg-code-bg min-h-0 flex-1 overflow-auto p-4 font-mono text-xs leading-5 whitespace-pre-wrap">
             {selectedChange?.rawPatch}
           </pre>
         </div>

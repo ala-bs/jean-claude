@@ -207,7 +207,7 @@ export function ComposerCommentsChip({
               className="shrink-0 overflow-auto px-3 py-2"
               style={{
                 maxHeight: 120,
-                borderTop: '1px solid oklch(1 0 0 / 0.06)',
+                borderTop: '1px solid var(--color-glass-border)',
               }}
             >
               <pre className="text-ink-3 text-[10px] leading-[1.5] whitespace-pre-wrap">

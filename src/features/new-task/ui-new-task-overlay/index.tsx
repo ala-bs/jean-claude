@@ -1491,16 +1491,16 @@ export function NewTaskOverlay({
         >
           <div
             ref={panelRef}
-            className="flex max-h-[86svh] w-[90svw] max-w-[1280px] flex-col overflow-hidden rounded-[14px] border border-white/10"
+            className="flex max-h-[86svh] w-[90svw] max-w-[1280px] flex-col overflow-hidden rounded-[14px] border border-glass-border"
             style={{
               background: `
-            radial-gradient(ellipse 700px 500px at 10% -10%, oklch(0.55 0.22 295 / 0.32), transparent 55%),
-            radial-gradient(ellipse 600px 420px at 110% 110%, oklch(0.55 0.18 205 / 0.25), transparent 55%),
-            oklch(0.14 0.015 280 / 0.94)
+            radial-gradient(ellipse 700px 500px at 10% -10%, var(--theme-overlay-glow-1), transparent 55%),
+            radial-gradient(ellipse 600px 420px at 110% 110%, var(--theme-overlay-glow-2), transparent 55%),
+            var(--theme-overlay-panel)
           `,
               backdropFilter: 'blur(40px) saturate(140%)',
               boxShadow:
-                '0 30px 80px oklch(0 0 0 / 0.55), inset 0 0 0 1px oklch(1 0 0 / 0.04)',
+                '0 30px 80px var(--theme-overlay-backdrop), inset 0 0 0 1px var(--color-glass-border)',
             }}
             onClick={handleModalClick}
           >
@@ -1508,11 +1508,11 @@ export function NewTaskOverlay({
             {showSearchInput && (
               <div
                 className="flex shrink-0 items-center gap-2.5 px-[18px] py-3.5"
-                style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+                style={{ borderBottom: '1px solid var(--color-glass-border)' }}
               >
                 <Search
                   className="h-3.5 w-3.5 shrink-0"
-                  style={{ color: 'oklch(0.55 0.01 280)' }}
+                  style={{ color: 'var(--color-ink-3)' }}
                 />
                 <textarea
                   ref={searchInputRef}
@@ -1522,7 +1522,7 @@ export function NewTaskOverlay({
                   placeholder={getPlaceholder({ mode: inputMode, isNoteMode })}
                   className="text-ink-1 placeholder-ink-3 field-sizing-content max-h-[40svh] min-h-[1lh] flex-1 resize-none bg-transparent text-sm outline-none"
                   style={{
-                    caretColor: 'oklch(0.78 0.18 295)',
+                    caretColor: 'var(--color-acc)',
                     letterSpacing: '-0.005em',
                   }}
                 />
@@ -1593,7 +1593,7 @@ export function NewTaskOverlay({
                 <div
                   className="flex flex-1 flex-col overflow-hidden"
                   style={{
-                    borderTop: '1px solid oklch(1 0 0 / 0.04)',
+                    borderTop: '1px solid var(--color-glass-border)',
                     minHeight: 200,
                   }}
                 >
@@ -1665,8 +1665,8 @@ export function NewTaskOverlay({
             <div
               className="flex min-h-[50px] shrink-0 flex-wrap items-center gap-2 overflow-hidden px-3.5 py-2.5"
               style={{
-                borderTop: '1px solid oklch(1 0 0 / 0.06)',
-                background: 'oklch(0 0 0 / 0.28)',
+                borderTop: '1px solid var(--color-glass-border)',
+                background: 'var(--theme-overlay-footer)',
               }}
             >
               <div className="flex items-center gap-2">
@@ -1753,15 +1753,15 @@ export function NewTaskOverlay({
                       currentCreateWorktree
                         ? {
                             background:
-                              'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
+                              'color-mix(in oklch, var(--color-acc) 14%, transparent)',
                             border:
-                              '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
-                            color: 'oklch(0.78 0.18 295)',
+                              '1px solid color-mix(in oklch, var(--color-acc) 30%, transparent)',
+                            color: 'var(--color-acc)',
                           }
                         : {
-                            background: 'oklch(1 0 0 / 0.03)',
-                            border: '1px solid oklch(1 0 0 / 0.07)',
-                            color: 'oklch(0.78 0.01 280)',
+                            background: 'var(--color-glass-subtle)',
+                            border: '1px solid var(--color-glass-border)',
+                            color: 'var(--color-ink-1)',
                           }
                     }
                     onClick={() => toggleWorktree(!currentCreateWorktree)}
@@ -1782,15 +1782,15 @@ export function NewTaskOverlay({
                       currentShowFileExplorer
                         ? {
                             background:
-                              'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
+                              'color-mix(in oklch, var(--color-acc) 14%, transparent)',
                             border:
-                              '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
-                            color: 'oklch(0.78 0.18 295)',
+                              '1px solid color-mix(in oklch, var(--color-acc) 30%, transparent)',
+                            color: 'var(--color-acc)',
                           }
                         : {
-                            background: 'oklch(1 0 0 / 0.03)',
-                            border: '1px solid oklch(1 0 0 / 0.07)',
-                            color: 'oklch(0.78 0.01 280)',
+                            background: 'var(--color-glass-subtle)',
+                            border: '1px solid var(--color-glass-border)',
+                            color: 'var(--color-ink-1)',
                           }
                     }
                     onClick={() =>
@@ -1806,7 +1806,7 @@ export function NewTaskOverlay({
                         className="rounded-full px-1.5 py-px text-[10px] leading-none font-medium"
                         style={{
                           background:
-                            'color-mix(in oklch, oklch(0.78 0.18 295) 24%, transparent)',
+                            'color-mix(in oklch, var(--color-acc) 24%, transparent)',
                         }}
                       >
                         {fileCommentCount}
@@ -1819,12 +1819,7 @@ export function NewTaskOverlay({
                 {!isNoteMode && selectedWorkItems.length > 0 && (
                   <button
                     type="button"
-                    className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-[5px] px-2.5 py-[5px] text-xs font-medium"
-                    style={{
-                      background: 'oklch(1 0 0 / 0.03)',
-                      border: '1px solid oklch(1 0 0 / 0.07)',
-                      color: 'oklch(0.78 0.01 280)',
-                    }}
+                    className="border-glass-border bg-glass-subtle text-ink-2 inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-[5px] border px-2.5 py-[5px] text-xs font-medium"
                     onClick={() => void handleCreateVerificationNote()}
                     disabled={createVerificationNoteMutation.isPending}
                   >
@@ -1844,15 +1839,15 @@ export function NewTaskOverlay({
                       currentUpdateWorkItemStatus
                         ? {
                             background:
-                              'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
+                              'color-mix(in oklch, var(--color-acc) 14%, transparent)',
                             border:
-                              '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
-                            color: 'oklch(0.78 0.18 295)',
+                              '1px solid color-mix(in oklch, var(--color-acc) 30%, transparent)',
+                            color: 'var(--color-acc)',
                           }
                         : {
-                            background: 'oklch(1 0 0 / 0.03)',
-                            border: '1px solid oklch(1 0 0 / 0.07)',
-                            color: 'oklch(0.78 0.01 280)',
+                            background: 'var(--color-glass-subtle)',
+                            border: '1px solid var(--color-glass-border)',
+                            color: 'var(--color-ink-1)',
                           }
                     }
                     onClick={() =>
@@ -1874,11 +1869,11 @@ export function NewTaskOverlay({
                     <div
                       className="inline-flex shrink-0 items-center gap-[5px] rounded-[5px] px-2.5 py-[5px] text-xs"
                       style={{
-                        background: 'oklch(1 0 0 / 0.03)',
-                        border: '1px solid oklch(1 0 0 / 0.07)',
+                        background: 'var(--color-glass-subtle)',
+                        border: '1px solid var(--color-glass-border)',
                       }}
                     >
-                      <span style={{ color: 'oklch(0.55 0.01 280)' }}>
+                      <span style={{ color: 'var(--color-ink-3)' }}>
                         {draft?.parentTaskId ? 'child of' : 'from'}
                       </span>
                       <BranchOrTaskSelect
@@ -1909,7 +1904,7 @@ export function NewTaskOverlay({
                   <>
                     <div
                       className="mx-1 h-[18px] w-px"
-                      style={{ background: 'oklch(1 0 0 / 0.06)' }}
+                      style={{ background: 'var(--color-glass-border)' }}
                     />
                     <span className="flex items-center gap-1">
                       <Kbd shortcut="cmd+m" />{' '}
@@ -1979,13 +1974,13 @@ function getProjectButtonStyle(project: Project, isSelected: boolean) {
     ? {
         background: `color-mix(in oklch, ${project.color} 18%, transparent)`,
         border: `1px solid color-mix(in oklch, ${project.color} 45%, transparent)`,
-        color: 'oklch(0.99 0 0)',
+        color: 'var(--color-ink-0)',
         fontWeight: 500,
       }
     : {
         background: 'transparent',
         border: '1px solid transparent',
-        color: 'oklch(0.78 0.01 280)',
+        color: 'var(--color-ink-1)',
         fontWeight: 400,
       };
 }
@@ -2020,7 +2015,7 @@ function SortableProjectButton({
         transition: transition ?? undefined,
         opacity: isDragging ? 0.5 : 1,
         zIndex: isDragging ? 10 : undefined,
-        boxShadow: isDragging ? '0 4px 16px oklch(0 0 0 / 0.4)' : undefined,
+        boxShadow: isDragging ? 'var(--theme-shadow-ambient)' : undefined,
       }}
       {...attributes}
       {...listeners}
@@ -2099,9 +2094,9 @@ function ProjectGrid({
         ref={projectGridRef}
         className="grid max-h-[180px] shrink-0 grid-cols-7 gap-1 overflow-y-auto px-3 py-2 sm:grid-cols-8 lg:grid-cols-10"
         style={{
-          borderTop: '1px solid oklch(1 0 0 / 0.04)',
-          borderBottom: '1px solid oklch(1 0 0 / 0.04)',
-          background: 'oklch(0 0 0 / 0.2)',
+          borderTop: '1px solid var(--color-glass-border)',
+          borderBottom: '1px solid var(--color-glass-border)',
+          background: 'var(--color-scrim-medium)',
         }}
       >
         <button
@@ -2111,22 +2106,22 @@ function ProjectGrid({
           style={
             selectedProjectId === null
               ? {
-                  background: 'oklch(1 0 0 / 0.08)',
-                  border: '1px solid oklch(1 0 0 / 0.14)',
-                  color: 'oklch(0.99 0 0)',
+                  background: 'var(--color-glass-medium)',
+                  border: '1px solid var(--color-glass-border-strong)',
+                  color: 'var(--color-ink-0)',
                   fontWeight: 500,
                 }
               : {
                   background: 'transparent',
                   border: '1px solid transparent',
-                  color: 'oklch(0.78 0.01 280)',
+                  color: 'var(--color-ink-1)',
                   fontWeight: 400,
                 }
           }
         >
           <span
             className="h-[7px] w-[7px] shrink-0 rounded-full"
-            style={{ background: 'oklch(0.55 0.01 280)' }}
+            style={{ background: 'var(--color-ink-3)' }}
           />
           <span className="truncate">Note</span>
         </button>
@@ -2154,8 +2149,8 @@ function ToolCheckmark({ checked }: { checked: boolean }) {
       style={{
         width: 13,
         height: 13,
-        background: checked ? 'oklch(0.78 0.18 295)' : 'oklch(1 0 0 / 0.05)',
-        border: `1px solid ${checked ? 'oklch(0.78 0.18 295)' : 'oklch(1 0 0 / 0.18)'}`,
+        background: checked ? 'var(--color-acc)' : 'var(--color-glass-subtle)',
+        border: `1px solid ${checked ? 'var(--color-acc)' : 'var(--color-glass-border)'}`,
       }}
     >
       {checked && (
@@ -2164,7 +2159,8 @@ function ToolCheckmark({ checked }: { checked: boolean }) {
           height={9}
           viewBox="0 0 24 24"
           fill="none"
-          stroke="oklch(0.12 0 0)"
+          stroke="currentColor"
+          className="text-on-acc"
           strokeWidth={3.5}
           strokeLinecap="round"
           strokeLinejoin="round"

@@ -190,7 +190,7 @@ export function ProjectSkillsSettings({ projectId }: { projectId: string }) {
           onDelete={handleDelete}
         />
       ) : (
-        <div className="flex min-w-0 flex-1 items-center justify-center bg-black/[0.18]">
+        <div className="flex min-w-0 flex-1 items-center justify-center bg-panel-scrim">
           <div className="text-center">
             <p className="text-ink-3 mb-4 text-sm">No project skills yet.</p>
             <Button

@@ -75,7 +75,7 @@ export function RegistrySkillDetails({
   }, [installMutation, skill, selectedBackends, addToast, onInstalled]);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-black/[0.18]">
+    <div className="bg-bg-0 flex min-h-0 min-w-0 flex-1 flex-col">
       {/* ── Header ── */}
       <div className="border-line-soft flex shrink-0 items-center gap-3 border-b px-5 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -92,7 +92,7 @@ export function RegistrySkillDetails({
       </div>
 
       {/* ── Metadata strip ── */}
-      <div className="border-line-soft flex shrink-0 flex-wrap items-center gap-3 border-b bg-black/[0.12] px-5 py-2.5">
+      <div className="border-line-soft bg-section-strip flex shrink-0 flex-wrap items-center gap-3 border-b px-5 py-2.5">
         <Chip size="xs" color="neutral">
           {formatCompactNumber(skill.installs)} installs
         </Chip>
@@ -134,7 +134,7 @@ export function RegistrySkillDetails({
       </div>
 
       {/* ── Install footer ── */}
-      <div className="border-line-soft flex shrink-0 items-center gap-4 border-t bg-black/[0.12] px-5 py-3">
+      <div className="border-line-soft bg-section-strip flex shrink-0 items-center gap-4 border-t px-5 py-3">
         <Checkbox
           checked={enabledBackends['claude-code']}
           onChange={(checked) =>

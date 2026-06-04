@@ -215,7 +215,7 @@ function WorkItemChip({
       className={clsx(
         'inline-flex cursor-pointer items-center gap-0.5 rounded px-1.5 py-0 font-mono text-[9.5px] ring-1 transition-colors',
         isFocused
-          ? 'bg-acc/20 text-acc-ink ring-acc/50 shadow-[0_0_12px_oklch(0.72_0.20_295_/_0.4),0_0_4px_oklch(0.72_0.20_295_/_0.25)]'
+          ? 'bg-acc/20 text-acc-ink ring-acc/50 shadow-[0_0_12px_color-mix(in_srgb,var(--color-acc)_40%,transparent),0_0_4px_color-mix(in_srgb,var(--color-acc)_25%,transparent)]'
           : 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40',
       )}
     >

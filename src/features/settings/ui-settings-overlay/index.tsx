@@ -244,44 +244,42 @@ const PROJECT_SECTIONS: ProjectSection[] = [
 
 const SEGMENTED_TAB_ACTIVE: React.CSSProperties = {
   background:
-    'linear-gradient(135deg, oklch(0.78 0.18 295), oklch(0.6 0.2 260))',
-  color: 'oklch(0.1 0 0)',
+    'linear-gradient(135deg, var(--color-acc), color-mix(in srgb, var(--color-acc) 80%, var(--color-secondary)))',
+  color: 'var(--theme-settings-tab-active-fg)',
   boxShadow:
-    '0 2px 8px oklch(0.65 0.18 295 / 0.4), 0 0 0 1px oklch(1 0 0 / 0.1) inset',
+    '0 2px 8px color-mix(in oklch, var(--color-acc) 40%, transparent), 0 0 0 1px color-mix(in oklch, var(--color-chrome-fg) 10%, transparent) inset',
 };
 
 const SEGMENTED_TAB_INACTIVE: React.CSSProperties = {
   background: 'transparent',
-  color: 'oklch(0.7 0.01 280)',
+  color: 'var(--theme-settings-tab-inactive-fg)',
 };
 
 const NAV_SECTION_ACTIVE: React.CSSProperties = {
-  background: 'oklch(1 0 0 / 0.06)',
-  color: 'oklch(0.99 0 0)',
+  background: 'var(--color-glass-medium)',
+  color: 'var(--theme-settings-nav-active-fg)',
   fontWeight: 500,
 };
 
 const NAV_SECTION_INACTIVE: React.CSSProperties = {
   background: 'transparent',
-  color: 'oklch(0.72 0.01 280)',
+  color: 'var(--theme-settings-nav-inactive-fg)',
 };
 
 const NAV_SECTION_ACTIVE_LEAF: React.CSSProperties = {
-  background: 'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
-  border:
-    '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
-  borderLeft: '2px solid oklch(0.78 0.18 295)',
-  color: 'oklch(0.99 0 0)',
+  background: 'color-mix(in oklch, var(--color-acc) 14%, transparent)',
+  border: '1px solid color-mix(in oklch, var(--color-acc) 30%, transparent)',
+  borderLeft: '2px solid var(--color-acc)',
+  color: 'var(--theme-settings-nav-active-fg)',
   fontWeight: 500,
 };
 
 const NAV_SUB_ACTIVE: React.CSSProperties = {
-  background: 'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
-  border:
-    '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
-  borderLeft: '2px solid oklch(0.78 0.18 295)',
+  background: 'color-mix(in oklch, var(--color-acc) 14%, transparent)',
+  border: '1px solid color-mix(in oklch, var(--color-acc) 30%, transparent)',
+  borderLeft: '2px solid var(--color-acc)',
   paddingLeft: 9,
-  color: 'oklch(0.99 0 0)',
+  color: 'var(--theme-settings-nav-active-fg)',
   fontWeight: 500,
 };
 
@@ -290,15 +288,15 @@ const NAV_SUB_INACTIVE: React.CSSProperties = {
   border: '1px solid transparent',
   borderLeft: '2px solid transparent',
   paddingLeft: 9,
-  color: 'oklch(0.62 0.01 280)',
+  color: 'var(--theme-settings-nav-inactive-fg)',
 };
 
 const NAV_ICON_ACTIVE: React.CSSProperties = {
-  color: 'oklch(0.78 0.18 295)',
+  color: 'var(--theme-settings-nav-icon-active)',
 };
 
 const NAV_ICON_INACTIVE: React.CSSProperties = {
-  color: 'oklch(0.55 0.01 280)',
+  color: 'var(--theme-settings-nav-icon-inactive)',
 };
 
 /* ── Active selection state ── */
@@ -393,27 +391,16 @@ function GlobalContent({ selection }: { selection: ActiveSelection }) {
         <div className="mb-5">
           {/* Breadcrumb for sub-items */}
           {subItem && (
-            <div
-              className="mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase"
-              style={{ color: 'oklch(0.55 0.01 280)' }}
-            >
+            <div className="text-ink-3 mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase">
               <span>{section.label}</span>
-              <ChevronRight size={10} style={{ opacity: 0.5 }} />
-              <span style={{ color: 'oklch(0.78 0.18 295)' }}>
-                {subItem.label}
-              </span>
+              <ChevronRight size={10} className="opacity-50" />
+              <span className="text-acc">{subItem.label}</span>
             </div>
           )}
-          <div
-            className="text-[18px] font-semibold tracking-tight"
-            style={{ color: 'oklch(0.97 0.01 280)' }}
-          >
+          <div className="text-ink-0 text-[18px] font-semibold tracking-tight">
             {subItem?.label ?? section.title}
           </div>
-          <div
-            className="text-[12.5px]"
-            style={{ color: 'oklch(0.62 0.01 280)' }}
-          >
+          <div className="text-ink-2 text-[12.5px]">
             {subItem
               ? getGlobalSubtitle(selection.sectionId, selection.subId!)
               : section.subtitle}
@@ -874,8 +861,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
     <FocusLock returnFocus>
       <RemoveScroll>
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'oklch(0.08 0.01 280 / 0.7)' }}
+          className="bg-scrim-strong/80 fixed inset-0 z-50 flex items-center justify-center"
           onClick={onClose}
           tabIndex={-1}
           role="dialog"
@@ -883,27 +869,18 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
           aria-label="Settings"
         >
           <div
-            className="flex h-[85svh] w-[92svw] max-w-[1280px] flex-col overflow-hidden rounded-2xl border"
+            className="border-glass-border bg-bg-1/95 shadow-ambient flex h-[85svh] w-[92svw] max-w-[1280px] flex-col overflow-hidden rounded-2xl border"
             style={{
               background:
-                'radial-gradient(ellipse at 15% 5%, oklch(0.25 0.12 295 / 0.35), transparent 55%), radial-gradient(ellipse at 85% 95%, oklch(0.22 0.1 250 / 0.3), transparent 55%), oklch(0.14 0.015 280 / 0.92)',
+                'radial-gradient(ellipse at 15% 5%, var(--theme-aurora-glow-1), transparent 55%), radial-gradient(ellipse at 85% 95%, var(--theme-aurora-glow-2), transparent 55%), color-mix(in oklch, var(--theme-bg-1) 95%, transparent)',
               backdropFilter: 'blur(40px) saturate(140%)',
-              borderColor: 'oklch(1 0 0 / 0.1)',
-              boxShadow:
-                '0 30px 80px oklch(0 0 0 / 0.55), 0 0 0 1px oklch(1 0 0 / 0.04) inset',
             }}
             onClick={handlePanelClick}
           >
             {/* Header: segmented toggle + project chip + close */}
             <div className="flex shrink-0 items-center gap-3 px-4 py-3">
               {/* Segmented pill */}
-              <div
-                className="flex items-center gap-0.5 rounded-lg p-[3px]"
-                style={{
-                  backgroundColor: 'oklch(0 0 0 / 0.3)',
-                  border: '1px solid oklch(1 0 0 / 0.06)',
-                }}
-              >
+              <div className="border-glass-border bg-section-strip flex items-center gap-0.5 rounded-lg p-[3px]">
                 <button
                   className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all"
                   style={
@@ -939,17 +916,12 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
               {hasProjectTab &&
                 resolvedProject &&
                 displayedActiveTab === 'project' && (
-                  <div
-                    className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs transition-opacity"
-                    style={{
-                      color: 'oklch(0.8 0.01 280)',
-                    }}
-                  >
+                  <div className="text-ink-1 inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs transition-opacity">
                     <span
                       className="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-bold"
                       style={{
                         backgroundColor: resolvedProject.color,
-                        color: 'oklch(1 0 0)',
+                        color: 'var(--color-on-acc)',
                       }}
                     >
                       {resolvedProject.name.charAt(0).toUpperCase()}
@@ -968,21 +940,16 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
               <div className="flex-1" />
 
               {/* Settings label */}
-              <span
-                className="font-mono text-[10.5px] tracking-wider uppercase"
-                style={{ color: 'oklch(0.5 0.01 280)' }}
-              >
+              <span className="text-ink-3 font-mono text-[10.5px] tracking-wider uppercase">
                 Settings
               </span>
 
               {/* Close button */}
               <button
-                className="flex items-center justify-center rounded transition-colors"
+                className="bg-glass-medium text-ink-2 hover:bg-glass-strong flex items-center justify-center rounded transition-colors"
                 style={{
                   width: 22,
                   height: 22,
-                  backgroundColor: 'oklch(1 0 0 / 0.06)',
-                  color: 'oklch(0.65 0.01 280)',
                 }}
                 onClick={onClose}
                 aria-label="Close settings"
@@ -995,19 +962,12 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               {/* Left sidebar menu */}
               <div
-                className="flex w-[220px] shrink-0 flex-col"
-                style={{
-                  backgroundColor: 'oklch(0 0 0 / 0.2)',
-                  borderRight: '1px solid oklch(1 0 0 / 0.05)',
-                  padding: '12px 8px',
-                }}
+                className="border-glass-border bg-scrim-medium flex w-[220px] shrink-0 flex-col border-r"
+                style={{ padding: '12px 8px' }}
               >
                 <div
-                  className="mb-2 px-2 font-mono text-[9.5px] font-semibold uppercase"
-                  style={{
-                    letterSpacing: '0.1em',
-                    color: 'oklch(0.5 0.01 280)',
-                  }}
+                  className="text-ink-3 mb-2 px-2 font-mono text-[9.5px] font-semibold uppercase"
+                  style={{ letterSpacing: '0.1em' }}
                 >
                   Sections
                 </div>
@@ -1089,15 +1049,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             </div>
 
             {/* Footer */}
-            <div
-              className="flex shrink-0 items-center gap-3 font-mono text-[10.5px]"
-              style={{
-                backgroundColor: 'oklch(0 0 0 / 0.2)',
-                borderTop: '1px solid oklch(1 0 0 / 0.06)',
-                padding: '9px 16px',
-                color: 'oklch(0.55 0.01 280)',
-              }}
-            >
+            <div className="border-glass-border bg-section-strip text-ink-3 flex shrink-0 items-center gap-3 border-t px-4 py-2.5 font-mono text-[10.5px]">
               <span className="flex items-center gap-1">
                 <Kbd shortcut="up" /> <Kbd shortcut="down" /> navigate
               </span>
@@ -1143,15 +1095,10 @@ function ProjectContent({
       {!fillHeight && section && (
         <div className="mb-5">
           {subItem && (
-            <div
-              className="mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase"
-              style={{ color: 'oklch(0.55 0.01 280)' }}
-            >
+            <div className="text-ink-3 mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase">
               <span>{section.label}</span>
-              <ChevronRight size={10} style={{ opacity: 0.5 }} />
-              <span style={{ color: 'oklch(0.78 0.18 295)' }}>
-                {subItem.label}
-              </span>
+              <ChevronRight size={10} className="opacity-50" />
+              <span className="text-acc">{subItem.label}</span>
             </div>
           )}
         </div>
@@ -1209,9 +1156,9 @@ function GlobalNavSection({
         <span className="flex-1">{section.label}</span>
         {hasSubs &&
           (isExpanded ? (
-            <ChevronDown size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+            <ChevronDown size={12} className="text-ink-3" />
           ) : (
-            <ChevronRight size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+            <ChevronRight size={12} className="text-ink-3" />
           ))}
       </button>
 
@@ -1226,7 +1173,7 @@ function GlobalNavSection({
               top: 4,
               bottom: 4,
               width: 1,
-              background: 'oklch(1 0 0 / 0.08)',
+              background: 'var(--color-glass-border)',
             }}
           />
           {section.subs.map((sub) => {
@@ -1290,9 +1237,9 @@ function ProjectNavSection({
         <span className="flex-1">{section.label}</span>
         {hasSubs &&
           (isExpanded ? (
-            <ChevronDown size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+            <ChevronDown size={12} className="text-ink-3" />
           ) : (
-            <ChevronRight size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+            <ChevronRight size={12} className="text-ink-3" />
           ))}
       </button>
 
@@ -1305,7 +1252,7 @@ function ProjectNavSection({
               top: 4,
               bottom: 4,
               width: 1,
-              background: 'oklch(1 0 0 / 0.08)',
+              background: 'var(--color-glass-border)',
             }}
           />
           {section.subs.map((sub) => {

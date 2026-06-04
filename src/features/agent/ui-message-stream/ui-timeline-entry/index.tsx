@@ -13,6 +13,7 @@ import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { codeToTokens, type ThemedToken } from 'shiki';
 
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { formatNumber } from '@/lib/number';
 import { formatDuration } from '@/lib/time';
 import type { TodoItem } from '@shared/agent-types';
@@ -43,6 +44,7 @@ function LineNumberedContent({
   filePath?: string;
 }) {
   const [tokens, setTokens] = useState<ThemedToken[][] | null>(null);
+  const { shikiTheme } = useColorScheme();
 
   // Check if content has line numbers (format: spaces + number + arrow)
   const lineNumberPattern = /^(\s*\d+)\u2192(.*)$/;
@@ -77,20 +79,20 @@ function LineNumberedContent({
 
     codeToTokens(rawCode || ' ', {
       lang: language,
-      theme: 'github-dark',
+      theme: shikiTheme,
     })
       .then((result) => setTokens(result.tokens))
       .catch(() => {
         // Fallback to no highlighting
         setTokens(null);
       });
-  }, [rawCode, language]);
+  }, [rawCode, language, shikiTheme]);
 
   // Render content without line numbers
   if (!hasLineNumbers || !parsedLines) {
     return (
       <div className="relative">
-        <pre className="text-ink-1 overflow-auto rounded bg-black/30 p-2 whitespace-pre-wrap">
+        <pre className="text-ink-1 overflow-auto rounded bg-panel-scrim-soft p-2 whitespace-pre-wrap">
           {content}
         </pre>
       </div>
@@ -99,7 +101,7 @@ function LineNumberedContent({
 
   return (
     <div className="relative">
-      <div className="overflow-auto rounded bg-black/30 p-2 font-mono text-xs">
+      <div className="overflow-auto rounded bg-panel-scrim-soft p-2 font-mono text-xs">
         <table className="w-full border-collapse">
           <tbody>
             {parsedLines.map((line, i) => {
@@ -285,7 +287,7 @@ function DotEntry({
 
       {/* Content */}
       <div
-        className={`py-1.5 pr-3 ${hasExpandedContent ? 'cursor-pointer hover:bg-white/5' : ''}`}
+        className={`py-1.5 pr-3 ${hasExpandedContent ? 'cursor-pointer hover:bg-glass-subtle' : ''}`}
         onClick={() => hasExpandedContent && setIsExpanded(!isExpanded)}
       >
         {/* Summary row */}
@@ -328,7 +330,7 @@ function DotEntry({
         {/* Expanded content */}
         {isExpanded && expandedContent && (
           <div className="relative mt-2 ml-5 pl-4">
-            <div className="absolute top-1 bottom-1 left-1.5 w-px rounded-full bg-white/[0.06]" />
+            <div className="absolute top-1 bottom-1 left-1.5 w-px rounded-full bg-glass-border" />
             {expandedContent}
           </div>
         )}
@@ -453,6 +455,7 @@ function CompactDiffPreview({
   const [oldTokens, setOldTokens] = useState<ThemedToken[][]>([]);
   const [newTokens, setNewTokens] = useState<ThemedToken[][]>([]);
   const language = getLanguageFromPath(filePath);
+  const { shikiTheme } = useColorScheme();
 
   useEffect(() => {
     let isCancelled = false;
@@ -460,15 +463,15 @@ function CompactDiffPreview({
     Promise.all([
       codeToTokens(oldString || ' ', {
         lang: language,
-        theme: 'github-dark',
+        theme: shikiTheme,
       }).catch(() =>
-        codeToTokens(oldString || ' ', { lang: 'text', theme: 'github-dark' }),
+        codeToTokens(oldString || ' ', { lang: 'text', theme: shikiTheme }),
       ),
       codeToTokens(newString || ' ', {
         lang: language,
-        theme: 'github-dark',
+        theme: shikiTheme,
       }).catch(() =>
-        codeToTokens(newString || ' ', { lang: 'text', theme: 'github-dark' }),
+        codeToTokens(newString || ' ', { lang: 'text', theme: shikiTheme }),
       ),
     ])
       .then(([oldResult, newResult]) => {
@@ -485,7 +488,7 @@ function CompactDiffPreview({
     return () => {
       isCancelled = true;
     };
-  }, [language, oldString, newString]);
+  }, [language, oldString, newString, shikiTheme]);
 
   const preview = useMemo(() => {
     const lines = computeDiff(oldString, newString);
@@ -565,7 +568,7 @@ function CompactDiffPreview({
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
       className={clsx(
-        'text-ink-1 w-full rounded bg-black/30 p-2 text-left font-mono text-xs',
+        'text-ink-1 w-full rounded bg-panel-scrim-soft p-2 text-left font-mono text-xs',
         onClick && 'cursor-pointer hover:bg-blue-500/5',
       )}
       title={onClick ? `Open full diff for ${filePath}` : undefined}
@@ -764,7 +767,7 @@ function ToolEntry({
                       ? `Question ${index + 1}`
                       : 'Question'}
                   </div>
-                  <div className="text-ink-1 rounded bg-black/30 p-2 whitespace-pre-wrap">
+                  <div className="text-ink-1 rounded bg-panel-scrim-soft p-2 whitespace-pre-wrap">
                     {question.question}
                   </div>
                   {ask.result && hasOptions && (
@@ -778,8 +781,8 @@ function ToolEntry({
                             key={option.label}
                             className={`rounded px-2 py-1 text-xs ${
                               isSelected
-                                ? 'bg-teal-600 text-white'
-                                : 'text-ink-3 bg-black/20'
+                                ? 'bg-status-done text-on-acc'
+                                : 'text-ink-3 bg-panel-scrim'
                             }`}
                           >
                             {option.label}
@@ -793,7 +796,7 @@ function ToolEntry({
                       <div className="text-ink-3 mb-1 font-medium">
                         Custom response
                       </div>
-                      <div className="text-ink-1 rounded bg-black/30 p-2 whitespace-pre-wrap">
+                      <div className="text-ink-1 rounded bg-panel-scrim-soft p-2 whitespace-pre-wrap">
                         {responseText}
                       </div>
                     </div>
@@ -803,7 +806,7 @@ function ToolEntry({
                       <div className="text-ink-3 mb-1 font-medium">
                         Response
                       </div>
-                      <div className="text-ink-1 rounded bg-black/30 p-2 whitespace-pre-wrap">
+                      <div className="text-ink-1 rounded bg-panel-scrim-soft p-2 whitespace-pre-wrap">
                         {responseText ?? 'No response'}
                       </div>
                     </div>

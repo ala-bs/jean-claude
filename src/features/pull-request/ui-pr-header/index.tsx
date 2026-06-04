@@ -457,7 +457,7 @@ export function PrHeader({
                   <button
                     onClick={() => publishMutation.mutate()}
                     disabled={publishMutation.isPending}
-                    className="flex items-center gap-1.5 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50"
+                    className="bg-status-done text-on-acc flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors hover:brightness-110 disabled:opacity-50"
                   >
                     {publishMutation.isPending ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />

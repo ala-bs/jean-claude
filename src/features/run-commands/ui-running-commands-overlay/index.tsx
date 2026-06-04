@@ -185,11 +185,11 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         onClick={onClose}
       >
         <div
-          className="bg-bg-0/85 flex max-h-[75svh] w-[min(1000px,96vw)] flex-col overflow-hidden rounded-xl border border-white/10 shadow-2xl shadow-black/50 backdrop-blur-xl"
+          className="bg-bg-0/85 flex max-h-[75svh] w-[min(1000px,96vw)] flex-col overflow-hidden rounded-xl border border-glass-border shadow-2xl shadow-black/50 backdrop-blur-xl"
           onClick={(event) => event.stopPropagation()}
         >
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-white/10 bg-gradient-to-r from-white/5 to-transparent px-4 py-3">
+          <div className="flex items-center justify-between border-b border-glass-border bg-gradient-to-r from-glass-subtle to-transparent px-4 py-3">
             <div className="flex items-center gap-2">
               <Terminal className="text-status-done h-4 w-4" />
               <div>
@@ -223,7 +223,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
           ) : (
             <div className="flex min-h-0 flex-1">
               {/* Left: command list */}
-              <div className="w-64 shrink-0 overflow-y-auto border-r border-white/10 p-2">
+              <div className="w-64 shrink-0 overflow-y-auto border-r border-glass-border p-2">
                 {runningCommands.map((cmd) => {
                   const key = makeKey(cmd.taskId, cmd.commandStatus.id);
                   const isSelected = selectedKey === key;
@@ -236,8 +236,8 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                       className={clsx(
                         'group flex w-full cursor-pointer items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors',
                         isSelected
-                          ? 'text-ink-0 bg-white/10'
-                          : 'text-ink-2 hover:text-ink-1 hover:bg-white/5',
+                          ? 'text-ink-0 bg-glass-medium'
+                          : 'text-ink-2 hover:text-ink-1 hover:bg-glass-light',
                       )}
                       onClick={() => setSelectedKey(key)}
                       onKeyDown={(e) => {
@@ -313,7 +313,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
           )}
 
           {/* Footer with shortcut hints */}
-          <div className="flex items-center gap-4 border-t border-white/10 px-4 py-2">
+          <div className="flex items-center gap-4 border-t border-glass-border px-4 py-2">
             <div className="text-ink-3 flex items-center gap-1.5 text-[11px]">
               <Kbd shortcut="up" />
               <Kbd shortcut="down" />
@@ -355,7 +355,7 @@ function LogViewer({
   return (
     <div className="flex h-full flex-col">
       {/* Log header */}
-      <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+      <div className="flex items-center justify-between border-b border-glass-border px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-ink-1 font-mono text-xs">{command}</span>
           <span className="text-status-done flex items-center gap-1 text-[11px]">

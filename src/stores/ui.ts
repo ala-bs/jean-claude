@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import { applyColorScheme, type ColorScheme } from '@/lib/theme';
+
 export type DiffViewMode = 'inline' | 'side-by-side' | 'current-state';
 
 interface UISettings {
@@ -9,6 +11,7 @@ interface UISettings {
   diffViewMode: DiffViewMode;
   reactScanEnabled: boolean;
   prProjectOrder: string[];
+  colorScheme: ColorScheme;
 }
 
 const UI_SETTINGS_DEFAULTS: UISettings = {
@@ -17,6 +20,7 @@ const UI_SETTINGS_DEFAULTS: UISettings = {
   diffViewMode: 'inline',
   reactScanEnabled: false,
   prProjectOrder: [],
+  colorScheme: 'dark',
 };
 
 function validateSettings(settings: UISettings): UISettings {
@@ -59,6 +63,8 @@ function migrateLegacyKeys(raw: Record<string, unknown>): Partial<UISettings> {
     legacy.prProjectOrder = raw.prProjectOrder.filter(
       (id): id is string => typeof id === 'string',
     );
+  if (raw.colorScheme === 'light' || raw.colorScheme === 'dark')
+    legacy.colorScheme = raw.colorScheme;
   return legacy;
 }
 
@@ -104,6 +110,7 @@ export const useUIStore = create<UIState>()(
             ...legacy,
             ...state.settings,
           });
+          applyColorScheme(state.settings.colorScheme);
         }
       },
     },

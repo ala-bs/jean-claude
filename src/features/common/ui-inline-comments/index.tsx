@@ -24,15 +24,17 @@ import type { PromptImagePart } from '@shared/agent-backend-types';
 // ---------------------------------------------------------------------------
 
 export const COMMENT_ACCENT = {
-  bg: 'color-mix(in oklch, oklch(0.78 0.18 295) 8%, transparent)',
-  bgLight: 'color-mix(in oklch, oklch(0.78 0.18 295) 6%, transparent)',
-  border: 'oklch(0.78 0.18 295 / 0.15)',
-  borderStrong: 'oklch(0.78 0.18 295 / 0.2)',
-  bar: 'oklch(0.78 0.18 295)',
-  barSoft: 'oklch(0.78 0.18 295 / 0.5)',
-  text: 'oklch(0.65 0.15 295)',
-  chipBg: 'color-mix(in oklch, oklch(0.78 0.18 295) 18%, transparent)',
-  chipText: 'oklch(0.78 0.18 295)',
+  bg: 'color-mix(in srgb, var(--color-acc) 8%, transparent)',
+  bgLight: 'color-mix(in srgb, var(--color-acc) 6%, transparent)',
+  border: 'color-mix(in srgb, var(--color-acc) 15%, transparent)',
+  borderStrong: 'color-mix(in srgb, var(--color-acc) 20%, transparent)',
+  bar: 'var(--color-acc)',
+  barSoft: 'color-mix(in srgb, var(--color-acc) 50%, transparent)',
+  text: 'var(--color-acc-ink)',
+  chipBg: 'var(--color-acc-soft)',
+  chipText: 'var(--color-acc)',
+  panelBg: 'var(--color-bg-1)',
+  panelFg: 'var(--color-on-acc)',
 };
 
 type InlineComposerImage = PromptImagePart & {
@@ -332,12 +334,12 @@ export function InlineCommentComposer({
               <img
                 src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                 alt={img.filename || 'Attached image'}
-                className="h-8 w-8 rounded border border-white/10 object-cover"
+                className="h-8 w-8 rounded border border-glass-border object-cover"
               />
               <button
                 type="button"
                 onClick={() => handleImageRemove(index)}
-                className="absolute -top-1 -right-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white group-hover:flex"
+                className="absolute -top-1 -right-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-scrim-strong text-on-acc group-hover:flex"
               >
                 <X className="h-2.5 w-2.5" />
               </button>
@@ -354,7 +356,7 @@ export function InlineCommentComposer({
           disabled={isDisabled}
         >
           {submitLabel}
-          <kbd className="rounded bg-white/20 px-1 py-px font-mono text-[9px]">
+          <kbd className="rounded bg-glass-medium px-1 py-px font-mono text-[9px]">
             {'\u2318\u21B5'}
           </kbd>
         </button>
@@ -639,7 +641,7 @@ export function InlineCommentBubble({
                     <img
                       src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                       alt={img.filename || 'Attached image'}
-                      className="h-8 w-8 rounded border border-white/10 object-cover"
+                      className="h-8 w-8 rounded border border-glass-border object-cover"
                     />
                     <button
                       type="button"
@@ -648,7 +650,7 @@ export function InlineCommentBubble({
                           prev.filter((_, i) => i !== index),
                         )
                       }
-                      className="absolute -top-1 -right-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white group-hover/thumb:flex"
+                      className="absolute -top-1 -right-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-scrim-strong text-on-acc group-hover/thumb:flex"
                     >
                       <X className="h-2.5 w-2.5" />
                     </button>
@@ -669,7 +671,7 @@ export function InlineCommentBubble({
                 }
               >
                 Save
-                <kbd className="rounded bg-white/20 px-1 py-px font-mono text-[9px]">
+                <kbd className="rounded bg-glass-medium px-1 py-px font-mono text-[9px]">
                   {'\u2318\u21B5'}
                 </kbd>
               </button>
@@ -717,7 +719,7 @@ export function InlineCommentBubble({
                     key={`${img.filename ?? 'img'}-${index}`}
                     src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                     alt={img.filename || 'Attached image'}
-                    className="h-8 w-8 rounded border border-white/10 object-cover"
+                    className="h-8 w-8 rounded border border-glass-border object-cover"
                   />
                 ))}
               </div>

@@ -49,7 +49,7 @@ function RootErrorBoundary({ error }: { error: Error }) {
   const router = useRouter();
 
   return (
-    <div className="aurora-app-bg flex h-screen w-screen items-center justify-center text-white">
+    <div className="aurora-app-bg text-ink-0 flex h-screen w-screen items-center justify-center">
       <div className="max-w-lg space-y-4 p-8 text-center">
         <h1 className="text-2xl font-semibold text-red-400">
           Something went wrong

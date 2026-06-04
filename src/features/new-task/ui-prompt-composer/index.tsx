@@ -774,7 +774,7 @@ export function PromptComposer({
       {/* Breadcrumb header */}
       <div
         className="flex shrink-0 items-center gap-2.5 px-[18px] py-3"
-        style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+        style={{ borderBottom: '1px solid var(--color-glass-border)' }}
       >
         <button
           type="button"
@@ -782,9 +782,9 @@ export function PromptComposer({
           className="inline-flex cursor-pointer items-center gap-[5px] rounded-[5px] font-medium"
           style={{
             padding: '4px 9px',
-            background: 'oklch(1 0 0 / 0.04)',
-            border: '1px solid oklch(1 0 0 / 0.07)',
-            color: 'oklch(0.78 0.01 280)',
+            background: 'var(--color-glass-border)',
+            border: '1px solid var(--color-glass-border)',
+            color: 'var(--color-ink-1)',
             fontSize: '11.5px',
           }}
         >
@@ -799,10 +799,10 @@ export function PromptComposer({
         {workItems.slice(0, 4).map((wi) => (
           <span
             key={wi.id}
-            className="inline-flex items-center gap-1 rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10.5px]"
+            className="inline-flex items-center gap-1 rounded bg-glass-subtle px-1.5 py-0.5 font-mono text-[10.5px]"
             style={{
-              border: '1px solid oklch(1 0 0 / 0.07)',
-              color: 'oklch(0.78 0.01 280)',
+              border: '1px solid var(--color-glass-border)',
+              color: 'var(--color-ink-1)',
             }}
           >
             #{wi.id}
@@ -812,14 +812,11 @@ export function PromptComposer({
 
       {/* Comment selection */}
       {comments && comments.length > 0 && (
-        <div style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}>
+        <div style={{ borderBottom: '1px solid var(--color-glass-border)' }}>
           <button
             type="button"
             onClick={() => setShowComments(!showComments)}
-            className="flex w-full items-center gap-2 px-[18px] py-2 text-left"
-            style={{
-              background: showComments ? 'oklch(1 0 0 / 0.02)' : 'transparent',
-            }}
+            className={`flex w-full items-center gap-2 px-[18px] py-2 text-left ${showComments ? 'bg-glass-subtle' : 'bg-transparent'}`}
           >
             <MessageSquare className="text-ink-3 h-3.5 w-3.5" />
             <span className="text-ink-2 text-xs font-medium">Comments</span>
@@ -869,7 +866,7 @@ export function PromptComposer({
                 return (
                   <div
                     key={commentSelectionId}
-                    className="flex cursor-pointer items-start gap-2 rounded px-1 py-1.5 hover:bg-white/[0.03]"
+                    className="flex cursor-pointer items-start gap-2 rounded px-1 py-1.5 hover:bg-glass-subtle"
                     onClick={() => onCommentToggle?.(commentSelectionId)}
                   >
                     <Checkbox
@@ -907,7 +904,7 @@ export function PromptComposer({
       {isLoadingComments && (
         <div
           className="flex items-center gap-2 px-[18px] py-2"
-          style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+          style={{ borderBottom: '1px solid var(--color-glass-border)' }}
         >
           <span className="border-glass-border-strong border-t-ink-1 inline-block h-3 w-3 animate-spin rounded-full border-2" />
           <span className="text-ink-3 text-xs">Loading comments…</span>
@@ -919,14 +916,14 @@ export function PromptComposer({
         {/* Left: Template editor */}
         <div
           className="relative flex flex-1 flex-col overflow-hidden"
-          style={{ borderRight: '1px solid oklch(1 0 0 / 0.04)' }}
+          style={{ borderRight: '1px solid var(--color-glass-border)' }}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
           <div
             className="flex items-center gap-1.5 px-4 py-2.5"
-            style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+            style={{ borderBottom: '1px solid var(--color-glass-border)' }}
           >
             <span className="text-ink-3 font-mono text-[10px] font-semibold tracking-wider uppercase">
               Prompt Template
@@ -939,14 +936,14 @@ export function PromptComposer({
                   className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[11px] font-medium"
                   style={{
                     background: selectedSnippetId
-                      ? 'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)'
-                      : 'oklch(1 0 0 / 0.04)',
+                      ? 'color-mix(in oklch, var(--color-acc) 14%, transparent)'
+                      : 'var(--color-glass-border)',
                     border: selectedSnippetId
-                      ? '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)'
-                      : '1px solid oklch(1 0 0 / 0.07)',
+                      ? '1px solid color-mix(in oklch, var(--color-acc) 30%, transparent)'
+                      : '1px solid var(--color-glass-border)',
                     color: selectedSnippetId
-                      ? 'oklch(0.78 0.18 295)'
-                      : 'oklch(0.78 0.01 280)',
+                      ? 'var(--color-acc)'
+                      : 'var(--color-ink-1)',
                   }}
                 >
                   {selectedSnippetId
@@ -957,22 +954,17 @@ export function PromptComposer({
                 </button>
                 {showSnippetDropdown && (
                   <div
-                    className="absolute top-full left-0 z-20 mt-1 min-w-[180px] overflow-hidden rounded-lg border py-1"
-                    style={{
-                      background: 'oklch(0.16 0.015 280)',
-                      borderColor: 'oklch(1 0 0 / 0.1)',
-                      boxShadow: '0 8px 24px oklch(0 0 0 / 0.4)',
-                    }}
+                    className="border-glass-border bg-bg-1 absolute top-full left-0 z-20 mt-1 min-w-[180px] overflow-hidden rounded-lg border py-1 shadow-[var(--theme-shadow-ambient)]"
                   >
                     <button
                       type="button"
                       onClick={() => handleSnippetSelect(null)}
-                      className="flex w-full items-center px-3 py-1.5 text-left text-[11.5px] hover:bg-white/[0.05]"
+                      className="flex w-full items-center px-3 py-1.5 text-left text-[11.5px] hover:bg-glass-light"
                       style={{
                         color:
                           selectedSnippetId === null
-                            ? 'oklch(0.78 0.18 295)'
-                            : 'oklch(0.78 0.01 280)',
+                            ? 'var(--color-acc)'
+                            : 'var(--color-ink-1)',
                       }}
                     >
                       Default template
@@ -982,16 +974,14 @@ export function PromptComposer({
                         key={snippet.id}
                         type="button"
                         onClick={() => handleSnippetSelect(snippet.id)}
-                        className="flex w-full flex-col items-start px-3 py-1.5 text-left hover:bg-white/[0.05]"
+                        className="flex w-full flex-col items-start px-3 py-1.5 text-left hover:bg-glass-light"
                       >
                         <span
-                          className="text-[11.5px] font-medium"
-                          style={{
-                            color:
-                              selectedSnippetId === snippet.id
-                                ? 'oklch(0.78 0.18 295)'
-                                : 'oklch(0.88 0.01 280)',
-                          }}
+                          className={
+                            selectedSnippetId === snippet.id
+                              ? 'text-acc text-[11.5px] font-medium'
+                              : 'text-ink-1 text-[11.5px] font-medium'
+                          }
                         >
                           {snippet.name}
                         </span>
@@ -1070,13 +1060,7 @@ export function PromptComposer({
               featureMap={featureMap}
             />
           </div>
-          <div
-            className="px-4 py-2"
-            style={{
-              borderTop: '1px solid oklch(1 0 0 / 0.04)',
-              background: 'oklch(0 0 0 / 0.22)',
-            }}
-          >
+          <div className="border-glass-border bg-section-strip border-t px-4 py-2">
             <span className="text-ink-3 font-mono text-[10px] font-semibold tracking-wider uppercase">
               {selectedSnippetId
                 ? 'Handlebars template — use {{#each workItems}} to iterate'
@@ -1094,13 +1078,10 @@ export function PromptComposer({
         </div>
 
         {/* Right: Preview */}
-        <div
-          className="flex flex-1 flex-col overflow-hidden"
-          style={{ background: 'oklch(0 0 0 / 0.18)' }}
-        >
+        <div className="bg-bg-1 flex flex-1 flex-col overflow-hidden">
           <div
             className="flex items-center gap-1.5 px-4 py-2.5"
-            style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+            style={{ borderBottom: '1px solid var(--color-glass-border)' }}
           >
             <span className="text-ink-3 font-mono text-[10px] font-semibold tracking-wider uppercase">
               Preview
@@ -1121,7 +1102,7 @@ export function PromptComposer({
       {(isFetchingImages || (images && images.length > 0)) && (
         <div
           className="flex shrink-0 items-center gap-2 px-[18px] py-2"
-          style={{ borderTop: '1px solid oklch(1 0 0 / 0.04)' }}
+          style={{ borderTop: '1px solid var(--color-glass-border)' }}
         >
           {isFetchingImages && (
             <div className="text-ink-2 flex items-center gap-2 text-xs">
@@ -1137,8 +1118,7 @@ export function PromptComposer({
               return (
                 <div
                   key={`${image.filename ?? 'img'}-${index}`}
-                  className="group relative h-12 w-12 shrink-0 rounded border"
-                  style={{ borderColor: 'oklch(1 0 0 / 0.08)' }}
+                  className="border-glass-border group relative h-12 w-12 shrink-0 rounded border"
                 >
                   <button
                     type="button"
@@ -1152,13 +1132,7 @@ export function PromptComposer({
                       className="h-full w-full object-cover transition duration-150 group-focus-within:scale-105 group-focus-within:brightness-75 group-hover:scale-105 group-hover:brightness-75"
                     />
                     <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
-                      <span
-                        className="flex h-6 w-6 items-center justify-center rounded-full border"
-                        style={{
-                          background: 'oklch(0.2 0.02 280 / 0.72)',
-                          borderColor: 'oklch(1 0 0 / 0.14)',
-                        }}
-                      >
+                      <span className="border-glass-border-strong bg-scrim-strong flex h-6 w-6 items-center justify-center rounded-full border">
                         <Eye className="text-ink-0 h-3.5 w-3.5" />
                       </span>
                     </span>
@@ -1170,11 +1144,7 @@ export function PromptComposer({
                         event.stopPropagation();
                         onImageRemove(index);
                       }}
-                      className="absolute top-0 right-0 flex h-4 w-4 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border transition-transform hover:scale-110"
-                      style={{
-                        background: 'oklch(0.2 0.02 280 / 0.92)',
-                        borderColor: 'oklch(1 0 0 / 0.16)',
-                      }}
+                      className="border-glass-border-strong bg-scrim-strong absolute top-0 right-0 flex h-4 w-4 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border transition-transform hover:scale-110"
                       aria-label={`Remove ${image.filename ?? `image ${index + 1}`}`}
                     >
                       <X className="text-ink-0 h-2.5 w-2.5" />
@@ -1190,13 +1160,12 @@ export function PromptComposer({
       {files && files.length > 0 && (
         <div
           className="flex shrink-0 flex-wrap items-center gap-2 px-[18px] py-2"
-          style={{ borderTop: '1px solid oklch(1 0 0 / 0.04)' }}
+          style={{ borderTop: '1px solid var(--color-glass-border)' }}
         >
           {files.map((file, index) => (
             <div
               key={`${file.filename}-${index}`}
-              className="group relative flex items-center gap-1.5 rounded border px-2 py-1"
-              style={{ borderColor: 'oklch(1 0 0 / 0.08)' }}
+              className="border-glass-border group relative flex items-center gap-1.5 rounded border px-2 py-1"
             >
               <Paperclip className="text-ink-3 h-3 w-3 shrink-0" />
               <span className="text-ink-2 max-w-[120px] truncate text-xs">
@@ -1206,8 +1175,7 @@ export function PromptComposer({
                 <button
                   type="button"
                   onClick={() => onFileRemove(index)}
-                  className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
-                  style={{ background: 'oklch(0 0 0 / 0.6)' }}
+                  className="bg-scrim-strong absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
                 >
                   <X className="text-ink-0 h-3 w-3" />
                 </button>

@@ -80,7 +80,7 @@ export function KillPortsModal({
             type="button"
             onClick={onConfirm}
             disabled={isLoading}
-            className="flex items-center gap-2 rounded-md bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-700 disabled:opacity-50"
+            className="bg-status-run text-on-acc flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium hover:brightness-110 disabled:opacity-50"
           >
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
             Kill & Start

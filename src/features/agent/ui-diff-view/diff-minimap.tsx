@@ -140,7 +140,7 @@ export function DiffMinimap({
             left: 0,
             width: '3px',
             minHeight: '2px',
-            background: 'oklch(0.78 0.18 295)',
+            background: 'var(--color-acc)',
           }}
         />
       ))}

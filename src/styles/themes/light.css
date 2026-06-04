@@ -1,0 +1,168 @@
+/* Light theme — VS Code Light+ workbench & syntax palette */
+[data-theme='light'] {
+  /* Surfaces — light_vs.json workbench colors */
+  --theme-bg-0: #ffffff;
+  --theme-bg-1: #f3f3f3;
+  --theme-bg-2: #f8f8f8;
+  --theme-bg-3: #e8e8e8;
+  --theme-bg-4: #e5ebf1;
+
+  --theme-line: #d4d4d4;
+  --theme-line-soft: #e8e8e8;
+
+  /* Text — editor.foreground, sideBarTitle, placeholders */
+  --theme-ink-0: #000000;
+  --theme-ink-1: #333333;
+  --theme-ink-2: #6f6f6f;
+  --theme-ink-3: #767676;
+  --theme-ink-4: #919191;
+
+  /* Accent — activityBarBadge.background (#007ACC) */
+  --theme-acc: #007acc;
+  --theme-acc-soft: color-mix(in srgb, #007acc 14%, transparent);
+  --theme-acc-line: color-mix(in srgb, #007acc 38%, transparent);
+  --theme-acc-ink: #005a9e;
+
+  /* Status — readable on white (VS Code semantic / status colors) */
+  --theme-status-run: #bc6c00;
+  --theme-status-done: #16825d;
+  --theme-status-review: #0451a5;
+  --theme-status-pr: #007acc;
+  --theme-status-fail: #c72e0f;
+  --theme-status-azure: #0078d4;
+
+  --theme-status-run-soft: color-mix(in srgb, #bc6c00 12%, transparent);
+  --theme-status-done-soft: color-mix(in srgb, #16825d 12%, transparent);
+  --theme-status-review-soft: color-mix(in srgb, #0451a5 10%, transparent);
+  --theme-status-pr-soft: color-mix(in srgb, #007acc 10%, transparent);
+  --theme-status-fail-soft: color-mix(in srgb, #c72e0f 10%, transparent);
+  --theme-status-azure-soft: color-mix(in srgb, #0078d4 10%, transparent);
+
+  /* Glass — dark overlays on light surfaces */
+  --theme-glass-subtle: rgb(0 0 0 / 0.02);
+  --theme-glass-light: rgb(0 0 0 / 0.04);
+  --theme-glass-medium: rgb(0 0 0 / 0.06);
+  --theme-glass-strong: rgb(0 0 0 / 0.08);
+  --theme-glass-border: rgb(0 0 0 / 0.1);
+  --theme-glass-border-strong: rgb(0 0 0 / 0.14);
+
+  --theme-scrim: rgb(0 0 0 / 0.04);
+  --theme-scrim-medium: rgb(0 0 0 / 0.08);
+  --theme-scrim-strong: rgb(0 0 0 / 0.45);
+  --theme-panel-scrim: rgb(0 0 0 / 0.03);
+  --theme-panel-scrim-soft: rgb(0 0 0 / 0.05);
+
+  --theme-code-bg: #ffffff;
+  --theme-chrome-fg: #333333;
+  --theme-chrome-fg-muted: #6f6f6f;
+  --theme-chrome-hover: rgb(0 0 0 / 0.06);
+  --theme-chrome-border: #d4d4d4;
+  --theme-on-acc: #ffffff;
+
+  --theme-primary: #007acc;
+  --theme-primary-dim: #005a9e;
+  --theme-primary-container: #e5ebf1;
+  --theme-secondary: #0451a5;
+  --theme-secondary-dim: #003f7f;
+  --theme-tertiary: #267f99;
+  --theme-error-dim: #a31515;
+
+  --theme-surface: #ffffff;
+  --theme-surface-bright: #ffffff;
+  --theme-surface-variant: #f3f3f3;
+  --theme-surface-tint: color-mix(in srgb, #007acc 6%, transparent);
+  --theme-surface-container-lowest: #ffffff;
+  --theme-surface-container-low: #f8f8f8;
+  --theme-surface-container: #f3f3f3;
+  --theme-surface-container-high: #e8e8e8;
+  --theme-surface-container-highest: #e5ebf1;
+
+  --theme-on-surface: #000000;
+  --theme-on-surface-variant: #6f6f6f;
+  --theme-on-primary: #ffffff;
+  --theme-on-secondary: #ffffff;
+  --theme-outline-variant: #d4d4d4;
+
+  --theme-shadow-ambient: 0 16px 40px rgb(0 0 0 / 0.12);
+  --theme-shadow-focus-glow: 0 0 0 4px color-mix(in srgb, #007acc 25%, transparent);
+
+  /* Subtle cool tint on white — Light+ feel without heavy aurora */
+  --theme-aurora-glow-1: color-mix(in srgb, #007acc 10%, transparent);
+  --theme-aurora-glow-2: color-mix(in srgb, #267f99 8%, transparent);
+  --theme-aurora-glow-3: color-mix(in srgb, #af00db 4%, transparent);
+  --theme-aurora-base: #ffffff;
+
+  --theme-separator-stop: rgb(0 0 0 / 0.08);
+  --theme-panel-edge: rgb(0 0 0 / 0.06);
+
+  --theme-overlay-glow-1: color-mix(in srgb, #007acc 8%, transparent);
+  --theme-overlay-glow-2: color-mix(in srgb, #267f99 6%, transparent);
+  --theme-overlay-panel: rgb(255 255 255 / 0.96);
+  --theme-overlay-backdrop: rgb(0 0 0 / 0.35);
+  --theme-overlay-footer: rgb(0 0 0 / 0.04);
+
+  --theme-settings-tab-active-fg: #ffffff;
+  --theme-settings-tab-inactive-fg: #6f6f6f;
+  --theme-settings-nav-active-fg: #000000;
+  --theme-settings-nav-inactive-fg: #6f6f6f;
+  --theme-settings-nav-icon-active: #007acc;
+  --theme-settings-nav-icon-inactive: #767676;
+
+  /* Syntax-adjacent tokens for inline code / diffs (Light+ tokenColors) */
+  --theme-syntax-comment: #008000;
+  --theme-syntax-keyword: #0000ff;
+  --theme-syntax-string: #a31515;
+  --theme-syntax-number: #098658;
+  --theme-syntax-function: #795e26;
+  --theme-syntax-type: #267f99;
+  --theme-syntax-variable: #001080;
+  --theme-syntax-constant: #0070c1;
+  --theme-syntax-control: #af00db;
+  --theme-syntax-regexp: #811f3f;
+  --theme-syntax-invalid: #cd3131;
+  --theme-syntax-tag: #800000;
+  --theme-syntax-attribute: #e50000;
+
+  /* Agent message panel — VS Code editor / panel surfaces */
+  --theme-agent-panel-bg: #ffffff;
+  --theme-agent-panel-border: #e8e8e8;
+  --theme-agent-panel-header-bg: #f3f3f3;
+  --theme-agent-todo-checkbox-border: #d4d4d4;
+  --theme-agent-todo-strike: #c8c8c8;
+
+  /* List section strips — VS Code list/suggest backgrounds */
+  --theme-section-strip-bg: #f3f3f3;
+
+  /* ANSI terminal (Light+ on white log background) */
+  --theme-ansi-black: #000000;
+  --theme-ansi-red: #cd3131;
+  --theme-ansi-green: #098658;
+  --theme-ansi-yellow: #bc6c00;
+  --theme-ansi-blue: #0451a5;
+  --theme-ansi-magenta: #af00db;
+  --theme-ansi-cyan: #267f99;
+  --theme-ansi-white: #333333;
+  --theme-ansi-bright-black: #666666;
+  --theme-ansi-bright-red: #a31515;
+  --theme-ansi-bright-green: #16825d;
+  --theme-ansi-bright-yellow: #8b6914;
+  --theme-ansi-bright-blue: #007acc;
+  --theme-ansi-bright-magenta: #871094;
+  --theme-ansi-bright-cyan: #1b6e6e;
+  --theme-ansi-bright-white: #000000;
+
+  /* Shrink-to-target fly animation ghost */
+  --theme-shrink-ghost-bg: var(--theme-bg-1);
+  --theme-shrink-ghost-border: var(--theme-chrome-border);
+  --theme-shrink-ghost-shadow: var(--theme-shadow-ambient);
+  --theme-shrink-ghost-squircle-bg: var(--theme-bg-3);
+  --theme-shrink-ghost-squircle-border: var(--theme-glass-border-strong);
+  --theme-shrink-ghost-squircle-glow: 0 0 24px 4px color-mix(in srgb, var(--theme-acc) 18%, transparent),
+    0 0 48px 8px color-mix(in srgb, var(--theme-acc) 8%, transparent);
+  --theme-shrink-ghost-fly-glow: 0 0 12px 3px color-mix(in srgb, var(--theme-acc) 12%, transparent);
+
+  /* Kbd on saturated action buttons */
+  --theme-kbd-on-saturated-fg: #ffffff;
+  --theme-kbd-on-saturated-border: rgb(255 255 255 / 0.7);
+  --theme-kbd-on-saturated-bg: rgb(255 255 255 / 0.15);
+}

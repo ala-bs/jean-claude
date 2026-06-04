@@ -102,7 +102,7 @@ let styleInjected = false;
 function ensureHighlightStyle() {
   if (styleInjected) return;
   const style = document.createElement('style');
-  style.textContent = `::highlight(${HIGHLIGHT_NAME}) { background-color: oklch(0.78 0.18 295 / 0.3); border-radius: 2px; }`;
+  style.textContent = `::highlight(${HIGHLIGHT_NAME}) { background-color: color-mix(in srgb, var(--color-acc) 30%, transparent); border-radius: 2px; }`;
   document.head.appendChild(style);
   styleInjected = true;
 }
@@ -399,7 +399,7 @@ export function CommentableWrapper({
           style={{
             top: floatingPos.top,
             left: Math.min(floatingPos.left, 200),
-            background: 'oklch(0.22 0.02 295)',
+            background: COMMENT_ACCENT.panelBg,
             color: COMMENT_ACCENT.chipText,
             border: `1px solid ${COMMENT_ACCENT.borderStrong}`,
           }}
@@ -417,7 +417,7 @@ export function CommentableWrapper({
           className="absolute right-0 left-0 z-10 rounded-md px-3 py-2.5"
           style={{
             top: composerPos.top,
-            background: 'oklch(0.18 0.02 295)',
+            background: COMMENT_ACCENT.panelBg,
             border: `1px solid ${COMMENT_ACCENT.borderStrong}`,
           }}
         >
@@ -455,7 +455,7 @@ export function CommentableWrapper({
                   ? COMMENT_ACCENT.chipText
                   : COMMENT_ACCENT.chipBg,
                 color: isActive
-                  ? 'oklch(0.16 0.02 295)'
+                  ? COMMENT_ACCENT.panelFg
                   : COMMENT_ACCENT.chipText,
                 border: `1px solid ${COMMENT_ACCENT.borderStrong}`,
               }}
@@ -474,7 +474,7 @@ export function CommentableWrapper({
                 className="absolute right-0 left-0 z-20 rounded-md px-3 py-2.5 shadow-xl"
                 style={{
                   top: position.top + 24,
-                  background: 'oklch(0.18 0.02 295)',
+                  background: COMMENT_ACCENT.panelBg,
                   border: `1px solid ${COMMENT_ACCENT.borderStrong}`,
                 }}
               >

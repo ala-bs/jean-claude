@@ -2,17 +2,20 @@ import {
   Check,
   FolderOpen,
   GitBranch,
+  Moon,
   Bell,
   CircleAlert,
   ExternalLink,
   RefreshCw,
   Search,
   Star,
+  Sun,
   Trash2,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
 import { Select } from '@/common/ui/select';
@@ -362,9 +365,48 @@ export function MaintenanceSettings() {
   );
 }
 
+function AppearanceSettings() {
+  const { colorScheme, setColorScheme } = useColorScheme();
+
+  return (
+    <div>
+      <h2 className="text-ink-1 text-lg font-semibold">Appearance</h2>
+      <p className="text-ink-3 mt-1 text-sm">
+        Choose light or dark mode for the interface
+      </p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button
+          onClick={() => setColorScheme('dark')}
+          icon={<Moon className="h-3.5 w-3.5" />}
+          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+            colorScheme === 'dark'
+              ? 'border-acc bg-acc/20 text-acc-ink'
+              : 'border-glass-border bg-bg-1 text-ink-1 hover:border-glass-border-strong hover:bg-glass-medium'
+          }`}
+        >
+          Dark
+        </Button>
+        <Button
+          onClick={() => setColorScheme('light')}
+          icon={<Sun className="h-3.5 w-3.5" />}
+          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+            colorScheme === 'light'
+              ? 'border-acc bg-acc/20 text-acc-ink'
+              : 'border-glass-border bg-bg-1 text-ink-1 hover:border-glass-border-strong hover:bg-glass-medium'
+          }`}
+        >
+          Light
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function GeneralSettings() {
   return (
     <div>
+      <AppearanceSettings />
+      <div className="border-line-soft my-8 border-t" />
       <EditorSettings />
       <div className="border-line-soft my-8 border-t" />
       <NotificationsSettings />

@@ -41,7 +41,7 @@ export function SkillEntry({
 
       {/* Clickable header */}
       <div
-        className="flex cursor-pointer items-center gap-2 py-1.5 pr-3 hover:bg-white/5"
+        className="flex cursor-pointer items-center gap-2 py-1.5 pr-3 hover:bg-glass-light"
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <Wand2 className="h-3 w-3 shrink-0 text-purple-400" />
@@ -61,8 +61,8 @@ export function SkillEntry({
       {/* Expanded content */}
       {isExpanded && promptText && (
         <div className="relative mb-2 ml-5 pr-3 pl-4">
-          <div className="absolute top-1 bottom-1 left-1.5 w-px rounded-full bg-white/[0.06]" />
-          <div className="text-ink-1 max-h-96 overflow-auto rounded bg-black/30 p-3 text-xs">
+          <div className="absolute top-1 bottom-1 left-1.5 w-px rounded-full bg-glass-subtle" />
+          <div className="text-ink-1 max-h-96 overflow-auto rounded bg-code-bg p-3 text-xs">
             <MarkdownContent
               content={promptText}
               onFilePathClick={onFilePathClick}

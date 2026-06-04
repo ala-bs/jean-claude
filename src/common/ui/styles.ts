@@ -65,6 +65,8 @@ export type ButtonVariant =
   | 'secondary'
   | 'ghost'
   | 'danger'
+  | 'success'
+  | 'warning'
   | 'tab'
   | 'unstyled';
 
@@ -81,7 +83,7 @@ export const buttonVariantClasses: Record<
   }
 > = {
   primary: {
-    base: 'bg-acc text-bg-0 border border-transparent',
+    base: 'bg-acc text-on-acc border border-transparent',
     hover: 'hover:brightness-110',
     active: 'active:brightness-90',
   },
@@ -101,16 +103,28 @@ export const buttonVariantClasses: Record<
     active: 'active:bg-glass-medium',
   },
   danger: {
-    base: 'bg-status-fail text-ink-0 border border-transparent',
+    base: 'bg-status-fail text-on-acc border border-transparent',
+    hover: 'hover:brightness-110',
+    active: 'active:brightness-90',
+  },
+  success: {
+    base: 'bg-status-done text-on-acc border border-transparent',
+    hover: 'hover:brightness-110',
+    active: 'active:brightness-90',
+  },
+  warning: {
+    base: 'bg-status-run text-on-acc border border-transparent',
     hover: 'hover:brightness-110',
     active: 'active:brightness-90',
   },
   tab: {
-    base: 'border border-transparent',
+    base: 'border transition-colors',
     hover: '',
     active: '',
-    selected: 'bg-glass-strong font-medium text-ink-0',
-    unselected: 'text-ink-2 hover:bg-glass-light hover:text-ink-1',
+    selected:
+      'bg-glass-strong text-ink-0 border-glass-border-strong font-medium',
+    unselected:
+      'text-ink-2 bg-bg-1 border-glass-border hover:bg-glass-light hover:text-ink-1',
   },
   unstyled: {
     base: '',

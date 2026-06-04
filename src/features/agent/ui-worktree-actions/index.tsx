@@ -372,7 +372,7 @@ export function WorktreeActions({
               href={pullRequestUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex flex-1 items-center justify-center gap-2 rounded-md bg-green-700 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-green-600"
+              className="bg-status-done text-on-acc flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:brightness-110"
               title="View pull request"
             >
               <ExternalLink className="h-4 w-4" />
@@ -383,10 +383,10 @@ export function WorktreeActions({
           <Button
             onClick={onOpenPrView}
             disabled={!canCreatePr}
-            variant="primary"
+            variant="success"
             size="md"
             icon={<GitPullRequest />}
-            className="w-full bg-green-700 hover:bg-green-600"
+            className="w-full"
             title="Create pull request"
           >
             Create PR

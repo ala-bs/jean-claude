@@ -103,7 +103,7 @@ export function FileEditorDialog({
             type="button"
             onClick={handleSave}
             disabled={!filename.trim() || !content}
-            className="bg-acc hover:bg-acc/90 disabled:bg-glass-medium disabled:text-ink-3 rounded px-3 py-1.5 text-xs text-white disabled:cursor-not-allowed"
+            className="bg-acc hover:bg-acc/90 disabled:bg-glass-medium disabled:text-ink-3 text-on-acc rounded px-3 py-1.5 text-xs disabled:cursor-not-allowed"
           >
             Attach file
           </button>

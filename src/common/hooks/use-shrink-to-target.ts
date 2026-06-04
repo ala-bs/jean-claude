@@ -1,6 +1,8 @@
 import { animate } from 'framer-motion';
 import { useCallback, type RefObject } from 'react';
 
+import { getShrinkGhostThemeStyles } from '@/lib/shrink-ghost-theme';
+
 /**
  * Three-phase "squeeze, shrink, fly" animation:
  *
@@ -41,6 +43,8 @@ export function useShrinkToTarget({
     const shrunkLeft = panelCenterX - squareSize / 2;
     const shrunkTop = panelCenterY - squareSize / 2;
 
+    const ghostTheme = getShrinkGhostThemeStyles();
+
     // Create ghost element matching the overlay panel
     const ghost = document.createElement('div');
     Object.assign(ghost.style, {
@@ -53,10 +57,9 @@ export function useShrinkToTarget({
       zIndex: '60',
       pointerEvents: 'none',
       borderRadius: '8px',
-      border: '1px solid rgb(64, 64, 64)',
-      background: 'rgb(38, 38, 38)',
-      boxShadow:
-        '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 100px -20px rgba(0,0,0,0.6)',
+      border: ghostTheme.initial.border,
+      background: ghostTheme.initial.background,
+      boxShadow: ghostTheme.initial.boxShadow,
       overflow: 'hidden',
     });
     document.body.appendChild(ghost);
@@ -88,10 +91,9 @@ export function useShrinkToTarget({
           width: `${squareSize}px`,
           opacity: 0.9,
           borderRadius: `20px`,
-          boxShadow:
-            '0 0 30px 6px rgba(255,255,255,0.25), 0 0 60px 12px rgba(255,255,255,0.08)',
-          border: '1px solid rgba(255,255,255,0.5)',
-          background: 'rgb(65, 65, 75)',
+          boxShadow: ghostTheme.squircle.boxShadow,
+          border: ghostTheme.squircle.border,
+          background: ghostTheme.squircle.background,
         },
         {
           type: 'spring',
@@ -116,7 +118,7 @@ export function useShrinkToTarget({
           width: `${finalSize}px`,
           height: `${finalSize}px`,
           opacity: 0,
-          boxShadow: '0 0 12px 3px rgba(255,255,255,0.15)',
+          boxShadow: ghostTheme.fly.boxShadow,
         },
         {
           duration: PHASE_2_DURATION,

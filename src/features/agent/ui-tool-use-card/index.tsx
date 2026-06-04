@@ -105,7 +105,7 @@ export function ToolUseCard({ toolUse }: { toolUse: NormalizedToolUse }) {
     <div className={`rounded-lg border ${colorClass} overflow-hidden`}>
       {/* Tool header */}
       <button
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium hover:bg-white/5"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium hover:bg-glass-light"
         onClick={() => setIsExpanded(!isExpanded)}
       >
         {isExpanded ? (
@@ -129,16 +129,16 @@ export function ToolUseCard({ toolUse }: { toolUse: NormalizedToolUse }) {
 
       {/* Collapsed input preview */}
       {!isExpanded && (
-        <div className="border-t border-white/10 bg-black/20 px-3 py-1.5">
+        <div className="border-t border-glass-border bg-scrim-medium px-3 py-1.5">
           <pre className="text-ink-1">{formattedInput}</pre>
         </div>
       )}
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="border-t border-white/10">
+        <div className="border-t border-glass-border">
           {/* Input section */}
-          <div className="bg-black/20 px-3 py-2">
+          <div className="bg-scrim-medium px-3 py-2">
             <div className="text-ink-3 mb-1 text-xs font-medium">Input</div>
             <pre className="text-ink-1 overflow-x-auto text-xs whitespace-pre-wrap">
               {formattedInput}
@@ -148,7 +148,7 @@ export function ToolUseCard({ toolUse }: { toolUse: NormalizedToolUse }) {
           {/* Result section */}
           {hasResult && (
             <div
-              className={`border-t border-white/10 px-3 py-2 ${isError ? 'bg-red-900/20' : 'bg-black/10'}`}
+              className={`border-t border-glass-border px-3 py-2 ${isError ? 'bg-red-900/20' : 'bg-scrim-medium'}`}
             >
               <div
                 className={`mb-1 text-xs font-medium ${isError ? 'text-status-fail' : 'text-ink-3'}`}
@@ -166,7 +166,7 @@ export function ToolUseCard({ toolUse }: { toolUse: NormalizedToolUse }) {
       {/* Collapsed result preview */}
       {!isExpanded && hasResult && (
         <div
-          className={`border-t border-white/10 px-3 py-1.5 ${isError ? 'bg-red-900/20' : 'bg-black/10'}`}
+          className={`border-t border-glass-border px-3 py-1.5 ${isError ? 'bg-red-900/20' : 'bg-scrim-medium'}`}
         >
           <span
             className={`text-xs ${isError ? 'text-status-fail' : 'text-ink-3'}`}

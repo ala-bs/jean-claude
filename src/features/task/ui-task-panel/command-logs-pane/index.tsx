@@ -278,13 +278,11 @@ export function CommandLogsPane({
               <Button
                 key={tab.id}
                 type="button"
+                variant="tab"
+                size="xs"
+                active={activeCommandId === tab.id}
                 onClick={() => onSelectCommand(tab.id)}
-                className={clsx(
-                  'max-w-64 truncate rounded px-2.5 py-1 text-xs font-medium transition-colors',
-                  activeCommandId === tab.id
-                    ? 'bg-acc text-ink-0'
-                    : 'text-ink-1 bg-bg-1 hover:bg-glass-medium',
-                )}
+                className="max-w-64 truncate px-2.5"
                 title={getRunCommandDisplayName(tab)}
               >
                 {getRunCommandDisplayName(tab)}

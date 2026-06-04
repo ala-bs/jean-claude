@@ -10,9 +10,12 @@ import {
 export function Kbd({
   shortcut,
   className,
+  variant = 'default',
 }: {
   shortcut: BindingKey;
   className?: string;
+  /** White key cap for shortcuts on saturated accent buttons */
+  variant?: 'default' | 'on-accent';
 }) {
   const layoutMap = useKeyboardLayout();
 
@@ -29,7 +32,10 @@ export function Kbd({
   return (
     <kbd
       className={clsx(
-        'border-glass-border bg-bg-1/50 text-ink-3 rounded border px-1.5 py-0.5 font-mono text-[10px]',
+        'rounded border px-1.5 py-0.5 font-mono text-[10px]',
+        variant === 'on-accent'
+          ? 'border-[color:var(--theme-kbd-on-saturated-border)] bg-[color:var(--theme-kbd-on-saturated-bg)] text-[color:var(--theme-kbd-on-saturated-fg)]'
+          : 'border-glass-border bg-bg-1/50 text-ink-3',
         className,
       )}
     >

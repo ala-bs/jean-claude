@@ -282,7 +282,7 @@ function CurrentStateRow({
           ...(hasComment && !isSelected && !isInCommentRange
             ? {
                 background:
-                  'color-mix(in oklch, oklch(0.78 0.18 295) 8%, transparent)',
+                  'color-mix(in oklch, var(--color-acc) 8%, transparent)',
               }
             : {}),
         }}
@@ -321,7 +321,7 @@ function CurrentStateRow({
           )}
           style={
             hasComment && !isSelected && !isInCommentRange
-              ? { borderLeft: '2px solid oklch(0.78 0.18 295 / 0.5)' }
+              ? { borderLeft: '2px solid color-mix(in srgb, var(--color-acc) 50%, transparent)' }
               : undefined
           }
         >

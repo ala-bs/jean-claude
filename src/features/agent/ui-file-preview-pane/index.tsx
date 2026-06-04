@@ -2,6 +2,7 @@ import { X, ExternalLink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { codeToHtml } from 'shiki';
 
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { api } from '@/lib/api';
 
 export function FilePreviewPane({
@@ -22,6 +23,7 @@ export function FilePreviewPane({
   const [language, setLanguage] = useState<string>('text');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const { shikiTheme } = useColorScheme();
 
   // Resolve full path
   const fullPath = filePath.startsWith('/')
@@ -56,17 +58,17 @@ export function FilePreviewPane({
 
     codeToHtml(content, {
       lang: language,
-      theme: 'github-dark',
+      theme: shikiTheme,
     })
       .then(setHtml)
       .catch(() => {
         // Fallback for unsupported languages
         codeToHtml(content, {
           lang: 'text',
-          theme: 'github-dark',
+          theme: shikiTheme,
         }).then(setHtml);
       });
-  }, [content, language]);
+  }, [content, language, shikiTheme]);
 
   // Scroll to highlighted line
   useEffect(() => {

@@ -286,7 +286,7 @@ export function WorkItemPicker({
         {/* Header toolbar */}
         <div
           className="flex shrink-0 items-center gap-2 px-3 py-2"
-          style={{ borderBottom: '1px solid oklch(1 0 0 / 0.04)' }}
+          style={{ borderBottom: '1px solid var(--color-glass-border)' }}
         >
           {/* Count */}
           <span className="text-ink-2 text-xs">
@@ -392,8 +392,8 @@ export function WorkItemPicker({
       <div
         className="min-w-0 flex-1 overflow-y-auto border-l p-3"
         style={{
-          borderColor: 'oklch(1 0 0 / 0.04)',
-          background: 'oklch(0 0 0 / 0.22)',
+          borderColor: 'var(--color-glass-border)',
+          background: 'var(--color-section-strip)',
         }}
       >
         <WorkItemPreview

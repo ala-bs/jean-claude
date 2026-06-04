@@ -441,10 +441,9 @@ export function PermissionBar({
               <div className="flex-1" />
               <Button
                 onClick={handleAllow}
-                variant="primary"
+                variant="success"
                 size="sm"
                 icon={<Check />}
-                className="bg-green-600 hover:bg-green-500"
               >
                 Allow
               </Button>

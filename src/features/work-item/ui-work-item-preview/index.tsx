@@ -250,8 +250,8 @@ function ExpandableTestCase({
     <div
       className="rounded-md border"
       style={{
-        borderColor: 'oklch(1 0 0 / 0.06)',
-        background: 'oklch(1 0 0 / 0.02)',
+        borderColor: 'var(--color-glass-border)',
+        background: 'var(--color-glass-subtle)',
       }}
     >
       <button
@@ -274,7 +274,7 @@ function ExpandableTestCase({
       {expanded && (
         <div
           className="border-t px-3 py-2"
-          style={{ borderColor: 'oklch(1 0 0 / 0.06)' }}
+          style={{ borderColor: 'var(--color-glass-border)' }}
         >
           {description && (
             <AzureHtmlContent
@@ -289,7 +289,7 @@ function ExpandableTestCase({
                 <div
                   key={i}
                   className="border-b py-1.5 last:border-b-0"
-                  style={{ borderColor: 'oklch(1 0 0 / 0.04)' }}
+                  style={{ borderColor: 'var(--color-glass-border)' }}
                 >
                   <div className="flex gap-2">
                     <span className="text-ink-3 w-4 shrink-0 text-[10px]">

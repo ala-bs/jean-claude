@@ -30,7 +30,7 @@ export function Toaster() {
           <p className="text-sm">{toast.message}</p>
           <button
             onClick={() => removeToast(toast.id)}
-            className="ml-2 shrink-0 rounded p-0.5 hover:bg-white/10"
+            className="ml-2 shrink-0 rounded p-0.5 hover:bg-glass-medium"
           >
             <X className="h-3.5 w-3.5" />
           </button>

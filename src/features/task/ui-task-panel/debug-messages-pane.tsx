@@ -167,7 +167,7 @@ function JsonArray({
         <ChevronDown className="mr-0.5 inline h-3 w-3" />[
       </span>
       <div className="relative ml-4 pl-3">
-        <div className="absolute top-1 bottom-1 left-0.5 w-px rounded-full bg-white/[0.06]" />
+        <div className="absolute top-1 bottom-1 left-0.5 w-px rounded-full bg-glass-subtle" />
         {items.map((item, index) => (
           <div key={index} className="py-0.5">
             <span className="text-ink-4 mr-1">{index}:</span>
@@ -221,7 +221,7 @@ function JsonObject({
         {'{'}
       </span>
       <div className="relative ml-4 pl-3">
-        <div className="absolute top-1 bottom-1 left-0.5 w-px rounded-full bg-white/[0.06]" />
+        <div className="absolute top-1 bottom-1 left-0.5 w-px rounded-full bg-glass-subtle" />
         {keys.map((key, index) => (
           <div key={key} className="py-0.5">
             <span className="text-acc-ink">&quot;{key}&quot;</span>
@@ -261,7 +261,7 @@ function DebugMessageCard({
         'bg-bg-1/30 flex w-full flex-col overflow-hidden rounded-md border',
         isHighlighted
           ? 'border-acc/50 ring-acc/30 ring-1'
-          : 'border-white/[0.06]',
+          : 'border-glass-border',
       )}
     >
       {/* Card header */}

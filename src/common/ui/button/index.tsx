@@ -1,4 +1,3 @@
-import clsx from 'clsx';
 import { Loader2 } from 'lucide-react';
 import {
   forwardRef,
@@ -18,6 +17,7 @@ import {
   type ComponentSize,
 } from '@/common/ui/styles';
 import { isPromiseLike } from '@/common/ui/utils';
+import { cn } from '@/lib/cn';
 
 type ButtonClickHandler = (
   event: MouseEvent<HTMLButtonElement>,
@@ -84,7 +84,7 @@ export const Button = forwardRef<
       {...buttonProps}
       disabled={disabled || isLoading}
       onClick={handleClick}
-      className={clsx(
+      className={cn(
         'inline-flex items-center justify-center font-medium transition-colors',
         'disabled:cursor-not-allowed disabled:opacity-50',
         !isUnstyled && heightOrPy,
@@ -101,10 +101,10 @@ export const Button = forwardRef<
       )}
     >
       {showLoader && isLoading ? (
-        <Loader2 className={clsx(s.icon, 'animate-spin')} aria-hidden />
+        <Loader2 className={cn(s.icon, 'animate-spin')} aria-hidden />
       ) : icon ? (
         <span
-          className={clsx(s.icon, 'shrink-0 [&>svg]:h-full [&>svg]:w-full')}
+          className={cn(s.icon, 'shrink-0 [&>svg]:h-full [&>svg]:w-full')}
           aria-hidden
         >
           {icon}

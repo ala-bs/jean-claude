@@ -79,8 +79,8 @@ function FilterRow({
             onClick={() => onChange(filter)}
             className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
               active
-                ? 'text-ink-0 border-white/10 bg-white/[0.055]'
-                : 'text-ink-2 hover:text-ink-1 border-transparent hover:bg-white/[0.035]'
+                ? 'text-ink-0 border-glass-border bg-glass-medium'
+                : 'text-ink-2 hover:text-ink-1 border-transparent hover:bg-glass-light'
             }`}
           >
             {meta && (
@@ -271,7 +271,7 @@ export function ChangelogModal() {
       onClose={handleClose}
       size="xl"
       showHeader={false}
-      panelClassName="!max-w-[920px] overflow-hidden border border-white/[0.07] bg-[#1b1a22] shadow-[0_24px_80px_rgba(0,0,0,0.5)]"
+      panelClassName="!max-w-[920px] overflow-hidden border border-glass-border bg-bg-0 shadow-[var(--theme-shadow-ambient)]"
       contentClassName="min-h-0 overflow-hidden p-0"
     >
       <div className="flex h-[min(620px,78vh)] flex-col overflow-hidden">
@@ -287,7 +287,7 @@ export function ChangelogModal() {
             type="button"
             onClick={handleClose}
             aria-label="Close dialog"
-            className="text-ink-2 hover:text-ink-0 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-white/[0.06]"
+            className="text-ink-2 hover:text-ink-0 hover:bg-glass-medium inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors"
           >
             <X className="h-3.5 w-3.5" aria-hidden />
           </button>
@@ -313,7 +313,7 @@ export function ChangelogModal() {
                     }
                   }}
                   className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
-                    active ? 'bg-white/[0.055]' : 'hover:bg-white/[0.035]'
+                    active ? 'bg-glass-medium' : 'hover:bg-glass-light'
                   }`}
                 >
                   <span
@@ -357,18 +357,10 @@ export function ChangelogModal() {
                 className="relative pl-7"
                 data-date={day.date}
               >
-                <div
-                  className="absolute top-[22px] bottom-0 left-[7px] w-px"
-                  style={{
-                    backgroundImage:
-                      'linear-gradient(to bottom, rgb(255 255 255 / 0.1) 50%, transparent 0%)',
-                    backgroundRepeat: 'repeat-y',
-                    backgroundSize: '1px 6px',
-                  }}
-                />
+                <div className="bg-line absolute top-[22px] bottom-0 left-[7px] w-px" />
 
-                <div className="sticky -top-px z-10 -mr-[18px] -ml-[46px] flex items-center bg-gradient-to-b from-[#1b1a22] from-75% to-[#1b1a22]/0 pt-[15px] pb-2 pl-[18px]">
-                  <div className="flex h-[15px] w-[15px] items-center justify-center rounded-full border border-white/15 bg-[#1b1a22]">
+                <div className="from-bg-0 sticky -top-px z-10 -mr-[18px] -ml-[46px] flex items-center bg-gradient-to-b from-75% to-transparent pt-[15px] pb-2 pl-[18px]">
+                  <div className="border-glass-border bg-bg-0 flex h-[15px] w-[15px] items-center justify-center rounded-full border">
                     <div
                       className={`h-[5px] w-[5px] rounded-full ${
                         dayIndex === 0 ? 'bg-blue-300' : 'bg-ink-3'
@@ -379,11 +371,11 @@ export function ChangelogModal() {
                     <h3 className="text-ink-0 text-[13.5px] font-semibold">
                       {day.label}
                     </h3>
-                    <span className="border-glass-border text-ink-3 rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10.5px]">
+                    <span className="border-glass-border text-ink-3 bg-glass-light rounded px-1.5 py-0.5 font-mono text-[10.5px]">
                       {day.date}
                     </span>
                     {dayIndex === 0 && (
-                      <span className="text-[10px] font-medium tracking-[0.06em] text-blue-200 uppercase">
+                      <span className="text-acc text-[10px] font-medium tracking-[0.06em] uppercase">
                         Latest
                       </span>
                     )}
@@ -412,7 +404,7 @@ export function ChangelogModal() {
                             {entry.commits.map((commit) => (
                               <span
                                 key={commit}
-                                className="rounded border border-white/[0.06] bg-white/[0.035] px-1 py-px"
+                                className="border-glass-border bg-glass-light rounded border px-1 py-px"
                               >
                                 {commit}
                               </span>

@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, Sparkles, TextQuote } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -144,7 +145,7 @@ function AiGenerationRail({
       title="AI Generation"
       count={SLOT_DEFINITIONS.length + SUMMARY_MODEL_ITEMS.length + 2}
       headerSupplement={
-        <p className="text-[12px] leading-relaxed text-white/45">
+        <p className="text-ink-3 text-[12px] leading-relaxed">
           Configure AI-powered content generation by feature.
         </p>
       }
@@ -161,15 +162,14 @@ function AiGenerationRail({
           renderIcon={({ isActive, isDimmed }) => (
             <Sparkles
               size={14}
-              className="shrink-0"
-              style={{
-                color: isDimmed
-                  ? 'oklch(0.4 0.01 280)'
+              className={clsx(
+                'shrink-0',
+                isDimmed
+                  ? 'text-ink-4 opacity-60'
                   : isActive
-                    ? 'oklch(0.78 0.18 295)'
-                    : 'oklch(0.78 0.16 295)',
-                opacity: isDimmed ? 0.6 : 1,
-              }}
+                    ? 'text-acc'
+                    : 'text-acc-ink',
+              )}
             />
           )}
         />
@@ -185,10 +185,7 @@ function AiGenerationRail({
         renderIcon={({ isActive }) => (
           <KeyRound
             size={14}
-            className="shrink-0"
-            style={{
-              color: isActive ? 'oklch(0.78 0.18 295)' : 'oklch(0.78 0.16 295)',
-            }}
+            className={clsx('shrink-0', isActive ? 'text-acc' : 'text-acc-ink')}
           />
         )}
       />
@@ -201,10 +198,7 @@ function AiGenerationRail({
         renderIcon={({ isActive }) => (
           <Sparkles
             size={14}
-            className="shrink-0"
-            style={{
-              color: isActive ? 'oklch(0.78 0.18 295)' : 'oklch(0.78 0.16 295)',
-            }}
+            className={clsx('shrink-0', isActive ? 'text-acc' : 'text-acc-ink')}
           />
         )}
       />
@@ -218,12 +212,7 @@ function AiGenerationRail({
           renderIcon={({ isActive }) => (
             <TextQuote
               size={14}
-              className="shrink-0"
-              style={{
-                color: isActive
-                  ? 'oklch(0.78 0.18 295)'
-                  : 'oklch(0.78 0.16 295)',
-              }}
+              className={clsx('shrink-0', isActive ? 'text-acc' : 'text-acc-ink')}
             />
           )}
         />

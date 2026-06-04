@@ -60,8 +60,8 @@ function CommentsContent({
           key={comment.id}
           className="rounded-md border px-3 py-2.5"
           style={{
-            borderColor: 'oklch(1 0 0 / 0.06)',
-            background: 'oklch(1 0 0 / 0.02)',
+            borderColor: 'var(--color-glass-border)',
+            background: 'var(--color-glass-subtle)',
           }}
         >
           <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">

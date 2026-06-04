@@ -209,8 +209,8 @@ export function RunButton({
               className={clsx(
                 'flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium transition-colors',
                 runningCount > 0
-                  ? 'bg-red-600 text-white hover:bg-red-700'
-                  : 'bg-green-600 text-white hover:bg-green-700',
+                  ? 'bg-status-fail text-on-acc hover:brightness-95'
+                  : 'bg-status-done text-on-acc hover:brightness-95',
               )}
               aria-label="Run command"
             >
@@ -222,10 +222,7 @@ export function RunButton({
               ) : (
                 <Play className="h-3 w-3" aria-hidden />
               )}
-              <Kbd
-                shortcut="cmd+u"
-                className="border-white/25 bg-white/10 text-white/90"
-              />
+              <Kbd shortcut="cmd+u" variant="on-accent" />
             </button>
           }
         >

@@ -22,44 +22,44 @@ const colorClasses: Record<
   { bg: string; text: string; hover: string }
 > = {
   neutral: {
-    bg: 'bg-bg-1',
-    text: 'text-ink-2',
-    hover: 'hover:bg-glass-medium hover:text-ink-1',
+    bg: 'bg-bg-2 border border-glass-border',
+    text: 'text-ink-1',
+    hover: 'hover:bg-bg-3 hover:text-ink-0',
   },
   green: {
-    bg: 'bg-green-900/30',
-    text: 'text-green-400',
-    hover: 'hover:bg-green-900/50 hover:text-green-300',
+    bg: 'bg-status-done-soft border border-status-done/25',
+    text: 'text-status-done',
+    hover: 'hover:bg-status-done/15 hover:text-status-done',
   },
   blue: {
-    bg: 'bg-blue-900/30',
-    text: 'text-blue-400',
-    hover: 'hover:bg-blue-900/50 hover:text-blue-300',
+    bg: 'bg-status-pr-soft border border-status-pr/25',
+    text: 'text-status-pr',
+    hover: 'hover:bg-status-pr/15 hover:text-status-pr',
   },
   orange: {
-    bg: 'bg-orange-900/30',
-    text: 'text-orange-400',
-    hover: 'hover:bg-orange-900/50 hover:text-orange-300',
+    bg: 'bg-status-run-soft border border-status-run/25',
+    text: 'text-status-run',
+    hover: 'hover:bg-status-run/15 hover:text-status-run',
   },
   red: {
-    bg: 'bg-red-900/30',
-    text: 'text-red-400',
-    hover: 'hover:bg-red-900/50 hover:text-red-300',
+    bg: 'bg-status-fail-soft border border-status-fail/25',
+    text: 'text-status-fail',
+    hover: 'hover:bg-status-fail/15 hover:text-status-fail',
   },
   purple: {
-    bg: 'bg-purple-900/30',
-    text: 'text-purple-400',
-    hover: 'hover:bg-purple-900/50 hover:text-purple-300',
+    bg: 'bg-acc-soft border border-acc-line',
+    text: 'text-acc-ink',
+    hover: 'hover:bg-acc/20 hover:text-acc-ink',
   },
   yellow: {
-    bg: 'bg-yellow-900/30',
-    text: 'text-yellow-400',
-    hover: 'hover:bg-yellow-900/50 hover:text-yellow-300',
+    bg: 'bg-status-run-soft border border-status-run/25',
+    text: 'text-status-run',
+    hover: 'hover:bg-status-run/15 hover:text-status-run',
   },
   amber: {
-    bg: 'bg-amber-900/30',
-    text: 'text-amber-400',
-    hover: 'hover:bg-amber-900/50 hover:text-amber-300',
+    bg: 'bg-status-run-soft border border-status-run/25',
+    text: 'text-status-run',
+    hover: 'hover:bg-status-run/15 hover:text-status-run',
   },
 } as const;
 

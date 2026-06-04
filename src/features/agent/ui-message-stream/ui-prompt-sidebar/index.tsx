@@ -68,9 +68,9 @@ function PromptChip({
           isCompleted
             ? 'bg-acc/15 text-acc-ink border-acc/25 hover:bg-acc/25 border'
             : isCurrent
-              ? 'bg-acc text-white shadow-[0_0_12px_oklch(0.7_0.18_295_/_0.4)]'
+              ? 'bg-acc text-on-acc shadow-[0_0_12px_color-mix(in_srgb,var(--color-acc)_40%,transparent)]'
               : isFuture
-                ? 'border border-dashed border-white/20 text-white/40 hover:border-white/35'
+                ? 'border border-dashed border-glass-border-strong text-chrome-fg-muted hover:border-white/35'
                 : ''
         }`}
       >
@@ -185,7 +185,7 @@ export function PromptSidebar({
                 className={`h-5 w-px ${
                   prompt.index <= currentIndex
                     ? 'bg-acc/40'
-                    : 'border-l border-dashed border-white/15'
+                    : 'border-l border-dashed border-glass-border'
                 }`}
               />
             )}

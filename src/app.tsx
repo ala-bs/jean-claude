@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-router';
 
 import { RootKeyboardBindings } from './common/context/keyboard-bindings';
+import { ThemeProvider } from './common/context/theme';
 import { DetectKeyboardLayout } from './common/context/keyboard-layout';
 import { ModalProvider } from './common/context/modal';
 import { RootOverlay } from './common/context/overlay';
@@ -31,15 +32,17 @@ export default function App() {
   return (
     <>
       <DetectKeyboardLayout />
-      <RootKeyboardBindings>
-        <RootOverlay>
-          <QueryClientProvider client={queryClient}>
-            <ModalProvider>
-              <RouterProvider router={router} />
-            </ModalProvider>
-          </QueryClientProvider>
-        </RootOverlay>
-      </RootKeyboardBindings>
+      <ThemeProvider>
+        <RootKeyboardBindings>
+          <RootOverlay>
+            <QueryClientProvider client={queryClient}>
+              <ModalProvider>
+                <RouterProvider router={router} />
+              </ModalProvider>
+            </QueryClientProvider>
+          </RootOverlay>
+        </RootKeyboardBindings>
+      </ThemeProvider>
       <Toaster />
     </>
   );

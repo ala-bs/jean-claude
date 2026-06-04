@@ -15,6 +15,7 @@ import {
   extractImagesFromMarkdown,
   type ExtractedMarkdownContent,
 } from '@/lib/markdown-images';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { sanitizeMarkdownUrl } from '@/lib/markdown-urls';
 
 // Pattern to match file paths like src/foo.ts:42-50 or just src/foo.ts:42 or src/foo.ts
@@ -217,6 +218,7 @@ function AsciiArtBlock({ code }: { code: string }) {
 
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [html, setHtml] = useState<string>('');
+  const { shikiTheme } = useColorScheme();
 
   // Check if this is ASCII art
   const asciiArt = isAsciiArt(code);
@@ -229,17 +231,17 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 
     codeToHtml(code, {
       lang: language || 'text',
-      theme: 'github-dark',
+      theme: shikiTheme,
     })
       .then(setHtml)
       .catch(() => {
         // Fallback for unsupported languages
         codeToHtml(code, {
           lang: 'text',
-          theme: 'github-dark',
+          theme: shikiTheme,
         }).then(setHtml);
       });
-  }, [code, language, asciiArt]);
+  }, [code, language, asciiArt, shikiTheme]);
 
   // Render ASCII art with special styling
   if (asciiArt) {
@@ -891,7 +893,7 @@ export function MarkdownContent({
                     rel="noopener noreferrer"
                     aria-label={url}
                     title={url}
-                    className="bg-acc-soft border-acc-line text-acc-ink hover:text-ink-0 inline-flex items-center gap-1 rounded-full border px-2 py-1 align-baseline font-mono text-[11.5px] leading-none no-underline transition-colors hover:bg-[oklch(0.72_0.2_295_/_0.26)]"
+                    className="bg-acc-soft border-acc-line text-acc-ink hover:text-ink-0 hover:bg-acc-soft inline-flex items-center gap-1 rounded-full border px-2 py-1 align-baseline font-mono text-[11.5px] leading-none no-underline transition-colors"
                   >
                     {getCollapsedUrlLabel(url)}
                     <span className="text-[10px] opacity-70">↗</span>

@@ -28,10 +28,10 @@ export function ReviewSubmitBar({
       )}
       <button
         onClick={onSubmit}
-        className="bg-acc inline-flex items-center gap-1.5 rounded px-3 py-1 text-[11.5px] font-medium text-white"
+        className="bg-acc text-on-acc inline-flex items-center gap-1.5 rounded px-3 py-1 text-[11.5px] font-medium"
       >
         Submit review
-        <span className="rounded-full bg-white/20 px-1.5 font-mono text-[10px]">
+        <span className="rounded-full bg-glass-medium px-1.5 font-mono text-[10px]">
           {commentCount}
         </span>
         <kbd className="ml-0.5 font-mono text-[10px] opacity-70">⌘↵</kbd>

@@ -74,7 +74,7 @@ export function MeetingDetail({
       {/* Header */}
       <div className="border-glass-border border-b px-5 pt-4 pb-3">
         <div className="text-acc-ink mb-2 flex items-center gap-2 text-[11px] font-semibold tracking-widest uppercase">
-          <span className="bg-acc h-1.5 w-1.5 rounded-full shadow-[0_0_8px_oklch(0.72_0.2_295/0.6)]" />
+          <span className="bg-acc shadow-[0_0_8px_color-mix(in_srgb,var(--color-acc)_60%,transparent)] h-1.5 w-1.5 rounded-full" />
           Meeting details
           <div className="flex-1" />
           <span
@@ -106,8 +106,8 @@ export function MeetingDetail({
                 strokeWidth={2.5}
                 color={
                   state === 'live'
-                    ? 'oklch(0.78 0.16 75)'
-                    : 'oklch(0.72 0.2 295)'
+                    ? 'var(--color-status-run)'
+                    : 'var(--color-acc)'
                 }
               />
               <div className="min-w-0 flex-1">

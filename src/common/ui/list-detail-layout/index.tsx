@@ -4,8 +4,8 @@ import type { ReactNode } from 'react';
 
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 
-const SHARED_BORDER_COLOR = 'oklch(1 0 0 / 0.05)';
-const SHARED_PANEL_BACKGROUND = 'oklch(0 0 0 / 0.18)';
+const SHARED_BORDER_COLOR = 'var(--color-glass-border)';
+const SHARED_PANEL_BACKGROUND = 'var(--color-panel-scrim)';
 
 export function ListDetailLayout({
   list,
@@ -77,11 +77,8 @@ export function ListPane({
             {headerContent ??
               (title ? (
                 <div
-                  className="text-lg font-semibold"
-                  style={{
-                    color: 'oklch(0.99 0 0)',
-                    letterSpacing: '-0.015em',
-                  }}
+                  className="text-ink-0 text-lg font-semibold"
+                  style={{ letterSpacing: '-0.015em' }}
                 >
                   {title}
                 </div>
@@ -90,9 +87,9 @@ export function ListPane({
               <span
                 className="rounded-[5px] px-2 py-0.5 font-mono text-[11px]"
                 style={{
-                  color: 'oklch(0.7 0.01 280)',
-                  background: 'oklch(1 0 0 / 0.06)',
-                  border: '1px solid oklch(1 0 0 / 0.06)',
+                  color: 'var(--color-ink-2)',
+                  background: 'var(--color-glass-border)',
+                  border: '1px solid var(--color-glass-border)',
                 }}
               >
                 {count}
@@ -138,22 +135,19 @@ export function ListSearchInput({
     <div
       className="flex min-w-0 items-center gap-2 rounded-md px-2.5 py-1.5"
       style={{
-        background: 'oklch(0 0 0 / 0.25)',
-        border: '1px solid oklch(1 0 0 / 0.06)',
+        background: 'var(--color-panel-scrim-soft)',
+        border: '1px solid var(--color-glass-border)',
       }}
     >
-      <Search size={12} style={{ color: 'oklch(0.5 0.01 280)' }} />
+      <Search size={12} className="text-ink-3" />
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         aria-label={ariaLabel}
         autoFocus={autoFocus}
-        className="min-w-0 flex-1 overflow-hidden bg-transparent text-[12.5px] text-ellipsis focus:outline-none"
-        style={{
-          color: 'oklch(0.92 0.008 280)',
-          letterSpacing: '-0.005em',
-        }}
+        className="text-ink-1 min-w-0 flex-1 overflow-hidden bg-transparent text-[12.5px] text-ellipsis focus:outline-none"
+        style={{ letterSpacing: '-0.005em' }}
       />
     </div>
   );
@@ -169,7 +163,7 @@ export function ListGroupHeader({
   return (
     <div
       className="flex items-center gap-2 px-4 pt-3 pb-1.5 font-mono text-[10px] font-semibold tracking-wider uppercase"
-      style={{ color: accent ? 'oklch(0.78 0.18 295)' : 'oklch(0.5 0.01 280)' }}
+      style={{ color: accent ? 'var(--color-acc)' : 'var(--color-ink-3)' }}
     >
       {label}
     </div>
@@ -203,10 +197,10 @@ export function ListItemButton({
       )}
       style={{
         background: isActive
-          ? 'color-mix(in oklch, oklch(0.78 0.18 295) 18%, transparent)'
+          ? 'color-mix(in oklch, var(--color-acc) 18%, transparent)'
           : 'transparent',
         borderLeft: isActive
-          ? '2px solid oklch(0.78 0.18 295)'
+          ? '2px solid var(--color-acc)'
           : '2px solid transparent',
       }}
     >
@@ -217,10 +211,10 @@ export function ListItemButton({
           fontSize: size === 'compact' ? '13px' : '14px',
           fontWeight: isActive ? 500 : 400,
           color: isActive
-            ? 'oklch(0.99 0 0)'
+            ? 'var(--color-ink-0)'
             : isDimmed
-              ? 'oklch(0.5 0.01 280)'
-              : 'oklch(0.88 0.008 280)',
+              ? 'var(--color-ink-3)'
+              : 'var(--color-ink-1)',
           letterSpacing: '-0.005em',
         }}
       >
@@ -244,7 +238,7 @@ export function DetailPlaceholder({
       style={{ background: SHARED_PANEL_BACKGROUND }}
     >
       <div className="text-center">
-        <p className="text-sm" style={{ color: 'oklch(0.55 0.01 280)' }}>
+        <p className="text-sm" style={{ color: 'var(--color-ink-3)' }}>
           {message}
         </p>
         {actions ? <div className="mt-4">{actions}</div> : null}

@@ -376,7 +376,7 @@ export const MessageStream = memo(function MessageStream({
                       style={{
                         height: '1px',
                         background:
-                          'linear-gradient(to right, transparent, oklch(1 0 0 / 0.12), transparent)',
+                          'linear-gradient(to right, transparent, var(--color-glass-border), transparent)',
                       }}
                     />
                   )}

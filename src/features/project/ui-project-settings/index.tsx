@@ -2027,7 +2027,7 @@ function ProjectAiGenerationRail({
       title="AI Generation"
       count={SLOT_DEFINITIONS.length}
       headerSupplement={
-        <p className="text-[12px] leading-relaxed text-white/45">
+        <p className="text-ink-3 text-[12px] leading-relaxed">
           Override AI generation by project. Empty slots inherit global
           settings.
         </p>
@@ -2045,15 +2045,13 @@ function ProjectAiGenerationRail({
           renderIcon={({ isActive, isDimmed }) => (
             <Sparkles
               size={14}
-              className="shrink-0"
-              style={{
-                color: isDimmed
-                  ? 'oklch(0.4 0.01 280)'
+              className={
+                isDimmed
+                  ? 'text-ink-4 shrink-0 opacity-60'
                   : isActive
-                    ? 'oklch(0.78 0.18 295)'
-                    : 'oklch(0.78 0.16 295)',
-                opacity: isDimmed ? 0.6 : 1,
-              }}
+                    ? 'text-acc shrink-0'
+                    : 'text-acc-ink shrink-0'
+              }
             />
           )}
         />

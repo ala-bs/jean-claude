@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { Plus, Terminal } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
@@ -31,15 +32,14 @@ function SnippetRailRow({
       renderIcon={({ isActive: active, isDimmed }) => (
         <Terminal
           size={14}
-          className="shrink-0"
-          style={{
-            color: isDimmed
-              ? 'oklch(0.4 0.01 280)'
+          className={clsx(
+            'shrink-0',
+            isDimmed
+              ? 'text-ink-4 opacity-60'
               : active
-                ? 'oklch(0.78 0.18 295)'
-                : 'oklch(0.78 0.16 295)',
-            opacity: isDimmed ? 0.6 : 1,
-          }}
+                ? 'text-acc'
+                : 'text-acc-ink',
+          )}
         />
       )}
       suffix={
@@ -49,7 +49,7 @@ function SnippetRailRow({
             style={{
               width: 5,
               height: 5,
-              background: 'oklch(0.55 0.01 280)',
+              background: 'var(--color-ink-3)',
             }}
           />
         ) : undefined
@@ -112,7 +112,7 @@ export function SnippetRail({
           title="New snippet"
           className="inline-flex h-7 w-7 items-center justify-center rounded-md"
           style={{
-            color: 'oklch(0.78 0.18 295)',
+            color: 'var(--color-acc)',
             background: 'transparent',
             border: 'none',
           }}
@@ -148,10 +148,7 @@ export function SnippetRail({
         </>
       )}
       {filteredBuiltin.length === 0 && filteredCustom.length === 0 && (
-        <p
-          className="px-4 py-6 text-center text-xs"
-          style={{ color: 'oklch(0.5 0.01 280)' }}
-        >
+        <p className="text-ink-3 px-4 py-6 text-center text-xs">
           No snippets match &ldquo;{search}&rdquo;
         </p>
       )}

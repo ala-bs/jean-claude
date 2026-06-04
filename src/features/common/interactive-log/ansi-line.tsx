@@ -1,28 +1,7 @@
 import Anser from 'anser';
 import { memo, useMemo } from 'react';
 
-/**
- * ANSI color class → CSS color value.
- * Uses standard terminal colors that work on both light and dark backgrounds.
- */
-const ANSI_COLOR_MAP: Record<string, string> = {
-  'ansi-black': '#545454',
-  'ansi-red': '#ff5f56',
-  'ansi-green': '#2dd4a8',
-  'ansi-yellow': '#e5c07b',
-  'ansi-blue': '#61afef',
-  'ansi-magenta': '#c678dd',
-  'ansi-cyan': '#56b6c2',
-  'ansi-white': '#d4d4d4',
-  'ansi-bright-black': '#808080',
-  'ansi-bright-red': '#ff6e6a',
-  'ansi-bright-green': '#69f0ae',
-  'ansi-bright-yellow': '#ffd740',
-  'ansi-bright-blue': '#82b1ff',
-  'ansi-bright-magenta': '#ea80fc',
-  'ansi-bright-cyan': '#84ffff',
-  'ansi-bright-white': '#ffffff',
-};
+import { ansiClassToThemeColor } from '@/lib/ansi-theme';
 
 /**
  * Strip all non-printable characters that the PTY may emit:
@@ -73,8 +52,9 @@ export const AnsiLine = memo(function AnsiLine({ line }: { line: string }) {
         if (segment.fg) {
           if (segment.fg_truecolor) {
             style.color = `rgb(${segment.fg_truecolor})`;
-          } else if (ANSI_COLOR_MAP[segment.fg]) {
-            style.color = ANSI_COLOR_MAP[segment.fg];
+          } else {
+            const fg = ansiClassToThemeColor(segment.fg);
+            if (fg) style.color = fg;
           }
         }
 
@@ -82,8 +62,9 @@ export const AnsiLine = memo(function AnsiLine({ line }: { line: string }) {
         if (segment.bg) {
           if (segment.bg_truecolor) {
             style.backgroundColor = `rgb(${segment.bg_truecolor})`;
-          } else if (ANSI_COLOR_MAP[segment.bg]) {
-            style.backgroundColor = ANSI_COLOR_MAP[segment.bg];
+          } else {
+            const bg = ansiClassToThemeColor(segment.bg);
+            if (bg) style.backgroundColor = bg;
           }
         }
 

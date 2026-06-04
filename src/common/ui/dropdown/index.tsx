@@ -338,7 +338,7 @@ export function DropdownItem({
       onClick={onClick}
       className={clsx(
         'hover:bg-glass-medium focus:bg-glass-medium flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors focus:outline-none',
-        variant === 'danger' ? 'text-red-400' : 'text-ink-1',
+        variant === 'danger' ? 'text-status-fail' : 'text-ink-0',
       )}
     >
       {icon && (

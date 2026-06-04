@@ -250,7 +250,7 @@ export function SkillEditor({
   });
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="bg-bg-0 flex h-full min-w-0 flex-1 flex-col overflow-hidden">
       {/* Top bar */}
       <div className="border-glass-border flex shrink-0 items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-3">
@@ -346,14 +346,14 @@ export function SkillEditor({
             className="border-glass-border flex shrink-0 flex-col border-r"
             style={{ width: leftWidth }}
           >
-            <div className="border-glass-border flex shrink-0 items-center border-b px-3 py-2">
+            <div className="border-glass-border bg-section-strip flex shrink-0 items-center border-b px-3 py-2">
               <span className="text-ink-2 text-xs font-medium">Markdown</span>
             </div>
             <textarea
               value={content}
               onChange={(e) => handleContentChange(e.target.value)}
               placeholder="Write the skill instructions in Markdown..."
-              className="bg-bg-0/60 text-ink-1 placeholder-ink-3 flex-1 resize-none border-none p-4 font-mono text-sm leading-relaxed focus:outline-none"
+              className="bg-code-bg text-ink-0 placeholder:text-ink-3 flex-1 resize-none border-none p-4 font-mono text-sm leading-relaxed focus:outline-none"
             />
           </div>
         )}
@@ -366,10 +366,10 @@ export function SkillEditor({
 
         {/* Right pane: live preview */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="border-glass-border flex shrink-0 items-center border-b px-3 py-2">
+          <div className="border-glass-border bg-section-strip flex shrink-0 items-center border-b px-3 py-2">
             <span className="text-ink-2 text-xs font-medium">Preview</span>
           </div>
-          <div className="text-ink-1 flex-1 overflow-auto p-4 text-sm break-words">
+          <div className="bg-bg-0 text-ink-1 flex-1 overflow-auto p-4 text-sm break-words">
             {deferredContent ? (
               <MarkdownContent content={deferredContent} />
             ) : (

@@ -4,10 +4,10 @@ import { useCallback, useRef, useState, useLayoutEffect } from 'react';
 import type { ReviewComment } from '@/stores/review-comments';
 
 // Kind accent tokens from design (composer review v2)
-const DIFF_ACCENT_INK = 'oklch(0.82 0.17 295)';
-const DIFF_ACCENT_SOFT = 'oklch(0.72 0.20 295 / 0.16)';
-const MSG_ACCENT_INK = 'oklch(0.78 0.16 205)';
-const MSG_ACCENT_SOFT = 'oklch(0.78 0.16 205 / 0.14)';
+const DIFF_ACCENT_INK = 'var(--color-acc-ink)';
+const DIFF_ACCENT_SOFT = 'var(--color-acc-soft)';
+const MSG_ACCENT_INK = 'var(--color-status-review)';
+const MSG_ACCENT_SOFT = 'var(--color-status-review-soft)';
 
 export type PillKind = 'diff' | 'message';
 

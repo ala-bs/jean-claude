@@ -150,11 +150,11 @@ function ProjectPill({
 
 function SectionDivider({ label, count }: { label: string; count: number }) {
   return (
-    <div className="flex items-center gap-2 bg-black/[0.15] px-4 py-1.5">
-      <span className="text-ink-3 text-[10px] font-semibold tracking-wider uppercase">
+    <div className="border-glass-border bg-section-strip flex items-center gap-2 border-b px-4 py-1.5">
+      <span className="text-ink-2 text-[10px] font-semibold tracking-wider uppercase">
         {label}
       </span>
-      <span className="text-ink-4 text-[10px]">{count}</span>
+      <span className="text-ink-3 text-[10px]">{count}</span>
     </div>
   );
 }
@@ -187,7 +187,7 @@ function JobRow({
       data-activity-row
       className={clsx(
         'grid grid-cols-[18px_1fr_auto] items-start gap-3 px-4 py-2.5',
-        isSelected ? 'bg-glass-medium' : 'hover:bg-white/[0.03]',
+        isSelected ? 'bg-glass-medium' : 'hover:bg-glass-subtle',
       )}
     >
       <StatusIcon status={job.status} />
@@ -294,8 +294,8 @@ function NotificationRow({
         isSelected
           ? 'bg-glass-medium'
           : !notification.read
-            ? 'bg-white/[0.02] hover:bg-white/[0.03]'
-            : 'hover:bg-white/[0.03]',
+            ? 'bg-glass-subtle hover:bg-glass-subtle'
+            : 'hover:bg-glass-subtle',
       )}
     >
       <StatusIcon status={status} />
@@ -351,7 +351,7 @@ function DebugRow({
       data-activity-row
       className={clsx(
         'grid grid-cols-[60px_110px_1fr] gap-2 px-4 py-1 font-mono text-[11px] leading-relaxed',
-        isSelected ? 'bg-glass-medium' : 'hover:bg-white/[0.03]',
+        isSelected ? 'bg-glass-medium' : 'hover:bg-glass-subtle',
       )}
     >
       <span className="text-ink-4 shrink-0">
@@ -850,7 +850,7 @@ export function ActivityCenterOverlay({
           tabIndex={-1}
         >
           <div
-            className="border-glass-border-strong bg-bg-0/[0.96] flex max-h-[70svh] w-[640px] flex-col overflow-hidden rounded-xl border shadow-[0_24px_60px_-12px_oklch(0_0_0/0.6)] backdrop-blur-xl"
+            className="border-glass-border-strong bg-bg-0/[0.96] flex max-h-[70svh] w-[640px] flex-col overflow-hidden rounded-xl border shadow-[var(--theme-shadow-ambient)] backdrop-blur-xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Tab bar */}
@@ -898,14 +898,14 @@ export function ActivityCenterOverlay({
             </div>
 
             {/* Search / filter strip */}
-            <div className="flex items-center gap-2 bg-black/[0.15] px-4 py-2">
+            <div className="border-glass-border bg-section-strip flex items-center gap-2 border-b px-4 py-2">
               <Search className="text-ink-3 h-3.5 w-3.5 shrink-0" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Filter..."
-                className="text-ink-1 placeholder:text-ink-4 flex-1 bg-transparent text-[12.5px] outline-none"
+                className="text-ink-0 placeholder:text-ink-3 border-glass-border bg-bg-0 flex-1 rounded border px-2 py-1 text-[12.5px] outline-none"
               />
               <span className="text-ink-4 shrink-0 text-[10px]">
                 {currentItemCount} item{currentItemCount !== 1 ? 's' : ''}

@@ -59,10 +59,10 @@ export function BackgroundJobsOverlay({ onClose }: { onClose: () => void }) {
         onClick={onClose}
       >
         <div
-          className="bg-bg-0/85 flex max-h-[70svh] w-[min(900px,96vw)] flex-col overflow-hidden rounded-xl border border-white/10 shadow-2xl shadow-black/50 backdrop-blur-xl"
+          className="bg-bg-0/85 flex max-h-[70svh] w-[min(900px,96vw)] flex-col overflow-hidden rounded-xl border border-glass-border shadow-2xl shadow-black/50 backdrop-blur-xl"
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="flex items-center justify-between border-b border-white/10 bg-gradient-to-r from-white/5 to-transparent px-4 py-3">
+          <div className="flex items-center justify-between border-b border-glass-border bg-gradient-to-r from-glass-subtle to-transparent px-4 py-3">
             <div>
               <h2 className="text-ink-0 text-sm font-semibold">
                 Background Jobs
@@ -89,7 +89,7 @@ export function BackgroundJobsOverlay({ onClose }: { onClose: () => void }) {
 
           <div className="overflow-y-auto p-3">
             {jobs.length === 0 ? (
-              <div className="text-ink-3 rounded-lg border border-dashed border-white/10 px-4 py-8 text-center text-sm">
+              <div className="text-ink-3 rounded-lg border border-dashed border-glass-border px-4 py-8 text-center text-sm">
                 No background jobs yet.
               </div>
             ) : (

@@ -51,7 +51,7 @@ export function SkillRail({
       maxWidth={maxWidth}
       onWidthChange={onWidthChange}
       headerContent={
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-md border border-white/6 bg-black/15 p-1">
+        <div className="border-glass-border bg-section-strip flex min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-md border p-1">
           <ModeButton
             label="Installed"
             isActive={mode === 'installed'}
@@ -71,8 +71,8 @@ export function SkillRail({
             <button
               type="button"
               onClick={onCreateWithAgent}
-              className="rounded p-1 transition-colors hover:bg-white/6 hover:text-white"
-              style={{ color: 'oklch(0.7 0.01 280)' }}
+              className="rounded p-1 transition-colors hover:bg-chrome-hover hover:text-chrome-fg"
+              style={{ color: 'var(--color-ink-2)' }}
               title="Create with Agent"
             >
               <Bot size={13} />
@@ -81,7 +81,7 @@ export function SkillRail({
               type="button"
               onClick={onAdd}
               className="rounded p-1 transition-colors"
-              style={{ color: 'oklch(0.78 0.18 295)' }}
+              style={{ color: 'var(--color-acc)' }}
               title="Add skill"
             >
               <Plus size={13} />
@@ -143,8 +143,8 @@ function ModeButton({
       className={clsx(
         'inline-flex min-w-0 flex-1 items-center gap-1.5 rounded px-2 py-1 text-xs font-medium transition-colors',
         isActive
-          ? 'bg-white/8 text-white'
-          : 'text-white/60 hover:bg-white/6 hover:text-white',
+          ? 'bg-glass-medium text-chrome-fg'
+          : 'text-chrome-fg-muted hover:bg-chrome-hover hover:text-chrome-fg',
       )}
     >
       {icon}
@@ -244,14 +244,14 @@ function BrowseList({
   return (
     <div className="flex-1 overflow-y-auto">
       {isLoading && (
-        <div className="flex items-center justify-center gap-2 py-8 text-xs text-white/60">
+        <div className="flex items-center justify-center gap-2 py-8 text-xs text-chrome-fg-muted">
           <Loader2 size={14} className="animate-spin" />
           {debouncedQuery ? 'Searching...' : 'Loading popular...'}
         </div>
       )}
 
       {!isLoading && searchResult && searchResult.skills.length === 0 && (
-        <p className="py-8 text-center text-xs text-white/60">
+        <p className="py-8 text-center text-xs text-chrome-fg-muted">
           No skills found.
         </p>
       )}
@@ -274,7 +274,7 @@ function BrowseList({
                       ✓
                     </Chip>
                   ) : (
-                    <span className="ml-auto font-mono text-[10px] text-white/45">
+                    <span className="ml-auto font-mono text-[10px] text-chrome-fg-muted">
                       {formatCompactNumber(skill.installs)}
                     </span>
                   )

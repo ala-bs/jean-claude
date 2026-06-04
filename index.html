@@ -1,6 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem('ui-store');
+          if (!raw) return;
+          var parsed = JSON.parse(raw);
+          var scheme =
+            parsed &&
+            parsed.state &&
+            parsed.state.settings &&
+            parsed.state.settings.colorScheme;
+          if (scheme === 'light' || scheme === 'dark') {
+            document.documentElement.dataset.theme = scheme;
+          }
+        } catch (_) {}
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"

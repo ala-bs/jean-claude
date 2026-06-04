@@ -11,6 +11,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { codeToTokens, type ThemedToken } from 'shiki';
 
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useUISetting, useUIStore } from '@/stores/ui';
 
 import { ChangeNavigator } from './change-navigator';
@@ -76,6 +77,7 @@ export function DiffView({
 }) {
   const [state, setState] = useState<DiffState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const { shikiTheme } = useColorScheme();
   const viewMode = useUISetting('diffViewMode');
   const setSetting = useUIStore((s) => s.setSetting);
   const [viewport, setViewport] = useState<ViewportInfo | undefined>();
@@ -125,15 +127,15 @@ export function DiffView({
     Promise.all([
       codeToTokens(oldString || ' ', {
         lang: language,
-        theme: 'github-dark',
+        theme: shikiTheme,
       }).catch(() =>
-        codeToTokens(oldString || ' ', { lang: 'text', theme: 'github-dark' }),
+        codeToTokens(oldString || ' ', { lang: 'text', theme: shikiTheme }),
       ),
       codeToTokens(newString || ' ', {
         lang: language,
-        theme: 'github-dark',
+        theme: shikiTheme,
       }).catch(() =>
-        codeToTokens(newString || ' ', { lang: 'text', theme: 'github-dark' }),
+        codeToTokens(newString || ' ', { lang: 'text', theme: shikiTheme }),
       ),
     ])
       .then(([oldResult, newResult]) => {
@@ -152,7 +154,7 @@ export function DiffView({
         });
       })
       .finally(() => setIsLoading(false));
-  }, [oldString, newString, language]);
+  }, [oldString, newString, language, shikiTheme]);
 
   // Search functionality
   const {
@@ -190,7 +192,7 @@ export function DiffView({
 
   if (isLoading || !state) {
     return (
-      <div className="flex items-center justify-center rounded bg-black/30 p-2">
+      <div className="flex items-center justify-center rounded bg-code-bg p-2">
         <span className="text-ink-3 text-xs">Loading diff…</span>
       </div>
     );
@@ -266,7 +268,7 @@ export function DiffView({
         ref={scrollContainerRef}
         onScroll={handleScroll}
         className={clsx(
-          'h-full flex-1 overflow-auto bg-black/30 pb-2 font-mono text-xs',
+          'h-full flex-1 overflow-auto bg-code-bg pb-2 font-mono text-xs',
           isScrollable && totalHunks > 0 ? 'pt-12' : 'pt-2',
           {
             'no-scrollbar': !!withMinimap,
@@ -649,7 +651,7 @@ function DiffLineRow({
           ...(hasComment && !isSelected && !isInCommentRange
             ? {
                 background:
-                  'color-mix(in oklch, oklch(0.78 0.18 295) 8%, transparent)',
+                  'color-mix(in oklch, var(--color-acc) 8%, transparent)',
               }
             : {}),
         }}
@@ -688,7 +690,7 @@ function DiffLineRow({
           )}
           style={
             hasComment && !isSelected && !isInCommentRange
-              ? { borderLeft: '2px solid oklch(0.78 0.18 295 / 0.5)' }
+              ? { borderLeft: '2px solid color-mix(in srgb, var(--color-acc) 50%, transparent)' }
               : undefined
           }
         >

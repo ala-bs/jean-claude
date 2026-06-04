@@ -4,6 +4,7 @@ import * as monaco from 'monaco-editor/esm/vs/editor/edcore.main.js';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
   flattenProjectFeatures,
   getFeatureReferenceText,
@@ -21,6 +22,69 @@ monacoGlobal.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+
+let handlebarsThemesDefined = false;
+
+function defineHandlebarsThemes(monacoApi: typeof monaco) {
+  if (handlebarsThemesDefined) return;
+  handlebarsThemesDefined = true;
+
+  monacoApi.editor.defineTheme('handlebars-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: 'delimiter.handlebars', foreground: 'c678dd' },
+      { token: 'variable.handlebars', foreground: '61afef' },
+      { token: 'keyword.handlebars', foreground: 'c678dd' },
+      { token: 'tag', foreground: 'e06c75' },
+      { token: 'attribute.name', foreground: 'd19a66' },
+      { token: 'attribute.value', foreground: '98c379' },
+      { token: 'string', foreground: '98c379' },
+      { token: 'comment', foreground: '5c6370' },
+    ],
+    colors: {
+      'editor.background': '#1e1e2e',
+      'editor.foreground': '#abb2bf',
+      'editorCursor.foreground': '#61afef',
+      'editor.selectionBackground': '#3e4451',
+      'editor.lineHighlightBackground': '#2c313c',
+      'editorWidget.background': '#21252b',
+      'editorSuggestWidget.background': '#21252b',
+      'editorSuggestWidget.border': '#3e4451',
+      'editorSuggestWidget.selectedBackground': '#2c313c',
+    },
+  });
+
+  monacoApi.editor.defineTheme('handlebars-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: 'delimiter.handlebars', foreground: 'AF00DB' },
+      { token: 'variable.handlebars', foreground: '001080' },
+      { token: 'keyword.handlebars', foreground: '0000FF' },
+      { token: 'tag', foreground: '800000' },
+      { token: 'attribute.name', foreground: 'E50000' },
+      { token: 'attribute.value', foreground: '0451A5' },
+      { token: 'string', foreground: 'A31515' },
+      { token: 'comment', foreground: '008000' },
+    ],
+    colors: {
+      'editor.background': '#ffffff',
+      'editor.foreground': '#000000',
+      'editorCursor.foreground': '#000000',
+      'editor.selectionBackground': '#add6ff',
+      'editor.lineHighlightBackground': '#f3f3f3',
+      'editorWidget.background': '#f3f3f3',
+      'editorSuggestWidget.background': '#f3f3f3',
+      'editorSuggestWidget.border': '#d4d4d4',
+      'editorSuggestWidget.selectedBackground': '#e8e8e8',
+    },
+  });
+}
+
+function getHandlebarsEditorTheme(colorScheme: 'light' | 'dark') {
+  return colorScheme === 'light' ? 'handlebars-light' : 'handlebars-dark';
+}
 
 const VARIABLE_SUGGESTIONS: Array<{
   label: string;
@@ -112,6 +176,8 @@ export function HandlebarsEditor({
   maxHeight?: string;
   featureMap?: ProjectFeatureMap | null;
 }) {
+  const { colorScheme } = useColorScheme();
+  const editorTheme = getHandlebarsEditorTheme(colorScheme);
   const disposablesRef = useRef<IDisposable[]>([]);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const featureMapRef = useRef<ProjectFeatureMap | null>(featureMap);
@@ -121,6 +187,11 @@ export function HandlebarsEditor({
   useEffect(() => {
     featureMapRef.current = featureMap;
   }, [featureMap]);
+
+  useEffect(() => {
+    defineHandlebarsThemes(monaco);
+    monaco.editor.setTheme(editorTheme);
+  }, [editorTheme]);
 
   // Sync external value changes into the editor (controlled behavior)
   useEffect(() => {
@@ -378,29 +449,29 @@ export function HandlebarsEditor({
       <Editor
         defaultValue={value}
         language="handlebars"
-        theme="vs-dark"
+        theme={editorTheme}
         onChange={(val) => {
           isInternalChange.current = true;
           setIsEmpty(!val);
           onChange(val ?? '');
         }}
         onMount={handleMount}
-        beforeMount={(monaco) => {
+        beforeMount={(monacoApi) => {
           if (
-            !monaco.languages
+            !monacoApi.languages
               .getLanguages()
               .some((language: { id: string }) => language.id === 'handlebars')
           ) {
-            monaco.languages.register({ id: 'handlebars' });
+            monacoApi.languages.register({ id: 'handlebars' });
           }
 
-          monaco.languages.setLanguageConfiguration('handlebars', {
+          monacoApi.languages.setLanguageConfiguration('handlebars', {
             brackets: [['{', '}']],
             autoClosingPairs: [{ open: '{', close: '}' }],
             surroundingPairs: [{ open: '{', close: '}' }],
           });
 
-          monaco.languages.setMonarchTokensProvider('handlebars', {
+          monacoApi.languages.setMonarchTokensProvider('handlebars', {
             tokenizer: {
               root: [
                 [/\{\{!--/, 'comment.handlebars', '@comment'],
@@ -410,44 +481,19 @@ export function HandlebarsEditor({
                 [/--\}\}/, 'comment.handlebars', '@pop'],
                 [/./, 'comment.handlebars'],
               ],
-              handlebars: [
+              handlebars: {
                 [/\}\}/, 'delimiter.handlebars', '@pop'],
                 [/#[\w-]+|\/[\w-]+/, 'keyword.handlebars'],
                 [/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, 'string'],
                 [/\b[\w.]+\b/, 'variable.handlebars'],
-              ],
+              },
             },
           });
 
-          // Define dark theme matching app
-          monaco.editor.defineTheme('handlebars-dark', {
-            base: 'vs-dark',
-            inherit: true,
-            rules: [
-              { token: 'delimiter.handlebars', foreground: 'c678dd' },
-              { token: 'variable.handlebars', foreground: '61afef' },
-              { token: 'keyword.handlebars', foreground: 'c678dd' },
-              { token: 'tag', foreground: 'e06c75' },
-              { token: 'attribute.name', foreground: 'd19a66' },
-              { token: 'attribute.value', foreground: '98c379' },
-              { token: 'string', foreground: '98c379' },
-              { token: 'comment', foreground: '5c6370' },
-            ],
-            colors: {
-              'editor.background': '#1e1e2e',
-              'editor.foreground': '#abb2bf',
-              'editorCursor.foreground': '#61afef',
-              'editor.selectionBackground': '#3e4451',
-              'editor.lineHighlightBackground': '#2c313c',
-              'editorWidget.background': '#21252b',
-              'editorSuggestWidget.background': '#21252b',
-              'editorSuggestWidget.border': '#3e4451',
-              'editorSuggestWidget.selectedBackground': '#2c313c',
-            },
-          });
+          defineHandlebarsThemes(monacoApi);
         }}
         options={{
-          theme: 'handlebars-dark',
+          theme: editorTheme,
           fixedOverflowWidgets: false,
           minimap: { enabled: false },
           lineNumbers: 'off',

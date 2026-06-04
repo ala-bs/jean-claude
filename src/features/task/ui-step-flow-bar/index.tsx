@@ -331,7 +331,7 @@ const CHIP_STYLES: Record<TaskStepStatus, string> = {
     'border border-glass-border bg-glass-light text-ink-1 cursor-pointer hover:bg-glass-medium hover:border-glass-border-strong',
   running: 'step-chip-running text-acc-ink cursor-pointer',
   completed:
-    'border border-status-done/30 bg-status-done-soft text-status-done cursor-pointer hover:bg-status-done/15 shadow-[inset_0_1px_0_0_oklch(0.78_0.16_155_/_0.06)]',
+    'border border-status-done/30 bg-status-done-soft text-status-done hover:bg-status-done/15 cursor-pointer shadow-[inset_0_1px_0_0_color-mix(in_srgb,var(--color-status-done)_6%,transparent)]',
   errored:
     'border border-status-fail/30 bg-status-fail-soft text-status-fail cursor-pointer hover:bg-status-fail/15',
   interrupted:
@@ -378,7 +378,7 @@ function StepChip({
           'h-full w-full gap-1 rounded-md px-1.5 py-0.5 text-[10px] leading-none transition-all duration-300 ease-out',
           CHIP_STYLES[step.status],
           isActive &&
-            'ring-acc/70 ring-offset-bg-0 shadow-[0_0_10px_0_oklch(0.72_0.20_295_/_0.3),0_0_3px_0_oklch(0.72_0.20_295_/_0.2)] ring-[1.5px] ring-offset-[1.5px] brightness-125',
+            'ring-acc/70 ring-offset-bg-0 shadow-[0_0_10px_0_color-mix(in_srgb,var(--color-acc)_30%,transparent),0_0_3px_0_color-mix(in_srgb,var(--color-acc)_20%,transparent)] ring-[1.5px] ring-offset-[1.5px]',
         )}
       >
         <StepTypeIcon step={step} />

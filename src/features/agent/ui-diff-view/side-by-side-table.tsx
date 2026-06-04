@@ -363,7 +363,7 @@ function SideBySideRowComponent({
           ...(hasComment && !isSelected && !isInCommentRange
             ? {
                 background:
-                  'color-mix(in oklch, oklch(0.78 0.18 295) 8%, transparent)',
+                  'color-mix(in oklch, var(--color-acc) 8%, transparent)',
               }
             : {}),
         }}
@@ -413,7 +413,7 @@ function SideBySideRowComponent({
             className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-all ${
               isDragging
                 ? 'bg-acc w-0.5'
-                : 'group-hover:bg-acc/50 bg-white/[0.06] group-hover:w-0.5'
+                : 'group-hover:bg-acc/50 bg-glass-subtle group-hover:w-0.5'
             }`}
           />
           {/* Wide invisible hit target */}
@@ -561,7 +561,7 @@ function SideBySideCell({
         )}
         style={
           hasComment && !isSelected && !isInCommentRange && side === 'left'
-            ? { borderLeft: '2px solid oklch(0.78 0.18 295 / 0.5)' }
+            ? { borderLeft: '2px solid color-mix(in srgb, var(--color-acc) 50%, transparent)' }
             : undefined
         }
       >

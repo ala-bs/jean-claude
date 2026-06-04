@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { Wand2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 
@@ -29,14 +30,14 @@ export function SkillRow({
       renderIcon={({ isActive: active, isDimmed }) => (
         <Wand2
           size={14}
-          className="shrink-0"
-          style={{
-            color: isDimmed
-              ? 'oklch(0.4 0.01 280)'
+          className={clsx(
+            'shrink-0',
+            isDimmed
+              ? 'text-ink-4 opacity-60'
               : active
-                ? 'oklch(0.78 0.18 295)'
-                : 'oklch(0.78 0.16 295)',
-          }}
+                ? 'text-acc'
+                : 'text-acc-ink',
+          )}
         />
       )}
       suffix={suffix}

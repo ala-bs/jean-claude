@@ -9,6 +9,7 @@ import {
   InlineCommentBubble,
   InlineCommentComposer,
 } from '@/features/common/ui-inline-comments';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { api } from '@/lib/api';
 import {
   useComposerFileCommentActions,
@@ -29,6 +30,7 @@ export function CommentableFileViewer({
   projectId: string;
 }) {
   const [tokens, setTokens] = useState<ThemedToken[][] | null>(null);
+  const { shikiTheme } = useColorScheme();
   const [composerLineRange, setComposerLineRange] = useState<{
     start: number;
     end: number;
@@ -77,12 +79,12 @@ export function CommentableFileViewer({
         try {
           result = await codeToTokens(fileData.content, {
             lang: (fileData.language || 'text') as BundledLanguage,
-            theme: 'github-dark',
+            theme: shikiTheme,
           });
         } catch {
           result = await codeToTokens(fileData.content, {
             lang: 'text',
-            theme: 'github-dark',
+            theme: shikiTheme,
           });
         }
         if (!cancelled) setTokens(result.tokens);
@@ -94,7 +96,7 @@ export function CommentableFileViewer({
     return () => {
       cancelled = true;
     };
-  }, [fileData]);
+  }, [fileData, shikiTheme]);
 
   // Initialize viewport info after tokens load
   useEffect(() => {

@@ -118,7 +118,7 @@ export function SubagentEntry({
 
       {/* Clickable header */}
       <div
-        className="flex cursor-pointer flex-col gap-0.5 py-1.5 pr-3 hover:bg-white/5"
+        className="flex cursor-pointer flex-col gap-0.5 py-1.5 pr-3 hover:bg-glass-light"
         onClick={() => setIsExpanded(!isExpanded)}
       >
         {/* Main row: icon + description + status */}
@@ -198,13 +198,13 @@ export function SubagentEntry({
       {/* Expanded nested timeline */}
       {isExpanded && (resultOutput || displayEntries.length > 0) && (
         <div className="relative mb-2 ml-5 pl-1">
-          <div className="absolute top-1 bottom-1 left-0 w-px rounded-full bg-white/[0.06]" />
+          <div className="absolute top-1 bottom-1 left-0 w-px rounded-full bg-glass-subtle" />
           {resultOutput && (
             <div className="px-3 pb-3">
               <div className="mb-1 text-[11px] font-medium tracking-wide text-cyan-300 uppercase">
                 Result
               </div>
-              <div className="text-ink-1 max-h-96 overflow-auto rounded bg-black/30 p-3 text-xs">
+              <div className="text-ink-1 max-h-96 overflow-auto rounded bg-code-bg p-3 text-xs">
                 <MarkdownContent
                   content={resultOutput}
                   onFilePathClick={onFilePathClick}
@@ -235,7 +235,7 @@ export function SubagentEntry({
       {/* Empty state when expanded but no entries and no result yet */}
       {isExpanded && displayEntries.length === 0 && !resultOutput && (
         <div className="text-ink-3 relative mb-2 ml-5 pl-4 text-xs">
-          <div className="absolute top-1 bottom-1 left-1.5 w-px rounded-full bg-white/[0.06]" />
+          <div className="absolute top-1 bottom-1 left-1.5 w-px rounded-full bg-glass-subtle" />
           Waiting for sub-agent activity...
         </div>
       )}

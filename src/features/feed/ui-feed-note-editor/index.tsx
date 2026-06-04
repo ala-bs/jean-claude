@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
 import { IconButton } from '@/common/ui/icon-button';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import {
   useDeleteFeedNote,
@@ -20,6 +21,7 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
   const { note, isLoading } = useFeedNoteById(noteId);
   const updateNote = useUpdateFeedNote();
   const deleteNote = useDeleteFeedNote();
+  const { colorScheme } = useColorScheme();
   const editor = useCreateBlockNote();
 
   const [value, setValue] = useState('');
@@ -143,7 +145,7 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
       <div className="feed-note-blocknote flex-1 overflow-y-auto px-2 py-3">
         <BlockNoteView
           editor={editor}
-          theme="dark"
+          theme={colorScheme}
           onChange={handleEditorChange}
           className="h-full"
         />

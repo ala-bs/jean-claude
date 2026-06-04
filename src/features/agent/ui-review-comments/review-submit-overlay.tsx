@@ -191,8 +191,7 @@ function ReviewSubmitOverlayContent({
       role="dialog"
       aria-modal="true"
       aria-label="Submit review"
-      className="absolute inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
-      style={{ background: 'oklch(0.06 0.012 275 / 0.78)' }}
+      className="bg-scrim-strong/80 absolute inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
     >
       <div className="bg-bg-1 border-line flex max-h-[92%] w-[720px] flex-col overflow-hidden rounded-lg border shadow-2xl">
         {/* Header */}
@@ -348,7 +347,7 @@ function ReviewSubmitOverlayContent({
                             key={imgIdx}
                             src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                             alt={img.filename || 'Attached'}
-                            className="h-8 w-8 rounded border border-white/10 object-cover"
+                            className="h-8 w-8 rounded border border-glass-border object-cover"
                           />
                         ))}
                       </div>
@@ -406,7 +405,7 @@ function ReviewSubmitOverlayContent({
           <button
             onClick={handleSubmit}
             disabled={!canSubmit}
-            className="bg-acc inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+            className="bg-acc text-on-acc inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-xs font-medium disabled:opacity-40"
           >
             Submit review
             <kbd className="ml-1 text-[10px] opacity-70">⌘↵</kbd>

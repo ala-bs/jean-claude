@@ -3,84 +3,89 @@
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
 
 @import 'tailwindcss';
+@import './styles/themes/dark.css';
+@import './styles/themes/light.css';
 
-@theme extend {
-  /* ── Aurora Glass: oklch color system ── */
+@theme inline {
+  /* ── Aurora Glass: theme-aware color tokens ── */
+  --color-bg-0: var(--theme-bg-0);
+  --color-bg-1: var(--theme-bg-1);
+  --color-bg-2: var(--theme-bg-2);
+  --color-bg-3: var(--theme-bg-3);
+  --color-bg-4: var(--theme-bg-4);
 
-  /* Background tiers — near-black with cool violet cast */
-  --color-bg-0: oklch(0.14 0.012 275);
-  --color-bg-1: oklch(0.17 0.013 275);
-  --color-bg-2: oklch(0.205 0.014 275);
-  --color-bg-3: oklch(0.245 0.015 275);
-  --color-bg-4: oklch(0.29 0.016 275);
+  --color-line: var(--theme-line);
+  --color-line-soft: var(--theme-line-soft);
 
-  /* Border colors */
-  --color-line: oklch(0.27 0.015 275);
-  --color-line-soft: oklch(0.22 0.013 275);
+  --color-ink-0: var(--theme-ink-0);
+  --color-ink-1: var(--theme-ink-1);
+  --color-ink-2: var(--theme-ink-2);
+  --color-ink-3: var(--theme-ink-3);
+  --color-ink-4: var(--theme-ink-4);
 
-  /* Ink (text) tiers */
-  --color-ink-0: oklch(0.985 0.003 275);
-  --color-ink-1: oklch(0.88 0.008 275);
-  --color-ink-2: oklch(0.68 0.012 275);
-  --color-ink-3: oklch(0.52 0.014 275);
-  --color-ink-4: oklch(0.4 0.014 275);
+  --color-acc: var(--theme-acc);
+  --color-acc-soft: var(--theme-acc-soft);
+  --color-acc-line: var(--theme-acc-line);
+  --color-acc-ink: var(--theme-acc-ink);
 
-  /* Accent — electric violet */
-  --color-acc: oklch(0.72 0.2 295);
-  --color-acc-soft: oklch(0.72 0.2 295 / 0.16);
-  --color-acc-line: oklch(0.72 0.2 295 / 0.4);
-  --color-acc-ink: oklch(0.82 0.17 295);
+  --color-status-run: var(--theme-status-run);
+  --color-status-done: var(--theme-status-done);
+  --color-status-review: var(--theme-status-review);
+  --color-status-pr: var(--theme-status-pr);
+  --color-status-fail: var(--theme-status-fail);
+  --color-status-azure: var(--theme-status-azure);
 
-  /* Status — same L+C, hue rotation only */
-  --color-status-run: oklch(0.78 0.16 75);
-  --color-status-done: oklch(0.78 0.16 155);
-  --color-status-review: oklch(0.78 0.16 235);
-  --color-status-pr: oklch(0.78 0.16 260);
-  --color-status-fail: oklch(0.72 0.18 25);
-  --color-status-azure: oklch(0.78 0.16 205);
+  --color-status-run-soft: var(--theme-status-run-soft);
+  --color-status-done-soft: var(--theme-status-done-soft);
+  --color-status-review-soft: var(--theme-status-review-soft);
+  --color-status-pr-soft: var(--theme-status-pr-soft);
+  --color-status-fail-soft: var(--theme-status-fail-soft);
+  --color-status-azure-soft: var(--theme-status-azure-soft);
 
-  /* Status soft (low-opacity backgrounds) */
-  --color-status-run-soft: oklch(0.78 0.16 75 / 0.14);
-  --color-status-done-soft: oklch(0.78 0.16 155 / 0.14);
-  --color-status-review-soft: oklch(0.78 0.16 235 / 0.14);
-  --color-status-pr-soft: oklch(0.78 0.16 260 / 0.14);
-  --color-status-fail-soft: oklch(0.72 0.18 25 / 0.14);
-  --color-status-azure-soft: oklch(0.78 0.16 205 / 0.14);
+  --color-glass-subtle: var(--theme-glass-subtle);
+  --color-glass-light: var(--theme-glass-light);
+  --color-glass-medium: var(--theme-glass-medium);
+  --color-glass-strong: var(--theme-glass-strong);
+  --color-glass-border: var(--theme-glass-border);
+  --color-glass-border-strong: var(--theme-glass-border-strong);
 
-  /* Glass surfaces — translucent white at various opacities */
-  --color-glass-subtle: oklch(1 0 0 / 0.025);
-  --color-glass-light: oklch(1 0 0 / 0.04);
-  --color-glass-medium: oklch(1 0 0 / 0.06);
-  --color-glass-strong: oklch(1 0 0 / 0.1);
-  --color-glass-border: oklch(1 0 0 / 0.08);
-  --color-glass-border-strong: oklch(1 0 0 / 0.12);
+  --color-scrim: var(--theme-scrim);
+  --color-scrim-medium: var(--theme-scrim-medium);
+  --color-scrim-strong: var(--theme-scrim-strong);
+  --color-panel-scrim: var(--theme-panel-scrim);
+  --color-panel-scrim-soft: var(--theme-panel-scrim-soft);
+  --color-code-bg: var(--theme-code-bg);
+  --color-chrome-fg: var(--theme-chrome-fg);
+  --color-chrome-fg-muted: var(--theme-chrome-fg-muted);
+  --color-chrome-hover: var(--theme-chrome-hover);
+  --color-chrome-border: var(--theme-chrome-border);
+  --color-on-acc: var(--theme-on-acc);
+  --color-section-strip: var(--theme-section-strip-bg);
 
-  /* ── Legacy mappings for gradual migration ── */
-  /* These let existing neutral-*, blue-*, etc. classes still compile */
-  --color-primary: oklch(0.72 0.2 295);
-  --color-primary-dim: oklch(0.6 0.18 295);
-  --color-primary-container: oklch(0.25 0.03 275);
-  --color-secondary: oklch(0.78 0.18 295);
-  --color-secondary-dim: oklch(0.65 0.15 295);
-  --color-tertiary: oklch(0.85 0.12 205);
-  --color-error-dim: oklch(0.55 0.18 25);
+  /* Legacy mappings */
+  --color-primary: var(--theme-primary);
+  --color-primary-dim: var(--theme-primary-dim);
+  --color-primary-container: var(--theme-primary-container);
+  --color-secondary: var(--theme-secondary);
+  --color-secondary-dim: var(--theme-secondary-dim);
+  --color-tertiary: var(--theme-tertiary);
+  --color-error-dim: var(--theme-error-dim);
 
-  --color-surface: oklch(0.14 0.012 275);
-  --color-surface-bright: oklch(0.17 0.013 275);
-  --color-surface-variant: oklch(0.16 0.012 275);
-  --color-surface-tint: oklch(0.72 0.2 295 / 0.05);
-  --color-surface-container-lowest: oklch(0.08 0.01 275);
-  --color-surface-container-low: oklch(0.12 0.011 275);
-  --color-surface-container: oklch(0.15 0.012 275);
-  --color-surface-container-high: oklch(0.18 0.013 275);
-  --color-surface-container-highest: oklch(0.21 0.014 275);
+  --color-surface: var(--theme-surface);
+  --color-surface-bright: var(--theme-surface-bright);
+  --color-surface-variant: var(--theme-surface-variant);
+  --color-surface-tint: var(--theme-surface-tint);
+  --color-surface-container-lowest: var(--theme-surface-container-lowest);
+  --color-surface-container-low: var(--theme-surface-container-low);
+  --color-surface-container: var(--theme-surface-container);
+  --color-surface-container-high: var(--theme-surface-container-high);
+  --color-surface-container-highest: var(--theme-surface-container-highest);
 
-  --color-on-surface: oklch(0.985 0.003 275);
-  --color-on-surface-variant: oklch(0.68 0.012 275);
-  --color-on-primary: oklch(0.14 0.012 275);
-  --color-on-secondary: oklch(0.14 0.012 275);
-
-  --color-outline-variant: oklch(0.35 0.015 275);
+  --color-on-surface: var(--theme-on-surface);
+  --color-on-surface-variant: var(--theme-on-surface-variant);
+  --color-on-primary: var(--theme-on-primary);
+  --color-on-secondary: var(--theme-on-secondary);
+  --color-outline-variant: var(--theme-outline-variant);
 
   /* ── Typography ── */
   --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
@@ -114,8 +119,8 @@
   --radius-2xl: 1rem;
 
   /* ── Elevation ── */
-  --shadow-ambient: 0 24px 48px oklch(0 0 0 / 0.3);
-  --shadow-focus-glow: 0 0 0 4px oklch(0.72 0.2 295 / 0.2);
+  --shadow-ambient: var(--theme-shadow-ambient);
+  --shadow-focus-glow: var(--theme-shadow-focus-glow);
 }
 
 /* ── Base layer: global defaults from the design system ── */
@@ -254,15 +259,15 @@ button {
     linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.65 0.2 295),
-        oklch(0.6 0.22 320),
-        oklch(0.72 0.18 295),
-        oklch(0.65 0.2 295)
+        var(--color-acc),
+        var(--color-secondary),
+        color-mix(in srgb, var(--color-acc) 85%, var(--color-secondary)),
+        var(--color-acc)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 1.5s linear infinite;
-  box-shadow: 0 0 6px 0px oklch(0.72 0.2 295 / 0.35);
+  box-shadow: 0 0 6px 0px color-mix(in srgb, var(--color-acc) 35%, transparent);
 }
 
 @keyframes cat-bongo-bob {
@@ -419,13 +424,13 @@ button {
   0%,
   100% {
     box-shadow:
-      0 0 6px oklch(var(--acc) / 0.25),
-      inset 0 0 0 1px oklch(var(--acc) / 0.2);
+      0 0 6px color-mix(in srgb, var(--color-acc) 25%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, var(--color-acc) 20%, transparent);
   }
   50% {
     box-shadow:
-      0 0 12px oklch(var(--acc) / 0.4),
-      inset 0 0 0 1px oklch(var(--acc) / 0.35);
+      0 0 12px color-mix(in srgb, var(--color-acc) 40%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, var(--color-acc) 35%, transparent);
   }
 }
 
@@ -457,15 +462,15 @@ button {
     linear-gradient(var(--color-bg-0), var(--color-bg-0)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.65 0.2 295),
-        oklch(0.6 0.22 320),
-        oklch(0.72 0.18 295),
-        oklch(0.65 0.2 295)
+        var(--color-acc),
+        var(--color-secondary),
+        color-mix(in srgb, var(--color-acc) 85%, var(--color-secondary)),
+        var(--color-acc)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 3s linear infinite;
-  box-shadow: 0 0 12px 0px oklch(0.72 0.2 295 / 0.15);
+  box-shadow: 0 0 12px 0px color-mix(in srgb, var(--color-acc) 15%, transparent);
 }
 
 @utility running-border-selected {
@@ -475,15 +480,15 @@ button {
     linear-gradient(var(--color-bg-3), var(--color-bg-3)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.72 0.22 295),
-        oklch(0.67 0.24 320),
-        oklch(0.78 0.2 295),
-        oklch(0.72 0.22 295)
+        var(--color-acc),
+        var(--color-secondary),
+        color-mix(in srgb, var(--color-acc) 90%, white),
+        var(--color-acc)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 1.5s linear infinite;
-  box-shadow: 0 0 10px 1px oklch(0.72 0.2 295 / 0.6);
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--color-acc) 60%, transparent);
 }
 
 .task-agent-running-shell {
@@ -541,15 +546,15 @@ button {
     linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.78 0.16 75),
-        oklch(0.72 0.18 55),
-        oklch(0.82 0.15 80),
-        oklch(0.78 0.16 75)
+        var(--color-status-run),
+        color-mix(in srgb, var(--color-status-run) 90%, var(--color-status-fail)),
+        color-mix(in srgb, var(--color-status-run) 85%, white),
+        var(--color-status-run)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 2s linear infinite;
-  box-shadow: 0 0 6px 0px oklch(0.78 0.16 75 / 0.35);
+  box-shadow: 0 0 6px 0px color-mix(in srgb, var(--color-status-run) 35%, transparent);
 }
 
 @utility permission-border-selected {
@@ -559,15 +564,15 @@ button {
     linear-gradient(var(--color-bg-3), var(--color-bg-3)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.84 0.18 75),
-        oklch(0.78 0.2 55),
-        oklch(0.88 0.17 80),
-        oklch(0.84 0.18 75)
+        var(--color-status-run),
+        color-mix(in srgb, var(--color-status-run) 95%, white),
+        color-mix(in srgb, var(--color-status-run) 90%, white),
+        var(--color-status-run)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 2s linear infinite;
-  box-shadow: 0 0 10px 1px oklch(0.78 0.16 75 / 0.6);
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--color-status-run) 60%, transparent);
 }
 
 /* Animated gradient border for question requests (teal/blue) */
@@ -578,15 +583,15 @@ button {
     linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.78 0.16 195),
-        oklch(0.78 0.16 235),
-        oklch(0.82 0.14 200),
-        oklch(0.78 0.16 195)
+        var(--color-status-review),
+        var(--color-tertiary),
+        color-mix(in srgb, var(--color-status-review) 85%, white),
+        var(--color-status-review)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 2s linear infinite;
-  box-shadow: 0 0 6px 0px oklch(0.78 0.16 205 / 0.35);
+  box-shadow: 0 0 6px 0px color-mix(in srgb, var(--color-status-review) 35%, transparent);
 }
 
 @utility question-border-selected {
@@ -596,15 +601,15 @@ button {
     linear-gradient(var(--color-bg-3), var(--color-bg-3)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.84 0.18 195),
-        oklch(0.84 0.18 235),
-        oklch(0.88 0.16 200),
-        oklch(0.84 0.18 195)
+        var(--color-status-review),
+        var(--color-tertiary),
+        color-mix(in srgb, var(--color-status-review) 90%, white),
+        var(--color-status-review)
       )
       border-box;
   border: 1.5px solid transparent;
   animation: gradient-rotate 2s linear infinite;
-  box-shadow: 0 0 10px 1px oklch(0.78 0.16 205 / 0.6);
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--color-status-review) 60%, transparent);
 }
 
 /* Static glow for any focused/selected feed item */
@@ -612,60 +617,60 @@ button {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.72 0.2 295 / 0.45);
+  border: 1.5px solid color-mix(in srgb, var(--color-acc) 45%, transparent);
   box-shadow:
-    inset 0 0 0 1px oklch(0.72 0.2 295 / 0.15),
-    0 0 24px oklch(0.72 0.2 295 / 0.1);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-acc) 15%, transparent),
+    0 0 24px color-mix(in srgb, var(--color-acc) 10%, transparent);
 }
 
 @utility focused-border-fail {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.72 0.18 25 / 0.6);
+  border: 1.5px solid color-mix(in srgb, var(--color-status-fail) 60%, transparent);
   box-shadow:
-    inset 0 0 0 1px oklch(0.72 0.18 25 / 0.15),
-    0 0 24px oklch(0.72 0.18 25 / 0.1);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-status-fail) 15%, transparent),
+    0 0 24px color-mix(in srgb, var(--color-status-fail) 10%, transparent);
 }
 
 @utility focused-border-run {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.78 0.16 75 / 0.6);
+  border: 1.5px solid color-mix(in srgb, var(--color-status-run) 60%, transparent);
   box-shadow:
-    inset 0 0 0 1px oklch(0.78 0.16 75 / 0.15),
-    0 0 24px oklch(0.78 0.16 75 / 0.1);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-status-run) 15%, transparent),
+    0 0 24px color-mix(in srgb, var(--color-status-run) 10%, transparent);
 }
 
 @utility focused-border-run-subtle {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.78 0.16 75 / 0.4);
+  border: 1.5px solid color-mix(in srgb, var(--color-status-run) 40%, transparent);
   box-shadow:
-    inset 0 0 0 1px oklch(0.78 0.16 75 / 0.1),
-    0 0 24px oklch(0.78 0.16 75 / 0.06);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-status-run) 10%, transparent),
+    0 0 24px color-mix(in srgb, var(--color-status-run) 6%, transparent);
 }
 
 @utility focused-border-pr {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.78 0.16 260 / 0.4);
+  border: 1.5px solid color-mix(in srgb, var(--color-secondary) 40%, transparent);
   box-shadow:
-    inset 0 0 0 1px oklch(0.78 0.16 260 / 0.15),
-    0 0 24px oklch(0.78 0.16 260 / 0.1);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-secondary) 15%, transparent),
+    0 0 24px color-mix(in srgb, var(--color-secondary) 10%, transparent);
 }
 
 @utility focused-border-azure {
   position: relative;
   isolation: isolate;
   background: var(--color-bg-3);
-  border: 1.5px solid oklch(0.78 0.16 205 / 0.6);
+  border: 1.5px solid color-mix(in srgb, var(--color-status-review) 60%, transparent);
   box-shadow:
-    inset 0 0 0 1px oklch(0.78 0.16 205 / 0.15),
-    0 0 24px oklch(0.78 0.16 205 / 0.1);
+    inset 0 0 0 1px color-mix(in srgb, var(--color-status-review) 15%, transparent),
+    0 0 24px color-mix(in srgb, var(--color-status-review) 10%, transparent);
 }
 
 /* ── Step flow bar: running chip animated border ── */
@@ -674,17 +679,17 @@ button {
     linear-gradient(var(--color-bg-0), var(--color-bg-0)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.72 0.18 295),
-        oklch(0.65 0.2 320),
-        oklch(0.78 0.16 290),
-        oklch(0.72 0.18 295)
+        var(--color-acc),
+        var(--color-secondary),
+        color-mix(in srgb, var(--color-acc) 80%, var(--color-secondary)),
+        var(--color-acc)
       )
       border-box;
   border: 1px solid transparent;
   animation: gradient-rotate 2s linear infinite;
   box-shadow:
-    0 0 8px 0 oklch(0.72 0.18 295 / 0.25),
-    inset 0 1px 0 0 oklch(0.72 0.18 295 / 0.08);
+    0 0 8px 0 color-mix(in srgb, var(--color-acc) 25%, transparent),
+    inset 0 1px 0 0 color-mix(in srgb, var(--color-acc) 8%, transparent);
 }
 
 /* ── Step flow bar: animated connector between steps ── */
@@ -703,8 +708,8 @@ button {
   background: linear-gradient(
     90deg,
     var(--color-line) 0%,
-    oklch(0.72 0.18 295) 40%,
-    oklch(0.65 0.2 320) 60%,
+    var(--color-acc) 40%,
+    var(--color-secondary) 60%,
     var(--color-line) 100%
   );
   background-size: 200% 100%;
@@ -719,17 +724,17 @@ button {
     linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.65 0.2 295),
-        oklch(0.6 0.22 310),
-        oklch(0.58 0.22 325),
-        oklch(0.6 0.22 310),
-        oklch(0.65 0.2 295)
+        var(--color-acc),
+        var(--color-secondary),
+        color-mix(in srgb, var(--color-acc) 70%, var(--color-secondary)),
+        var(--color-secondary),
+        var(--color-acc)
       )
       border-box;
   border: 1px solid transparent;
   animation: gradient-rotate 4s linear infinite;
   box-shadow:
-    0 0 12px 0 oklch(0.72 0.2 295 / 0.2),
+    0 0 12px 0 color-mix(in srgb, var(--color-acc) 20%, transparent),
     0 4px 6px -1px rgba(0, 0, 0, 0.2);
 }
 
@@ -740,18 +745,18 @@ button {
     linear-gradient(var(--color-bg-1), var(--color-bg-1)) padding-box,
     conic-gradient(
         from var(--gradient-angle),
-        oklch(0.65 0.2 295),
-        oklch(0.6 0.22 310),
-        oklch(0.58 0.22 325),
-        oklch(0.6 0.22 310),
-        oklch(0.65 0.2 295)
+        var(--color-acc),
+        var(--color-secondary),
+        color-mix(in srgb, var(--color-acc) 70%, var(--color-secondary)),
+        var(--color-secondary),
+        var(--color-acc)
       )
       border-box;
   border: 1px solid transparent;
   animation: gradient-rotate 4s linear infinite;
   box-shadow:
-    0 0 14px 0 oklch(0.72 0.2 295 / 0.25),
-    0 0 6px 0 oklch(0.6 0.22 320 / 0.15),
+    0 0 14px 0 color-mix(in srgb, var(--color-acc) 25%, transparent),
+    0 0 6px 0 color-mix(in srgb, var(--color-secondary) 15%, transparent),
     0 4px 6px -1px rgba(0, 0, 0, 0.25);
 }
 
@@ -759,20 +764,20 @@ button {
   background:
     radial-gradient(
       ellipse 1200px 700px at 15% -10%,
-      oklch(0.35 0.15 295 / 0.35),
+      var(--theme-aurora-glow-1),
       transparent 55%
     ),
     radial-gradient(
       ellipse 900px 600px at 110% 110%,
-      oklch(0.35 0.12 205 / 0.3),
+      var(--theme-aurora-glow-2),
       transparent 50%
     ),
     radial-gradient(
       ellipse 600px 500px at 60% 50%,
-      oklch(0.3 0.1 330 / 0.12),
+      var(--theme-aurora-glow-3),
       transparent 60%
     ),
-    oklch(0.11 0.015 275);
+    var(--theme-aurora-base);
 }
 
 /* ── Timeline: gradient vertical line that fades at top and bottom ── */
@@ -877,7 +882,7 @@ button {
   background: linear-gradient(
     to right,
     transparent,
-    oklch(1 0 0 / 0.06),
+    var(--theme-separator-stop),
     transparent
   );
 }
@@ -887,17 +892,17 @@ button {
   background: linear-gradient(
     to bottom,
     transparent,
-    oklch(1 0 0 / 0.06),
+    var(--theme-separator-stop),
     transparent
   );
 }
 
 @utility panel-edge-shadow {
-  box-shadow: inset 1px 0 0 0 oklch(1 0 0 / 0.04);
+  box-shadow: inset 1px 0 0 0 var(--theme-panel-edge);
 }
 
 @utility panel-edge-shadow-r {
-  box-shadow: inset -1px 0 0 0 oklch(1 0 0 / 0.04);
+  box-shadow: inset -1px 0 0 0 var(--theme-panel-edge);
 }
 
 /* ─── Feed Graph V3a Animations ───────────────────────────────── */
@@ -1137,13 +1142,13 @@ button {
 @utility rg-running-text {
   background: linear-gradient(
     100deg,
-    oklch(0.55 0.04 280) 0%,
-    oklch(0.55 0.04 280) 28%,
-    oklch(0.95 0.02 280) 42%,
+    var(--color-ink-3) 0%,
+    var(--color-ink-3) 28%,
+    var(--color-ink-0) 42%,
     var(--color-acc-ink) 50%,
-    oklch(0.95 0.02 280) 58%,
-    oklch(0.55 0.04 280) 72%,
-    oklch(0.55 0.04 280) 100%
+    var(--color-ink-0) 58%,
+    var(--color-ink-3) 72%,
+    var(--color-ink-3) 100%
   );
   background-size: 240% 100%;
   -webkit-background-clip: text;

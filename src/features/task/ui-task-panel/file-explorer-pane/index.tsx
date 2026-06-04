@@ -517,7 +517,7 @@ function SvgSourcePreview({
   return (
     <div
       ref={containerRef}
-      className={`flex min-h-0 flex-1 bg-black/30 ${isDragging ? 'select-none' : ''}`}
+      className={`bg-code-bg flex min-h-0 flex-1 ${isDragging ? 'select-none' : ''}`}
     >
       <CodeContent content={content} />
       <div
@@ -551,7 +551,7 @@ function SvgSourcePreview({
 
 function CodeContent({ content }: { content: string }) {
   return (
-    <div className="min-w-0 flex-1 overflow-auto bg-black/30 font-mono text-xs">
+    <div className="bg-code-bg min-w-0 flex-1 overflow-auto font-mono text-xs">
       <pre className="p-3 leading-5">
         {content.split('\n').map((line, i) => (
           <div key={i} className="flex">

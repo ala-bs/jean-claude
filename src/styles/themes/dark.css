@@ -1,0 +1,148 @@
+/* Dark theme — Aurora Glass (extracted from original design system) */
+:root,
+[data-theme='dark'] {
+  --theme-bg-0: oklch(0.14 0.012 275);
+  --theme-bg-1: oklch(0.17 0.013 275);
+  --theme-bg-2: oklch(0.205 0.014 275);
+  --theme-bg-3: oklch(0.245 0.015 275);
+  --theme-bg-4: oklch(0.29 0.016 275);
+
+  --theme-line: oklch(0.27 0.015 275);
+  --theme-line-soft: oklch(0.22 0.013 275);
+
+  --theme-ink-0: oklch(0.985 0.003 275);
+  --theme-ink-1: oklch(0.88 0.008 275);
+  --theme-ink-2: oklch(0.68 0.012 275);
+  --theme-ink-3: oklch(0.52 0.014 275);
+  --theme-ink-4: oklch(0.4 0.014 275);
+
+  --theme-acc: oklch(0.72 0.2 295);
+  --theme-acc-soft: oklch(0.72 0.2 295 / 0.16);
+  --theme-acc-line: oklch(0.72 0.2 295 / 0.4);
+  --theme-acc-ink: oklch(0.82 0.17 295);
+
+  --theme-status-run: oklch(0.78 0.16 75);
+  --theme-status-done: oklch(0.78 0.16 155);
+  --theme-status-review: oklch(0.78 0.16 235);
+  --theme-status-pr: oklch(0.78 0.16 260);
+  --theme-status-fail: oklch(0.72 0.18 25);
+  --theme-status-azure: oklch(0.78 0.16 205);
+
+  --theme-status-run-soft: oklch(0.78 0.16 75 / 0.14);
+  --theme-status-done-soft: oklch(0.78 0.16 155 / 0.14);
+  --theme-status-review-soft: oklch(0.78 0.16 235 / 0.14);
+  --theme-status-pr-soft: oklch(0.78 0.16 260 / 0.14);
+  --theme-status-fail-soft: oklch(0.72 0.18 25 / 0.14);
+  --theme-status-azure-soft: oklch(0.78 0.16 205 / 0.14);
+
+  --theme-glass-subtle: oklch(1 0 0 / 0.025);
+  --theme-glass-light: oklch(1 0 0 / 0.04);
+  --theme-glass-medium: oklch(1 0 0 / 0.06);
+  --theme-glass-strong: oklch(1 0 0 / 0.1);
+  --theme-glass-border: oklch(1 0 0 / 0.08);
+  --theme-glass-border-strong: oklch(1 0 0 / 0.12);
+
+  --theme-scrim: oklch(0 0 0 / 0.12);
+  --theme-scrim-medium: oklch(0 0 0 / 0.22);
+  --theme-scrim-strong: oklch(0 0 0 / 0.45);
+  --theme-panel-scrim: oklch(0 0 0 / 0.18);
+  --theme-panel-scrim-soft: oklch(0 0 0 / 0.25);
+
+  --theme-code-bg: oklch(0.17 0.013 275);
+  --theme-chrome-fg: oklch(0.985 0.003 275);
+  --theme-chrome-fg-muted: oklch(0.68 0.012 275);
+  --theme-chrome-hover: oklch(1 0 0 / 0.08);
+  --theme-chrome-border: oklch(1 0 0 / 0.1);
+  --theme-on-acc: oklch(0.14 0.012 275);
+
+  --theme-primary: oklch(0.72 0.2 295);
+  --theme-primary-dim: oklch(0.6 0.18 295);
+  --theme-primary-container: oklch(0.25 0.03 275);
+  --theme-secondary: oklch(0.78 0.18 295);
+  --theme-secondary-dim: oklch(0.65 0.15 295);
+  --theme-tertiary: oklch(0.85 0.12 205);
+  --theme-error-dim: oklch(0.55 0.18 25);
+
+  --theme-surface: oklch(0.14 0.012 275);
+  --theme-surface-bright: oklch(0.17 0.013 275);
+  --theme-surface-variant: oklch(0.16 0.012 275);
+  --theme-surface-tint: oklch(0.72 0.2 295 / 0.05);
+  --theme-surface-container-lowest: oklch(0.08 0.01 275);
+  --theme-surface-container-low: oklch(0.12 0.011 275);
+  --theme-surface-container: oklch(0.15 0.012 275);
+  --theme-surface-container-high: oklch(0.18 0.013 275);
+  --theme-surface-container-highest: oklch(0.21 0.014 275);
+
+  --theme-on-surface: oklch(0.985 0.003 275);
+  --theme-on-surface-variant: oklch(0.68 0.012 275);
+  --theme-on-primary: oklch(0.14 0.012 275);
+  --theme-on-secondary: oklch(0.14 0.012 275);
+  --theme-outline-variant: oklch(0.35 0.015 275);
+
+  --theme-shadow-ambient: 0 24px 48px oklch(0 0 0 / 0.3);
+  --theme-shadow-focus-glow: 0 0 0 4px oklch(0.72 0.2 295 / 0.2);
+
+  --theme-aurora-glow-1: oklch(0.35 0.15 295 / 0.35);
+  --theme-aurora-glow-2: oklch(0.35 0.12 205 / 0.3);
+  --theme-aurora-glow-3: oklch(0.3 0.1 330 / 0.12);
+  --theme-aurora-base: oklch(0.11 0.015 275);
+
+  --theme-separator-stop: oklch(1 0 0 / 0.06);
+  --theme-panel-edge: oklch(1 0 0 / 0.04);
+
+  --theme-overlay-glow-1: oklch(0.25 0.12 295 / 0.35);
+  --theme-overlay-glow-2: oklch(0.22 0.1 250 / 0.3);
+  --theme-overlay-panel: oklch(0.14 0.015 280 / 0.92);
+  --theme-overlay-backdrop: oklch(0 0 0 / 0.55);
+  --theme-overlay-footer: oklch(0 0 0 / 0.2);
+
+  --theme-settings-tab-active-fg: oklch(0.1 0 0);
+  --theme-settings-tab-inactive-fg: oklch(0.7 0.01 280);
+  --theme-settings-nav-active-fg: oklch(0.99 0 0);
+  --theme-settings-nav-inactive-fg: oklch(0.72 0.01 280);
+  --theme-settings-nav-icon-active: oklch(0.78 0.18 295);
+  --theme-settings-nav-icon-inactive: oklch(0.55 0.01 280);
+
+  /* Agent message panel (prompt group) */
+  --theme-agent-panel-bg: oklch(0.06 0.01 280 / 0.5);
+  --theme-agent-panel-border: oklch(1 0 0 / 0.1);
+  --theme-agent-panel-header-bg: oklch(1 0 0 / 0.02);
+  --theme-agent-todo-checkbox-border: oklch(1 0 0 / 0.18);
+  --theme-agent-todo-strike: oklch(1 0 0 / 0.25);
+
+  /* List section strips (activity center, etc.) */
+  --theme-section-strip-bg: oklch(0 0 0 / 0.18);
+
+  /* ANSI terminal (One Dark–style on dark log background) */
+  --theme-ansi-black: #545454;
+  --theme-ansi-red: #ff5f56;
+  --theme-ansi-green: #2dd4a8;
+  --theme-ansi-yellow: #e5c07b;
+  --theme-ansi-blue: #61afef;
+  --theme-ansi-magenta: #c678dd;
+  --theme-ansi-cyan: #56b6c2;
+  --theme-ansi-white: #d4d4d4;
+  --theme-ansi-bright-black: #808080;
+  --theme-ansi-bright-red: #ff6e6a;
+  --theme-ansi-bright-green: #69f0ae;
+  --theme-ansi-bright-yellow: #ffd740;
+  --theme-ansi-bright-blue: #82b1ff;
+  --theme-ansi-bright-magenta: #ea80fc;
+  --theme-ansi-bright-cyan: #84ffff;
+  --theme-ansi-bright-white: #ffffff;
+
+  /* Shrink-to-target fly animation ghost */
+  --theme-shrink-ghost-bg: var(--theme-bg-2);
+  --theme-shrink-ghost-border: var(--theme-chrome-border);
+  --theme-shrink-ghost-shadow: var(--theme-shadow-ambient);
+  --theme-shrink-ghost-squircle-bg: var(--theme-bg-3);
+  --theme-shrink-ghost-squircle-border: oklch(1 0 0 / 0.5);
+  --theme-shrink-ghost-squircle-glow: 0 0 30px 6px oklch(1 0 0 / 0.25),
+    0 0 60px 12px oklch(1 0 0 / 0.08);
+  --theme-shrink-ghost-fly-glow: 0 0 12px 3px oklch(1 0 0 / 0.15);
+
+  /* Kbd on saturated action buttons (run, PR approve, etc.) */
+  --theme-kbd-on-saturated-fg: oklch(0.99 0 0);
+  --theme-kbd-on-saturated-border: oklch(1 0 0 / 0.7);
+  --theme-kbd-on-saturated-bg: oklch(1 0 0 / 0.15);
+}

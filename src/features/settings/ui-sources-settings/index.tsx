@@ -166,7 +166,7 @@ function SourceItemUpdateControl({
 
   if (item.status === 'up-to-date' || item.status === 'installed') {
     return (
-      <span className="text-ink-3 rounded bg-white/[0.04] px-2 py-1 text-xs">
+      <span className="text-ink-3 bg-glass-light rounded px-2 py-1 text-xs">
         Up to date
       </span>
     );
@@ -201,15 +201,12 @@ function SourceRow({
     <button
       type="button"
       onClick={onSelect}
-      className="flex w-full max-w-full min-w-0 flex-col gap-1.5 overflow-hidden px-4 py-3 text-left transition-colors hover:bg-white/[0.04]"
-      style={{
-        background: isActive
-          ? 'color-mix(in oklch, oklch(0.78 0.18 295) 18%, transparent)'
-          : 'transparent',
-        borderLeft: isActive
-          ? '2px solid oklch(0.78 0.18 295)'
-          : '2px solid transparent',
-      }}
+      className={clsx(
+        'flex w-full max-w-full min-w-0 flex-col gap-1.5 overflow-hidden border-l-2 px-4 py-3 text-left transition-colors hover:bg-glass-light',
+        isActive
+          ? 'bg-acc-soft border-acc'
+          : 'border-transparent bg-transparent',
+      )}
     >
       <div className="flex min-w-0 items-center gap-2">
         <Github
@@ -584,7 +581,7 @@ function SourceDetail({ source }: { source: SourceView }) {
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-black/[0.18]">
+    <div className="bg-bg-0 flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="border-line-soft flex shrink-0 items-center gap-3 border-b px-5 py-3">
         <Github size={16} className="text-acc-ink shrink-0" />
         <div className="min-w-0 flex-1">
@@ -605,10 +602,10 @@ function SourceDetail({ source }: { source: SourceView }) {
         </Button>
       </div>
 
-      <div className="border-line-soft flex shrink-0 flex-wrap items-center gap-3 border-b bg-black/[0.12] px-5 py-2.5">
+      <div className="border-line-soft bg-section-strip flex shrink-0 flex-wrap items-center gap-3 border-b px-5 py-2.5">
         <span className="text-ink-2 text-xs">Branch {source.branch}</span>
         <span className="text-ink-3 text-xs">Commit</span>
-        <code className="text-ink-2 rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11px]">
+        <code className="text-ink-2 bg-glass-light rounded px-1.5 py-0.5 font-mono text-[11px]">
           {shortCommit(source.currentCommit)}
         </code>
         <span className="text-ink-3 text-xs">

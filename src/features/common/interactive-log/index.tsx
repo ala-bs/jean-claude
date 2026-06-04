@@ -100,7 +100,7 @@ export function InteractiveLog({
         onKeyDown={handleKeyDown}
         style={{ fontFamily: TERMINAL_FONT_FAMILY }}
         className={clsx(
-          'flex-1 overflow-auto px-3 py-2 text-xs leading-relaxed focus:outline-none',
+          'bg-code-bg text-ink-0 flex-1 overflow-auto px-3 py-2 text-xs leading-relaxed focus:outline-none',
           isRunning && 'cursor-text',
         )}
       >
@@ -111,7 +111,7 @@ export function InteractiveLog({
             <div
               key={`${entry.timestamp}-${index}`}
               className={clsx(
-                '-mx-1 border-l-2 px-2 break-words whitespace-pre-wrap transition-colors hover:bg-white/[0.03]',
+                '-mx-1 border-l-2 px-2 break-words whitespace-pre-wrap transition-colors hover:bg-glass-subtle',
                 entry.stream === 'stderr'
                   ? 'border-status-fail/70 text-status-fail hover:bg-status-fail/5'
                   : 'text-ink-1 border-ink-4/25 hover:border-ink-3/60',

@@ -105,14 +105,14 @@ function AgentRow({
       renderIcon={({ isActive: active, isDimmed }) => (
         <Bot
           size={14}
-          className="shrink-0"
-          style={{
-            color: isDimmed
-              ? 'oklch(0.4 0.01 280)'
+          className={clsx(
+            'shrink-0',
+            isDimmed
+              ? 'text-ink-4 opacity-60'
               : active
-                ? 'oklch(0.78 0.18 295)'
-                : 'oklch(0.78 0.16 295)',
-          }}
+                ? 'text-acc'
+                : 'text-acc-ink',
+          )}
         />
       )}
       suffix={
@@ -160,8 +160,7 @@ function AgentRail({
             <button
               type="button"
               onClick={onMigrate}
-              className="rounded p-1 transition-colors hover:bg-white/6 hover:text-white"
-              style={{ color: 'oklch(0.7 0.01 280)' }}
+              className="text-ink-3 hover:text-ink-1 hover:bg-glass-medium rounded p-1 transition-colors"
               title="Migrate manually installed agents"
             >
               <RefreshCw size={13} />
@@ -170,8 +169,7 @@ function AgentRail({
           <button
             type="button"
             onClick={onAdd}
-            className="rounded p-1 transition-colors"
-            style={{ color: 'oklch(0.78 0.18 295)' }}
+            className="text-acc hover:bg-glass-medium rounded p-1 transition-colors"
             title="Add agent"
           >
             <Plus size={13} />
@@ -411,7 +409,7 @@ function AgentEditor({
       )}
 
       <div className="flex min-h-0 flex-1 flex-col p-5">
-        <div className="border-glass-border flex items-center gap-2 rounded-t-lg border border-b-0 bg-black/20 px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase">
+        <div className="border-glass-border bg-section-strip flex items-center gap-2 rounded-t-lg border border-b-0 px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase">
           <Pencil size={11} className="text-ink-3" />
           <span className="text-ink-3">AGENT.md</span>
         </div>
@@ -519,7 +517,7 @@ function AgentDetails({
     : undefined;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-black/[0.18]">
+    <div className="bg-bg-0 flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="border-line-soft flex shrink-0 items-center gap-3 border-b px-5 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <Bot size={16} className="text-acc-ink shrink-0" />
@@ -571,7 +569,7 @@ function AgentDetails({
         )}
       </div>
 
-      <div className="border-line-soft flex shrink-0 flex-wrap items-center gap-3 border-b bg-black/[0.12] px-5 py-2.5">
+      <div className="border-line-soft bg-section-strip flex shrink-0 flex-wrap items-center gap-3 border-b px-5 py-2.5">
         <span className="text-ink-4 font-mono text-[10px] tracking-wider uppercase">
           Enabled in
         </span>
@@ -618,7 +616,7 @@ function AgentDetails({
           )}
           {!isLoading && !error && mode === 'edit' && (
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="border-glass-border flex items-center gap-2 rounded-t-lg border border-b-0 bg-black/20 px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase">
+              <div className="border-glass-border bg-section-strip flex items-center gap-2 rounded-t-lg border border-b-0 px-3 py-1.5 font-mono text-[10px] tracking-wider uppercase">
                 <Pencil size={11} className="text-ink-3" />
                 <span className="text-ink-3">AGENT.md</span>
                 <div className="flex-1" />

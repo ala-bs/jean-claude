@@ -21,28 +21,28 @@ const VOTE_OPTIONS = [
     label: 'Approve',
     status: 'approved' as const,
     icon: Check,
-    color: 'text-green-400',
+    color: 'text-status-done',
   },
   {
     vote: 5,
     label: 'Approve with suggestions',
     status: 'approved-with-suggestions' as const,
     icon: ThumbsUp,
-    color: 'text-emerald-400',
+    color: 'text-status-done',
   },
   {
     vote: -5,
     label: 'Wait for author',
     status: 'waiting' as const,
     icon: Hand,
-    color: 'text-amber-400',
+    color: 'text-status-run',
   },
   {
     vote: -10,
     label: 'Reject',
     status: 'rejected' as const,
     icon: X,
-    color: 'text-red-400',
+    color: 'text-status-fail',
   },
 ] as const;
 
@@ -93,8 +93,8 @@ export function PrVoteDropdown({
     <div className="flex h-7 items-stretch">
       <button
         className={clsx(
-          'flex h-full items-center rounded-l-lg bg-green-600 px-3 text-xs font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50',
-          currentVote === 'approved' && 'bg-green-700',
+          'bg-status-done text-on-acc flex h-full items-center rounded-l-lg px-3 text-xs font-medium transition-colors hover:brightness-110 disabled:opacity-50',
+          currentVote === 'approved' && 'brightness-95',
         )}
         disabled={voteMutation.isPending}
         onClick={() => handleVote(APPROVE_VOTE)}
@@ -106,8 +106,8 @@ export function PrVoteDropdown({
         trigger={
           <button
             className={clsx(
-              'flex h-full items-center justify-center rounded-r-lg border-l border-white/20 bg-green-600 px-2 text-white transition-colors hover:bg-green-700 disabled:opacity-50',
-              currentVote === 'approved' && 'bg-green-700',
+              'bg-status-done text-on-acc border-on-acc/20 flex h-full items-center justify-center rounded-r-lg border-l px-2 transition-colors hover:brightness-110 disabled:opacity-50',
+              currentVote === 'approved' && 'brightness-95',
             )}
             disabled={voteMutation.isPending}
             aria-label="More vote options"
