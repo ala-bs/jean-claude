@@ -17,7 +17,7 @@ const TERMINAL_FONT_FAMILY =
 
 /**
  * Interactive terminal log viewer with ANSI color rendering, auto-scroll,
- * and optional PTY keyboard input forwarding.
+ * and optional keyboard input forwarding.
  *
  * Used by both the task panel's command logs pane and the running commands overlay.
  */
@@ -31,7 +31,11 @@ export function InteractiveLog({
   emptyText = 'Waiting for output...',
   className,
 }: {
-  lines: readonly { line: string; timestamp: number }[];
+  lines: readonly {
+    line: string;
+    stream: 'stdout' | 'stderr';
+    timestamp: number;
+  }[];
   taskId: string;
   runCommandId: string;
   isRunning: boolean;
@@ -63,7 +67,7 @@ export function InteractiveLog({
     }
   }, [lineCount, runCommandId]);
 
-  // Forward raw keystrokes to the PTY when the log area is focused
+  // Forward raw keystrokes to the process when the log area is focused.
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       if (!isRunning) return;
@@ -106,7 +110,12 @@ export function InteractiveLog({
           lines.map((entry, index) => (
             <div
               key={`${entry.timestamp}-${index}`}
-              className="text-ink-1 break-words whitespace-pre-wrap"
+              className={clsx(
+                '-mx-1 border-l-2 px-2 break-words whitespace-pre-wrap transition-colors hover:bg-white/[0.03]',
+                entry.stream === 'stderr'
+                  ? 'border-status-fail/70 text-status-fail hover:bg-status-fail/5'
+                  : 'text-ink-1 border-ink-4/25 hover:border-ink-3/60',
+              )}
             >
               <AnsiLine line={entry.line} />
             </div>
