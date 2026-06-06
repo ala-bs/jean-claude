@@ -105,7 +105,6 @@ function getGlobalSections(): GlobalSection[] {
       ? [{ id: 'calendar', label: 'Calendar' }]
       : []),
     { id: 'usage', label: 'Usage Display' },
-    { id: 'prompt-preface', label: 'Prompt Preface' },
     { id: 'maintenance', label: 'Maintenance' },
   ];
 
@@ -126,6 +125,7 @@ function getGlobalSections(): GlobalSection[] {
       subtitle: 'Backends, thinking defaults, and model presets',
       subs: [
         { id: 'presets', label: 'Model Presets' },
+        { id: 'prompt-preface', label: 'Prompt Preface' },
         { id: 'claude-code', label: 'Claude Code', layout: 'fill' },
         { id: 'opencode', label: 'OpenCode', layout: 'fill' },
       ],
@@ -434,10 +434,14 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Meeting reminders from your macOS Calendar.';
       case 'usage':
         return 'Rate-limit pills shown in the title bar.';
-      case 'prompt-preface':
-        return 'Reusable instructions injected into agent prompts.';
       case 'maintenance':
         return 'Cleanup, gitignore, and housekeeping tools.';
+    }
+  }
+  if (sectionId === 'coding-agents') {
+    switch (subId) {
+      case 'prompt-preface':
+        return 'Reusable instructions injected into coding agent prompts.';
     }
   }
   return '';
@@ -455,8 +459,6 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <CalendarSettings />;
       case 'general:usage':
         return <UsageDisplaySettings />;
-      case 'general:prompt-preface':
-        return <PromptPrefaceSettings />;
       case 'general:maintenance':
         return <MaintenanceSettings />;
       case 'skills-agents:skills':
@@ -467,6 +469,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <AgentsSettings />;
       case 'coding-agents:presets':
         return <ModelPresetsSettings />;
+      case 'coding-agents:prompt-preface':
+        return <PromptPrefaceSettings />;
       case 'coding-agents:claude-code':
         return <BackendConfigSettings backend="claude-code" />;
       case 'coding-agents:opencode':
