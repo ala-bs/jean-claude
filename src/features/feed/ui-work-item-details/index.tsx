@@ -22,6 +22,7 @@ import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProject } from '@/hooks/use-projects';
 import {
   useRelatedTestCases,
+  useAddWorkItemComment,
   useUpdateWorkItemState,
   useWorkItemById,
   useWorkItemComments,
@@ -183,6 +184,7 @@ export function WorkItemDetails({
       projectName,
       workItemId,
     });
+  const addComment = useAddWorkItemComment();
   const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
   const [activeTab, setActiveTab] = useState<DetailsTab>('comments');
 
@@ -367,6 +369,18 @@ export function WorkItemDetails({
                 providerId={providerId ?? undefined}
                 emptyMessage="No comments on this work item yet."
                 hideHeader
+                isAddingComment={addComment.isPending}
+                onAddComment={
+                  providerId && projectName
+                    ? (text) =>
+                        addComment.mutateAsync({
+                          providerId,
+                          projectName,
+                          workItemId,
+                          text,
+                        })
+                    : undefined
+                }
               />
             )}
 

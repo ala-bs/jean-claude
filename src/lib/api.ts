@@ -632,6 +632,12 @@ export interface Api {
       projectName: string;
       workItemId: number;
     }) => Promise<WorkItemComment[]>;
+    addWorkItemComment: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      text: string;
+    }) => Promise<WorkItemComment>;
     getIterations: (params: {
       providerId: string;
       projectName: string;
@@ -1645,6 +1651,9 @@ export const api: Api = hasWindowApi
         },
         getRelatedTestCases: async () => [],
         getWorkItemComments: async () => [],
+        addWorkItemComment: async () => {
+          throw new Error('API not available');
+        },
         getIterations: async () => [],
         createPullRequest: async () => {
           throw new Error('API not available');

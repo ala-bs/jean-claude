@@ -956,6 +956,56 @@ export async function getWorkItemComments(params: {
   );
 }
 
+export async function addWorkItemComment(params: {
+  providerId: string;
+  projectName: string;
+  workItemId: number;
+  text: string;
+}): Promise<{
+  id: number;
+  workItemId: number;
+  text: string;
+  createdBy: string;
+  createdDate: string;
+}> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text: params.text }),
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(
+      `Failed to add comment for work item ${params.workItemId}: ${error}`,
+    );
+  }
+
+  const c: {
+    id: number;
+    workItemId?: number;
+    text?: string;
+    createdBy?: { displayName?: string };
+    createdDate?: string;
+  } = await response.json();
+
+  return {
+    id: c.id,
+    workItemId: c.workItemId ?? params.workItemId,
+    text: c.text ?? params.text,
+    createdBy: c.createdBy?.displayName ?? 'Unknown',
+    createdDate: c.createdDate ?? new Date().toISOString(),
+  };
+}
+
 export async function getIterations(params: {
   providerId: string;
   projectName: string;

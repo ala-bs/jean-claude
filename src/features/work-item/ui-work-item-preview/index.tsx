@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { Kbd } from '@/common/ui/kbd';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import {
+  useAddWorkItemComment,
   useRelatedTestCases,
   useWorkItemComments,
 } from '@/hooks/use-work-items';
@@ -46,6 +47,7 @@ export function WorkItemPreview({
       projectName: projectName ?? null,
       workItemId,
     });
+  const addComment = useAddWorkItemComment();
 
   const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
   const [activeTab, setActiveTab] = useState<DetailsTab>('content');
@@ -160,6 +162,18 @@ export function WorkItemPreview({
             }
             providerId={providerId}
             hideHeader
+            isAddingComment={addComment.isPending}
+            onAddComment={
+              providerId && projectName
+                ? (text) =>
+                    addComment.mutateAsync({
+                      providerId,
+                      projectName,
+                      workItemId: id,
+                      text,
+                    })
+                : undefined
+            }
           />
         )}
 

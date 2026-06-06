@@ -2406,6 +2406,23 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:addWorkItemComment',
+    async (
+      _event,
+      params: {
+        providerId: string;
+        projectName: string;
+        workItemId: number;
+        text: string;
+      },
+    ) => {
+      const { addWorkItemComment } =
+        await import('../services/azure-devops-service');
+      return addWorkItemComment(params);
+    },
+  );
+
+  ipcMain.handle(
     'azureDevOps:getIterations',
     (
       _,

@@ -1,5 +1,8 @@
-import { MessageSquare, MessagesSquare } from 'lucide-react';
+import { MessageSquare, MessagesSquare, Send } from 'lucide-react';
+import { useState } from 'react';
 
+import { Button } from '@/common/ui/button';
+import { Textarea } from '@/common/ui/textarea';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import type { WorkItemComment } from '@/lib/api';
 
@@ -89,6 +92,8 @@ export function WorkItemComments({
   emptyMessage = 'No comments yet.',
   title = 'Comments',
   hideHeader = false,
+  onAddComment,
+  isAddingComment = false,
 }: {
   comments: WorkItemComment[];
   isLoading: boolean;
@@ -97,16 +102,68 @@ export function WorkItemComments({
   emptyMessage?: string;
   title?: string;
   hideHeader?: boolean;
+  onAddComment?: (text: string) => void | Promise<unknown>;
+  isAddingComment?: boolean;
 }) {
+  const [draft, setDraft] = useState('');
+  const trimmedDraft = draft.trim();
+
+  async function handleSubmit() {
+    if (!trimmedDraft || !onAddComment) return;
+    try {
+      await onAddComment(trimmedDraft);
+      setDraft('');
+    } catch {
+      // Mutation hook handles user-facing error toast. Keep draft for retry.
+    }
+  }
+
+  const editor = onAddComment ? (
+    <div className="border-glass-border/50 bg-bg-1/70 sticky bottom-0 -mx-5 mt-3 border-t px-5 pt-3 pb-1 backdrop-blur">
+      <Textarea
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder="Write a comment..."
+        rows={3}
+        disabled={isAddingComment}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+            event.preventDefault();
+            void handleSubmit();
+          }
+        }}
+      />
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="text-ink-4 text-[11px]">Cmd+Enter to post</span>
+        <Button
+          type="button"
+          size="sm"
+          variant="primary"
+          icon={<Send className="h-3.5 w-3.5" />}
+          loading={isAddingComment}
+          disabled={!trimmedDraft}
+          onClick={handleSubmit}
+        >
+          Post
+        </Button>
+      </div>
+    </div>
+  ) : null;
+
   if (hideHeader) {
     return (
-      <CommentsContent
-        comments={comments}
-        isLoading={isLoading}
-        error={error}
-        providerId={providerId}
-        emptyMessage={emptyMessage}
-      />
+      <div className="flex min-h-full flex-col">
+        <div className="min-h-0 flex-1">
+          <CommentsContent
+            comments={comments}
+            isLoading={isLoading}
+            error={error}
+            providerId={providerId}
+            emptyMessage={emptyMessage}
+          />
+        </div>
+        {editor}
+      </div>
     );
   }
 
@@ -135,6 +192,7 @@ export function WorkItemComments({
           emptyMessage={emptyMessage}
         />
       </div>
+      {editor}
     </div>
   );
 }
