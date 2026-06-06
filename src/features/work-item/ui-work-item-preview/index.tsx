@@ -66,6 +66,7 @@ export function WorkItemPreview({
 
   const { id, fields } = workItem;
   const { title, workItemType, state, assignedTo } = fields;
+  const hasReproSteps = workItemType === 'Bug' && !!fields.reproSteps;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
@@ -119,7 +120,7 @@ export function WorkItemPreview({
               </div>
             </div>
 
-            {fields.description && (
+            {(fields.description || hasReproSteps) && (
               <div className="border-glass-border my-3 border-t" />
             )}
 
@@ -131,6 +132,21 @@ export function WorkItemPreview({
                 imageClassName="max-h-72 w-auto object-contain"
                 enableImageModal
               />
+            )}
+
+            {hasReproSteps && (
+              <div className={fields.description ? 'mt-4' : undefined}>
+                <h4 className="text-ink-1 mb-1.5 text-xs font-medium">
+                  Repro Steps
+                </h4>
+                <AzureHtmlContent
+                  html={fields.reproSteps!}
+                  providerId={providerId}
+                  className="text-ink-2 text-xs"
+                  imageClassName="max-h-72 w-auto object-contain"
+                  enableImageModal
+                />
+              </div>
             )}
           </div>
         )}
