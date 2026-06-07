@@ -21,12 +21,18 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { Checkbox } from '@/common/ui/checkbox';
 import { HandlebarsEditor } from '@/common/ui/handlebars-editor';
 import { Kbd } from '@/common/ui/kbd';
 import { FileEditorDialog } from '@/features/common/ui-file-editor-dialog';
 import type { AzureDevOpsWorkItem, WorkItemComment } from '@/lib/api';
-import { processAttachmentFile, MAX_FILES } from '@/lib/file-attachment-utils';
+import {
+  buildAttachedFilesXml,
+  processAttachmentFile,
+  MAX_FILES,
+} from '@/lib/file-attachment-utils';
 import { processImageFile, MAX_IMAGES } from '@/lib/image-utils';
+import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import {
   resolveSnippetTemplate,
   type SnippetVariableContext,
@@ -36,7 +42,7 @@ import type {
   PromptFilePart,
   PromptImagePart,
 } from '@shared/agent-backend-types';
-import type { PromptSnippet } from '@shared/types';
+import type { ProjectFeatureMap, PromptSnippet } from '@shared/types';
 
 export function getWorkItemCommentSelectionId(
   comment: WorkItemComment,
@@ -482,6 +488,7 @@ export function PromptComposer({
   snippets,
   snippetVariableContext,
   testCasesByWorkItem,
+  featureMap,
 }: {
   template: string;
   workItems: AzureDevOpsWorkItem[];
@@ -503,6 +510,7 @@ export function PromptComposer({
   isLoadingComments?: boolean;
   snippets?: PromptSnippet[];
   snippetVariableContext?: SnippetVariableContext;
+  featureMap?: ProjectFeatureMap | null;
   testCasesByWorkItem?: Record<
     number,
     Array<{
@@ -553,24 +561,33 @@ export function PromptComposer({
 
   // Expand template to preview — use Handlebars if template contains `{{`, else old {#id} regex
   const preview = useMemo(() => {
+    let expanded: string;
     if (template.includes('{{')) {
       const workItemsContext = buildWorkItemSnippetContext({
         workItems,
         comments: selectedComments,
         testCasesByWorkItem,
       });
-      return resolveSnippetTemplate(template, {
+      expanded = resolveSnippetTemplate(template, {
         ...snippetVariableContext,
         workItems: workItemsContext,
       }).output;
+    } else {
+      expanded = expandTemplate(template, workItems, selectedComments);
     }
-    return expandTemplate(template, workItems, selectedComments);
+
+    return `${expandFeatureReferencesInPrompt({
+      text: expanded,
+      featureMap,
+    })}${buildAttachedFilesXml(files ?? [])}`;
   }, [
     template,
     workItems,
     selectedComments,
     testCasesByWorkItem,
     snippetVariableContext,
+    featureMap,
+    files,
   ]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -850,15 +867,18 @@ export function PromptComposer({
                   .replace(/\n{3,}/g, '\n\n')
                   .trim();
                 return (
-                  <label
+                  <div
                     key={commentSelectionId}
                     className="flex cursor-pointer items-start gap-2 rounded px-1 py-1.5 hover:bg-white/[0.03]"
+                    onClick={() => onCommentToggle?.(commentSelectionId)}
                   >
-                    <input
-                      type="checkbox"
+                    <Checkbox
+                      size="sm"
                       checked={isSelected}
                       onChange={() => onCommentToggle?.(commentSelectionId)}
-                      className="accent-acc mt-0.5 h-3.5 w-3.5 shrink-0"
+                      onClick={(event) => event.stopPropagation()}
+                      className="mt-0.5"
+                      compact
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -876,7 +896,7 @@ export function PromptComposer({
                         {cleanText}
                       </p>
                     </div>
-                  </label>
+                  </div>
                 );
               })}
             </div>
@@ -1047,6 +1067,7 @@ export function PromptComposer({
               className="h-full"
               minHeight="200px"
               maxHeight="500px"
+              featureMap={featureMap}
             />
           </div>
           <div

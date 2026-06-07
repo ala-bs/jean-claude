@@ -38,14 +38,13 @@ import { dbg } from '../../../lib/debug';
 import {
   flattenScope,
   normalizeToolRequest,
-  evaluatePermission,
+  evaluatePermissionWithMatch,
 } from '../../permission-settings-service';
 import {
   getPromptText,
   getPromptImages,
   buildPromptMarkdown,
 } from '../../prompt-utils';
-import { SESSION_SUMMARY_PROMPT } from '../../session-summary-service';
 
 import { normalizeClaudeMessageV2 } from './normalize-claude-message-v2';
 import type { NormalizationContext } from './normalize-claude-message-v2';
@@ -54,14 +53,6 @@ const SDK_PERMISSION_MODES = {
   ask: 'default',
   auto: 'bypassPermissions',
   plan: 'plan',
-} as const;
-
-const SESSION_SUMMARY_SCHEMA = {
-  type: 'object',
-  properties: {
-    summary: { type: 'string' },
-  },
-  required: ['summary'],
 } as const;
 
 // --- Async event channel ---
@@ -186,6 +177,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       normalizationCtx: {
         sessionIdEmitted: false,
         pendingToolUses: new Map(),
+        pendingToolPermissionDecisions: [],
       },
       messageIndex: this.taskContext.sessionStartIndex,
     };
@@ -217,47 +209,6 @@ export class ClaudeCodeBackend implements AgentBackend {
     session.eventChannel.close();
 
     this.sessions.delete(sessionId);
-  }
-
-  async summarizeSession({
-    sessionId,
-    cwd,
-    model,
-  }: {
-    sessionId: string;
-    cwd: string;
-    model?: string;
-  }): Promise<string> {
-    // Claude SDK supports ephemeral forked sessions via persistSession: false.
-    // With allowedTools: [], the session can only produce text output.
-    const generator = query({
-      prompt: SESSION_SUMMARY_PROMPT,
-      options: {
-        cwd,
-        allowedTools: [],
-        model: model && model !== 'default' ? model : undefined,
-        resume: sessionId,
-        forkSession: true,
-        persistSession: false,
-        outputFormat: {
-          type: 'json_schema',
-          schema: SESSION_SUMMARY_SCHEMA,
-        },
-      },
-    });
-
-    for await (const message of generator) {
-      const msg = message as {
-        type: string;
-        structured_output?: { summary?: string };
-      };
-      if (msg.type !== 'result') continue;
-
-      const summary = msg.structured_output?.summary?.trim();
-      if (summary) return summary;
-    }
-
-    throw new Error('Claude summary session returned no summary output');
   }
 
   async respondToPermission(
@@ -568,13 +519,27 @@ export class ClaudeCodeBackend implements AgentBackend {
 
     // Check against backend-agnostic permission rules
     const { tool, matchValue } = normalizeToolRequest(toolName, input);
-    const action = evaluatePermission(
+    const permissionDecision = evaluatePermissionWithMatch(
       session.permissionRules,
       tool,
       matchValue,
     );
+    const action = permissionDecision.action;
     if (action === 'allow') {
       dbg.agentPermission('Tool %s auto-allowed by permission rules', toolName);
+      (session.normalizationCtx.pendingToolPermissionDecisions ??= []).push(
+        permissionDecision.matchedRule
+          ? {
+              allowedBy: 'system',
+              tool,
+              matchValue,
+              rule: {
+                tool: permissionDecision.matchedRule.tool,
+                pattern: permissionDecision.matchedRule.pattern,
+              },
+            }
+          : { allowedBy: 'system', tool, matchValue },
+      );
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
     if (action === 'deny') {
@@ -593,6 +558,11 @@ export class ClaudeCodeBackend implements AgentBackend {
       (matchValue && session.sessionAllowedTools.includes(tool))
     ) {
       dbg.agentPermission('Tool %s is session-allowed', toolName);
+      (session.normalizationCtx.pendingToolPermissionDecisions ??= []).push({
+        allowedBy: 'agent',
+        tool,
+        matchValue,
+      });
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
 

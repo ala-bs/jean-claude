@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import { feedQueryKeys } from '@/lib/feed-query-keys';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useTaskMessagesStore } from '@/stores/task-messages';
+import { useToastStore } from '@/stores/toasts';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type {
   InteractionMode,
@@ -178,6 +179,7 @@ export function useDeleteTask() {
 
 export function useDeleteWorktree() {
   const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
   return useMutation({
     mutationFn: ({
       taskId,
@@ -186,7 +188,10 @@ export function useDeleteWorktree() {
       taskId: string;
       keepBranch?: boolean;
     }) => api.tasks.worktree.delete(taskId, { keepBranch }),
-    onSuccess: (_, { taskId }) => {
+    onSuccess: (result, { taskId }) => {
+      if (result.editorCloseWarning) {
+        addToast({ type: 'error', message: result.editorCloseWarning });
+      }
       queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
@@ -257,6 +262,7 @@ export function useCompleteTask() {
   const addRunningJob = useBackgroundJobsStore((s) => s.addRunningJob);
   const markJobSucceeded = useBackgroundJobsStore((s) => s.markJobSucceeded);
   const markJobFailed = useBackgroundJobsStore((s) => s.markJobFailed);
+  const addToast = useToastStore((s) => s.addToast);
 
   return useMutation({
     mutationFn: ({
@@ -266,9 +272,21 @@ export function useCompleteTask() {
       id: string;
       cleanupWorktree?: boolean;
     }) => api.tasks.complete(id, { cleanupWorktree }),
-    onSuccess: (result, { id }) => {
+    onMutate: ({ id, cleanupWorktree }) =>
+      addRunningJob({
+        type: 'task-completion',
+        title: 'Completing task',
+        taskId: id,
+        details: {
+          cleanupWorktree: cleanupWorktree ?? null,
+        },
+      }),
+    onSuccess: (result, { id }, jobId) => {
       const { task, worktreeCleanup } = result;
 
+      if (jobId) {
+        markJobSucceeded(jobId, { projectId: task.projectId });
+      }
       clearAllRunCommandLogs(id);
       setRunCommandRunning(id, false);
       queryClient.invalidateQueries({ queryKey: ['tasks', id] });
@@ -294,8 +312,16 @@ export function useCompleteTask() {
 
         void api.tasks.worktree
           .cleanupAfterCompletion(id, worktreeCleanup)
-          .then(() => {
-            markJobSucceeded(jobId);
+          .then((cleanupResult) => {
+            if (cleanupResult.editorCloseWarning) {
+              addToast({
+                type: 'error',
+                message: cleanupResult.editorCloseWarning,
+              });
+            }
+            markJobSucceeded(jobId, {
+              warningMessage: cleanupResult.editorCloseWarning ?? null,
+            });
             queryClient.invalidateQueries({ queryKey: ['tasks', id] });
             invalidateFeedItems(queryClient);
           })
@@ -307,6 +333,13 @@ export function useCompleteTask() {
             markJobFailed(jobId, message);
           });
       }
+    },
+    onError: (error, _variables, jobId) => {
+      if (!jobId) return;
+
+      const message =
+        error instanceof Error ? error.message : 'Task completion failed';
+      markJobFailed(jobId, message);
     },
   });
 }

@@ -1,10 +1,16 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import isEqual from 'lodash-es/isEqual';
 import {
+  ChevronRight,
   Check,
+  FileText,
   FolderOpen,
   ImagePlus,
+  Layers,
+  Maximize2,
+  Minimize2,
   RefreshCw,
+  Search,
   Sparkles,
   Trash2,
   X,
@@ -62,6 +68,8 @@ import {
   useDeleteGeneratedProjectLogo,
   useGenerateProjectLogo,
   useGeneratedProjectLogos,
+  useCreateProjectFeatureMapTask,
+  useProjectFeatureMap,
   useRegenerateProjectSummary,
   useRemoveProjectLogo,
   useSelectGeneratedProjectLogo,
@@ -71,6 +79,8 @@ import {
   useAiGenerationSetting,
   useBackendModelPresetsSetting,
   useBackendsSetting,
+  useProjectPromptPrefaceSetting,
+  useUpdateProjectPromptPrefaceSetting,
 } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
@@ -83,6 +93,8 @@ import type {
   AiSkillSlotKey,
   AiSkillSlotsSetting,
   ModelPreference,
+  ProjectFeatureMap,
+  ProjectFeatureMapItem,
   ProjectLogoHistoryItem,
   UpdateProject,
 } from '@shared/types';
@@ -91,10 +103,29 @@ import { FavoriteBranchesInput } from './favorite-branches-input';
 import { ProtectedBranchesInput } from './protected-branches-input';
 import { getProjectSettingsSaveData } from './utils-project-settings-save-data';
 
+const PROMPT_PREFACE_MODE_OPTIONS = [
+  { value: 'inherit', label: 'Use global' },
+  { value: 'extend', label: 'Extend global' },
+  { value: 'override', label: 'Override global' },
+];
+
+const PROMPT_PREFACE_PLACEMENT_OPTIONS = [
+  { value: 'before', label: 'Before user prompt' },
+  { value: 'after', label: 'After user prompt' },
+];
+
+const PROMPT_PREFACE_FREQUENCY_OPTIONS = [
+  { value: 'initial', label: 'Initial prompt only' },
+  { value: 'each', label: 'Each prompt' },
+];
+
 export type ProjectSettingsMenuItem =
   | 'details'
+  | 'commit-ignore'
   | 'permissions'
   | 'worktree'
+  | 'feature-map'
+  | 'prompt-preface'
   | 'autocomplete'
   | 'integrations'
   | 'pipelines'
@@ -106,6 +137,612 @@ export type ProjectSettingsMenuItem =
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled project settings menu item: ${String(value)}`);
+}
+
+function ProjectPromptPrefaceSettings({
+  projectPath,
+}: {
+  projectPath: string;
+}) {
+  const { data: setting, isLoading } =
+    useProjectPromptPrefaceSetting(projectPath);
+  const updateSetting = useUpdateProjectPromptPrefaceSetting(projectPath);
+  const [draftText, setDraftText] = useState('');
+
+  useEffect(() => {
+    if (setting) {
+      setDraftText(setting.text);
+    }
+  }, [setting]);
+
+  if (isLoading || !setting) {
+    return <p className="text-ink-3">Loading...</p>;
+  }
+
+  const controlsDisabled = setting.mode === 'inherit';
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-ink-1 text-lg font-semibold">Prompt Preface</h2>
+        <p className="text-ink-3 mt-1 text-sm">
+          Configure project instructions to inherit, extend, or replace the
+          global prompt preface.
+        </p>
+      </div>
+
+      <div>
+        <label className="text-ink-1 mb-1 block text-sm font-medium">
+          Project behavior
+        </label>
+        <Select
+          value={setting.mode}
+          options={PROMPT_PREFACE_MODE_OPTIONS}
+          onChange={(mode) =>
+            updateSetting.mutate({
+              ...setting,
+              text: draftText,
+              mode: mode as typeof setting.mode,
+            })
+          }
+          className="w-full justify-between sm:w-64"
+        />
+      </div>
+
+      <Textarea
+        size="md"
+        value={draftText}
+        disabled={controlsDisabled}
+        onChange={(e) => setDraftText(e.target.value)}
+        onBlur={() => updateSetting.mutate({ ...setting, text: draftText })}
+        placeholder="Example: In this project, prefer Zustand selectors and avoid unstable selector outputs."
+        rows={8}
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="text-ink-1 mb-1 block text-sm font-medium">
+            Placement
+          </label>
+          <Select
+            value={setting.placement}
+            options={PROMPT_PREFACE_PLACEMENT_OPTIONS}
+            disabled={controlsDisabled}
+            onChange={(placement) =>
+              updateSetting.mutate({
+                ...setting,
+                text: draftText,
+                placement: placement as typeof setting.placement,
+              })
+            }
+            className="w-full justify-between"
+          />
+        </div>
+
+        <div>
+          <label className="text-ink-1 mb-1 block text-sm font-medium">
+            Frequency
+          </label>
+          <Select
+            value={setting.frequency}
+            options={PROMPT_PREFACE_FREQUENCY_OPTIONS}
+            disabled={controlsDisabled}
+            onChange={(frequency) =>
+              updateSetting.mutate({
+                ...setting,
+                text: draftText,
+                frequency: frequency as typeof setting.frequency,
+              })
+            }
+            className="w-full justify-between"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectFeatureMapSettings({
+  featureMap,
+  onCreateTask,
+  isGenerating,
+}: {
+  featureMap: ProjectFeatureMap | null;
+  onCreateTask: () => void;
+  isGenerating: boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [openFileIds, setOpenFileIds] = useState<Set<string>>(() => new Set());
+
+  const flatFeatures = useMemo(
+    () => flattenProjectFeatureMap(featureMap?.features ?? []),
+    [featureMap],
+  );
+  const parentIds = useMemo(
+    () => flatFeatures.filter((feature) => feature.children.length > 0),
+    [flatFeatures],
+  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleIds = useMemo(() => {
+    if (!normalizedQuery) return null;
+    const ids = new Set<string>();
+    for (const feature of flatFeatures) {
+      if (!projectFeatureMapItemMatches(feature, normalizedQuery)) continue;
+      ids.add(feature.id);
+      for (const ancestorId of feature.ancestorIds) ids.add(ancestorId);
+    }
+    return ids;
+  }, [flatFeatures, normalizedQuery]);
+  const rows = useMemo(
+    () =>
+      collectVisibleProjectFeatureRows(featureMap?.features ?? [], {
+        collapsedIds,
+        visibleIds,
+      }),
+    [collapsedIds, featureMap, visibleIds],
+  );
+  const totalFiles = useMemo(() => {
+    const files = new Set<string>();
+    for (const feature of flatFeatures) {
+      for (const file of feature.key_files) files.add(file);
+    }
+    return files.size;
+  }, [flatFeatures]);
+  const anyExpanded = collapsedIds.size < parentIds.length;
+
+  function toggleCollapsed(featureId: string) {
+    setCollapsedIds((current) => {
+      const next = new Set(current);
+      if (next.has(featureId)) next.delete(featureId);
+      else next.add(featureId);
+      return next;
+    });
+  }
+
+  function toggleFiles(featureId: string) {
+    setOpenFileIds((current) => {
+      const next = new Set(current);
+      if (next.has(featureId)) next.delete(featureId);
+      else next.add(featureId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (anyExpanded) {
+      setCollapsedIds(new Set(parentIds.map((feature) => feature.id)));
+      return;
+    }
+    setCollapsedIds(new Set());
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-ink-1 text-lg font-semibold">Feature Map</h2>
+          <p className="text-ink-3 mt-1 text-sm">
+            File-backed project feature tree. Create a task to draft or improve
+            it, then save from task details when reviewed.
+          </p>
+          {featureMap?.generatedAt && (
+            <p className="text-ink-3 mt-2 flex items-center gap-1.5 font-mono text-[11px]">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              Generated {new Date(featureMap.generatedAt).toLocaleString()}
+            </p>
+          )}
+        </div>
+        <Button
+          variant="accent"
+          size="sm"
+          onClick={onCreateTask}
+          disabled={isGenerating}
+          loading={isGenerating}
+          icon={<RefreshCw />}
+        >
+          {isGenerating ? 'Creating...' : 'Create feature map task'}
+        </Button>
+      </div>
+
+      {!featureMap || featureMap.features.length === 0 ? (
+        <div className="border-glass-border bg-glass-light rounded-xl border p-5">
+          <p className="text-ink-2 text-sm">No feature map yet.</p>
+          <p className="text-ink-3 mt-1 text-xs">
+            Generate one to make project features selectable in new tasks.
+          </p>
+        </div>
+      ) : (
+        <div className="border-glass-border bg-glass-light flex min-h-[460px] flex-1 flex-col overflow-hidden rounded-xl border">
+          <div className="border-glass-border/70 bg-bg-1/40 flex flex-wrap items-center gap-2 border-b p-2.5">
+            <div
+              className={`bg-bg-0/40 flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-3 py-2 sm:max-w-sm ${
+                query ? 'border-accent-1/50' : 'border-glass-border'
+              }`}
+            >
+              <Search
+                className={`h-3.5 w-3.5 shrink-0 ${query ? 'text-accent-1' : 'text-ink-3'}`}
+              />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Filter features, summaries, files..."
+                spellCheck={false}
+                className="text-ink-1 placeholder:text-ink-4 min-w-0 flex-1 bg-transparent text-sm outline-none"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  className="text-ink-3 hover:text-ink-1 rounded p-0.5"
+                  aria-label="Clear feature map filter"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {query && (
+              <span className="text-ink-3 font-mono text-[11px]">
+                {rows.length} match{rows.length === 1 ? '' : 'es'}
+              </span>
+            )}
+            <div className="hidden flex-1 sm:block" />
+            <button
+              type="button"
+              onClick={toggleAll}
+              disabled={!!query}
+              className="border-glass-border bg-glass-medium text-ink-2 hover:text-ink-1 disabled:text-ink-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:cursor-default disabled:opacity-50"
+            >
+              {anyExpanded ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+              {anyExpanded ? 'Collapse all' : 'Expand all'}
+            </button>
+          </div>
+
+          <div className="scroll flex-1 overflow-auto p-1.5">
+            {rows.length > 0 ? (
+              rows.map((row) => (
+                <ProjectFeatureMapRow
+                  key={row.feature.id}
+                  row={row}
+                  query={query}
+                  isOpen={!collapsedIds.has(row.feature.id) || !!visibleIds}
+                  filesOpen={openFileIds.has(row.feature.id)}
+                  onToggleCollapsed={toggleCollapsed}
+                  onToggleFiles={toggleFiles}
+                />
+              ))
+            ) : (
+              <div className="text-ink-3 px-4 py-12 text-center text-sm">
+                No features match "{query}".
+              </div>
+            )}
+          </div>
+
+          <div className="border-glass-border/70 bg-bg-1/40 text-ink-3 flex flex-wrap items-center gap-2 border-t px-3 py-2 font-mono text-[11px]">
+            <span className="inline-flex items-center gap-1.5">
+              <Layers className="text-ink-4 h-3 w-3" />
+              {flatFeatures.length} features
+            </span>
+            <span className="text-ink-4">·</span>
+            <span className="inline-flex items-center gap-1.5">
+              <FileText className="text-ink-4 h-3 w-3" />
+              {totalFiles} files
+            </span>
+            <span className="text-ink-4">·</span>
+            <span>{featureMap.features.length} top-level groups</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectFeatureMapRow({
+  row,
+  query,
+  isOpen,
+  filesOpen,
+  onToggleCollapsed,
+  onToggleFiles,
+}: {
+  row: ProjectFeatureMapRowData;
+  query: string;
+  isOpen: boolean;
+  filesOpen: boolean;
+  onToggleCollapsed: (featureId: string) => void;
+  onToggleFiles: (featureId: string) => void;
+}) {
+  const { feature, depth } = row;
+  const isParent = feature.children.length > 0;
+
+  return (
+    <div>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() =>
+          isParent ? onToggleCollapsed(feature.id) : onToggleFiles(feature.id)
+        }
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          if (isParent) onToggleCollapsed(feature.id);
+          else onToggleFiles(feature.id);
+        }}
+        className="hover:bg-glass-medium group flex min-h-8 cursor-pointer items-center gap-2 rounded-lg px-2"
+      >
+        <div className="flex self-stretch" aria-hidden="true">
+          {Array.from({ length: depth }).map((_, index) => (
+            <span key={index} className="border-glass-border/70 w-4 border-l" />
+          ))}
+        </div>
+
+        {isParent ? (
+          <ChevronRight
+            className={`text-ink-3 group-hover:text-ink-1 h-3.5 w-3.5 shrink-0 transition-transform ${
+              isOpen ? 'rotate-90' : ''
+            }`}
+          />
+        ) : (
+          <span className="flex w-3.5 shrink-0 justify-center">
+            <span className="bg-ink-4 h-1 w-1 rounded-full" />
+          </span>
+        )}
+
+        <span
+          className={`shrink-0 truncate text-sm tracking-[-0.01em] ${
+            depth === 0
+              ? 'text-ink-1 font-semibold'
+              : isParent
+                ? 'text-ink-1 font-medium'
+                : 'text-ink-2'
+          }`}
+        >
+          <ProjectFeatureMapHighlight text={feature.name} query={query} />
+        </span>
+
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleFiles(feature.id);
+          }}
+          className={`inline-flex h-[18px] shrink-0 items-center gap-1 rounded px-1.5 font-mono text-[10px] font-semibold ${
+            filesOpen
+              ? 'border-accent-1/40 bg-accent-1/15 text-accent-1'
+              : 'border-glass-border bg-glass-medium text-ink-3'
+          } border`}
+          title={filesOpen ? 'Hide files' : 'Show files'}
+        >
+          <FileText className="h-2.5 w-2.5" />
+          {feature.key_files.length}
+        </button>
+
+        <span className="text-ink-3 min-w-0 flex-1 truncate text-xs">
+          <ProjectFeatureMapHighlight text={feature.summary} query={query} />
+        </span>
+      </div>
+
+      {filesOpen && feature.key_files.length > 0 && (
+        <div
+          className="flex flex-wrap gap-1.5 pt-0.5 pb-1"
+          style={{ paddingLeft: depth * 16 + 36 }}
+        >
+          {feature.key_files.map((file) => {
+            const slashIndex = file.lastIndexOf('/');
+            const directory =
+              slashIndex >= 0 ? file.slice(0, slashIndex + 1) : '';
+            const basename =
+              slashIndex >= 0 ? file.slice(slashIndex + 1) : file;
+
+            return (
+              <code
+                key={file}
+                className="border-glass-border bg-bg-0/30 text-ink-3 inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px]"
+              >
+                <FileText className="text-ink-4 h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">
+                  <ProjectFeatureMapHighlight text={directory} query={query} />
+                  <span className="text-ink-1">
+                    <ProjectFeatureMapHighlight text={basename} query={query} />
+                  </span>
+                </span>
+              </code>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectFeatureMapHighlight({
+  text,
+  query,
+}: {
+  text: string;
+  query: string;
+}) {
+  const needle = query.trim();
+  if (!needle) return text;
+  const index = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (index < 0) return text;
+
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark className="bg-accent-1/25 text-ink-1 rounded px-0.5">
+        {text.slice(index, index + needle.length)}
+      </mark>
+      {text.slice(index + needle.length)}
+    </>
+  );
+}
+
+type ProjectFeatureMapFlatItem = ProjectFeatureMapItem & {
+  ancestorIds: string[];
+};
+
+type ProjectFeatureMapRowData = {
+  feature: ProjectFeatureMapItem;
+  depth: number;
+};
+
+function flattenProjectFeatureMap(
+  features: ProjectFeatureMapItem[],
+  ancestorIds: string[] = [],
+): ProjectFeatureMapFlatItem[] {
+  return features.flatMap((feature) => [
+    { ...feature, ancestorIds },
+    ...flattenProjectFeatureMap(feature.children, [...ancestorIds, feature.id]),
+  ]);
+}
+
+function projectFeatureMapItemMatches(
+  feature: ProjectFeatureMapItem,
+  query: string,
+) {
+  return (
+    feature.name.toLowerCase().includes(query) ||
+    feature.summary.toLowerCase().includes(query) ||
+    feature.key_files.some((file) => file.toLowerCase().includes(query))
+  );
+}
+
+function collectVisibleProjectFeatureRows(
+  features: ProjectFeatureMapItem[],
+  {
+    collapsedIds,
+    visibleIds,
+    depth = 0,
+  }: {
+    collapsedIds: Set<string>;
+    visibleIds: Set<string> | null;
+    depth?: number;
+  },
+): ProjectFeatureMapRowData[] {
+  return features.flatMap((feature) => {
+    if (visibleIds && !visibleIds.has(feature.id)) return [];
+
+    const row = { feature, depth };
+    const shouldShowChildren = visibleIds || !collapsedIds.has(feature.id);
+    if (!shouldShowChildren) return [row];
+
+    return [
+      row,
+      ...collectVisibleProjectFeatureRows(feature.children, {
+        collapsedIds,
+        visibleIds,
+        depth: depth + 1,
+      }),
+    ];
+  });
+}
+
+function ProjectCommitIgnoreSettings({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+  const { data: content = '', isLoading } = useQuery({
+    queryKey: ['project-commit-ignore', projectId],
+    queryFn: () => api.projects.getCommitIgnore(projectId),
+  });
+  const [draft, setDraft] = useState('');
+  const lastLoadedContentRef = useRef('');
+  const saveVersionRef = useRef(0);
+  const pendingSaveContentRef = useRef<string | null>(null);
+  const updateCommitIgnore = useMutation({
+    mutationFn: ({
+      content: nextContent,
+    }: {
+      content: string;
+      version: number;
+    }) => api.projects.updateCommitIgnore(projectId, nextContent),
+    onSuccess: (_, { content: nextContent, version }) => {
+      if (version !== saveVersionRef.current) return;
+      lastLoadedContentRef.current = nextContent;
+      queryClient.setQueryData(
+        ['project-commit-ignore', projectId],
+        nextContent,
+      );
+    },
+    onError: (error, { version }) => {
+      if (version !== saveVersionRef.current) return;
+      addToast({
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to save commit ignore rules',
+        type: 'error',
+      });
+    },
+    onSettled: (_, __, { content: nextContent }) => {
+      if (pendingSaveContentRef.current === nextContent) {
+        pendingSaveContentRef.current = null;
+      }
+    },
+  });
+
+  useEffect(() => {
+    setDraft((current) =>
+      current === lastLoadedContentRef.current ? content : current,
+    );
+    lastLoadedContentRef.current = content;
+  }, [content]);
+
+  if (isLoading) return <p className="text-ink-3">Loading...</p>;
+
+  const hasChanges = draft !== content;
+
+  function saveDraft() {
+    if (!hasChanges || pendingSaveContentRef.current === draft) return;
+    pendingSaveContentRef.current = draft;
+    const version = saveVersionRef.current + 1;
+    saveVersionRef.current = version;
+    updateCommitIgnore.mutate({ content: draft, version });
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-ink-1 text-lg font-semibold">Commit Ignore</h2>
+        <p className="text-ink-3 mt-1 text-sm">
+          Gitignore-style rules stored at <code>.jean-claude/ignore</code>.
+          Jean-Claude skips matching paths when committing all changes.
+        </p>
+      </div>
+      <Textarea
+        size="md"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          saveDraft();
+        }}
+        placeholder={`# Examples\ndist/\n.env.local\n*.log`}
+        rows={12}
+      />
+      <div className="flex items-center gap-3">
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={saveDraft}
+          disabled={!hasChanges || updateCommitIgnore.isPending}
+          loading={updateCommitIgnore.isPending}
+        >
+          {updateCommitIgnore.isPending ? 'Saving...' : 'Save'}
+        </Button>
+        <p className="text-ink-3 text-xs">
+          Existing Git ignore still applies. These rules only affect Jean-Claude
+          commits.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export function ProjectSettings({
@@ -130,6 +767,7 @@ export function ProjectSettings({
   const selectGeneratedProjectLogo = useSelectGeneratedProjectLogo();
   const deleteGeneratedProjectLogo = useDeleteGeneratedProjectLogo();
   const regenerateProjectSummary = useRegenerateProjectSummary();
+  const createProjectFeatureMapTask = useCreateProjectFeatureMapTask();
   const removeProjectLogo = useRemoveProjectLogo();
   const deleteProject = useDeleteProject();
   const deleteWorktreesFolder = useDeleteProjectWorktreesFolder();
@@ -158,12 +796,14 @@ export function ProjectSettings({
   });
   const { data: generatedLogoHistory = [] } =
     useGeneratedProjectLogos(projectId);
+  const { data: featureMap = null } = useProjectFeatureMap(projectId);
 
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
   const [color, setColor] = useState('');
   const [defaultBranch, setDefaultBranch] = useState('');
   const [autoPullSourceBranch, setAutoPullSourceBranch] = useState(false);
+  const [commitWithNoVerify, setCommitWithNoVerify] = useState(false);
   const [defaultAgentBackend, setDefaultAgentBackend] =
     useState<AgentBackendType | null>(null);
   const [defaultAgentModelPreference, setDefaultAgentModelPreference] =
@@ -219,6 +859,7 @@ export function ProjectSettings({
       color: project.color,
       defaultBranch: project.defaultBranch ?? null,
       autoPullSourceBranch: project.autoPullSourceBranch,
+      commitWithNoVerify: project.commitWithNoVerify,
       defaultAgentBackend: project.defaultAgentBackend,
       defaultAgentModelPreference: project.defaultAgentModelPreference,
       prPriority: project.prPriority ?? 'normal',
@@ -239,6 +880,7 @@ export function ProjectSettings({
       color,
       defaultBranch: defaultBranch || null,
       autoPullSourceBranch,
+      commitWithNoVerify,
       defaultAgentBackend,
       defaultAgentModelPreference,
       prPriority,
@@ -253,6 +895,7 @@ export function ProjectSettings({
     [
       aiSkillSlots,
       autoPullSourceBranch,
+      commitWithNoVerify,
       color,
       completionContext,
       defaultAgentBackend,
@@ -303,6 +946,7 @@ export function ProjectSettings({
       setColor(project.color);
       setDefaultBranch(project.defaultBranch ?? '');
       setAutoPullSourceBranch(project.autoPullSourceBranch);
+      setCommitWithNoVerify(project.commitWithNoVerify);
       setDefaultAgentBackend(project.defaultAgentBackend);
       setDefaultAgentModelPreference(project.defaultAgentModelPreference);
       setDefaultAgentPresetId(
@@ -466,6 +1110,29 @@ export function ProjectSettings({
             ? error.message
             : 'Failed to regenerate project summary.';
         markJobFailed(jobId, message);
+        addToast({
+          message,
+          type: 'error',
+        });
+      });
+  }
+
+  function handleCreateFeatureMapTask() {
+    if (!project) return;
+
+    void createProjectFeatureMapTask
+      .mutateAsync(projectId)
+      .then(() => {
+        addToast({
+          message: 'Feature map task created.',
+          type: 'success',
+        });
+      })
+      .catch((error: unknown) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to create project feature map task.';
         addToast({
           message,
           type: 'error',
@@ -644,7 +1311,7 @@ export function ProjectSettings({
                 Summary
               </label>
               <Button
-                variant="secondary"
+                variant="accent"
                 size="sm"
                 onClick={handleRegenerateSummary}
                 disabled={regenerateProjectSummary.isPending}
@@ -710,7 +1377,7 @@ export function ProjectSettings({
                   Upload
                 </Button>
                 <Button
-                  variant="secondary"
+                  variant="accent"
                   size="sm"
                   onClick={handleGenerateLogo}
                   disabled={
@@ -813,6 +1480,21 @@ export function ProjectSettings({
             />
             <p className="text-ink-3 mt-1 text-xs">
               Pulls the selected base branch before creating a task worktree.
+            </p>
+          </div>
+
+          <div>
+            <Checkbox
+              id="commitWithNoVerify"
+              checked={commitWithNoVerify}
+              onChange={(checked) => {
+                markFieldDirty('commitWithNoVerify');
+                setCommitWithNoVerify(checked);
+              }}
+              label="Commit with --no-verify"
+            />
+            <p className="text-ink-3 mt-1 text-xs">
+              Skips Git hooks for app-created commits in this project.
             </p>
           </div>
 
@@ -988,11 +1670,26 @@ export function ProjectSettings({
         </div>
       );
       break;
+    case 'commit-ignore':
+      content = <ProjectCommitIgnoreSettings projectId={projectId} />;
+      break;
     case 'permissions':
       content = <ProjectPermissionsSettings projectPath={project.path} />;
       break;
     case 'worktree':
       content = <ProjectWorktreeSettings projectPath={project.path} />;
+      break;
+    case 'feature-map':
+      content = (
+        <ProjectFeatureMapSettings
+          featureMap={featureMap}
+          onCreateTask={handleCreateFeatureMapTask}
+          isGenerating={createProjectFeatureMapTask.isPending}
+        />
+      );
+      break;
+    case 'prompt-preface':
+      content = <ProjectPromptPrefaceSettings projectPath={project.path} />;
       break;
     case 'autocomplete':
       content = (
@@ -1017,7 +1714,7 @@ export function ProjectSettings({
           />
           <div className="flex gap-2">
             <Button
-              variant="secondary"
+              variant="accent"
               size="sm"
               onClick={handleGenerateContext}
               disabled={isGeneratingContext}
@@ -1166,7 +1863,7 @@ export function ProjectSettings({
               Cancel
             </Button>
             <Button
-              variant="primary"
+              variant="accent"
               size="sm"
               onClick={handleConfirmGenerateLogo}
               disabled={

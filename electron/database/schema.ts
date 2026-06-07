@@ -1,3 +1,5 @@
+import type { Buffer } from 'node:buffer';
+
 import { Generated, Insertable, Selectable, Updateable } from 'kysely';
 
 import type { ProviderType, ProjectType, TaskStatus } from '@shared/types';
@@ -105,6 +107,7 @@ export interface ProjectTable {
   showWorkItemsInFeed: number; // SQLite boolean: 1 = show (default), 0 = hide
   showPrsInFeed: number; // SQLite boolean: 1 = show (default), 0 = hide
   autoPullSourceBranch: number; // SQLite boolean: 1 = pull before creating worktree, 0 = skip
+  commitWithNoVerify: number; // SQLite boolean: 1 = pass --no-verify to git commit, 0 = run hooks
   createdAt: Generated<string>;
   updatedAt: string;
 }
@@ -158,7 +161,9 @@ export interface RawMessageTable {
   stepId: string | null;
   messageIndex: number;
   backendSessionId: string | null; // SDK session ID for traceability
-  rawData: string; // Original SDK message JSON
+  rawData: string; // Legacy/plain SDK message JSON. Empty when compressed.
+  rawDataBlob: Buffer | null; // Compressed SDK message JSON.
+  rawDataEncoding: string | null; // Compression encoding for rawDataBlob.
   rawFormat: string; // Which SDK produced the raw data ('claude-code' | 'opencode')
   createdAt: Generated<string>;
 }

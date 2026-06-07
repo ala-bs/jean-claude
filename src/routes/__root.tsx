@@ -5,6 +5,7 @@ import {
   useRouter,
   useRouterState,
 } from '@tanstack/react-router';
+import clsx from 'clsx';
 import { useCallback, useEffect, useRef } from 'react';
 import { scan, setOptions } from 'react-scan';
 
@@ -23,7 +24,6 @@ import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
 import { ProjectOverlay } from '@/features/project/ui-project-overlay';
 import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
 import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
-import { useBacklogProjectId } from '@/hooks/use-backlog-project-id';
 import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { api } from '@/lib/api';
@@ -145,13 +145,14 @@ function NewTaskContainer() {
   const isOpen = useOverlaysStore((s) => s.activeOverlay === 'new-task');
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
-  const { discardDraft, setSelectedProjectId } = useNewTaskDraft();
+  const { draft, discardDraft, setSelectedProjectId } = useNewTaskDraft();
   const { projectId } = useCurrentVisibleProject();
 
   useEffect(() => {
     if (!isOpen || projectId === 'all') return;
+    if (draft?.backlogTodoIds?.length) return;
     setSelectedProjectId(projectId);
-  }, [isOpen, projectId, setSelectedProjectId]);
+  }, [draft?.backlogTodoIds?.length, isOpen, projectId, setSelectedProjectId]);
 
   const handleClose = useCallback(() => close('new-task'), [close]);
   const handleDiscardDraft = useCallback(() => {
@@ -264,37 +265,29 @@ function SettingsContainer() {
   return <SettingsOverlay onClose={() => close('settings')} />;
 }
 
-function ProjectBacklogContainer() {
+function BacklogContainer() {
   const layer = useKeyboardLayer('global-nav');
-  const isOpen = useOverlaysStore((s) => s.activeOverlay === 'project-backlog');
+  const isOpen = useOverlaysStore((s) => s.activeOverlay === 'backlog');
   const toggle = useOverlaysStore((s) => s.toggle);
   const close = useOverlaysStore((s) => s.close);
-  const projectId = useBacklogProjectId();
 
   useCommands(
-    'project-backlog-trigger',
+    'backlog-trigger',
     [
       {
         shortcut: 'cmd+b',
-        label: 'Open Project Backlog',
-        section: 'Projects',
+        label: 'Open Backlog',
+        section: 'General',
         handler: () => {
-          if (projectId) {
-            toggle('project-backlog');
-          }
+          toggle('backlog');
         },
       },
     ],
     { layer },
   );
 
-  if (!isOpen || !projectId) return null;
-  return (
-    <BacklogOverlay
-      initialProjectId={projectId}
-      onClose={() => close('project-backlog')}
-    />
-  );
+  if (!isOpen) return null;
+  return <BacklogOverlay onClose={() => close('backlog')} />;
 }
 
 function RunningCommandsContainer() {
@@ -380,7 +373,13 @@ function RootLayout() {
   useCleanupNonActiveTasks();
 
   return (
-    <div className="aurora-app-bg flex h-screen w-screen overflow-hidden">
+    <div
+      className={clsx(
+        'aurora-app-bg flex h-screen w-screen overflow-hidden',
+        api.app.isDevMode &&
+          'rounded-xl border-2 border-amber-400/50 shadow-[inset_0_0_0_1px_oklch(0.8_0.18_80_/_0.22),inset_0_0_32px_oklch(0.8_0.18_80_/_0.18)]',
+      )}
+    >
       <ReactScanBridge />
       <NotificationTaskOpenBridge />
       <TaskMessageManager />
@@ -395,7 +394,7 @@ function RootLayout() {
       <NewTaskContainer />
       <CommandPaletteContainer />
       <ProjectOverlayContainer />
-      <ProjectBacklogContainer />
+      <BacklogContainer />
       <ActivityCenterContainer />
       <CalendarContainer />
       <SettingsContainer />

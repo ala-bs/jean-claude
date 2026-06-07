@@ -16,7 +16,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Search } from 'lucide-react';
+import { ChevronRight, Eye, Search } from 'lucide-react';
 import React, {
   useCallback,
   useEffect,
@@ -39,6 +39,7 @@ import {
 } from '@/common/ui/branch-or-task-select';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
+import { Modal } from '@/common/ui/modal';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
 import {
@@ -62,6 +63,7 @@ import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
 import {
   useProjects,
   useProjectBranches,
+  useProjectFeatureMap,
   useProjectIsGitRepository,
   useReorderProjects,
 } from '@/hooks/use-projects';
@@ -84,6 +86,10 @@ import { feedQueryKeys } from '@/lib/feed-query-keys';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
 import { compressImage } from '@/lib/image-compression';
 import {
+  expandFeatureReferencesInPrompt,
+  getReferencedFeatures,
+} from '@/lib/prompt-feature-context';
+import {
   resolveSnippetTemplate,
   type SnippetVariableContext,
 } from '@/lib/resolve-snippet-template';
@@ -93,6 +99,7 @@ import {
   useComposerFileComments,
   useComposerFileCommentsStore,
   synthesizeFileCommentsPrompt,
+  type ComposerFileComment,
 } from '@/stores/composer-file-comments';
 import {
   useNewTaskDraft,
@@ -114,9 +121,9 @@ import {
   normalizeInteractionModeForBackend,
   type ThinkingEffort,
   type Project,
+  type ProjectFeatureMap,
 } from '@shared/types';
 
-import { ComposerCommentsChip } from '../ui-composer-comments-chip';
 import { ComposerFileExplorer } from '../ui-composer-file-explorer';
 import {
   PromptComposer,
@@ -134,6 +141,115 @@ function projectHasWorkItems(project: Project | null): boolean {
     project.workItemProviderId &&
     project.workItemProjectId &&
     project.workItemProjectName
+  );
+}
+
+function FinalPromptPreviewButton({
+  prompt,
+  projectRoot,
+  featureMap,
+  fileComments,
+  files,
+}: {
+  prompt: string;
+  projectRoot: string | null | undefined;
+  featureMap: ProjectFeatureMap | null | undefined;
+  fileComments: ComposerFileComment[];
+  files: PromptFilePart[];
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  const referencedFeatures = useMemo(
+    () => getReferencedFeatures({ text: prompt, featureMap }),
+    [prompt, featureMap],
+  );
+
+  const fileContextParts = useMemo(
+    () => synthesizeFileCommentsPrompt(fileComments, projectRoot ?? undefined),
+    [fileComments, projectRoot],
+  );
+
+  const fileCommentText = useMemo(() => {
+    const textPart = fileContextParts?.find((part) => part.type === 'text');
+    return textPart?.type === 'text' ? textPart.text : '';
+  }, [fileContextParts]);
+
+  const finalPromptPreview = useMemo(() => {
+    let finalPrompt = prompt;
+    if (fileCommentText) {
+      finalPrompt = finalPrompt.trim()
+        ? `${finalPrompt}\n\n${fileCommentText}`
+        : fileCommentText;
+    }
+    finalPrompt = expandFeatureReferencesInPrompt({
+      text: finalPrompt,
+      featureMap,
+    });
+    finalPrompt += buildAttachedFilesXml(files);
+    return finalPrompt;
+  }, [prompt, fileCommentText, featureMap, files]);
+
+  const hasGeneratedContext =
+    referencedFeatures.length > 0 ||
+    fileComments.length > 0 ||
+    files.length > 0;
+  if (!hasGeneratedContext) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        className="border-glass-border bg-glass-light text-ink-2 hover:bg-glass-medium hover:text-ink-1 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors"
+        onClick={() => setIsOpen(true)}
+      >
+        <Eye className="h-3 w-3" />
+        <span className="text-acc font-mono text-[10px]">Preview</span>
+        <span className="text-ink-3 text-[10px]">final prompt</span>
+        {referencedFeatures.length > 0 && (
+          <span className="bg-acc-soft text-acc rounded px-1.5 py-px font-mono text-[10px]">
+            {referencedFeatures.length} feat
+          </span>
+        )}
+        {fileComments.length > 0 && (
+          <span className="bg-glass-medium text-ink-3 rounded px-1.5 py-px font-mono text-[10px]">
+            {fileComments.length} comments
+          </span>
+        )}
+        {files.length > 0 && (
+          <span className="bg-glass-medium text-ink-3 rounded px-1.5 py-px font-mono text-[10px]">
+            {files.length} files
+          </span>
+        )}
+      </button>
+
+      <Modal
+        isOpen={isOpen}
+        onClose={() => setIsOpen(false)}
+        title="Final prompt preview"
+        size="lg"
+        contentClassName="min-h-0 overflow-hidden p-0"
+      >
+        <div className="flex max-h-[70vh] min-h-0 flex-col">
+          <div className="border-glass-border text-ink-3 flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 font-mono text-[10px]">
+            <span>{finalPromptPreview.length.toLocaleString()} chars</span>
+            <span>
+              ~{Math.ceil(finalPromptPreview.length / 4).toLocaleString()}{' '}
+              tokens
+            </span>
+            {referencedFeatures.length > 0 && (
+              <span>{referencedFeatures.length} feature refs</span>
+            )}
+            {fileComments.length > 0 && (
+              <span>{fileComments.length} comments</span>
+            )}
+            {files.length > 0 && <span>{files.length} files</span>}
+          </div>
+          <pre className="text-ink-2 flex-1 overflow-auto p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+            {finalPromptPreview}
+          </pre>
+        </div>
+      </Modal>
+    </>
   );
 }
 
@@ -293,6 +409,8 @@ export function NewTaskOverlay({
     selectedProjectId ?? undefined,
   );
   const isNoteMode = selectedProjectId === null;
+  const { data: selectedProjectFeatureMap = null } =
+    useProjectFeatureMap(selectedProjectId);
 
   // Fetch work items for the selected project (used for navigation)
   const { data: workItems = [] } = useWorkItems({
@@ -911,6 +1029,10 @@ export function NewTaskOverlay({
       }
 
       // Append file attachment references to prompt text
+      finalPrompt = expandFeatureReferencesInPrompt({
+        text: finalPrompt,
+        featureMap: selectedProjectFeatureMap,
+      });
       finalPrompt += buildAttachedFilesXml(draftFiles);
 
       const backlogTodoIds = draft.backlogTodoIds ?? [];
@@ -1021,6 +1143,7 @@ export function NewTaskOverlay({
     testCasesByWorkItem,
     selectedProject?.name,
     selectedProject?.path,
+    selectedProjectFeatureMap,
     currentBackend,
     currentInteractionMode,
     currentModelPreference,
@@ -1368,7 +1491,7 @@ export function NewTaskOverlay({
         >
           <div
             ref={panelRef}
-            className="flex max-h-[80svh] w-[90svw] max-w-[1280px] flex-col overflow-hidden rounded-[14px] border border-white/10"
+            className="flex max-h-[86svh] w-[90svw] max-w-[1280px] flex-col overflow-hidden rounded-[14px] border border-white/10"
             style={{
               background: `
             radial-gradient(ellipse 700px 500px at 10% -10%, oklch(0.55 0.22 295 / 0.32), transparent 55%),
@@ -1424,6 +1547,7 @@ export function NewTaskOverlay({
                     enableFilePathAutocomplete
                     enableCompletion={completionSetting?.enabled ?? false}
                     projectId={selectedProject?.id}
+                    featureMap={selectedProjectFeatureMap}
                     images={draft?.images}
                     onImageAttach={handleImageAttach}
                     onImageRemove={handleImageRemove}
@@ -1432,14 +1556,17 @@ export function NewTaskOverlay({
                     onFileRemove={handleFileRemove}
                     promptSnippets={promptSnippets}
                     snippetVariableContext={snippetVariableContext}
-                    containerClassName={`px-[18px] pt-3.5 ${fileCommentCount > 0 && selectedProject ? 'pb-2' : 'pb-3.5'}`}
+                    containerClassName={`px-[18px] pt-3.5 ${selectedProject ? 'pb-2' : 'pb-3.5'}`}
                     className="text-ink-1 placeholder-ink-3 border-transparent bg-transparent px-0 py-0 text-sm focus:border-transparent focus:ring-0 focus:outline-none"
                   />
-                  {fileCommentCount > 0 && selectedProject && (
+                  {!isNoteMode && selectedProject && (
                     <div className="px-[18px] pb-3.5">
-                      <ComposerCommentsChip
-                        projectId={selectedProject.id}
+                      <FinalPromptPreviewButton
+                        prompt={inputValue}
                         projectRoot={selectedProject.path}
+                        featureMap={selectedProjectFeatureMap}
+                        fileComments={fileComments}
+                        files={draft?.files ?? []}
                       />
                     </div>
                   )}
@@ -1529,6 +1656,7 @@ export function NewTaskOverlay({
                   snippets={promptSnippets}
                   snippetVariableContext={snippetVariableContext}
                   testCasesByWorkItem={testCasesByWorkItem}
+                  featureMap={selectedProjectFeatureMap}
                 />
               </div>
             )}

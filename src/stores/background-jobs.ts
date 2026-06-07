@@ -14,6 +14,8 @@ export type BackgroundJobType =
   | 'project-summary-generation'
   | 'logo-generation'
   | 'verification-note'
+  | 'step-start'
+  | 'task-completion'
   | 'task-deletion'
   | 'commit'
   | 'merge'
@@ -27,6 +29,7 @@ interface BackgroundJobBase {
   createdAt: string;
   completedAt: string | null;
   errorMessage: string | null;
+  warningMessage: string | null;
   taskId: string | null;
   projectId: string | null;
   noteId: string | null;
@@ -85,6 +88,19 @@ export type BackgroundJob =
       details: {
         workItemCount: number;
         workItemTitles: string[];
+      };
+    })
+  | (BackgroundJobBase & {
+      type: 'step-start';
+      details: {
+        stepId?: string;
+        stepName: string;
+      };
+    })
+  | (BackgroundJobBase & {
+      type: 'task-completion';
+      details: {
+        cleanupWorktree: boolean | null;
       };
     })
   | (BackgroundJobBase & {
@@ -197,6 +213,25 @@ type NewBackgroundJobInput =
       };
     }
   | {
+      type: 'step-start';
+      title: string;
+      taskId?: string | null;
+      projectId?: string | null;
+      details: {
+        stepId?: string;
+        stepName: string;
+      };
+    }
+  | {
+      type: 'task-completion';
+      title: string;
+      taskId?: string | null;
+      projectId?: string | null;
+      details: {
+        cleanupWorktree: boolean | null;
+      };
+    }
+  | {
       type: 'task-deletion';
       title: string;
       taskId?: string | null;
@@ -246,6 +281,7 @@ interface BackgroundJobsState {
       taskId?: string | null;
       projectId?: string | null;
       noteId?: string | null;
+      warningMessage?: string | null;
     },
   ) => void;
   markJobFailed: (id: string, errorMessage: string) => void;
@@ -277,6 +313,7 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
           createdAt,
           completedAt: null,
           errorMessage: null,
+          warningMessage: null,
           taskId,
           projectId,
           noteId,
@@ -299,6 +336,7 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
                   status: 'succeeded',
                   completedAt,
                   errorMessage: null,
+                  warningMessage: data?.warningMessage ?? job.warningMessage,
                   taskId: data?.taskId ?? job.taskId,
                   projectId: data?.projectId ?? job.projectId,
                   noteId: data?.noteId ?? job.noteId,
@@ -318,6 +356,7 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
                   status: 'failed',
                   completedAt,
                   errorMessage,
+                  warningMessage: null,
                 }
               : job,
           ),
@@ -333,6 +372,7 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
                   status: 'running',
                   completedAt: null,
                   errorMessage: null,
+                  warningMessage: null,
                 }
               : job,
           ),
@@ -376,6 +416,10 @@ export function bgJobLabel(type: BackgroundJobType): string {
       return 'Generating logo…';
     case 'verification-note':
       return 'Generating verification note…';
+    case 'step-start':
+      return 'Starting step…';
+    case 'task-completion':
+      return 'Completing…';
     case 'task-creation':
       return 'Creating…';
     case 'skill-creation':

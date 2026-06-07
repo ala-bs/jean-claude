@@ -408,6 +408,31 @@ export function useAddThreadReply(projectId: string, prId: number) {
   });
 }
 
+export function useUpdateThreadComment(projectId: string, prId: number) {
+  const queryClient = useQueryClient();
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useMutation<
+    AzureDevOpsComment,
+    Error,
+    { threadId: number; commentId: number; content: string }
+  >({
+    mutationFn: (params) =>
+      api.azureDevOps.updateThreadComment({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        ...params,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['pull-request-threads', projectId, prId],
+      });
+    },
+  });
+}
+
 export function useUpdateThreadStatus(projectId: string, prId: number) {
   const queryClient = useQueryClient();
   const repoInfo = useProjectRepoInfo(projectId);
@@ -523,9 +548,11 @@ export function useSetAutoComplete(projectId: string, prId: number) {
         pullRequestId: prId,
         ...params,
       }),
-    onSuccess: () => {
+    onSuccess: (updatedPr) => {
+      queryClient.setQueryData(['pull-request', projectId, prId], updatedPr);
+      queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
       queryClient.invalidateQueries({
-        queryKey: ['pull-request', projectId, prId],
+        queryKey: ['all-projects-pull-requests'],
       });
     },
   });

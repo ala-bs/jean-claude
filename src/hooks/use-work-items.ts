@@ -100,6 +100,44 @@ export function useWorkItemComments(params: {
   });
 }
 
+export function useAddWorkItemComment() {
+  const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+
+  return useMutation({
+    mutationFn: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      text: string;
+    }) => api.azureDevOps.addWorkItemComment(params),
+    onSuccess: (comment, variables) => {
+      queryClient.setQueryData<WorkItemComment[]>(
+        [
+          'work-item-comments',
+          variables.providerId,
+          variables.projectName,
+          [variables.workItemId],
+        ],
+        (existing) => {
+          if (!existing) return existing;
+          return [comment, ...existing.filter((c) => c.id !== comment.id)];
+        },
+      );
+      queryClient.invalidateQueries({
+        queryKey: [
+          'work-item-comments',
+          variables.providerId,
+          variables.projectName,
+        ],
+      });
+    },
+    onError: () => {
+      addToast({ message: 'Failed to add work item comment', type: 'error' });
+    },
+  });
+}
+
 export function useRelatedTestCases(params: {
   providerId: string | null;
   projectName: string | null;

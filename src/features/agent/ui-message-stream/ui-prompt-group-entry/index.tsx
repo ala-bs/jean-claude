@@ -30,10 +30,65 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 // ── Helpers ────────────────────────────────────────────────────────────
 
 const PROMPT_MAX_CHARS = 300;
+const RECENT_RUNNING_MESSAGE_COUNT = 5;
+
+type RunningActivityMessage =
+  | {
+      kind: 'text';
+      text: string;
+    }
+  | {
+      kind: 'bash';
+      command: string;
+    };
+
+function getAssistantPreviewMessage(
+  dm: DisplayMessage,
+): RunningActivityMessage | null {
+  if (
+    dm.kind !== 'entry' ||
+    dm.entry.type !== 'assistant-message' ||
+    !dm.entry.value.trim()
+  ) {
+    return null;
+  }
+
+  const preview = dm.entry.value.slice(0, 100);
+  return {
+    kind: 'text',
+    text: preview.length < dm.entry.value.length ? `${preview}...` : preview,
+  };
+}
+
+function getLatestActivityMessage(
+  dm: DisplayMessage,
+): RunningActivityMessage | null {
+  const assistantMessage = getAssistantPreviewMessage(dm);
+  if (assistantMessage) return assistantMessage;
+
+  if (dm.kind === 'entry' && dm.entry.type === 'tool-use') {
+    if (dm.entry.name === 'bash') {
+      const bashEntry = dm.entry as ToolUseByName<'bash'>;
+      const firstLine = bashEntry.input.command.split('\n')[0];
+      const command = firstLine.slice(0, 80);
+      return {
+        kind: 'bash',
+        command: command.length < firstLine.length ? `${command}...` : command,
+      };
+    }
+
+    return {
+      kind: 'text',
+      text: getToolActivitySummary(dm.entry as NormalizedToolUse),
+    };
+  }
+
+  return null;
+}
 
 /**
  * Get live activity for a running prompt group:
- * active subagents, active skills, latest todo, latest message.
+ * active subagents, active skills, latest todo, recent messages.
  */
 function getRunningActivity(childMessages: DisplayMessage[]): {
   subagents: Array<{
@@ -53,16 +108,7 @@ function getRunningActivity(childMessages: DisplayMessage[]): {
     current: boolean;
   }>;
   isCompacting: boolean;
-  latestMessage:
-    | {
-        kind: 'text';
-        text: string;
-      }
-    | {
-        kind: 'bash';
-        command: string;
-      }
-    | null;
+  recentMessages: RunningActivityMessage[];
 } {
   const subagents: Array<{
     id: string;
@@ -75,16 +121,7 @@ function getRunningActivity(childMessages: DisplayMessage[]): {
     id: string;
     summary: string;
   }> = [];
-  let latestMessage:
-    | {
-        kind: 'text';
-        text: string;
-      }
-    | {
-        kind: 'bash';
-        command: string;
-      }
-    | null = null;
+  const recentMessages: RunningActivityMessage[] = [];
 
   // Collect active subagents
   for (const dm of childMessages) {
@@ -157,62 +194,39 @@ function getRunningActivity(childMessages: DisplayMessage[]): {
     }
   }
 
-  // Latest message (always shown, even alongside subagents/running tools)
+  // Recent messages: newest row is latest activity; faded rows are assistant text.
+  let latestMessage: RunningActivityMessage | null = null;
+  let latestMessageIndex = -1;
   for (let i = childMessages.length - 1; i >= 0; i--) {
-    const dm = childMessages[i];
-    if (dm.kind === 'entry') {
-      if (dm.entry.type === 'tool-use') {
-        if (dm.entry.name === 'bash') {
-          const bashEntry = dm.entry as ToolUseByName<'bash'>;
-          const firstLine = bashEntry.input.command.split('\n')[0];
-          const command = firstLine.slice(0, 80);
-          latestMessage = {
-            kind: 'bash',
-            command:
-              command.length < firstLine.length ? `${command}...` : command,
-          };
-        } else {
-          latestMessage = {
-            kind: 'text',
-            text: getToolActivitySummary(dm.entry as NormalizedToolUse),
-          };
-        }
-        break;
-      }
-      if (dm.entry.type === 'assistant-message' && dm.entry.value.trim()) {
-        const preview = dm.entry.value.slice(0, 100);
-        latestMessage = {
-          kind: 'text',
-          text:
-            preview.length < dm.entry.value.length ? `${preview}...` : preview,
-        };
-        break;
-      }
-      if (dm.entry.type === 'thinking') {
-        latestMessage = { kind: 'text', text: 'Thinking...' };
-        break;
-      }
-    }
-    if (dm.kind === 'subagent' && dm.toolUse.result) {
-      const sa =
-        dm.toolUse.name === 'sub-agent'
-          ? (dm.toolUse as ToolUseByName<'sub-agent'>)
-          : undefined;
-      latestMessage = {
-        kind: 'text',
-        text: `Completed: ${sa?.input.description ?? 'Sub-agent'}`,
-      };
+    const message = getLatestActivityMessage(childMessages[i]);
+    if (message) {
+      latestMessage = message;
+      latestMessageIndex = i;
       break;
     }
   }
-  if (!latestMessage) latestMessage = { kind: 'text', text: 'Working...' };
+
+  if (latestMessage) {
+    for (let i = latestMessageIndex - 1; i >= 0; i--) {
+      const message = getAssistantPreviewMessage(childMessages[i]);
+      if (message) {
+        recentMessages.unshift(message);
+        if (recentMessages.length >= RECENT_RUNNING_MESSAGE_COUNT - 1) break;
+      }
+    }
+    recentMessages.push(latestMessage);
+  }
+
+  if (recentMessages.length === 0) {
+    recentMessages.push({ kind: 'text', text: 'Working...' });
+  }
 
   // Check if context compaction is in progress
   const isCompacting = childMessages.some(
     (dm) => dm.kind === 'compacting' && !dm.endEntry,
   );
 
-  return { subagents, runningTools, todos, isCompacting, latestMessage };
+  return { subagents, runningTools, todos, isCompacting, recentMessages };
 }
 
 function parseDateMs(date: string | undefined): number | null {
@@ -613,7 +627,7 @@ function ResultBlock({
   return content;
 }
 
-/** Running summary — subagent cards, todo checklist, latest message */
+/** Running summary — subagent cards, todo checklist, recent messages */
 function RunningSummary({
   activity,
 }: {
@@ -708,27 +722,44 @@ function RunningSummary({
         </div>
       )}
 
-      {/* Latest message */}
-      {activity.latestMessage && (
+      {/* Recent messages */}
+      {activity.recentMessages.length > 0 && (
         <div>
           <div className="text-ink-4 mb-1 font-mono text-[10px] tracking-wider uppercase">
-            latest
+            recent
           </div>
-          <div className="text-ink-2 flex items-baseline gap-2">
-            <span className="text-ink-4 w-3 shrink-0 text-center">·</span>
-            <span className="flex-1">
-              {activity.latestMessage.kind === 'bash' ? (
-                <span className="inline-flex items-baseline gap-1">
-                  <span className="text-acc-ink">$</span>
-                  <span className="text-ink-2">
-                    {activity.latestMessage.command}
+          <div className="flex flex-col gap-0.5">
+            {activity.recentMessages.map((message, index) => {
+              const isNewest = index === activity.recentMessages.length - 1;
+              const opacity =
+                activity.recentMessages.length === 1
+                  ? 1
+                  : 0.38 +
+                    (index / (activity.recentMessages.length - 1)) * 0.62;
+
+              return (
+                <div
+                  key={index}
+                  className="text-ink-2 flex items-baseline gap-2"
+                  style={{ opacity }}
+                >
+                  <span className="text-ink-4 w-3 shrink-0 text-center">·</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {message.kind === 'bash' ? (
+                      <span className="inline-flex min-w-0 items-baseline gap-1">
+                        <span className="text-acc-ink shrink-0">$</span>
+                        <span className="text-ink-2 truncate">
+                          {message.command}
+                        </span>
+                      </span>
+                    ) : (
+                      message.text
+                    )}
+                    {isNewest && <span className="rg-caret">▍</span>}
                   </span>
-                </span>
-              ) : (
-                activity.latestMessage.text
-              )}
-              <span className="rg-caret">▍</span>
-            </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -787,8 +818,8 @@ export function PromptGroupEntry({
   const isError = group.status === 'error';
   const isInterrupted = group.status === 'interrupted';
   const isRunning = group.status === 'running';
-  // Show running indicator in header when this is the last group and task is active
-  const showRunningHeader = isRunning || (isLast && isTaskRunning);
+  // Last group can still be active while backend has no open tool/result yet.
+  const isActiveGroup = isRunning || (isLast && isTaskRunning);
   const [diffModalOpen, setDiffModalOpen] = useState(false);
   // Details expand/collapse:
   // - error/interrupted on last group: start expanded
@@ -814,6 +845,7 @@ export function PromptGroupEntry({
       };
     }
     const cost = entry.cost?.toFixed(2) || '0.00';
+    const apiCost = entry.apiCost?.toFixed(2);
     const tokens = formatNumber(
       (entry.usage?.inputTokens ?? 0) + (entry.usage?.outputTokens ?? 0),
     );
@@ -824,7 +856,7 @@ export function PromptGroupEntry({
         : null;
     return {
       isError: false,
-      stats: `${tokens} tok · ${formatDuration(durationMs)} · $${cost}`,
+      stats: `${tokens} tok · ${formatDuration(durationMs)} · $${cost}${apiCost ? ` · api cost $${apiCost}` : ''}`,
       text: entry.value || fallbackAssistantMessage?.text || null,
       entryId: fallbackAssistantMessage?.entryId ?? entry.id,
       isAssistantFallback: fallbackAssistantMessage !== null,
@@ -832,19 +864,19 @@ export function PromptGroupEntry({
   }, [group.childMessages, group.durationMs, group.resultEntry]);
 
   const completedDurationLabel = useMemo(() => {
-    if (showRunningHeader) return null;
+    if (isActiveGroup) return null;
 
     const durationMs = group.durationMs ?? group.resultEntry?.durationMs;
     if (durationMs === undefined || durationMs < 0) return null;
 
     return formatDuration(durationMs);
-  }, [group.durationMs, group.resultEntry?.durationMs, showRunningHeader]);
+  }, [group.durationMs, group.resultEntry?.durationMs, isActiveGroup]);
 
   // Activity for running state
   const activity = useMemo(() => {
-    if (!isRunning) return null;
+    if (!isActiveGroup) return null;
     return getRunningActivity(group.childMessages);
-  }, [isRunning, group.childMessages]);
+  }, [isActiveGroup, group.childMessages]);
 
   const visibleChildMessages = useMemo(
     () => group.childMessages.filter(shouldRenderChildMessage),
@@ -853,7 +885,7 @@ export function PromptGroupEntry({
 
   // Extract todos for collapsed non-running state
   const completedTodos = useMemo(() => {
-    if (isRunning) return null;
+    if (isActiveGroup) return null;
     const allEntries: NormalizedEntry[] = [];
     for (const dm of group.childMessages) {
       if (dm.kind === 'entry') allEntries.push(dm.entry);
@@ -880,7 +912,7 @@ export function PromptGroupEntry({
       }
     }
     return todos.length > 0 ? todos : null;
-  }, [isRunning, group.childMessages]);
+  }, [isActiveGroup, group.childMessages]);
 
   const toggleDetails = useCallback(
     () =>
@@ -1019,7 +1051,7 @@ export function PromptGroupEntry({
 
         <div
           className={
-            isLast && showRunningHeader
+            isLast && isActiveGroup
               ? 'task-agent-running-shell min-w-0 flex-1 rounded-md'
               : 'min-w-0 flex-1 rounded-md'
           }
@@ -1050,7 +1082,7 @@ export function PromptGroupEntry({
               <ChevronRight className="h-2.5 w-2.5" />
             )}
 
-            {showRunningHeader ? (
+            {isActiveGroup ? (
               <>
                 <span className="inline-flex items-center gap-1.5">
                   <span
@@ -1175,7 +1207,7 @@ export function PromptGroupEntry({
                   );
                 })}
                 {/* Append result or running summary at bottom when expanded */}
-                {!isRunning && group.resultEntry && (
+                {!isActiveGroup && group.resultEntry && (
                   <div
                     className="mt-2.5 border-t border-dashed border-white/[0.08] pt-2.5"
                     onContextMenu={
@@ -1198,13 +1230,13 @@ export function PromptGroupEntry({
                     />
                   </div>
                 )}
-                {isRunning && activity && (
+                {isActiveGroup && activity && (
                   <div className="mt-2.5 border-t border-dashed border-white/[0.08] pt-2.5">
                     <RunningSummary activity={activity} />
                   </div>
                 )}
               </div>
-            ) : isRunning && activity ? (
+            ) : isActiveGroup && activity ? (
               /* Collapsed running: live summary */
               <RunningSummary activity={activity} />
             ) : (

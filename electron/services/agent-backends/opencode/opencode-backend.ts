@@ -30,17 +30,18 @@ import type {
   NormalizedQuestionRequest,
   PromptPart,
 } from '@shared/agent-backend-types';
+import type { TokenUsage } from '@shared/normalized-message-v2';
 import type { InteractionMode } from '@shared/types';
 
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
 import { RawMessageRepository } from '../../../database/repositories';
 import { dbg } from '../../../lib/debug';
+import { calculateTheoreticalOpenCodeCost } from '../../backend-models-service';
 import {
   compileForOpenCode,
-  evaluatePermission,
+  evaluatePermissionWithMatch,
   normalizeToolRequest,
 } from '../../permission-settings-service';
-import { SESSION_SUMMARY_PROMPT } from '../../session-summary-service';
 
 import {
   normalizeOpenCodeV2,
@@ -179,6 +180,10 @@ interface OpenCodeSessionState {
   startTime: number;
   /** Accumulated cost */
   totalCost: number;
+  /** Estimated direct API cost when actual cost is zero */
+  totalApiCost: number;
+  /** Accumulated token usage */
+  totalUsage?: TokenUsage;
   /** V2 normalization context */
   normalizationCtx: OpenCodeNormalizationContext;
   /** Current message index for raw persistence ordering */
@@ -292,12 +297,19 @@ export class OpenCodeBackend implements AgentBackend {
       pendingQuestions: new Set(),
       startTime: Date.now(),
       totalCost: 0,
+      totalApiCost: 0,
+      totalUsage: undefined,
       normalizationCtx: {
         emittedEntryIds: new Set(),
         rawMessages: new Map(),
         rawParts: new Map(),
         sessionStartTime: Date.now(),
         totalCost: 0,
+        totalApiCost: 0,
+        totalUsage: undefined,
+        pendingToolPermissionDecisions: [],
+        toolPermissionsByEntryId: new Map(),
+        permissionRules: config.permissionRules ?? [],
       },
       messageIndex: this.taskContext.sessionStartIndex,
       rawDeltaRows: new Map(),
@@ -343,84 +355,6 @@ export class OpenCodeBackend implements AgentBackend {
 
     this.sessions.delete(sessionId);
     this.closeDedicatedServer(state);
-  }
-
-  async summarizeSession({
-    sessionId,
-    cwd,
-    model,
-  }: {
-    sessionId: string;
-    cwd: string;
-    model?: string;
-  }): Promise<string> {
-    // OpenCode does not currently expose a non-persistent fork option,
-    // so we delete the forked session explicitly after summarization.
-    const state = this.sessions.get(sessionId);
-    const client =
-      state?.serverHandle.client ?? (await getOrCreateServer()).client;
-    const forked = await client.session.fork({
-      sessionID: sessionId,
-      directory: cwd,
-    });
-    const forkedSessionId = forked.data?.id;
-
-    if (!forkedSessionId) {
-      throw new Error('OpenCode session fork did not return a session ID');
-    }
-
-    let promptError: unknown;
-    let summary: string | null = null;
-
-    try {
-      const resolvedModel = this.parseModel(model);
-      const response = await client.session.prompt({
-        sessionID: forkedSessionId,
-        directory: cwd,
-        parts: [{ type: 'text', text: SESSION_SUMMARY_PROMPT }],
-        ...(resolvedModel ? { model: resolvedModel } : {}),
-      });
-
-      const textParts = (response.data?.parts ?? [])
-        .filter((part) => part.type === 'text')
-        .map((part) => (part as { text?: string }).text?.trim() ?? '')
-        .filter(Boolean)
-        .join('\n\n')
-        .trim();
-
-      if (!textParts) {
-        throw new Error('OpenCode summary session returned empty text output');
-      }
-
-      summary = textParts;
-    } catch (error) {
-      promptError = error;
-    }
-
-    try {
-      await client.session.delete({
-        sessionID: forkedSessionId,
-        directory: cwd,
-      });
-    } catch (error) {
-      // Delete failure is a minor resource leak — log but don't fail.
-      dbg.agent(
-        'Failed to delete forked summary session %s: %O',
-        forkedSessionId,
-        error,
-      );
-    }
-
-    if (promptError) {
-      throw promptError;
-    }
-    // Delete failure is a minor resource leak, not a user-facing error.
-    // Log it but still return the valid summary.
-    if (!summary) {
-      throw new Error('OpenCode summary session returned no summary output');
-    }
-
-    return summary;
   }
 
   async respondToPermission(
@@ -688,11 +622,9 @@ export class OpenCodeBackend implements AgentBackend {
           ctx.rawMessages.set(result.data.info.id, result.data.info);
           ctx.rawParts.set(result.data.info.id, result.data.parts);
 
-          // Track cost
+          // Track cost/tokens from unique assistant messages.
           if (result.data.info.role === 'assistant') {
-            const cost = (result.data.info as OcAssistantMessage).cost ?? 0;
-            state.totalCost += cost;
-            ctx.totalCost = state.totalCost;
+            this.updateUsageTotals(state);
           }
 
           // Persist raw prompt result
@@ -833,11 +765,12 @@ export class OpenCodeBackend implements AgentBackend {
               req.toolName,
               req.input,
             );
-            const action = evaluatePermission(
+            const permissionDecision = evaluatePermissionWithMatch(
               state.permissionRules,
               tool,
               matchValue,
             );
+            const action = permissionDecision.action;
 
             if (action === 'allow') {
               dbg.agentPermission(
@@ -849,6 +782,20 @@ export class OpenCodeBackend implements AgentBackend {
                 directory: state.cwd,
                 reply: 'once',
               });
+              (state.normalizationCtx.pendingToolPermissionDecisions ??=
+                []).push(
+                permissionDecision.matchedRule
+                  ? {
+                      allowedBy: 'system',
+                      tool,
+                      matchValue,
+                      rule: {
+                        tool: permissionDecision.matchedRule.tool,
+                        pattern: permissionDecision.matchedRule.pattern,
+                      },
+                    }
+                  : { allowedBy: 'system', tool, matchValue },
+              );
               continue; // Don't yield the permission-request event
             }
 
@@ -937,7 +884,16 @@ export class OpenCodeBackend implements AgentBackend {
         isError: hasError,
         text: hasError ? 'Session ended' : undefined,
         durationMs,
-        cost: state.totalCost > 0 ? { costUsd: state.totalCost } : undefined,
+        cost:
+          state.totalCost > 0 || state.totalApiCost > 0
+            ? {
+                costUsd: state.totalCost,
+                ...(state.totalCost === 0 && state.totalApiCost > 0
+                  ? { apiCostUsd: state.totalApiCost }
+                  : {}),
+              }
+            : undefined,
+        usage: state.totalUsage,
       },
     };
 
@@ -1034,6 +990,60 @@ export class OpenCodeBackend implements AgentBackend {
     }
   }
 
+  private updateUsageTotals(state: OpenCodeSessionState): void {
+    let totalCost = 0;
+    let totalApiCost = 0;
+    const totalUsage: TokenUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    };
+
+    for (const message of state.normalizationCtx.rawMessages.values()) {
+      if (message.role !== 'assistant') continue;
+
+      const assistant = message as OcAssistantMessage;
+      if (!assistant.tokens) {
+        totalCost += assistant.cost ?? 0;
+        continue;
+      }
+
+      if (assistant.cost && assistant.cost > 0) {
+        totalCost += assistant.cost;
+      } else if (assistant.cost === 0) {
+        totalApiCost += calculateTheoreticalOpenCodeCost({
+          providerID: assistant.providerID,
+          modelID: assistant.modelID,
+          inputTokens: assistant.tokens.input,
+          outputTokens: assistant.tokens.output,
+          cacheReadTokens: assistant.tokens.cache.read,
+          cacheCreationTokens: assistant.tokens.cache.write,
+        });
+      }
+
+      totalUsage.inputTokens += assistant.tokens.input;
+      totalUsage.outputTokens += assistant.tokens.output;
+      totalUsage.cacheReadTokens =
+        (totalUsage.cacheReadTokens ?? 0) + assistant.tokens.cache.read;
+      totalUsage.cacheCreationTokens =
+        (totalUsage.cacheCreationTokens ?? 0) + assistant.tokens.cache.write;
+    }
+
+    const hasUsage =
+      totalUsage.inputTokens > 0 ||
+      totalUsage.outputTokens > 0 ||
+      (totalUsage.cacheReadTokens ?? 0) > 0 ||
+      (totalUsage.cacheCreationTokens ?? 0) > 0;
+
+    state.totalCost = totalCost;
+    state.totalApiCost = totalCost === 0 ? totalApiCost : 0;
+    state.totalUsage = hasUsage ? totalUsage : undefined;
+    state.normalizationCtx.totalCost = totalCost;
+    state.normalizationCtx.totalApiCost = state.totalApiCost;
+    state.normalizationCtx.totalUsage = state.totalUsage;
+  }
+
   /**
    * Extract session ID from an OpenCode event (if applicable).
    */
@@ -1097,12 +1107,10 @@ export class OpenCodeBackend implements AgentBackend {
           parts: existing?.parts ?? [],
         });
 
-        // Track cost from assistant messages
+        // Track cost/tokens from assistant messages. Recompute from rawMessages
+        // because OpenCode can emit the same message.updated more than once.
         if (msg.role === 'assistant') {
-          const assistantMsg = msg as OcAssistantMessage;
-          const cost = assistantMsg.cost ?? 0;
-          state.totalCost += cost;
-          ctx.totalCost = state.totalCost;
+          this.updateUsageTotals(state);
         }
         break;
       }
@@ -1154,11 +1162,13 @@ export class OpenCodeBackend implements AgentBackend {
         for (const entryId of ctx.emittedEntryIds) {
           if (entryId.startsWith(prefix)) {
             ctx.emittedEntryIds.delete(entryId);
+            ctx.toolPermissionsByEntryId?.delete(entryId);
           }
         }
         ctx.rawMessages.delete(props.messageID);
         ctx.rawParts.delete(props.messageID);
         state.messages.delete(props.messageID);
+        this.updateUsageTotals(state);
         break;
       }
 

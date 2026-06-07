@@ -243,6 +243,11 @@ function JobRow({
           {job.errorMessage && (
             <p className="text-status-fail mt-1 text-xs">{job.errorMessage}</p>
           )}
+          {job.warningMessage && (
+            <p className="text-status-fail mt-1 text-xs">
+              {job.warningMessage}
+            </p>
+          )}
           <div className="mt-2 flex items-center gap-2">
             {job.type === 'task-creation' &&
               job.details.creationInput.prompt.trim() && (
@@ -405,6 +410,26 @@ function JobDetails({ job }: { job: BackgroundJob }) {
             <p className="truncate">
               {typedJob.details.workItemTitles.join(', ')}
             </p>
+          )}
+        </div>
+      );
+    },
+    'step-start': (typedJob) => {
+      if (typedJob.type !== 'step-start') return null;
+
+      return (
+        <div className="text-ink-2 mt-1 space-y-0.5 text-xs">
+          <p>Step: {typedJob.details.stepName}</p>
+        </div>
+      );
+    },
+    'task-completion': (typedJob) => {
+      if (typedJob.type !== 'task-completion') return null;
+
+      return (
+        <div className="text-ink-2 mt-1 space-y-0.5 text-xs">
+          {typedJob.details.cleanupWorktree && (
+            <p>Worktree cleanup requested</p>
           )}
         </div>
       );

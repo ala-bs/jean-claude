@@ -266,11 +266,12 @@ export function PrWorkItems({
     null,
   );
 
-  const handlePreview = useCallback(
-    (e: React.MouseEvent, wi: AzureDevOpsWorkItem) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setPreviewItem(wi);
+  const handleRowKeyDown = useCallback(
+    (e: React.KeyboardEvent, wi: AzureDevOpsWorkItem) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setPreviewItem(wi);
+      }
     },
     [],
   );
@@ -359,60 +360,67 @@ export function PrWorkItems({
               {workItems.map((wi) => (
                 <div
                   key={wi.id}
-                  className="hover:bg-bg-2 group flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setPreviewItem(wi)}
+                  onKeyDown={(e) => handleRowKeyDown(e, wi)}
+                  className="hover:bg-bg-2 group flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 transition-colors"
                 >
-                  <WorkItemTypeIcon type={wi.fields.workItemType} size="sm" />
-                  <span className="text-acc-ink text-xs font-medium">
-                    #{wi.id}
+                  <span className="mt-0.5 shrink-0">
+                    <WorkItemTypeIcon type={wi.fields.workItemType} size="sm" />
                   </span>
-                  <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">
-                    {wi.fields.title}
-                  </span>
-                  <span
-                    className={clsx(
-                      'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium',
-                      getStatusColor(wi.fields.state),
-                    )}
-                  >
-                    {wi.fields.state}
-                  </span>
-                  {wi.fields.assignedTo && (
-                    <span className="text-ink-3 shrink-0 truncate text-[10px]">
-                      {wi.fields.assignedTo}
-                    </span>
-                  )}
-                  {unlinkingId === wi.id ? (
-                    <Loader2 className="text-ink-3 h-3 w-3 shrink-0 animate-spin" />
-                  ) : (
-                    <span className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
-                      <button
-                        onClick={(e) => handlePreview(e, wi)}
-                        className="text-ink-3 hover:text-ink-1 rounded p-0.5 transition-colors"
-                        title="Preview work item"
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="text-acc-ink shrink-0 text-xs font-medium">
+                        #{wi.id}
+                      </span>
+                      <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">
+                        {wi.fields.title}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex min-w-0 items-center gap-2">
+                      <span
+                        className={clsx(
+                          'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium',
+                          getStatusColor(wi.fields.state),
+                        )}
                       >
-                        <Eye className="h-3 w-3" />
-                      </button>
-                      <a
-                        href={wi.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-ink-3 hover:text-ink-1 rounded p-0.5 transition-colors"
-                        title="Open in Azure DevOps"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                      {onUnlink && (
-                        <button
-                          onClick={(e) => handleUnlink(e, wi.id)}
-                          className="text-ink-3 hover:text-status-fail rounded p-0.5 transition-colors"
-                          title="Unlink work item"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
+                        {wi.fields.state}
+                      </span>
+                      {wi.fields.assignedTo && (
+                        <span className="text-ink-3 max-w-28 min-w-0 truncate text-[10px]">
+                          {wi.fields.assignedTo}
+                        </span>
                       )}
-                    </span>
-                  )}
+                    </div>
+                  </div>
+                  <div className="mt-0.5 shrink-0">
+                    {unlinkingId === wi.id ? (
+                      <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />
+                    ) : (
+                      <span className="flex items-center gap-0.5">
+                        <a
+                          href={wi.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-ink-3 hover:text-ink-1 rounded p-0.5 transition-colors"
+                          title="Open in Azure DevOps"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                        {onUnlink && (
+                          <button
+                            onClick={(e) => handleUnlink(e, wi.id)}
+                            className="text-ink-3 hover:text-status-fail rounded p-0.5 transition-colors"
+                            title="Unlink work item"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -456,13 +464,15 @@ export function PrWorkItems({
             </span>
           ) : undefined
         }
-        size="lg"
-        contentClassName="min-h-0 overflow-y-auto p-4"
+        size="xl"
+        panelClassName="h-[85vh]"
+        contentClassName="flex min-h-0 flex-1 overflow-hidden p-4"
       >
         <WorkItemPreview
           workItem={previewItem}
           providerId={providerId}
           projectName={azureProjectName}
+          showCommentsAside
         />
       </Modal>
     </div>

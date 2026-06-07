@@ -51,6 +51,12 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:deleteGeneratedLogo', projectId, logoId),
     regenerateSummary: (projectId: string) =>
       ipcRenderer.invoke('projects:regenerateSummary', projectId),
+    getFeatureMap: (projectId: string) =>
+      ipcRenderer.invoke('projects:getFeatureMap', projectId),
+    createFeatureMapTask: (projectId: string) =>
+      ipcRenderer.invoke('projects:createFeatureMapTask', projectId),
+    saveFeatureMapFromTask: (stepId: string) =>
+      ipcRenderer.invoke('projects:saveFeatureMapFromTask', stepId),
     removeLogo: (projectId: string) =>
       ipcRenderer.invoke('projects:removeLogo', projectId),
     delete: (id: string) => ipcRenderer.invoke('projects:delete', id),
@@ -64,6 +70,10 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:getCurrentBranch', projectId),
     isGitRepository: (projectId: string) =>
       ipcRenderer.invoke('projects:isGitRepository', projectId),
+    getCommitIgnore: (projectId: string) =>
+      ipcRenderer.invoke('projects:getCommitIgnore', projectId),
+    updateCommitIgnore: (projectId: string, content: string) =>
+      ipcRenderer.invoke('projects:updateCommitIgnore', projectId, content),
     getDetected: () => ipcRenderer.invoke('projects:getDetected'),
     detectLogos: (projectPath: string) =>
       ipcRenderer.invoke('projects:detectLogos', projectPath),
@@ -217,8 +227,13 @@ contextBridge.exposeInMainWorld('api', {
       isDraft: boolean;
       deleteWorktree?: boolean;
     }) => ipcRenderer.invoke('tasks:createPullRequest', params),
-    createPrReview: (params: { projectId: string; pullRequestId: number }) =>
-      ipcRenderer.invoke('tasks:createPrReview', params),
+    createPrReview: (params: {
+      projectId: string;
+      pullRequestId: number;
+      agentBackend?: string | null;
+      modelPreference?: string | null;
+      thinkingEffort?: string | null;
+    }) => ipcRenderer.invoke('tasks:createPrReview', params),
   },
   steps: {
     findByTaskId: (taskId: string) =>
@@ -292,6 +307,12 @@ contextBridge.exposeInMainWorld('api', {
       projectName: string;
       workItemId: number;
     }) => ipcRenderer.invoke('azureDevOps:getWorkItemComments', params),
+    addWorkItemComment: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      text: string;
+    }) => ipcRenderer.invoke('azureDevOps:addWorkItemComment', params),
     getIterations: (params: { providerId: string; projectName: string }) =>
       ipcRenderer.invoke('azureDevOps:getIterations', params),
     createPullRequest: (params: {
@@ -417,6 +438,15 @@ contextBridge.exposeInMainWorld('api', {
       threadId: number;
       content: string;
     }) => ipcRenderer.invoke('azureDevOps:addThreadReply', params),
+    updateThreadComment: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      threadId: number;
+      commentId: number;
+      content: string;
+    }) => ipcRenderer.invoke('azureDevOps:updateThreadComment', params),
     updateThreadStatus: (params: {
       providerId: string;
       projectId: string;
@@ -425,6 +455,8 @@ contextBridge.exposeInMainWorld('api', {
       threadId: number;
       status: string;
     }) => ipcRenderer.invoke('azureDevOps:updateThreadStatus', params),
+    searchIdentities: (params: { providerId: string; query: string }) =>
+      ipcRenderer.invoke('azureDevOps:searchIdentities', params),
     fetchImageAsBase64: (params: { providerId: string; imageUrl: string }) =>
       ipcRenderer.invoke('azureDevOps:fetchImageAsBase64', params),
     getPullRequestPolicyEvaluations: (params: {
@@ -476,6 +508,23 @@ contextBridge.exposeInMainWorld('api', {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: unknown) =>
       ipcRenderer.invoke('settings:set', key, value),
+  },
+  backendConfig: {
+    getUserConfig: (
+      backend: import('@shared/agent-backend-types').AgentBackendType,
+    ) => ipcRenderer.invoke('backendConfig:getUserConfig', backend),
+    setUserConfig: (
+      backend: import('@shared/agent-backend-types').AgentBackendType,
+      content: string,
+    ) => ipcRenderer.invoke('backendConfig:setUserConfig', backend, content),
+  },
+  projectPromptPreface: {
+    get: (projectPath: string) =>
+      ipcRenderer.invoke('projectPromptPreface:get', projectPath),
+    set: (
+      projectPath: string,
+      value: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
+    ) => ipcRenderer.invoke('projectPromptPreface:set', projectPath, value),
   },
   globalPermissions: {
     get: () => ipcRenderer.invoke('globalPermissions:get'),
@@ -600,6 +649,8 @@ contextBridge.exposeInMainWorld('api', {
     revealMeeting: (
       meeting: import('@shared/calendar-types').UpcomingMeeting,
     ) => ipcRenderer.invoke('calendar:revealMeeting', meeting) as Promise<void>,
+    setIgnoredMeetingIds: (ids: string[]) =>
+      ipcRenderer.invoke('calendar:setIgnoredMeetingIds', ids) as Promise<void>,
   },
   agent: {
     start: (stepId: string) => ipcRenderer.invoke(AGENT_CHANNELS.START, stepId),

@@ -4,6 +4,17 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+import {
+  EMPTY_MENTION_OPTIONS,
+  MENTION_TEXTAREA_CLASS,
+  MentionTextarea,
+  type MentionOption,
+} from '@/common/ui/mention-textarea';
+import { MarkdownContent } from '@/features/agent/ui-markdown-content';
+import {
+  isVideoFile,
+  VideoGifConverter,
+} from '@/features/pull-request/ui-video-gif-converter';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import { formatLineRangeLabel } from '@/stores/utils-comment-store';
 import type { PromptImagePart } from '@shared/agent-backend-types';
@@ -24,6 +35,36 @@ export const COMMENT_ACCENT = {
   chipText: 'oklch(0.78 0.18 295)',
 };
 
+type InlineComposerImage = PromptImagePart & {
+  placeholderMarkdown?: string;
+};
+
+function imageDataUrl(image: PromptImagePart) {
+  return `data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`;
+}
+
+function placeholderPattern(placeholderMarkdown: string) {
+  const token = placeholderMarkdown.match(/jc-image:\/\/([^)]+)/)?.[1];
+  return token
+    ? new RegExp(`!\\[[^\\]]*\\]\\(jc-image:\\/\\/${token}\\)`, 'g')
+    : null;
+}
+
+function markdownWithLocalImages(body: string, images: InlineComposerImage[]) {
+  return images.reduce((current, image) => {
+    if (!image.placeholderMarkdown) return current;
+    const pattern = placeholderPattern(image.placeholderMarkdown);
+    if (!pattern) return current;
+    return current.replace(
+      pattern,
+      image.placeholderMarkdown.replace(
+        /\]\([^)]*\)$/,
+        `](${imageDataUrl(image)})`,
+      ),
+    );
+  }, body);
+}
+
 // ---------------------------------------------------------------------------
 // InlineCommentComposer — shared comment input form
 // ---------------------------------------------------------------------------
@@ -41,8 +82,11 @@ export function InlineCommentComposer({
   initialBody = '',
   initialImages = [],
   allowImages = true,
+  insertImagesInBody = false,
   isSubmitting = false,
   showCancel = true,
+  mentionOptions = EMPTY_MENTION_OPTIONS,
+  onSearchMentions,
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -66,15 +110,23 @@ export function InlineCommentComposer({
   initialImages?: PromptImagePart[];
   /** Whether users can attach images to the comment. */
   allowImages?: boolean;
+  /** Insert image markdown at the cursor instead of appending attachments. */
+  insertImagesInBody?: boolean;
   /** Whether submit is in progress. */
   isSubmitting?: boolean;
   /** Whether to show cancel action. */
   showCancel?: boolean;
+  /** People available for @ mention insertion. */
+  mentionOptions?: MentionOption[];
+  onSearchMentions?: (query: string) => Promise<MentionOption[]>;
 }) {
   const [body, setBody] = useState(initialBody);
-  const [images, setImages] = useState<PromptImagePart[]>(initialImages);
+  const [images, setImages] = useState<InlineComposerImage[]>(initialImages);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imagesRef = useRef<InlineComposerImage[]>(initialImages);
+  const imageTokenCounterRef = useRef(0);
   const bindingId = useId();
 
   useEffect(() => {
@@ -83,16 +135,62 @@ export function InlineCommentComposer({
 
   const lineLabel = formatLineRangeLabel(lineStart, lineEnd);
 
+  const insertTextAtCursor = useCallback((text: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      setBody((current) => `${current}${current ? '\n\n' : ''}${text}`);
+      return;
+    }
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    setBody(
+      (current) => `${current.slice(0, start)}${text}${current.slice(end)}`,
+    );
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const cursor = start + text.length;
+      textarea.setSelectionRange(cursor, cursor);
+    });
+  }, []);
+
   const handleImageAttach = useCallback(
     (image: PromptImagePart) => {
       if (!allowImages) return;
-      setImages((prev) => (prev.length < MAX_IMAGES ? [...prev, image] : prev));
+      if (imagesRef.current.length >= MAX_IMAGES) return;
+
+      let nextImage: InlineComposerImage = image;
+
+      if (insertImagesInBody) {
+        imageTokenCounterRef.current += 1;
+        const token = imageTokenCounterRef.current;
+        const extension = image.mimeType.split('/')[1] || 'png';
+        const fileName = image.filename || `image-${token}.${extension}`;
+        const safeAltText = fileName.replace(/[[\]()\\]/g, '_');
+        const placeholderMarkdown = `![${safeAltText}](jc-image://${token})`;
+
+        insertTextAtCursor(placeholderMarkdown);
+        nextImage = { ...image, placeholderMarkdown };
+      }
+
+      const nextImages = [...imagesRef.current, nextImage];
+      imagesRef.current = nextImages;
+      setImages(nextImages);
     },
-    [allowImages],
+    [allowImages, insertImagesInBody, insertTextAtCursor],
   );
 
   const handleImageRemove = useCallback((index: number) => {
-    setImages((prev) => prev.filter((_, i) => i !== index));
+    const image = imagesRef.current[index];
+    if (image?.placeholderMarkdown) {
+      setBody((current) =>
+        current.replace(image.placeholderMarkdown ?? '', ''),
+      );
+    }
+
+    const nextImages = imagesRef.current.filter((_, i) => i !== index);
+    imagesRef.current = nextImages;
+    setImages(nextImages);
   }, []);
 
   const handleSubmit = useCallback(() => {
@@ -107,12 +205,15 @@ export function InlineCommentComposer({
       if (!allowImages) return;
       const files = Array.from(e.clipboardData.files);
       const imageFiles = files.filter((f) => f.type.startsWith('image/'));
-      if (imageFiles.length === 0) return;
+      const nextVideoFile = files.find(isVideoFile);
+      if (imageFiles.length === 0 && !nextVideoFile) return;
       e.preventDefault();
       const allowed = MAX_IMAGES - images.length;
       for (const file of imageFiles.slice(0, allowed)) {
         void processImageFile(file, handleImageAttach);
       }
+      if (nextVideoFile && allowed > imageFiles.length)
+        setVideoFile(nextVideoFile);
     },
     [allowImages, images.length, handleImageAttach],
   );
@@ -123,10 +224,13 @@ export function InlineCommentComposer({
       e.preventDefault();
       const files = Array.from(e.dataTransfer.files);
       const imageFiles = files.filter((f) => f.type.startsWith('image/'));
+      const nextVideoFile = files.find(isVideoFile);
       const allowed = MAX_IMAGES - images.length;
       for (const file of imageFiles.slice(0, allowed)) {
         void processImageFile(file, handleImageAttach);
       }
+      if (nextVideoFile && allowed > imageFiles.length)
+        setVideoFile(nextVideoFile);
     },
     [allowImages, images.length, handleImageAttach],
   );
@@ -143,10 +247,14 @@ export function InlineCommentComposer({
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!allowImages) return;
       const files = Array.from(e.target.files ?? []);
+      const nextVideoFile = files.find(isVideoFile);
       const allowed = MAX_IMAGES - images.length;
-      for (const file of files.slice(0, allowed)) {
+      for (const file of files
+        .filter((f) => f.type.startsWith('image/'))
+        .slice(0, allowed)) {
         void processImageFile(file, handleImageAttach);
       }
+      if (nextVideoFile && allowed > 0) setVideoFile(nextVideoFile);
       e.target.value = '';
     },
     [allowImages, images.length, handleImageAttach],
@@ -171,6 +279,7 @@ export function InlineCommentComposer({
 
   const isDisabled =
     isSubmitting || (!body.trim() && images.length === 0 && !canSubmitEmpty);
+  const previewMarkdown = markdownWithLocalImages(body, images);
 
   return (
     <div className="flex flex-col gap-2">
@@ -185,17 +294,33 @@ export function InlineCommentComposer({
 
       {renderBeforeTextarea}
 
-      <textarea
+      <MentionTextarea
         ref={textareaRef}
-        className="bg-bg-2 text-ink-1 border-stroke-1 min-h-[60px] w-full resize-y rounded border px-2 py-1.5 text-xs focus:outline-none"
+        className={MENTION_TEXTAREA_CLASS}
         value={body}
-        onChange={(e) => setBody(e.target.value)}
+        onChange={setBody}
+        mentionOptions={mentionOptions}
+        onSearchMentions={onSearchMentions}
         placeholder={placeholder}
         onPaste={handlePaste}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         disabled={isSubmitting}
+        minHeight={60}
       />
+
+      {previewMarkdown.trim() && (
+        <div className="border-glass-border/60 bg-bg-1/60 rounded border px-2.5 py-2">
+          <div className="text-ink-4 mb-1 text-[10px] font-medium tracking-wide uppercase">
+            Preview
+          </div>
+          <MarkdownContent
+            content={previewMarkdown}
+            imageClassName="max-h-64 object-contain"
+            enableImageModal
+          />
+        </div>
+      )}
 
       {images.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -247,7 +372,7 @@ export function InlineCommentComposer({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               multiple
               className="hidden"
               onChange={handleFileSelect}
@@ -266,6 +391,11 @@ export function InlineCommentComposer({
         )}
         {renderAfterActions}
       </div>
+      <VideoGifConverter
+        file={videoFile}
+        onAttach={handleImageAttach}
+        onClose={() => setVideoFile(null)}
+      />
     </div>
   );
 }
@@ -310,6 +440,7 @@ export function InlineCommentBubble({
   const [editBody, setEditBody] = useState(body);
   const [editImages, setEditImages] =
     useState<PromptImagePart[]>(currentImages);
+  const [editVideoFile, setEditVideoFile] = useState<File | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const editFileInputRef = useRef<HTMLInputElement>(null);
   const bindingId = useId();
@@ -336,12 +467,15 @@ export function InlineCommentBubble({
     (e: React.ClipboardEvent) => {
       const files = Array.from(e.clipboardData.files);
       const imageFiles = files.filter((f) => f.type.startsWith('image/'));
-      if (imageFiles.length === 0) return;
+      const nextVideoFile = files.find(isVideoFile);
+      if (imageFiles.length === 0 && !nextVideoFile) return;
       e.preventDefault();
       const allowed = MAX_IMAGES - editImages.length;
       for (const file of imageFiles.slice(0, allowed)) {
         void processImageFile(file, handleEditImageAttach);
       }
+      if (nextVideoFile && allowed > imageFiles.length)
+        setEditVideoFile(nextVideoFile);
     },
     [editImages.length, handleEditImageAttach],
   );
@@ -351,10 +485,13 @@ export function InlineCommentBubble({
       e.preventDefault();
       const files = Array.from(e.dataTransfer.files);
       const imageFiles = files.filter((f) => f.type.startsWith('image/'));
+      const nextVideoFile = files.find(isVideoFile);
       const allowed = MAX_IMAGES - editImages.length;
       for (const file of imageFiles.slice(0, allowed)) {
         void processImageFile(file, handleEditImageAttach);
       }
+      if (nextVideoFile && allowed > imageFiles.length)
+        setEditVideoFile(nextVideoFile);
     },
     [editImages.length, handleEditImageAttach],
   );
@@ -366,10 +503,14 @@ export function InlineCommentBubble({
   const handleEditFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files ?? []);
+      const nextVideoFile = files.find(isVideoFile);
       const allowed = MAX_IMAGES - editImages.length;
-      for (const file of files.slice(0, allowed)) {
+      for (const file of files
+        .filter((f) => f.type.startsWith('image/'))
+        .slice(0, allowed)) {
         void processImageFile(file, handleEditImageAttach);
       }
+      if (nextVideoFile && allowed > 0) setEditVideoFile(nextVideoFile);
       e.target.value = '';
     },
     [editImages.length, handleEditImageAttach],
@@ -390,6 +531,8 @@ export function InlineCommentBubble({
     onEdit?.(trimmed, editImages);
     setIsEditing(false);
   }, [editBody, editImages, body, currentImages, onEdit, cancelEditing]);
+
+  const editPreviewMarkdown = markdownWithLocalImages(editBody, editImages);
 
   // Focus textarea when entering edit mode
   useEffect(() => {
@@ -474,6 +617,18 @@ export function InlineCommentBubble({
               onDrop={handleEditDrop}
               onDragOver={handleEditDragOver}
             />
+            {editPreviewMarkdown.trim() && (
+              <div className="border-glass-border/60 bg-bg-1/60 rounded border px-2.5 py-2">
+                <div className="text-ink-4 mb-1 text-[10px] font-medium tracking-wide uppercase">
+                  Preview
+                </div>
+                <MarkdownContent
+                  content={editPreviewMarkdown}
+                  imageClassName="max-h-64 object-contain"
+                  enableImageModal
+                />
+              </div>
+            )}
             {editImages.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {editImages.map((img, index) => (
@@ -530,7 +685,7 @@ export function InlineCommentBubble({
               <input
                 ref={editFileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/*,video/*"
                 multiple
                 className="hidden"
                 onChange={handleEditFileSelect}
@@ -570,6 +725,11 @@ export function InlineCommentBubble({
           </>
         )}
         {renderFooter}
+        <VideoGifConverter
+          file={editVideoFile}
+          onAttach={handleEditImageAttach}
+          onClose={() => setEditVideoFile(null)}
+        />
       </div>
     </div>
   );

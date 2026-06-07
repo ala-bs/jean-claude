@@ -1,24 +1,24 @@
 import clsx from 'clsx';
-import { Search, Trash2, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { RotateCw, Search, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
+import { Kbd } from '@/common/ui/kbd';
 import { Separator } from '@/common/ui/separator';
+import { ConfirmRunModal } from '@/features/agent/ui-run-button/confirm-run-modal';
+import { KillPortsModal } from '@/features/agent/ui-run-button/kill-ports-modal';
 import { InteractiveLog } from '@/features/common/interactive-log';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProjectCommands } from '@/hooks/use-project-commands';
-import { api } from '@/lib/api';
+import { useRunCommands } from '@/hooks/use-run-commands';
 import { useCommandLogsPaneWidth } from '@/stores/navigation';
 import {
   type RunCommandLogs,
   useTaskMessagesStore,
 } from '@/stores/task-messages';
-import {
-  getRunCommandDisplayName,
-  type RunStatus,
-} from '@shared/run-command-types';
+import { getRunCommandDisplayName } from '@shared/run-command-types';
 
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
 
@@ -27,63 +27,43 @@ const EMPTY_RUN_COMMAND_LOGS: RunCommandLogs = {};
 export function CommandLogsPane({
   taskId,
   projectId,
+  workingDir,
   selectedCommandId,
   onSelectCommand,
   onClose,
 }: {
   taskId: string;
   projectId: string;
+  workingDir: string;
   selectedCommandId: string | null;
   onSelectCommand: (commandId: string | null) => void;
   onClose: () => void;
 }) {
   const { data: commands = [] } = useProjectCommands(projectId);
+  const {
+    status,
+    isCommandStarting,
+    isStartingAnyCommand,
+    startCommand,
+    portsInUseError,
+    confirmKillPorts,
+    dismissPortsError,
+  } = useRunCommands({ taskId, projectId, workingDir });
   const runCommandLogs =
     useTaskMessagesStore((state) => state.runCommandLogs[taskId]) ??
     EMPTY_RUN_COMMAND_LOGS;
   const clearRunCommandLogs = useTaskMessagesStore(
     (state) => state.clearRunCommandLogs,
   );
-  const [status, setStatus] = useState<RunStatus | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    commandId: string;
+    label: string;
+    message: string | null;
+  } | null>(null);
   const paneRef = useRef<HTMLDivElement>(null);
+  const restartInFlightRef = useRef(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    api.runCommands.getStatus(taskId).then(setStatus);
-
-    const unsubscribe = api.runCommands.onStatusChange(
-      (changedTaskId, nextStatus) => {
-        if (changedTaskId === taskId) {
-          setStatus(nextStatus);
-        }
-      },
-    );
-
-    return unsubscribe;
-  }, [taskId]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const pane = paneRef.current;
-      const target = event.target;
-      if (!(target instanceof Node) || !pane?.contains(target)) return;
-
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        !event.shiftKey &&
-        !event.altKey
-      ) {
-        if (event.key.toLowerCase() !== 'f') return;
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   const runningCommandIds = useMemo(
     () =>
@@ -135,6 +115,74 @@ export function CommandLogsPane({
   const isActiveRunning = !!(
     activeCommandId && runningCommandIds.has(activeCommandId)
   );
+  const isActiveStarting = !!(
+    activeCommandId && isCommandStarting(activeCommandId)
+  );
+
+  const restartCommand = useCallback(
+    async (commandId: string) => {
+      if (restartInFlightRef.current) return;
+      restartInFlightRef.current = true;
+      try {
+        await startCommand(commandId);
+      } finally {
+        restartInFlightRef.current = false;
+      }
+    },
+    [startCommand],
+  );
+
+  const requestRestartActiveCommand = useCallback(() => {
+    if (!activeCommandId || isActiveStarting || restartInFlightRef.current) {
+      return;
+    }
+
+    const command = commands.find((entry) => entry.id === activeCommandId);
+    if (command?.confirmBeforeRun) {
+      setPendingConfirm({
+        commandId: activeCommandId,
+        label: getRunCommandDisplayName(command),
+        message: command.confirmMessage,
+      });
+      return;
+    }
+
+    void restartCommand(activeCommandId);
+  }, [activeCommandId, commands, isActiveStarting, restartCommand]);
+
+  const handleConfirmRestart = useCallback(() => {
+    if (!pendingConfirm) return;
+
+    const commandId = pendingConfirm.commandId;
+    setPendingConfirm(null);
+    void restartCommand(commandId);
+  }, [pendingConfirm, restartCommand]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const pane = paneRef.current;
+      const target = event.target;
+      if (!(target instanceof Node) || !pane?.contains(target)) return;
+
+      if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+        const key = event.key.toLowerCase();
+        if (key === 'f' && !event.shiftKey) {
+          event.preventDefault();
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+          return;
+        }
+
+        if (key === 'u' && event.shiftKey && !event.repeat) {
+          event.preventDefault();
+          requestRestartActiveCommand();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [requestRestartActiveCommand]);
   const filteredActiveLines = useMemo(() => {
     if (!activeLog) return [];
     if (!normalizedSearchQuery) return activeLog.lines;
@@ -179,6 +227,19 @@ export function CommandLogsPane({
       >
         <h3 className="text-ink-1 text-sm font-medium">Command Logs</h3>
         <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            onClick={requestRestartActiveCommand}
+            size="xs"
+            variant="secondary"
+            icon={<RotateCw />}
+            loading={isActiveStarting}
+            disabled={!activeCommandId}
+            aria-label="Restart command"
+            title="Restart command (⌘⇧U)"
+          >
+            <Kbd shortcut="cmd+shift+u" />
+          </Button>
           <IconButton
             onClick={() => {
               if (activeCommandId) clearRunCommandLogs(taskId, activeCommandId);
@@ -252,6 +313,24 @@ export function CommandLogsPane({
             ? `No command logs match "${searchQuery.trim()}".`
             : 'Run a command to see logs.'}
         </div>
+      )}
+
+      {portsInUseError && (
+        <KillPortsModal
+          error={portsInUseError}
+          onConfirm={confirmKillPorts}
+          onCancel={dismissPortsError}
+          isLoading={isStartingAnyCommand}
+        />
+      )}
+
+      {pendingConfirm && (
+        <ConfirmRunModal
+          commandName={pendingConfirm.label}
+          message={pendingConfirm.message}
+          onConfirm={handleConfirmRestart}
+          onCancel={() => setPendingConfirm(null)}
+        />
       )}
     </div>
   );

@@ -22,6 +22,7 @@ import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProject } from '@/hooks/use-projects';
 import {
   useRelatedTestCases,
+  useAddWorkItemComment,
   useUpdateWorkItemState,
   useWorkItemById,
   useWorkItemComments,
@@ -183,6 +184,7 @@ export function WorkItemDetails({
       projectName,
       workItemId,
     });
+  const addComment = useAddWorkItemComment();
   const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
   const [activeTab, setActiveTab] = useState<DetailsTab>('comments');
 
@@ -226,7 +228,8 @@ export function WorkItemDetails({
   }
 
   const { fields } = workItem;
-  const description = fields.description || fields.reproSteps;
+  const hasReproSteps = fields.workItemType === 'Bug' && !!fields.reproSteps;
+  const hasContent = !!fields.description || hasReproSteps;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -290,14 +293,33 @@ export function WorkItemDetails({
         )}
       >
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-4">
-          {description ? (
-            <AzureHtmlContent
-              html={description}
-              providerId={providerId ?? undefined}
-              className="text-ink-1 text-sm"
-              imageClassName="max-h-96 w-auto object-contain"
-              enableImageModal
-            />
+          {hasContent ? (
+            <div>
+              {fields.description && (
+                <AzureHtmlContent
+                  html={fields.description}
+                  providerId={providerId ?? undefined}
+                  className="text-ink-1 text-sm"
+                  imageClassName="max-h-96 w-auto object-contain"
+                  enableImageModal
+                />
+              )}
+
+              {hasReproSteps && (
+                <div className={fields.description ? 'mt-6' : undefined}>
+                  <h2 className="text-ink-0 mb-2 text-sm font-semibold">
+                    Repro Steps
+                  </h2>
+                  <AzureHtmlContent
+                    html={fields.reproSteps!}
+                    providerId={providerId ?? undefined}
+                    className="text-ink-1 text-sm"
+                    imageClassName="max-h-96 w-auto object-contain"
+                    enableImageModal
+                  />
+                </div>
+              )}
+            </div>
           ) : (
             <p className="text-ink-3 text-sm italic">
               No description provided.
@@ -347,6 +369,18 @@ export function WorkItemDetails({
                 providerId={providerId ?? undefined}
                 emptyMessage="No comments on this work item yet."
                 hideHeader
+                isAddingComment={addComment.isPending}
+                onAddComment={
+                  providerId && projectName
+                    ? (text) =>
+                        addComment.mutateAsync({
+                          providerId,
+                          projectName,
+                          workItemId,
+                          text,
+                        })
+                    : undefined
+                }
               />
             )}
 

@@ -3,8 +3,11 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Pencil,
+  File,
+  FilePenLine,
+  Globe,
   Plus,
+  Search,
   Terminal,
   Trash2,
   X,
@@ -12,6 +15,7 @@ import {
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
 import { Select } from '@/common/ui/select';
@@ -59,6 +63,12 @@ const ACTION_OPTIONS = [
   { value: 'ask' as const, label: 'Ask' },
   { value: 'deny' as const, label: 'Deny' },
 ];
+
+const ACTION_ORDER = ACTION_OPTIONS.map((option) => option.value);
+
+function nextAction(action: PermissionAction): PermissionAction {
+  return ACTION_ORDER[(ACTION_ORDER.indexOf(action) + 1) % ACTION_ORDER.length];
+}
 
 const TOOL_META: Record<string, { label: string; description: string }> =
   Object.fromEntries(
@@ -130,6 +140,50 @@ const TOOL_GUIDANCE: Record<
     hint: 'Allow or deny skill execution. No pattern needed.',
     examples: [],
   },
+};
+
+const TOOL_SAMPLE_VALUES: Record<string, string[]> = {
+  bash: [
+    'git status',
+    'git status --short',
+    'git diff src/app.ts',
+    'echo "hello world"',
+    'echo arg1 arg2 arg3',
+    'pnpm install',
+    'pnpm lint --fix',
+    'npm run build',
+    'rm -rf node_modules',
+  ],
+  read: [
+    'package.json',
+    'src/app.ts',
+    'src/components/button.tsx',
+    'src/.env',
+    '/etc/hosts',
+    'README.md',
+  ],
+  edit: [
+    'src/app.ts',
+    'src/components/button.tsx',
+    'config/app.json',
+    'package.json',
+    'README.md',
+  ],
+  write: [
+    'src/app.ts',
+    'dist/index.js',
+    'config/app.json',
+    'tmp/output.txt',
+    'README.md',
+  ],
+  glob: ['**/*.ts', 'src/**/*.tsx', 'src/**', '*.json', 'README.md'],
+  grep: ['TODO', 'TODO|FIXME', 'import React from', 'function handleSave'],
+  webfetch: [
+    'https://docs.example.com/api',
+    'https://api.github.com/repos',
+    'https://example.com/login',
+  ],
+  websearch: ['react hooks', 'typescript generics', 'electron permissions'],
 };
 
 // ---------------------------------------------------------------------------
@@ -209,8 +263,131 @@ function groupPermissions(scope: PermissionScope): ToolGroup[] {
       tool,
       label: TOOL_META[tool]?.label ?? tool,
       description: TOOL_META[tool]?.description ?? '',
-      rules,
+      rules: [...rules].sort((a, b) =>
+        (a.pattern ?? '').localeCompare(b.pattern ?? ''),
+      ),
     }));
+}
+
+function globLikeMatches(
+  pattern: string,
+  value: string,
+  isBash: boolean,
+): boolean {
+  if (pattern === '*') return true;
+  const regex = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*+/g, (stars) => (isBash || stars.length > 1 ? '.*' : '[^/]*'))
+    .replace(/\?/g, isBash ? '.' : '[^/]')
+    .replace(/(\.\*)+/g, '.*');
+  return new RegExp(`^${regex}$`).test(value);
+}
+
+function materializePattern(tool: string, pattern: string): string {
+  const fill = tool === 'bash' ? 'hello' : 'example';
+  return pattern
+    .replace(/\*+/g, fill)
+    .replace(/\?/g, 'x')
+    .replace(/\{subpath\}/g, 'src/app.ts');
+}
+
+function getLiteralPrefix(pattern: string): string {
+  const wildcardIndex = pattern.search(/[?*{]/);
+  return wildcardIndex === -1 ? pattern : pattern.slice(0, wildcardIndex);
+}
+
+function getBashCommand(value: string): string {
+  return value.trim().split(/\s+/)[0] || 'command';
+}
+
+function buildNearMatchCandidates(tool: string, pattern: string): string[] {
+  const prefix = getLiteralPrefix(pattern);
+  if (tool !== 'bash') {
+    return [
+      materializePattern(tool, pattern),
+      `${prefix}example`,
+      `${prefix}sample`,
+    ];
+  }
+
+  const command = getBashCommand(prefix);
+  if (prefix.endsWith(' ')) {
+    return [
+      `${prefix}hello`,
+      `${prefix}"hello world"`,
+      `${prefix}arg1 arg2 arg3`,
+      `${prefix}src/app.ts`,
+      command === 'cd' ? `${prefix}..` : `${prefix}--help`,
+    ];
+  }
+
+  return [
+    materializePattern(tool, pattern),
+    `${prefix} --help`,
+    `${prefix} "hello world"`,
+    `${prefix} arg1 arg2 arg3`,
+    `${prefix} src/app.ts`,
+  ];
+}
+
+function buildNearMissCandidates(tool: string, pattern: string): string[] {
+  const prefix = getLiteralPrefix(pattern);
+  if (tool !== 'bash') {
+    return [
+      prefix || 'unmatched-example',
+      `not-${materializePattern(tool, pattern)}`,
+      `${prefix}other/example`,
+    ];
+  }
+
+  const command = getBashCommand(prefix);
+  if (prefix.endsWith(' ')) {
+    const bareCommand = prefix.trim();
+    return [bareCommand, `${bareCommand}foo`, `${command}-other hello`];
+  }
+
+  const stem = prefix.trim();
+  return [command, `${stem}x`, `${command} other`];
+}
+
+function buildPatternExamples(tool: string, pattern: string) {
+  const trimmed = pattern.trim();
+  if (!trimmed || PATTERNLESS_TOOLS.has(tool)) {
+    return { matches: [], misses: [] };
+  }
+
+  const isBash = tool === 'bash';
+  const generated = materializePattern(tool, trimmed);
+  const samples =
+    TOOL_SAMPLE_VALUES[tool] ?? TOOL_GUIDANCE[tool]?.examples ?? [];
+  const hasWildcard = /[*?{]/.test(trimmed);
+  const candidates = Array.from(
+    new Set([
+      ...buildNearMatchCandidates(tool, trimmed),
+      generated,
+      ...(hasWildcard ? [] : [trimmed]),
+      ...samples,
+      ...(TOOL_GUIDANCE[tool]?.examples ?? []),
+    ]),
+  );
+  const matches = candidates
+    .filter((candidate) => globLikeMatches(trimmed, candidate, isBash))
+    .slice(0, 4);
+
+  const missCandidates = Array.from(
+    new Set([
+      ...buildNearMissCandidates(tool, trimmed),
+      ...samples,
+      `not-${generated}`,
+      `${generated}-extra`,
+      isBash ? 'rm -rf node_modules' : 'unmatched-example',
+    ]),
+  );
+  const misses = missCandidates
+    .filter((candidate) => !globLikeMatches(trimmed, candidate, isBash))
+    .slice(0, 4);
+
+  return { matches, misses };
 }
 
 // ---------------------------------------------------------------------------
@@ -244,31 +421,400 @@ const FALLBACK_STYLE = {
   dot: 'bg-bg-2',
 };
 
-function ActionBadge({ action }: { action: PermissionAction }) {
-  const style = ACTION_STYLES[action] ?? FALLBACK_STYLE;
+const ACTION_GLOW: Record<PermissionAction, string> = {
+  allow: 'rgba(84, 211, 151, 0.65)',
+  ask: 'rgba(236, 177, 74, 0.65)',
+  deny: 'rgba(243, 103, 79, 0.65)',
+};
+
+const ACTION_CHIP_CLASSES: Record<PermissionAction, string> = {
+  allow:
+    'border-emerald-400/30 bg-emerald-400/12 shadow-[inset_0_0_0_1px_rgba(84,211,151,0.08),0_0_18px_-10px_rgba(84,211,151,0.9)]',
+  ask: 'border-amber-400/35 bg-amber-400/12 shadow-[inset_0_0_0_1px_rgba(236,177,74,0.08),0_0_18px_-10px_rgba(236,177,74,0.9)]',
+  deny: 'border-red-400/35 bg-red-400/12 shadow-[inset_0_0_0_1px_rgba(243,103,79,0.08),0_0_18px_-10px_rgba(243,103,79,0.9)]',
+};
+
+function getActionStyle(action: PermissionAction) {
+  return ACTION_STYLES[action] ?? FALLBACK_STYLE;
+}
+
+function ActionDot({
+  action,
+  size = 'sm',
+  glow = false,
+}: {
+  action: PermissionAction;
+  size?: 'xs' | 'sm';
+  glow?: boolean;
+}) {
+  const style = getActionStyle(action);
   return (
     <span
       className={clsx(
-        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase',
-        style.bg,
-        style.text,
+        'shrink-0 rounded-full',
+        size === 'xs' ? 'h-1.5 w-1.5' : 'h-[9px] w-[9px]',
+        style.dot,
       )}
-    >
-      <span className={clsx('h-1.5 w-1.5 rounded-full', style.dot)} />
-      {action}
+      style={glow ? { boxShadow: `0 0 6px ${ACTION_GLOW[action]}` } : undefined}
+    />
+  );
+}
+
+function ActionSegment({
+  value,
+  onChange,
+}: {
+  value: PermissionAction;
+  onChange: (action: PermissionAction) => void;
+}) {
+  return (
+    <div className="border-glass-border/60 bg-bg-1/60 inline-flex rounded-lg border p-0.5">
+      {ACTION_OPTIONS.map((option) => {
+        const selected = value === option.value;
+        const style = getActionStyle(option.value);
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            aria-pressed={selected}
+            className={clsx(
+              'inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors',
+              selected
+                ? clsx('bg-bg-3 text-ink-1 shadow-sm', style.text)
+                : 'text-ink-3 hover:text-ink-1',
+            )}
+          >
+            <ActionDot action={option.value} />
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DistributionBar({ rules }: { rules: FlatRule[] }) {
+  const counts = useMemo(
+    () =>
+      rules.reduce<Record<PermissionAction, number>>(
+        (acc, rule) => {
+          acc[rule.action] += 1;
+          return acc;
+        },
+        { allow: 0, ask: 0, deny: 0 },
+      ),
+    [rules],
+  );
+  const total = rules.length || 1;
+
+  return (
+    <span className="bg-glass-medium/40 inline-flex h-1 w-14 overflow-hidden rounded-full">
+      {ACTION_OPTIONS.map((option) => {
+        const width = (counts[option.value] / total) * 100;
+        return width > 0 ? (
+          <span
+            key={option.value}
+            className={getActionStyle(option.value).dot}
+            style={{ width: `${width}%` }}
+          />
+        ) : null;
+      })}
     </span>
   );
 }
 
-function RuleRow({
+function ToolIcon({ tool }: { tool: string }) {
+  const className = 'text-ink-3 h-3.5 w-3.5 shrink-0';
+  switch (tool) {
+    case 'read':
+      return <File className={className} />;
+    case 'edit':
+    case 'write':
+      return <FilePenLine className={className} />;
+    case 'webfetch':
+    case 'websearch':
+      return <Globe className={className} />;
+    default:
+      return <Terminal className={className} />;
+  }
+}
+
+function PatternMatchPreview({
+  tool,
+  pattern,
+  compact = false,
+}: {
+  tool: string;
+  pattern: string;
+  compact?: boolean;
+}) {
+  const { matches, misses } = useMemo(
+    () => buildPatternExamples(tool, pattern),
+    [tool, pattern],
+  );
+
+  if (matches.length === 0 && misses.length === 0) return null;
+
+  return (
+    <div
+      className={clsx(
+        'text-[11px]',
+        compact
+          ? 'bg-bg-3/95 absolute top-full left-0 z-30 mt-1 w-max max-w-[min(520px,calc(100vw-2rem))] rounded-lg border border-white/10 p-2 shadow-xl'
+          : 'border-glass-border/50 bg-bg-1/35 mt-2 rounded-lg border p-2',
+      )}
+    >
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="min-w-0">
+          <div className="text-status-done mb-1 font-medium">Matches</div>
+          <div className="flex flex-wrap gap-1">
+            {matches.length > 0 ? (
+              matches.map((example) => (
+                <span
+                  key={example}
+                  className="bg-status-done/10 text-status-done rounded px-1.5 py-0.5 font-mono"
+                >
+                  {example}
+                </span>
+              ))
+            ) : (
+              <span className="text-ink-4">No sample matches</span>
+            )}
+          </div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-status-fail mb-1 font-medium">Misses</div>
+          <div className="flex flex-wrap gap-1">
+            {misses.length > 0 ? (
+              misses.map((example) => (
+                <span
+                  key={example}
+                  className="bg-status-fail/10 text-status-fail rounded px-1.5 py-0.5 font-mono"
+                >
+                  {example}
+                </span>
+              ))
+            ) : (
+              <span className="text-ink-4">Nothing, matches all samples</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InlineRuleEditor({
+  tool,
+  initialPattern = '',
+  initialAction = 'allow',
+  onCommit,
+  onCancel,
+  isBusy,
+}: {
+  tool: string;
+  initialPattern?: string;
+  initialAction?: PermissionAction;
+  onCommit: (pattern: string | null, action: PermissionAction) => void;
+  onCancel: () => void;
+  isBusy: boolean;
+}) {
+  const [editPattern, setEditPattern] = useState(initialPattern);
+  const [editAction, setEditAction] = useState<PermissionAction>(initialAction);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const hasPattern = !PATTERNLESS_TOOLS.has(tool);
+
+  useRegisterKeyboardBindings('permissions-inline-rule-editor', {
+    escape: () => {
+      onCancel();
+      return true;
+    },
+  });
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      onCancel();
+    };
+
+    window.addEventListener('keydown', handleEscape, true);
+    return () => window.removeEventListener('keydown', handleEscape, true);
+  }, [onCancel]);
+
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, []);
+
+  const commitEdit = useCallback(() => {
+    const trimmed = editPattern.trim();
+    onCommit(hasPattern ? trimmed || null : null, editAction);
+  }, [editPattern, editAction, hasPattern, onCommit]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        commitEdit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      }
+    },
+    [commitEdit, onCancel],
+  );
+
+  return (
+    <span className="relative inline-flex">
+      <span
+        className={clsx(
+          'inline-flex items-center gap-0.5 rounded-lg border py-0.5 pr-1 pl-0.5 font-mono text-[12.5px] leading-[1.3]',
+          ACTION_CHIP_CLASSES[editAction],
+        )}
+      >
+        <button
+          type="button"
+          onClick={() => setEditAction(nextAction(editAction))}
+          className="inline-flex h-4 w-4 items-center justify-center rounded-md transition-transform hover:scale-110"
+          title="Change action"
+        >
+          <ActionDot action={editAction} glow />
+        </button>
+        {hasPattern ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={editPattern}
+            onChange={(e) => setEditPattern(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onBlur={onCancel}
+            placeholder={TOOL_GUIDANCE[tool]?.placeholder ?? 'pattern'}
+            className="text-ink-1 placeholder:text-ink-4 w-36 bg-transparent px-0.5 font-mono outline-none"
+          />
+        ) : (
+          <span className="text-ink-2 px-1 text-xs italic">All operations</span>
+        )}
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={commitEdit}
+          disabled={isBusy}
+          className="rounded px-1 font-mono text-[10px] font-semibold opacity-80 transition-colors hover:bg-black/20 disabled:opacity-50"
+          aria-label="Save permission rule"
+        >
+          ↵
+        </button>
+        <Button
+          type="button"
+          variant="unstyled"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onCancel}
+          className="text-ink-3 hover:text-ink-1 hover:bg-glass-medium rounded p-1"
+          aria-label="Cancel permission rule"
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </span>
+      {hasPattern && (
+        <PatternMatchPreview tool={tool} pattern={editPattern} compact />
+      )}
+    </span>
+  );
+}
+
+function RuleActionMenu({
   rule,
-  isLast,
+  onAction,
+  onRemove,
+  onClose,
+  isBusy,
+}: {
+  rule: FlatRule;
+  onAction: (action: PermissionAction) => void;
+  onRemove: () => void;
+  onClose: () => void;
+  isBusy: boolean;
+}) {
+  return (
+    <div className="bg-bg-3 absolute top-full left-0 z-20 mt-1 min-w-[210px] rounded-[10px] border border-white/10 p-1 shadow-[0_16px_40px_-12px_rgba(0,0,0,0.7),0_0_0_1px_rgba(0,0,0,0.4)]">
+      <div className="text-ink-4 px-2 pt-1 pb-0.5 text-[9.5px] font-semibold tracking-[0.07em] uppercase">
+        Action
+      </div>
+      {ACTION_OPTIONS.map((option) => {
+        const selected = rule.action === option.value;
+        const style = getActionStyle(option.value);
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => {
+              onAction(option.value);
+              onClose();
+            }}
+            disabled={isBusy}
+            className="hover:bg-bg-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            <ActionDot action={option.value} glow />
+            <span className="min-w-0 flex-1 whitespace-nowrap">
+              <span className="text-ink-1">
+                {option.label}
+                <span className="text-ink-4 text-[11px] font-normal">
+                  {' · '}
+                  {option.value === 'allow'
+                    ? 'Run without asking'
+                    : option.value === 'ask'
+                      ? 'Confirm each time'
+                      : 'Always block'}
+                </span>
+              </span>
+            </span>
+            <Check
+              className={clsx(
+                'h-3.5 w-3.5',
+                selected ? style.text : 'text-transparent',
+              )}
+            />
+          </button>
+        );
+      })}
+      <div className="bg-glass-border/60 mx-1 my-1 h-px" />
+      <button
+        type="button"
+        onClick={() => {
+          onRemove();
+          onClose();
+        }}
+        disabled={isBusy}
+        className="text-status-fail hover:bg-status-fail/10 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium transition-colors disabled:opacity-50"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        Delete rule
+      </button>
+    </div>
+  );
+}
+
+function RuleChip({
+  rule,
+  isMenuOpen,
+  onOpenMenu,
+  onCloseMenu,
   onRemove,
   onEdit,
   isBusy,
 }: {
   rule: FlatRule;
-  isLast: boolean;
+  isMenuOpen: boolean;
+  onOpenMenu: () => void;
+  onCloseMenu: () => void;
   onRemove: () => void;
   onEdit: (update: {
     pattern: string | null;
@@ -277,143 +823,104 @@ function RuleRow({
   isBusy: boolean;
 }) {
   const [editing, setEditing] = useState(false);
-  const [editPattern, setEditPattern] = useState(rule.pattern ?? '');
-  const [editAction, setEditAction] = useState<PermissionAction>(rule.action);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const hasPattern = !PATTERNLESS_TOOLS.has(rule.tool);
-
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editing]);
-
-  const startEdit = useCallback(() => {
-    setEditPattern(rule.pattern ?? '');
-    setEditAction(rule.action);
-    setEditing(true);
-  }, [rule.pattern, rule.action]);
-
-  const cancelEdit = useCallback(() => {
-    setEditing(false);
-  }, []);
-
-  const commitEdit = useCallback(() => {
-    const trimmed = editPattern.trim();
-    const newPattern = hasPattern ? trimmed || null : null;
-    if (newPattern !== rule.pattern || editAction !== rule.action) {
-      onEdit({ pattern: newPattern, action: editAction });
-    }
-    setEditing(false);
-  }, [editPattern, editAction, hasPattern, rule.pattern, rule.action, onEdit]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        commitEdit();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelEdit();
-      }
-    },
-    [commitEdit, cancelEdit],
-  );
+  const style = getActionStyle(rule.action);
+  const displayPattern = rule.pattern ?? '*';
 
   if (editing) {
     return (
-      <div
-        className={clsx(
-          'bg-bg-1/50 flex items-center gap-2 px-3 py-2',
-          !isLast && 'border-glass-border/20 border-b',
-        )}
-      >
-        {hasPattern ? (
-          <input
-            ref={inputRef}
-            type="text"
-            value={editPattern}
-            onChange={(e) => setEditPattern(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={TOOL_GUIDANCE[rule.tool]?.placeholder ?? ''}
-            className="border-glass-border text-ink-1 focus:border-acc bg-bg-1 min-w-0 flex-1 rounded border px-2 py-1 text-xs outline-none"
-          />
-        ) : (
-          <span className="text-ink-3 min-w-0 flex-1 text-xs italic">
-            All operations
-          </span>
-        )}
-
-        <Select
-          value={editAction}
-          options={ACTION_OPTIONS}
-          onChange={(v: string) => setEditAction(v as PermissionAction)}
-          label="Action"
-        />
-
-        <Button
-          onClick={commitEdit}
-          disabled={isBusy}
-          className="text-status-done hover:text-status-done hover:bg-glass-medium rounded p-1 transition-colors"
-          aria-label="Save changes"
-        >
-          <Check className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          onClick={cancelEdit}
-          className="text-ink-3 hover:text-ink-1 hover:bg-glass-medium rounded p-1 transition-colors"
-          aria-label="Cancel editing"
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+      <InlineRuleEditor
+        tool={rule.tool}
+        initialPattern={displayPattern}
+        initialAction={rule.action}
+        onCommit={(pattern, action) => {
+          onEdit({
+            pattern: rule.pattern === null && pattern === '*' ? null : pattern,
+            action,
+          });
+          setEditing(false);
+        }}
+        onCancel={() => setEditing(false)}
+        isBusy={isBusy}
+      />
     );
   }
 
   return (
-    <div
-      className={clsx(
-        'group hover:bg-glass-medium/20 flex items-center gap-3 px-3 py-2 transition-colors',
-        !isLast && 'border-glass-border/20 border-b',
+    <span className="relative inline-flex">
+      {isMenuOpen && (
+        <button
+          className="fixed inset-0 z-10 cursor-default"
+          onClick={onCloseMenu}
+        />
       )}
-    >
-      <code className="text-ink-1 min-w-0 flex-1 truncate text-xs">
-        {rule.pattern ?? (
-          <span className="text-ink-3 italic">All operations</span>
+      <span
+        className={clsx(
+          'inline-flex items-center gap-0.5 rounded-lg border py-0.5 pr-1 pl-0.5 font-mono text-[12.5px] leading-[1.3] transition-[filter,box-shadow,background] select-none hover:brightness-110',
+          ACTION_CHIP_CLASSES[rule.action],
+          isMenuOpen && 'ring-acc/20 shadow-lg ring-2',
         )}
-      </code>
-
-      <ActionBadge action={rule.action} />
-
-      <Button
-        onClick={startEdit}
-        disabled={isBusy}
-        className="text-ink-4 hover:text-acc-ink hover:bg-glass-medium rounded p-1 opacity-0 transition-all group-hover:opacity-100"
-        aria-label={`Edit ${rule.pattern ?? 'all'} rule`}
       >
-        <Pencil className="h-3.5 w-3.5" />
-      </Button>
-
-      <Button
-        onClick={onRemove}
-        disabled={isBusy}
-        className="text-ink-4 hover:text-status-fail hover:bg-glass-medium rounded p-1 opacity-0 transition-all group-hover:opacity-100"
-        aria-label={`Remove ${rule.pattern ?? 'all'} rule`}
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </Button>
-    </div>
+        <button
+          type="button"
+          onClick={onOpenMenu}
+          disabled={isBusy}
+          className={clsx(
+            'inline-flex items-center gap-0.5 rounded-md py-0.5 pr-1 pl-1 transition-colors hover:bg-black/20 disabled:opacity-50 [&[aria-expanded=true]_.permission-chip-caret]:rotate-180 [&[aria-expanded=true]_.permission-chip-caret]:opacity-100',
+            style.text,
+          )}
+          title={`${rule.action} options`}
+          aria-label={`Open options for ${displayPattern}`}
+          aria-expanded={isMenuOpen}
+        >
+          <ActionDot action={rule.action} glow />
+          <ChevronDown className="permission-chip-caret h-[9px] w-[9px] opacity-60 transition-[transform,opacity]" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          disabled={isBusy}
+          className="text-ink-1 cursor-text rounded-[5px] px-0.5 py-0 text-left whitespace-nowrap transition-colors hover:bg-white/5 disabled:opacity-50"
+          title="Click to edit pattern"
+        >
+          {displayPattern}
+        </button>
+      </span>
+      {isMenuOpen && (
+        <RuleActionMenu
+          rule={rule}
+          onAction={(action) => onEdit({ pattern: rule.pattern, action })}
+          onRemove={onRemove}
+          onClose={onCloseMenu}
+          isBusy={isBusy}
+        />
+      )}
+    </span>
   );
 }
 
 function ToolGroupCard({
   group,
+  shownRules,
+  hiddenCount,
+  adding,
+  onAddStart,
+  onAddCommit,
+  onAddCancel,
+  openMenuKey,
+  setOpenMenuKey,
   onRemove,
   onEdit,
   isBusy,
 }: {
   group: ToolGroup;
+  shownRules: FlatRule[];
+  hiddenCount: number;
+  adding: boolean;
+  onAddStart: () => void;
+  onAddCommit: (pattern: string | null, action: PermissionAction) => void;
+  onAddCancel: () => void;
+  openMenuKey: string | null;
+  setOpenMenuKey: (key: string | null) => void;
   onRemove: (rule: FlatRule) => void;
   onEdit: (
     rule: FlatRule,
@@ -424,37 +931,66 @@ function ToolGroupCard({
   const [expanded, setExpanded] = useState(true);
 
   return (
-    <div className="border-glass-border/50 bg-bg-1/40 overflow-hidden rounded-lg border">
+    <div className="px-1 py-3">
       <button
         type="button"
         onClick={() => setExpanded((p) => !p)}
-        className="hover:bg-glass-medium/30 flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors"
+        className="hover:bg-glass-medium/20 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors"
       >
         {expanded ? (
-          <ChevronDown className="text-ink-3 h-3.5 w-3.5 shrink-0" />
+          <ChevronDown className="text-ink-3 h-4 w-4 shrink-0" />
         ) : (
-          <ChevronRight className="text-ink-3 h-3.5 w-3.5 shrink-0" />
+          <ChevronRight className="text-ink-3 h-4 w-4 shrink-0" />
         )}
-        <Terminal className="text-ink-2 h-4 w-4 shrink-0" />
-        <span className="text-ink-1 text-sm font-medium">{group.label}</span>
-        <span className="text-ink-3 text-xs">{group.description}</span>
-        <span className="bg-glass-medium/60 text-ink-2 ml-auto rounded-full px-1.5 py-0.5 text-[10px] tabular-nums">
+        <ToolIcon tool={group.tool} />
+        <span className="text-ink-1 text-sm font-semibold">{group.label}</span>
+        <span className="text-ink-4 text-xs">{group.description}</span>
+        <DistributionBar rules={group.rules} />
+        <span className="bg-glass-medium/45 text-ink-2 ml-auto rounded-full px-2 py-0.5 text-[11px] tabular-nums">
           {group.rules.length}
         </span>
       </button>
 
       {expanded && (
-        <div className="border-glass-border/30 border-t">
-          {group.rules.map((rule, i) => (
-            <RuleRow
-              key={`${rule.tool}-${rule.pattern ?? '*'}`}
-              rule={rule}
-              isLast={i === group.rules.length - 1}
-              onRemove={() => onRemove(rule)}
-              onEdit={(update) => onEdit(rule, update)}
+        <div className="flex flex-wrap gap-x-2 gap-y-2 pt-3 pb-2 pl-10">
+          {shownRules.map((rule) => {
+            const menuKey = `${rule.tool}:${rule.pattern ?? '__all__'}`;
+            return (
+              <RuleChip
+                key={menuKey}
+                rule={rule}
+                isMenuOpen={openMenuKey === menuKey}
+                onOpenMenu={() => setOpenMenuKey(menuKey)}
+                onCloseMenu={() => setOpenMenuKey(null)}
+                onRemove={() => onRemove(rule)}
+                onEdit={(update) => onEdit(rule, update)}
+                isBusy={isBusy}
+              />
+            );
+          })}
+          {adding ? (
+            <InlineRuleEditor
+              tool={group.tool}
+              onCommit={onAddCommit}
+              onCancel={onAddCancel}
               isBusy={isBusy}
             />
-          ))}
+          ) : (
+            <button
+              type="button"
+              onClick={onAddStart}
+              disabled={isBusy}
+              className="border-glass-border/70 text-ink-3 hover:text-acc-ink hover:border-acc/60 hover:bg-acc/10 inline-flex items-center gap-1 rounded-lg border border-dashed py-0.5 pr-2 pl-1.5 font-mono text-[12.5px] leading-[1.3] font-medium transition-colors disabled:opacity-50"
+            >
+              <Plus className="h-3 w-3" />
+              add
+            </button>
+          )}
+          {hiddenCount > 0 && (
+            <span className="text-ink-4 self-center text-[11px]">
+              +{hiddenCount} hidden
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -472,8 +1008,8 @@ export function PermissionsEditor({
   onAdd,
   onRemove,
   onEdit,
-  title,
-  description,
+  title: _title,
+  description: _description,
   emptyTitle,
   emptyDescription,
 }: {
@@ -499,6 +1035,13 @@ export function PermissionsEditor({
   const [pattern, setPattern] = useState('');
   const [action, setAction] = useState<PermissionAction>('allow');
   const [addError, setAddError] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addingTool, setAddingTool] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [actionFilter, setActionFilter] = useState<PermissionAction | 'all'>(
+    'all',
+  );
+  const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
 
   const groups = useMemo(
     () => (permissions ? groupPermissions(permissions) : []),
@@ -510,17 +1053,34 @@ export function PermissionsEditor({
     [groups],
   );
 
+  const actionCounts = useMemo(
+    () =>
+      groups
+        .flatMap((group) => group.rules)
+        .reduce<Record<PermissionAction, number>>(
+          (acc, rule) => {
+            acc[rule.action] += 1;
+            return acc;
+          },
+          { allow: 0, ask: 0, deny: 0 },
+        ),
+    [groups],
+  );
+
   const guidance = TOOL_GUIDANCE[tool];
 
-  const handleAdd = useCallback(
-    (e: React.FormEvent) => {
-      e.preventDefault();
+  const commitAddRule = useCallback(
+    async (params: {
+      toolName: string;
+      pattern: string | null;
+      action: PermissionAction;
+    }) => {
       setAddError(null);
 
-      const trimmed = pattern.trim();
+      const trimmed = params.pattern?.trim() ?? '';
       if (
-        tool.toLowerCase() === 'bash' &&
-        action === 'allow' &&
+        params.toolName.toLowerCase() === 'bash' &&
+        params.action === 'allow' &&
         (!trimmed || trimmed === '*' || trimmed === '**')
       ) {
         setAddError(
@@ -529,17 +1089,29 @@ export function PermissionsEditor({
         return;
       }
 
-      const input = buildInput(tool, trimmed);
-      onAdd({ toolName: tool, input, action })
-        .then(() => {
-          setPattern('');
-          setAddError(null);
-        })
-        .catch((err: Error) => {
-          setAddError(err.message);
+      try {
+        await onAdd({
+          toolName: params.toolName,
+          input: buildInput(params.toolName, trimmed),
+          action: params.action,
         });
+        setPattern('');
+        setAddError(null);
+        setAddOpen(false);
+        setAddingTool(null);
+      } catch (err) {
+        setAddError(err instanceof Error ? err.message : String(err));
+      }
     },
-    [tool, pattern, action, onAdd],
+    [onAdd],
+  );
+
+  const handleAdd = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      void commitAddRule({ toolName: tool, pattern, action });
+    },
+    [tool, pattern, action, commitAddRule],
   );
 
   const handleRemove = useCallback(
@@ -559,130 +1131,217 @@ export function PermissionsEditor({
     [onEdit],
   );
 
+  const visibleGroups = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return groups
+      .map((group) => {
+        const shownRules = group.rules.filter((rule) => {
+          const patternText = rule.pattern ?? 'all operations';
+          return (
+            (actionFilter === 'all' || rule.action === actionFilter) &&
+            (!query ||
+              group.label.toLowerCase().includes(query) ||
+              patternText.toLowerCase().includes(query))
+          );
+        });
+        return {
+          group,
+          shownRules,
+          hiddenCount: group.rules.length - shownRules.length,
+        };
+      })
+      .filter(
+        ({ shownRules }) =>
+          shownRules.length > 0 || (!query && actionFilter === 'all'),
+      );
+  }, [groups, search, actionFilter]);
+
   return (
-    <div className="flex flex-col gap-6">
-      {/* Header */}
+    <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-ink-1 text-lg font-semibold">{title}</h2>
-        <p className="text-ink-3 mt-1 text-sm">{description}</p>
-      </div>
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1" />
+          {totalRules > 0 && (
+            <div className="hidden items-center gap-3 sm:flex">
+              {ACTION_OPTIONS.map((option) => (
+                <span
+                  key={option.value}
+                  className="text-ink-3 inline-flex items-center gap-1.5 text-xs"
+                >
+                  <ActionDot action={option.value} />
+                  <span className="text-ink-1 font-semibold tabular-nums">
+                    {actionCounts[option.value]}
+                  </span>
+                  {option.label.toLowerCase()}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
 
-      {/* Add Rule Form */}
-      <form
-        onSubmit={handleAdd}
-        className="border-glass-border/50 bg-bg-1/30 rounded-lg border p-4"
-      >
-        <h3 className="text-ink-1 mb-3 text-sm font-medium">Add Rule</h3>
-        <div className="flex items-end gap-2">
-          <div className="flex flex-col gap-1">
-            <label className="text-ink-3 text-xs">Tool</label>
-            <Select
-              value={tool}
-              options={[...TOOL_OPTIONS]}
-              onChange={(v: string) => {
-                setTool(v);
-                setPattern('');
-                setAddError(null);
-              }}
-              label="Tool"
-            />
+        <div className="mt-4 flex flex-col gap-2 lg:flex-row lg:items-center">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter rules... git, rm, *.env"
+            icon={<Search />}
+            size="sm"
+            className="min-w-0 flex-1"
+          />
+          <div className="border-glass-border/60 bg-bg-1/60 inline-flex w-fit rounded-lg border p-0.5">
+            <button
+              type="button"
+              onClick={() => setActionFilter('all')}
+              aria-pressed={actionFilter === 'all'}
+              className={clsx(
+                'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                actionFilter === 'all'
+                  ? 'bg-bg-3 text-ink-1 shadow-sm'
+                  : 'text-ink-3 hover:text-ink-1',
+              )}
+            >
+              All
+            </button>
+            {ACTION_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setActionFilter(option.value)}
+                aria-pressed={actionFilter === option.value}
+                className={clsx(
+                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                  actionFilter === option.value
+                    ? clsx(
+                        'bg-bg-3 shadow-sm',
+                        getActionStyle(option.value).text,
+                      )
+                    : 'text-ink-3 hover:text-ink-1',
+                )}
+              >
+                <ActionDot action={option.value} />
+                {option.label}
+              </button>
+            ))}
           </div>
-
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <label className="text-ink-3 text-xs">
-              Pattern{' '}
-              {guidance?.examples.length === 0 ? '(not applicable)' : ''}
-            </label>
-            <Input
-              value={pattern}
-              onChange={(e) => setPattern(e.target.value)}
-              placeholder={guidance?.placeholder ?? ''}
-              disabled={guidance?.examples.length === 0}
-              size="sm"
-            />
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label className="text-ink-3 text-xs">Action</label>
-            <Select
-              value={action}
-              options={ACTION_OPTIONS}
-              onChange={(v: string) => setAction(v as PermissionAction)}
-              label="Action"
-            />
-          </div>
-
           <Button
-            type="submit"
-            disabled={isBusy}
+            type="button"
             variant="primary"
             size="sm"
             icon={<Plus />}
+            onClick={() => setAddOpen((open) => !open)}
+            disabled={isBusy}
+            className="w-fit whitespace-nowrap"
           >
-            Add
+            Add rule
           </Button>
         </div>
 
-        {/* Tool-specific guidance */}
-        {guidance && (
-          <div className="border-glass-border/50 bg-bg-1/50 mt-3 rounded-md border px-3 py-2">
-            <p className="text-ink-2 text-xs">{guidance.hint}</p>
-            {guidance.examples.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {guidance.examples.map((ex) => (
-                  <button
-                    key={ex}
-                    type="button"
-                    onClick={() => setPattern(ex)}
-                    className="bg-glass-medium/60 text-ink-1 hover:bg-bg-3 hover:text-ink-1 rounded px-1.5 py-0.5 text-[11px] transition-colors"
-                  >
-                    {ex}
-                  </button>
-                ))}
-              </div>
-            )}
+        {addOpen && (
+          <form
+            onSubmit={handleAdd}
+            className="border-glass-border/60 bg-bg-1/50 mt-3 flex flex-col gap-2 rounded-xl border p-3 lg:flex-row lg:items-end"
+          >
+            <div className="flex flex-col gap-1">
+              <label className="text-ink-3 text-xs">Tool</label>
+              <Select
+                value={tool}
+                options={[...TOOL_OPTIONS]}
+                onChange={(v: string) => {
+                  setTool(v);
+                  setPattern('');
+                  setAddError(null);
+                }}
+                label="Tool"
+              />
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <label className="text-ink-3 text-xs">
+                Pattern{' '}
+                {guidance?.examples.length === 0 ? '(not applicable)' : ''}
+              </label>
+              <Input
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value)}
+                placeholder={guidance?.placeholder ?? ''}
+                disabled={guidance?.examples.length === 0}
+                size="sm"
+              />
+              <PatternMatchPreview tool={tool} pattern={pattern} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-ink-3 text-xs">Action</label>
+              <ActionSegment value={action} onChange={setAction} />
+            </div>
+            <Button type="submit" disabled={isBusy} variant="primary" size="sm">
+              Add
+            </Button>
+          </form>
+        )}
+
+        {guidance && addOpen && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-ink-4 text-xs">{guidance.hint}</span>
+            {guidance.examples.map((ex) => (
+              <button
+                key={ex}
+                type="button"
+                onClick={() => setPattern(ex)}
+                className="bg-glass-medium/60 text-ink-1 hover:bg-bg-3 rounded px-1.5 py-0.5 font-mono text-[11px] transition-colors"
+              >
+                {ex}
+              </button>
+            ))}
           </div>
         )}
 
         {addError && (
           <p className="text-status-fail mt-2 text-xs">{addError}</p>
         )}
-      </form>
+      </div>
 
-      {/* Current Rules */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-baseline justify-between">
-          <h3 className="text-ink-1 text-sm font-medium">Current Rules</h3>
-          {totalRules > 0 && (
-            <span className="text-ink-3 text-xs">
-              {totalRules} rule{totalRules !== 1 ? 's' : ''} across{' '}
-              {groups.length} tool{groups.length !== 1 ? 's' : ''}
-            </span>
-          )}
-        </div>
-
-        {isLoading && <p className="text-ink-3 text-sm">Loading...</p>}
+      <div className="flex flex-col gap-2">
+        {isLoading && <p className="text-ink-3 px-2 text-sm">Loading...</p>}
 
         {!isLoading && groups.length === 0 && (
-          <div className="border-glass-border/50 rounded-lg border border-dashed px-4 py-8 text-center">
+          <div className="border-glass-border/50 rounded-xl border border-dashed px-4 py-8 text-center">
             <p className="text-ink-3 text-sm">{emptyTitle}</p>
             <p className="text-ink-4 mt-1 text-xs">{emptyDescription}</p>
           </div>
         )}
 
-        {groups.length > 0 && (
-          <div className="flex flex-col gap-2">
-            {groups.map((group) => (
-              <ToolGroupCard
-                key={group.tool}
-                group={group}
-                onRemove={handleRemove}
-                onEdit={handleEdit}
-                isBusy={isBusy}
-              />
-            ))}
+        {!isLoading && groups.length > 0 && visibleGroups.length === 0 && (
+          <div className="border-glass-border/50 rounded-xl border border-dashed px-4 py-8 text-center">
+            <p className="text-ink-3 text-sm">No rules match this filter.</p>
           </div>
         )}
+
+        {!isLoading &&
+          visibleGroups.map(({ group, shownRules, hiddenCount }) => (
+            <ToolGroupCard
+              key={group.tool}
+              group={group}
+              shownRules={shownRules}
+              hiddenCount={hiddenCount}
+              adding={addingTool === group.tool}
+              onAddStart={() => {
+                setAddingTool(group.tool);
+                setOpenMenuKey(null);
+              }}
+              onAddCommit={(newPattern, newAction) => {
+                void commitAddRule({
+                  toolName: group.tool,
+                  pattern: newPattern,
+                  action: newAction,
+                });
+              }}
+              onAddCancel={() => setAddingTool(null)}
+              openMenuKey={openMenuKey}
+              setOpenMenuKey={setOpenMenuKey}
+              onRemove={handleRemove}
+              onEdit={handleEdit}
+              isBusy={isBusy}
+            />
+          ))}
       </div>
     </div>
   );

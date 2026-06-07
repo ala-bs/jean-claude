@@ -63,6 +63,7 @@ import {
   resolveRules,
   normalizeToolRequest,
 } from './permission-settings-service';
+import { applyConfiguredPromptPreface } from './prompt-preface-service';
 import { textPrompt, getPromptText } from './prompt-utils';
 import { StepService } from './step-service';
 import { assertValidWorkspacePath } from './system-project-service';
@@ -71,6 +72,50 @@ import { assertValidWorkspacePath } from './system-project-service';
  *  Keeps full PromptPart[] (with image base64) out of the QueuedPrompt.content
  *  field which crosses IPC to the renderer for display. */
 const queuedPromptParts = new Map<string, PromptPart[]>();
+
+function appendPromptParts(
+  existingParts: PromptPart[],
+  incomingParts: PromptPart[],
+): PromptPart[] {
+  const combinedParts = [...existingParts];
+
+  for (const part of incomingParts) {
+    if (part.type !== 'text') {
+      combinedParts.push(part);
+      continue;
+    }
+
+    const lastPart = combinedParts[combinedParts.length - 1];
+    if (!lastPart || lastPart.type !== 'text') {
+      combinedParts.push(part);
+      continue;
+    }
+
+    combinedParts[combinedParts.length - 1] = {
+      type: 'text',
+      text: [lastPart.text, part.text]
+        .filter((text) => text.trim().length > 0)
+        .join('\n\n'),
+    };
+  }
+
+  return combinedParts;
+}
+
+function replacePromptText(parts: PromptPart[], content: string): PromptPart[] {
+  const textPartIndex = parts.findIndex((part) => part.type === 'text');
+  const nonTextParts = parts.filter((part) => part.type !== 'text');
+
+  if (textPartIndex === -1) {
+    return [{ type: 'text', text: content }, ...nonTextParts];
+  }
+
+  return [
+    ...parts.slice(0, textPartIndex).filter((part) => part.type !== 'text'),
+    { type: 'text' as const, text: content },
+    ...parts.slice(textPartIndex + 1).filter((part) => part.type !== 'text'),
+  ];
+}
 
 const TASK_NOTIFICATION_TITLE_PREFIX: Record<TaskNotificationEvent, string> = {
   completed: '✅',
@@ -120,7 +165,7 @@ function buildReviewPrompt({
   const reviewerList = reviewers
     .map(
       (r, i) =>
-        `${i + 1}. **${r.label}** (backend: ${r.backend ?? 'claude-code'}${r.model && r.model !== 'default' ? `, model: ${r.model}` : ''}): ${r.focusPrompt}`,
+        `${i + 1}. **${r.label}** (backend: ${r.backend ?? 'claude-code'}${r.model && r.model !== 'default' ? `, model: ${r.model}` : ''}${r.thinkingEffort && r.thinkingEffort !== 'default' ? `, variant: ${r.thinkingEffort}` : ''}): ${r.focusPrompt}`,
     )
     .join('\n');
 
@@ -153,7 +198,7 @@ function buildReviewPrompt({
     '2. Wait for all reviews to complete.',
     '3. Synthesize the findings into a comprehensive summary organized by severity and category.',
     '',
-    'When calling `run_review`, set the `backend` field to the backend listed for each reviewer. If a model is specified, set the `model` field accordingly.',
+    'When calling `run_review`, set the `backend` field to the backend listed for each reviewer. If a model is specified, set the `model` field accordingly. If a variant is specified, set the `thinkingEffort` field accordingly.',
     "Include the diff instructions below in each reviewer's prompt so they know how to find the changes.",
     '',
     '## Diff instructions (include in each reviewer prompt)',
@@ -512,7 +557,11 @@ class AgentService {
     stepId: string,
     parts: PromptPart[],
     session: ActiveSession,
-    options?: { generateNameOnInit?: boolean; initialPrompt?: string },
+    options?: {
+      generateNameOnInit?: boolean;
+      initialPrompt?: string;
+      isInitialPrompt?: boolean;
+    },
   ): Promise<void> {
     const { taskId } = session;
     const task = await TaskRepository.findById(taskId);
@@ -593,6 +642,15 @@ class AgentService {
 
     // Start the backend
     dbg.agentSession('Starting backend for step %s', stepId);
+    const effectiveParts =
+      step?.type === 'feature-map'
+        ? parts
+        : await applyConfiguredPromptPreface({
+            parts,
+            projectPath: project.path,
+            isInitialPrompt: options?.isInitialPrompt ?? false,
+          });
+
     const agentSession = await session.backend.start(
       {
         type: session.backendType,
@@ -617,7 +675,7 @@ class AgentService {
         permissionRules: rules,
         mcpServers,
       },
-      parts,
+      effectiveParts,
     );
 
     session.backendSessionId = agentSession.sessionId;
@@ -874,6 +932,7 @@ class AgentService {
           isError: result.isError,
           durationMs: result.durationMs,
           cost: result.cost?.costUsd,
+          apiCost: result.cost?.apiCostUsd,
           usage: result.usage,
         });
 
@@ -1050,6 +1109,7 @@ class AgentService {
         await this.runBackend(stepId, parts, session, {
           generateNameOnInit: isFirstStep,
           initialPrompt: step.promptTemplate,
+          isInitialPrompt: true,
         });
       } catch (error) {
         const errorMessage =
@@ -1324,6 +1384,28 @@ class AgentService {
       throw new Error(`No active session for step ${stepId}`);
     }
 
+    const existingPrompt = session.queuedPrompts[0];
+    if (existingPrompt) {
+      const existingParts =
+        queuedPromptParts.get(existingPrompt.id) ??
+        textPrompt(existingPrompt.content);
+      const combinedParts = appendPromptParts(existingParts, parts);
+      existingPrompt.content = getPromptText(combinedParts);
+      queuedPromptParts.set(existingPrompt.id, combinedParts);
+
+      this.emitEvent(session.taskId, stepId, {
+        type: 'queue-update',
+        queuedPrompts: session.queuedPrompts,
+      });
+
+      dbg.agent(
+        'Coalesced queued prompt %s for step %s',
+        existingPrompt.id,
+        stepId,
+      );
+      return { promptId: existingPrompt.id };
+    }
+
     const id = nanoid();
     queuedPromptParts.set(id, parts);
 
@@ -1359,16 +1441,7 @@ class AgentService {
 
     const existingParts =
       queuedPromptParts.get(promptId) ?? textPrompt(queuedPrompt.content);
-    const textPartIndex = existingParts.findIndex(
-      (part) => part.type === 'text',
-    );
-    const updatedParts = [...existingParts];
-
-    if (textPartIndex >= 0) {
-      updatedParts[textPartIndex] = { type: 'text', text: content };
-    } else {
-      updatedParts.unshift({ type: 'text', text: content });
-    }
+    const updatedParts = replacePromptText(existingParts, content);
 
     queuedPrompt.content = content;
     queuedPromptParts.set(promptId, updatedParts);

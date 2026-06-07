@@ -15,6 +15,7 @@ import type {
   AzureDevOpsPullRequestDetails,
   AzureDevOpsCommit,
   AzureDevOpsFileChange,
+  AzureDevOpsIdentity,
   AzureDevOpsCommentThread,
   AzureDevOpsComment,
   AzureDevOpsPolicyEvaluation,
@@ -86,6 +87,7 @@ import type {
 } from '@shared/source-management-types';
 import type {
   Project,
+  ProjectFeatureMap,
   NewProject,
   UpdateProject,
   Task,
@@ -312,6 +314,7 @@ export interface QueryTableResult {
 export interface DebugDatabaseSizeResult {
   bytes: number;
   reclaimableBytes: number;
+  tables: { name: string; bytes: number }[];
 }
 
 export interface OldCompletedTasksCountResult {
@@ -396,6 +399,9 @@ export interface Api {
     ) => Promise<Project>;
     deleteGeneratedLogo: (projectId: string, logoId: string) => Promise<void>;
     regenerateSummary: (projectId: string) => Promise<Project>;
+    getFeatureMap: (projectId: string) => Promise<ProjectFeatureMap | null>;
+    createFeatureMapTask: (projectId: string) => Promise<Task>;
+    saveFeatureMapFromTask: (stepId: string) => Promise<ProjectFeatureMap>;
     removeLogo: (projectId: string) => Promise<Project>;
     delete: (id: string) => Promise<void>;
     deleteWorktreesFolder: (projectId: string) => Promise<void>;
@@ -403,6 +409,8 @@ export interface Api {
     getBranches: (projectId: string) => Promise<BranchInfo[]>;
     getCurrentBranch: (projectId: string) => Promise<string>;
     isGitRepository: (projectId: string) => Promise<boolean>;
+    getCommitIgnore: (projectId: string) => Promise<string>;
+    updateCommitIgnore: (projectId: string, content: string) => Promise<void>;
     getDetected: () => Promise<DetectedProject[]>;
     detectLogos: (projectPath: string) => Promise<DetectedProjectLogo[]>;
     getSkills: (projectId: string) => Promise<Skill[]>;
@@ -535,14 +543,14 @@ export interface Api {
       delete: (
         taskId: string,
         options?: { keepBranch?: boolean },
-      ) => Promise<void>;
+      ) => Promise<{ editorCloseWarning?: string }>;
       cleanupAfterCompletion: (
         taskId: string,
         params: {
           worktreePath: string;
           branchName: string;
         },
-      ) => Promise<void>;
+      ) => Promise<{ editorCloseWarning?: string }>;
     };
     summary: {
       get: (taskId: string) => Promise<TaskSummary | undefined>;
@@ -555,10 +563,13 @@ export interface Api {
       isDraft: boolean;
       deleteWorktree?: boolean;
       commitUnstaged?: boolean;
-    }) => Promise<{ id: number; url: string }>;
+    }) => Promise<{ id: number; url: string; editorCloseWarning?: string }>;
     createPrReview: (params: {
       projectId: string;
       pullRequestId: number;
+      agentBackend?: AgentBackendType | null;
+      modelPreference?: string | null;
+      thinkingEffort?: ThinkingEffort | null;
     }) => Promise<Task>;
   };
   steps: {
@@ -627,6 +638,12 @@ export interface Api {
       projectName: string;
       workItemId: number;
     }) => Promise<WorkItemComment[]>;
+    addWorkItemComment: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      text: string;
+    }) => Promise<WorkItemComment>;
     getIterations: (params: {
       providerId: string;
       projectName: string;
@@ -750,6 +767,15 @@ export interface Api {
       threadId: number;
       content: string;
     }) => Promise<AzureDevOpsComment>;
+    updateThreadComment: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      threadId: number;
+      commentId: number;
+      content: string;
+    }) => Promise<AzureDevOpsComment>;
     updateThreadStatus: (params: {
       providerId: string;
       projectId: string;
@@ -758,6 +784,10 @@ export interface Api {
       threadId: number;
       status: string;
     }) => Promise<void>;
+    searchIdentities: (params: {
+      providerId: string;
+      query: string;
+    }) => Promise<AzureDevOpsIdentity[]>;
     fetchImageAsBase64: (params: {
       providerId: string;
       imageUrl: string;
@@ -836,6 +866,30 @@ export interface Api {
       value: AppSettings[K],
     ) => Promise<void>;
   };
+  backendConfig: {
+    getUserConfig: (
+      backend: import('@shared/agent-backend-types').AgentBackendType,
+    ) => Promise<
+      import('@shared/backend-config-settings-types').BackendUserConfig
+    >;
+    setUserConfig: (
+      backend: import('@shared/agent-backend-types').AgentBackendType,
+      content: string,
+    ) => Promise<
+      import('@shared/backend-config-settings-types').BackendUserConfig
+    >;
+  };
+  projectPromptPreface: {
+    get: (
+      projectPath: string,
+    ) => Promise<
+      import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting
+    >;
+    set: (
+      projectPath: string,
+      value: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
+    ) => Promise<void>;
+  };
   globalPermissions: {
     get: () => Promise<import('@shared/permission-types').PermissionScope>;
     set: (
@@ -898,6 +952,7 @@ export interface Api {
     listUpcomingMeetings: () => Promise<UpcomingMeeting[]>;
     listTodayMeetings: () => Promise<UpcomingMeeting[]>;
     revealMeeting: (meeting: UpcomingMeeting) => Promise<void>;
+    setIgnoredMeetingIds: (ids: string[]) => Promise<void>;
   };
   agent: {
     start: (stepId: string) => Promise<void>;
@@ -1435,6 +1490,13 @@ export const api: Api = hasWindowApi
         regenerateSummary: async () => {
           throw new Error('API not available');
         },
+        getFeatureMap: async () => null,
+        createFeatureMapTask: async () => {
+          throw new Error('API not available');
+        },
+        saveFeatureMapFromTask: async () => {
+          throw new Error('API not available');
+        },
         removeLogo: async () => {
           throw new Error('API not available');
         },
@@ -1444,6 +1506,8 @@ export const api: Api = hasWindowApi
         getBranches: async () => [],
         getCurrentBranch: async () => '',
         isGitRepository: async () => false,
+        getCommitIgnore: async () => '',
+        updateCommitIgnore: async () => {},
         getDetected: async () => [],
         detectLogos: async () => [],
         getSkills: async () => [],
@@ -1523,8 +1587,8 @@ export const api: Api = hasWindowApi
             }) as MergeWorktreeResult,
           getBranches: async () => [],
           pushBranch: async () => {},
-          delete: async () => {},
-          cleanupAfterCompletion: async () => {},
+          delete: async () => ({}),
+          cleanupAfterCompletion: async () => ({}),
         },
         summary: {
           get: async () => undefined,
@@ -1602,6 +1666,9 @@ export const api: Api = hasWindowApi
         },
         getRelatedTestCases: async () => [],
         getWorkItemComments: async () => [],
+        addWorkItemComment: async () => {
+          throw new Error('API not available');
+        },
         getIterations: async () => [],
         createPullRequest: async () => {
           throw new Error('API not available');
@@ -1638,9 +1705,13 @@ export const api: Api = hasWindowApi
         addThreadReply: async () => {
           throw new Error('API not available');
         },
+        updateThreadComment: async () => {
+          throw new Error('API not available');
+        },
         updateThreadStatus: async () => {
           throw new Error('API not available');
         },
+        searchIdentities: async () => [],
         fetchImageAsBase64: async () => null,
         getPullRequestPolicyEvaluations: async () => [],
         requeuePolicyEvaluation: async () => {},
@@ -1677,6 +1748,22 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
       },
+      backendConfig: {
+        getUserConfig: async () => {
+          throw new Error('API not available');
+        },
+        setUserConfig: async () => {
+          throw new Error('API not available');
+        },
+      },
+      projectPromptPreface: {
+        get: async () => {
+          throw new Error('API not available');
+        },
+        set: async () => {
+          throw new Error('API not available');
+        },
+      },
       globalPermissions: {
         get: async () => ({}),
         set: async () => {},
@@ -1703,6 +1790,7 @@ export const api: Api = hasWindowApi
         listUpcomingMeetings: async () => [],
         listTodayMeetings: async () => [],
         revealMeeting: async () => {},
+        setIgnoredMeetingIds: async () => {},
       },
       agent: {
         start: async () => {
@@ -1737,7 +1825,11 @@ export const api: Api = hasWindowApi
       },
       debug: {
         getTableNames: async () => [],
-        getDatabaseSize: async () => ({ bytes: 0, reclaimableBytes: 0 }),
+        getDatabaseSize: async () => ({
+          bytes: 0,
+          reclaimableBytes: 0,
+          tables: [],
+        }),
         countOldCompletedTasks: async () => ({ count: 0 }),
         deleteOldCompletedTasks: async () => ({ deletedCount: 0 }),
         queryTable: async () => ({ columns: [], rows: [], total: 0 }),

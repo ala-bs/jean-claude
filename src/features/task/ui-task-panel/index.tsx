@@ -62,6 +62,7 @@ import {
   ReviewPillsQueue,
   reviewCommentToPill,
 } from '@/features/common/ui-review-pills';
+import { FeatureMapSaveAction } from '@/features/task/ui-feature-map-save-action';
 import { PrReviewValidation } from '@/features/task/ui-pr-review-validation';
 import { SkillPublishAction } from '@/features/task/ui-skill-publish-action';
 import { StepFlowBar } from '@/features/task/ui-step-flow-bar';
@@ -272,6 +273,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     (state) => state.markJobSucceeded,
   );
   const markJobFailed = useBackgroundJobsStore((state) => state.markJobFailed);
+  const backgroundJobs = useBackgroundJobsStore((state) => state.jobs);
 
   // Navigation tracking
   const setLastLocation = useNavigationStore((s) => s.setLastLocation);
@@ -379,6 +381,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     null,
   );
   const [addStepAtEnd, setAddStepAtEnd] = useState(false);
+  const [startingStepIds, setStartingStepIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const stepStartJobIdsRef = useRef<Map<string, string>>(new Map());
   const [showWorkItemsEditor, setShowWorkItemsEditor] = useState(false);
   const [workItemsFilter, setWorkItemsFilter] = useState('');
   // Buffered selection state for work items modal (applied on submit)
@@ -857,6 +863,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         setAddStepAfterStepId(null);
         setAddStepAtEnd(false);
         setActiveStepId(step.id);
+        if (data.start) {
+          setStartingStepIds((prev) => new Set(prev).add(step.id));
+          if (!stepStartJobIdsRef.current.has(step.id)) {
+            const jobId = addRunningJob({
+              type: 'step-start',
+              title: `Starting "${step.name}"`,
+              taskId,
+              projectId: task?.projectId ?? projectId ?? null,
+              details: { stepId: step.id, stepName: step.name },
+            });
+            stepStartJobIdsRef.current.set(step.id, jobId);
+          }
+        }
       } catch (error) {
         addToast({
           type: 'error',
@@ -874,8 +893,81 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       activeStepId,
       addStepAfterStepId,
       addStepAtEnd,
+      addRunningJob,
+      projectId,
+      task?.projectId,
     ],
   );
+
+  const handleStartStep = useCallback(async () => {
+    if (!activeStepId) return;
+    setStartingStepIds((prev) => new Set(prev).add(activeStepId));
+    if (activeStep && !stepStartJobIdsRef.current.has(activeStepId)) {
+      const jobId = addRunningJob({
+        type: 'step-start',
+        title: `Starting "${activeStep.name}"`,
+        taskId,
+        projectId: task?.projectId ?? projectId ?? null,
+        details: { stepId: activeStep.id, stepName: activeStep.name },
+      });
+      stepStartJobIdsRef.current.set(activeStepId, jobId);
+    }
+    const didStart = await start();
+    if (!didStart) {
+      const jobId = stepStartJobIdsRef.current.get(activeStepId);
+      if (jobId) {
+        markJobFailed(jobId, 'Failed to start step');
+        stepStartJobIdsRef.current.delete(activeStepId);
+      }
+      setStartingStepIds((prev) => {
+        const next = new Set(prev);
+        next.delete(activeStepId);
+        return next;
+      });
+    }
+  }, [
+    activeStep,
+    activeStepId,
+    addRunningJob,
+    markJobFailed,
+    projectId,
+    start,
+    task?.projectId,
+    taskId,
+  ]);
+
+  useEffect(() => {
+    if (!steps) return;
+
+    for (const step of steps) {
+      const jobId = stepStartJobIdsRef.current.get(step.id);
+      if (!jobId) continue;
+
+      if (step.status === 'running' || step.status === 'completed') {
+        markJobSucceeded(jobId, {
+          taskId: step.taskId,
+          projectId: task?.projectId ?? projectId ?? null,
+        });
+        stepStartJobIdsRef.current.delete(step.id);
+        continue;
+      }
+
+      if (step.status === 'errored' || step.status === 'interrupted') {
+        markJobFailed(jobId, `Step ${step.status}`);
+        stepStartJobIdsRef.current.delete(step.id);
+      }
+    }
+  }, [steps, markJobFailed, markJobSucceeded, projectId, task?.projectId]);
+
+  useEffect(() => {
+    if (!activeStepId || activeStep?.status === 'ready') return;
+    setStartingStepIds((prev) => {
+      if (!prev.has(activeStepId)) return prev;
+      const next = new Set(prev);
+      next.delete(activeStepId);
+      return next;
+    });
+  }, [activeStepId, activeStep?.status]);
 
   const handleMergeStarted = useCallback(() => {
     // Close the diff view when merge is dispatched (worktree will be deleted)
@@ -1138,13 +1230,26 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
   const isRunning =
     agentState.status === 'running' || activeStep?.status === 'running';
+  const hasRunningStepStartJob = backgroundJobs.some(
+    (job) =>
+      job.status === 'running' &&
+      job.type === 'step-start' &&
+      job.taskId === taskId &&
+      job.details.stepId === activeStepId,
+  );
+  const isStepStarting =
+    isStarting ||
+    hasRunningStepStartJob ||
+    (!!activeStepId && startingStepIds.has(activeStepId));
+  const isAgentBusy = isRunning || isStepStarting;
   const isWaiting =
     agentState.status === 'waiting' || task.status === 'waiting';
   const taskRootPath = task.worktreePath ?? project.path;
   const hasMessages = agentState.messages.length > 0;
+  const activeStepError = agentState.error ?? 'No error details available.';
   const getCompletionContextBeforePrompt = () =>
     getLastAssistantMessage(agentState.messages);
-  const canSendMessage = !isRunning && hasMessages && !!activeStep?.sessionId;
+  const canSendMessage = !isAgentBusy && hasMessages && !!activeStep?.sessionId;
   const hasRepoLink =
     !!project.repoProviderId && !!project.repoProjectId && !!project.repoId;
   const hasWorkItemsLink =
@@ -1436,7 +1541,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Change Worktree Path
                   </DropdownItem>
                 )}
-                {task.worktreePath && !isRunning && (
+                {task.worktreePath && !isAgentBusy && (
                   <DropdownItem
                     icon={<Trash2 />}
                     variant="danger"
@@ -1445,7 +1550,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Delete Worktree
                   </DropdownItem>
                 )}
-                {!isRunning && (
+                {!isAgentBusy && (
                   <DropdownItem
                     icon={<Trash2 />}
                     variant="danger"
@@ -1565,7 +1670,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               ) : hasMessages ? (
                 <MessageStream
                   messages={agentState.messages}
-                  isRunning={isRunning}
+                  isRunning={isAgentBusy}
                   queuedPrompts={agentState.queuedPrompts}
                   onFilePathClick={handleFilePathClick}
                   onToolDiffClick={handleToolDiffClick}
@@ -1597,7 +1702,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                       {activeStep?.promptTemplate ?? task.prompt}
                     </pre>
                   </div>
-                  {isRunning ? (
+                  {isAgentBusy ? (
                     <div className="border-glass-border mt-6 flex items-center justify-center gap-2 rounded-lg border border-dashed p-8">
                       <Loader2 className="text-ink-2 h-4 w-4 animate-spin" />
                       <p className="text-ink-2">Starting agent...</p>
@@ -1605,13 +1710,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   ) : activeStep?.status === 'ready' ? (
                     <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
                       <Button
-                        onClick={() => void start()}
-                        disabled={isStarting}
-                        loading={isStarting}
+                        onClick={handleStartStep}
+                        disabled={isStepStarting}
+                        loading={isStepStarting}
                         variant="primary"
                         icon={<Play />}
                       >
-                        {isStarting ? 'Starting...' : 'Start Step'}
+                        {isStepStarting ? 'Starting...' : 'Start Step'}
                       </Button>
                     </div>
                   ) : activeStep?.status === 'pending' ? (
@@ -1619,6 +1724,24 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                       <p className="text-ink-3 text-sm">
                         Waiting for dependencies to complete
                       </p>
+                    </div>
+                  ) : activeStep?.status === 'errored' ? (
+                    <div className="border-status-fail/30 bg-status-fail-soft mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border p-8 text-center">
+                      <p className="text-status-fail text-sm font-medium">
+                        Step failed to start
+                      </p>
+                      <p className="text-ink-2 max-w-md text-xs">
+                        {activeStepError}
+                      </p>
+                      <Button
+                        onClick={handleStartStep}
+                        disabled={isStepStarting}
+                        loading={isStepStarting}
+                        variant="secondary"
+                        icon={<RefreshCw />}
+                      >
+                        {isStepStarting ? 'Retrying...' : 'Retry Start'}
+                      </Button>
                     </div>
                   ) : (
                     <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
@@ -1677,10 +1800,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     taskCompleted={task?.userCompleted ?? false}
                   />
                 )}
+                {activeStep?.type === 'feature-map' && (
+                  <FeatureMapSaveAction step={activeStep} />
+                )}
                 <TaskInputFooter
                   taskId={taskId}
                   activeStepId={activeStepId}
-                  isRunning={isRunning}
+                  isRunning={isAgentBusy}
                   isStopping={isStopping}
                   canSendMessage={!!canSendMessage}
                   onSend={sendMessage}
@@ -1747,6 +1873,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           <CommandLogsPane
             taskId={taskId}
             projectId={project.id}
+            workingDir={taskRootPath}
             selectedCommandId={rightPane.selectedCommandId}
             onSelectCommand={selectCommandLogsTab}
             onClose={closeRightPane}

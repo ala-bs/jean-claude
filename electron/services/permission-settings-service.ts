@@ -5,6 +5,10 @@ import picomatch from 'picomatch';
 import writeFileAtomic from 'write-file-atomic';
 
 import {
+  DEFAULT_PROJECT_PROMPT_PREFACE_SETTING,
+  isProjectPromptPrefaceSetting,
+} from '@shared/prompt-preface-types';
+import {
   parseCompoundCommand,
   stripRedirections,
   validateSubpathArgs,
@@ -13,6 +17,7 @@ import {
 import type {
   JeanClaudeSettings,
   PermissionAction,
+  PermissionEvalDetails,
   PermissionEvalResult,
   PermissionScope,
   ResolvedPermissionRule,
@@ -52,6 +57,9 @@ function normalizeSettingsShape(
         : {}),
     },
     ...(parsed.worktree ? { worktree: parsed.worktree } : {}),
+    ...(isProjectPromptPrefaceSetting(parsed.promptPreface)
+      ? { promptPreface: parsed.promptPreface }
+      : {}),
   };
 }
 
@@ -228,6 +236,28 @@ export async function writeSettings(
   });
 }
 
+export async function readProjectPromptPreface(
+  rootDir: string,
+): Promise<import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting> {
+  const settings = await readSettings(rootDir);
+  return settings.promptPreface ?? DEFAULT_PROJECT_PROMPT_PREFACE_SETTING;
+}
+
+export async function writeProjectPromptPreface(
+  rootDir: string,
+  promptPreface: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
+): Promise<void> {
+  if (!isProjectPromptPrefaceSetting(promptPreface)) {
+    throw new Error('Invalid project prompt preface setting');
+  }
+
+  await withProjectWriteLock(rootDir, async () => {
+    const settings = await readSettings(rootDir);
+    settings.promptPreface = promptPreface;
+    await writeSettings(rootDir, settings);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Rule Resolution (scope merging)
 // ---------------------------------------------------------------------------
@@ -390,6 +420,14 @@ export function evaluatePermission(
   toolKey: string,
   matchValue: string,
 ): PermissionEvalResult {
+  return evaluatePermissionWithMatch(rules, toolKey, matchValue).action;
+}
+
+export function evaluatePermissionWithMatch(
+  rules: ResolvedPermissionRule[],
+  toolKey: string,
+  matchValue: string,
+): PermissionEvalDetails {
   // For bash commands, parse compound operators and evaluate each sub-command
   if (toolKey === 'bash' && matchValue) {
     const subCommands = parseCompoundCommand(matchValue);
@@ -405,13 +443,14 @@ function evaluateSinglePermission(
   rules: ResolvedPermissionRule[],
   toolKey: string,
   matchValue: string,
-): PermissionEvalResult {
+): PermissionEvalDetails {
   // Strip redirections from bash commands so patterns like "pnpm lint*"
   // match "pnpm lint --fix 2>&1" the same as "pnpm lint --fix"
   const normalized =
     toolKey === 'bash' ? stripRedirections(matchValue) : matchValue;
   const isBash = toolKey === 'bash';
   let result: PermissionEvalResult = 'ask';
+  let matchedRule: ResolvedPermissionRule | undefined;
 
   for (const rule of rules) {
     if (rule.tool !== toolKey && rule.tool !== '*') continue;
@@ -423,28 +462,32 @@ function evaluateSinglePermission(
         validateSubpathArgs(normalized, rule.subpathRoot)
       ) {
         result = rule.action;
+        matchedRule = rule;
       }
     } else if (matchPattern(rule.pattern, normalized, isBash)) {
       result = rule.action;
+      matchedRule = rule;
     }
   }
 
-  return result;
+  return { action: result, matchedRule };
 }
 
 function evaluateCompoundPermission(
   rules: ResolvedPermissionRule[],
   subCommands: string[],
-): PermissionEvalResult {
+): PermissionEvalDetails {
   let combined: PermissionEvalResult = 'allow';
+  let matchedRule: ResolvedPermissionRule | undefined;
 
   for (const subCommand of subCommands) {
     const result = evaluateSinglePermission(rules, 'bash', subCommand);
-    if (result === 'deny') return 'deny';
-    if (result === 'ask') combined = 'ask';
+    if (result.matchedRule) matchedRule = result.matchedRule;
+    if (result.action === 'deny') return result;
+    if (result.action === 'ask') combined = 'ask';
   }
 
-  return combined;
+  return { action: combined, matchedRule };
 }
 
 // ---------------------------------------------------------------------------

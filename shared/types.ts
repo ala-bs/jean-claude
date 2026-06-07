@@ -10,6 +10,10 @@ import {
   type OpenAiLogoBaseImageId,
 } from './openai-logo-bases';
 import type { PermissionScope } from './permission-types';
+import {
+  DEFAULT_PROMPT_PREFACE_SETTING,
+  isPromptPrefaceSetting,
+} from './prompt-preface-types';
 import type { UsageProviderType } from './usage-types';
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
@@ -42,7 +46,7 @@ export interface UpdateToken {
 }
 
 export type ProjectType = 'local' | 'git-provider' | 'system';
-export type TaskType = 'agent' | 'skill-creation';
+export type TaskType = 'agent' | 'skill-creation' | 'feature-map';
 export type TaskStatus =
   | 'running'
   | 'waiting'
@@ -196,6 +200,19 @@ export interface ProjectLogoHistoryItem {
   createdAt: string;
 }
 
+export interface ProjectFeatureMapItem {
+  id: string;
+  name: string;
+  summary: string;
+  key_files: string[];
+  children: ProjectFeatureMapItem[];
+}
+
+export interface ProjectFeatureMap {
+  features: ProjectFeatureMapItem[];
+  generatedAt: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -220,6 +237,7 @@ export interface Project {
   showWorkItemsInFeed: boolean;
   showPrsInFeed: boolean;
   autoPullSourceBranch: boolean;
+  commitWithNoVerify: boolean;
   defaultAgentBackend: AgentBackendType | null; // null = use global default
   defaultAgentModelPreference: ModelPreference | null;
   completionContext: string | null;
@@ -256,6 +274,7 @@ export interface NewProject {
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
+  commitWithNoVerify?: boolean;
   defaultAgentBackend?: AgentBackendType | null;
   defaultAgentModelPreference?: ModelPreference | null;
   completionContext?: string | null;
@@ -292,6 +311,7 @@ export interface UpdateProject {
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
+  commitWithNoVerify?: boolean;
   defaultAgentBackend?: AgentBackendType | null;
   defaultAgentModelPreference?: ModelPreference | null;
   completionContext?: string | null;
@@ -390,7 +410,8 @@ export type TaskStepType =
   | 'fork'
   | 'pr-review'
   | 'review'
-  | 'skill-creation';
+  | 'skill-creation'
+  | 'feature-map';
 
 /** Meta for `create-pull-request` steps — params + result after execution */
 export interface CreatePullRequestStepMeta {
@@ -433,6 +454,7 @@ export interface ReviewerConfig {
   focusPrompt: string;
   backend: AgentBackendType;
   model?: ModelPreference;
+  thinkingEffort?: ThinkingEffort;
 }
 
 /** Meta for `review` steps — single agent session using MCP tools for parallel review */
@@ -456,12 +478,22 @@ export interface SkillCreationStepMeta {
   published?: boolean;
 }
 
+export interface FeatureMapStepMeta {
+  projectId: string;
+  projectPath: string;
+  tempDir: string;
+  tempFilePath: string;
+  savedFilePath: string;
+  saved?: boolean;
+}
+
 export type TaskStepMeta =
   | CreatePullRequestStepMeta
   | ForkStepMeta
   | PrReviewStepMeta
   | ReviewStepMeta
   | SkillCreationStepMeta
+  | FeatureMapStepMeta
   | Record<string, never>;
 
 /** Type guard for SkillCreationStepMeta */
@@ -474,6 +506,20 @@ export function isSkillCreationStepMeta(
     typeof m.workspacePath === 'string' &&
     (m.mode === 'create' || m.mode === 'improve') &&
     Array.isArray(m.enabledBackends)
+  );
+}
+
+export function isFeatureMapStepMeta(
+  meta: TaskStepMeta | null | undefined,
+): meta is FeatureMapStepMeta {
+  if (!meta) return false;
+  const m = meta as FeatureMapStepMeta;
+  return (
+    typeof m.projectId === 'string' &&
+    typeof m.projectPath === 'string' &&
+    typeof m.tempDir === 'string' &&
+    typeof m.tempFilePath === 'string' &&
+    typeof m.savedFilePath === 'string'
   );
 }
 
@@ -645,6 +691,7 @@ export const DEFAULT_TASK_NOTIFICATION_MODES: Record<
 export interface CalendarNotificationsSetting {
   enabled: boolean;
   leadTimeMinutes: number;
+  showStartWindow: boolean;
 }
 
 export const DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES = 5;
@@ -652,8 +699,16 @@ export const DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES = 5;
 export interface AiSkillSlotConfig {
   backend: AgentBackendType;
   model: string;
+  thinkingEffort?: ThinkingEffort;
   skillName: string | null; // null = built-in default prompt
 }
+
+export const DEFAULT_PROJECT_FEATURE_MAP_SLOT: AiSkillSlotConfig = {
+  backend: 'claude-code',
+  model: 'haiku',
+  thinkingEffort: 'default',
+  skillName: 'project-feature-mapping',
+};
 
 export interface AiGenerationSetting {
   openAiApiKey: string; // Stored encrypted
@@ -677,6 +732,7 @@ export type AiSkillSlotKey =
   | 'task-name'
   | 'verification-note'
   | 'project-summary'
+  | 'project-feature-map'
   | 'logo-generation';
 export type AiSkillSlotsSetting = Partial<
   Record<AiSkillSlotKey, AiSkillSlotConfig>
@@ -863,6 +919,7 @@ function isCalendarNotificationsSetting(
   const obj = v as Record<string, unknown>;
   return (
     typeof obj.enabled === 'boolean' &&
+    typeof obj.showStartWindow === 'boolean' &&
     typeof obj.leadTimeMinutes === 'number' &&
     Number.isInteger(obj.leadTimeMinutes) &&
     obj.leadTimeMinutes >= 1 &&
@@ -877,6 +934,7 @@ const VALID_SLOT_KEYS: AiSkillSlotKey[] = [
   'task-name',
   'verification-note',
   'project-summary',
+  'project-feature-map',
   'logo-generation',
 ];
 
@@ -891,6 +949,11 @@ export function isAiSkillSlotsSetting(v: unknown): v is AiSkillSlotsSetting {
     if (typeof s.backend !== 'string') return false;
     if (!VALID_BACKENDS.includes(s.backend as AgentBackendType)) return false;
     if (typeof s.model !== 'string') return false;
+    if (
+      s.thinkingEffort !== undefined &&
+      !VALID_THINKING_EFFORTS.includes(s.thinkingEffort as ThinkingEffort)
+    )
+      return false;
     if (s.skillName !== null && typeof s.skillName !== 'string') return false;
     return true;
   });
@@ -1030,11 +1093,14 @@ export const SETTINGS_DEFINITIONS = {
     defaultValue: {
       enabled: false,
       leadTimeMinutes: DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
+      showStartWindow: false,
     } as CalendarNotificationsSetting,
     validate: isCalendarNotificationsSetting,
   },
   aiSkillSlots: {
-    defaultValue: {} as AiSkillSlotsSetting,
+    defaultValue: {
+      'project-feature-map': DEFAULT_PROJECT_FEATURE_MAP_SLOT,
+    } as AiSkillSlotsSetting,
     validate: isAiSkillSlotsSetting,
   },
   aiGeneration: {
@@ -1054,7 +1120,16 @@ export const SETTINGS_DEFINITIONS = {
     defaultValue: [] as PromptSnippetsSetting,
     validate: isPromptSnippetsSetting,
   },
+  promptPreface: {
+    defaultValue: DEFAULT_PROMPT_PREFACE_SETTING,
+    validate: isPromptPrefaceSetting,
+  },
 } satisfies Record<string, SettingDefinition<unknown>>;
+
+export type {
+  PromptPrefaceSetting,
+  ProjectPromptPrefaceSetting,
+} from './prompt-preface-types';
 
 export type AppSettings = {
   [K in keyof typeof SETTINGS_DEFINITIONS]: (typeof SETTINGS_DEFINITIONS)[K]['defaultValue'];

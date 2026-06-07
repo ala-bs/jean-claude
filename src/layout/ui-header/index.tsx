@@ -28,10 +28,10 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import { Kbd } from '@/common/ui/kbd';
-import { useBacklogProjectId } from '@/hooks/use-backlog-project-id';
 import { useProjectTodoCount } from '@/hooks/use-project-todos';
 import { useProjects } from '@/hooks/use-projects';
 import { api, type ReloadPreviewProgress } from '@/lib/api';
+import { useBacklogSelectedProjectId } from '@/stores/backlog-overlay-draft';
 import { useCurrentVisibleProject } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
@@ -59,6 +59,31 @@ const initialReloadProgress: ReloadPreviewProgress = {
   detail: 'Preparing preview reload',
 };
 
+const reloadSteps: Array<{
+  step: ReloadPreviewProgress['step'];
+  label: string;
+  command: string;
+}> = [
+  { step: 'starting', label: 'Preparing reload', command: 'preview reload' },
+  {
+    step: 'stopping-commands',
+    label: 'Stopping commands',
+    command: 'stop running commands',
+  },
+  { step: 'pulling', label: 'Pulling latest changes', command: 'git pull' },
+  {
+    step: 'building',
+    label: 'Installing and building',
+    command: 'pnpm install && pnpm build',
+  },
+  {
+    step: 'launching',
+    label: 'Launching preview',
+    command: 'pnpm preview:skip-build',
+  },
+  { step: 'restarting', label: 'Restarting app', command: 'app exit' },
+];
+
 const DEFAULT_ACTIVITY_RESERVE_PX = 220;
 const ACTIVITY_GAP_PX = 30;
 
@@ -78,8 +103,61 @@ function useReloadTicker(startedAt: number) {
   const elapsedMs = Math.max(0, now - startedAt);
 
   return {
+    elapsedMs,
     elapsed: formatReloadElapsed(elapsedMs),
+    now,
   };
+}
+
+function ReloadStatusGlyph({
+  state,
+}: {
+  state: 'done' | 'run' | 'fail' | 'pending';
+}) {
+  if (state === 'done') {
+    return (
+      <span className="bg-status-done-soft text-status-done inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full">
+        <svg
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          aria-hidden
+        >
+          <path
+            d="M1.5 4.2 L3.3 6 L6.7 2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+    );
+  }
+
+  if (state === 'run') {
+    return (
+      <span className="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full">
+        <span className="reload-ring bg-acc absolute inset-0 rounded-full opacity-55" />
+        <span className="bg-acc h-[7px] w-[7px] rounded-full" />
+      </span>
+    );
+  }
+
+  if (state === 'fail') {
+    return (
+      <span className="bg-status-fail-soft text-status-fail inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full">
+        <X className="h-2 w-2" aria-hidden />
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full">
+      <span className="border-ink-4 h-1.5 w-1.5 rounded-full border" />
+    </span>
+  );
 }
 
 function ReloadPreviewModal({
@@ -98,15 +176,43 @@ function ReloadPreviewModal({
   const [progress, setProgress] = useState<ReloadPreviewProgress>(
     initialReloadProgress,
   );
-  const { elapsed } = useReloadTicker(startedAt);
+  const progressRef = useRef<ReloadPreviewProgress>(initialReloadProgress);
+  const [stepStartedAt, setStepStartedAt] = useState(startedAt);
+  const stepStartedAtRef = useRef(startedAt);
+  const [stepDurations, setStepDurations] = useState<
+    Partial<Record<ReloadPreviewProgress['step'], number>>
+  >({});
+  const { elapsed, now } = useReloadTicker(startedAt);
   const stepNumber = reloadStepNumbers[progress.step];
+  const activeStepIndex = Math.max(0, stepNumber - 1);
+  const failedStepIndex = error ? activeStepIndex : -1;
+  const connectorFillSteps = error
+    ? failedStepIndex
+    : Math.min(reloadStepCount - 1, activeStepIndex);
 
   useEffect(() => {
     setProgress(initialReloadProgress);
+    progressRef.current = initialReloadProgress;
+    setStepStartedAt(startedAt);
+    stepStartedAtRef.current = startedAt;
+    setStepDurations({});
     return api.app.onReloadPreviewProgress((nextProgress) => {
+      const currentProgress = progressRef.current;
+      if (currentProgress.step !== nextProgress.step) {
+        const nextStartedAt = Date.now();
+        setStepDurations((durations) => ({
+          ...durations,
+          [currentProgress.step]: nextStartedAt - stepStartedAtRef.current,
+        }));
+        stepStartedAtRef.current = nextStartedAt;
+        setStepStartedAt(nextStartedAt);
+      }
+      progressRef.current = nextProgress;
       setProgress(nextProgress);
     });
   }, [startedAt]);
+
+  const activeStepElapsed = now - stepStartedAt;
 
   return (
     <div
@@ -114,91 +220,165 @@ function ReloadPreviewModal({
       style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
     >
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(oklch(1_0_0_/_0.02)_1px,transparent_1px),linear-gradient(90deg,oklch(1_0_0_/_0.02)_1px,transparent_1px)] bg-[size:28px_28px] opacity-50" />
-      {error ? (
-        <div
-          role="alert"
-          aria-label="Reload failed"
-          className="reload-fade-up bg-bg-1 border-glass-border relative w-full max-w-[380px] overflow-hidden rounded-[9px] border px-4 pt-3.5 pb-2.5 shadow-[0_24px_60px_oklch(0_0_0_/_0.55),0_0_0_1px_oklch(0_0_0_/_0.4)]"
-        >
-          <div className="flex items-center gap-2.5">
-            <span className="bg-status-fail-soft text-status-fail inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full">
-              <X className="h-2 w-2" aria-hidden />
-            </span>
-            <div className="text-ink-0 min-w-0 flex-1 text-[12.5px] font-medium">
-              Reload failed
-            </div>
-            <div className="text-ink-4 font-mono text-[10.5px]">
-              reload preview
-            </div>
+      <div
+        role={error ? 'alert' : 'status'}
+        aria-label={error ? 'Reload failed' : 'Reloading preview'}
+        className="reload-fade-up bg-bg-1 border-glass-border relative w-full max-w-[420px] overflow-hidden rounded-[9px] border shadow-[0_24px_60px_oklch(0_0_0_/_0.55),0_0_0_1px_oklch(0_0_0_/_0.4)]"
+      >
+        <div className="flex items-center gap-2.5 px-4 pt-3.5 pb-2.5">
+          <ReloadStatusGlyph state={error ? 'fail' : 'run'} />
+          <div className="text-ink-0 min-w-0 flex-1 text-[12.5px] font-medium">
+            {error ? 'Reload failed' : 'Reloading preview'}
           </div>
-
-          <div className="bg-status-fail-soft border-status-fail/25 text-status-fail mt-2 rounded-[5px] border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] break-words">
-            {error}
-          </div>
-
-          <div className="border-line-soft mt-2.5 flex items-center justify-between border-t pt-2">
-            <span className="text-ink-4 text-[10.5px]">
-              Previous preview still running
-            </span>
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={onBack}
-                className="text-ink-3 hover:bg-glass-medium rounded px-2 py-1 text-[11px]"
-              >
-                Back
-              </button>
-              <button
-                type="button"
-                onClick={onRetry}
-                className="border-acc-line bg-acc-soft text-acc-ink rounded border px-2.5 py-1 text-[11px] font-medium"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div
-          role="status"
-          aria-label="Reloading preview"
-          className="reload-fade-up bg-bg-1 border-glass-border relative w-full max-w-[360px] overflow-hidden rounded-[9px] border px-4 pt-3.5 pb-3 shadow-[0_24px_60px_oklch(0_0_0_/_0.55),0_0_0_1px_oklch(0_0_0_/_0.4)]"
-        >
-          <div className="flex items-center gap-2.5">
-            <span className="bg-acc relative h-2 w-2 shrink-0 rounded-full shadow-[0_0_10px_var(--color-acc)]">
-              <span className="reload-ring bg-acc absolute -inset-1 rounded-full opacity-40" />
-            </span>
-            <div className="text-ink-0 min-w-0 flex-1 text-[12.5px] font-medium">
-              Reloading preview
-            </div>
-            <div className="text-ink-3 font-mono text-[10.5px] tabular-nums">
-              {elapsed}
-            </div>
-          </div>
-
-          <div className="mt-2 flex items-center gap-1.5 overflow-hidden pl-[18px] font-mono text-[11px] whitespace-nowrap">
+          <div className="flex items-center gap-2 font-mono text-[10.5px] tabular-nums">
             <span className="text-ink-4">
               {String(stepNumber).padStart(2, '0')}/
               {String(reloadStepCount).padStart(2, '0')}
             </span>
-            <span className="text-ink-1">{progress.label}</span>
-            {progress.detail && (
-              <>
-                <span className="text-ink-4">·</span>
-                <span className="text-ink-3 truncate">{progress.detail}</span>
-              </>
-            )}
-          </div>
-
-          <div className="mt-3 h-0.5 overflow-hidden rounded-full bg-white/5">
-            <div
-              className="bg-acc h-full rounded-full opacity-80 transition-[width] duration-200"
-              style={{ width: `${(stepNumber / reloadStepCount) * 100}%` }}
-              aria-hidden
-            />
+            <span className="text-ink-3">{elapsed}</span>
           </div>
         </div>
-      )}
+
+        <div className="relative px-4 pt-1.5 pb-2.5">
+          <div
+            className="absolute top-[19px] bottom-[23px] left-6 w-px bg-white/[0.07]"
+            aria-hidden
+          />
+          <div
+            className={`absolute top-[19px] left-6 w-px opacity-50 ${
+              error ? 'bg-status-fail' : 'bg-acc'
+            }`}
+            style={{ height: `${connectorFillSteps * 26}px` }}
+            aria-hidden
+          />
+
+          {reloadSteps.map((step, index) => {
+            const isActive = index === activeStepIndex;
+            const isFailed = index === failedStepIndex;
+            const isDone = index < activeStepIndex && !isFailed;
+            const isPending = index > activeStepIndex;
+            const state = isFailed
+              ? 'fail'
+              : isDone
+                ? 'done'
+                : isActive
+                  ? 'run'
+                  : 'pending';
+            const detail =
+              isActive && progress.detail ? progress.detail : step.command;
+            const rowElapsed = isDone
+              ? formatReloadElapsed(stepDurations[step.step] ?? 0)
+              : isActive && !error
+                ? formatReloadElapsed(activeStepElapsed)
+                : isFailed
+                  ? 'failed'
+                  : '';
+
+            return (
+              <div
+                key={step.step}
+                className={`relative z-10 grid h-[26px] grid-cols-[16px_18px_minmax(0,1fr)_42px] items-center gap-2 ${
+                  isPending ? 'opacity-50' : ''
+                }`}
+              >
+                <span className="bg-bg-1 inline-flex items-center justify-center rounded-full">
+                  <ReloadStatusGlyph state={state} />
+                </span>
+                <span
+                  className={`font-mono text-[10px] tabular-nums ${
+                    isFailed
+                      ? 'text-status-fail'
+                      : isActive
+                        ? 'text-acc-ink'
+                        : 'text-ink-4'
+                  }`}
+                >
+                  {String(index + 1).padStart(2, '0')}
+                </span>
+                <div className="flex min-w-0 items-baseline gap-1.5 overflow-hidden whitespace-nowrap">
+                  <span
+                    className={`shrink-0 text-[12px] ${
+                      isFailed
+                        ? 'text-status-fail font-medium'
+                        : isActive
+                          ? 'text-ink-0 font-medium'
+                          : isDone
+                            ? 'text-ink-1'
+                            : 'text-ink-3'
+                    }`}
+                  >
+                    {step.label}
+                  </span>
+                  <span className="text-ink-4 text-[11px]">·</span>
+                  <span
+                    className={`truncate font-mono text-[10.5px] ${
+                      isFailed
+                        ? 'text-status-fail/75'
+                        : isActive
+                          ? 'text-ink-2'
+                          : 'text-ink-4'
+                    }`}
+                  >
+                    {detail}
+                  </span>
+                </div>
+                <span
+                  className={`text-right font-mono text-[10px] tabular-nums ${
+                    isFailed
+                      ? 'text-status-fail'
+                      : isActive
+                        ? 'text-acc-ink'
+                        : isDone
+                          ? 'text-ink-3'
+                          : 'text-ink-4'
+                  }`}
+                >
+                  {rowElapsed}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {error ? (
+          <>
+            <div className="bg-status-fail-soft border-status-fail/25 text-status-fail mx-4 mb-3 rounded-[5px] border px-2.5 py-2 font-mono text-[10.5px] leading-[1.55] break-words">
+              {error}
+            </div>
+            <div className="border-line-soft flex items-center justify-between border-t bg-white/[0.012] px-4 py-2.5">
+              <span className="text-ink-4 text-[10.5px]">
+                Previous preview still running
+              </span>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="text-ink-3 hover:bg-glass-medium rounded px-2 py-1 text-[11px]"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  className="border-acc-line bg-acc-soft text-acc-ink rounded border px-2.5 py-1 text-[11px] font-medium"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="px-4 pb-3">
+            <div className="h-0.5 overflow-hidden rounded-full bg-white/5">
+              <div
+                className="bg-acc h-full rounded-full opacity-90 transition-[width] duration-300"
+                style={{ width: `${(stepNumber / reloadStepCount) * 100}%` }}
+                aria-hidden
+              />
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -216,7 +396,12 @@ export function Header() {
   const { projectId } = useCurrentVisibleProject();
   const { data: projects = [] } = useProjects();
   const openOverlay = useOverlaysStore((state) => state.open);
-  const backlogProjectId = useBacklogProjectId();
+  const persistedBacklogProjectId = useBacklogSelectedProjectId();
+  const backlogProjectId = projects.some(
+    (project) => project.id === persistedBacklogProjectId,
+  )
+    ? persistedBacklogProjectId
+    : projects[0]?.id;
   const { data: todoCount } = useProjectTodoCount(backlogProjectId);
   const modal = useModal();
   const commitHash = import.meta.env.VITE_COMMIT_HASH;
@@ -377,10 +562,10 @@ export function Header() {
           >
             {selectedProjectLabel}
           </DropdownItem>
-          {backlogProjectId && (
+          {projects.length > 0 && (
             <DropdownItem
               icon={<ClipboardList />}
-              onClick={() => openOverlay('project-backlog')}
+              onClick={() => openOverlay('backlog')}
               shortcut="cmd+b"
             >
               Backlog
@@ -443,12 +628,21 @@ export function Header() {
         </Dropdown>
         {api.app.isDevMode && (
           <div
-            className="ml-2 flex items-center gap-1 rounded-full border border-amber-400/50 bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] text-amber-200 shadow-[0_0_16px_oklch(0.8_0.18_80_/_0.22)]"
-            title="Jean-Claude is running in development mode"
+            className="group relative ml-2 flex items-center gap-1 rounded-full border border-amber-400/50 bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] text-amber-200 shadow-[0_0_16px_oklch(0.8_0.18_80_/_0.22)]"
             aria-label="Development mode"
+            aria-describedby="dev-mode-tooltip"
+            tabIndex={0}
           >
             <span className="h-1.5 w-1.5 rounded-full bg-amber-300 shadow-[0_0_8px_oklch(0.8_0.18_80)]" />
             DEV
+            <span
+              id="dev-mode-tooltip"
+              role="tooltip"
+              className="bg-bg-1 pointer-events-none absolute top-[calc(100%+0.5rem)] left-1/2 z-50 w-64 -translate-x-1/2 rounded-lg border border-amber-400/40 px-3 py-2 text-center text-[11px] leading-snug font-medium tracking-normal text-amber-100 opacity-0 shadow-[0_12px_32px_oklch(0_0_0_/_0.35),0_0_18px_oklch(0.8_0.18_80_/_0.18)] transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+            >
+              Jean-Claude is running in dev mode. Use pnpm preview instead if
+              you want to use the app.
+            </span>
           </div>
         )}
       </div>

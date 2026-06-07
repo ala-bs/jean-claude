@@ -4,6 +4,8 @@ import type { AgentBackendType } from '@shared/agent-backend-types';
 
 import { db } from '../index';
 
+import { decodeRawMessageData, encodeRawMessageData } from './raw-message-data';
+
 // --- Type guards for OpenCode SSE events ---
 
 function isOpenCodeDeltaEvent(value: unknown): value is {
@@ -92,6 +94,8 @@ export const RawMessageRepository = {
     rawData: unknown;
     rawFormat: AgentBackendType;
   }) => {
+    const encoded = encodeRawMessageData(rawData);
+
     return db
       .insertInto('raw_messages')
       .values({
@@ -100,7 +104,9 @@ export const RawMessageRepository = {
         stepId: stepId ?? null,
         messageIndex,
         backendSessionId,
-        rawData: JSON.stringify(rawData),
+        rawData: encoded.rawData,
+        rawDataBlob: encoded.rawDataBlob,
+        rawDataEncoding: encoded.rawDataEncoding,
         rawFormat,
       })
       .returningAll()
@@ -112,9 +118,15 @@ export const RawMessageRepository = {
    * Used when a streaming update replaces a previous snapshot.
    */
   updateRawData: async (rowId: string, rawData: unknown) => {
+    const encoded = encodeRawMessageData(rawData);
+
     await db
       .updateTable('raw_messages')
-      .set({ rawData: JSON.stringify(rawData) })
+      .set({
+        rawData: encoded.rawData,
+        rawDataBlob: encoded.rawDataBlob,
+        rawDataEncoding: encoded.rawDataEncoding,
+      })
       .where('id', '=', rowId)
       .execute();
   },
@@ -123,12 +135,17 @@ export const RawMessageRepository = {
    * Find all raw messages for a task, ordered by messageIndex.
    */
   findByTaskId: async (taskId: string) => {
-    return db
+    const rows = await db
       .selectFrom('raw_messages')
       .selectAll()
       .where('taskId', '=', taskId)
       .orderBy('messageIndex', 'asc')
       .execute();
+
+    return rows.map((row) => ({
+      ...row,
+      rawData: decodeRawMessageData(row),
+    }));
   },
 
   /**
@@ -157,7 +174,13 @@ export const RawMessageRepository = {
     await db.transaction().execute(async (trx) => {
       const rows = await trx
         .selectFrom('raw_messages')
-        .select(['id', 'rawData', 'messageIndex'])
+        .select([
+          'id',
+          'rawData',
+          'rawDataBlob',
+          'rawDataEncoding',
+          'messageIndex',
+        ])
         .where('taskId', '=', taskId)
         .where('rawFormat', '=', 'opencode')
         .orderBy('messageIndex', 'asc')
@@ -167,7 +190,7 @@ export const RawMessageRepository = {
       const parsedRows = rows.map((row) => {
         let parsed: unknown = null;
         try {
-          parsed = JSON.parse(row.rawData);
+          parsed = JSON.parse(decodeRawMessageData(row));
         } catch {
           // leave as null
         }
@@ -315,9 +338,14 @@ export const RawMessageRepository = {
 
       // --- Apply updates and deletes ---
       for (const update of updates) {
+        const encoded = encodeRawMessageData(update.rawData);
         await trx
           .updateTable('raw_messages')
-          .set({ rawData: JSON.stringify(update.rawData) })
+          .set({
+            rawData: encoded.rawData,
+            rawDataBlob: encoded.rawDataBlob,
+            rawDataEncoding: encoded.rawDataEncoding,
+          })
           .where('id', '=', update.id)
           .execute();
       }

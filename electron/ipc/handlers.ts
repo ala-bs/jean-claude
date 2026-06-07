@@ -46,6 +46,7 @@ import type {
 import {
   PRESET_EDITORS,
   type InteractionMode,
+  type ModelPreference,
   type ThinkingEffort,
   type AiGenerationSetting,
   type EditorSetting,
@@ -56,7 +57,9 @@ import {
   type Task,
   type UpdateTaskStep,
   type SkillCreationStepMeta,
+  type FeatureMapStepMeta,
   isSkillCreationStepMeta,
+  isFeatureMapStepMeta,
   isAiSkillSlotsSetting,
   type ReviewerConfig,
   type ReviewStepMeta,
@@ -114,6 +117,7 @@ import {
   saveOpenAiBaseImage,
   setOpenAiBaseImageSelection,
 } from '../services/ai-generation-settings-service';
+import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import {
   getOrganizationsByTokenId,
   validateTokenAndGetOrganizations,
@@ -140,7 +144,9 @@ import {
   addPullRequestComment,
   addPullRequestFileComment,
   addThreadReply,
+  updateThreadComment,
   updateThreadStatus,
+  searchIdentities,
   getCurrentUser,
   activateWorkItem,
   listBuilds,
@@ -161,6 +167,10 @@ import {
   type CloneRepositoryParams,
 } from '../services/azure-devops-service';
 import { fetchImageAsBase64 } from '../services/azure-image-proxy-service';
+import {
+  readBackendUserConfig,
+  writeBackendUserConfig,
+} from '../services/backend-config-settings-service';
 import * as backendModelsService from '../services/backend-models-service';
 import {
   generateCommitMessageForTask,
@@ -172,7 +182,7 @@ import {
   resetClient as resetCompletionClient,
   getDailyUsage as getCompletionDailyUsage,
 } from '../services/completion-service';
-import { closeEditorWindowsForWorktree } from '../services/editor-window-service';
+import { closeEditorWindowsForTaskWorktree } from '../services/editor-automation-service';
 import {
   createFeedNote,
   deleteFeedNote,
@@ -215,10 +225,20 @@ import {
   editProjectPermissionRule,
   readSettings,
   writeSettings,
+  readProjectPromptPreface,
+  writeProjectPromptPreface,
 } from '../services/permission-settings-service';
 import { pipelineTrackingService } from '../services/pipeline-tracking-service';
 import { generatePrDescriptionForTask } from '../services/pr-description-generation-service';
 import { detectProjects } from '../services/project-detection-service';
+import {
+  buildProjectFeatureMapPrompt,
+  cleanupFeatureMapTempDir,
+  FEATURE_MAP_GIT_PATH,
+  getFeatureMapTempPaths,
+  getProjectFeatureMap,
+  saveProjectFeatureMapFromTemp,
+} from '../services/project-feature-map-generation-service';
 import { projectFileIndexService } from '../services/project-file-index-service';
 import { detectProjectLogos } from '../services/project-logo-detection-service';
 import {
@@ -284,7 +304,9 @@ import {
   getCurrentCommitHash,
   isGitRepository,
   getWorktreeStatus,
+  getProjectCommitIgnore,
   commitWorktreeChanges,
+  updateProjectCommitIgnore,
   cleanupWorktree,
   cleanupMissingWorktree,
   mergeWorktree,
@@ -336,6 +358,57 @@ async function pullSourceBranch({
 }
 
 const VALID_BACKENDS = new Set<string>(['claude-code', 'opencode']);
+
+async function cleanupFeatureMapTempDirsForTask(taskId: string): Promise<void> {
+  const steps = await TaskStepRepository.findByTaskId(taskId);
+  await Promise.all(
+    steps
+      .filter(
+        (step) =>
+          step.type === 'feature-map' && isFeatureMapStepMeta(step.meta),
+      )
+      .map((step) => {
+        const meta = step.meta as FeatureMapStepMeta;
+        return cleanupFeatureMapTempDir(meta.tempDir).catch((err) => {
+          dbg.ipc(
+            'Failed to cleanup feature map temp dir %s: %O',
+            meta.tempDir,
+            err,
+          );
+        });
+      }),
+  );
+}
+
+async function ensureFeatureMapFileInDiff(
+  task: Task,
+  diffRootPath: string,
+  diff: Awaited<ReturnType<typeof getWorktreeDiff>>,
+) {
+  if (task.type !== 'feature-map') return diff;
+  if (diff.files.some((file) => file.path === FEATURE_MAP_GIT_PATH)) {
+    return diff;
+  }
+
+  try {
+    await fs.access(path.join(diffRootPath, FEATURE_MAP_GIT_PATH));
+  } catch {
+    return diff;
+  }
+
+  return {
+    ...diff,
+    files: [
+      ...diff.files,
+      {
+        path: FEATURE_MAP_GIT_PATH,
+        status: 'added' as const,
+        additions: 0,
+        deletions: 0,
+      },
+    ],
+  };
+}
 
 async function runGit(
   args: string[],
@@ -507,23 +580,6 @@ function validateUpdateSourceInstallParams(
       'overwriteLocalChanges',
     ),
   };
-}
-
-async function closeEditorWindowsForTaskWorktree(task: {
-  id: string;
-  worktreePath: string | null;
-}): Promise<void> {
-  if (!task.worktreePath) return;
-
-  const automationSetting = await SettingsRepository.get('editorAutomation');
-  if (!automationSetting.closeWindowsOnTaskCompletion) return;
-
-  const editorSetting = await SettingsRepository.get('editor');
-  await closeEditorWindowsForWorktree({
-    worktreePath: task.worktreePath,
-    editorSetting,
-  });
-  dbg.ipc('Closed editor windows for task %s worktree', task.id);
 }
 
 function buildSkillCreationPrompt({
@@ -709,6 +765,126 @@ export function registerIpcHandlers() {
     dbg.ipc('projects:regenerateSummary %s', projectId);
     return regenerateProjectSummary(projectId);
   });
+  ipcMain.handle('projects:getFeatureMap', async (_, projectId: string) => {
+    dbg.ipc('projects:getFeatureMap %s', projectId);
+    const project = await ProjectRepository.findById(projectId);
+    if (!project) throw new Error('Project not found');
+    return getProjectFeatureMap(project.path);
+  });
+  ipcMain.handle(
+    'projects:createFeatureMapTask',
+    async (_, projectId: string) => {
+      dbg.ipc('projects:createFeatureMapTask %s', projectId);
+      const project = await ProjectRepository.findById(projectId);
+      if (!project) throw new Error('Project not found');
+
+      const task = await TaskRepository.create({
+        projectId,
+        type: 'feature-map',
+        name: 'Map project features',
+        prompt: 'Map project features',
+        startCommitHash: await getCurrentCommitHash(project.path),
+        updatedAt: new Date().toISOString(),
+      });
+
+      let createdTempDir: string | null = null;
+      try {
+        const paths = getFeatureMapTempPaths({
+          projectPath: project.path,
+          taskId: task.id,
+        });
+        createdTempDir = paths.tempDir;
+        await fs.mkdir(paths.tempDir, { recursive: true });
+        const slotConfig = await resolveAiSkillSlot(
+          'project-feature-map',
+          project.aiSkillSlots,
+        );
+        const prompt = buildProjectFeatureMapPrompt({
+          project,
+          tempFilePath: paths.tempFilePath,
+          skillName: slotConfig?.skillName,
+        });
+        const meta: FeatureMapStepMeta = {
+          projectId,
+          projectPath: project.path,
+          tempDir: paths.tempDir,
+          tempFilePath: paths.tempFilePath,
+          savedFilePath: paths.savedFilePath,
+        };
+
+        const step = await StepService.create({
+          taskId: task.id,
+          name: 'Draft feature map',
+          type: 'feature-map',
+          promptTemplate: prompt,
+          interactionMode: 'auto',
+          modelPreference: slotConfig?.model ?? 'default',
+          thinkingEffort: slotConfig?.thinkingEffort ?? null,
+          agentBackend:
+            slotConfig?.backend ??
+            (VALID_BACKENDS.has(project.defaultAgentBackend ?? '')
+              ? (project.defaultAgentBackend as AgentBackendType)
+              : 'claude-code'),
+          meta,
+        });
+
+        agentService.start(step.id).catch((err) => {
+          dbg.ipc(
+            'Error auto-starting feature map agent for step %s: %O',
+            step.id,
+            err,
+          );
+        });
+
+        return task;
+      } catch (err) {
+        await cleanupFeatureMapTempDirsForTask(task.id);
+        if (createdTempDir) {
+          await cleanupFeatureMapTempDir(createdTempDir).catch(() => {});
+        }
+        await TaskRepository.delete(task.id).catch(() => {});
+        throw err;
+      }
+    },
+  );
+  ipcMain.handle(
+    'projects:saveFeatureMapFromTask',
+    async (_, stepId: string) => {
+      dbg.ipc('projects:saveFeatureMapFromTask %s', stepId);
+      const step = await TaskStepRepository.findById(stepId);
+      if (!step || step.type !== 'feature-map') {
+        throw new Error('Invalid stepId: must reference a feature-map step');
+      }
+      if (!isFeatureMapStepMeta(step.meta)) {
+        throw new Error(
+          'Invalid step: missing or malformed feature-map metadata',
+        );
+      }
+      const meta = step.meta;
+
+      const project = await ProjectRepository.findById(meta.projectId);
+      if (!project || project.path !== meta.projectPath) {
+        throw new Error('Feature map project metadata is stale');
+      }
+
+      const featureMap = await saveProjectFeatureMapFromTemp({
+        tempFilePath: meta.tempFilePath,
+        savedFilePath: meta.savedFilePath,
+      });
+      await TaskStepRepository.update(stepId, {
+        meta: { ...meta, saved: true },
+      });
+      await cleanupFeatureMapTempDir(meta.tempDir).catch((err) => {
+        dbg.ipc(
+          'Failed to cleanup feature map temp dir %s after save: %O',
+          meta.tempDir,
+          err,
+        );
+      });
+      await TaskRepository.markUserCompleted(step.taskId);
+      return featureMap;
+    },
+  );
   ipcMain.handle('projects:detectLogos', (_, projectPath: string) => {
     dbg.ipc('projects:detectLogos %s', projectPath);
     return detectProjectLogos(projectPath);
@@ -758,6 +934,23 @@ export function registerIpcHandlers() {
     }
     return isGitRepository(project.path);
   });
+  ipcMain.handle('projects:getCommitIgnore', async (_, projectId: string) => {
+    const project = await ProjectRepository.findById(projectId);
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+    return getProjectCommitIgnore(project.path);
+  });
+  ipcMain.handle(
+    'projects:updateCommitIgnore',
+    async (_, projectId: string, content: string) => {
+      const project = await ProjectRepository.findById(projectId);
+      if (!project) {
+        throw new Error(`Project ${projectId} not found`);
+      }
+      await updateProjectCommitIgnore({ projectPath: project.path, content });
+    },
+  );
   ipcMain.handle('projects:getSkills', async (_, projectId: string) => {
     const project = await ProjectRepository.findById(projectId);
     if (!project) {
@@ -1071,6 +1264,9 @@ export function registerIpcHandlers() {
       params: {
         projectId: string;
         pullRequestId: number;
+        agentBackend?: AgentBackendType | null;
+        modelPreference?: ModelPreference | null;
+        thinkingEffort?: ThinkingEffort | null;
       },
     ) => {
       const { projectId, pullRequestId } = params;
@@ -1208,8 +1404,11 @@ export function registerIpcHandlers() {
 
       // 7. Build reviewer configs
       const defaultBackend =
+        params.agentBackend ??
         (project.defaultAgentBackend as AgentBackendType | null) ??
         'claude-code';
+      const modelPreference = params.modelPreference ?? 'default';
+      const thinkingEffort = params.thinkingEffort ?? 'default';
 
       const reviewers: ReviewerConfig[] = [
         {
@@ -1218,6 +1417,8 @@ export function registerIpcHandlers() {
           focusPrompt:
             'Look for potential bugs, logic errors, race conditions, off-by-one errors, null/undefined issues, and unhandled edge cases in the changed code.',
           backend: defaultBackend,
+          model: modelPreference,
+          thinkingEffort,
         },
         {
           id: crypto.randomUUID(),
@@ -1225,6 +1426,8 @@ export function registerIpcHandlers() {
           focusPrompt:
             'Evaluate code quality: naming, readability, DRY violations, overly complex logic, missing error handling, and adherence to project conventions.',
           backend: defaultBackend,
+          model: modelPreference,
+          thinkingEffort,
         },
         {
           id: crypto.randomUUID(),
@@ -1232,6 +1435,8 @@ export function registerIpcHandlers() {
           focusPrompt:
             'Check for security vulnerabilities (injection, XSS, auth issues, secrets exposure) and performance concerns (N+1 queries, unnecessary re-renders, memory leaks, large allocations).',
           backend: defaultBackend,
+          model: modelPreference,
+          thinkingEffort,
         },
       ];
 
@@ -1242,6 +1447,8 @@ export function registerIpcHandlers() {
           focusPrompt:
             'Verify that the code changes fulfill the requirements described in the associated work items. Check for missing acceptance criteria, incomplete implementations, and deviations from the specification.',
           backend: defaultBackend,
+          model: modelPreference,
+          thinkingEffort,
         });
       }
 
@@ -1266,6 +1473,8 @@ export function registerIpcHandlers() {
         ].join('\n'),
         interactionMode: 'auto',
         agentBackend: defaultBackend,
+        modelPreference,
+        thinkingEffort,
         meta: reviewMeta,
         sortOrder: 0,
       });
@@ -1338,21 +1547,27 @@ export function registerIpcHandlers() {
         }
       }
 
-      // Clean up skill workspaces for skill-creation steps (in parallel)
+      // Clean up task-scoped temporary workspaces (in parallel)
       const steps = await TaskStepRepository.findByTaskId(id);
       await Promise.all(
         steps
           .filter(
             (step) =>
-              step.type === 'skill-creation' &&
-              isSkillCreationStepMeta(step.meta),
+              (step.type === 'skill-creation' &&
+                isSkillCreationStepMeta(step.meta)) ||
+              (step.type === 'feature-map' && isFeatureMapStepMeta(step.meta)),
           )
           .map((step) => {
-            const meta = step.meta as SkillCreationStepMeta;
-            return cleanupSkillWorkspace(meta.workspacePath).catch((err) => {
+            const cleanup =
+              step.type === 'feature-map' && isFeatureMapStepMeta(step.meta)
+                ? cleanupFeatureMapTempDir(step.meta.tempDir)
+                : cleanupSkillWorkspace(
+                    (step.meta as SkillCreationStepMeta).workspacePath,
+                  );
+            return cleanup.catch((err) => {
               dbg.ipc(
-                'Failed to cleanup skill workspace %s: %O',
-                meta.workspacePath,
+                'Failed to cleanup temp workspace for step %s: %O',
+                step.id,
                 err,
               );
             });
@@ -1480,6 +1695,7 @@ export function registerIpcHandlers() {
     const updatedTask = await TaskRepository.toggleUserCompleted(id);
 
     if (isCompleting) {
+      await cleanupFeatureMapTempDirsForTask(id);
       await agentService.compactRawMessages(id);
     }
 
@@ -1499,6 +1715,7 @@ export function registerIpcHandlers() {
         await closeEditorWindowsForTaskWorktree(task);
 
         updatedTask = await TaskRepository.markUserCompleted(id);
+        await cleanupFeatureMapTempDirsForTask(id);
         await agentService.compactRawMessages(id);
       }
 
@@ -1541,6 +1758,10 @@ export function registerIpcHandlers() {
       if (!project) throw new Error('Project not found');
 
       const worktreeExists = await pathExists(params.worktreePath);
+      const editorCloseWarning = await closeEditorWindowsForTaskWorktree({
+        id: taskId,
+        worktreePath: params.worktreePath,
+      });
       if (worktreeExists) {
         await cleanupWorktree({
           worktreePath: params.worktreePath,
@@ -1554,6 +1775,7 @@ export function registerIpcHandlers() {
           branchName: params.branchName,
         });
       }
+      return { editorCloseWarning };
     },
   );
   ipcMain.handle('tasks:clearUserCompleted', (_, id: string) =>
@@ -1945,11 +2167,12 @@ export function registerIpcHandlers() {
 
     const startCommitHash =
       task.startCommitHash ?? (await getCurrentCommitHash(diffRootPath));
-    return getWorktreeDiff(
+    const diff = await getWorktreeDiff(
       diffRootPath,
       startCommitHash,
       task.worktreePath ? task.sourceBranch : null,
     );
+    return ensureFeatureMapFileInDiff(task, diffRootPath, diff);
   });
 
   ipcMain.handle('tasks:worktree:getCommits', async (_, taskId: string) => {
@@ -2046,14 +2269,15 @@ export function registerIpcHandlers() {
         throw new Error(`Task ${taskId} does not have a worktree`);
       }
 
+      const project = await ProjectRepository.findById(task.projectId);
+      if (!project) {
+        throw new Error(`Project ${task.projectId} not found`);
+      }
+
       let { message } = params;
 
       // Auto-generate commit message if not provided
       if (!message) {
-        const project = await ProjectRepository.findById(task.projectId);
-        if (!project) {
-          throw new Error(`Project ${task.projectId} not found`);
-        }
         const generated = await generateCommitMessageForTask(
           task,
           project,
@@ -2069,8 +2293,10 @@ export function registerIpcHandlers() {
 
       return commitWorktreeChanges({
         worktreePath: task.worktreePath,
+        projectPath: project.path,
         message,
         stageAll: params.stageAll,
+        noVerify: project.commitWithNoVerify,
       });
     },
   );
@@ -2172,8 +2398,10 @@ export function registerIpcHandlers() {
         if (status.hasUnstagedChanges) {
           await commitWorktreeChanges({
             worktreePath: task.worktreePath,
+            projectPath: project.path,
             message: 'chore: commit unstaged changes before merge',
             stageAll: true,
+            noVerify: project.commitWithNoVerify,
           });
         }
       }
@@ -2184,6 +2412,7 @@ export function registerIpcHandlers() {
         targetBranch: params.targetBranch,
         squash: params.squash,
         commitMessage,
+        noVerify: project.commitWithNoVerify,
       });
 
       // On successful merge, clear worktree fields and mark the task as
@@ -2385,6 +2614,23 @@ export function registerIpcHandlers() {
       const { getWorkItemComments } =
         await import('../services/azure-devops-service');
       return getWorkItemComments(params);
+    },
+  );
+
+  ipcMain.handle(
+    'azureDevOps:addWorkItemComment',
+    async (
+      _event,
+      params: {
+        providerId: string;
+        projectName: string;
+        workItemId: number;
+        text: string;
+      },
+    ) => {
+      const { addWorkItemComment } =
+        await import('../services/azure-devops-service');
+      return addWorkItemComment(params);
     },
   );
 
@@ -2634,6 +2880,22 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:updateThreadComment',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        threadId: number;
+        commentId: number;
+        content: string;
+      },
+    ) => updateThreadComment(params),
+  );
+
+  ipcMain.handle(
     'azureDevOps:updateThreadStatus',
     (
       _,
@@ -2646,6 +2908,12 @@ export function registerIpcHandlers() {
         status: string;
       },
     ) => updateThreadStatus(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:searchIdentities',
+    (_, params: { providerId: string; query: string }) =>
+      searchIdentities(params),
   );
 
   ipcMain.handle(
@@ -2742,6 +3010,11 @@ export function registerIpcHandlers() {
         );
       }
 
+      const project = await ProjectRepository.findById(task.projectId);
+      if (!project) {
+        throw new Error(`Project ${task.projectId} not found`);
+      }
+
       let committedBeforePush = false;
 
       if (params?.commitUnstaged) {
@@ -2749,8 +3022,10 @@ export function registerIpcHandlers() {
         if (status.hasUncommittedChanges) {
           await commitWorktreeChanges({
             worktreePath: task.worktreePath,
+            projectPath: project.path,
             message: 'chore: commit unstaged changes before push',
             stageAll: true,
+            noVerify: project.commitWithNoVerify,
           });
           committedBeforePush = true;
         }
@@ -2779,13 +3054,14 @@ export function registerIpcHandlers() {
     'tasks:worktree:delete',
     async (_, taskId: string, options?: { keepBranch?: boolean }) => {
       const task = await TaskRepository.findById(taskId);
-      if (!task?.worktreePath) return;
+      if (!task?.worktreePath) return {};
 
       const project = await ProjectRepository.findById(task.projectId);
-      if (!project) return;
+      if (!project) return {};
 
       const shouldKeepBranch = options?.keepBranch ?? false;
       const worktreeExists = await pathExists(task.worktreePath);
+      const editorCloseWarning = await closeEditorWindowsForTaskWorktree(task);
 
       if (worktreeExists) {
         await cleanupWorktree({
@@ -2808,6 +3084,7 @@ export function registerIpcHandlers() {
         startCommitHash: null,
         sourceBranch: null,
       });
+      return { editorCloseWarning };
     },
   );
 
@@ -2869,8 +3146,10 @@ export function registerIpcHandlers() {
       if (status.hasUncommittedChanges) {
         await commitWorktreeChanges({
           worktreePath: task.worktreePath,
+          projectPath: project.path,
           message: 'chore: commit unstaged changes before PR creation',
           stageAll: true,
+          noVerify: project.commitWithNoVerify,
         });
       }
 
@@ -2910,7 +3189,9 @@ export function registerIpcHandlers() {
       });
 
       // Step 6: Optionally delete worktree (keep branch)
+      let editorCloseWarning: string | undefined;
       if (params.deleteWorktree) {
+        editorCloseWarning = await closeEditorWindowsForTaskWorktree(task);
         await cleanupWorktree({
           worktreePath: task.worktreePath,
           projectPath: project.path,
@@ -2920,7 +3201,7 @@ export function registerIpcHandlers() {
         await TaskRepository.update(params.taskId, { worktreePath: null });
       }
 
-      return { id: pr.id, url: pr.url };
+      return { id: pr.id, url: pr.url, editorCloseWarning };
     },
   );
 
@@ -3217,6 +3498,38 @@ export function registerIpcHandlers() {
       return SettingsRepository.set(key, value);
     },
   );
+  ipcMain.handle(
+    'backendConfig:getUserConfig',
+    (_: unknown, backend: unknown) => {
+      if (backend !== 'claude-code' && backend !== 'opencode') {
+        throw new Error('Invalid backend');
+      }
+      return readBackendUserConfig(backend);
+    },
+  );
+  ipcMain.handle(
+    'backendConfig:setUserConfig',
+    (_: unknown, backend: unknown, content: unknown) => {
+      if (backend !== 'claude-code' && backend !== 'opencode') {
+        throw new Error('Invalid backend');
+      }
+      if (typeof content !== 'string') {
+        throw new Error('Invalid config content');
+      }
+      return writeBackendUserConfig({ backend, content });
+    },
+  );
+  ipcMain.handle('projectPromptPreface:get', async (_, projectPath: string) =>
+    readProjectPromptPreface(projectPath),
+  );
+  ipcMain.handle(
+    'projectPromptPreface:set',
+    async (
+      _,
+      projectPath: string,
+      value: import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting,
+    ) => writeProjectPromptPreface(projectPath, value),
+  );
 
   // Shell
   ipcMain.handle('shell:getAvailableEditors', async () => {
@@ -3250,6 +3563,10 @@ export function registerIpcHandlers() {
     await systemCalendarService.revealMeeting(meeting);
   });
 
+  ipcMain.handle('calendar:setIgnoredMeetingIds', async (_, ids: string[]) => {
+    systemCalendarService.setIgnoredMeetingIds(ids);
+  });
+
   ipcMain.handle(
     'shell:openInEditor',
     async (_, dirPath: string, folderContext?: string) => {
@@ -3269,6 +3586,7 @@ export function registerIpcHandlers() {
 
     const ENTRIES = [
       '**/.jean-claude/settings.local.json',
+      '**/.jean-claude/ignore',
       '**/.jean-claude/tmp/',
     ];
 

@@ -52,17 +52,19 @@ export function useAgentControls({
   const addToast = useToastStore((s) => s.addToast);
 
   const start = useCallback(async () => {
-    if (!stepId || startInFlightRef.current) return;
+    if (!stepId || startInFlightRef.current) return false;
     startInFlightRef.current = true;
     setIsStarting(true);
     try {
       await api.agent.start(stepId);
+      return true;
     } catch (error) {
       addToast({
         type: 'error',
         message:
           error instanceof Error ? error.message : 'Failed to start the step',
       });
+      return false;
     } finally {
       startInFlightRef.current = false;
       setIsStarting(false);

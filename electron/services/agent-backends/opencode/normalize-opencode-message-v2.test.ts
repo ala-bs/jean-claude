@@ -85,7 +85,7 @@ describe('normalizeOpenCodeV2', () => {
       sessionID: 'session-1',
       type: 'text',
       text: 'Hello',
-    } as Part;
+    } as never;
     const ctx = createContext();
     ctx.rawMessages.set(info.id, info as Message);
     ctx.rawParts.set(info.id, [part]);
@@ -408,6 +408,189 @@ describe('normalizeOpenCodeV2', () => {
             },
           ],
         },
+      },
+    });
+  });
+
+  it('preserves system permission attribution across tool updates', () => {
+    const info = createAssistantMessage('msg-permission-update');
+    const ctx = createContext();
+    const part = {
+      id: 'tool-1',
+      messageID: info.id,
+      sessionID: 'session-1',
+      type: 'tool',
+      tool: 'bash',
+      callID: 'call-1',
+      state: {
+        status: 'running',
+        input: { command: 'pnpm test' },
+      },
+    };
+    ctx.rawMessages.set(info.id, info as Message);
+    ctx.rawParts.set(info.id, [part as never]);
+    ctx.pendingToolPermissionDecisions = [
+      {
+        allowedBy: 'system',
+        tool: 'bash',
+        matchValue: 'pnpm test',
+        rule: { tool: 'bash', pattern: 'pnpm *' },
+      },
+    ];
+
+    const runningEvents = normalizeOpenCodeV2(
+      {
+        kind: 'event',
+        event: {
+          type: 'message.part.updated',
+          properties: { part: part as never },
+        } as never,
+      },
+      ctx,
+    );
+    ctx.emittedEntryIds.add('msg-permission-update:tool-1');
+
+    const completedPart = {
+      ...part,
+      state: {
+        status: 'completed',
+        input: { command: 'pnpm test' },
+        output: 'ok',
+      },
+    };
+    ctx.rawParts.set(info.id, [completedPart as never]);
+
+    const completedEvents = normalizeOpenCodeV2(
+      {
+        kind: 'event',
+        event: {
+          type: 'message.part.updated',
+          properties: { part: completedPart as never },
+        } as never,
+      },
+      ctx,
+    );
+
+    expect(runningEvents[0]).toMatchObject({
+      entry: {
+        permission: {
+          allowedBy: 'system',
+          rule: { tool: 'bash', pattern: 'pnpm *' },
+        },
+      },
+    });
+    expect(completedEvents[0]).toMatchObject({
+      type: 'entry-update',
+      entry: {
+        permission: {
+          allowedBy: 'system',
+          rule: { tool: 'bash', pattern: 'pnpm *' },
+        },
+      },
+    });
+  });
+
+  it('marks OpenCode native auto-allows as system permissions', () => {
+    const info = createAssistantMessage('msg-native-auto-allow');
+    const ctx = createContext();
+    ctx.permissionRules = [
+      { tool: 'bash', pattern: 'pnpm *', action: 'allow' },
+    ];
+    const part = {
+      id: 'tool-1',
+      messageID: info.id,
+      sessionID: 'session-1',
+      type: 'tool',
+      tool: 'bash',
+      callID: 'call-1',
+      state: {
+        status: 'running',
+        input: { command: 'pnpm test' },
+      },
+    } as never;
+    ctx.rawMessages.set(info.id, info as Message);
+    ctx.rawParts.set(info.id, [part]);
+
+    const events = normalizeOpenCodeV2(
+      {
+        kind: 'event',
+        event: {
+          type: 'message.part.updated',
+          properties: { part },
+        } as never,
+      },
+      ctx,
+    );
+
+    expect(events[0]).toMatchObject({
+      entry: {
+        permission: {
+          allowedBy: 'system',
+          rule: { tool: 'bash', pattern: 'pnpm *' },
+        },
+      },
+    });
+  });
+
+  it('emits synthetic skill content prompt when skill tool completes', () => {
+    const info = createAssistantMessage('msg-skill');
+    const ctx = createContext();
+    ctx.rawMessages.set(info.id, info as Message);
+    ctx.emittedEntryIds.add('msg-skill:tool-1');
+
+    const part = {
+      id: 'tool-1',
+      messageID: info.id,
+      sessionID: 'session-1',
+      type: 'tool',
+      tool: 'skill',
+      callID: 'call-skill-1',
+      state: {
+        status: 'completed',
+        input: { name: 'brainstorming' },
+        output:
+          '<skill_content name="brainstorming">\n# Skill\n</skill_content>',
+        metadata: { name: 'brainstorming' },
+        title: 'Loaded skill: brainstorming',
+        time: {
+          start: 1_717_000_000_000,
+          end: 1_717_000_000_001,
+        },
+      },
+    } as Part;
+    ctx.rawParts.set(info.id, [part]);
+
+    const events = normalizeOpenCodeV2(
+      {
+        kind: 'event',
+        event: {
+          type: 'message.part.updated',
+          properties: { part },
+        } as never,
+      },
+      ctx,
+    );
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      type: 'entry-update',
+      entry: {
+        id: 'msg-skill:tool-1',
+        type: 'tool-use',
+        name: 'skill',
+        skillName: 'brainstorming',
+        result: {},
+      },
+    });
+    expect(events[1]).toMatchObject({
+      type: 'entry',
+      entry: {
+        id: 'msg-skill:tool-1:skill-content',
+        type: 'user-prompt',
+        value:
+          '<skill_content name="brainstorming">\n# Skill\n</skill_content>',
+        isSynthetic: true,
+        parentToolId: 'call-skill-1',
       },
     });
   });
