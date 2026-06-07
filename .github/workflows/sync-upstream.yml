@@ -63,27 +63,29 @@ jobs:
           git merge origin/main --no-edit
           git push -u origin "${SYNC_BRANCH}"
 
+          PR_BODY="${RUNNER_TEMP}/pr-body.md"
+          {
+            echo "Automated daily sync from [shantlr/jean-claude](https://github.com/shantlr/jean-claude) \`main\`."
+            echo ""
+            echo "## What to do"
+            echo "1. Review the diff"
+            echo "2. Wait for **Theme audit** CI (or run locally: \`pnpm theme:audit --base origin/local/light-theme\`)"
+            echo "3. Fix any new hardcoded colors, then merge this PR"
+            echo ""
+            echo "If this PR has merge conflicts, close it and run locally:"
+            echo '```bash'
+            echo "git fetch upstream origin"
+            echo "git checkout local/light-theme"
+            echo "git merge upstream/main"
+            echo "# resolve conflicts, pnpm test, git push origin local/light-theme"
+            echo '```'
+          } > "${PR_BODY}"
+
           gh pr create \
             --base local/light-theme \
             --head "${SYNC_BRANCH}" \
             --title "Sync upstream/main (${DATE})" \
-            --body "$(cat <<EOF
-Automated daily sync from [shantlr/jean-claude](https://github.com/shantlr/jean-claude) \`main\`.
-
-## What to do
-1. Review the diff
-2. Wait for **Theme audit** CI (or run locally: \`pnpm theme:audit --base origin/local/light-theme\`)
-3. Fix any new hardcoded colors, then merge this PR
-
-If this PR has merge conflicts, close it and run locally:
-\`\`\`bash
-git fetch upstream origin
-git checkout local/light-theme
-git merge upstream/main
-# resolve conflicts, pnpm test, git push origin local/light-theme
-\`\`\`
-EOF
-)"
+            --body-file "${PR_BODY}"
 
       - name: Report merge conflict
         if: failure()
