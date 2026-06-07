@@ -299,7 +299,14 @@ export function RunButton({
             icon={<FileText />}
             aria-label="Open command logs"
             title="Open command logs (⌘L)"
-          ></Button>
+          >
+            <Kbd
+              shortcut="cmd+l"
+              className={clsx(
+                isLogsPaneOpen && 'border-white/25 bg-white/10 text-white/90',
+              )}
+            />
+          </Button>
         )}
       </div>
 

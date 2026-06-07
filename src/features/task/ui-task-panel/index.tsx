@@ -1873,6 +1873,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           <CommandLogsPane
             taskId={taskId}
             projectId={project.id}
+            workingDir={taskRootPath}
             selectedCommandId={rightPane.selectedCommandId}
             onSelectCommand={selectCommandLogsTab}
             onClose={closeRightPane}
