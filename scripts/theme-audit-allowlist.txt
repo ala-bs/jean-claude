@@ -1,0 +1,8 @@
+# Paths still being migrated (remove lines as you fix files).
+# One repo-relative path per line. Lines starting with # are ignored.
+
+src/features/task/ui-status-indicator/index.tsx
+src/features/task/ui-task-panel/file-explorer-pane/file-tree.tsx
+src/features/pull-request/ui-pr-ci-inline/index.tsx
+src/features/pull-request/ui-pr-checks/index.tsx
+src/features/task/ui-pr-review-validation/index.tsx
