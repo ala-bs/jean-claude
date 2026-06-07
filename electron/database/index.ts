@@ -59,6 +59,19 @@ export async function migrateDatabase() {
     await reprocessAllTasksAfterV2Migration();
     dbg.dbMigration('Post-migration: v2 re-normalization complete');
   }
+
+  const rawCompressionApplied = results?.some(
+    (r) =>
+      r.migrationName === '065_compress_raw_messages' && r.status === 'Success',
+  );
+
+  if (rawCompressionApplied) {
+    dbg.dbMigration('Post-migration: vacuuming compressed raw messages...');
+    await sql`PRAGMA wal_checkpoint(TRUNCATE)`.execute(db);
+    await sql`VACUUM`.execute(db);
+    await sql`PRAGMA wal_checkpoint(TRUNCATE)`.execute(db);
+    dbg.dbMigration('Post-migration: raw message vacuum complete');
+  }
 }
 
 /**

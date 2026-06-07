@@ -19,6 +19,8 @@ import {
 import { replayOpenCodeContextUpdate } from '../../services/agent-backends/opencode/opencode-context-replay';
 import { db } from '../index';
 
+import { decodeRawMessageData } from './raw-message-data';
+
 export const AgentMessageRepository = {
   /**
    * Find all normalized entries for a task.
@@ -229,6 +231,8 @@ export const AgentMessageRepository = {
         'raw_messages.id as rawId',
         'raw_messages.messageIndex',
         'raw_messages.rawData',
+        'raw_messages.rawDataBlob',
+        'raw_messages.rawDataEncoding',
         'raw_messages.rawFormat',
         'raw_messages.backendSessionId',
         'raw_messages.createdAt',
@@ -289,7 +293,7 @@ export const AgentMessageRepository = {
     for (const raw of rawRows) {
       pairs.push({
         messageIndex: raw.messageIndex,
-        rawData: raw.rawData,
+        rawData: decodeRawMessageData(raw),
         rawFormat: raw.rawFormat,
         backendSessionId: raw.backendSessionId,
         normalizedData: normalizedByRawId.get(raw.rawId) ?? null,
@@ -336,7 +340,15 @@ export const AgentMessageRepository = {
   reprocessNormalization: async (taskId: string): Promise<number> => {
     const rawRows = await db
       .selectFrom('raw_messages')
-      .select(['id', 'messageIndex', 'rawData', 'rawFormat', 'stepId'])
+      .select([
+        'id',
+        'messageIndex',
+        'rawData',
+        'rawDataBlob',
+        'rawDataEncoding',
+        'rawFormat',
+        'stepId',
+      ])
       .where('taskId', '=', taskId)
       .orderBy('messageIndex', 'asc')
       .execute();
@@ -370,8 +382,9 @@ export const AgentMessageRepository = {
       };
 
       for (const raw of rawRows) {
-        if (!raw.rawData || raw.rawFormat !== 'claude-code') continue;
-        const rawMsg = JSON.parse(raw.rawData) as AgentMessage;
+        const rawData = decodeRawMessageData(raw);
+        if (!rawData || raw.rawFormat !== 'claude-code') continue;
+        const rawMsg = JSON.parse(rawData) as AgentMessage;
         const events = normalizeClaudeMessageV2(rawMsg, claudeCtx);
 
         for (const event of events) {
@@ -426,8 +439,9 @@ export const AgentMessageRepository = {
       };
 
       for (const raw of rawRows) {
-        if (!raw.rawData || raw.rawFormat !== 'opencode') continue;
-        const parsed = JSON.parse(raw.rawData);
+        const rawData = decodeRawMessageData(raw);
+        if (!rawData || raw.rawFormat !== 'opencode') continue;
+        const parsed = JSON.parse(rawData);
 
         // Determine if this is an SSE event or a prompt-result
         let input: OpenCodeRawInput;
