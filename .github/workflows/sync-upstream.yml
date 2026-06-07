@@ -84,7 +84,7 @@ jobs:
               echo ""
               echo "## Resolve locally"
               echo '```bash'
-              echo "git fetch upstream origin"
+              echo "git fetch upstream && git fetch origin"
               echo "git checkout local/light-theme"
               echo "git merge upstream/main"
               echo "# For each file above: keep upstream logic, keep theme tokens"
@@ -160,7 +160,7 @@ jobs:
             echo ""
             echo "Resolve locally:"
             echo '```bash'
-            echo "git fetch upstream origin"
+            echo "git fetch upstream && git fetch origin"
             echo "git checkout main"
             echo "git merge upstream/main"
             echo "git push origin main"

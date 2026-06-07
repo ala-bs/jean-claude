@@ -73,7 +73,7 @@ pnpm theme:audit --base origin/local/light-theme
 ## Manual upstream sync (if Action failed)
 
 ```bash
-git fetch upstream origin
+git fetch upstream && git fetch origin
 git checkout local/light-theme
 git merge upstream/main
 pnpm theme:audit --base HEAD~1   # files touched by merge

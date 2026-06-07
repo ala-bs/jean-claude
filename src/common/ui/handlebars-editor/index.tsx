@@ -481,12 +481,12 @@ export function HandlebarsEditor({
                 [/--\}\}/, 'comment.handlebars', '@pop'],
                 [/./, 'comment.handlebars'],
               ],
-              handlebars: {
+              handlebars: [
                 [/\}\}/, 'delimiter.handlebars', '@pop'],
                 [/#[\w-]+|\/[\w-]+/, 'keyword.handlebars'],
                 [/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/, 'string'],
                 [/\b[\w.]+\b/, 'variable.handlebars'],
-              },
+              ],
             },
           });
 
