@@ -1,0 +1,57 @@
+name: Theme audit
+
+on:
+  pull_request:
+    branches: [local/light-theme]
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit changed files in PR
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          node scripts/theme-audit.mjs --base "origin/${{ github.base_ref }}"
+
+      - name: Audit all src (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        run: node scripts/theme-audit.mjs
+
+      - name: Comment PR with audit output
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('node:child_process');
+            let body = '### Theme audit failed\n\nHardcoded colors or palette classes found in changed files. Run locally:\n```bash\npnpm theme:audit --base origin/local/light-theme\n```\n\n<details><summary>Log</summary>\n\n```\n';
+            try {
+              execSync(
+                'node scripts/theme-audit.mjs --base origin/${{ github.base_ref }}',
+                { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+              );
+            } catch (e) {
+              body += (e.stdout || '') + (e.stderr || e.message || '');
+            }
+            body += '\n```\n</details>';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });

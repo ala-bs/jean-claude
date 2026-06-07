@@ -1,0 +1,97 @@
+# Daily merge of shantlr/jean-claude main into this fork, then opens a PR
+# into local/light-theme. Runs on the fork's DEFAULT branch only.
+#
+# After first push: GitHub → Settings → Actions → General → allow workflows.
+# Set default branch to local/light-theme (recommended) or merge this file into main.
+
+name: Daily upstream sync
+
+on:
+  schedule:
+    # 08:00 UTC — for 08:00 Paris (CET) use "0 7 * * *"; for CEST use "0 6 * * *"
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-and-open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync fork main from upstream
+        run: |
+          git remote add upstream https://github.com/shantlr/jean-claude.git
+          git fetch upstream main
+          git checkout main
+          git merge upstream/main --no-edit
+          git push origin main
+
+      - name: Open PR into local/light-theme
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y-%m-%d)
+          SYNC_BRANCH="sync/upstream-${DATE}"
+
+          git fetch origin local/light-theme main
+          git checkout local/light-theme
+          git pull --ff-only origin local/light-theme
+
+          if gh pr list --base local/light-theme --head "${SYNC_BRANCH}" --state open --json number --jq 'length' | grep -q '^[1-9]'; then
+            echo "Open PR already exists for ${SYNC_BRANCH}"
+            exit 0
+          fi
+
+          git checkout -B "${SYNC_BRANCH}"
+          git merge origin/main --no-edit
+          git push -u origin "${SYNC_BRANCH}"
+
+          gh pr create \
+            --base local/light-theme \
+            --head "${SYNC_BRANCH}" \
+            --title "Sync upstream/main (${DATE})" \
+            --body "$(cat <<EOF
+Automated daily sync from [shantlr/jean-claude](https://github.com/shantlr/jean-claude) \`main\`.
+
+## What to do
+1. Review the diff
+2. Wait for **Theme audit** CI (or run locally: \`pnpm theme:audit --base origin/local/light-theme\`)
+3. Fix any new hardcoded colors, then merge this PR
+
+If this PR has merge conflicts, close it and run locally:
+\`\`\`bash
+git fetch upstream origin
+git checkout local/light-theme
+git merge upstream/main
+# resolve conflicts, pnpm test, git push origin local/light-theme
+\`\`\`
+EOF
+)"
+
+      - name: Report merge conflict
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          gh issue create \
+            --title "Upstream sync failed (${DATE})" \
+            --body "Daily sync could not merge \`upstream/main\`. Resolve conflicts manually on \`local/light-theme\`." \
+            || true
