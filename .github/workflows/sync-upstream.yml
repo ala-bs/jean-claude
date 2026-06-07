@@ -96,14 +96,35 @@ jobs:
               echo "Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             } > "${ISSUE_BODY}"
 
+            CONFLICT_LIST=$(echo "${CONFLICTS}" | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+
+            {
+              echo "## Upstream merge conflicts"
+              echo ""
+              echo "Could not merge \`origin/main\` into \`local/light-theme\`."
+              echo ""
+              echo "### Conflicted files"
+              if [ -n "${CONFLICTS}" ]; then
+                while IFS= read -r file; do
+                  [ -n "${file}" ] && echo "- \`${file}\`"
+                done <<< "${CONFLICTS}"
+              fi
+              echo ""
+              echo "Resolve locally — see repo \`docs/local-fork-automation.md\`."
+            } >> "${GITHUB_STEP_SUMMARY}"
+
             gh label create "upstream-sync" --color "FBCA04" --description "Automated upstream sync" 2>/dev/null || true
-            gh issue create \
+            if ! gh issue create \
               --title "Upstream merge conflicts (${DATE})" \
               --label "upstream-sync" \
-              --body-file "${ISSUE_BODY}" \
-              || true
+              --body-file "${ISSUE_BODY}"; then
+              gh issue create \
+                --title "Upstream merge conflicts (${DATE})" \
+                --body-file "${ISSUE_BODY}" \
+                || echo "::warning::Could not create issue — enable Issues in repo settings"
+            fi
 
-            echo "::error::Merge conflicts in ${CONFLICTS:-unknown files} — see open issue"
+            echo "::error::Merge conflicts in: ${CONFLICT_LIST:-unknown files}. See job Summary."
             exit 1
           fi
 
