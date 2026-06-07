@@ -142,6 +142,50 @@ const TOOL_GUIDANCE: Record<
   },
 };
 
+const TOOL_SAMPLE_VALUES: Record<string, string[]> = {
+  bash: [
+    'git status',
+    'git status --short',
+    'git diff src/app.ts',
+    'echo "hello world"',
+    'echo arg1 arg2 arg3',
+    'pnpm install',
+    'pnpm lint --fix',
+    'npm run build',
+    'rm -rf node_modules',
+  ],
+  read: [
+    'package.json',
+    'src/app.ts',
+    'src/components/button.tsx',
+    'src/.env',
+    '/etc/hosts',
+    'README.md',
+  ],
+  edit: [
+    'src/app.ts',
+    'src/components/button.tsx',
+    'config/app.json',
+    'package.json',
+    'README.md',
+  ],
+  write: [
+    'src/app.ts',
+    'dist/index.js',
+    'config/app.json',
+    'tmp/output.txt',
+    'README.md',
+  ],
+  glob: ['**/*.ts', 'src/**/*.tsx', 'src/**', '*.json', 'README.md'],
+  grep: ['TODO', 'TODO|FIXME', 'import React from', 'function handleSave'],
+  webfetch: [
+    'https://docs.example.com/api',
+    'https://api.github.com/repos',
+    'https://example.com/login',
+  ],
+  websearch: ['react hooks', 'typescript generics', 'electron permissions'],
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -223,6 +267,127 @@ function groupPermissions(scope: PermissionScope): ToolGroup[] {
         (a.pattern ?? '').localeCompare(b.pattern ?? ''),
       ),
     }));
+}
+
+function globLikeMatches(
+  pattern: string,
+  value: string,
+  isBash: boolean,
+): boolean {
+  if (pattern === '*') return true;
+  const regex = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*+/g, (stars) => (isBash || stars.length > 1 ? '.*' : '[^/]*'))
+    .replace(/\?/g, isBash ? '.' : '[^/]')
+    .replace(/(\.\*)+/g, '.*');
+  return new RegExp(`^${regex}$`).test(value);
+}
+
+function materializePattern(tool: string, pattern: string): string {
+  const fill = tool === 'bash' ? 'hello' : 'example';
+  return pattern
+    .replace(/\*+/g, fill)
+    .replace(/\?/g, 'x')
+    .replace(/\{subpath\}/g, 'src/app.ts');
+}
+
+function getLiteralPrefix(pattern: string): string {
+  const wildcardIndex = pattern.search(/[?*{]/);
+  return wildcardIndex === -1 ? pattern : pattern.slice(0, wildcardIndex);
+}
+
+function getBashCommand(value: string): string {
+  return value.trim().split(/\s+/)[0] || 'command';
+}
+
+function buildNearMatchCandidates(tool: string, pattern: string): string[] {
+  const prefix = getLiteralPrefix(pattern);
+  if (tool !== 'bash') {
+    return [
+      materializePattern(tool, pattern),
+      `${prefix}example`,
+      `${prefix}sample`,
+    ];
+  }
+
+  const command = getBashCommand(prefix);
+  if (prefix.endsWith(' ')) {
+    return [
+      `${prefix}hello`,
+      `${prefix}"hello world"`,
+      `${prefix}arg1 arg2 arg3`,
+      `${prefix}src/app.ts`,
+      command === 'cd' ? `${prefix}..` : `${prefix}--help`,
+    ];
+  }
+
+  return [
+    materializePattern(tool, pattern),
+    `${prefix} --help`,
+    `${prefix} "hello world"`,
+    `${prefix} arg1 arg2 arg3`,
+    `${prefix} src/app.ts`,
+  ];
+}
+
+function buildNearMissCandidates(tool: string, pattern: string): string[] {
+  const prefix = getLiteralPrefix(pattern);
+  if (tool !== 'bash') {
+    return [
+      prefix || 'unmatched-example',
+      `not-${materializePattern(tool, pattern)}`,
+      `${prefix}other/example`,
+    ];
+  }
+
+  const command = getBashCommand(prefix);
+  if (prefix.endsWith(' ')) {
+    const bareCommand = prefix.trim();
+    return [bareCommand, `${bareCommand}foo`, `${command}-other hello`];
+  }
+
+  const stem = prefix.trim();
+  return [command, `${stem}x`, `${command} other`];
+}
+
+function buildPatternExamples(tool: string, pattern: string) {
+  const trimmed = pattern.trim();
+  if (!trimmed || PATTERNLESS_TOOLS.has(tool)) {
+    return { matches: [], misses: [] };
+  }
+
+  const isBash = tool === 'bash';
+  const generated = materializePattern(tool, trimmed);
+  const samples =
+    TOOL_SAMPLE_VALUES[tool] ?? TOOL_GUIDANCE[tool]?.examples ?? [];
+  const hasWildcard = /[*?{]/.test(trimmed);
+  const candidates = Array.from(
+    new Set([
+      ...buildNearMatchCandidates(tool, trimmed),
+      generated,
+      ...(hasWildcard ? [] : [trimmed]),
+      ...samples,
+      ...(TOOL_GUIDANCE[tool]?.examples ?? []),
+    ]),
+  );
+  const matches = candidates
+    .filter((candidate) => globLikeMatches(trimmed, candidate, isBash))
+    .slice(0, 4);
+
+  const missCandidates = Array.from(
+    new Set([
+      ...buildNearMissCandidates(tool, trimmed),
+      ...samples,
+      `not-${generated}`,
+      `${generated}-extra`,
+      isBash ? 'rm -rf node_modules' : 'unmatched-example',
+    ]),
+  );
+  const misses = missCandidates
+    .filter((candidate) => !globLikeMatches(trimmed, candidate, isBash))
+    .slice(0, 4);
+
+  return { matches, misses };
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +540,71 @@ function ToolIcon({ tool }: { tool: string }) {
   }
 }
 
+function PatternMatchPreview({
+  tool,
+  pattern,
+  compact = false,
+}: {
+  tool: string;
+  pattern: string;
+  compact?: boolean;
+}) {
+  const { matches, misses } = useMemo(
+    () => buildPatternExamples(tool, pattern),
+    [tool, pattern],
+  );
+
+  if (matches.length === 0 && misses.length === 0) return null;
+
+  return (
+    <div
+      className={clsx(
+        'text-[11px]',
+        compact
+          ? 'bg-bg-3/95 absolute top-full left-0 z-30 mt-1 w-max max-w-[min(520px,calc(100vw-2rem))] rounded-lg border border-white/10 p-2 shadow-xl'
+          : 'border-glass-border/50 bg-bg-1/35 mt-2 rounded-lg border p-2',
+      )}
+    >
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="min-w-0">
+          <div className="text-status-done mb-1 font-medium">Matches</div>
+          <div className="flex flex-wrap gap-1">
+            {matches.length > 0 ? (
+              matches.map((example) => (
+                <span
+                  key={example}
+                  className="bg-status-done/10 text-status-done rounded px-1.5 py-0.5 font-mono"
+                >
+                  {example}
+                </span>
+              ))
+            ) : (
+              <span className="text-ink-4">No sample matches</span>
+            )}
+          </div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-status-fail mb-1 font-medium">Misses</div>
+          <div className="flex flex-wrap gap-1">
+            {misses.length > 0 ? (
+              misses.map((example) => (
+                <span
+                  key={example}
+                  className="bg-status-fail/10 text-status-fail rounded px-1.5 py-0.5 font-mono"
+                >
+                  {example}
+                </span>
+              ))
+            ) : (
+              <span className="text-ink-4">Nothing, matches all samples</span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InlineRuleEditor({
   tool,
   initialPattern = '',
@@ -443,54 +673,59 @@ function InlineRuleEditor({
   );
 
   return (
-    <span
-      className={clsx(
-        'inline-flex items-center gap-0.5 rounded-lg border py-0.5 pr-1 pl-0.5 font-mono text-[12.5px] leading-[1.3]',
-        ACTION_CHIP_CLASSES[editAction],
+    <span className="relative inline-flex">
+      <span
+        className={clsx(
+          'inline-flex items-center gap-0.5 rounded-lg border py-0.5 pr-1 pl-0.5 font-mono text-[12.5px] leading-[1.3]',
+          ACTION_CHIP_CLASSES[editAction],
+        )}
+      >
+        <button
+          type="button"
+          onClick={() => setEditAction(nextAction(editAction))}
+          className="inline-flex h-4 w-4 items-center justify-center rounded-md transition-transform hover:scale-110"
+          title="Change action"
+        >
+          <ActionDot action={editAction} glow />
+        </button>
+        {hasPattern ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={editPattern}
+            onChange={(e) => setEditPattern(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onBlur={onCancel}
+            placeholder={TOOL_GUIDANCE[tool]?.placeholder ?? 'pattern'}
+            className="text-ink-1 placeholder:text-ink-4 w-36 bg-transparent px-0.5 font-mono outline-none"
+          />
+        ) : (
+          <span className="text-ink-2 px-1 text-xs italic">All operations</span>
+        )}
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={commitEdit}
+          disabled={isBusy}
+          className="rounded px-1 font-mono text-[10px] font-semibold opacity-80 transition-colors hover:bg-black/20 disabled:opacity-50"
+          aria-label="Save permission rule"
+        >
+          ↵
+        </button>
+        <Button
+          type="button"
+          variant="unstyled"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onCancel}
+          className="text-ink-3 hover:text-ink-1 hover:bg-glass-medium rounded p-1"
+          aria-label="Cancel permission rule"
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </span>
+      {hasPattern && (
+        <PatternMatchPreview tool={tool} pattern={editPattern} compact />
       )}
-    >
-      <button
-        type="button"
-        onClick={() => setEditAction(nextAction(editAction))}
-        className="inline-flex h-4 w-4 items-center justify-center rounded-md transition-transform hover:scale-110"
-        title="Change action"
-      >
-        <ActionDot action={editAction} glow />
-      </button>
-      {hasPattern ? (
-        <input
-          ref={inputRef}
-          type="text"
-          value={editPattern}
-          onChange={(e) => setEditPattern(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onBlur={onCancel}
-          placeholder={TOOL_GUIDANCE[tool]?.placeholder ?? 'pattern'}
-          className="text-ink-1 placeholder:text-ink-4 w-36 bg-transparent px-0.5 font-mono outline-none"
-        />
-      ) : (
-        <span className="text-ink-2 px-1 text-xs italic">All operations</span>
-      )}
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={commitEdit}
-        disabled={isBusy}
-        className="rounded px-1 font-mono text-[10px] font-semibold opacity-80 transition-colors hover:bg-black/20 disabled:opacity-50"
-        aria-label="Save permission rule"
-      >
-        ↵
-      </button>
-      <Button
-        type="button"
-        variant="unstyled"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onCancel}
-        className="text-ink-3 hover:text-ink-1 hover:bg-glass-medium rounded p-1"
-        aria-label="Cancel permission rule"
-      >
-        <X className="h-3.5 w-3.5" />
-      </Button>
     </span>
   );
 }
@@ -1031,6 +1266,7 @@ export function PermissionsEditor({
                 disabled={guidance?.examples.length === 0}
                 size="sm"
               />
+              <PatternMatchPreview tool={tool} pattern={pattern} />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-ink-3 text-xs">Action</label>
