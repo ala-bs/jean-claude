@@ -1,10 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import isEqual from 'lodash-es/isEqual';
 import {
+  ChevronRight,
   Check,
+  FileText,
   FolderOpen,
   ImagePlus,
+  Layers,
+  Maximize2,
+  Minimize2,
   RefreshCw,
+  Search,
   Sparkles,
   Trash2,
   X,
@@ -245,8 +251,76 @@ function ProjectFeatureMapSettings({
   onCreateTask: () => void;
   isGenerating: boolean;
 }) {
+  const [query, setQuery] = useState('');
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [openFileIds, setOpenFileIds] = useState<Set<string>>(() => new Set());
+
+  const flatFeatures = useMemo(
+    () => flattenProjectFeatureMap(featureMap?.features ?? []),
+    [featureMap],
+  );
+  const parentIds = useMemo(
+    () => flatFeatures.filter((feature) => feature.children.length > 0),
+    [flatFeatures],
+  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleIds = useMemo(() => {
+    if (!normalizedQuery) return null;
+    const ids = new Set<string>();
+    for (const feature of flatFeatures) {
+      if (!projectFeatureMapItemMatches(feature, normalizedQuery)) continue;
+      ids.add(feature.id);
+      for (const ancestorId of feature.ancestorIds) ids.add(ancestorId);
+    }
+    return ids;
+  }, [flatFeatures, normalizedQuery]);
+  const rows = useMemo(
+    () =>
+      collectVisibleProjectFeatureRows(featureMap?.features ?? [], {
+        collapsedIds,
+        visibleIds,
+      }),
+    [collapsedIds, featureMap, visibleIds],
+  );
+  const totalFiles = useMemo(() => {
+    const files = new Set<string>();
+    for (const feature of flatFeatures) {
+      for (const file of feature.key_files) files.add(file);
+    }
+    return files.size;
+  }, [flatFeatures]);
+  const anyExpanded = collapsedIds.size < parentIds.length;
+
+  function toggleCollapsed(featureId: string) {
+    setCollapsedIds((current) => {
+      const next = new Set(current);
+      if (next.has(featureId)) next.delete(featureId);
+      else next.add(featureId);
+      return next;
+    });
+  }
+
+  function toggleFiles(featureId: string) {
+    setOpenFileIds((current) => {
+      const next = new Set(current);
+      if (next.has(featureId)) next.delete(featureId);
+      else next.add(featureId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (anyExpanded) {
+      setCollapsedIds(new Set(parentIds.map((feature) => feature.id)));
+      return;
+    }
+    setCollapsedIds(new Set());
+  }
+
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-ink-1 text-lg font-semibold">Feature Map</h2>
@@ -255,13 +329,14 @@ function ProjectFeatureMapSettings({
             it, then save from task details when reviewed.
           </p>
           {featureMap?.generatedAt && (
-            <p className="text-ink-3 mt-1 text-xs">
+            <p className="text-ink-3 mt-2 flex items-center gap-1.5 font-mono text-[11px]">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
               Generated {new Date(featureMap.generatedAt).toLocaleString()}
             </p>
           )}
         </div>
         <Button
-          variant="secondary"
+          variant="accent"
           size="sm"
           onClick={onCreateTask}
           disabled={isGenerating}
@@ -280,68 +355,294 @@ function ProjectFeatureMapSettings({
           </p>
         </div>
       ) : (
-        <div className="grid gap-3">
-          {featureMap.features.map((feature) => (
-            <ProjectFeatureMapCard
-              key={feature.id}
-              feature={feature}
-              depth={0}
-            />
-          ))}
+        <div className="border-glass-border bg-glass-light flex min-h-[460px] flex-1 flex-col overflow-hidden rounded-xl border">
+          <div className="border-glass-border/70 bg-bg-1/40 flex flex-wrap items-center gap-2 border-b p-2.5">
+            <div
+              className={`bg-bg-0/40 flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-3 py-2 sm:max-w-sm ${
+                query ? 'border-accent-1/50' : 'border-glass-border'
+              }`}
+            >
+              <Search
+                className={`h-3.5 w-3.5 shrink-0 ${query ? 'text-accent-1' : 'text-ink-3'}`}
+              />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Filter features, summaries, files..."
+                spellCheck={false}
+                className="text-ink-1 placeholder:text-ink-4 min-w-0 flex-1 bg-transparent text-sm outline-none"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  className="text-ink-3 hover:text-ink-1 rounded p-0.5"
+                  aria-label="Clear feature map filter"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {query && (
+              <span className="text-ink-3 font-mono text-[11px]">
+                {rows.length} match{rows.length === 1 ? '' : 'es'}
+              </span>
+            )}
+            <div className="hidden flex-1 sm:block" />
+            <button
+              type="button"
+              onClick={toggleAll}
+              disabled={!!query}
+              className="border-glass-border bg-glass-medium text-ink-2 hover:text-ink-1 disabled:text-ink-4 inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:cursor-default disabled:opacity-50"
+            >
+              {anyExpanded ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+              {anyExpanded ? 'Collapse all' : 'Expand all'}
+            </button>
+          </div>
+
+          <div className="scroll flex-1 overflow-auto p-1.5">
+            {rows.length > 0 ? (
+              rows.map((row) => (
+                <ProjectFeatureMapRow
+                  key={row.feature.id}
+                  row={row}
+                  query={query}
+                  isOpen={!collapsedIds.has(row.feature.id) || !!visibleIds}
+                  filesOpen={openFileIds.has(row.feature.id)}
+                  onToggleCollapsed={toggleCollapsed}
+                  onToggleFiles={toggleFiles}
+                />
+              ))
+            ) : (
+              <div className="text-ink-3 px-4 py-12 text-center text-sm">
+                No features match "{query}".
+              </div>
+            )}
+          </div>
+
+          <div className="border-glass-border/70 bg-bg-1/40 text-ink-3 flex flex-wrap items-center gap-2 border-t px-3 py-2 font-mono text-[11px]">
+            <span className="inline-flex items-center gap-1.5">
+              <Layers className="text-ink-4 h-3 w-3" />
+              {flatFeatures.length} features
+            </span>
+            <span className="text-ink-4">·</span>
+            <span className="inline-flex items-center gap-1.5">
+              <FileText className="text-ink-4 h-3 w-3" />
+              {totalFiles} files
+            </span>
+            <span className="text-ink-4">·</span>
+            <span>{featureMap.features.length} top-level groups</span>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function ProjectFeatureMapCard({
-  feature,
-  depth,
+function ProjectFeatureMapRow({
+  row,
+  query,
+  isOpen,
+  filesOpen,
+  onToggleCollapsed,
+  onToggleFiles,
 }: {
-  feature: ProjectFeatureMapItem;
-  depth: number;
+  row: ProjectFeatureMapRowData;
+  query: string;
+  isOpen: boolean;
+  filesOpen: boolean;
+  onToggleCollapsed: (featureId: string) => void;
+  onToggleFiles: (featureId: string) => void;
 }) {
+  const { feature, depth } = row;
+  const isParent = feature.children.length > 0;
+
   return (
-    <div
-      className="border-glass-border bg-glass-light rounded-xl border p-4"
-      style={{ marginLeft: depth * 16 }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-ink-1 text-sm font-semibold">{feature.name}</h3>
-          <p className="text-ink-2 mt-1 text-sm leading-relaxed">
-            {feature.summary}
-          </p>
+    <div>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() =>
+          isParent ? onToggleCollapsed(feature.id) : onToggleFiles(feature.id)
+        }
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          if (isParent) onToggleCollapsed(feature.id);
+          else onToggleFiles(feature.id);
+        }}
+        className="hover:bg-glass-medium group flex min-h-8 cursor-pointer items-center gap-2 rounded-lg px-2"
+      >
+        <div className="flex self-stretch" aria-hidden="true">
+          {Array.from({ length: depth }).map((_, index) => (
+            <span key={index} className="border-glass-border/70 w-4 border-l" />
+          ))}
         </div>
-        <span className="text-ink-3 bg-glass-medium shrink-0 rounded-full px-2 py-0.5 text-xs">
-          {feature.key_files.length} files
+
+        {isParent ? (
+          <ChevronRight
+            className={`text-ink-3 group-hover:text-ink-1 h-3.5 w-3.5 shrink-0 transition-transform ${
+              isOpen ? 'rotate-90' : ''
+            }`}
+          />
+        ) : (
+          <span className="flex w-3.5 shrink-0 justify-center">
+            <span className="bg-ink-4 h-1 w-1 rounded-full" />
+          </span>
+        )}
+
+        <span
+          className={`shrink-0 truncate text-sm tracking-[-0.01em] ${
+            depth === 0
+              ? 'text-ink-1 font-semibold'
+              : isParent
+                ? 'text-ink-1 font-medium'
+                : 'text-ink-2'
+          }`}
+        >
+          <ProjectFeatureMapHighlight text={feature.name} query={query} />
+        </span>
+
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleFiles(feature.id);
+          }}
+          className={`inline-flex h-[18px] shrink-0 items-center gap-1 rounded px-1.5 font-mono text-[10px] font-semibold ${
+            filesOpen
+              ? 'border-accent-1/40 bg-accent-1/15 text-accent-1'
+              : 'border-glass-border bg-glass-medium text-ink-3'
+          } border`}
+          title={filesOpen ? 'Hide files' : 'Show files'}
+        >
+          <FileText className="h-2.5 w-2.5" />
+          {feature.key_files.length}
+        </button>
+
+        <span className="text-ink-3 min-w-0 flex-1 truncate text-xs">
+          <ProjectFeatureMapHighlight text={feature.summary} query={query} />
         </span>
       </div>
-      {feature.key_files.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {feature.key_files.map((file) => (
-            <code
-              key={file}
-              className="border-glass-border bg-glass-medium text-ink-2 rounded-md border px-1.5 py-0.5 text-[11px]"
-            >
-              {file}
-            </code>
-          ))}
-        </div>
-      )}
-      {feature.children.length > 0 && (
-        <div className="mt-3 grid gap-2">
-          {feature.children.map((child) => (
-            <ProjectFeatureMapCard
-              key={child.id}
-              feature={child}
-              depth={depth + 1}
-            />
-          ))}
+
+      {filesOpen && feature.key_files.length > 0 && (
+        <div
+          className="flex flex-wrap gap-1.5 pt-0.5 pb-1"
+          style={{ paddingLeft: depth * 16 + 36 }}
+        >
+          {feature.key_files.map((file) => {
+            const slashIndex = file.lastIndexOf('/');
+            const directory =
+              slashIndex >= 0 ? file.slice(0, slashIndex + 1) : '';
+            const basename =
+              slashIndex >= 0 ? file.slice(slashIndex + 1) : file;
+
+            return (
+              <code
+                key={file}
+                className="border-glass-border bg-bg-0/30 text-ink-3 inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px]"
+              >
+                <FileText className="text-ink-4 h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">
+                  <ProjectFeatureMapHighlight text={directory} query={query} />
+                  <span className="text-ink-1">
+                    <ProjectFeatureMapHighlight text={basename} query={query} />
+                  </span>
+                </span>
+              </code>
+            );
+          })}
         </div>
       )}
     </div>
   );
+}
+
+function ProjectFeatureMapHighlight({
+  text,
+  query,
+}: {
+  text: string;
+  query: string;
+}) {
+  const needle = query.trim();
+  if (!needle) return text;
+  const index = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (index < 0) return text;
+
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark className="bg-accent-1/25 text-ink-1 rounded px-0.5">
+        {text.slice(index, index + needle.length)}
+      </mark>
+      {text.slice(index + needle.length)}
+    </>
+  );
+}
+
+type ProjectFeatureMapFlatItem = ProjectFeatureMapItem & {
+  ancestorIds: string[];
+};
+
+type ProjectFeatureMapRowData = {
+  feature: ProjectFeatureMapItem;
+  depth: number;
+};
+
+function flattenProjectFeatureMap(
+  features: ProjectFeatureMapItem[],
+  ancestorIds: string[] = [],
+): ProjectFeatureMapFlatItem[] {
+  return features.flatMap((feature) => [
+    { ...feature, ancestorIds },
+    ...flattenProjectFeatureMap(feature.children, [...ancestorIds, feature.id]),
+  ]);
+}
+
+function projectFeatureMapItemMatches(
+  feature: ProjectFeatureMapItem,
+  query: string,
+) {
+  return (
+    feature.name.toLowerCase().includes(query) ||
+    feature.summary.toLowerCase().includes(query) ||
+    feature.key_files.some((file) => file.toLowerCase().includes(query))
+  );
+}
+
+function collectVisibleProjectFeatureRows(
+  features: ProjectFeatureMapItem[],
+  {
+    collapsedIds,
+    visibleIds,
+    depth = 0,
+  }: {
+    collapsedIds: Set<string>;
+    visibleIds: Set<string> | null;
+    depth?: number;
+  },
+): ProjectFeatureMapRowData[] {
+  return features.flatMap((feature) => {
+    if (visibleIds && !visibleIds.has(feature.id)) return [];
+
+    const row = { feature, depth };
+    const shouldShowChildren = visibleIds || !collapsedIds.has(feature.id);
+    if (!shouldShowChildren) return [row];
+
+    return [
+      row,
+      ...collectVisibleProjectFeatureRows(feature.children, {
+        collapsedIds,
+        visibleIds,
+        depth: depth + 1,
+      }),
+    ];
+  });
 }
 
 function ProjectCommitIgnoreSettings({ projectId }: { projectId: string }) {
@@ -1010,7 +1311,7 @@ export function ProjectSettings({
                 Summary
               </label>
               <Button
-                variant="secondary"
+                variant="accent"
                 size="sm"
                 onClick={handleRegenerateSummary}
                 disabled={regenerateProjectSummary.isPending}
@@ -1076,7 +1377,7 @@ export function ProjectSettings({
                   Upload
                 </Button>
                 <Button
-                  variant="secondary"
+                  variant="accent"
                   size="sm"
                   onClick={handleGenerateLogo}
                   disabled={
@@ -1413,7 +1714,7 @@ export function ProjectSettings({
           />
           <div className="flex gap-2">
             <Button
-              variant="secondary"
+              variant="accent"
               size="sm"
               onClick={handleGenerateContext}
               disabled={isGeneratingContext}
@@ -1562,7 +1863,7 @@ export function ProjectSettings({
               Cancel
             </Button>
             <Button
-              variant="primary"
+              variant="accent"
               size="sm"
               onClick={handleConfirmGenerateLogo}
               disabled={

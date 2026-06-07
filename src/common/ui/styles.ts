@@ -61,6 +61,7 @@ export const sizeClasses = {
 
 export type ButtonVariant =
   | 'primary'
+  | 'accent'
   | 'secondary'
   | 'ghost'
   | 'danger'
@@ -82,6 +83,11 @@ export const buttonVariantClasses: Record<
   primary: {
     base: 'bg-acc text-bg-0 border border-transparent',
     hover: 'hover:brightness-110',
+    active: 'active:brightness-90',
+  },
+  accent: {
+    base: 'border border-acc-line bg-[linear-gradient(135deg,color-mix(in_oklch,var(--color-acc)_28%,transparent),color-mix(in_oklch,var(--color-acc)_10%,transparent))] text-ink-0 shadow-[0_0_22px_color-mix(in_oklch,var(--color-acc)_14%,transparent)]',
+    hover: 'hover:border-acc hover:brightness-110',
     active: 'active:brightness-90',
   },
   secondary: {
