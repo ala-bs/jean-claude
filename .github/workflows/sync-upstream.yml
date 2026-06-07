@@ -2,7 +2,7 @@
 # into local/light-theme. Runs on the fork's DEFAULT branch only.
 #
 # After first push: GitHub → Settings → Actions → General → allow workflows.
-# Set default branch to local/light-theme (recommended) or merge this file into main.
+# Workflows must exist on the default branch (fork main).
 
 name: Daily upstream sync
 
@@ -15,6 +15,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 concurrency:
   group: upstream-sync
@@ -35,7 +36,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Sync fork main from upstream
+        id: sync_main
         run: |
+          set -euo pipefail
           git remote add upstream https://github.com/shantlr/jean-claude.git
           git fetch upstream main
           git checkout main
@@ -43,10 +46,11 @@ jobs:
           git push origin main
 
       - name: Open PR into local/light-theme
+        id: open_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           DATE=$(date -u +%Y-%m-%d)
           SYNC_BRANCH="sync/upstream-${DATE}"
 
@@ -60,7 +64,49 @@ jobs:
           fi
 
           git checkout -B "${SYNC_BRANCH}"
-          git merge origin/main --no-edit
+
+          if ! git merge origin/main --no-edit; then
+            CONFLICTS=$(git diff --name-only --diff-filter=U | sort)
+            git merge --abort || true
+
+            ISSUE_BODY="${RUNNER_TEMP}/issue-body.md"
+            {
+              echo "Automated sync could not merge \`origin/main\` into \`local/light-theme\`."
+              echo ""
+              echo "## Conflicted files"
+              if [ -n "${CONFLICTS}" ]; then
+                while IFS= read -r file; do
+                  [ -n "${file}" ] && echo "- \`${file}\`"
+                done <<< "${CONFLICTS}"
+              else
+                echo "_Merge failed but no conflict list was produced._"
+              fi
+              echo ""
+              echo "## Resolve locally"
+              echo '```bash'
+              echo "git fetch upstream origin"
+              echo "git checkout local/light-theme"
+              echo "git merge upstream/main"
+              echo "# For each file above: keep upstream logic, keep theme tokens"
+              echo "pnpm install && pnpm test"
+              echo "pnpm theme:audit -- --base HEAD~1"
+              echo "git push origin local/light-theme"
+              echo '```'
+              echo ""
+              echo "Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            } > "${ISSUE_BODY}"
+
+            gh label create "upstream-sync" --color "FBCA04" --description "Automated upstream sync" 2>/dev/null || true
+            gh issue create \
+              --title "Upstream merge conflicts (${DATE})" \
+              --label "upstream-sync" \
+              --body-file "${ISSUE_BODY}" \
+              || true
+
+            echo "::error::Merge conflicts in ${CONFLICTS:-unknown files} — see open issue"
+            exit 1
+          fi
+
           git push -u origin "${SYNC_BRANCH}"
 
           PR_BODY="${RUNNER_TEMP}/pr-body.md"
@@ -71,14 +117,6 @@ jobs:
             echo "1. Review the diff"
             echo "2. Wait for **Theme audit** CI (or run locally: \`pnpm theme:audit --base origin/local/light-theme\`)"
             echo "3. Fix any new hardcoded colors, then merge this PR"
-            echo ""
-            echo "If this PR has merge conflicts, close it and run locally:"
-            echo '```bash'
-            echo "git fetch upstream origin"
-            echo "git checkout local/light-theme"
-            echo "git merge upstream/main"
-            echo "# resolve conflicts, pnpm test, git push origin local/light-theme"
-            echo '```'
           } > "${PR_BODY}"
 
           gh pr create \
@@ -87,13 +125,29 @@ jobs:
             --title "Sync upstream/main (${DATE})" \
             --body-file "${PR_BODY}"
 
-      - name: Report merge conflict
-        if: failure()
+      - name: Report upstream main sync failure
+        if: failure() && steps.sync_main.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           DATE=$(date -u +%Y-%m-%d)
+          ISSUE_BODY="${RUNNER_TEMP}/sync-main-failure.md"
+          {
+            echo "Could not merge \`upstream/main\` into fork \`main\`."
+            echo ""
+            echo "Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo ""
+            echo "Resolve locally:"
+            echo '```bash'
+            echo "git fetch upstream origin"
+            echo "git checkout main"
+            echo "git merge upstream/main"
+            echo "git push origin main"
+            echo '```'
+          } > "${ISSUE_BODY}"
+          gh label create "upstream-sync" --color "FBCA04" --description "Automated upstream sync" 2>/dev/null || true
           gh issue create \
-            --title "Upstream sync failed (${DATE})" \
-            --body "Daily sync could not merge \`upstream/main\`. Resolve conflicts manually on \`local/light-theme\`." \
+            --title "Upstream main sync failed (${DATE})" \
+            --label "upstream-sync" \
+            --body-file "${ISSUE_BODY}" \
             || true
