@@ -111,3 +111,15 @@ Do **not** use “Re-run jobs” on an old failed run — that replays the broke
 
 - PRs must target **`local/light-theme`**.
 - `theme-audit.yml` must be on the default branch (same as above).
+
+### Sync failed with merge conflicts
+
+When upstream touches the same files as your theme, the workflow:
+
+1. Aborts the merge (no broken PR branch)
+2. Opens a GitHub **issue** titled `Upstream merge conflicts (YYYY-MM-DD)` with the **list of conflicted files**
+3. Marks the workflow run as failed (red)
+
+Resolve using the issue’s commands, then close the issue. No need to merge a sync PR for that cycle.
+
+After editing workflows, sync to fork `main` (see step 3 above) so Actions picks up changes.
