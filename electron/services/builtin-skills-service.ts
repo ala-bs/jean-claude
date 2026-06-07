@@ -151,15 +151,32 @@ Examples:
 
 /**
  * Upserts all builtin skills to disk.
- * Called on every app startup to ensure builtin skills exist and are not
- * modified by the user. Overwrites any existing content.
+ * Called on every app startup to ensure builtin skills exist. Production
+ * overwrites existing content; dev preserves local edits to installed skills.
  */
-export async function upsertBuiltinSkills(): Promise<void> {
-  await fs.mkdir(JC_BUILTIN_SKILLS_DIR, { recursive: true });
+export async function upsertBuiltinSkills({
+  preserveExisting = false,
+  skillsDir = JC_BUILTIN_SKILLS_DIR,
+}: {
+  preserveExisting?: boolean;
+  skillsDir?: string;
+} = {}): Promise<void> {
+  await fs.mkdir(skillsDir, { recursive: true });
 
   for (const skill of BUILTIN_SKILLS) {
-    const skillDir = path.join(JC_BUILTIN_SKILLS_DIR, skill.dirName);
+    const skillDir = path.join(skillsDir, skill.dirName);
     await fs.mkdir(skillDir, { recursive: true });
+    const skillMdPath = path.join(skillDir, 'SKILL.md');
+
+    if (preserveExisting) {
+      try {
+        await fs.access(skillMdPath);
+        dbg.main('Preserved existing builtin skill: %s', skill.name);
+        continue;
+      } catch {
+        // Missing builtin skill; install it below.
+      }
+    }
 
     const skillMd = buildSkillMd({
       name: skill.name,
@@ -167,7 +184,7 @@ export async function upsertBuiltinSkills(): Promise<void> {
       content: skill.content,
     });
 
-    await fs.writeFile(path.join(skillDir, 'SKILL.md'), skillMd, 'utf-8');
+    await fs.writeFile(skillMdPath, skillMd, 'utf-8');
     dbg.main('Upserted builtin skill: %s', skill.name);
   }
 }

@@ -148,8 +148,9 @@ app.whenReady().then(async () => {
   await migrateDatabase();
   dbg.main('Database migrations complete');
 
+  const isDev = !!process.env.ELECTRON_RENDERER_URL;
   dbg.main('Upserting builtin skills...');
-  await upsertBuiltinSkills();
+  await upsertBuiltinSkills({ preserveExisting: isDev });
   await syncBuiltinSkillSymlinks();
   dbg.main('Builtin skills upserted');
 
