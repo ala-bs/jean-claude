@@ -30,7 +30,7 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 // ── Helpers ────────────────────────────────────────────────────────────
 
 const PROMPT_MAX_CHARS = 300;
-const RECENT_RUNNING_MESSAGE_COUNT = 3;
+const RECENT_RUNNING_MESSAGE_COUNT = 5;
 
 type RunningActivityMessage =
   | {
@@ -41,6 +41,50 @@ type RunningActivityMessage =
       kind: 'bash';
       command: string;
     };
+
+function getAssistantPreviewMessage(
+  dm: DisplayMessage,
+): RunningActivityMessage | null {
+  if (
+    dm.kind !== 'entry' ||
+    dm.entry.type !== 'assistant-message' ||
+    !dm.entry.value.trim()
+  ) {
+    return null;
+  }
+
+  const preview = dm.entry.value.slice(0, 100);
+  return {
+    kind: 'text',
+    text: preview.length < dm.entry.value.length ? `${preview}...` : preview,
+  };
+}
+
+function getLatestActivityMessage(
+  dm: DisplayMessage,
+): RunningActivityMessage | null {
+  const assistantMessage = getAssistantPreviewMessage(dm);
+  if (assistantMessage) return assistantMessage;
+
+  if (dm.kind === 'entry' && dm.entry.type === 'tool-use') {
+    if (dm.entry.name === 'bash') {
+      const bashEntry = dm.entry as ToolUseByName<'bash'>;
+      const firstLine = bashEntry.input.command.split('\n')[0];
+      const command = firstLine.slice(0, 80);
+      return {
+        kind: 'bash',
+        command: command.length < firstLine.length ? `${command}...` : command,
+      };
+    }
+
+    return {
+      kind: 'text',
+      text: getToolActivitySummary(dm.entry as NormalizedToolUse),
+    };
+  }
+
+  return null;
+}
 
 /**
  * Get live activity for a running prompt group:
@@ -150,56 +194,29 @@ function getRunningActivity(childMessages: DisplayMessage[]): {
     }
   }
 
-  // Recent messages (always shown, even alongside subagents/running tools)
+  // Recent messages: newest row is latest activity; faded rows are assistant text.
+  let latestMessage: RunningActivityMessage | null = null;
+  let latestMessageIndex = -1;
   for (let i = childMessages.length - 1; i >= 0; i--) {
-    const dm = childMessages[i];
-    let message: RunningActivityMessage | null = null;
-    if (dm.kind === 'entry') {
-      if (dm.entry.type === 'tool-use') {
-        if (dm.entry.name === 'bash') {
-          const bashEntry = dm.entry as ToolUseByName<'bash'>;
-          const firstLine = bashEntry.input.command.split('\n')[0];
-          const command = firstLine.slice(0, 80);
-          message = {
-            kind: 'bash',
-            command:
-              command.length < firstLine.length ? `${command}...` : command,
-          };
-        } else {
-          message = {
-            kind: 'text',
-            text: getToolActivitySummary(dm.entry as NormalizedToolUse),
-          };
-        }
-      }
-      if (dm.entry.type === 'assistant-message' && dm.entry.value.trim()) {
-        const preview = dm.entry.value.slice(0, 100);
-        message = {
-          kind: 'text',
-          text:
-            preview.length < dm.entry.value.length ? `${preview}...` : preview,
-        };
-      }
-      if (dm.entry.type === 'thinking') {
-        message = { kind: 'text', text: 'Thinking...' };
-      }
-    }
-    if (dm.kind === 'subagent' && dm.toolUse.result) {
-      const sa =
-        dm.toolUse.name === 'sub-agent'
-          ? (dm.toolUse as ToolUseByName<'sub-agent'>)
-          : undefined;
-      message = {
-        kind: 'text',
-        text: `Completed: ${sa?.input.description ?? 'Sub-agent'}`,
-      };
-    }
-
+    const message = getLatestActivityMessage(childMessages[i]);
     if (message) {
-      recentMessages.unshift(message);
-      if (recentMessages.length >= RECENT_RUNNING_MESSAGE_COUNT) break;
+      latestMessage = message;
+      latestMessageIndex = i;
+      break;
     }
   }
+
+  if (latestMessage) {
+    for (let i = latestMessageIndex - 1; i >= 0; i--) {
+      const message = getAssistantPreviewMessage(childMessages[i]);
+      if (message) {
+        recentMessages.unshift(message);
+        if (recentMessages.length >= RECENT_RUNNING_MESSAGE_COUNT - 1) break;
+      }
+    }
+    recentMessages.push(latestMessage);
+  }
+
   if (recentMessages.length === 0) {
     recentMessages.push({ kind: 'text', text: 'Working...' });
   }
