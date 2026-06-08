@@ -34,8 +34,12 @@ For **ala-bs/jean-claude** (or any fork of [shantlr/jean-claude](https://github.
    ```
    Alternative: set default branch to **`local/light-theme`** instead.
 
-4. **Allow Actions to create PRs**:  
-   Settings → Actions → General → Workflow permissions → **Read and write**.
+4. **Allow Actions to create PRs** (required — fixes `Resource not accessible by integration`):  
+   Settings → Actions → General:
+   - **Workflow permissions** → **Read and write permissions**
+   - Enable **Allow GitHub Actions to create and approve pull requests** (separate checkbox below)
+
+   Without the second checkbox, the sync branch is pushed but `gh pr create` fails.
 
 5. **Timezone**: edit `.github/workflows/sync-upstream.yml` cron:
    - `0 8 * * *` = 08:00 UTC
@@ -111,6 +115,15 @@ Do **not** use “Re-run jobs” on an old failed run — that replays the broke
 
 - PRs must target **`local/light-theme`**.
 - `theme-audit.yml` must be on the default branch (same as above).
+
+### `gh pr create` failed: Resource not accessible by integration
+
+The merge worked and branch `sync/upstream-YYYY-MM-DD` may already exist on your fork. Fix permissions:
+
+1. **Settings → Actions → General**
+2. **Workflow permissions** → **Read and write permissions** → Save
+3. Check **Allow GitHub Actions to create and approve pull requests** → Save
+4. Re-run the workflow, or open the PR manually from the compare link in the job log
 
 ### Sync failed with merge conflicts
 

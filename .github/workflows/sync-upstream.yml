@@ -157,11 +157,20 @@ jobs:
             echo "3. Fix any new hardcoded colors, then merge this PR"
           } > "${PR_BODY}"
 
-          gh pr create \
+          if ! gh pr create \
+            --repo "${{ github.repository }}" \
             --base local/light-theme \
             --head "${SYNC_BRANCH}" \
             --title "Sync upstream/main (${DATE})" \
-            --body-file "${PR_BODY}"
+            --body-file "${PR_BODY}"; then
+            echo "::error::gh pr create failed. Enable: Settings → Actions → General →"
+            echo "::error::1) Workflow permissions → Read and write"
+            echo "::error::2) Allow GitHub Actions to create and approve pull requests"
+            echo ""
+            echo "Branch ${SYNC_BRANCH} was pushed — open a PR manually:"
+            echo "${{ github.server_url }}/${{ github.repository }}/compare/local/light-theme...${SYNC_BRANCH}?expand=1"
+            exit 1
+          fi
 
       - name: Report upstream main sync failure
         if: failure() && steps.sync_main.outcome == 'failure'
