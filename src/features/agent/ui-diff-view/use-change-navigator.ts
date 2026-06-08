@@ -258,13 +258,13 @@ export function useChangeNavigator({
         }
 
         setCurrentHunkIndex(hunkIndex);
-        row.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        row.scrollIntoView({ behavior: 'instant', block: 'start' });
 
-        // Allow scroll handler to resume after smooth scroll completes
+        // Allow scroll handler to resume after instant scroll completes
         navigationTimeoutRef.current = setTimeout(() => {
           isNavigatingRef.current = false;
           navigationTimeoutRef.current = null;
-        }, 500);
+        }, 50);
       }
     },
     [findHunkRow],
