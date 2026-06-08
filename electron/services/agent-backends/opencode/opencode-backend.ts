@@ -188,6 +188,10 @@ interface OpenCodeSessionState {
   normalizationCtx: OpenCodeNormalizationContext;
   /** Current message index for raw persistence ordering */
   messageIndex: number;
+  /** Subtask parts that arrived before their parent message proved ownership. */
+  pendingSubtaskPartsByMessageId: Map<string, OcPart[]>;
+  /** Child task sessions already fetched from OpenCode history. */
+  fetchedChildSessionIds: Set<string>;
   /** First persisted row for each streaming text delta group */
   rawDeltaRows: Map<
     string,
@@ -312,6 +316,8 @@ export class OpenCodeBackend implements AgentBackend {
         permissionRules: config.permissionRules ?? [],
       },
       messageIndex: this.taskContext.sessionStartIndex,
+      pendingSubtaskPartsByMessageId: new Map(),
+      fetchedChildSessionIds: new Set(),
       rawDeltaRows: new Map(),
       emittedQuestionRequestIds: new Set(),
       permissionRules: config.permissionRules ?? [],
@@ -658,6 +664,14 @@ export class OpenCodeBackend implements AgentBackend {
             return ne as AgentEvent;
           });
 
+          for (const childSession of this.getCompletedTaskChildSessions(
+            result.data.parts,
+          )) {
+            promptEvents.push(
+              ...(await this.fetchChildSessionEvents(state, childSession)),
+            );
+          }
+
           if (promptEvents.length > 0) {
             return {
               type: 'entries',
@@ -717,16 +731,42 @@ export class OpenCodeBackend implements AgentBackend {
           continue;
         }
 
-        // Only process events for our session
+        // Only process events for parent session or known sub-agent child sessions.
         const sessionIdFromEvent = this.getSessionIdFromEvent(ocEvent);
-        if (sessionIdFromEvent && sessionIdFromEvent !== sessionId) {
+        const isKnownChildSession = sessionIdFromEvent
+          ? state.normalizationCtx.subtaskParentToolIdsBySessionId?.has(
+              sessionIdFromEvent,
+            )
+          : false;
+        const isOwnedSubtaskPartEvent = this.isOwnedSubtaskPartEvent(
+          ocEvent,
+          state,
+          sessionId,
+        );
+
+        if (
+          sessionIdFromEvent &&
+          sessionIdFromEvent !== sessionId &&
+          !isKnownChildSession &&
+          !isOwnedSubtaskPartEvent
+        ) {
+          if (this.bufferUnownedSubtaskPart(ocEvent, state)) {
+            await this.persistRawForMessage(state, ocEvent);
+          }
+          continue;
+        }
+
+        if (
+          sessionIdFromEvent &&
+          sessionIdFromEvent !== sessionId &&
+          isKnownChildSession &&
+          !this.shouldProcessChildSessionEvent(ocEvent)
+        ) {
           continue;
         }
 
         const isIdleEvent =
-          ocEvent.type === 'session.idle' &&
-          'properties' in ocEvent &&
-          (ocEvent.properties as { sessionID: string }).sessionID === sessionId;
+          ocEvent.type === 'session.idle' && sessionIdFromEvent === sessionId;
 
         const rawMessageId = await this.persistRawForMessage(state, ocEvent);
 
@@ -743,6 +783,14 @@ export class OpenCodeBackend implements AgentBackend {
           if (promptSettled) {
             break;
           }
+          continue;
+        }
+
+        if (
+          ocEvent.type === 'session.idle' &&
+          sessionIdFromEvent &&
+          sessionIdFromEvent !== sessionId
+        ) {
           continue;
         }
 
@@ -830,6 +878,16 @@ export class OpenCodeBackend implements AgentBackend {
           }
 
           yield agentEvent;
+        }
+
+        const childSession = this.getCompletedTaskChildSession(ocEvent);
+        if (childSession) {
+          for (const childEvent of await this.fetchChildSessionEvents(
+            state,
+            childSession,
+          )) {
+            yield childEvent;
+          }
         }
 
         // Check for session errors
@@ -1063,6 +1121,17 @@ export class OpenCodeBackend implements AgentBackend {
         return (props.info as { sessionID: string }).sessionID;
       }
 
+      // Session lifecycle events carry the session object as `info` with `id`.
+      if (
+        typeof event.type === 'string' &&
+        event.type.startsWith('session.') &&
+        props.info &&
+        typeof props.info === 'object' &&
+        typeof (props.info as { id?: unknown }).id === 'string'
+      ) {
+        return (props.info as { id: string }).id;
+      }
+
       // Part events have sessionID on the part
       if (
         props.part &&
@@ -1073,6 +1142,242 @@ export class OpenCodeBackend implements AgentBackend {
       }
     }
     return undefined;
+  }
+
+  private isOwnedSubtaskPartEvent(
+    event: OcEvent,
+    state: OpenCodeSessionState,
+    parentSessionId: string,
+  ): boolean {
+    if (event.type !== 'message.part.updated') return false;
+    if (!('properties' in event) || !event.properties) return false;
+
+    const props = event.properties as Record<string, unknown>;
+    const part = props.part;
+    if (!part || typeof part !== 'object') return false;
+
+    const subtaskPart = part as {
+      type?: unknown;
+      messageID?: unknown;
+    };
+    if (subtaskPart.type !== 'subtask') return false;
+    if (typeof subtaskPart.messageID !== 'string') return false;
+
+    const parentMessage = state.normalizationCtx.rawMessages.get(
+      subtaskPart.messageID,
+    );
+    if (!parentMessage) return false;
+
+    return (
+      parentMessage.sessionID === parentSessionId ||
+      state.normalizationCtx.subtaskParentToolIdsBySessionId?.has(
+        parentMessage.sessionID,
+      ) === true
+    );
+  }
+
+  private shouldProcessChildSessionEvent(event: OcEvent): boolean {
+    switch (event.type) {
+      case 'message.updated':
+      case 'message.part.updated':
+      case 'message.part.delta':
+      case 'message.part.removed':
+      case 'message.removed':
+      case 'permission.asked':
+      case 'question.asked':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private getCompletedTaskChildSession(event: OcEvent):
+    | {
+        sessionId: string;
+        parentToolId: string;
+      }
+    | undefined {
+    if (event.type !== 'message.part.updated') return undefined;
+    if (!('properties' in event) || !event.properties) return undefined;
+
+    const props = event.properties as Record<string, unknown>;
+    const part = props.part;
+    if (!part || typeof part !== 'object') return undefined;
+
+    return this.getCompletedTaskChildSessionFromPart(part);
+  }
+
+  private getCompletedTaskChildSessions(
+    parts: OcPart[],
+  ): Array<{ sessionId: string; parentToolId: string }> {
+    return parts
+      .map((part) => this.getCompletedTaskChildSessionFromPart(part))
+      .filter((childSession) => childSession !== undefined);
+  }
+
+  private getCompletedTaskChildSessionFromPart(part: unknown):
+    | {
+        sessionId: string;
+        parentToolId: string;
+      }
+    | undefined {
+    if (!part || typeof part !== 'object') return undefined;
+
+    const toolPart = part as {
+      type?: unknown;
+      tool?: unknown;
+      callID?: unknown;
+      state?: {
+        status?: unknown;
+        metadata?: { sessionId?: unknown };
+      };
+    };
+
+    if (toolPart.type !== 'tool' || toolPart.tool !== 'task') return undefined;
+    if (toolPart.state?.status !== 'completed') return undefined;
+    if (typeof toolPart.callID !== 'string') return undefined;
+    if (typeof toolPart.state.metadata?.sessionId !== 'string')
+      return undefined;
+
+    return {
+      sessionId: toolPart.state.metadata.sessionId,
+      parentToolId: toolPart.callID,
+    };
+  }
+
+  private async fetchChildSessionEvents(
+    state: OpenCodeSessionState,
+    childSession: { sessionId: string; parentToolId: string },
+  ): Promise<AgentEvent[]> {
+    if (state.fetchedChildSessionIds.has(childSession.sessionId)) return [];
+    state.fetchedChildSessionIds.add(childSession.sessionId);
+
+    try {
+      const result = await state.serverHandle.client.session.messages({
+        sessionID: childSession.sessionId,
+        directory: state.cwd,
+      });
+      const messages =
+        (result.data as Array<{ info: OcMessage; parts: OcPart[] }> | null) ??
+        [];
+      const events: AgentEvent[] = [];
+      const ctx: OpenCodeNormalizationContext = {
+        emittedEntryIds: new Set(state.normalizationCtx.emittedEntryIds),
+        rawMessages: new Map(),
+        rawParts: new Map(),
+        sessionStartTime: Date.now(),
+        totalCost: 0,
+        subtaskParentToolIdsBySessionId: new Map([
+          [childSession.sessionId, childSession.parentToolId],
+        ]),
+        pendingToolPermissionDecisions: [],
+        toolPermissionsByEntryId: new Map(),
+        permissionRules: state.permissionRules,
+      };
+
+      for (const message of messages) {
+        ctx.rawMessages.set(message.info.id, message.info);
+        ctx.rawParts.set(message.info.id, message.parts);
+
+        const normEvents = normalizeOpenCodeV2(
+          {
+            kind: 'event',
+            event: {
+              type: 'message.updated',
+              properties: { info: message.info },
+            } as OcEvent,
+          },
+          ctx,
+        );
+
+        for (const ne of normEvents) {
+          if (ne.type === 'entry') {
+            ctx.emittedEntryIds.add(ne.entry.id);
+          }
+        }
+
+        const entryEvents = normEvents.filter((ne) => ne.type === 'entry');
+        const entryUpdateEvents = normEvents.filter(
+          (ne) => ne.type === 'entry-update',
+        );
+        if (entryEvents.length === 0 && entryUpdateEvents.length === 0) {
+          continue;
+        }
+
+        const rawMessageId =
+          entryEvents.length > 0
+            ? await this.taskContext.persistRaw({
+                messageIndex: state.messageIndex++,
+                backendSessionId: state.session.id,
+                rawData: {
+                  type: 'child-session.message',
+                  sessionID: childSession.sessionId,
+                  message,
+                },
+              })
+            : null;
+
+        for (const ne of entryEvents) {
+          state.normalizationCtx.emittedEntryIds.add(ne.entry.id);
+          events.push({ ...ne, rawMessageId });
+        }
+        for (const ne of entryUpdateEvents) {
+          events.push(ne);
+        }
+
+        for (const nestedChildSession of this.getCompletedTaskChildSessions(
+          message.parts,
+        )) {
+          events.push(
+            ...(await this.fetchChildSessionEvents(state, nestedChildSession)),
+          );
+        }
+      }
+
+      return events;
+    } catch (error) {
+      dbg.agent(
+        'Failed to fetch OpenCode child session %s messages: %O',
+        childSession.sessionId,
+        error,
+      );
+      return [];
+    }
+  }
+
+  private bufferUnownedSubtaskPart(
+    event: OcEvent,
+    state: OpenCodeSessionState,
+  ): boolean {
+    if (event.type !== 'message.part.updated') return false;
+    if (!('properties' in event) || !event.properties) return false;
+
+    const props = event.properties as Record<string, unknown>;
+    const part = props.part;
+    if (!part || typeof part !== 'object') return false;
+
+    const subtaskPart = part as OcPart & {
+      type?: unknown;
+      messageID?: unknown;
+    };
+    if (subtaskPart.type !== 'subtask') return false;
+    if (typeof subtaskPart.messageID !== 'string') return false;
+
+    const pendingParts =
+      state.pendingSubtaskPartsByMessageId.get(subtaskPart.messageID) ?? [];
+    const existingIndex = pendingParts.findIndex(
+      (p) => p.id === subtaskPart.id,
+    );
+    if (existingIndex >= 0) {
+      pendingParts[existingIndex] = cloneOpenCodePart(subtaskPart);
+    } else {
+      pendingParts.push(cloneOpenCodePart(subtaskPart));
+    }
+    state.pendingSubtaskPartsByMessageId.set(
+      subtaskPart.messageID,
+      pendingParts,
+    );
+    return true;
   }
 
   /**
@@ -1099,12 +1404,25 @@ export class OpenCodeBackend implements AgentBackend {
 
         // Update raw context
         ctx.rawMessages.set(msg.id, msg);
+        const pendingSubtaskParts = state.pendingSubtaskPartsByMessageId.get(
+          msg.id,
+        );
+        if (pendingSubtaskParts) {
+          ctx.rawParts.set(msg.id, [
+            ...(ctx.rawParts.get(msg.id) ?? []),
+            ...pendingSubtaskParts.map(cloneOpenCodePart),
+          ]);
+          state.pendingSubtaskPartsByMessageId.delete(msg.id);
+        }
 
         // Also update the legacy messages map (used for prompt-result later)
         const existing = state.messages.get(msg.id);
         state.messages.set(msg.id, {
           info: msg,
-          parts: existing?.parts ?? [],
+          parts: [
+            ...(existing?.parts ?? []),
+            ...(pendingSubtaskParts?.map(cloneOpenCodePart) ?? []),
+          ],
         });
 
         // Track cost/tokens from assistant messages. Recompute from rawMessages

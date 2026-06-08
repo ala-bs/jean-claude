@@ -76,6 +76,8 @@ export type OpenCodeNormalizationContext = {
   toolPermissionsByEntryId?: Map<string, NormalizedToolUse['permission']>;
   /** Runtime rules used when OpenCode auto-allows without permission.asked. */
   permissionRules?: ResolvedPermissionRule[];
+  /** Maps OpenCode child session IDs to the parent sub-agent tool ID. */
+  subtaskParentToolIdsBySessionId?: Map<string, string>;
 };
 
 type ToolPermissionDecision = NonNullable<NormalizedToolUse['permission']> & {
@@ -88,7 +90,8 @@ type ToolPermissionDecision = NonNullable<NormalizedToolUse['permission']> & {
 /**
  * Normalize an OpenCode raw input into NormalizationEvent[].
  *
- * Pure function — reads from ctx but never mutates it.
+ * Mostly pure function — reads from ctx, but records subtask child-session
+ * parent links so later child-session messages can be grouped in the UI.
  * Handles most SSE event types (messages, permissions, errors, lifecycle).
  * Returns an empty array only for events with no normalised representation
  * (file watchers, LSP, PTY, TUI, etc.).
@@ -419,6 +422,7 @@ function buildUserEntries(
   const events: NormalizationEvent[] = [];
   const date = toIsoDateFromOpenCodeTimestamp(info.time.created);
   const model = `${info.model.providerID}/${info.model.modelID}`;
+  const parentToolId = getParentToolIdForSession(ctx, info.sessionID);
 
   // Collect text and image sections, then emit a single user-prompt entry.
   // Images are embedded as markdown data URIs so they render in the timeline.
@@ -453,6 +457,7 @@ function buildUserEntries(
         id: entryId,
         date,
         model,
+        parentToolId,
         type: 'user-prompt',
         value: sections.join('\n\n'),
       },
@@ -470,13 +475,16 @@ function buildAssistantEntries(
   const events: NormalizationEvent[] = [];
   const date = toIsoDateFromOpenCodeTimestamp(info.time.created);
   const model = `${info.providerID}/${info.modelID}`;
+  const parentToolId = getParentToolIdForSession(ctx, info.sessionID);
 
   for (const part of parts) {
     const entryEvents = normalizeAssistantPartToEntry(
       part,
       info.id,
+      info.sessionID,
       date,
       model,
+      parentToolId,
       ctx,
     );
     events.push(...entryEvents);
@@ -490,8 +498,10 @@ function buildAssistantEntries(
 function normalizeAssistantPartToEntry(
   part: OcPart,
   messageId: string,
+  messageSessionId: string,
   date: string,
   model: string,
+  parentToolId: string | undefined,
   ctx: OpenCodeNormalizationContext,
 ): NormalizationEvent[] {
   switch (part.type) {
@@ -507,6 +517,7 @@ function normalizeAssistantPartToEntry(
             id: entryId,
             date,
             model,
+            parentToolId,
             type: 'assistant-message',
             value: textPart.text,
           },
@@ -518,8 +529,10 @@ function normalizeAssistantPartToEntry(
       return normalizeToolPartToEntry(
         part as ToolPart,
         messageId,
+        messageSessionId,
         date,
         model,
+        parentToolId,
         ctx,
       );
 
@@ -527,8 +540,10 @@ function normalizeAssistantPartToEntry(
       return normalizeSubtaskPartToEntry(
         part as OcPart & { prompt: string; description: string; agent: string },
         messageId,
+        messageSessionId,
         date,
         model,
+        parentToolId,
         ctx,
       );
 
@@ -552,6 +567,7 @@ function normalizeAssistantPartToEntry(
             id: reasoningEntryId,
             date,
             model,
+            parentToolId,
             type: 'thinking',
             value: reasoningPart.text,
           },
@@ -584,8 +600,10 @@ function normalizeAssistantPartToEntry(
 function normalizeToolPartToEntry(
   part: ToolPart,
   messageId: string,
+  messageSessionId: string,
   date: string,
   model: string,
+  parentToolId: string | undefined,
   ctx: OpenCodeNormalizationContext,
 ): NormalizationEvent[] {
   const state = part.state;
@@ -601,6 +619,17 @@ function normalizeToolPartToEntry(
   const permission = getToolPermission(ctx, entryId, mapped);
   const events: NormalizationEvent[] = [];
 
+  if (
+    part.tool === 'task' &&
+    typeof stateMetadata?.sessionId === 'string' &&
+    stateMetadata.sessionId !== messageSessionId
+  ) {
+    (ctx.subtaskParentToolIdsBySessionId ??= new Map()).set(
+      stateMetadata.sessionId,
+      part.callID,
+    );
+  }
+
   // Build the base tool-use entry (without result — result comes as separate event)
   const baseEntry: NormalizedEntry = {
     id: entryId,
@@ -608,6 +637,7 @@ function normalizeToolPartToEntry(
     model,
     type: 'tool-use',
     toolId: part.callID,
+    parentToolId,
     permission,
     ...mapped,
   } as NormalizedEntry;
@@ -725,10 +755,19 @@ function getToolPermission(
 function normalizeSubtaskPartToEntry(
   part: OcPart & { prompt: string; description: string; agent: string },
   messageId: string,
+  messageSessionId: string,
   date: string,
   model: string,
+  parentToolId: string | undefined,
   ctx: OpenCodeNormalizationContext,
 ): NormalizationEvent[] {
+  if (part.sessionID !== messageSessionId) {
+    (ctx.subtaskParentToolIdsBySessionId ??= new Map()).set(
+      part.sessionID,
+      part.id,
+    );
+  }
+
   const entryId = `${messageId}:${part.id}`;
   const isUpdate = ctx.emittedEntryIds.has(entryId);
   return [
@@ -738,6 +777,7 @@ function normalizeSubtaskPartToEntry(
         id: entryId,
         date,
         model,
+        parentToolId,
         type: 'tool-use',
         toolId: part.id,
         name: 'sub-agent',
@@ -749,6 +789,13 @@ function normalizeSubtaskPartToEntry(
       } as NormalizedEntry,
     },
   ];
+}
+
+function getParentToolIdForSession(
+  ctx: OpenCodeNormalizationContext,
+  sessionId: string,
+): string | undefined {
+  return ctx.subtaskParentToolIdsBySessionId?.get(sessionId);
 }
 
 // --- Compaction part → system-status entry ---

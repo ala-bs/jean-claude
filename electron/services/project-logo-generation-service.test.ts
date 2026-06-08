@@ -27,6 +27,7 @@ vi.mock('electron', () => ({
   app: {
     getPath: appGetPathMock,
   },
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
 
 vi.mock('../database/repositories/projects', () => ({

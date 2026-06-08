@@ -443,9 +443,26 @@ export const AgentMessageRepository = {
         if (!rawData || raw.rawFormat !== 'opencode') continue;
         const parsed = JSON.parse(rawData);
 
-        // Determine if this is an SSE event or a prompt-result
+        // Determine if this is an SSE event, child-session history row, or a prompt-result.
         let input: OpenCodeRawInput;
-        if (parsed.type && typeof parsed.type === 'string') {
+        if (parsed.type === 'child-session.message' && parsed.message) {
+          const message = parsed.message as {
+            info: OcMessage;
+            parts: OcPart[];
+          };
+          ocCtx.rawMessages.set(message.info.id, message.info);
+          ocCtx.rawParts.set(message.info.id, message.parts);
+          if (message.info.role === 'assistant') {
+            ocCtx.totalCost += (message.info as OcAssistantMessage).cost ?? 0;
+          }
+          input = {
+            kind: 'event',
+            event: {
+              type: 'message.updated',
+              properties: { info: message.info },
+            } as OcEvent,
+          };
+        } else if (parsed.type && typeof parsed.type === 'string') {
           // SSE event — replay context updates before normalizing
           const event = parsed as OcEvent;
           replayOpenCodeContextUpdate(event, ocCtx);
