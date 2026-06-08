@@ -1,6 +1,9 @@
 # Paths still being migrated (remove lines as you fix files).
 # One repo-relative path per line. Lines starting with # are ignored.
 
+# Monaco defineTheme() requires literal editor hex colors
+src/common/ui/handlebars-editor/index.tsx
+
 src/features/task/ui-status-indicator/index.tsx
 src/features/task/ui-task-panel/file-explorer-pane/file-tree.tsx
 src/features/pull-request/ui-pr-ci-inline/index.tsx
