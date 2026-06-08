@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/tmp') },
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
 
 vi.mock('../database/repositories/projects', () => ({
