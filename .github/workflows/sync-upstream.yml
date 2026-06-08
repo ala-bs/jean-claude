@@ -58,8 +58,15 @@ jobs:
           git checkout local/light-theme
           git pull --ff-only origin local/light-theme
 
-          if gh pr list --base local/light-theme --head "${SYNC_BRANCH}" --state open --json number --jq 'length' | grep -q '^[1-9]'; then
-            echo "Open PR already exists for ${SYNC_BRANCH}"
+          existing_pr_url=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --base local/light-theme \
+            --head "${SYNC_BRANCH}" \
+            --state open \
+            --json url \
+            --jq '.[0].url // empty')
+          if [ -n "${existing_pr_url}" ]; then
+            echo "Open PR already exists: ${existing_pr_url}"
             exit 0
           fi
 
@@ -145,7 +152,16 @@ jobs:
             exit 1
           fi
 
-          git push -u origin "${SYNC_BRANCH}"
+          # Ephemeral daily branch — safe to update if a prior run pushed but failed to open PR
+          git push --force-with-lease -u origin "${SYNC_BRANCH}"
+
+          ahead_by=$(gh api \
+            "repos/${{ github.repository }}/compare/local/light-theme...${SYNC_BRANCH}" \
+            --jq '.ahead_by')
+          if [ "${ahead_by}" = "0" ]; then
+            echo "No new commits to sync into local/light-theme — skipping PR"
+            exit 0
+          fi
 
           PR_BODY="${RUNNER_TEMP}/pr-body.md"
           {
