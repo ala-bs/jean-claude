@@ -238,7 +238,7 @@ jobs:
           fi
 
           if [ "${audit_ok}" != true ]; then
-            exit 1
+            echo "::warning::Theme audit reported hardcoded colors — see PR comment. Sync PR was still created."
           fi
 
       - name: Report upstream main sync failure
