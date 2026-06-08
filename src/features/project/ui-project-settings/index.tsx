@@ -330,7 +330,7 @@ function ProjectFeatureMapSettings({
           </p>
           {featureMap?.generatedAt && (
             <p className="text-ink-3 mt-2 flex items-center gap-1.5 font-mono text-[11px]">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              <span className="bg-status-done h-1.5 w-1.5 rounded-full" />
               Generated {new Date(featureMap.generatedAt).toLocaleString()}
             </p>
           )}
