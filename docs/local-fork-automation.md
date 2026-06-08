@@ -7,7 +7,7 @@ For **ala-bs/jean-claude** (or any fork of [shantlr/jean-claude](https://github.
 | Workflow | When | What it does |
 |----------|------|----------------|
 | **Daily upstream sync** | 08:00 UTC daily (+ manual) | Merges `upstream/main` → fork `main`, opens PR `sync/upstream-YYYY-MM-DD` → `local/light-theme` |
-| **Theme audit** | On every PR to `local/light-theme` | Scans **only files changed in the PR** for hardcoded colors |
+| **Theme audit** | Sync workflow (bot PRs) + manual PRs to `local/light-theme` | Scans **only files changed in the PR** for hardcoded colors |
 
 ## One-time GitHub setup
 
@@ -111,10 +111,29 @@ Do **not** use “Re-run jobs” on an old failed run — that replays the broke
 - Workflows must exist on your fork’s **default branch** (`main` unless you changed it).
 - Enable Actions: Settings → Actions → General.
 
-### Theme audit does not run on PRs
+### Theme audit does not run on sync PRs (PR #1, etc.)
 
-- PRs must target **`local/light-theme`**.
-- `theme-audit.yml` must be on the default branch (same as above).
+**Expected.** PRs created by the sync bot use `GITHUB_TOKEN`. GitHub **does not** fire `pull_request` workflows for those events (prevents recursive Actions).
+
+Theme audit runs **inside Daily upstream sync** after the PR is opened. Check:
+
+1. The sync workflow run → **Theme audit on sync PR** step
+2. A comment on the PR: ✅ passed or ❌ failed
+
+For an **already-open** sync PR, run locally:
+
+```bash
+git fetch origin
+git checkout sync/upstream-YYYY-MM-DD   # PR head branch
+pnpm theme:audit -- --base origin/local/light-theme
+```
+
+Or **Actions → Daily upstream sync → Re-run** (updates branch + re-audits).
+
+### Theme audit does not run on manual PRs
+
+- PR must target **`local/light-theme`**.
+- `theme-audit.yml` must be on the default branch (`main`).
 
 ### Workflow failed after `git push` (branch `sync/upstream-…` already exists)
 

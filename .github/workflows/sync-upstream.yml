@@ -188,6 +188,59 @@ jobs:
             exit 1
           fi
 
+      # Theme audit must run here — PRs opened with GITHUB_TOKEN do not trigger
+      # pull_request workflows (GitHub prevents recursive Actions runs).
+      - name: Theme audit on sync PR
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          DATE=$(date -u +%Y-%m-%d)
+          SYNC_BRANCH="sync/upstream-${DATE}"
+
+          git fetch origin local/light-theme "${SYNC_BRANCH}"
+          git checkout "${SYNC_BRANCH}"
+
+          audit_ok=true
+          if ! node scripts/theme-audit.mjs --base origin/local/light-theme; then
+            audit_ok=false
+          fi
+
+          pr_number=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --base local/light-theme \
+            --head "${SYNC_BRANCH}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "${pr_number}" ]; then
+            if [ "${audit_ok}" = true ]; then
+              gh pr comment "${pr_number}" \
+                --body "✅ **Theme audit passed** — no new hardcoded colors in this PR diff."
+            else
+              fail_comment="${RUNNER_TEMP}/theme-audit-fail.md"
+              {
+                echo "❌ **Theme audit failed** — hardcoded colors found in changed files."
+                echo ""
+                echo "Run locally:"
+                echo '```bash'
+                echo "git fetch origin"
+                echo "git checkout ${SYNC_BRANCH}"
+                echo "pnpm theme:audit -- --base origin/local/light-theme"
+                echo '```'
+              } > "${fail_comment}"
+              gh pr comment "${pr_number}" --body-file "${fail_comment}"
+            fi
+          else
+            echo "No open PR for ${SYNC_BRANCH} — audit result not posted as comment"
+          fi
+
+          if [ "${audit_ok}" != true ]; then
+            exit 1
+          fi
+
       - name: Report upstream main sync failure
         if: failure() && steps.sync_main.outcome == 'failure'
         env:
