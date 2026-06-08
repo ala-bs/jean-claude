@@ -65,7 +65,24 @@ jobs:
 
           git checkout -B "${SYNC_BRANCH}"
 
+          merge_failed=false
           if ! git merge origin/main --no-edit; then
+            merge_failed=true
+            # CI files are canonical on main — auto-resolve to avoid noisy PR failures
+            ci_conflicts=$(git diff --name-only --diff-filter=U | grep -E '^(\\.github/|scripts/theme-audit)' || true)
+            if [ -n "${ci_conflicts}" ]; then
+              while IFS= read -r file; do
+                [ -n "${file}" ] && git checkout --theirs "${file}" && git add "${file}"
+              done <<< "${ci_conflicts}"
+              if [ -z "$(git diff --name-only --diff-filter=U)" ]; then
+                git commit --no-edit
+                merge_failed=false
+                echo "Auto-resolved CI file conflicts from origin/main"
+              fi
+            fi
+          fi
+
+          if [ "${merge_failed}" = true ]; then
             CONFLICTS=$(git diff --name-only --diff-filter=U | sort)
             git merge --abort || true
 
