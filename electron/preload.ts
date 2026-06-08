@@ -379,6 +379,20 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:getPullRequestChanges', params),
+    getCommitChanges: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+    }) => ipcRenderer.invoke('azureDevOps:getCommitChanges', params),
+    getFileContentAtCommit: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+      filePath: string;
+      version: 'current' | 'parent';
+    }) => ipcRenderer.invoke('azureDevOps:getFileContentAtCommit', params),
     getPullRequestFileContent: (params: {
       providerId: string;
       projectId: string;

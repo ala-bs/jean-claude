@@ -140,6 +140,8 @@ import {
   getPullRequestCommits,
   getPullRequestChanges,
   getPullRequestFileContent,
+  getCommitChanges,
+  getFileContentAtCommit,
   getPullRequestThreads,
   addPullRequestComment,
   addPullRequestFileComment,
@@ -2762,6 +2764,34 @@ export function registerIpcHandlers() {
         pullRequestId: number;
       },
     ) => getPullRequestChanges(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getCommitChanges',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        commitId: string;
+      },
+    ) => getCommitChanges(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getFileContentAtCommit',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        commitId: string;
+        filePath: string;
+        version: 'current' | 'parent';
+      },
+    ) => getFileContentAtCommit(params),
   );
 
   ipcMain.handle(

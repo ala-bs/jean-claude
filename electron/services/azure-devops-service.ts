@@ -2532,6 +2532,86 @@ export async function getPullRequestChanges(params: {
     }));
 }
 
+export async function getCommitChanges(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  commitId: string;
+}): Promise<AzureDevOpsFileChange[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/commits/${params.commitId}/changes?api-version=7.0`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get commit changes: ${error}`);
+  }
+
+  const data: {
+    changeCounts: Record<string, number>;
+    changes: Array<
+      ChangeResponse & { item?: ChangeResponse['item'] & { isFolder?: boolean } }
+    >;
+  } = await response.json();
+
+  return data.changes
+    .filter((change) => change.item?.path && !change.item.isFolder)
+    .map((change) => ({
+      path: change.item!.path,
+      changeType: mapChangeType(change.changeType),
+      originalPath: change.sourceServerItem,
+    }));
+}
+
+export async function getFileContentAtCommit(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  commitId: string;
+  filePath: string;
+  version: 'current' | 'parent';
+}): Promise<string> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  let versionId = params.commitId;
+
+  if (params.version === 'parent') {
+    // Get parent commit ID
+    const commitUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/commits/${params.commitId}?api-version=7.0`;
+    const commitResponse = await fetch(commitUrl, {
+      headers: { Authorization: authHeader },
+    });
+    if (!commitResponse.ok) {
+      return '';
+    }
+    const commitData: { parents?: string[] } = await commitResponse.json();
+    if (!commitData.parents?.length) {
+      return ''; // Initial commit, no parent
+    }
+    versionId = commitData.parents[0];
+  }
+
+  const contentUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/items?path=${encodeURIComponent(params.filePath)}&versionDescriptor.version=${encodeURIComponent(versionId)}&versionDescriptor.versionType=commit&api-version=7.0`;
+
+  const response = await fetch(contentUrl, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return ''; // File doesn't exist at this version (new or deleted)
+    }
+    const error = await response.text();
+    throw new Error(`Failed to get file content at commit: ${error}`);
+  }
+
+  return response.text();
+}
+
 export async function getPullRequestFileContent(params: {
   providerId: string;
   projectId: string;

@@ -1,11 +1,17 @@
+import clsx from 'clsx';
+
 import type { AzureDevOpsCommit } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/time';
 
 export function PrCommits({
   commits,
+  selectedCommitId,
+  onSelectCommit,
   bottomPadding = 0,
 }: {
   commits: AzureDevOpsCommit[];
+  selectedCommitId?: string | null;
+  onSelectCommit?: (commitId: string | null) => void;
   bottomPadding?: number;
 }) {
   if (commits.length === 0) {
@@ -30,12 +36,24 @@ export function PrCommits({
           const isLast = index === commits.length - 1;
           const shortHash = commit.commitId.slice(0, 7);
           const message = commit.comment.split('\n')[0];
+          const isSelected = selectedCommitId === commit.commitId;
 
           return (
             <div
               key={commit.commitId}
-              className="group hover:bg-bg-1/60 relative flex items-start gap-3 rounded-md px-2 py-2 transition-colors"
+              className={clsx(
+                'group relative flex items-start gap-3 rounded-md px-2 py-2 transition-colors',
+                onSelectCommit && 'cursor-pointer',
+                isSelected
+                  ? 'bg-acc/10 ring-acc/30 ring-1'
+                  : 'hover:bg-bg-1/60',
+              )}
               style={isLast ? undefined : { marginBottom: '4px' }}
+              onClick={() => {
+                if (onSelectCommit) {
+                  onSelectCommit(isSelected ? null : commit.commitId);
+                }
+              }}
             >
               {/* Dot */}
               <div className="absolute top-[11px] left-[-16px] z-10 flex -translate-x-1/2 items-center justify-center">
@@ -44,7 +62,12 @@ export function PrCommits({
                   <div className="border-acc bg-acc/30 h-3.5 w-3.5 rounded-full border-2" />
                 ) : (
                   /* Regular commit dot */
-                  <div className="bg-bg-2 h-2 w-2 rounded-full" />
+                  <div
+                    className={clsx(
+                      'h-2 w-2 rounded-full',
+                      isSelected ? 'bg-acc' : 'bg-bg-2',
+                    )}
+                  />
                 )}
               </div>
 

@@ -236,6 +236,47 @@ export function usePullRequestChanges(projectId: string, prId: number) {
   });
 }
 
+export function useCommitChanges(projectId: string, commitId: string | null) {
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useQuery<AzureDevOpsFileChange[]>({
+    queryKey: ['commit-changes', projectId, commitId],
+    queryFn: () =>
+      api.azureDevOps.getCommitChanges({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        commitId: commitId!,
+      }),
+    enabled: !!repoInfo && !!commitId,
+    staleTime: 300_000, // 5 min — commit changes are immutable
+  });
+}
+
+export function useCommitFileContent(
+  projectId: string,
+  commitId: string | null,
+  filePath: string | null,
+  version: 'current' | 'parent',
+) {
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useQuery<string>({
+    queryKey: ['commit-file-content', projectId, commitId, filePath, version],
+    queryFn: () =>
+      api.azureDevOps.getFileContentAtCommit({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        commitId: commitId!,
+        filePath: filePath!,
+        version,
+      }),
+    enabled: !!repoInfo && !!commitId && !!filePath,
+    staleTime: 300_000,
+  });
+}
+
 export function usePullRequestFileContent(
   projectId: string,
   prId: number,

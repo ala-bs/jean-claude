@@ -708,6 +708,20 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<AzureDevOpsFileChange[]>;
+    getCommitChanges: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+    }) => Promise<AzureDevOpsFileChange[]>;
+    getFileContentAtCommit: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+      filePath: string;
+      version: 'current' | 'parent';
+    }) => Promise<string>;
     getPullRequestFileContent: (params: {
       providerId: string;
       projectId: string;
@@ -1691,6 +1705,8 @@ export const api: Api = hasWindowApi
         },
         getPullRequestCommits: async () => [],
         getPullRequestChanges: async () => [],
+        getCommitChanges: async () => [],
+        getFileContentAtCommit: async () => '',
         getPullRequestFileContent: async () => '',
         getPullRequestThreads: async () => [],
         getPullRequestWorkItems: async () => [],
