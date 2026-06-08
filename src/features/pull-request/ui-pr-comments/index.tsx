@@ -861,6 +861,7 @@ export function PrInlineCommentTimeline({
   projectId,
   prId,
   canResolve = false,
+  threadStatus,
   mentionDisplayNames,
   mentionOptions = EMPTY_MENTION_OPTIONS,
   onSearchMentions,
@@ -872,117 +873,175 @@ export function PrInlineCommentTimeline({
   projectId?: string;
   prId?: number;
   canResolve?: boolean;
+  threadStatus?: string;
   mentionDisplayNames?: MentionDisplayNames;
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const isResolved =
+    threadStatus !== undefined &&
+    threadStatus !== 'active' &&
+    threadStatus !== 'pending' &&
+    threadStatus !== 'unknown';
+
   const firstComment = comments[0];
   const remainingComments = comments.slice(1);
 
   if (!firstComment) return null;
 
   return (
-    <div className="border-glass-border/70 bg-bg-1/90 border-y px-4 py-3 font-sans">
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setCollapsed((value) => !value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            setCollapsed((value) => !value);
-          }
-        }}
-        className="hover:bg-glass-light -mx-1 flex w-[calc(100%+0.5rem)] items-start gap-3 rounded px-1 py-1 text-left transition-colors"
-      >
-        <TimelineAvatar comment={firstComment} providerId={providerId} />
-        <div className="min-w-0 flex-1">
-          <div className="mb-1 flex items-center gap-2">
-            <span className="text-ink-0 text-sm font-medium">
-              {firstComment.author.displayName}
-            </span>
-            <span className="text-ink-3 text-xs">
-              {formatRelativeTime(firstComment.publishedDate)}
-            </span>
-            {remainingComments.length > 0 && (
-              <span className="bg-glass-medium text-ink-3 rounded px-1.5 py-0.5 text-[10px]">
-                {remainingComments.length} repl
-                {remainingComments.length === 1 ? 'y' : 'ies'}
-              </span>
-            )}
-          </div>
-          <div
-            className={clsx(
-              'text-ink-1 text-xs leading-relaxed',
-              collapsed && 'line-clamp-2',
-            )}
-          >
-            <AzureMarkdownContent
-              markdown={firstComment.content}
-              providerId={providerId}
-              mentionDisplayNames={mentionDisplayNames}
+    <div
+      className={clsx(
+        'border-glass-border/70 border-y font-sans',
+        isResolved ? 'bg-bg-1/60' : 'bg-bg-1/90',
+      )}
+    >
+      {isResolved && (
+        <div className="border-glass-border/40 flex items-center gap-2 border-b px-4 py-1.5">
+          <CheckCircle2 className="text-status-done h-3.5 w-3.5" />
+          <span className="text-ink-3 flex-1 text-[11px]">Resolved</span>
+          {threadId !== undefined && projectId && prId !== undefined && (
+            <InlineThreadReopenButton
+              threadId={threadId}
+              projectId={projectId}
+              prId={prId}
             />
-          </div>
+          )}
         </div>
-        {remainingComments.length > 0 && (
-          <ChevronDown
-            className={clsx(
-              'text-ink-3 mt-1 h-3.5 w-3.5 transition-transform',
-              !collapsed && 'rotate-180',
-            )}
-          />
-        )}
-      </div>
-
-      {!collapsed && remainingComments.length > 0 && (
-        <div className="mt-2">
-          {remainingComments.map((comment, index) => (
-            <div
-              key={comment.id}
-              className="flex items-stretch gap-3 pb-3 last:pb-0"
-            >
-              <div className="flex w-[26px] shrink-0 flex-col items-center">
-                <TimelineAvatar comment={comment} providerId={providerId} />
-                {index < remainingComments.length - 1 && (
-                  <div className="bg-glass-border mt-1.5 w-px flex-1 rounded" />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="text-ink-0 text-sm font-medium">
-                    {comment.author.displayName}
-                  </span>
-                  <span className="text-ink-3 text-xs">
-                    {formatRelativeTime(comment.publishedDate)}
-                  </span>
-                </div>
-                <div className="text-ink-1 text-xs leading-relaxed">
-                  <AzureMarkdownContent
-                    markdown={comment.content}
-                    providerId={providerId}
-                    mentionDisplayNames={mentionDisplayNames}
-                  />
-                </div>
-              </div>
+      )}
+      <div className="px-4 py-3">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setCollapsed((value) => !value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setCollapsed((value) => !value);
+            }
+          }}
+          className="hover:bg-glass-light -mx-1 flex w-[calc(100%+0.5rem)] items-start gap-3 rounded px-1 py-1 text-left transition-colors"
+        >
+          <TimelineAvatar comment={firstComment} providerId={providerId} />
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-ink-0 text-sm font-medium">
+                {firstComment.author.displayName}
+              </span>
+              <span className="text-ink-3 text-xs">
+                {formatRelativeTime(firstComment.publishedDate)}
+              </span>
+              {remainingComments.length > 0 && (
+                <span className="bg-glass-medium text-ink-3 rounded px-1.5 py-0.5 text-[10px]">
+                  {remainingComments.length} repl
+                  {remainingComments.length === 1 ? 'y' : 'ies'}
+                </span>
+              )}
             </div>
-          ))}
+            <div
+              className={clsx(
+                'text-ink-1 text-xs leading-relaxed',
+                collapsed && 'line-clamp-2',
+              )}
+            >
+              <AzureMarkdownContent
+                markdown={firstComment.content}
+                providerId={providerId}
+                mentionDisplayNames={mentionDisplayNames}
+              />
+            </div>
+          </div>
+          {remainingComments.length > 0 && (
+            <ChevronDown
+              className={clsx(
+                'text-ink-3 mt-1 h-3.5 w-3.5 transition-transform',
+                !collapsed && 'rotate-180',
+              )}
+            />
+          )}
         </div>
-      )}
 
-      {threadId !== undefined && projectId && prId !== undefined && (
-        <ThreadReplyForm
-          threadId={threadId}
-          projectId={projectId}
-          prId={prId}
-          canResolve={canResolve}
-          mentionOptions={mentionOptions}
-          onSearchMentions={onSearchMentions}
-          onUploadImage={onUploadImage}
-        />
-      )}
+        {!collapsed && remainingComments.length > 0 && (
+          <div className="mt-2">
+            {remainingComments.map((comment, index) => (
+              <div
+                key={comment.id}
+                className="flex items-stretch gap-3 pb-3 last:pb-0"
+              >
+                <div className="flex w-[26px] shrink-0 flex-col items-center">
+                  <TimelineAvatar comment={comment} providerId={providerId} />
+                  {index < remainingComments.length - 1 && (
+                    <div className="bg-glass-border mt-1.5 w-px flex-1 rounded" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex items-center gap-2">
+                    <span className="text-ink-0 text-sm font-medium">
+                      {comment.author.displayName}
+                    </span>
+                    <span className="text-ink-3 text-xs">
+                      {formatRelativeTime(comment.publishedDate)}
+                    </span>
+                  </div>
+                  <div className="text-ink-1 text-xs leading-relaxed">
+                    <AzureMarkdownContent
+                      markdown={comment.content}
+                      providerId={providerId}
+                      mentionDisplayNames={mentionDisplayNames}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {threadId !== undefined &&
+          projectId &&
+          prId !== undefined &&
+          !isResolved && (
+            <ThreadReplyForm
+              threadId={threadId}
+              projectId={projectId}
+              prId={prId}
+              canResolve={canResolve}
+              mentionOptions={mentionOptions}
+              onSearchMentions={onSearchMentions}
+              onUploadImage={onUploadImage}
+            />
+          )}
+      </div>
     </div>
+  );
+}
+
+function InlineThreadReopenButton({
+  threadId,
+  projectId,
+  prId,
+}: {
+  threadId: number;
+  projectId: string;
+  prId: number;
+}) {
+  const updateStatus = useUpdateThreadStatus(projectId, prId);
+
+  const handleReopen = useCallback(() => {
+    updateStatus.mutate({ threadId, status: 'active' });
+  }, [threadId, updateStatus]);
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={handleReopen}
+      loading={updateStatus.isPending}
+      className="text-ink-3 hover:text-ink-1 h-6 px-1.5 text-[11px]"
+    >
+      Reopen
+    </Button>
   );
 }
 
