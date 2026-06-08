@@ -1,9 +1,17 @@
+# Runs on human-opened PRs targeting local/light-theme.
+# Bot-opened sync PRs are audited in sync-upstream.yml (GITHUB_TOKEN PRs
+# do not trigger pull_request workflows).
+
 name: Theme audit
 
 on:
   pull_request:
     branches: [local/light-theme]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   audit:
