@@ -116,6 +116,12 @@ Do **not** use “Re-run jobs” on an old failed run — that replays the broke
 - PRs must target **`local/light-theme`**.
 - `theme-audit.yml` must be on the default branch (same as above).
 
+### Workflow failed after `git push` (branch `sync/upstream-…` already exists)
+
+A previous run may have pushed the sync branch but failed to open the PR. Re-run the workflow after the latest fix (force-push on sync branches), or open the PR manually:
+
+`https://github.com/ala-bs/jean-claude/compare/local/light-theme...sync/upstream-YYYY-MM-DD`
+
 ### `gh pr create` failed: Resource not accessible by integration
 
 The merge worked and branch `sync/upstream-YYYY-MM-DD` may already exist on your fork. Fix permissions:
