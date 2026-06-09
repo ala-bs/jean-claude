@@ -218,6 +218,167 @@ describe('normalizeOpenCodeV2', () => {
     });
   });
 
+  it('links child session messages to parent sub-agent tool id', () => {
+    const parentInfo = {
+      ...createAssistantMessage('parent-msg'),
+      sessionID: 'parent-session',
+    } as AssistantMessage;
+    const childInfo = {
+      ...createAssistantMessage('child-msg'),
+      sessionID: 'child-session',
+    } as AssistantMessage;
+    const ctx = createContext();
+    const subtaskPart = {
+      id: 'subtask-1',
+      messageID: parentInfo.id,
+      sessionID: 'child-session',
+      type: 'subtask',
+      prompt: 'Inspect code',
+      description: 'Code inspector',
+      agent: 'general',
+    } as Part;
+    const childTextPart = {
+      id: 'child-text-1',
+      messageID: childInfo.id,
+      sessionID: 'child-session',
+      type: 'text',
+      text: 'Child answer',
+    } as Part;
+
+    normalizeOpenCodeV2(
+      { kind: 'prompt-result', info: parentInfo, parts: [subtaskPart] },
+      ctx,
+    );
+    const events = normalizeOpenCodeV2(
+      { kind: 'prompt-result', info: childInfo, parts: [childTextPart] },
+      ctx,
+    );
+
+    expect(events).toMatchObject([
+      {
+        type: 'entry',
+        entry: {
+          id: 'child-msg:child-text-1',
+          parentToolId: 'subtask-1',
+          type: 'assistant-message',
+          value: 'Child answer',
+        },
+      },
+    ]);
+  });
+
+  it('links fetched task child session messages from task tool metadata', () => {
+    const parentInfo = {
+      ...createAssistantMessage('parent-msg'),
+      sessionID: 'parent-session',
+    } as AssistantMessage;
+    const childInfo = {
+      ...createAssistantMessage('child-msg'),
+      sessionID: 'child-session',
+    } as AssistantMessage;
+    const ctx = createContext();
+    const taskPart = {
+      id: 'task-part-1',
+      messageID: parentInfo.id,
+      sessionID: 'parent-session',
+      type: 'tool',
+      tool: 'task',
+      callID: 'call-task-1',
+      state: {
+        status: 'completed',
+        title: 'task',
+        input: {
+          description: 'Inspect code',
+          subagent_type: 'explore',
+          prompt: 'Inspect code',
+        },
+        output: '<task_result>Done</task_result>',
+        time: { start: 1_717_000_000_000, end: 1_717_000_000_500 },
+        metadata: { sessionId: 'child-session' },
+      },
+    } as Part;
+    const childTextPart = {
+      id: 'child-text-1',
+      messageID: childInfo.id,
+      sessionID: 'child-session',
+      type: 'text',
+      text: 'Child answer',
+    } as Part;
+
+    normalizeOpenCodeV2(
+      { kind: 'prompt-result', info: parentInfo, parts: [taskPart] },
+      ctx,
+    );
+    const events = normalizeOpenCodeV2(
+      { kind: 'prompt-result', info: childInfo, parts: [childTextPart] },
+      ctx,
+    );
+
+    expect(events).toMatchObject([
+      {
+        type: 'entry',
+        entry: {
+          id: 'child-msg:child-text-1',
+          parentToolId: 'call-task-1',
+          type: 'assistant-message',
+          value: 'Child answer',
+        },
+      },
+    ]);
+  });
+
+  it('links nested child subtask tools to the parent sub-agent tool id', () => {
+    const parentInfo = {
+      ...createAssistantMessage('parent-msg'),
+      sessionID: 'parent-session',
+    } as AssistantMessage;
+    const childInfo = {
+      ...createAssistantMessage('child-msg'),
+      sessionID: 'child-session',
+    } as AssistantMessage;
+    const ctx = createContext();
+    const parentSubtaskPart = {
+      id: 'subtask-1',
+      messageID: parentInfo.id,
+      sessionID: 'child-session',
+      type: 'subtask',
+      prompt: 'Inspect code',
+      description: 'Code inspector',
+      agent: 'general',
+    } as Part;
+    const nestedSubtaskPart = {
+      id: 'subtask-2',
+      messageID: childInfo.id,
+      sessionID: 'grandchild-session',
+      type: 'subtask',
+      prompt: 'Inspect nested code',
+      description: 'Nested inspector',
+      agent: 'general',
+    } as Part;
+
+    normalizeOpenCodeV2(
+      { kind: 'prompt-result', info: parentInfo, parts: [parentSubtaskPart] },
+      ctx,
+    );
+    const events = normalizeOpenCodeV2(
+      { kind: 'prompt-result', info: childInfo, parts: [nestedSubtaskPart] },
+      ctx,
+    );
+
+    expect(events).toMatchObject([
+      {
+        type: 'entry',
+        entry: {
+          id: 'child-msg:subtask-2',
+          parentToolId: 'subtask-1',
+          type: 'tool-use',
+          toolId: 'subtask-2',
+          name: 'sub-agent',
+        },
+      },
+    ]);
+  });
+
   it('uses unique fallback ids for repeated file.edited and todo.updated events', () => {
     const ctx = createContext();
 
