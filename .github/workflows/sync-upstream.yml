@@ -56,7 +56,7 @@ jobs:
 
           git fetch origin local/light-theme main
           git checkout local/light-theme
-          git pull --ff-only origin local/light-theme
+          git reset --hard origin/local/light-theme
 
           existing_pr_url=$(gh pr list \
             --repo "${{ github.repository }}" \
@@ -195,9 +195,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Do not fail the job — audit is advisory; gh pr comment can also fail harmlessly
           set -uo pipefail
           DATE=$(date -u +%Y-%m-%d)
           SYNC_BRANCH="sync/upstream-${DATE}"
+
+          if ! git ls-remote --exit-code --heads origin "${SYNC_BRANCH}" >/dev/null 2>&1; then
+            echo "Sync branch ${SYNC_BRANCH} not on origin — skipping theme audit"
+            exit 0
+          fi
 
           git fetch origin local/light-theme "${SYNC_BRANCH}"
           git checkout "${SYNC_BRANCH}"
@@ -210,15 +216,26 @@ jobs:
           pr_number=$(gh pr list \
             --repo "${{ github.repository }}" \
             --base local/light-theme \
-            --head "${SYNC_BRANCH}" \
+            --head "${{ github.repository_owner }}:${SYNC_BRANCH}" \
             --state open \
             --json number \
-            --jq '.[0].number // empty')
+            --jq '.[0].number // empty' 2>/dev/null || true)
+
+          if [ -z "${pr_number}" ]; then
+            pr_number=$(gh pr list \
+              --repo "${{ github.repository }}" \
+              --base local/light-theme \
+              --head "${SYNC_BRANCH}" \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty' 2>/dev/null || true)
+          fi
 
           if [ -n "${pr_number}" ]; then
             if [ "${audit_ok}" = true ]; then
               gh pr comment "${pr_number}" \
-                --body "✅ **Theme audit passed** — no new hardcoded colors in this PR diff."
+                --body "✅ **Theme audit passed** — no new hardcoded colors in this PR diff." \
+                || echo "::warning::Could not post theme audit comment on PR #${pr_number}"
             else
               fail_comment="${RUNNER_TEMP}/theme-audit-fail.md"
               {
@@ -231,14 +248,17 @@ jobs:
                 echo "pnpm theme:audit -- --base origin/local/light-theme"
                 echo '```'
               } > "${fail_comment}"
-              gh pr comment "${pr_number}" --body-file "${fail_comment}"
+              gh pr comment "${pr_number}" --body-file "${fail_comment}" \
+                || echo "::warning::Could not post theme audit comment on PR #${pr_number}"
             fi
           else
             echo "No open PR for ${SYNC_BRANCH} — audit result not posted as comment"
           fi
 
-          if [ "${audit_ok}" != true ]; then
-            echo "::warning::Theme audit reported hardcoded colors — see PR comment. Sync PR was still created."
+          if [ "${audit_ok}" = true ]; then
+            echo "Theme audit passed"
+          else
+            echo "::warning::Theme audit reported hardcoded colors — review before merging the sync PR"
           fi
 
       - name: Report upstream main sync failure

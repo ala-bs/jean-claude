@@ -150,6 +150,24 @@ The merge worked and branch `sync/upstream-YYYY-MM-DD` may already exist on your
 3. Check **Allow GitHub Actions to create and approve pull requests** → Save
 4. Re-run the workflow, or open the PR manually from the compare link in the job log
 
+### Scheduled sync did not run
+
+- Cron is **08:00 UTC** (`0 8 * * *`) — adjust in `sync-upstream.yml` for your timezone.
+- Workflow file must be on the repo **default branch** (`main`).
+- GitHub may delay scheduled runs by 15–30 minutes.
+- Check **Actions** tab → filter **Daily upstream sync** → look for automatic runs (not only manual).
+- Repos with no commits for 60+ days can have schedules disabled by GitHub.
+
+### Workflow green but no PR comment / theme audit step failed
+
+The sync PR may still exist (check **Pull requests**). Theme audit is **advisory** and must not fail the job. If `gh pr comment` fails, run audit locally:
+
+```bash
+git fetch origin
+git checkout sync/upstream-YYYY-MM-DD
+pnpm theme:audit -- --base origin/local/light-theme
+```
+
 ### Sync failed with merge conflicts
 
 When upstream touches the same files as your theme, the workflow:
