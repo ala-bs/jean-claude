@@ -256,6 +256,12 @@ export interface AzureDevOpsWorkItem {
   relatedTestCaseIds?: number[];
 }
 
+export interface AzureDevOpsWorkItemState {
+  name: string;
+  color?: string;
+  category?: string;
+}
+
 export interface WorkItemComment {
   id: number;
   workItemId: number;
@@ -623,6 +629,11 @@ export interface Api {
       providerId: string;
       workItemId: number;
     }) => Promise<AzureDevOpsWorkItem | null>;
+    getWorkItemStates: (params: {
+      providerId: string;
+      projectName: string;
+      workItemType: string;
+    }) => Promise<AzureDevOpsWorkItemState[]>;
     updateWorkItemState: (params: {
       providerId: string;
       workItemId: number;
@@ -1683,6 +1694,7 @@ export const api: Api = hasWindowApi
         },
         queryWorkItems: async () => [],
         getWorkItemById: async () => null,
+        getWorkItemStates: async () => [],
         updateWorkItemState: async () => {
           throw new Error('API not available');
         },

@@ -118,6 +118,12 @@ export interface AzureDevOpsIteration {
   isCurrent: boolean;
 }
 
+export interface AzureDevOpsWorkItemState {
+  name: string;
+  color?: string;
+  category?: string;
+}
+
 interface WiqlResponse {
   workItems: Array<{ id: number; url: string }>;
 }
@@ -808,6 +814,37 @@ export async function getWorkItemById(params: {
     parentId: extractParentId(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
   };
+}
+
+export async function getWorkItemStates(params: {
+  providerId: string;
+  projectName: string;
+  workItemType: string;
+}): Promise<AzureDevOpsWorkItemState[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(params.workItemType)}/states?api-version=7.1`,
+    {
+      headers: { Authorization: authHeader },
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(
+      `Failed to fetch states for work item type ${params.workItemType}: ${error}`,
+    );
+  }
+
+  const data = await response.json();
+  return (data.value ?? []).map(
+    (state: { name: string; color?: string; category?: string }) => ({
+      name: state.name,
+      color: state.color,
+      category: state.category,
+    }),
+  );
 }
 
 /**
