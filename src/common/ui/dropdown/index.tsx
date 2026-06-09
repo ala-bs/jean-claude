@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom';
 
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import type { BindingKey } from '@/common/context/keyboard-bindings/types';
+import { isTypingInInput } from '@/common/context/keyboard-bindings/utils';
 import { useRegisterOverlay } from '@/common/context/overlay';
 import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
 import { Kbd } from '@/common/ui/kbd';
@@ -145,6 +146,8 @@ export function Dropdown({
     if (!isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isTypingInInput(e)) return;
+
       // Only handle single printable letter keys (no modifiers except shift)
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key.length !== 1 || !/[a-zA-Z]/.test(e.key)) return;
@@ -201,37 +204,52 @@ export function Dropdown({
         close();
         return true;
       },
-      down: () => {
-        const items = getMenuItems();
-        if (items.length === 0) return true;
-        const next = focusedIndex < items.length - 1 ? focusedIndex + 1 : 0;
-        focusItem(next);
-        return true;
+      down: {
+        handler: () => {
+          const items = getMenuItems();
+          if (items.length === 0) return true;
+          const next = focusedIndex < items.length - 1 ? focusedIndex + 1 : 0;
+          focusItem(next);
+          return true;
+        },
+        ignoreIfInput: true,
       },
-      up: () => {
-        const items = getMenuItems();
-        if (items.length === 0) return true;
-        const prev = focusedIndex > 0 ? focusedIndex - 1 : items.length - 1;
-        focusItem(prev);
-        return true;
+      up: {
+        handler: () => {
+          const items = getMenuItems();
+          if (items.length === 0) return true;
+          const prev = focusedIndex > 0 ? focusedIndex - 1 : items.length - 1;
+          focusItem(prev);
+          return true;
+        },
+        ignoreIfInput: true,
       },
-      enter: () => {
-        const items = getMenuItems();
-        if (focusedIndex >= 0 && focusedIndex < items.length) {
-          items[focusedIndex].click();
-        }
-        return true;
+      enter: {
+        handler: () => {
+          const items = getMenuItems();
+          if (focusedIndex >= 0 && focusedIndex < items.length) {
+            items[focusedIndex].click();
+          }
+          return true;
+        },
+        ignoreIfInput: true,
       },
-      space: () => {
-        const items = getMenuItems();
-        if (focusedIndex >= 0 && focusedIndex < items.length) {
-          items[focusedIndex].click();
-        }
-        return true;
+      space: {
+        handler: () => {
+          const items = getMenuItems();
+          if (focusedIndex >= 0 && focusedIndex < items.length) {
+            items[focusedIndex].click();
+          }
+          return true;
+        },
+        ignoreIfInput: true,
       },
-      tab: () => {
-        close();
-        return true;
+      tab: {
+        handler: () => {
+          close();
+          return true;
+        },
+        ignoreIfInput: true,
       },
     },
     { enabled: isOpen },

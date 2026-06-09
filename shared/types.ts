@@ -55,6 +55,12 @@ export type TaskStatus =
   | 'interrupted';
 export type InteractionMode = 'ask' | 'auto' | 'plan';
 
+export interface TaskTodoItem {
+  id: string;
+  title: string;
+  checked: boolean;
+}
+
 export interface BackendInteractionModeOption {
   value: InteractionMode;
   label: string;
@@ -343,6 +349,7 @@ export interface Task {
   pullRequestId: string | null;
   pullRequestUrl: string | null;
   pendingMessage: string | null;
+  todoItems: TaskTodoItem[];
   parentTaskId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -370,6 +377,7 @@ export interface NewTask {
   pullRequestId?: string | null;
   pullRequestUrl?: string | null;
   pendingMessage?: string | null;
+  todoItems?: TaskTodoItem[];
   parentTaskId?: string | null;
   createdAt?: string;
   updatedAt: string;
@@ -392,6 +400,7 @@ export interface UpdateTask {
   pullRequestId?: string | null;
   pullRequestUrl?: string | null;
   pendingMessage?: string | null;
+  todoItems?: TaskTodoItem[];
   parentTaskId?: string | null;
   updatedAt?: string;
 }
