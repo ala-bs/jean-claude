@@ -391,7 +391,7 @@ describe('OpenCodeBackend event stream', () => {
     async function* idleStream() {
       yield {
         type: 'session.idle',
-        properties: { sessionID: 'session-1' },
+        properties: { info: { id: 'session-1' } },
       };
       await new Promise(() => {});
     }
@@ -581,6 +581,743 @@ describe('OpenCodeBackend event stream', () => {
       vi.useRealTimers();
     }
   });
+
+  it('ignores subtask child sessions that are not owned by the parent session', async () => {
+    async function* foreignSubtaskStream() {
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'foreign-subtask',
+            sessionID: 'foreign-child-session',
+            messageID: 'foreign-parent-msg',
+            type: 'subtask',
+            prompt: 'Inspect code',
+            description: 'Foreign subtask',
+            agent: 'general',
+          },
+        },
+      };
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'foreign-child-msg',
+            sessionID: 'foreign-child-session',
+          }),
+        },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: foreignSubtaskStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: null })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(
+      (
+        state.normalizationCtx as {
+          subtaskParentToolIdsBySessionId?: Map<string, string>;
+        }
+      ).subtaskParentToolIdsBySessionId,
+    ).toBeUndefined();
+    expect(events).toMatchObject([
+      { type: 'session-id', sessionId: 'session-1' },
+      { type: 'complete', result: { isError: false } },
+    ]);
+  });
+
+  it('does not treat child session lifecycle events as parent lifecycle events', async () => {
+    async function* childLifecycleStream() {
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'parent-msg',
+            sessionID: 'session-1',
+          }),
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'subtask-1',
+            sessionID: 'child-session',
+            messageID: 'parent-msg',
+            type: 'subtask',
+            prompt: 'Inspect code',
+            description: 'Child subtask',
+            agent: 'general',
+          },
+        },
+      };
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'child-session', error: 'child failed' },
+      };
+      yield {
+        type: 'session.updated',
+        properties: {
+          info: {
+            id: 'child-session',
+            title: 'Child title',
+            time: { updated: Date.now() },
+          },
+        },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: childLifecycleStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: null })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events).toMatchObject([
+      { type: 'session-id', sessionId: 'session-1' },
+      { type: 'entry', entry: { type: 'tool-use', toolId: 'subtask-1' } },
+      { type: 'complete', result: { isError: false } },
+    ]);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.some((event) => event.type === 'session-updated')).toBe(
+      false,
+    );
+  });
+
+  it('accepts nested subtask events from known child sessions', async () => {
+    async function* nestedSubtaskStream() {
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'parent-msg',
+            sessionID: 'session-1',
+          }),
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'subtask-1',
+            sessionID: 'child-session',
+            messageID: 'parent-msg',
+            type: 'subtask',
+            prompt: 'Inspect code',
+            description: 'Child subtask',
+            agent: 'general',
+          },
+        },
+      };
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'child-msg',
+            sessionID: 'child-session',
+          }),
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'subtask-2',
+            sessionID: 'grandchild-session',
+            messageID: 'child-msg',
+            type: 'subtask',
+            prompt: 'Inspect nested code',
+            description: 'Grandchild subtask',
+            agent: 'general',
+          },
+        },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: nestedSubtaskStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: null })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events).toMatchObject([
+      { type: 'session-id', sessionId: 'session-1' },
+      { type: 'entry', entry: { type: 'tool-use', toolId: 'subtask-1' } },
+      {
+        type: 'entry',
+        entry: {
+          type: 'tool-use',
+          toolId: 'subtask-2',
+          parentToolId: 'subtask-1',
+        },
+      },
+      { type: 'complete', result: { isError: false } },
+    ]);
+  });
+
+  it('buffers subtask parts until parent message ownership is known', async () => {
+    async function* outOfOrderSubtaskStream() {
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'subtask-1',
+            sessionID: 'child-session',
+            messageID: 'parent-msg',
+            type: 'subtask',
+            prompt: 'Inspect code',
+            description: 'Child subtask',
+            agent: 'general',
+          },
+        },
+      };
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'parent-msg',
+            sessionID: 'session-1',
+          }),
+        },
+      };
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'child-msg',
+            sessionID: 'child-session',
+          }),
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'child-text',
+            sessionID: 'child-session',
+            messageID: 'child-msg',
+            type: 'text',
+            text: 'Child answer',
+          },
+        },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: outOfOrderSubtaskStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: null })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events).toMatchObject([
+      { type: 'session-id', sessionId: 'session-1' },
+      { type: 'entry', entry: { type: 'tool-use', toolId: 'subtask-1' } },
+      {
+        type: 'entry',
+        entry: {
+          type: 'assistant-message',
+          parentToolId: 'subtask-1',
+          value: 'Child answer',
+        },
+      },
+      { type: 'complete', result: { isError: false } },
+    ]);
+  });
+
+  it('fetches completed task child session messages when SSE only has parent task output', async () => {
+    async function* completedTaskStream() {
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'parent-msg',
+            sessionID: 'session-1',
+          }),
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-1',
+          part: {
+            id: 'task-part-1',
+            sessionID: 'session-1',
+            messageID: 'parent-msg',
+            type: 'tool',
+            tool: 'task',
+            callID: 'call-task-1',
+            state: {
+              status: 'completed',
+              input: {
+                description: 'child scan',
+                subagent_type: 'explore',
+                prompt: 'Inspect code',
+              },
+              output:
+                'task_id: child-session\n\n<task_result>Final</task_result>',
+              metadata: {
+                parentSessionId: 'session-1',
+                sessionId: 'child-session',
+              },
+            },
+          },
+        },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: completedTaskStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: null })),
+        messages: vi.fn(async () => ({
+          data: [
+            {
+              info: {
+                id: 'child-user-msg',
+                sessionID: 'child-session',
+                role: 'user',
+                time: { created: 1_717_000_000_000 },
+                agent: 'build',
+                model: {
+                  providerID: 'github-copilot',
+                  modelID: 'gpt-5.4-mini',
+                },
+              },
+              parts: [
+                {
+                  id: 'child-user-text',
+                  sessionID: 'child-session',
+                  messageID: 'child-user-msg',
+                  type: 'text',
+                  text: 'Inspect code',
+                },
+              ],
+            },
+            {
+              info: createAssistantMessageForTest({
+                id: 'child-assistant-msg',
+                sessionID: 'child-session',
+              }),
+              parts: [
+                {
+                  id: 'child-assistant-text',
+                  sessionID: 'child-session',
+                  messageID: 'child-assistant-msg',
+                  type: 'text',
+                  text: 'Child detail',
+                },
+              ],
+            },
+          ],
+        })),
+      },
+    };
+    const persistRaw = vi.fn(async () => 'raw-child');
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw,
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(client.session.messages).toHaveBeenCalledWith({
+      sessionID: 'child-session',
+      directory: '/tmp/project',
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'entry',
+          entry: expect.objectContaining({
+            parentToolId: 'call-task-1',
+            type: 'user-prompt',
+            value: 'Inspect code',
+          }),
+        }),
+        expect.objectContaining({
+          type: 'entry',
+          entry: expect.objectContaining({
+            parentToolId: 'call-task-1',
+            type: 'assistant-message',
+            value: 'Child detail',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('fetches completed task child session messages from prompt result task output', async () => {
+    async function* emptyStream() {}
+
+    const parentInfo = createAssistantMessageForTest({
+      id: 'parent-msg',
+      sessionID: 'session-1',
+    });
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: emptyStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({
+          data: {
+            info: parentInfo,
+            parts: [
+              createCompletedTaskPart({
+                id: 'task-part-1',
+                messageID: 'parent-msg',
+                sessionID: 'session-1',
+                callID: 'call-task-1',
+                childSessionID: 'child-session',
+              }),
+            ],
+          },
+        })),
+        messages: vi.fn(async () => ({
+          data: [
+            {
+              info: createAssistantMessageForTest({
+                id: 'child-assistant-msg',
+                sessionID: 'child-session',
+              }),
+              parts: [
+                {
+                  id: 'child-assistant-text',
+                  sessionID: 'child-session',
+                  messageID: 'child-assistant-msg',
+                  type: 'text',
+                  text: 'Child detail from prompt result',
+                },
+              ],
+            },
+          ],
+        })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-child'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(client.session.messages).toHaveBeenCalledWith({
+      sessionID: 'child-session',
+      directory: '/tmp/project',
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'entry',
+          entry: expect.objectContaining({
+            parentToolId: 'call-task-1',
+            type: 'assistant-message',
+            value: 'Child detail from prompt result',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('recursively fetches nested completed task child session messages', async () => {
+    async function* completedTaskStream() {
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'parent-msg',
+            sessionID: 'session-1',
+          }),
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-1',
+          part: createCompletedTaskPart({
+            id: 'task-part-1',
+            messageID: 'parent-msg',
+            sessionID: 'session-1',
+            callID: 'call-task-1',
+            childSessionID: 'child-session',
+          }),
+        },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: completedTaskStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: null })),
+        messages: vi.fn(async ({ sessionID }: { sessionID: string }) => {
+          if (sessionID === 'child-session') {
+            return {
+              data: [
+                {
+                  info: createAssistantMessageForTest({
+                    id: 'child-msg',
+                    sessionID: 'child-session',
+                  }),
+                  parts: [
+                    createCompletedTaskPart({
+                      id: 'nested-task-part-1',
+                      messageID: 'child-msg',
+                      sessionID: 'child-session',
+                      callID: 'call-nested-task-1',
+                      childSessionID: 'grandchild-session',
+                    }),
+                  ],
+                },
+              ],
+            };
+          }
+          return {
+            data: [
+              {
+                info: createAssistantMessageForTest({
+                  id: 'grandchild-msg',
+                  sessionID: 'grandchild-session',
+                }),
+                parts: [
+                  {
+                    id: 'grandchild-text',
+                    sessionID: 'grandchild-session',
+                    messageID: 'grandchild-msg',
+                    type: 'text',
+                    text: 'Grandchild detail',
+                  },
+                ],
+              },
+            ],
+          };
+        }),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-child'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(client.session.messages).toHaveBeenCalledWith({
+      sessionID: 'child-session',
+      directory: '/tmp/project',
+    });
+    expect(client.session.messages).toHaveBeenCalledWith({
+      sessionID: 'grandchild-session',
+      directory: '/tmp/project',
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'entry',
+          entry: expect.objectContaining({
+            parentToolId: 'call-nested-task-1',
+            type: 'assistant-message',
+            value: 'Grandchild detail',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('does not duplicate child entries already streamed before history fetch', async () => {
+    async function* liveChildThenCompletedTaskStream() {
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'parent-msg',
+            sessionID: 'session-1',
+          }),
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-1',
+          part: createRunningTaskPart({
+            id: 'task-part-1',
+            messageID: 'parent-msg',
+            sessionID: 'session-1',
+            callID: 'call-task-1',
+            childSessionID: 'child-session',
+          }),
+        },
+      };
+      yield {
+        type: 'message.updated',
+        properties: {
+          info: createAssistantMessageForTest({
+            id: 'child-msg',
+            sessionID: 'child-session',
+          }),
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'child-session',
+          part: {
+            id: 'child-text',
+            sessionID: 'child-session',
+            messageID: 'child-msg',
+            type: 'text',
+            text: 'Live child partial',
+          },
+        },
+      };
+      yield {
+        type: 'message.part.updated',
+        properties: {
+          sessionID: 'session-1',
+          part: createCompletedTaskPart({
+            id: 'task-part-1',
+            messageID: 'parent-msg',
+            sessionID: 'session-1',
+            callID: 'call-task-1',
+            childSessionID: 'child-session',
+          }),
+        },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({
+          stream: liveChildThenCompletedTaskStream(),
+        })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: null })),
+        messages: vi.fn(async () => ({
+          data: [
+            {
+              info: createAssistantMessageForTest({
+                id: 'child-msg',
+                sessionID: 'child-session',
+              }),
+              parts: [
+                {
+                  id: 'child-text',
+                  sessionID: 'child-session',
+                  messageID: 'child-msg',
+                  type: 'text',
+                  text: 'Live child final',
+                },
+              ],
+            },
+          ],
+        })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-child'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+    const childTextEvents = events.filter(
+      (event) =>
+        (event.type === 'entry' || event.type === 'entry-update') &&
+        event.entry.id === 'child-msg:child-text',
+    );
+    const childTextEntryEvents = childTextEvents.filter(
+      (event) => event.type === 'entry',
+    );
+
+    expect(client.session.messages).toHaveBeenCalledOnce();
+    expect(childTextEvents).toHaveLength(2);
+    expect(childTextEntryEvents).toHaveLength(1);
+    expect(childTextEvents[0]).toMatchObject({
+      type: 'entry',
+      entry: {
+        parentToolId: 'call-task-1',
+        value: 'Live child partial',
+      },
+    });
+    expect(childTextEvents[1]).toMatchObject({
+      type: 'entry-update',
+      entry: {
+        parentToolId: 'call-task-1',
+        value: 'Live child final',
+      },
+    });
+  });
 });
 
 function createOpenCodeState(client: unknown) {
@@ -605,6 +1342,8 @@ function createOpenCodeState(client: unknown) {
       totalUsage: undefined,
     },
     messageIndex: 0,
+    pendingSubtaskPartsByMessageId: new Map(),
+    fetchedChildSessionIds: new Set(),
     rawDeltaRows: new Map(),
     emittedQuestionRequestIds: new Set(),
     permissionRules: [],
@@ -615,6 +1354,105 @@ function createOpenCodeState(client: unknown) {
     ownsServerHandle: false,
     serverClosed: false,
   };
+}
+
+function createAssistantMessageForTest({
+  id,
+  sessionID,
+}: {
+  id: string;
+  sessionID: string;
+}): AssistantMessage {
+  return {
+    id,
+    sessionID,
+    role: 'assistant',
+    providerID: 'openai',
+    modelID: 'gpt-5.4',
+    time: { created: Date.now(), completed: Date.now() },
+    cost: 0,
+    tokens: {
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    },
+  } as AssistantMessage;
+}
+
+function createCompletedTaskPart({
+  id,
+  messageID,
+  sessionID,
+  callID,
+  childSessionID,
+}: {
+  id: string;
+  messageID: string;
+  sessionID: string;
+  callID: string;
+  childSessionID: string;
+}): Part {
+  return {
+    id,
+    sessionID,
+    messageID,
+    type: 'tool',
+    tool: 'task',
+    callID,
+    state: {
+      status: 'completed',
+      title: 'task',
+      input: {
+        description: 'child scan',
+        subagent_type: 'explore',
+        prompt: 'Inspect code',
+      },
+      output: `task_id: ${childSessionID}\n\n<task_result>Final</task_result>`,
+      time: { start: 1_717_000_000_000, end: 1_717_000_000_500 },
+      metadata: {
+        parentSessionId: sessionID,
+        sessionId: childSessionID,
+      },
+    },
+  } as Part;
+}
+
+function createRunningTaskPart({
+  id,
+  messageID,
+  sessionID,
+  callID,
+  childSessionID,
+}: {
+  id: string;
+  messageID: string;
+  sessionID: string;
+  callID: string;
+  childSessionID: string;
+}): Part {
+  return {
+    id,
+    sessionID,
+    messageID,
+    type: 'tool',
+    tool: 'task',
+    callID,
+    state: {
+      status: 'running',
+      title: 'task',
+      input: {
+        description: 'child scan',
+        subagent_type: 'explore',
+        prompt: 'Inspect code',
+      },
+      time: { start: 1_717_000_000_000 },
+      metadata: {
+        parentSessionId: sessionID,
+        sessionId: childSessionID,
+      },
+    },
+  } as Part;
 }
 
 function mapEventForTest(

@@ -10,6 +10,7 @@ vi.mock('child_process', () => ({
 }));
 
 vi.mock('electron', () => ({
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
   systemPreferences: {
     isTrustedAccessibilityClient: vi.fn(),
   },
