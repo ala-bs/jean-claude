@@ -31,6 +31,7 @@ export function PrInlineCommentThread({
       projectId={projectId}
       prId={prId}
       canResolve={isActiveThreadStatus(thread.status)}
+      threadStatus={thread.status}
       comments={thread.comments.map((comment) => ({
         id: comment.id ?? 0,
         content: comment.content,

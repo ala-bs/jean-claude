@@ -26,6 +26,7 @@ import {
   useUpdateWorkItemState,
   useWorkItemById,
   useWorkItemComments,
+  useWorkItemStates,
 } from '@/hooks/use-work-items';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
@@ -56,8 +57,6 @@ function WorkItemTypeIcon({
   }
 }
 
-const WORK_ITEM_STATES = ['New', 'Active', 'Resolved', 'Done', 'Closed'];
-
 function getStateColor(state: string): {
   color: 'neutral' | 'blue' | 'yellow' | 'green';
   ringClass: string;
@@ -83,16 +82,21 @@ function StateBadge({ state }: { state: string }) {
 
 function EditableStateBadge({
   state,
+  states: availableStates,
   providerId,
   workItemId,
 }: {
   state: string;
+  states: string[];
   providerId: string;
   workItemId: number;
 }) {
   const updateState = useUpdateWorkItemState();
   const { color, ringClass } = getStateColor(state);
   const dropdownRef = useRef<{ toggle: () => void } | null>(null);
+  const states = availableStates.includes(state)
+    ? availableStates
+    : [state, ...availableStates];
 
   const handleSelect = useCallback(
     (s: string) => {
@@ -131,7 +135,7 @@ function EditableStateBadge({
         </button>
       }
     >
-      {WORK_ITEM_STATES.map((s) => (
+      {states.map((s) => (
         <DropdownItem
           key={s}
           onClick={() => handleSelect(s)}
@@ -168,6 +172,11 @@ export function WorkItemDetails({
   } = useWorkItemById({
     providerId,
     workItemId,
+  });
+  const { data: availableStates = [] } = useWorkItemStates({
+    providerId,
+    projectName,
+    workItemType: workItem?.fields.workItemType ?? null,
   });
   const {
     data: comments = [],
@@ -266,6 +275,7 @@ export function WorkItemDetails({
           {providerId ? (
             <EditableStateBadge
               state={fields.state}
+              states={availableStates.map((s) => s.name)}
               providerId={providerId}
               workItemId={workItem.id}
             />

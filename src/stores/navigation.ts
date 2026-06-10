@@ -61,11 +61,15 @@ export type PrDetailTab = 'overview' | 'files' | 'commits';
 interface PrViewState {
   selectedFile: string | null;
   activeTab: PrDetailTab;
+  selectedCommitId: string | null;
+  selectedCommitFile: string | null;
 }
 
 const defaultPrViewState: PrViewState = {
   selectedFile: null,
   activeTab: 'overview',
+  selectedCommitId: null,
+  selectedCommitFile: null,
 };
 
 interface TaskState {
@@ -227,6 +231,8 @@ interface NavigationState {
   setPrDraft: (taskId: string, draft: PrDraft) => void;
   setPrSelectedFile: (prKey: string, filePath: string | null) => void;
   setPrActiveTab: (prKey: string, tab: PrDetailTab) => void;
+  setPrSelectedCommit: (prKey: string, commitId: string | null) => void;
+  setPrSelectedCommitFile: (prKey: string, filePath: string | null) => void;
   clearPrNavState: (prKey: string) => void;
   reconcilePrState: (activePrKeys: Set<string>) => void;
   setReviewMode: (taskId: string, mode: ReviewMode) => void;
@@ -527,6 +533,31 @@ const useStore = create<NavigationState>()(
               ...defaultPrViewState,
               ...state.prState[prKey],
               activeTab: tab,
+            },
+          },
+        })),
+
+      setPrSelectedCommit: (prKey, commitId) =>
+        set((state) => ({
+          prState: {
+            ...state.prState,
+            [prKey]: {
+              ...defaultPrViewState,
+              ...state.prState[prKey],
+              selectedCommitId: commitId,
+              selectedCommitFile: null,
+            },
+          },
+        })),
+
+      setPrSelectedCommitFile: (prKey, filePath) =>
+        set((state) => ({
+          prState: {
+            ...state.prState,
+            [prKey]: {
+              ...defaultPrViewState,
+              ...state.prState[prKey],
+              selectedCommitFile: filePath,
             },
           },
         })),
@@ -1086,7 +1117,40 @@ export function usePrDetailState(projectId: string, prId: number) {
     [prKey, clearPrNavStateAction],
   );
 
-  return { selectedFile, activeTab, setSelectedFile, setActiveTab, clearState };
+  const selectedCommitId = useStore(
+    (state) => state.prState[prKey]?.selectedCommitId ?? null,
+  );
+  const selectedCommitFile = useStore(
+    (state) => state.prState[prKey]?.selectedCommitFile ?? null,
+  );
+  const setPrSelectedCommitAction = useStore(
+    (state) => state.setPrSelectedCommit,
+  );
+  const setPrSelectedCommitFileAction = useStore(
+    (state) => state.setPrSelectedCommitFile,
+  );
+
+  const setSelectedCommit = useCallback(
+    (commitId: string | null) => setPrSelectedCommitAction(prKey, commitId),
+    [prKey, setPrSelectedCommitAction],
+  );
+
+  const setSelectedCommitFile = useCallback(
+    (filePath: string | null) => setPrSelectedCommitFileAction(prKey, filePath),
+    [prKey, setPrSelectedCommitFileAction],
+  );
+
+  return {
+    selectedFile,
+    activeTab,
+    selectedCommitId,
+    selectedCommitFile,
+    setSelectedFile,
+    setActiveTab,
+    setSelectedCommit,
+    setSelectedCommitFile,
+    clearState,
+  };
 }
 
 // Hook for diff file tree width
