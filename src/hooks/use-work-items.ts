@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   api,
   type AzureDevOpsWorkItem,
+  type AzureDevOpsWorkItemState,
   type AzureDevOpsUser,
   type AzureDevOpsIteration,
   type WorkItemComment,
@@ -58,6 +59,30 @@ export function useWorkItemById(params: {
         workItemId: params.workItemId!,
       }),
     enabled: !!params.providerId && !!params.workItemId,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useWorkItemStates(params: {
+  providerId: string | null;
+  projectName: string | null;
+  workItemType: string | null;
+}) {
+  return useQuery<AzureDevOpsWorkItemState[]>({
+    queryKey: [
+      'work-item-states',
+      params.providerId,
+      params.projectName,
+      params.workItemType,
+    ],
+    queryFn: () =>
+      api.azureDevOps.getWorkItemStates({
+        providerId: params.providerId!,
+        projectName: params.projectName!,
+        workItemType: params.workItemType!,
+      }),
+    enabled:
+      !!params.providerId && !!params.projectName && !!params.workItemType,
     staleTime: 5 * 60_000,
   });
 }
@@ -266,6 +291,9 @@ export function useUpdateWorkItemState() {
       });
       queryClient.invalidateQueries({
         queryKey: ['work-items'],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['pull-request-work-items'],
       });
     },
   });

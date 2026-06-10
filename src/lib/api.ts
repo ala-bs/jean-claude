@@ -256,6 +256,12 @@ export interface AzureDevOpsWorkItem {
   relatedTestCaseIds?: number[];
 }
 
+export interface AzureDevOpsWorkItemState {
+  name: string;
+  color?: string;
+  category?: string;
+}
+
 export interface WorkItemComment {
   id: number;
   workItemId: number;
@@ -623,6 +629,11 @@ export interface Api {
       providerId: string;
       workItemId: number;
     }) => Promise<AzureDevOpsWorkItem | null>;
+    getWorkItemStates: (params: {
+      providerId: string;
+      projectName: string;
+      workItemType: string;
+    }) => Promise<AzureDevOpsWorkItemState[]>;
     updateWorkItemState: (params: {
       providerId: string;
       workItemId: number;
@@ -708,6 +719,20 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<AzureDevOpsFileChange[]>;
+    getCommitChanges: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+    }) => Promise<AzureDevOpsFileChange[]>;
+    getFileContentAtCommit: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+      filePath: string;
+      version: 'current' | 'parent';
+    }) => Promise<string>;
     getPullRequestFileContent: (params: {
       providerId: string;
       projectId: string;
@@ -776,6 +801,14 @@ export interface Api {
       commentId: number;
       content: string;
     }) => Promise<AzureDevOpsComment>;
+    deleteThreadComment: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      threadId: number;
+      commentId: number;
+    }) => Promise<void>;
     updateThreadStatus: (params: {
       providerId: string;
       projectId: string;
@@ -1661,6 +1694,7 @@ export const api: Api = hasWindowApi
         },
         queryWorkItems: async () => [],
         getWorkItemById: async () => null,
+        getWorkItemStates: async () => [],
         updateWorkItemState: async () => {
           throw new Error('API not available');
         },
@@ -1691,6 +1725,8 @@ export const api: Api = hasWindowApi
         },
         getPullRequestCommits: async () => [],
         getPullRequestChanges: async () => [],
+        getCommitChanges: async () => [],
+        getFileContentAtCommit: async () => '',
         getPullRequestFileContent: async () => '',
         getPullRequestThreads: async () => [],
         getPullRequestWorkItems: async () => [],
@@ -1706,6 +1742,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         updateThreadComment: async () => {
+          throw new Error('API not available');
+        },
+        deleteThreadComment: async () => {
           throw new Error('API not available');
         },
         updateThreadStatus: async () => {

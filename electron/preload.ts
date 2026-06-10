@@ -292,6 +292,11 @@ contextBridge.exposeInMainWorld('api', {
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
     getWorkItemById: (params: { providerId: string; workItemId: number }) =>
       ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    getWorkItemStates: (params: {
+      providerId: string;
+      projectName: string;
+      workItemType: string;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemStates', params),
     updateWorkItemState: (params: {
       providerId: string;
       workItemId: number;
@@ -379,6 +384,20 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:getPullRequestChanges', params),
+    getCommitChanges: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+    }) => ipcRenderer.invoke('azureDevOps:getCommitChanges', params),
+    getFileContentAtCommit: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+      filePath: string;
+      version: 'current' | 'parent';
+    }) => ipcRenderer.invoke('azureDevOps:getFileContentAtCommit', params),
     getPullRequestFileContent: (params: {
       providerId: string;
       projectId: string;
@@ -447,6 +466,14 @@ contextBridge.exposeInMainWorld('api', {
       commentId: number;
       content: string;
     }) => ipcRenderer.invoke('azureDevOps:updateThreadComment', params),
+    deleteThreadComment: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      threadId: number;
+      commentId: number;
+    }) => ipcRenderer.invoke('azureDevOps:deleteThreadComment', params),
     updateThreadStatus: (params: {
       providerId: string;
       projectId: string;
