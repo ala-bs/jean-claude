@@ -65,6 +65,7 @@ export function FileDiffContent({
   onResolveReviewComment,
   defaultCommentFormLineRanges,
   onCommentFormClose,
+  shouldKeepCommentFormRangeOnOpen,
 }: {
   file: DiffFile;
   oldContent: string;
@@ -97,6 +98,8 @@ export function FileDiffContent({
   defaultCommentFormLineRanges?: LineRange[];
   /** Called when a comment form is closed (for draft cleanup). */
   onCommentFormClose?: (range: LineRange) => void;
+  /** Decide which already-open forms stay when opening another form. */
+  shouldKeepCommentFormRangeOnOpen?: (range: LineRange) => boolean;
   // Annotation props - optional
   annotations?: FileAnnotation[];
   // Review comment props - optional
@@ -157,10 +160,29 @@ export function FileDiffContent({
       if (existing) {
         removeRange(lineRange);
       } else {
-        setCommentFormLineRanges((prev) => [...prev, lineRange]);
+        const retainedRanges = shouldKeepCommentFormRangeOnOpen
+          ? commentFormLineRanges.filter((range) =>
+              shouldKeepCommentFormRangeOnOpen(range),
+            )
+          : commentFormLineRanges;
+
+        setCommentFormLineRanges([...retainedRanges, lineRange]);
+
+        if (shouldKeepCommentFormRangeOnOpen) {
+          for (const range of commentFormLineRanges) {
+            if (!shouldKeepCommentFormRangeOnOpen(range)) {
+              onCommentFormClose?.(range);
+            }
+          }
+        }
       }
     },
-    [commentFormLineRanges, removeRange],
+    [
+      commentFormLineRanges,
+      onCommentFormClose,
+      removeRange,
+      shouldKeepCommentFormRangeOnOpen,
+    ],
   );
 
   // Filter threads for this file (only those with line numbers)
