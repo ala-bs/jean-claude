@@ -49,6 +49,7 @@ import {
   type ModelPreference,
   type ThinkingEffort,
   type AiGenerationSetting,
+  type UsageDisplaySetting,
   type EditorSetting,
   type AppSettings,
   type NewToken,
@@ -185,6 +186,10 @@ import {
   resetClient as resetCompletionClient,
   getDailyUsage as getCompletionDailyUsage,
 } from '../services/completion-service';
+import {
+  CopilotDeviceFlowService,
+  type CopilotDeviceCode,
+} from '../services/copilot-device-flow-service';
 import { closeEditorWindowsForTaskWorktree } from '../services/editor-automation-service';
 import {
   createFeedNote,
@@ -316,6 +321,11 @@ import {
   pushBranch,
   deleteProjectWorktreesFolder,
 } from '../services/worktree-service';
+
+import {
+  prepareUsageDisplaySettingForSave,
+  redactUsageDisplaySetting,
+} from './usage-display-settings';
 
 function redactAiGenerationSetting(
   setting: AiGenerationSetting,
@@ -3540,6 +3550,9 @@ export function registerIpcHandlers() {
       if (key === 'aiGeneration') {
         return redactAiGenerationSetting(value as AiGenerationSetting);
       }
+      if (key === 'usageDisplay') {
+        return redactUsageDisplaySetting(value as UsageDisplaySetting);
+      }
       return value;
     },
   );
@@ -3553,7 +3566,59 @@ export function registerIpcHandlers() {
       if (key === 'aiGeneration') {
         throw new Error('Use aiGeneration:saveSettings for OpenAI settings');
       }
+      if (key === 'usageDisplay') {
+        throw new Error(
+          'Use usageDisplay:saveSettings for usage display settings',
+        );
+      }
       return SettingsRepository.set(key, value);
+    },
+  );
+
+  ipcMain.handle(
+    'usageDisplay:saveSettings',
+    async (_: unknown, params: UsageDisplaySetting) => {
+      const existing = await SettingsRepository.get('usageDisplay');
+      const { encryptionService } =
+        await import('../services/encryption-service');
+      await SettingsRepository.set(
+        'usageDisplay',
+        prepareUsageDisplaySettingForSave({
+          params,
+          existing,
+          encrypt: (value) => encryptionService.encrypt(value),
+        }),
+      );
+      agentUsageService.invalidate('copilot');
+      return redactUsageDisplaySetting(
+        await SettingsRepository.get('usageDisplay'),
+      );
+    },
+  );
+  ipcMain.handle('copilotAuth:requestDeviceCode', async () => {
+    const flow = new CopilotDeviceFlowService();
+    const deviceCode = await flow.requestDeviceCode();
+    await shell.openExternal(
+      deviceCode.verificationUriComplete ?? deviceCode.verificationUri,
+    );
+    return deviceCode;
+  });
+  ipcMain.handle(
+    'copilotAuth:completeDeviceLogin',
+    async (_: unknown, deviceCode: CopilotDeviceCode) => {
+      const flow = new CopilotDeviceFlowService();
+      const token = await flow.pollForToken(deviceCode);
+      const existing = await SettingsRepository.get('usageDisplay');
+      const { encryptionService } =
+        await import('../services/encryption-service');
+      await SettingsRepository.set('usageDisplay', {
+        ...existing,
+        copilotToken: encryptionService.encrypt(token),
+      });
+      agentUsageService.invalidate('copilot');
+      return redactUsageDisplaySetting(
+        await SettingsRepository.get('usageDisplay'),
+      );
     },
   );
   ipcMain.handle(

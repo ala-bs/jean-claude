@@ -378,6 +378,15 @@ export type DesktopNotificationStatus = {
   canOpenSettings: boolean;
 };
 
+export type CopilotDeviceCode = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  expiresIn: number;
+  interval: number;
+};
+
 export interface Api {
   platform: typeof process.platform;
   windowState: {
@@ -1054,6 +1063,17 @@ export interface Api {
       since: string;
       until?: string;
     }) => Promise<UsageSnapshot[]>;
+  };
+  usageDisplay: {
+    saveSettings: (
+      value: AppSettings['usageDisplay'],
+    ) => Promise<AppSettings['usageDisplay']>;
+  };
+  copilotAuth: {
+    requestDeviceCode: () => Promise<CopilotDeviceCode>;
+    completeDeviceLogin: (
+      deviceCode: CopilotDeviceCode,
+    ) => Promise<AppSettings['usageDisplay']>;
   };
   projectCommands: {
     findByProjectId: (projectId: string) => Promise<ProjectCommand[]>;
@@ -1876,6 +1896,17 @@ export const api: Api = hasWindowApi
       usage: {
         getAll: async () => ({}),
         getHistory: async () => [],
+      },
+      usageDisplay: {
+        saveSettings: async (value) => value,
+      },
+      copilotAuth: {
+        requestDeviceCode: async () => {
+          throw new Error('API not available');
+        },
+        completeDeviceLogin: async () => {
+          throw new Error('API not available');
+        },
       },
       projectCommands: {
         findByProjectId: async () => [],

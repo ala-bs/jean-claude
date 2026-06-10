@@ -7,10 +7,14 @@ import type {
   UsageResult,
 } from '@shared/usage-types';
 
+import { SettingsRepository } from '../database/repositories/settings';
 import { UsageSnapshotRepository } from '../database/repositories/usage-snapshots';
 
+import { encryptionService } from './encryption-service';
 import { ClaudeUsageProvider } from './usage-providers/claude-usage-provider';
 import { CodexUsageProvider } from './usage-providers/codex-usage-provider';
+import { CopilotUsageProvider } from './usage-providers/copilot-usage-provider';
+import { GeminiUsageProvider } from './usage-providers/gemini-usage-provider';
 import type { BackendUsageProvider } from './usage-providers/types';
 
 class AgentUsageService {
@@ -60,6 +64,14 @@ class AgentUsageService {
     this.inFlight.clear();
   }
 
+  invalidate(providerType?: UsageProviderType): void {
+    if (providerType) {
+      this.cache.delete(providerType);
+      return;
+    }
+    this.cache.clear();
+  }
+
   private async getUsageForProvider(
     providerType: UsageProviderType,
   ): Promise<UsageResult> {
@@ -79,7 +91,9 @@ class AgentUsageService {
     const request = (async () => {
       const provider = this.getOrCreateProvider(providerType);
       const value = await provider.getUsage();
-      this.cache.set(providerType, { value, cachedAt: Date.now() });
+      if (value.data) {
+        this.cache.set(providerType, { value, cachedAt: Date.now() });
+      }
 
       if (value.data) {
         this.persistSnapshots(providerType, value.data).catch((err) => {
@@ -159,6 +173,17 @@ class AgentUsageService {
         return new ClaudeUsageProvider();
       case 'codex':
         return new CodexUsageProvider();
+      case 'gemini':
+        return new GeminiUsageProvider();
+      case 'copilot':
+        return new CopilotUsageProvider({
+          getToken: async () => {
+            const setting = await SettingsRepository.get('usageDisplay');
+            return setting.copilotToken
+              ? encryptionService.decrypt(setting.copilotToken)
+              : null;
+          },
+        });
       default: {
         const _exhaustive: never = providerType;
         throw new Error(`Unknown usage provider: ${_exhaustive}`);

@@ -154,11 +154,12 @@ export function useUpdateUsageDisplaySetting() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (value: UsageDisplaySetting) =>
-      api.settings.set('usageDisplay', value),
+      api.usageDisplay.saveSettings(value),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['settings', 'usageDisplay'],
       });
+      queryClient.invalidateQueries({ queryKey: ['backend-usage'] });
     },
   });
 }

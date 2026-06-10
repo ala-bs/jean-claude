@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Check,
   FolderOpen,
@@ -928,9 +929,26 @@ function TaskNotificationSettings() {
 }
 
 export function UsageDisplaySettings() {
+  const queryClient = useQueryClient();
   const { data: usageDisplaySetting } = useUsageDisplaySetting();
   const updateUsageDisplay = useUpdateUsageDisplaySetting();
   const enabledProviders = usageDisplaySetting?.enabledProviders ?? [];
+  const [copilotToken, setCopilotToken] = useState('');
+  const [copilotDeviceCode, setCopilotDeviceCode] = useState<string | null>(
+    null,
+  );
+  const [copilotLoginStatus, setCopilotLoginStatus] = useState<string | null>(
+    null,
+  );
+  const hasStoredCopilotToken = usageDisplaySetting?.copilotToken === 'stored';
+
+  useEffect(() => {
+    setCopilotToken(
+      usageDisplaySetting?.copilotToken === 'stored'
+        ? ''
+        : (usageDisplaySetting?.copilotToken ?? ''),
+    );
+  }, [usageDisplaySetting?.copilotToken]);
 
   const isEnabled = (id: UsageProviderType) => enabledProviders.includes(id);
 
@@ -938,7 +956,50 @@ export function UsageDisplaySettings() {
     const next = isEnabled(id)
       ? enabledProviders.filter((p) => p !== id)
       : [...enabledProviders, id];
-    updateUsageDisplay.mutate({ enabledProviders: next });
+    updateUsageDisplay.mutate({
+      ...(usageDisplaySetting ?? { enabledProviders: [] }),
+      enabledProviders: next,
+    });
+  };
+
+  const saveCopilotToken = () => {
+    if (!copilotToken.trim()) return;
+    updateUsageDisplay.mutate({
+      ...(usageDisplaySetting ?? { enabledProviders: [] }),
+      copilotToken: copilotToken.trim(),
+    });
+  };
+
+  const clearCopilotToken = () => {
+    setCopilotToken('');
+    setCopilotDeviceCode(null);
+    setCopilotLoginStatus('Signed out.');
+    updateUsageDisplay.mutate({
+      ...(usageDisplaySetting ?? { enabledProviders: [] }),
+      copilotToken: '',
+    });
+  };
+
+  const startCopilotLogin = async () => {
+    try {
+      setCopilotLoginStatus('Opening GitHub sign-in...');
+      const deviceCode = await api.copilotAuth.requestDeviceCode();
+      setCopilotDeviceCode(deviceCode.userCode);
+      setCopilotLoginStatus('Waiting for GitHub authorization...');
+      await api.copilotAuth.completeDeviceLogin(deviceCode);
+      setCopilotToken('');
+      setCopilotDeviceCode(null);
+      setCopilotLoginStatus('Signed in.');
+      await queryClient.invalidateQueries({
+        queryKey: ['settings', 'usageDisplay'],
+      });
+      await queryClient.invalidateQueries({ queryKey: ['backend-usage'] });
+    } catch (error) {
+      setCopilotDeviceCode(null);
+      setCopilotLoginStatus(
+        error instanceof Error ? error.message : 'GitHub sign-in failed.',
+      );
+    }
   };
 
   return (
@@ -970,6 +1031,73 @@ export function UsageDisplaySettings() {
             </div>
           );
         })}
+      </div>
+
+      <div className="mt-4">
+        <label className="text-ink-2 block text-sm font-medium">
+          GitHub Copilot token
+        </label>
+        <div className="mt-2 flex gap-2">
+          <Input
+            type="password"
+            value={copilotToken}
+            onChange={(e) => setCopilotToken(e.target.value)}
+            onBlur={saveCopilotToken}
+            onKeyDown={(e) => e.key === 'Enter' && saveCopilotToken()}
+            placeholder={
+              hasStoredCopilotToken
+                ? 'Stored token preserved unless replaced'
+                : 'Token used for Copilot usage API'
+            }
+          />
+          {hasStoredCopilotToken && (
+            <Button
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={clearCopilotToken}
+              variant="ghost"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <p className="text-ink-3 mt-1 text-xs">
+          Used only when Copilot usage display is enabled.
+        </p>
+        <div className="mt-2 flex items-center gap-2">
+          <Button
+            onClick={
+              hasStoredCopilotToken ? clearCopilotToken : startCopilotLogin
+            }
+            onMouseDown={
+              hasStoredCopilotToken
+                ? (event) => event.preventDefault()
+                : undefined
+            }
+            variant={hasStoredCopilotToken ? 'ghost' : 'secondary'}
+          >
+            {hasStoredCopilotToken ? 'Sign out' : 'Sign in with GitHub'}
+          </Button>
+          {hasStoredCopilotToken && (
+            <span className="text-status-done flex items-center gap-1 text-xs">
+              <Check className="h-3 w-3" /> Signed in
+            </span>
+          )}
+          {copilotDeviceCode && (
+            <span className="text-ink-2 text-xs">
+              Enter code{' '}
+              <code className="bg-bg-2 rounded px-1 py-0.5">
+                {copilotDeviceCode}
+              </code>
+            </span>
+          )}
+        </div>
+        {copilotLoginStatus && (
+          <p className="text-ink-3 mt-1 text-xs">{copilotLoginStatus}</p>
+        )}
+        <p className="text-ink-3 mt-2 text-xs">
+          Sign in with GitHub is preferred. Manual tokens are only a fallback
+          and must belong to a GitHub account with Copilot access.
+        </p>
       </div>
     </div>
   );

@@ -37,7 +37,7 @@ export interface UsageResult {
 
 // Usage provider types — independent from AgentBackendType.
 // Codex (OpenAI) is a usage provider but not an agent backend in this app.
-export type UsageProviderType = 'claude-code' | 'codex';
+export type UsageProviderType = 'claude-code' | 'codex' | 'gemini' | 'copilot';
 
 export const USAGE_PROVIDERS: {
   value: UsageProviderType;
@@ -56,6 +56,18 @@ export const USAGE_PROVIDERS: {
     label: 'Codex',
     shortLabel: 'CX',
     description: 'OpenAI Codex rate limits',
+  },
+  {
+    value: 'gemini',
+    label: 'Gemini',
+    shortLabel: 'GM',
+    description: 'Gemini CLI OAuth quota usage',
+  },
+  {
+    value: 'copilot',
+    label: 'Copilot',
+    shortLabel: 'CP',
+    description: 'GitHub Copilot premium and chat usage',
   },
 ];
 

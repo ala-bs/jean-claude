@@ -651,6 +651,7 @@ export interface CompletionSetting {
 
 export interface UsageDisplaySetting {
   enabledProviders: UsageProviderType[];
+  copilotToken?: string;
 }
 
 export interface SummaryModelsSetting {
@@ -823,7 +824,12 @@ function isBackendsSetting(v: unknown): v is BackendsSetting {
   return true;
 }
 
-const VALID_USAGE_PROVIDERS: UsageProviderType[] = ['claude-code', 'codex'];
+const VALID_USAGE_PROVIDERS: UsageProviderType[] = [
+  'claude-code',
+  'codex',
+  'gemini',
+  'copilot',
+];
 
 function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
   if (!v || typeof v !== 'object') return false;
@@ -834,6 +840,8 @@ function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
       VALID_USAGE_PROVIDERS.includes(b as UsageProviderType),
     )
   )
+    return false;
+  if (obj.copilotToken !== undefined && typeof obj.copilotToken !== 'string')
     return false;
   return true;
 }
@@ -1089,6 +1097,7 @@ export const SETTINGS_DEFINITIONS = {
   usageDisplay: {
     defaultValue: {
       enabledProviders: [],
+      copilotToken: '',
     } as UsageDisplaySetting,
     validate: isUsageDisplaySetting,
   },
