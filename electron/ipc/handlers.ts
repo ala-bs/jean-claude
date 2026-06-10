@@ -140,11 +140,14 @@ import {
   getPullRequestCommits,
   getPullRequestChanges,
   getPullRequestFileContent,
+  getCommitChanges,
+  getFileContentAtCommit,
   getPullRequestThreads,
   addPullRequestComment,
   addPullRequestFileComment,
   addThreadReply,
   updateThreadComment,
+  deleteThreadComment,
   updateThreadStatus,
   searchIdentities,
   getCurrentUser,
@@ -2592,6 +2595,18 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:getWorkItemStates',
+    async (
+      _event,
+      params: { providerId: string; projectName: string; workItemType: string },
+    ) => {
+      const { getWorkItemStates } =
+        await import('../services/azure-devops-service');
+      return getWorkItemStates(params);
+    },
+  );
+
+  ipcMain.handle(
     'azureDevOps:getRelatedTestCases',
     async (
       _event,
@@ -2765,6 +2780,34 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:getCommitChanges',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        commitId: string;
+      },
+    ) => getCommitChanges(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getFileContentAtCommit',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        commitId: string;
+        filePath: string;
+        version: 'current' | 'parent';
+      },
+    ) => getFileContentAtCommit(params),
+  );
+
+  ipcMain.handle(
     'azureDevOps:getPullRequestFileContent',
     (
       _,
@@ -2893,6 +2936,21 @@ export function registerIpcHandlers() {
         content: string;
       },
     ) => updateThreadComment(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:deleteThreadComment',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        threadId: number;
+        commentId: number;
+      },
+    ) => deleteThreadComment(params),
   );
 
   ipcMain.handle(

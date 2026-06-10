@@ -118,6 +118,12 @@ export interface AzureDevOpsIteration {
   isCurrent: boolean;
 }
 
+export interface AzureDevOpsWorkItemState {
+  name: string;
+  color?: string;
+  category?: string;
+}
+
 interface WiqlResponse {
   workItems: Array<{ id: number; url: string }>;
 }
@@ -808,6 +814,37 @@ export async function getWorkItemById(params: {
     parentId: extractParentId(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
   };
+}
+
+export async function getWorkItemStates(params: {
+  providerId: string;
+  projectName: string;
+  workItemType: string;
+}): Promise<AzureDevOpsWorkItemState[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(params.workItemType)}/states?api-version=7.1`,
+    {
+      headers: { Authorization: authHeader },
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(
+      `Failed to fetch states for work item type ${params.workItemType}: ${error}`,
+    );
+  }
+
+  const data = await response.json();
+  return (data.value ?? []).map(
+    (state: { name: string; color?: string; category?: string }) => ({
+      name: state.name,
+      color: state.color,
+      category: state.category,
+    }),
+  );
 }
 
 /**
@@ -2532,6 +2569,88 @@ export async function getPullRequestChanges(params: {
     }));
 }
 
+export async function getCommitChanges(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  commitId: string;
+}): Promise<AzureDevOpsFileChange[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/commits/${params.commitId}/changes?api-version=7.0`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get commit changes: ${error}`);
+  }
+
+  const data: {
+    changeCounts: Record<string, number>;
+    changes: Array<
+      ChangeResponse & {
+        item?: ChangeResponse['item'] & { isFolder?: boolean };
+      }
+    >;
+  } = await response.json();
+
+  return data.changes
+    .filter((change) => change.item?.path && !change.item.isFolder)
+    .map((change) => ({
+      path: change.item!.path,
+      changeType: mapChangeType(change.changeType),
+      originalPath: change.sourceServerItem,
+    }));
+}
+
+export async function getFileContentAtCommit(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  commitId: string;
+  filePath: string;
+  version: 'current' | 'parent';
+}): Promise<string> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  let versionId = params.commitId;
+
+  if (params.version === 'parent') {
+    // Get parent commit ID
+    const commitUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/commits/${params.commitId}?api-version=7.0`;
+    const commitResponse = await fetch(commitUrl, {
+      headers: { Authorization: authHeader },
+    });
+    if (!commitResponse.ok) {
+      return '';
+    }
+    const commitData: { parents?: string[] } = await commitResponse.json();
+    if (!commitData.parents?.length) {
+      return ''; // Initial commit, no parent
+    }
+    versionId = commitData.parents[0];
+  }
+
+  const contentUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/items?path=${encodeURIComponent(params.filePath)}&versionDescriptor.version=${encodeURIComponent(versionId)}&versionDescriptor.versionType=commit&api-version=7.0`;
+
+  const response = await fetch(contentUrl, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return ''; // File doesn't exist at this version (new or deleted)
+    }
+    const error = await response.text();
+    throw new Error(`Failed to get file content at commit: ${error}`);
+  }
+
+  return response.text();
+}
+
 export async function getPullRequestFileContent(params: {
   providerId: string;
   projectId: string;
@@ -2819,6 +2938,7 @@ export async function getPullRequestActivityMetadata(params: {
   lastCommitDate: string | null;
   lastThreadActivityDate: string | null;
   activeThreadCount: number;
+  unresolvedCommentCount: number;
 }> {
   const [commits, threads] = await Promise.all([
     getPullRequestCommits(params),
@@ -2836,10 +2956,19 @@ export async function getPullRequestActivityMetadata(params: {
   // Find max lastUpdatedDate across all comments in all threads
   let lastThreadActivityDate: string | null = null;
   let activeThreadCount = 0;
+  let unresolvedCommentCount = 0;
 
   for (const thread of realThreads) {
-    if (thread.status === 'active') {
+    const isActiveThread =
+      thread.status === 'active' ||
+      thread.status === 'pending' ||
+      thread.status === 'unknown';
+
+    if (isActiveThread) {
       activeThreadCount++;
+      unresolvedCommentCount += thread.comments.filter(
+        (comment) => comment.commentType !== 'system',
+      ).length;
     }
     for (const comment of thread.comments) {
       if (
@@ -2851,7 +2980,12 @@ export async function getPullRequestActivityMetadata(params: {
     }
   }
 
-  return { lastCommitDate, lastThreadActivityDate, activeThreadCount };
+  return {
+    lastCommitDate,
+    lastThreadActivityDate,
+    activeThreadCount,
+    unresolvedCommentCount,
+  };
 }
 
 export async function addThreadReply(params: {
@@ -2900,6 +3034,31 @@ export async function addThreadReply(params: {
     publishedDate: comment.publishedDate,
     lastUpdatedDate: comment.lastUpdatedDate,
   };
+}
+
+export async function deleteThreadComment(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  threadId: number;
+  commentId: number;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/threads/${params.threadId}/comments/${params.commentId}?api-version=7.0`;
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: authHeader,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to delete thread comment: ${error}`);
+  }
 }
 
 export async function updateThreadComment(params: {

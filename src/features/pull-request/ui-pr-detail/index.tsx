@@ -32,9 +32,11 @@ import {
 import { feedQueryKeys } from '@/lib/feed-query-keys';
 import { usePrDetailState } from '@/stores/navigation';
 import type { PrDetailTab } from '@/stores/navigation';
+import { usePrDraftCountByFile } from '@/stores/pr-comment-drafts';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import type { FeedItem } from '@shared/feed-types';
 
+import { PrCommitDiffView } from '../ui-pr-commit-diff-view';
 import { PrCommits } from '../ui-pr-commits';
 import { PrDiffView } from '../ui-pr-diff-view';
 import { PrHeader } from '../ui-pr-header';
@@ -52,8 +54,16 @@ export function PrDetail({
   prId: number;
   bottomPadding?: number;
 }) {
-  const { selectedFile, activeTab, setSelectedFile, setActiveTab } =
-    usePrDetailState(projectId, prId);
+  const {
+    selectedFile,
+    activeTab,
+    selectedCommitId,
+    selectedCommitFile,
+    setSelectedFile,
+    setActiveTab,
+    setSelectedCommit,
+    setSelectedCommitFile,
+  } = usePrDetailState(projectId, prId);
   const [fileTreeWidth, setFileTreeWidth] = useState(250);
   const [searchedMentionOptions, setSearchedMentionOptions] = useState<
     MentionOption[]
@@ -214,6 +224,9 @@ export function PrDetail({
     return getCommentCountByPrFile({ files, threads });
   }, [files, threads]);
 
+  const filePaths = useMemo(() => files.map((f) => f.path), [files]);
+  const draftCountByFile = usePrDraftCountByFile(prId, filePaths);
+
   const { mentionDisplayNames, mentionOptions } = useMemo(() => {
     const names: MentionDisplayNames = {};
     const optionsById = new Map<string, MentionOption>();
@@ -359,6 +372,7 @@ export function PrDetail({
                   selectedPath={selectedFile}
                   onSelectFile={setSelectedFile}
                   commentCountByFile={commentCountByFile}
+                  draftCountByFile={draftCountByFile}
                 />
               )}
               {/* Resize handle */}
@@ -405,7 +419,40 @@ export function PrDetail({
               <Loader2 className="text-ink-3 h-5 w-5 animate-spin" />
             </div>
           ) : (
-            <PrCommits commits={commits} bottomPadding={bottomPadding} />
+            <div
+              className="flex h-full"
+              style={
+                bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined
+              }
+            >
+              {/* Commit list — fixed width left panel */}
+              <div
+                className={clsx(
+                  'shrink-0',
+                  selectedCommitId ? 'panel-edge-shadow-r w-[320px]' : 'w-full',
+                )}
+              >
+                <PrCommits
+                  commits={commits}
+                  selectedCommitId={selectedCommitId}
+                  onSelectCommit={setSelectedCommit}
+                  bottomPadding={selectedCommitId ? 0 : bottomPadding}
+                />
+              </div>
+
+              {/* Commit diff view — fills remaining space */}
+              {selectedCommitId && (
+                <div className="min-w-0 flex-1 overflow-hidden">
+                  <PrCommitDiffView
+                    projectId={projectId}
+                    commitId={selectedCommitId}
+                    selectedFile={selectedCommitFile}
+                    onSelectFile={setSelectedCommitFile}
+                    bottomPadding={bottomPadding}
+                  />
+                </div>
+              )}
+            </div>
           ))}
       </div>
     </div>

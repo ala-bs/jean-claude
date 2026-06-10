@@ -12,6 +12,7 @@ import {
   normalizeAzureChangeType,
   type DiffFile,
 } from '@/features/common/ui-file-diff';
+import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import {
   useCurrentAzureUser,
@@ -169,10 +170,15 @@ export function PrOverview({
     return names;
   }, [currentUser, pr.createdBy, pr.reviewers, threads]);
 
+  // Debounce draft for preview to avoid re-rendering markdown+GIFs on every keystroke
+  const debouncedDescriptionDraft = useDebouncedValue(descriptionDraft, 300);
   const previewDescriptionDraft = useMemo(
     () =>
-      descriptionPreviewMarkdown(descriptionDraft, pendingDescriptionImages),
-    [descriptionDraft, pendingDescriptionImages],
+      descriptionPreviewMarkdown(
+        debouncedDescriptionDraft,
+        pendingDescriptionImages,
+      ),
+    [debouncedDescriptionDraft, pendingDescriptionImages],
   );
 
   useEffect(() => {
