@@ -244,6 +244,7 @@ import {
   cleanupFeatureMapTempDir,
   FEATURE_MAP_GIT_PATH,
   getFeatureMapTempPaths,
+  getExistingProjectFeatureMapPath,
   getProjectFeatureMap,
   saveProjectFeatureMapFromTemp,
 } from '../services/project-feature-map-generation-service';
@@ -815,6 +816,9 @@ export function registerIpcHandlers() {
         const prompt = buildProjectFeatureMapPrompt({
           project,
           tempFilePath: paths.tempFilePath,
+          existingFeatureMapPath: await getExistingProjectFeatureMapPath(
+            project.path,
+          ),
           skillName: slotConfig?.skillName,
         });
         const meta: FeatureMapStepMeta = {

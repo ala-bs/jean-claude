@@ -39,14 +39,25 @@ export function getProjectFeatureMapPath(projectPath: string) {
 export async function getProjectFeatureMap(
   projectPath: string,
 ): Promise<ProjectFeatureMap | null> {
-  for (const filePath of [
-    getProjectFeatureMapPath(projectPath),
-    path.join(projectPath, LEGACY_FEATURE_MAP_RELATIVE_PATH),
-  ]) {
+  for (const filePath of getSupportedProjectFeatureMapPaths(projectPath)) {
     try {
       const content = await readFile(filePath, 'utf8');
       const featureMap = parseProjectFeatureMapContent(content);
       if (featureMap) return featureMap;
+    } catch {
+      // Try next supported feature-map format.
+    }
+  }
+  return null;
+}
+
+export async function getExistingProjectFeatureMapPath(
+  projectPath: string,
+): Promise<string | null> {
+  for (const filePath of getSupportedProjectFeatureMapPaths(projectPath)) {
+    try {
+      const content = await readFile(filePath, 'utf8');
+      if (parseProjectFeatureMapContent(content)) return filePath;
     } catch {
       // Try next supported feature-map format.
     }
@@ -99,6 +110,7 @@ export function getFeatureMapTempPaths({
 export function buildProjectFeatureMapPrompt({
   project,
   tempFilePath,
+  existingFeatureMapPath,
   skillName,
 }: {
   project: {
@@ -106,11 +118,16 @@ export function buildProjectFeatureMapPrompt({
     path: string;
   };
   tempFilePath: string;
+  existingFeatureMapPath?: string | null;
   skillName?: string | null;
 }): string {
   const projectDetails = `Project name: ${project.name}
 Repository path: ${project.path}
-Output file: ${tempFilePath}`;
+Output file: ${tempFilePath}${
+    existingFeatureMapPath
+      ? `\nExisting feature map: ${existingFeatureMapPath}`
+      : ''
+  }`;
   const skillInstruction = skillName
     ? `Use the "${skillName}" skill to create the feature map.\n\n`
     : '';
@@ -123,6 +140,13 @@ ${FEATURE_MAP_YAML_SCHEMA}
 Write the feature map YAML to the output file.
 The YAML must match this schema:
 ${schemaBlock}`;
+}
+
+function getSupportedProjectFeatureMapPaths(projectPath: string) {
+  return [
+    getProjectFeatureMapPath(projectPath),
+    path.join(projectPath, LEGACY_FEATURE_MAP_RELATIVE_PATH),
+  ];
 }
 
 export function parseProjectFeatureMapContent(value: string) {
