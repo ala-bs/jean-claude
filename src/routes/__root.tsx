@@ -37,6 +37,7 @@ import { useNewTaskDraft } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
+import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
 import { useUISetting } from '@/stores/ui';
 
 export const Route = createRootRoute({
@@ -355,6 +356,9 @@ function useCleanupNonActiveTasks() {
 
       // Prune task prompt drafts
       pruneOrphanedTaskPrompts(activeIds);
+
+      // Prune task review comment drafts
+      pruneOrphanedTaskReviewDrafts(activeIds);
 
       // Prune navigation task state
       // Note: clearTaskNavHistoryState also calls clearReviewCommentsForTask
