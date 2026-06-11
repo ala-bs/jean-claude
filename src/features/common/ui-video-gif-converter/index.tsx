@@ -194,7 +194,8 @@ async function convertVideoToGif({
 }
 
 export function isVideoFile(file: File) {
-  return file.type.startsWith('video/');
+  if (file.type.startsWith('video/')) return true;
+  return /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name);
 }
 
 export function VideoGifConverter({

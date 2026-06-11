@@ -17,6 +17,10 @@ import {
   normalizeAzureChangeType,
   type DiffFile,
 } from '@/features/common/ui-file-diff';
+import {
+  isVideoFile,
+  VideoGifConverter,
+} from '@/features/common/ui-video-gif-converter';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import {
@@ -50,7 +54,6 @@ import {
   PrInlineCommentThread,
 } from '../ui-pr-inline-comment-thread';
 import { PrMetaPanel } from '../ui-pr-meta-panel';
-import { isVideoFile, VideoGifConverter } from '../ui-video-gif-converter';
 
 type PendingDescriptionImage = PromptImagePart & {
   placeholderMarkdown: string;

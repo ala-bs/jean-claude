@@ -21,7 +21,7 @@ import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import {
   isVideoFile,
   VideoGifConverter,
-} from '@/features/pull-request/ui-video-gif-converter';
+} from '@/features/common/ui-video-gif-converter';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import { formatLineRangeLabel } from '@/stores/utils-comment-store';
