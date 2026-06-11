@@ -657,6 +657,8 @@ contextBridge.exposeInMainWorld('api', {
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) =>
       ipcRenderer.invoke('shell:openInEditor', dirPath, folderContext),
+    openTeamsJoinUrl: (url: string) =>
+      ipcRenderer.invoke('shell:openTeamsJoinUrl', url),
     getAvailableEditors: () => ipcRenderer.invoke('shell:getAvailableEditors'),
     setupGlobalGitignore: () =>
       ipcRenderer.invoke('shell:setupGlobalGitignore') as Promise<{

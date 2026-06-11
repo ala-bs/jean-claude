@@ -43,6 +43,7 @@ import type {
   InstallSourceItemsParams,
   UpdateSourceInstallParams,
 } from '@shared/source-management-types';
+import { isValidTeamsJoinUrl } from '@shared/teams-url';
 import {
   PRESET_EDITORS,
   type InteractionMode,
@@ -3667,6 +3668,13 @@ export function registerIpcHandlers() {
       })),
     );
     return results;
+  });
+
+  ipcMain.handle('shell:openTeamsJoinUrl', async (_, url: string) => {
+    if (!isValidTeamsJoinUrl(url)) {
+      throw new Error('Invalid Teams meeting URL');
+    }
+    await shell.openExternal(url);
   });
 
   ipcMain.handle('calendar:listUpcomingMeetings', async () => {

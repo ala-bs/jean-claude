@@ -17,9 +17,11 @@ import {
   extractTeamsUrl,
   formatDayHeader,
   formatTimeRange,
+  getTeamsJoinUrl,
   getMeetingState,
   minutesBetween,
 } from '@/features/calendar/utils-calendar';
+import { useCalendarNotificationsSetting } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
 import type { UpcomingMeeting } from '@shared/calendar-types';
@@ -36,6 +38,8 @@ export function MeetingDetail({
   onToggleIgnore: () => void;
 }) {
   const addToast = useToastStore((s) => s.addToast);
+  const { data: calendarNotificationsSetting } =
+    useCalendarNotificationsSetting();
 
   if (!meeting) {
     return (
@@ -66,7 +70,22 @@ export function MeetingDetail({
   };
 
   const openTeams = () => {
-    if (teamsUrl) window.open(teamsUrl, '_blank');
+    if (teamsUrl) {
+      void api.shell
+        .openTeamsJoinUrl(
+          getTeamsJoinUrl(
+            teamsUrl,
+            calendarNotificationsSetting?.meetingJoinTarget,
+          ),
+        )
+        .catch((error) => {
+          addToast({
+            message:
+              error instanceof Error ? error.message : 'Could not open Teams',
+            type: 'error',
+          });
+        });
+    }
   };
 
   return (

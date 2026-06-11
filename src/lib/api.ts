@@ -987,6 +987,7 @@ export interface Api {
   };
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) => Promise<void>;
+    openTeamsJoinUrl: (url: string) => Promise<void>;
     getAvailableEditors: () => Promise<{ id: string; available: boolean }[]>;
     setupGlobalGitignore: () => Promise<{ success: boolean; path: string }>;
   };
@@ -1842,6 +1843,7 @@ export const api: Api = hasWindowApi
       },
       shell: {
         openInEditor: async () => {},
+        openTeamsJoinUrl: async () => {},
         getAvailableEditors: async () => [],
         setupGlobalGitignore: async () => ({ success: true, path: '' }),
       },

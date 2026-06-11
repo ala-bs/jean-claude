@@ -86,6 +86,11 @@ const PROMPT_PREFACE_FREQUENCY_OPTIONS = [
   { value: 'each', label: 'Each prompt' },
 ];
 
+const MEETING_JOIN_TARGET_OPTIONS = [
+  { value: 'web', label: 'Web browser' },
+  { value: 'app', label: 'Teams app' },
+];
+
 const TASK_NOTIFICATION_OPTIONS: Array<{
   event: TaskNotificationEvent;
   label: string;
@@ -608,6 +613,7 @@ function CalendarNotificationSettings() {
       enabled: false,
       leadTimeMinutes: DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
       showStartWindow: false,
+      meetingJoinTarget: 'web',
     };
   const isSupported = api.platform === 'darwin';
   const [leadTimeInput, setLeadTimeInput] = useState(
@@ -679,6 +685,28 @@ function CalendarNotificationSettings() {
             label="Show a window when meetings start"
             description="Display an always-on-top meeting window at the scheduled start time, with a quick join action when available."
           />
+        </div>
+
+        <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
+          <label className="text-ink-1 mb-1 block text-sm font-medium">
+            Open Teams meetings in
+          </label>
+          <Select
+            value={settings.meetingJoinTarget}
+            options={MEETING_JOIN_TARGET_OPTIONS}
+            onChange={(meetingJoinTarget) =>
+              updateSetting({
+                ...settings,
+                meetingJoinTarget:
+                  meetingJoinTarget as CalendarNotificationsSetting['meetingJoinTarget'],
+              })
+            }
+            disabled={!settings.enabled || !isSupported}
+            className="w-full justify-between sm:w-56"
+          />
+          <p className="text-ink-3 mt-2 text-xs">
+            Teams app uses msteams:// deep links when meeting links support it.
+          </p>
         </div>
 
         {!isSupported ? (

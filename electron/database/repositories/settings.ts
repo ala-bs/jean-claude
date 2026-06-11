@@ -51,13 +51,21 @@ function normalizeCalendarNotificationsSetting(
   }
 
   const obj = value as Record<string, unknown>;
-  if (typeof obj.showStartWindow === 'boolean' || 'showStartWindow' in obj) {
+  if (
+    typeof obj.showStartWindow === 'boolean' &&
+    (obj.meetingJoinTarget === 'web' || obj.meetingJoinTarget === 'app')
+  ) {
     return null;
   }
 
   return {
     ...obj,
-    showStartWindow: false,
+    showStartWindow:
+      typeof obj.showStartWindow === 'boolean' ? obj.showStartWindow : false,
+    meetingJoinTarget:
+      obj.meetingJoinTarget === 'web' || obj.meetingJoinTarget === 'app'
+        ? obj.meetingJoinTarget
+        : 'web',
   } as CalendarNotificationsSetting;
 }
 
