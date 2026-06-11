@@ -265,9 +265,11 @@ function CompleteTaskButton({ taskId }: { taskId: string }) {
 function RailPrAutoCompleteButton({
   projectId,
   prId,
+  canSet,
 }: {
   projectId: string;
   prId: number;
+  canSet: boolean;
 }) {
   const { data: pr, isLoading } = usePullRequest(projectId, prId);
 
@@ -280,7 +282,11 @@ function RailPrAutoCompleteButton({
     );
   }
 
-  if (!pr || pr.status !== 'active' || pr.isDraft || pr.autoCompleteSetBy) {
+  if (!pr || pr.status !== 'active' || pr.isDraft) {
+    return null;
+  }
+
+  if (!pr.autoCompleteSetBy && !canSet) {
     return null;
   }
 
@@ -351,13 +357,15 @@ export function FeedItemCard({
   const prApprovalCount = item.approvedBy?.length ?? 0;
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
-  const showAutoCompleteButton =
+  const canSetPrAutoComplete =
     hasPr &&
     prApprovalCount > 0 &&
     !prMerged &&
     !prHasConflicts &&
     !item.isDraft &&
     !!item.pullRequestId;
+  const showRailPrAutoComplete =
+    hasPr && !prMerged && !item.isDraft && !!item.pullRequestId;
 
   // Complete task (for merged PRs)
   const canComplete =
@@ -882,10 +890,11 @@ export function FeedItemCard({
                   )}
                   {canComplete && <CompleteTaskButton taskId={item.taskId!} />}
                 </div>
-                {showAutoCompleteButton && item.pullRequestId && (
+                {showRailPrAutoComplete && item.pullRequestId && (
                   <RailPrAutoCompleteButton
                     projectId={item.projectId}
                     prId={item.pullRequestId}
+                    canSet={canSetPrAutoComplete}
                   />
                 )}
               </div>

@@ -179,34 +179,47 @@ export function PrAutoComplete({
     }
   }, [handleQueueCi, pendingCi, queuedIds]);
 
-  if (!currentIdentityId) return null;
-
   // When auto-complete is already set, show status chip with cancel button
   if (isAutoCompleteSet) {
+    const activeClassName =
+      variant === 'compact'
+        ? 'text-status-done bg-status-done/10 ring-status-done/20 ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1'
+        : 'flex items-center gap-1 rounded-lg bg-green-600/20 px-3 py-1.5 text-xs font-medium text-green-400';
+    const activeMutedClassName =
+      variant === 'compact' ? 'text-status-done/70' : 'text-green-400/70';
+    const cancelClassName =
+      variant === 'compact'
+        ? 'ml-0.5 rounded p-0.5 hover:bg-status-done/20'
+        : 'ml-1 rounded p-0.5 hover:bg-green-600/30';
+
     return (
-      <div className="flex items-center gap-1 rounded-lg bg-green-600/20 px-3 py-1.5 text-xs font-medium text-green-400">
+      <div className={activeClassName}>
         <GitMerge className="h-3.5 w-3.5" />
         <span>Auto-complete</span>
         {pr.completionOptions && (
-          <span className="text-green-400/70">
+          <span className={activeMutedClassName}>
             ({MERGE_STRATEGY_LABELS[pr.completionOptions.mergeStrategy]})
           </span>
         )}
-        <button
-          onClick={handleCancel}
-          className="ml-1 rounded p-0.5 hover:bg-green-600/30"
-          title="Cancel auto-complete"
-          disabled={autoCompleteMutation.isPending}
-        >
-          {autoCompleteMutation.isPending ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <X className="h-3 w-3" />
-          )}
-        </button>
+        {variant !== 'compact' && (
+          <button
+            onClick={handleCancel}
+            className={cancelClassName}
+            title="Cancel auto-complete"
+            disabled={autoCompleteMutation.isPending}
+          >
+            {autoCompleteMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <X className="h-3 w-3" />
+            )}
+          </button>
+        )}
       </div>
     );
   }
+
+  if (!currentIdentityId) return null;
 
   const triggerClassName =
     variant === 'compact'
