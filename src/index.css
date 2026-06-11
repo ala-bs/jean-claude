@@ -227,6 +227,19 @@ button {
   font-size: 0.875rem;
 }
 
+.feed-note-blocknote input[type='checkbox'] {
+  width: 0.875rem;
+  height: 0.875rem;
+  margin: 0.125rem 0.375rem 0 0;
+  vertical-align: top;
+  accent-color: var(--color-acc);
+  cursor: pointer;
+}
+
+.feed-note-blocknote input[type='checkbox']:disabled {
+  cursor: default;
+}
+
 @utility no-scrollbar {
   @apply [scrollbar-width:none] [&::-webkit-scrollbar]:hidden;
 }
