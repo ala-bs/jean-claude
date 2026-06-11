@@ -122,6 +122,14 @@ export function PrDiffView({
     [onAddFileComment, clearDraft],
   );
 
+  const shouldKeepCommentFormRangeOnOpen = useCallback(
+    (range: LineRange) => {
+      const lineEnd = range.end !== range.start ? range.end : undefined;
+      return Boolean(getBody(range.start, lineEnd).trim());
+    },
+    [getBody],
+  );
+
   return (
     <FileDiffContent
       key={file.path}
@@ -133,6 +141,7 @@ export function PrDiffView({
       threads={fileThreads}
       defaultCommentFormLineRanges={defaultCommentFormLineRanges}
       onCommentFormClose={handleCommentFormClose}
+      shouldKeepCommentFormRangeOnOpen={shouldKeepCommentFormRangeOnOpen}
       renderThread={(thread) => (
         <PrInlineCommentThread
           thread={thread}

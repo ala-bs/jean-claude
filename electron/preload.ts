@@ -745,6 +745,16 @@ contextBridge.exposeInMainWorld('api', {
       until?: string;
     }) => ipcRenderer.invoke('agent:usage:getHistory', params),
   },
+  usageDisplay: {
+    saveSettings: (value: import('@shared/types').UsageDisplaySetting) =>
+      ipcRenderer.invoke('usageDisplay:saveSettings', value),
+  },
+  copilotAuth: {
+    requestDeviceCode: () =>
+      ipcRenderer.invoke('copilotAuth:requestDeviceCode'),
+    completeDeviceLogin: (deviceCode: unknown) =>
+      ipcRenderer.invoke('copilotAuth:completeDeviceLogin', deviceCode),
+  },
   projectCommands: {
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('project:commands:findByProjectId', projectId),
