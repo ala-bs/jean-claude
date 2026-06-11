@@ -651,9 +651,14 @@ export interface CompletionSetting {
 
 export interface UsageDisplaySetting {
   enabledProviders: UsageProviderType[];
+  copilotToken?: string;
 }
 
 export interface SummaryModelsSetting {
+  models: Record<AgentBackendType, ModelPreference>;
+}
+
+export interface BackendDefaultModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
@@ -663,6 +668,7 @@ export interface EditorAutomationSetting {
 
 export interface ThinkingSettingsSetting {
   efforts: Record<AgentBackendType, Record<string, ThinkingEffort>>;
+  selectedModels?: Record<AgentBackendType, ModelPreference>;
 }
 
 export interface BackendModelPreset {
@@ -818,7 +824,12 @@ function isBackendsSetting(v: unknown): v is BackendsSetting {
   return true;
 }
 
-const VALID_USAGE_PROVIDERS: UsageProviderType[] = ['claude-code', 'codex'];
+const VALID_USAGE_PROVIDERS: UsageProviderType[] = [
+  'claude-code',
+  'codex',
+  'gemini',
+  'copilot',
+];
 
 function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
   if (!v || typeof v !== 'object') return false;
@@ -830,10 +841,22 @@ function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
     )
   )
     return false;
+  if (obj.copilotToken !== undefined && typeof obj.copilotToken !== 'string')
+    return false;
   return true;
 }
 
 function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  if (!obj.models || typeof obj.models !== 'object') return false;
+  const models = obj.models as Record<string, unknown>;
+  return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+}
+
+function isBackendDefaultModelsSetting(
+  v: unknown,
+): v is BackendDefaultModelsSetting {
   if (!v || typeof v !== 'object') return false;
   const obj = v as Record<string, unknown>;
   if (!obj.models || typeof obj.models !== 'object') return false;
@@ -862,6 +885,19 @@ function isThinkingSettingsSetting(v: unknown): v is ThinkingSettingsSetting {
   const obj = v as Record<string, unknown>;
   if (!obj.efforts || typeof obj.efforts !== 'object') return false;
   const efforts = obj.efforts as Record<string, unknown>;
+  if (obj.selectedModels !== undefined) {
+    if (!obj.selectedModels || typeof obj.selectedModels !== 'object') {
+      return false;
+    }
+    const selectedModels = obj.selectedModels as Record<string, unknown>;
+    if (
+      !VALID_BACKENDS.every(
+        (backend) => typeof selectedModels[backend] === 'string',
+      )
+    ) {
+      return false;
+    }
+  }
   return VALID_BACKENDS.every((backend) => {
     const backendEfforts = efforts[backend];
     if (!backendEfforts || typeof backendEfforts !== 'object') return false;
@@ -1061,6 +1097,7 @@ export const SETTINGS_DEFINITIONS = {
   usageDisplay: {
     defaultValue: {
       enabledProviders: [],
+      copilotToken: '',
     } as UsageDisplaySetting,
     validate: isUsageDisplaySetting,
   },
@@ -1073,6 +1110,15 @@ export const SETTINGS_DEFINITIONS = {
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
   },
+  backendDefaultModels: {
+    defaultValue: {
+      models: {
+        'claude-code': 'default',
+        opencode: 'default',
+      },
+    } as BackendDefaultModelsSetting,
+    validate: isBackendDefaultModelsSetting,
+  },
   editorAutomation: {
     defaultValue: {
       closeWindowsOnTaskCompletion: false,
@@ -1084,6 +1130,10 @@ export const SETTINGS_DEFINITIONS = {
       efforts: {
         'claude-code': { default: 'default' },
         opencode: { default: 'default' },
+      },
+      selectedModels: {
+        'claude-code': 'default',
+        opencode: 'default',
       },
     } as ThinkingSettingsSetting,
     validate: isThinkingSettingsSetting,

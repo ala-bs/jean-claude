@@ -1,4 +1,7 @@
 import { exec, type ExecOptions } from 'child_process';
+import { readFile } from 'fs/promises';
+import os from 'os';
+import path from 'path';
 import { promisify } from 'util';
 
 import type {
@@ -15,13 +18,37 @@ const execAsync = promisify(exec) as (
   options?: ExecOptions,
 ) => Promise<{ stdout: string; stderr: string }>;
 
+interface ClaudeUsageProviderOptions {
+  credentialsPath?: string;
+}
+
 export class ClaudeUsageProvider implements BackendUsageProvider {
   private cachedToken: string | null = null;
   private tokenCacheTime: number = 0;
+  private rateLimitedUntil: Date | null = null;
+  private readonly credentialsPath: string;
   private readonly TOKEN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private readonly FALLBACK_CLAUDE_CODE_VERSION = '2.1.0';
+
+  constructor(options: ClaudeUsageProviderOptions = {}) {
+    this.credentialsPath =
+      options.credentialsPath ??
+      path.join(os.homedir(), '.claude', '.credentials.json');
+  }
 
   async getUsage(): Promise<UsageResult> {
     try {
+      if (this.rateLimitedUntil && this.rateLimitedUntil > new Date()) {
+        return {
+          data: null,
+          error: {
+            type: 'api_error',
+            message: `Claude usage API is rate limited until ${this.rateLimitedUntil.toLocaleTimeString()}`,
+            statusCode: 429,
+          },
+        };
+      }
+
       const token = await this.getOAuthToken();
       if (!token) {
         return {
@@ -42,9 +69,24 @@ export class ClaudeUsageProvider implements BackendUsageProvider {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
             'anthropic-beta': 'oauth-2025-04-20',
+            'User-Agent': `claude-code/${this.FALLBACK_CLAUDE_CODE_VERSION}`,
           },
         },
       );
+
+      if (response.status === 429) {
+        this.rateLimitedUntil = this.parseRetryAfter(
+          response.headers.get('retry-after'),
+        );
+        return {
+          data: null,
+          error: {
+            type: 'api_error',
+            message: 'Claude usage API is rate limited. Try again later.',
+            statusCode: response.status,
+          },
+        };
+      }
 
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
@@ -61,6 +103,7 @@ export class ClaudeUsageProvider implements BackendUsageProvider {
       }
 
       const apiData = (await response.json()) as Record<string, unknown>;
+      this.rateLimitedUntil = null;
       return {
         data: this.transformResponse(apiData),
         error: null,
@@ -78,6 +121,7 @@ export class ClaudeUsageProvider implements BackendUsageProvider {
 
   dispose(): void {
     this.cachedToken = null;
+    this.rateLimitedUntil = null;
   }
 
   private async getOAuthToken(): Promise<string | null> {
@@ -88,24 +132,71 @@ export class ClaudeUsageProvider implements BackendUsageProvider {
       return this.cachedToken;
     }
 
+    const token = await this.getOAuthTokenFromKeychain();
+    if (token) {
+      this.cachedToken = token;
+      this.tokenCacheTime = Date.now();
+      return token;
+    }
+
+    const fileToken = await this.getOAuthTokenFromFile();
+    if (fileToken) {
+      this.cachedToken = fileToken;
+      this.tokenCacheTime = Date.now();
+      return fileToken;
+    }
+
+    return null;
+  }
+
+  private async getOAuthTokenFromKeychain(): Promise<string | null> {
     try {
       const { stdout } = await execAsync(
         'security find-generic-password -s "Claude Code-credentials" -w',
         { encoding: 'utf-8' },
       );
-
-      const credentials = JSON.parse(stdout.trim());
-      const token = credentials?.claudeAiOauth?.accessToken;
-
-      if (token) {
-        this.cachedToken = token;
-        this.tokenCacheTime = Date.now();
-      }
-
-      return token || null;
+      return this.extractOAuthToken(JSON.parse(stdout.trim()));
     } catch {
       return null;
     }
+  }
+
+  private async getOAuthTokenFromFile(): Promise<string | null> {
+    try {
+      const contents = await readFile(this.credentialsPath, 'utf-8');
+      return this.extractOAuthToken(JSON.parse(contents));
+    } catch {
+      return null;
+    }
+  }
+
+  private extractOAuthToken(credentials: unknown): string | null {
+    if (!credentials || typeof credentials !== 'object') return null;
+    const record = credentials as Record<string, unknown>;
+    const claudeAiOauth = record.claudeAiOauth as
+      | Record<string, unknown>
+      | undefined;
+    const accessToken = claudeAiOauth?.accessToken ?? record.accessToken;
+    return typeof accessToken === 'string' && accessToken.length > 0
+      ? accessToken
+      : null;
+  }
+
+  private parseRetryAfter(value: string | null): Date {
+    const now = Date.now();
+    if (!value) return new Date(now + 5 * 60 * 1000);
+
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return new Date(now + seconds * 1000);
+    }
+
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed) && parsed > now) {
+      return new Date(parsed);
+    }
+
+    return new Date(now + 5 * 60 * 1000);
   }
 
   private transformResponse(
