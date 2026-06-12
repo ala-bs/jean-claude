@@ -1,5 +1,6 @@
 import {
   ClipboardList,
+  History,
   X,
   Menu,
   RefreshCw,
@@ -32,6 +33,7 @@ import { useProjectTodoCount } from '@/hooks/use-project-todos';
 import { useProjects } from '@/hooks/use-projects';
 import { api, type ReloadPreviewProgress } from '@/lib/api';
 import { useBacklogSelectedProjectId } from '@/stores/backlog-overlay-draft';
+import { useChangelogStore } from '@/stores/changelog';
 import { useCurrentVisibleProject } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
@@ -396,6 +398,7 @@ export function Header() {
   const { projectId } = useCurrentVisibleProject();
   const { data: projects = [] } = useProjects();
   const openOverlay = useOverlaysStore((state) => state.open);
+  const openChangelog = useChangelogStore((state) => state.open);
   const persistedBacklogProjectId = useBacklogSelectedProjectId();
   const backlogProjectId = projects.some(
     (project) => project.id === persistedBacklogProjectId,
@@ -582,6 +585,9 @@ export function Header() {
             shortcut="cmd+shift+y"
           >
             Pipelines
+          </DropdownItem>
+          <DropdownItem icon={<History />} onClick={openChangelog}>
+            Changelog
           </DropdownItem>
           <DropdownItem
             icon={<Terminal />}
