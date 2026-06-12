@@ -2,14 +2,150 @@ import {
   DEFAULT_TASK_NOTIFICATION_MODES,
   SETTINGS_DEFINITIONS,
   AppSettings,
+  type BackendDefaultModelsSetting,
   type CalendarNotificationsSetting,
+  type SummaryModelsSetting,
   type TaskEventNotificationsSetting,
   type TaskNotificationEvent,
   type TaskNotificationMode,
+  type ThinkingSettingsSetting,
 } from '@shared/types';
 
 import { dbg } from '../../lib/debug';
 import { db } from '../index';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object';
+}
+
+function normalizeSummaryModelsSetting(
+  value: unknown,
+): SummaryModelsSetting | null {
+  if (!isRecord(value) || !isRecord(value.models)) {
+    return null;
+  }
+
+  const defaults = SETTINGS_DEFINITIONS.summaryModels.defaultValue.models;
+  const models = value.models as Record<string, unknown>;
+
+  return {
+    models: {
+      'claude-code':
+        typeof models['claude-code'] === 'string'
+          ? models['claude-code']
+          : defaults['claude-code'],
+      opencode:
+        typeof models.opencode === 'string'
+          ? models.opencode
+          : defaults.opencode,
+      codex: typeof models.codex === 'string' ? models.codex : defaults.codex,
+    },
+  };
+}
+
+function normalizeBackendDefaultModelsSetting(
+  value: unknown,
+): BackendDefaultModelsSetting | null {
+  if (!isRecord(value) || !isRecord(value.models)) {
+    return null;
+  }
+
+  const defaults =
+    SETTINGS_DEFINITIONS.backendDefaultModels.defaultValue.models;
+  const models = value.models as Record<string, unknown>;
+
+  return {
+    models: {
+      'claude-code':
+        typeof models['claude-code'] === 'string'
+          ? models['claude-code']
+          : defaults['claude-code'],
+      opencode:
+        typeof models.opencode === 'string'
+          ? models.opencode
+          : defaults.opencode,
+      codex: typeof models.codex === 'string' ? models.codex : defaults.codex,
+    },
+  };
+}
+
+function normalizeThinkingSettingsSetting(
+  value: unknown,
+): ThinkingSettingsSetting | null {
+  if (!isRecord(value) || !isRecord(value.efforts)) {
+    return null;
+  }
+
+  const defaults = SETTINGS_DEFINITIONS.thinkingSettings.defaultValue;
+  const efforts = value.efforts as Record<string, unknown>;
+  const selectedModels = isRecord(value.selectedModels)
+    ? (value.selectedModels as Record<string, unknown>)
+    : {};
+
+  return {
+    efforts: {
+      'claude-code': {
+        ...defaults.efforts['claude-code'],
+        ...(isRecord(efforts['claude-code']) ? efforts['claude-code'] : {}),
+      },
+      opencode: {
+        ...defaults.efforts.opencode,
+        ...(isRecord(efforts.opencode) ? efforts.opencode : {}),
+      },
+      codex: {
+        ...defaults.efforts.codex,
+        ...(isRecord(efforts.codex) ? efforts.codex : {}),
+      },
+    },
+    selectedModels: {
+      'claude-code':
+        typeof selectedModels['claude-code'] === 'string'
+          ? selectedModels['claude-code']
+          : defaults.selectedModels['claude-code'],
+      opencode:
+        typeof selectedModels.opencode === 'string'
+          ? selectedModels.opencode
+          : defaults.selectedModels.opencode,
+      codex:
+        typeof selectedModels.codex === 'string'
+          ? selectedModels.codex
+          : defaults.selectedModels.codex,
+    },
+  };
+}
+
+function normalizeSettingValue<K extends keyof AppSettings>(
+  key: K,
+  value: unknown,
+): AppSettings[K] | null {
+  if (key === 'summaryModels') {
+    return normalizeSummaryModelsSetting(value) as AppSettings[K];
+  }
+  if (key === 'backendDefaultModels') {
+    return normalizeBackendDefaultModelsSetting(value) as AppSettings[K];
+  }
+  if (key === 'thinkingSettings') {
+    return normalizeThinkingSettingsSetting(value) as AppSettings[K];
+  }
+  return null;
+}
+
+async function writeSettingValue<K extends keyof AppSettings>(
+  key: K,
+  value: AppSettings[K],
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .insertInto('settings')
+    .values({ key, value: JSON.stringify(value), updatedAt: now })
+    .onConflict((oc) =>
+      oc.column('key').doUpdateSet({
+        value: JSON.stringify(value),
+        updatedAt: now,
+      }),
+    )
+    .execute();
+}
 
 function migrateTaskEventNotificationsSetting(
   value: unknown,
@@ -96,6 +232,12 @@ export const SettingsRepository = {
           return normalized as AppSettings[K];
         }
       }
+      const normalized = normalizeSettingValue(key, parsed);
+      if (normalized && def.validate(normalized)) {
+        dbg.db('Normalized legacy value for setting "%s"', key);
+        await writeSettingValue(key, normalized);
+        return normalized;
+      }
       if (def.validate(parsed)) {
         return parsed as AppSettings[K];
       }
@@ -114,17 +256,6 @@ export const SettingsRepository = {
     if (!SETTINGS_DEFINITIONS[key].validate(value)) {
       throw new Error(`Invalid value for setting "${key}"`);
     }
-
-    const now = new Date().toISOString();
-    await db
-      .insertInto('settings')
-      .values({ key, value: JSON.stringify(value), updatedAt: now })
-      .onConflict((oc) =>
-        oc.column('key').doUpdateSet({
-          value: JSON.stringify(value),
-          updatedAt: now,
-        }),
-      )
-      .execute();
+    await writeSettingValue(key, value);
   },
 };
