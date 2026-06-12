@@ -2,6 +2,7 @@ import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import { useCallback, useMemo, useState } from 'react';
 
+import { countUnifiedPatchStats } from '@/features/agent/ui-diff-view/diff-utils';
 import { formatModelName } from '@/hooks/use-model';
 import { extractImagesFromMarkdown } from '@/lib/markdown-images';
 import { formatNumber } from '@/lib/number';
@@ -971,6 +972,14 @@ export function PromptGroupEntry({
               removed += file.deletions ?? 0;
               continue;
             }
+            if (file.patch) {
+              const patchStats = countUnifiedPatchStats(file.patch);
+              if (patchStats) {
+                added += patchStats.additions;
+                removed += patchStats.deletions;
+                continue;
+              }
+            }
             const oldLines = countLines(file.before ?? e.input.oldString);
             const newLines = countLines(file.after ?? e.input.newString);
             if (newLines > oldLines) added += newLines - oldLines;
@@ -996,6 +1005,14 @@ export function PromptGroupEntry({
               added += file.additions ?? 0;
               removed += file.deletions ?? 0;
               continue;
+            }
+            if (file.patch) {
+              const patchStats = countUnifiedPatchStats(file.patch);
+              if (patchStats) {
+                added += patchStats.additions;
+                removed += patchStats.deletions;
+                continue;
+              }
             }
             added += countLines(file.after ?? w.input.value);
           }

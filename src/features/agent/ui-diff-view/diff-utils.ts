@@ -12,6 +12,11 @@ export interface ParsedUnifiedPatch {
   newString: string;
 }
 
+export interface UnifiedPatchStats {
+  additions: number;
+  deletions: number;
+}
+
 interface ParsedHunk {
   oldStart: number;
   oldLines: string[];
@@ -20,6 +25,9 @@ interface ParsedHunk {
   hasAddition: boolean;
   hasDeletion: boolean;
 }
+
+const HUNK_HEADER_PATTERN =
+  /^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)?(?: @@(?: .*)?)?$/;
 
 function applyHunkToLines(lines: string[], hunk: ParsedHunk): string[] | null {
   const startIndex = Math.max(hunk.oldStart - 1, 0);
@@ -58,13 +66,12 @@ function reconstructSequentialPatch(
 export function parseUnifiedPatchToStrings(
   patch: string,
 ): ParsedUnifiedPatch | null {
-  const hunkHeaderPattern = /^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@/;
   const hunks: ParsedHunk[] = [];
   let currentHunk: ParsedHunk | null = null;
   let inHunk = false;
 
   for (const line of patch.split('\n')) {
-    const hunkHeaderMatch = line.match(hunkHeaderPattern);
+    const hunkHeaderMatch = line.match(HUNK_HEADER_PATTERN);
     if (hunkHeaderMatch) {
       currentHunk = {
         oldStart: Number(hunkHeaderMatch[1]),
@@ -138,6 +145,35 @@ export function parseUnifiedPatchToStrings(
     oldString: oldLines.join('\n'),
     newString: newLines.join('\n'),
   };
+}
+
+export function countUnifiedPatchStats(
+  patch: string,
+): UnifiedPatchStats | null {
+  let additions = 0;
+  let deletions = 0;
+  let inHunk = false;
+
+  for (const line of patch.split('\n')) {
+    if (HUNK_HEADER_PATTERN.test(line)) {
+      inHunk = true;
+      continue;
+    }
+
+    if (!inHunk) continue;
+    if (line.startsWith('\\ No newline at end of file')) continue;
+
+    if (line.startsWith('+')) {
+      additions += 1;
+    } else if (line.startsWith('-')) {
+      deletions += 1;
+    } else if (!line.startsWith(' ')) {
+      inHunk = false;
+    }
+  }
+
+  if (additions === 0 && deletions === 0) return null;
+  return { additions, deletions };
 }
 
 export interface SideBySideRow {
