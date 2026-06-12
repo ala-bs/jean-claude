@@ -32,6 +32,7 @@ import { useWorktreeStatus } from '@/hooks/use-worktree-diff';
 import { api } from '@/lib/api';
 import type { FileAnnotation } from '@/lib/api';
 import { feedQueryKeys } from '@/lib/feed-query-keys';
+import { formatBytes } from '@/lib/format-bytes';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { usePrDraftState } from '@/stores/navigation';
@@ -586,8 +587,18 @@ export function PrCreationForm({
                     <img
                       src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
                       alt={image.filename || 'Attached image'}
+                      title={
+                        image.sizeBytes
+                          ? formatBytes(image.sizeBytes)
+                          : undefined
+                      }
                       className="h-10 w-10 rounded border border-white/10 object-cover"
                     />
+                    {image.sizeBytes && (
+                      <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[8px] leading-3 text-white">
+                        {formatBytes(image.sizeBytes)}
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => removeStagedImage(index)}

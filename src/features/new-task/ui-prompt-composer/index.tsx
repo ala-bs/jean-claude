@@ -35,6 +35,7 @@ import {
   processAttachmentFile,
   MAX_FILES,
 } from '@/lib/file-attachment-utils';
+import { formatBytes } from '@/lib/format-bytes';
 import { processImageFile, MAX_IMAGES } from '@/lib/image-utils';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import {
@@ -1166,6 +1167,9 @@ export function PromptComposer({
                     onClick={() => setPreviewIndex(index)}
                     className="relative h-full w-full cursor-pointer overflow-hidden rounded focus-visible:outline-none"
                     aria-label={`Preview ${image.filename ?? `image ${index + 1}`}`}
+                    title={
+                      image.sizeBytes ? formatBytes(image.sizeBytes) : undefined
+                    }
                   >
                     <img
                       src={`data:${thumbMime};base64,${thumbData}`}
@@ -1183,6 +1187,11 @@ export function PromptComposer({
                         <Eye className="text-ink-0 h-3.5 w-3.5" />
                       </span>
                     </span>
+                    {image.sizeBytes && (
+                      <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
+                        {formatBytes(image.sizeBytes)}
+                      </span>
+                    )}
                   </button>
                   {onImageRemove && (
                     <button
