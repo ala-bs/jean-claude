@@ -442,7 +442,16 @@ export function BackendsSettings() {
                 checked={enabled}
                 onChange={() => handleToggle(backend.value)}
                 disabled={enabled && enabledBackends.length <= 1}
-                label={backend.label}
+                label={
+                  <span className="flex items-center gap-2">
+                    <span>{backend.label}</span>
+                    {backend.badge && (
+                      <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                        {backend.badge}
+                      </span>
+                    )}
+                  </span>
+                }
                 description={backend.description}
               />
 

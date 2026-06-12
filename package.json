@@ -88,6 +88,7 @@
     "remark-parse": "^11.0.0",
     "shell-quote": "^1.8.3",
     "shiki": "^3.21.0",
+    "smol-toml": "^1.6.1",
     "tree-sitter-wasms": "^0.1.13",
     "turndown": "^7.2.2",
     "unified": "^11.0.5",

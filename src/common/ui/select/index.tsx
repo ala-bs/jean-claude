@@ -26,6 +26,7 @@ export interface SelectOption<T extends string> {
   label: string;
   description?: string;
   group?: string;
+  badge?: string;
 }
 
 export interface SelectRef {
@@ -265,7 +266,14 @@ export const Select = forwardRef<
           className,
         )}
       >
-        <span className="truncate">{selectedOption?.label}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate">{selectedOption?.label}</span>
+          {selectedOption?.badge && (
+            <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+              {selectedOption.badge}
+            </span>
+          )}
+        </span>
         {displayShortcut ? (
           <Kbd shortcut={displayShortcut} />
         ) : (
@@ -332,15 +340,22 @@ export const Select = forwardRef<
                       {option.value === value && <Check className="h-3 w-3" />}
                     </span>
                     <div className="flex flex-col">
-                      <span
-                        className={clsx(
-                          s.text,
-                          option.value === value
-                            ? 'text-ink-1 font-medium'
-                            : 'text-ink-1',
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={clsx(
+                            s.text,
+                            option.value === value
+                              ? 'text-ink-1 font-medium'
+                              : 'text-ink-1',
+                          )}
+                        >
+                          {option.label}
+                        </span>
+                        {option.badge && (
+                          <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                            {option.badge}
+                          </span>
                         )}
-                      >
-                        {option.label}
                       </span>
                       {option.description && (
                         <span className="text-ink-3 text-xs">

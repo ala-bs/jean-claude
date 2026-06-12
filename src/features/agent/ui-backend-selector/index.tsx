@@ -179,6 +179,7 @@ export const AVAILABLE_BACKENDS: {
   value: AgentBackendType;
   label: string;
   description: string;
+  badge?: string;
 }[] = [
   {
     value: 'claude-code',
@@ -194,6 +195,7 @@ export const AVAILABLE_BACKENDS: {
     value: 'codex',
     label: 'Codex',
     description: 'OpenAI Codex App Server',
+    badge: 'Beta',
   },
 ];
 
@@ -281,6 +283,7 @@ export const BackendSelector = forwardRef<
     value: b.value,
     label: b.label,
     description: b.description,
+    badge: b.badge,
   }));
 
   return (
