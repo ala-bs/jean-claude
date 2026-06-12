@@ -854,8 +854,7 @@ class SystemCalendarService {
   ): boolean {
     const existing = this.startPopupWindows.get(notificationKey);
     if (existing) {
-      existing.show();
-      existing.focus();
+      existing.showInactive();
       return true;
     }
 
@@ -901,8 +900,7 @@ class SystemCalendarService {
       }
     });
     popup.once('ready-to-show', () => {
-      popup.show();
-      popup.focus();
+      popup.showInactive();
     });
 
     popup
