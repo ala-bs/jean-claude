@@ -1,6 +1,7 @@
 // electron/services/azure-devops-service.ts
 
 import { spawn } from 'child_process';
+import { createHash } from 'crypto';
 
 import TurndownService from 'turndown';
 
@@ -2093,29 +2094,64 @@ export async function uploadPullRequestAttachment(params: {
   await assertCurrentUserOwnsPullRequest(params);
 
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
-  const encodedFileName = encodeURIComponent(params.fileName);
-  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/attachments/${encodedFileName}?api-version=7.1-preview.1`;
+  const data = Buffer.from(params.dataBase64, 'base64');
+  const hashSuffix = createHash('sha256')
+    .update(data)
+    .digest('hex')
+    .slice(0, 8);
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: authHeader,
-      'Content-Type': 'application/octet-stream',
-    },
-    body: Buffer.from(params.dataBase64, 'base64'),
-  });
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const fileName = getPullRequestAttachmentFileName(
+      params.fileName,
+      hashSuffix,
+      attempt,
+    );
+    const encodedFileName = encodeURIComponent(fileName);
+    const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/attachments/${encodedFileName}?api-version=7.1-preview.1`;
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to upload pull request attachment: ${error}`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/octet-stream',
+      },
+      body: data,
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      if (isDuplicateAttachmentNameError(error) && attempt < 9) {
+        continue;
+      }
+      throw new Error(`Failed to upload pull request attachment: ${error}`);
+    }
+
+    const attachment: { url?: string } = await response.json();
+    if (!attachment.url) {
+      throw new Error('Azure DevOps did not return an attachment URL');
+    }
+
+    return { url: attachment.url };
   }
 
-  const attachment: { url?: string } = await response.json();
-  if (!attachment.url) {
-    throw new Error('Azure DevOps did not return an attachment URL');
-  }
+  throw new Error('Failed to upload pull request attachment');
+}
 
-  return { url: attachment.url };
+function getPullRequestAttachmentFileName(
+  fileName: string,
+  hashSuffix: string,
+  attempt: number,
+) {
+  const suffix = attempt === 0 ? hashSuffix : `${hashSuffix}-${attempt}`;
+
+  const extensionIndex = fileName.lastIndexOf('.');
+  if (extensionIndex <= 0) return `${fileName}-${suffix}`;
+
+  return `${fileName.slice(0, extensionIndex)}-${suffix}${fileName.slice(extensionIndex)}`;
+}
+
+function isDuplicateAttachmentNameError(error: string) {
+  return /attachment with file name ['"][^'"]+['"] already exists/i.test(error);
 }
 
 export async function votePullRequest(params: {
