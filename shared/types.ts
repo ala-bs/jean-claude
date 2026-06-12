@@ -154,6 +154,7 @@ export function normalizeInteractionModeForBackend({
 export type ModelPreference = 'default' | (string & {});
 export type ThinkingEffort =
   | 'default'
+  | 'minimal'
   | 'none'
   | 'low'
   | 'medium'
@@ -874,6 +875,7 @@ function isEditorAutomationSetting(v: unknown): v is EditorAutomationSetting {
 
 const VALID_THINKING_EFFORTS: ThinkingEffort[] = [
   'default',
+  'minimal',
   'none',
   'low',
   'medium',

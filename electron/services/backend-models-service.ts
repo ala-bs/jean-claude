@@ -6,6 +6,7 @@ import type { ThinkingEffort } from '@shared/types';
 
 import { dbg } from '../lib/debug';
 
+import { getOrCreateCodexAppServer } from './agent-backends/codex/codex-app-server';
 import {
   getOpenCodeFallbackCost,
   type OpenCodeModelCost,
@@ -21,6 +22,13 @@ const OPENCODE_THINKING_VARIANTS = new Set<ThinkingEffort>([
   'medium',
   'high',
   'max',
+  'xhigh',
+]);
+const CODEX_THINKING_VARIANTS = new Set<ThinkingEffort>([
+  'minimal',
+  'low',
+  'medium',
+  'high',
   'xhigh',
 ]);
 
@@ -74,6 +82,10 @@ export async function getBackendModels(
 
   if (backend === 'opencode') {
     return fetchOpenCodeModels();
+  }
+
+  if (backend === 'codex') {
+    return fetchCodexModels();
   }
 
   dbg.agent('Unknown backend type for model discovery: %s', backend);
@@ -164,6 +176,88 @@ export function parseOpenCodeModelsVerbose(stdout: string): BackendModel[] {
   }
 
   return models;
+}
+
+async function fetchCodexModels(): Promise<BackendModel[]> {
+  const cached = modelCache.get('codex');
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.models;
+  }
+
+  try {
+    const { client } = await getOrCreateCodexAppServer();
+    const models: BackendModel[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const result = (await client.request('model/list', {
+        ...(cursor ? { after: cursor } : {}),
+      })) as {
+        data?: unknown[];
+        hasMore?: boolean;
+        nextCursor?: string | null;
+      };
+
+      for (const item of result.data ?? []) {
+        const model = parseCodexModel(item);
+        if (model) models.push(model);
+      }
+
+      cursor = result.hasMore ? (result.nextCursor ?? undefined) : undefined;
+    } while (cursor);
+
+    dbg.agent('Discovered %d Codex models', models.length);
+    modelCache.set('codex', { models, fetchedAt: Date.now() });
+    return models;
+  } catch (error) {
+    dbg.agent('Failed to fetch Codex models: %O', error);
+    return cached?.models ?? [];
+  }
+}
+
+export function parseCodexModel(item: unknown): BackendModel | null {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const model = item as {
+    id?: unknown;
+    displayName?: unknown;
+    hidden?: unknown;
+    supportedReasoningEfforts?: unknown;
+  };
+
+  if (
+    model.hidden === true ||
+    typeof model.id !== 'string' ||
+    !model.id.trim()
+  ) {
+    return null;
+  }
+
+  const thinkingEfforts = Array.isArray(model.supportedReasoningEfforts)
+    ? model.supportedReasoningEfforts
+        .map((effort) =>
+          effort && typeof effort === 'object' && !Array.isArray(effort)
+            ? (effort as { reasoningEffort?: unknown }).reasoningEffort
+            : undefined,
+        )
+        .filter(
+          (effort): effort is ThinkingEffort =>
+            typeof effort === 'string' &&
+            CODEX_THINKING_VARIANTS.has(effort as ThinkingEffort),
+        )
+    : [];
+
+  return {
+    id: model.id,
+    label:
+      typeof model.displayName === 'string' && model.displayName.trim()
+        ? model.displayName
+        : formatModelLabel(model.id),
+    supportsThinking: thinkingEfforts.length > 0,
+    ...(thinkingEfforts.length > 0 ? { thinkingEfforts } : {}),
+  };
 }
 
 export function calculateTheoreticalOpenCodeCost({

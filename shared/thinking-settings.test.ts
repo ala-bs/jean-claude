@@ -25,4 +25,17 @@ describe('getThinkingEffortOptions', () => {
       }).map((option) => option.value),
     ).toEqual(['default']);
   });
+
+  it('uses Codex model-specific reasoning efforts', () => {
+    expect(
+      getThinkingEffortOptions({
+        backend: 'codex',
+        model: 'gpt-5.4',
+        capabilities: {
+          supportsThinking: true,
+          thinkingEfforts: ['minimal', 'medium', 'xhigh'],
+        },
+      }).map((option) => option.value),
+    ).toEqual(['default', 'minimal', 'medium', 'xhigh']);
+  });
 });
