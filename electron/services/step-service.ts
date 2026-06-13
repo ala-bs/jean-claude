@@ -68,6 +68,29 @@ function condenseText(value: string): string {
   return `${condensed.slice(0, 317).trim()}...`;
 }
 
+function getSummaryFallbackText({
+  step,
+  messages,
+}: {
+  step: TaskStep;
+  messages: Awaited<ReturnType<typeof AgentMessageRepository.findByStepId>>;
+}): { text: string; source: 'captured output' | 'last message' } | null {
+  const output = step.output?.trim();
+  if (output) return { text: condenseText(output), source: 'captured output' };
+
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (
+      (message.type === 'result' || message.type === 'assistant-message') &&
+      message.value?.trim()
+    ) {
+      return { text: condenseText(message.value), source: 'last message' };
+    }
+  }
+
+  return null;
+}
+
 async function resolvePromptTemplate({
   template,
   taskPrompt,
@@ -152,56 +175,33 @@ async function resolvePromptTemplate({
       }
 
       const messages = await AgentMessageRepository.findByStepId(step.id);
-      if (messages.length === 0) {
-        throw new Error(
-          `Failed to summarize: step "${step.name}" (${stepId}) has no messages`,
-        );
-      }
 
       const model = summaryModels[summaryBackend] ?? 'default';
       const summaryStartedAt = Date.now();
-      const summaryPrompt = buildSummaryGenerationPrompt(messages);
       const messageTypes = countMessageTypes(messages);
+      let summaryPrompt = '';
 
-      try {
-        debug(
-          'Starting prompt summary for step %s (%s): sourceStep=%s backend=%s model=%s messages=%d messageTypes=%o outputLength=%d summaryPromptLength=%d',
-          stepId,
-          step.name,
-          step.id,
-          summaryBackend,
-          model,
-          messages.length,
-          messageTypes,
-          step.output?.length ?? 0,
-          summaryPrompt.length,
-        );
-        await onSummaryLifecycle?.onStart?.(step, summaryPrompt);
-        const summary = await summarizeNormalizedMessages({
-          backend: summaryBackend,
-          model,
-          messages,
-          usageContext: {
-            feature: 'step-summary',
-            projectId,
-            taskId,
-            stepId: step.id,
-          },
-        });
-        debug(
-          'Finished prompt summary for step %s (%s): sourceStep=%s durationMs=%d summaryLength=%d compressionRatio=%s',
-          stepId,
-          step.name,
-          step.id,
-          Date.now() - summaryStartedAt,
-          summary.length,
-          summaryPrompt.length > 0
-            ? (summary.length / summaryPrompt.length).toFixed(4)
-            : 'n/a',
-        );
-        await onSummaryLifecycle?.onResolved?.(step, summary);
-        return summary;
-      } catch (error) {
+      const handleSummaryFailure = async (error: unknown): Promise<string> => {
+        const fallback = getSummaryFallbackText({ step, messages });
+        if (fallback) {
+          warnings.push(
+            `Summary generation failed for step "${step.name}" (${stepId}); used ${fallback.source} fallback.`,
+          );
+          debug(
+            'Prompt summary failed for step %s (%s); using %s fallback durationMs=%d messages=%d messageTypes=%o fallbackLength=%d error=%O',
+            stepId,
+            step.name,
+            fallback.source,
+            Date.now() - summaryStartedAt,
+            messages.length,
+            messageTypes,
+            fallback.text.length,
+            error,
+          );
+          await onSummaryLifecycle?.onResolved?.(step, fallback.text);
+          return fallback.text;
+        }
+
         debug(
           'Prompt summary failed for step %s (%s): sourceStep=%s backend=%s model=%s durationMs=%d messages=%d messageTypes=%o summaryPromptLength=%d error=%O',
           stepId,
@@ -220,7 +220,58 @@ async function resolvePromptTemplate({
         );
         (wrappedError as Error & { cause?: unknown }).cause = error;
         throw wrappedError;
+      };
+
+      try {
+        summaryPrompt = buildSummaryGenerationPrompt(messages);
+      } catch (error) {
+        return await handleSummaryFailure(error);
       }
+
+      debug(
+        'Starting prompt summary for step %s (%s): sourceStep=%s backend=%s model=%s messages=%d messageTypes=%o outputLength=%d summaryPromptLength=%d',
+        stepId,
+        step.name,
+        step.id,
+        summaryBackend,
+        model,
+        messages.length,
+        messageTypes,
+        step.output?.length ?? 0,
+        summaryPrompt.length,
+      );
+      await onSummaryLifecycle?.onStart?.(step, summaryPrompt);
+
+      let summary = '';
+      try {
+        summary = await summarizeNormalizedMessages({
+          backend: summaryBackend,
+          model,
+          messages,
+          usageContext: {
+            feature: 'step-summary',
+            projectId,
+            taskId,
+            stepId: step.id,
+          },
+        });
+      } catch (error) {
+        return await handleSummaryFailure(error);
+      }
+
+      debug(
+        'Finished prompt summary for step %s (%s): sourceStep=%s durationMs=%d summaryLength=%d compressionRatio=%s',
+        stepId,
+        step.name,
+        step.id,
+        Date.now() - summaryStartedAt,
+        summary.length,
+        summaryPrompt.length > 0
+          ? (summary.length / summaryPrompt.length).toFixed(4)
+          : 'n/a',
+      );
+      await onSummaryLifecycle?.onResolved?.(step, summary);
+      return summary;
     }
 
     const rawValue = resolveValueExpression(argExpression);
