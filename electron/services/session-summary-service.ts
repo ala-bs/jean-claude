@@ -94,6 +94,7 @@ function formatEntry(entry: NormalizedEntry): string | null {
     case 'system-status':
       return null;
     case 'result':
+      if (entry.isError) return null;
       return entry.value ? `Result:\n${entry.value}` : null;
     case 'tool-use':
       return formatToolEntry(entry);

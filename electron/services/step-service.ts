@@ -80,6 +80,7 @@ function getSummaryFallbackText({
 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
+    if (message.type === 'result' && message.isError) continue;
     if (
       (message.type === 'result' || message.type === 'assistant-message') &&
       message.value?.trim()

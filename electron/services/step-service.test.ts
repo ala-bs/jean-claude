@@ -187,4 +187,36 @@ describe('StepService.resolveAndValidate', () => {
       'Summary generation failed for step "Step 1" (step-1); used last message fallback.',
     ]);
   });
+
+  it('skips interrupted error result when falling back to last message', async () => {
+    findStepsByTaskIdMock.mockResolvedValue([
+      { ...previousStep, output: null },
+      continueStep,
+    ]);
+    findMessagesByStepIdMock.mockResolvedValue([
+      {
+        id: 'msg-1',
+        type: 'assistant-message',
+        value: 'Implemented login flow before interruption.',
+      },
+      {
+        id: 'msg-2',
+        type: 'result',
+        value: 'Task interrupted by user',
+        isError: true,
+      },
+    ]);
+    summarizeNormalizedMessagesMock.mockRejectedValue(
+      new Error('Failed to generate summary from normalized messages'),
+    );
+
+    const result = await StepService.resolveAndValidate('step-2');
+
+    expect(result.resolvedPrompt).toBe(
+      'Continue from:\nImplemented login flow before interruption.',
+    );
+    expect(result.warnings).toEqual([
+      'Summary generation failed for step "Step 1" (step-1); used last message fallback.',
+    ]);
+  });
 });
