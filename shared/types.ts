@@ -707,6 +707,7 @@ export interface CalendarNotificationsSetting {
   enabled: boolean;
   leadTimeMinutes: number;
   showStartWindow: boolean;
+  meetingJoinTarget: import('./teams-url').TeamsMeetingJoinTarget;
 }
 
 export const DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES = 5;
@@ -965,6 +966,7 @@ function isCalendarNotificationsSetting(
   return (
     typeof obj.enabled === 'boolean' &&
     typeof obj.showStartWindow === 'boolean' &&
+    (obj.meetingJoinTarget === 'web' || obj.meetingJoinTarget === 'app') &&
     typeof obj.leadTimeMinutes === 'number' &&
     Number.isInteger(obj.leadTimeMinutes) &&
     obj.leadTimeMinutes >= 1 &&
@@ -1153,6 +1155,7 @@ export const SETTINGS_DEFINITIONS = {
       enabled: false,
       leadTimeMinutes: DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
       showStartWindow: false,
+      meetingJoinTarget: 'web',
     } as CalendarNotificationsSetting,
     validate: isCalendarNotificationsSetting,
   },

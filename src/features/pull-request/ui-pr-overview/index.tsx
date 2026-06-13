@@ -17,6 +17,10 @@ import {
   normalizeAzureChangeType,
   type DiffFile,
 } from '@/features/common/ui-file-diff';
+import {
+  isVideoFile,
+  VideoGifConverter,
+} from '@/features/common/ui-video-gif-converter';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import {
@@ -39,6 +43,7 @@ import {
   normalizeMentionId,
   type MentionDisplayNames,
 } from '@/lib/azure-devops-mentions';
+import { formatBytes } from '@/lib/format-bytes';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
@@ -50,7 +55,6 @@ import {
   PrInlineCommentThread,
 } from '../ui-pr-inline-comment-thread';
 import { PrMetaPanel } from '../ui-pr-meta-panel';
-import { isVideoFile, VideoGifConverter } from '../ui-video-gif-converter';
 
 type PendingDescriptionImage = PromptImagePart & {
   placeholderMarkdown: string;
@@ -600,6 +604,32 @@ export function PrOverview({
                   )}
                   {descriptionError && (
                     <p className="text-xs text-red-400">{descriptionError}</p>
+                  )}
+                  {pendingDescriptionImages.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {pendingDescriptionImages.map((image, index) => (
+                        <div
+                          key={`${image.filename ?? 'img'}-${index}`}
+                          className="relative"
+                        >
+                          <img
+                            src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
+                            alt={image.filename || 'Attached image'}
+                            title={
+                              image.sizeBytes
+                                ? formatBytes(image.sizeBytes)
+                                : undefined
+                            }
+                            className="h-8 w-8 rounded border border-white/10 object-cover"
+                          />
+                          {image.sizeBytes && (
+                            <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                              {formatBytes(image.sizeBytes)}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   )}
                   <input
                     ref={imageInputRef}

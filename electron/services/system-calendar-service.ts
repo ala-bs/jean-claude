@@ -5,6 +5,7 @@ import { BrowserWindow, screen, shell } from 'electron';
 
 import type { UpcomingMeeting } from '@shared/calendar-types';
 import type { AppNotification } from '@shared/notification-types';
+import { getTeamsJoinUrl, isValidTeamsJoinUrl } from '@shared/teams-url';
 
 import { NotificationRepository } from '../database/repositories/notifications';
 import { SettingsRepository } from '../database/repositories/settings';
@@ -127,20 +128,7 @@ function extractTeamsUrl(event: CalendarEventRecord): string | null {
 }
 
 function isValidTeamsUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === 'https:' &&
-      (url.hostname === 'teams.microsoft.com' ||
-        url.hostname.endsWith('.teams.microsoft.com') ||
-        url.hostname === 'teams.live.com' ||
-        url.hostname.endsWith('.teams.live.com') ||
-        url.hostname === 'teams.cloud.microsoft' ||
-        url.hostname.endsWith('.teams.cloud.microsoft'))
-    );
-  } catch {
-    return false;
-  }
+  return isValidTeamsJoinUrl(value) && new URL(value).protocol === 'https:';
 }
 
 function buildMeetingStartPopupHtml(event: CalendarEventRecord): string {
@@ -866,8 +854,7 @@ class SystemCalendarService {
   ): boolean {
     const existing = this.startPopupWindows.get(notificationKey);
     if (existing) {
-      existing.show();
-      existing.focus();
+      existing.showInactive();
       return true;
     }
 
@@ -913,8 +900,7 @@ class SystemCalendarService {
       }
     });
     popup.once('ready-to-show', () => {
-      popup.show();
-      popup.focus();
+      popup.showInactive();
     });
 
     popup
@@ -943,7 +929,16 @@ class SystemCalendarService {
       const parsed = new URL(url);
       const teamsUrl = parsed.searchParams.get('url');
       if (teamsUrl && isValidTeamsUrl(teamsUrl)) {
-        void shell.openExternal(teamsUrl);
+        void SettingsRepository.get('calendarNotifications')
+          .then((settings) =>
+            shell.openExternal(
+              getTeamsJoinUrl(teamsUrl, settings.meetingJoinTarget),
+            ),
+          )
+          .catch((error) => {
+            dbg.notification('Failed to open Teams meeting: %O', error);
+            void shell.openExternal(teamsUrl);
+          });
       }
     }
 

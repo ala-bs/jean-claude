@@ -306,7 +306,7 @@ export const Select = forwardRef<
               return (
                 <React.Fragment key={option.value}>
                   {showGroupLabel && (
-                    <div className="text-ink-4 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[0.14em] uppercase first:pt-1">
+                    <div className="text-ink-4 bg-bg-1 sticky -top-1 z-10 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[0.14em] uppercase first:pt-1">
                       {option.group}
                     </div>
                   )}

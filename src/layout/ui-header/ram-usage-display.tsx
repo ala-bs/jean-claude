@@ -8,8 +8,11 @@ import {
 } from '@/hooks/use-memory-usage';
 
 function formatBytes(bytes: number): string {
-  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(0)} MB`;
+  const megabytes = bytes / 1_048_576;
+  if (megabytes > 1000) {
+    return `${(megabytes / 1000).toFixed(1).replace('.', ',')}GB`;
+  }
+  if (megabytes >= 1) return `${megabytes.toFixed(0)} MB`;
   return `${(bytes / 1_024).toFixed(0)} KB`;
 }
 

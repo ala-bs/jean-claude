@@ -16,11 +16,13 @@ import {
   extractTeamsUrl,
   formatTimeHHMM,
   formatTimeRange,
+  getTeamsJoinUrl,
   isSameDay,
   layoutColumns,
   minutesBetween,
   startOfDay,
 } from '@/features/calendar/utils-calendar';
+import { useCalendarNotificationsSetting } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
 import type { UpcomingMeeting } from '@shared/calendar-types';
@@ -76,6 +78,8 @@ export function WeekView({
   onRequestIgnore: (meeting: UpcomingMeeting) => void;
 }) {
   const addToast = useToastStore((s) => s.addToast);
+  const { data: calendarNotificationsSetting } =
+    useCalendarNotificationsSetting();
   const today = useMemo(() => new Date(now), [now]);
   const [weekOffset, setWeekOffset] = useState(0);
   const monday = useMemo(() => {
@@ -336,7 +340,22 @@ export function WeekView({
               variant="primary"
               icon={<Video />}
               onClick={() => {
-                window.open(teamsUrl, '_blank');
+                void api.shell
+                  .openTeamsJoinUrl(
+                    getTeamsJoinUrl(
+                      teamsUrl,
+                      calendarNotificationsSetting?.meetingJoinTarget,
+                    ),
+                  )
+                  .catch((error) => {
+                    addToast({
+                      message:
+                        error instanceof Error
+                          ? error.message
+                          : 'Could not open Teams',
+                      type: 'error',
+                    });
+                  });
               }}
             >
               Join

@@ -71,6 +71,7 @@ export const ModelSelector = forwardRef<
           value: m.value,
           label: m.label,
           description: m.description,
+          group: m.group,
         }),
       ),
     [models],

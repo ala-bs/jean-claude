@@ -21,8 +21,9 @@ import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import {
   isVideoFile,
   VideoGifConverter,
-} from '@/features/pull-request/ui-video-gif-converter';
+} from '@/features/common/ui-video-gif-converter';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { formatBytes } from '@/lib/format-bytes';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import { formatLineRangeLabel } from '@/stores/utils-comment-store';
 import type { PromptImagePart } from '@shared/agent-backend-types';
@@ -364,8 +365,14 @@ export function InlineCommentComposer({
               <img
                 src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                 alt={img.filename || 'Attached image'}
+                title={img.sizeBytes ? formatBytes(img.sizeBytes) : undefined}
                 className="h-8 w-8 rounded border border-white/10 object-cover"
               />
+              {img.sizeBytes && (
+                <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                  {formatBytes(img.sizeBytes)}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => handleImageRemove(index)}
@@ -749,12 +756,24 @@ export function InlineCommentBubble({
             {currentImages.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {currentImages.map((img, index) => (
-                  <img
+                  <div
                     key={`${img.filename ?? 'img'}-${index}`}
-                    src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
-                    alt={img.filename || 'Attached image'}
-                    className="h-8 w-8 rounded border border-white/10 object-cover"
-                  />
+                    className="relative"
+                  >
+                    <img
+                      src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
+                      alt={img.filename || 'Attached image'}
+                      title={
+                        img.sizeBytes ? formatBytes(img.sizeBytes) : undefined
+                      }
+                      className="h-8 w-8 rounded border border-white/10 object-cover"
+                    />
+                    {img.sizeBytes && (
+                      <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                        {formatBytes(img.sizeBytes)}
+                      </span>
+                    )}
+                  </div>
                 ))}
               </div>
             )}

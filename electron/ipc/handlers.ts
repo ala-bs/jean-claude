@@ -43,6 +43,7 @@ import type {
   InstallSourceItemsParams,
   UpdateSourceInstallParams,
 } from '@shared/source-management-types';
+import { isValidTeamsJoinUrl } from '@shared/teams-url';
 import {
   PRESET_EDITORS,
   type InteractionMode,
@@ -244,6 +245,7 @@ import {
   cleanupFeatureMapTempDir,
   FEATURE_MAP_GIT_PATH,
   getFeatureMapTempPaths,
+  getExistingProjectFeatureMapPath,
   getProjectFeatureMap,
   saveProjectFeatureMapFromTemp,
 } from '../services/project-feature-map-generation-service';
@@ -815,6 +817,9 @@ export function registerIpcHandlers() {
         const prompt = buildProjectFeatureMapPrompt({
           project,
           tempFilePath: paths.tempFilePath,
+          existingFeatureMapPath: await getExistingProjectFeatureMapPath(
+            project.path,
+          ),
           skillName: slotConfig?.skillName,
         });
         const meta: FeatureMapStepMeta = {
@@ -3663,6 +3668,13 @@ export function registerIpcHandlers() {
       })),
     );
     return results;
+  });
+
+  ipcMain.handle('shell:openTeamsJoinUrl', async (_, url: string) => {
+    if (!isValidTeamsJoinUrl(url)) {
+      throw new Error('Invalid Teams meeting URL');
+    }
+    await shell.openExternal(url);
   });
 
   ipcMain.handle('calendar:listUpcomingMeetings', async () => {

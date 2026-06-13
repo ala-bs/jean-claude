@@ -17,6 +17,7 @@ export interface BackendModelOption {
   value: ModelPreference;
   label: string;
   description: string;
+  group?: string;
 }
 
 // Static fallback for Claude Code (models are fixed by the SDK)
@@ -49,15 +50,54 @@ const DEFAULT_OPTION: BackendModelOption = {
  * Convert dynamically fetched BackendModel[] into BackendModelOption[].
  * Prepends a 'default' entry.
  */
-function toModelOptions(models: BackendModel[]): BackendModelOption[] {
+function toModelOptions(
+  models: BackendModel[],
+  backend: AgentBackendType,
+): BackendModelOption[] {
+  const modelOptions = models.map((m) => ({
+    value: m.id as ModelPreference,
+    label: m.label,
+    description: m.id,
+    group: getModelProviderGroup(m.id, backend),
+  }));
+
   return [
     DEFAULT_OPTION,
-    ...models.map((m) => ({
-      value: m.id as ModelPreference,
-      label: m.label,
-      description: m.id,
-    })),
+    ...(backend === 'opencode'
+      ? groupModelOptionsByProvider(modelOptions)
+      : modelOptions),
   ];
+}
+
+function groupModelOptionsByProvider(
+  options: BackendModelOption[],
+): BackendModelOption[] {
+  const groupOrder = new Map<string, number>();
+  for (const option of options) {
+    if (option.group && !groupOrder.has(option.group)) {
+      groupOrder.set(option.group, groupOrder.size);
+    }
+  }
+
+  return [...options].sort((a, b) => {
+    const aGroup = a.group ? groupOrder.get(a.group) : Number.MAX_SAFE_INTEGER;
+    const bGroup = b.group ? groupOrder.get(b.group) : Number.MAX_SAFE_INTEGER;
+    return (
+      (aGroup ?? Number.MAX_SAFE_INTEGER) - (bGroup ?? Number.MAX_SAFE_INTEGER)
+    );
+  });
+}
+
+function getModelProviderGroup(
+  modelId: string,
+  backend: AgentBackendType,
+): string | undefined {
+  if (backend !== 'opencode') return undefined;
+
+  const separatorIndex = modelId.indexOf('/');
+  if (separatorIndex <= 0) return undefined;
+
+  return modelId.slice(0, separatorIndex);
 }
 
 /**
@@ -70,7 +110,7 @@ export function getModelsForBackend(
   dynamicModels?: BackendModel[],
 ): BackendModelOption[] {
   if (dynamicModels && dynamicModels.length > 0) {
-    return toModelOptions(dynamicModels);
+    return toModelOptions(dynamicModels, backend);
   }
   if (backend === 'claude-code') {
     return CLAUDE_CODE_MODELS;

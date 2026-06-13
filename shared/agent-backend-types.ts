@@ -37,6 +37,8 @@ export type PromptImagePart = {
   mimeType: string;
   /** Optional original filename */
   filename?: string;
+  /** Original byte size when known */
+  sizeBytes?: number;
   /** AVIF-compressed base64 for storage (set by UI before IPC) */
   storageData?: string;
   /** MIME type of the storage version */

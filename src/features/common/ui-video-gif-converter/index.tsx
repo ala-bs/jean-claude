@@ -3,6 +3,7 @@ import { Loader2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
+import { formatBytes } from '@/lib/format-bytes';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
 const MAX_VIDEO_SIZE = 80 * 1024 * 1024;
@@ -48,11 +49,6 @@ function formatSeconds(value: number) {
   const seconds = Math.floor(value % 60);
   const tenths = Math.floor((value % 1) * 10);
   return `${minutes}:${seconds.toString().padStart(2, '0')}.${tenths}`;
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function estimateGifSize({
@@ -185,6 +181,7 @@ async function convertVideoToGif({
       data: dataUrlToBase64(dataUrl),
       mimeType: 'image/gif',
       filename: gifFileName(file.name),
+      sizeBytes: gifBytes.byteLength,
       storageData: dataUrlToBase64(dataUrl),
       storageMimeType: 'image/gif',
     };
@@ -194,7 +191,8 @@ async function convertVideoToGif({
 }
 
 export function isVideoFile(file: File) {
-  return file.type.startsWith('video/');
+  if (file.type.startsWith('video/')) return true;
+  return /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name);
 }
 
 export function VideoGifConverter({

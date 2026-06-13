@@ -173,6 +173,7 @@ export function ReviewFilesTree({
   diffFiles,
   hideUnchanged,
   commentCountsByFile,
+  draftCountsByFile,
   bottomPadding = 0,
 }: {
   rootPath: string;
@@ -186,6 +187,7 @@ export function ReviewFilesTree({
   >;
   hideUnchanged: boolean;
   commentCountsByFile?: Map<string, number>;
+  draftCountsByFile?: Map<string, number>;
   bottomPadding?: number;
 }) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -282,6 +284,7 @@ export function ReviewFilesTree({
             expandedDirs={expandedDirs}
             onToggleDir={onToggleDir}
             commentCountsByFile={commentCountsByFile}
+            draftCountsByFile={draftCountsByFile}
             filterPaths={searchFilterPaths}
             diffFiles={diffFiles}
             hideUnchanged={!isSearching && hideUnchanged}
