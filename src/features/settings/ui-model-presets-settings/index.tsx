@@ -202,14 +202,6 @@ export function ModelPresetsSettings() {
       <div className="border-line-soft my-8 border-t" />
 
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-ink-1 text-lg font-semibold">Model Presets</h2>
-          <p className="text-ink-3 mt-1 text-sm">
-            Save backend and model pairs for faster task and step setup. Presets
-            appear at the top of composer backend menus and hide the separate
-            model selector when selected.
-          </p>
-        </div>
         <Button icon={<Plus />} onClick={handleAddPreset}>
           Add preset
         </Button>

@@ -3,7 +3,6 @@ import {
   Check,
   FolderOpen,
   GitBranch,
-  Bell,
   CircleAlert,
   ExternalLink,
   RefreshCw,
@@ -188,12 +187,7 @@ export function EditorSettings() {
 
   return (
     <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Editor</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Choose which editor to open projects in
-      </p>
-
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         {PRESET_EDITORS.map((editor) => {
           const available = isEditorAvailable(editor.id);
           const selected = isPresetSelected(editor.id);
@@ -293,14 +287,6 @@ export function PromptPrefaceSettings() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-ink-1 text-lg font-semibold">Prompt Preface</h2>
-        <p className="text-ink-3 mt-1 text-sm">
-          Add reusable instructions to prompts before they are sent to coding
-          agents.
-        </p>
-      </div>
-
       <Textarea
         size="md"
         value={draftText}
@@ -665,21 +651,7 @@ function CalendarNotificationSettings() {
 
   return (
     <div>
-      <div className="flex items-start gap-3">
-        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-          <Bell className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-ink-1 text-lg font-semibold">
-            Calendar Notifications
-          </h2>
-          <p className="text-ink-3 mt-1 text-sm">
-            Notify before meetings start using your macOS Calendar data.
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
+      <div className="space-y-3">
         <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
           <Checkbox
             checked={settings.enabled}
@@ -868,21 +840,7 @@ function TaskNotificationSettings() {
 
   return (
     <div>
-      <div className="flex items-start gap-3">
-        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-          <Bell className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-ink-1 text-lg font-semibold">
-            Task Notifications
-          </h2>
-          <p className="text-ink-3 mt-1 text-sm">
-            Choose delivery mode for each kind of task notification.
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
+      <div className="space-y-3">
         {showDesktopWarning ? (
           <div className="border-status-err/50 bg-status-err/8 rounded-lg border px-4 py-3 text-sm">
             <div className="text-ink-1 flex items-center gap-2 font-medium">
@@ -1056,12 +1014,7 @@ export function UsageDisplaySettings() {
 
   return (
     <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Usage Display</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Show rate limit usage in the header for these providers.
-      </p>
-
-      <div className="mt-4 space-y-2">
+      <div className="space-y-2">
         {USAGE_PROVIDERS.map((provider) => {
           const enabled = isEnabled(provider.value);
 

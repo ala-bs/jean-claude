@@ -95,18 +95,8 @@ export function AutocompleteSettings() {
 
   return (
     <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Autocomplete</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Inline ghost text completions powered by Mistral Codestral FIM
-        (Fill-in-the-Middle). Press{' '}
-        <kbd className="bg-glass-medium text-ink-1 rounded px-1 py-0.5 text-xs">
-          Tab
-        </kbd>{' '}
-        to accept a suggestion.
-      </p>
-
       {/* Setup guide */}
-      <div className="border-glass-border bg-bg-1/50 mt-4 max-w-lg rounded-lg border px-4 py-3">
+      <div className="border-glass-border bg-bg-1/50 max-w-lg rounded-lg border px-4 py-3">
         <p className="text-ink-1 text-sm font-medium">Getting started</p>
         <ol className="text-ink-2 mt-2 list-inside list-decimal space-y-1 text-sm">
           <li>
