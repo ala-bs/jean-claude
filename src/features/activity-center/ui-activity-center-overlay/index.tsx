@@ -456,7 +456,9 @@ export function ActivityCenterOverlay({
         ? debugLogs.filter(
             (l) =>
               matchesSearch(l.message, searchLower) ||
-              matchesSearch(l.namespace, searchLower),
+              matchesSearch(l.namespace, searchLower) ||
+              matchesSearch(l.level, searchLower) ||
+              matchesSearch(formatTimestamp(l.timestamp), searchLower),
           )
         : debugLogs,
     [debugLogs, searchLower],
@@ -904,7 +906,9 @@ export function ActivityCenterOverlay({
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Filter..."
+                placeholder={
+                  activeTab === 'debug' ? 'Filter debug logs...' : 'Filter...'
+                }
                 className="text-ink-1 placeholder:text-ink-4 flex-1 bg-transparent text-[12.5px] outline-none"
               />
               <span className="text-ink-4 shrink-0 text-[10px]">
