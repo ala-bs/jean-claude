@@ -142,6 +142,7 @@ export async function summarizeNormalizedMessages({
     model,
     outputSchema: SESSION_SUMMARY_SCHEMA,
     prompt,
+    throwOnError: true,
     usageContext,
   });
 

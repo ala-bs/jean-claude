@@ -23,6 +23,23 @@ import { buildSummaryGenerationPrompt } from './session-summary-service';
 
 const debug = createDebug('jc:step-service');
 
+function summarizeExpressionForDebug(expression: string): string {
+  return expression.replace(/\s+/g, ' ').slice(0, 160);
+}
+
+function countMessageTypes(
+  messages: Awaited<ReturnType<typeof AgentMessageRepository.findByStepId>>,
+) {
+  return messages.reduce<Record<string, number>>((counts, message) => {
+    counts[message.type] = (counts[message.type] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function canUseStepAsContinueSource(status: TaskStep['status']): boolean {
   return (
     status === 'completed' || status === 'interrupted' || status === 'errored'
@@ -111,6 +128,13 @@ async function resolvePromptTemplate({
   async function resolveSummaryExpression(
     argExpression: string,
   ): Promise<string> {
+    debug(
+      'Resolving summary expression task=%s backend=%s expression=%s',
+      taskId,
+      summaryBackend,
+      summarizeExpressionForDebug(argExpression),
+    );
+
     const stepMatch = argExpression.match(
       /^step\.([a-zA-Z0-9_-]+)(?:\.output)?$/,
     );
@@ -137,16 +161,20 @@ async function resolvePromptTemplate({
       const model = summaryModels[summaryBackend] ?? 'default';
       const summaryStartedAt = Date.now();
       const summaryPrompt = buildSummaryGenerationPrompt(messages);
+      const messageTypes = countMessageTypes(messages);
 
       try {
         debug(
-          'Starting prompt summary for step %s (%s): sourceStep=%s backend=%s model=%s messages=%d',
+          'Starting prompt summary for step %s (%s): sourceStep=%s backend=%s model=%s messages=%d messageTypes=%o outputLength=%d summaryPromptLength=%d',
           stepId,
           step.name,
           step.id,
           summaryBackend,
           model,
           messages.length,
+          messageTypes,
+          step.output?.length ?? 0,
+          summaryPrompt.length,
         );
         await onSummaryLifecycle?.onStart?.(step, summaryPrompt);
         const summary = await summarizeNormalizedMessages({
@@ -161,27 +189,37 @@ async function resolvePromptTemplate({
           },
         });
         debug(
-          'Finished prompt summary for step %s (%s): sourceStep=%s durationMs=%d summaryLength=%d',
+          'Finished prompt summary for step %s (%s): sourceStep=%s durationMs=%d summaryLength=%d compressionRatio=%s',
           stepId,
           step.name,
           step.id,
           Date.now() - summaryStartedAt,
           summary.length,
+          summaryPrompt.length > 0
+            ? (summary.length / summaryPrompt.length).toFixed(4)
+            : 'n/a',
         );
         await onSummaryLifecycle?.onResolved?.(step, summary);
         return summary;
       } catch (error) {
         debug(
-          'Prompt summary failed for step %s (%s): sourceStep=%s durationMs=%d error=%O',
+          'Prompt summary failed for step %s (%s): sourceStep=%s backend=%s model=%s durationMs=%d messages=%d messageTypes=%o summaryPromptLength=%d error=%O',
           stepId,
           step.name,
           step.id,
+          summaryBackend,
+          model,
           Date.now() - summaryStartedAt,
+          messages.length,
+          messageTypes,
+          summaryPrompt.length,
           error,
         );
-        throw new Error(
-          `Failed to summarize step "${step.name}" (${stepId}) using backend ${summaryBackend}`,
+        const wrappedError = new Error(
+          `Failed to summarize step "${step.name}" (${stepId}) using backend ${summaryBackend}: ${getErrorMessage(error)}`,
         );
+        (wrappedError as Error & { cause?: unknown }).cause = error;
+        throw wrappedError;
       }
     }
 
@@ -191,6 +229,12 @@ async function resolvePromptTemplate({
         `Failed to summarize: unresolved expression ${argExpression}`,
       );
     }
+    debug(
+      'Condensing raw summary expression task=%s expression=%s rawLength=%d',
+      taskId,
+      summarizeExpressionForDebug(argExpression),
+      rawValue.length,
+    );
     return condenseText(rawValue);
   }
 
@@ -199,14 +243,18 @@ async function resolvePromptTemplate({
     let result = '';
     let cursor = 0;
     let match: RegExpExecArray | null = null;
+    let expressionCount = 0;
+    let summaryExpressionCount = 0;
 
     while ((match = pattern.exec(template)) !== null) {
       result += template.slice(cursor, match.index);
 
       const expression = match[1]?.trim() ?? '';
       const summaryMatch = expression.match(/^summary\((.+)\)$/);
+      expressionCount += 1;
 
       if (summaryMatch) {
+        summaryExpressionCount += 1;
         const argExpression = summaryMatch[1]?.trim();
         if (!argExpression) {
           warnings.push('summary() requires one argument');
@@ -222,8 +270,27 @@ async function resolvePromptTemplate({
     }
 
     result += template.slice(cursor);
+    debug(
+      'Resolved template expressions task=%s expressions=%d summaries=%d warnings=%d templateLength=%d resolvedLength=%d',
+      taskId,
+      expressionCount,
+      summaryExpressionCount,
+      warnings.length,
+      template.length,
+      result.length,
+    );
     return result;
   }
+
+  debug(
+    'Resolving prompt template task=%s project=%s backend=%s steps=%d templateLength=%d taskPromptLength=%d',
+    taskId,
+    projectId,
+    summaryBackend,
+    steps.length,
+    template.length,
+    taskPrompt.length,
+  );
 
   const resolvedPrompt = await resolveTemplate();
   return { resolvedPrompt, warnings };
