@@ -175,6 +175,8 @@ export function CalendarOverlay({ onClose }: { onClose: () => void }) {
       result = result.filter(
         (m) =>
           m.title.toLowerCase().includes(q) ||
+          (m.organizer || '').toLowerCase().includes(q) ||
+          (m.organizerEmail || '').toLowerCase().includes(q) ||
           (m.location || '').toLowerCase().includes(q),
       );
     }
@@ -191,6 +193,8 @@ export function CalendarOverlay({ onClose }: { onClose: () => void }) {
       result = result.filter(
         (m) =>
           m.title.toLowerCase().includes(q) ||
+          (m.organizer || '').toLowerCase().includes(q) ||
+          (m.organizerEmail || '').toLowerCase().includes(q) ||
           (m.location || '').toLowerCase().includes(q),
       );
     }

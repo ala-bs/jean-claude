@@ -7,12 +7,14 @@ import {
   EyeOff,
   MapPin,
   Repeat,
+  User,
   Video,
 } from 'lucide-react';
 
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
 import { CountdownRing } from '@/features/calendar/ui-countdown-ring';
+import { OrganizerTooltip } from '@/features/calendar/ui-organizer-tooltip';
 import {
   extractTeamsUrl,
   formatDayHeader,
@@ -167,6 +169,17 @@ export function MeetingDetail({
               <Repeat className="text-ink-3 h-3 w-3" />
               recurring
             </span>
+          </>
+        )}
+        {meeting.organizer && (
+          <>
+            <span className="text-ink-4">·</span>
+            <OrganizerTooltip meeting={meeting}>
+              <span className="flex max-w-[220px] items-center gap-1.5 truncate">
+                <User className="text-ink-3 h-3 w-3 shrink-0" />
+                From {meeting.organizer}
+              </span>
+            </OrganizerTooltip>
           </>
         )}
         <span className="text-ink-4">·</span>

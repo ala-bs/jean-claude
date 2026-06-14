@@ -9,6 +9,8 @@ export interface CalendarEventRecord {
   startLabel: string;
   location: string;
   calendarName: string;
+  organizer: string;
+  organizerEmail: string;
   notes: string;
   url: string;
   recurring: boolean;
@@ -37,6 +39,8 @@ export function parseCalendarEventRecords(
         notes = '',
         url = '',
         recurring = 'false',
+        organizer = '',
+        organizerEmail = '',
       ] = record.split(CALENDAR_FIELD_DELIMITER);
 
       return {
@@ -47,6 +51,8 @@ export function parseCalendarEventRecords(
         startLabel,
         location,
         calendarName,
+        organizer,
+        organizerEmail,
         notes,
         url,
         recurring: recurring === 'true',

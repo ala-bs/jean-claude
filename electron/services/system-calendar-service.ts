@@ -251,6 +251,8 @@ function parseSystemCalendarEvents(rawOutput: string): CalendarEventRecord[] {
     startLabel?: string;
     location?: string;
     calendarName?: string;
+    organizer?: string;
+    organizerEmail?: string;
     notes?: string;
     url?: string;
     recurring?: boolean;
@@ -272,6 +274,8 @@ function parseSystemCalendarEvents(rawOutput: string): CalendarEventRecord[] {
       startLabel: event.startLabel ?? '',
       location: event.location ?? '',
       calendarName: event.calendarName ?? '',
+      organizer: event.organizer ?? '',
+      organizerEmail: event.organizerEmail ?? '',
       notes: event.notes ?? '',
       url: event.url ?? '',
       recurring: event.recurring ?? false,
@@ -301,6 +305,8 @@ struct Meeting: Encodable {
   let startLabel: String
   let location: String
   let calendarName: String
+  let organizer: String
+  let organizerEmail: String
   let notes: String
   let url: String
   let recurring: Bool
@@ -364,6 +370,13 @@ let filteredEvents = events.compactMap { event -> Meeting? in
     return nil
   }
 
+  let organizerName = event.organizer?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  let organizerUrl = event.organizer?.url.absoluteString ?? ""
+  let organizerEmail = organizerUrl.hasPrefix("mailto:")
+    ? String(organizerUrl.dropFirst("mailto:".count))
+    : ""
+  let organizerDisplay = organizerName.isEmpty ? organizerEmail : organizerName
+
   return Meeting(
     externalId: event.calendarItemExternalIdentifier,
     subject: event.title ?? "",
@@ -372,6 +385,8 @@ let filteredEvents = events.compactMap { event -> Meeting? in
     startLabel: timeFormatter.string(from: event.startDate),
     location: event.location ?? "",
     calendarName: event.calendar.title,
+    organizer: organizerDisplay,
+    organizerEmail: organizerEmail,
     notes: event.notes ?? "",
     url: event.url?.absoluteString ?? "",
     recurring: !(event.recurrenceRules ?? []).isEmpty
@@ -579,6 +594,8 @@ class SystemCalendarService {
         endAt: event.endAt,
         location: event.location,
         calendarName: event.calendarName,
+        organizer: event.organizer,
+        organizerEmail: event.organizerEmail,
         notes: event.notes,
         url: event.url,
         recurring: event.recurring,
@@ -624,6 +641,8 @@ class SystemCalendarService {
       endAt: event.endAt,
       location: event.location,
       calendarName: event.calendarName,
+      organizer: event.organizer,
+      organizerEmail: event.organizerEmail,
       notes: event.notes,
       url: event.url,
       recurring: event.recurring,

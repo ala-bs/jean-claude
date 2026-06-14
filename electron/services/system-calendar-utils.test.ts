@@ -23,6 +23,8 @@ describe('parseCalendarEventRecords', () => {
         startLabel: '10:00 AM',
         location: 'Room A',
         calendarName: 'Work',
+        organizer: '',
+        organizerEmail: '',
         notes: 'Prep notes',
         url: 'https://teams.microsoft.com/l/meetup-join/abc',
         recurring: true,
@@ -35,6 +37,8 @@ describe('parseCalendarEventRecords', () => {
         startLabel: '11:00 AM',
         location: '',
         calendarName: 'Personal',
+        organizer: '',
+        organizerEmail: '',
         notes: '',
         url: '',
         recurring: false,
@@ -62,9 +66,33 @@ describe('parseCalendarEventRecords', () => {
         startLabel: '09:00 AM',
         location: 'Zoom',
         calendarName: 'Work',
+        organizer: '',
+        organizerEmail: '',
         notes: 'Agenda',
         url: '',
         recurring: false,
+      },
+    ]);
+  });
+
+  it('parses organizer fields when present', () => {
+    const raw =
+      'evt-1\u001fDesign Review\u001f2026-05-23T10:00:00\u001f2026-05-23T10:30:00\u001f10:00 AM\u001fRoom A\u001fWork\u001fPrep notes\u001fhttps://teams.microsoft.com/l/meetup-join/abc\u001ftrue\u001fAda Lovelace\u001fada@example.com';
+
+    expect(parseCalendarEventRecords(raw)).toEqual([
+      {
+        externalId: 'evt-1',
+        subject: 'Design Review',
+        startAt: '2026-05-23T10:00:00',
+        endAt: '2026-05-23T10:30:00',
+        startLabel: '10:00 AM',
+        location: 'Room A',
+        calendarName: 'Work',
+        organizer: 'Ada Lovelace',
+        organizerEmail: 'ada@example.com',
+        notes: 'Prep notes',
+        url: 'https://teams.microsoft.com/l/meetup-join/abc',
+        recurring: true,
       },
     ]);
   });
