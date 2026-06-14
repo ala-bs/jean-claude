@@ -360,6 +360,8 @@ export function NewTaskOverlay({
   const promptInputRef = useRef<PromptTextareaRef>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const workItemImageFetchSessionRef = useRef(0);
+  const [isPromptAutocompleteOpen, setIsPromptAutocompleteOpen] =
+    useState(false);
   const [highlightedWorkItemId, setHighlightedWorkItemId] = useState<
     string | null
   >(null);
@@ -1304,6 +1306,10 @@ export function NewTaskOverlay({
 
   // Handle Escape based on current state
   const handleEscape = useCallback(() => {
+    if (isPromptAutocompleteOpen) {
+      return false;
+    }
+
     if (inputMode === 'search' && searchStep === 'compose') {
       // In compose step, go back to select
       backToSelect();
@@ -1311,7 +1317,7 @@ export function NewTaskOverlay({
       // Otherwise close overlay
       onClose();
     }
-  }, [inputMode, searchStep, backToSelect, onClose]);
+  }, [isPromptAutocompleteOpen, inputMode, searchStep, backToSelect, onClose]);
 
   // Show search input only in select step
   const showSearchInput = inputMode === 'search' && searchStep === 'select';
@@ -1408,9 +1414,7 @@ export function NewTaskOverlay({
       {
         label: 'Close or Go Back',
         shortcut: 'escape',
-        handler: () => {
-          handleEscape();
-        },
+        handler: () => handleEscape(),
       },
       {
         label: 'Discard Draft and Close',
@@ -1595,6 +1599,7 @@ export function NewTaskOverlay({
                     onFileRemove={handleFileRemove}
                     promptSnippets={promptSnippets}
                     snippetVariableContext={snippetVariableContext}
+                    onAutocompleteOpenChange={setIsPromptAutocompleteOpen}
                     containerClassName={`px-[18px] pt-3.5 ${selectedProject ? 'pb-2' : 'pb-3.5'}`}
                     className="text-ink-1 placeholder-ink-3 border-transparent bg-transparent px-0 py-0 text-sm focus:border-transparent focus:ring-0 focus:outline-none"
                   />
