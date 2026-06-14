@@ -97,6 +97,7 @@ export function useFeed() {
 
   const queryData = useMemo(() => {
     const prItems = prQuery.data ?? [];
+    const workItems = workItemQuery.data ?? [];
     const taskItems = mergeTaskPrInfo(taskQuery.data ?? [], prItems);
     const noteItems = (noteQuery.data ?? []).filter(
       (item) => !item.isCompleted,
@@ -104,7 +105,7 @@ export function useFeed() {
     const taskWorkItemIds = new Set(
       taskItems.flatMap((item) => (item.workItemIds ?? []).map(Number)),
     );
-    const workItemItems = (workItemQuery.data ?? []).filter(
+    const workItemItems = workItems.filter(
       (item) =>
         item.workItemId === undefined || !taskWorkItemIds.has(item.workItemId),
     );

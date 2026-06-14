@@ -201,10 +201,12 @@ function PrDiamond({ merged }: { merged: boolean }) {
 // ─── Work Item Chip (clickable) ──────────────────────────────────
 function WorkItemChip({
   label,
+  type,
   isFocused,
   onClick,
 }: {
   label: string;
+  type?: string | null;
   isFocused?: boolean;
   onClick?: (e: React.MouseEvent) => void;
 }) {
@@ -216,13 +218,27 @@ function WorkItemChip({
         'inline-flex cursor-pointer items-center gap-0.5 rounded px-1.5 py-0 font-mono text-[9.5px] ring-1 transition-colors',
         isFocused
           ? 'bg-acc/20 text-acc-ink ring-acc/50 shadow-[0_0_12px_oklch(0.72_0.20_295_/_0.4),0_0_4px_oklch(0.72_0.20_295_/_0.25)]'
-          : 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40',
+          : workItemChipColorClass(type),
       )}
     >
       <span className="opacity-70">◈</span>
       {label}
     </button>
   );
+}
+
+function workItemChipColorClass(type?: string | null): string {
+  switch (type) {
+    case 'Bug':
+      return 'bg-status-fail/10 text-status-fail ring-status-fail/25 hover:bg-status-fail/20 hover:ring-status-fail/40';
+    case 'User Story':
+    case 'Feature':
+      return 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40';
+    case 'Task':
+      return 'bg-status-run/10 text-status-run ring-status-run/25 hover:bg-status-run/20 hover:ring-status-run/40';
+    default:
+      return 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40';
+  }
 }
 
 // ─── Complete Task Button (isolated to avoid hooks in every card) ─
@@ -636,6 +652,7 @@ export function FeedItemCard({
                     <WorkItemChip
                       key={wiId}
                       label={`#${wiId}`}
+                      type={item.workItemTypes?.[index]}
                       isFocused={currentWorkItemId === wiId}
                       onClick={(e) =>
                         handleWorkItemClick(e, wiId, item.workItemUrls?.[index])
@@ -805,6 +822,7 @@ export function FeedItemCard({
               <SubtaskRow
                 key={child.id}
                 child={child}
+                currentWorkItemId={currentWorkItemId}
                 isRunning={child.attention === 'running'}
                 isSelected={child.taskId === currentTaskId}
               />
@@ -957,10 +975,12 @@ export function FeedItemCard({
 // ─── SubtaskRow (renders with branch connector from parent rail) ──
 function SubtaskRow({
   child,
+  currentWorkItemId,
   isRunning,
   isSelected,
 }: {
   child: FeedItem;
+  currentWorkItemId?: string;
   isRunning: boolean;
   isSelected?: boolean;
 }) {
@@ -1109,6 +1129,8 @@ function SubtaskRow({
               <WorkItemChip
                 key={wiId}
                 label={`#${wiId}`}
+                type={child.workItemTypes?.[index]}
+                isFocused={currentWorkItemId === wiId}
                 onClick={(e) =>
                   handleWorkItemClick(e, wiId, child.workItemUrls?.[index])
                 }
