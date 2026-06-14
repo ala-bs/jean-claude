@@ -1,3 +1,5 @@
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import type { AiUsageContext } from '@shared/ai-usage-types';
 import type { AiSkillSlotsSetting } from '@shared/types';
 
 import { dbg } from '../lib/debug';
@@ -34,13 +36,14 @@ const TASK_NAME_SCHEMA = {
 export async function generateTaskName(
   prompt: string,
   projectSlots?: AiSkillSlotsSetting | null,
+  usageContext?: AiUsageContext,
 ): Promise<string | null> {
   const truncatedPrompt = prompt.slice(0, TASK_NAME_MAX_PROMPT_LENGTH);
 
   try {
     const slotConfig = await resolveAiSkillSlot('task-name', projectSlots);
 
-    let backend: 'claude-code' | 'opencode';
+    let backend: AgentBackendType;
     let model: string;
     let effectivePrompt: string;
     let skillName: string | undefined;
@@ -72,6 +75,7 @@ export async function generateTaskName(
       skillName,
       outputSchema: TASK_NAME_SCHEMA,
       timeoutMs: TASK_NAME_TIMEOUT_MS,
+      usageContext,
     });
 
     if (

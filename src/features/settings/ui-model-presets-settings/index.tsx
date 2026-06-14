@@ -159,6 +159,7 @@ export function ModelPresetsSettings() {
           value: backend.value,
           label: backend.label,
           description: backend.description,
+          badge: backend.badge,
         }),
       ),
     [enabledBackends],

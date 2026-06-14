@@ -106,6 +106,7 @@ import {
 import { api } from '@/lib/api';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { getDefaultModelForBackend } from '@/lib/default-models';
+import { formatNumber } from '@/lib/number';
 import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
 import { getBranchFromWorktreePath } from '@/lib/worktree';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
@@ -161,6 +162,42 @@ import { ToolDiffPreviewPane } from './tool-diff-preview-pane';
 
 const LAST_ASSISTANT_MESSAGE_MAX_LENGTH = 1200;
 
+type StepTokenSummary = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  displayTokens: number;
+  totalTokens: number;
+};
+
+function getStepTokenSummary(entries: NormalizedEntry[]): StepTokenSummary {
+  const summary: StepTokenSummary = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    displayTokens: 0,
+    totalTokens: 0,
+  };
+
+  for (const entry of entries) {
+    if (entry.type !== 'result' || !entry.usage) continue;
+
+    summary.inputTokens += entry.usage.inputTokens;
+    summary.outputTokens += entry.usage.outputTokens;
+    summary.cacheReadTokens += entry.usage.cacheReadTokens ?? 0;
+    summary.cacheCreationTokens += entry.usage.cacheCreationTokens ?? 0;
+  }
+
+  summary.displayTokens =
+    summary.inputTokens + summary.outputTokens + summary.cacheCreationTokens;
+
+  summary.totalTokens = summary.displayTokens + summary.cacheReadTokens;
+
+  return summary;
+}
+
 function buildReviewChangesPrompt(): string {
   return [
     'Review the current task changes.',
@@ -208,6 +245,45 @@ function getReferenceStepForPreset({
     steps[steps.length - 1] ??
     null
   );
+}
+
+function getContinueReferenceStep({
+  steps,
+  activeStepId,
+  preferredStepId,
+}: {
+  steps: TaskStep[];
+  activeStepId: string | null;
+  preferredStepId?: string | null;
+}): TaskStep | null {
+  function isUsableContinueSource(step: TaskStep | null | undefined): boolean {
+    return Boolean(
+      step &&
+      (step.status === 'completed' ||
+        step.status === 'interrupted' ||
+        step.status === 'errored') &&
+      (step.output !== null || step.sessionId !== null),
+    );
+  }
+
+  const preferred = getReferenceStepForPreset({
+    steps,
+    activeStepId,
+    preferredStepId,
+  });
+
+  if (isUsableContinueSource(preferred)) {
+    return preferred;
+  }
+
+  for (let index = steps.length - 1; index >= 0; index--) {
+    const step = steps[index];
+    if (isUsableContinueSource(step)) {
+      return step;
+    }
+  }
+
+  return null;
 }
 
 function getLastAssistantMessage(messages: NormalizedEntry[]): string {
@@ -375,6 +451,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
   const agentState = useAgentStream({ taskId, stepId: activeStepId });
   const contextUsage = useContextUsage(agentState.messages);
+  const stepTokenSummary = useMemo(
+    () => getStepTokenSummary(agentState.messages),
+    [agentState.messages],
+  );
   const model = useModel(agentState.messages);
   const {
     start,
@@ -815,11 +895,28 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       const preferredStepId = addStepAtEnd
         ? (stepList[stepList.length - 1]?.id ?? null)
         : addStepAfterStepId;
-      const referenceStep = getReferenceStepForPreset({
-        steps: stepList,
-        activeStepId,
-        preferredStepId,
-      });
+      const referenceStep =
+        data.presetType === 'continue'
+          ? getContinueReferenceStep({
+              steps: stepList,
+              activeStepId,
+              preferredStepId,
+            })
+          : getReferenceStepForPreset({
+              steps: stepList,
+              activeStepId,
+              preferredStepId,
+            });
+
+      if (data.presetType === 'continue' && !referenceStep) {
+        addToast({
+          type: 'error',
+          message:
+            'No usable previous step to continue from. Pick step with actual messages or finish current step first.',
+        });
+        return;
+      }
+
       const insertionSortOrder = (() => {
         if (addStepAtEnd) return stepList.length;
         if (stepList.length === 0) return 0;
@@ -849,10 +946,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             ? data.promptTemplate || buildReviewChangesPrompt()
             : data.promptTemplate;
 
-      const dependsOn =
-        data.presetType === 'continue' && referenceStep
-          ? [referenceStep.id]
-          : [];
+      const dependsOn = referenceStep ? [referenceStep.id] : [];
 
       const isReview = data.presetType === 'review-changes';
       const reviewers = isReview ? data.reviewers : undefined;
@@ -1832,6 +1926,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   queuedPrompts={agentState.queuedPrompts}
                   onStop={handleStop}
                   contextUsage={contextUsage}
+                  stepTokenSummary={stepTokenSummary}
                   projectRoot={taskRootPath}
                   getCompletionContextBeforePrompt={
                     getCompletionContextBeforePrompt
@@ -1989,6 +2084,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   queuedPrompts,
   onStop,
   contextUsage,
+  stepTokenSummary,
   projectRoot,
   getCompletionContextBeforePrompt,
 }: {
@@ -2002,6 +2098,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
   contextUsage: ContextUsage;
+  stepTokenSummary: StepTokenSummary;
   projectRoot: string | null;
   getCompletionContextBeforePrompt: () => string;
 }) {
@@ -2273,6 +2370,13 @@ const TaskInputFooter = memo(function TaskInputFooter({
     </div>
   );
 
+  const tokenControls = (
+    <>
+      <StepTokenSummaryDisplay summary={stepTokenSummary} />
+      <ContextUsageDisplay contextUsage={contextUsage} />
+    </>
+  );
+
   return (
     <div
       ref={containerRef}
@@ -2334,9 +2438,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
                 />
               </>
             }
-            controlsBeforeButtons={
-              <ContextUsageDisplay contextUsage={contextUsage} />
-            }
+            controlsBeforeButtons={tokenControls}
             buttonSize="sm"
             textareaClassName="bg-transparent px-1 py-0 text-sm leading-[20px]"
           />
@@ -2369,9 +2471,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
             controlsAboveButtons={selectorGroup}
-            controlsBeforeButtons={
-              <ContextUsageDisplay contextUsage={contextUsage} />
-            }
+            controlsBeforeButtons={tokenControls}
             buttonSize="sm"
             fillAvailableHeight
             textareaClassName="bg-transparent px-1 py-0 text-sm leading-[20px]"
@@ -2393,3 +2493,25 @@ const TaskInputFooter = memo(function TaskInputFooter({
     </div>
   );
 });
+
+function StepTokenSummaryDisplay({ summary }: { summary: StepTokenSummary }) {
+  if (summary.displayTokens === 0) return null;
+
+  const title = [
+    `Step tokens: ${summary.displayTokens.toLocaleString()} tokens`,
+    `Input: ${summary.inputTokens.toLocaleString()}`,
+    `Output: ${summary.outputTokens.toLocaleString()}`,
+    `Cache read: ${summary.cacheReadTokens.toLocaleString()}`,
+    `Cache created: ${summary.cacheCreationTokens.toLocaleString()}`,
+    `Raw total with cache read: ${summary.totalTokens.toLocaleString()}`,
+  ].join('\n');
+
+  return (
+    <div
+      className="text-ink-3 border-glass-border bg-bg-2/70 flex h-7 items-center rounded-md border px-2 text-[11px] font-medium tabular-nums"
+      title={title}
+    >
+      {formatNumber(summary.displayTokens)} tok
+    </div>
+  );
+}

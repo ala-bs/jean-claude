@@ -223,6 +223,22 @@ export function useUpdateThinkingSettingsSetting() {
   return useMutation({
     mutationFn: (value: ThinkingSettingsSetting) =>
       api.settings.set('thinkingSettings', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'thinkingSettings'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous =
+        queryClient.getQueryData<ThinkingSettingsSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ['settings', 'thinkingSettings'],
+          context.previous,
+        );
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['settings', 'thinkingSettings'],

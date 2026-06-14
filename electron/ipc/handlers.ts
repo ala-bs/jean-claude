@@ -80,6 +80,7 @@ import {
   DebugRepository,
   TaskSummaryRepository,
   ProjectTodoRepository,
+  AiUsageRepository,
 } from '../database/repositories';
 import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { NotificationRepository } from '../database/repositories/notifications';
@@ -372,7 +373,7 @@ async function pullSourceBranch({
   return `origin/${remoteBranch}`;
 }
 
-const VALID_BACKENDS = new Set<string>(['claude-code', 'opencode']);
+const VALID_BACKENDS = new Set<string>(['claude-code', 'opencode', 'codex']);
 
 async function cleanupFeatureMapTempDirsForTask(taskId: string): Promise<void> {
   const steps = await TaskStepRepository.findByTaskId(taskId);
@@ -1134,6 +1135,14 @@ export function registerIpcHandlers() {
           taskName = await generateTaskName(
             taskData.prompt,
             project.aiSkillSlots,
+            {
+              feature: 'task-name',
+              projectId: taskData.projectId,
+              taskId: null,
+              stepId: null,
+              taskName: taskData.name ?? null,
+              projectName: project.name,
+            },
           );
           dbg.ipc('Generated task name: %s', taskName);
           // taskName may still be null if generation fails - that's ok
@@ -2483,10 +2492,13 @@ export function registerIpcHandlers() {
         stepData.autoStart = true;
       }
 
-      const step = await StepService.create(stepData);
+      let step = await StepService.create(stepData);
 
       const shouldStartNow = start && (!hasDeps || step.status === 'ready');
       if (shouldStartNow) {
+        // Return the step as running immediately so renderer caches do not keep
+        // a stale "ready" state while the async start pipeline boots.
+        step = await StepService.update(step.id, { status: 'running' });
         dbg.ipc('Auto-starting step %s (task %s)', step.id, step.taskId);
         const window = BrowserWindow.fromWebContents(event.sender);
         if (window) {
@@ -3044,6 +3056,7 @@ export function registerIpcHandlers() {
           deleteSourceBranch: boolean;
           transitionWorkItems: boolean;
           mergeCommitMessage?: string;
+          autoCompleteIgnoreConfigIds?: number[];
         };
       },
     ) => setPullRequestAutoComplete(params),
@@ -3457,7 +3470,10 @@ export function registerIpcHandlers() {
     if (window) {
       agentService.setMainWindow(window);
     }
-    return agentService.start(stepId);
+    agentService.start(stepId).catch((err) => {
+      dbg.ipc('Error starting step %s: %O', stepId, err);
+    });
+    return;
   });
 
   ipcMain.handle(AGENT_CHANNELS.STOP, (_, stepId: string) => {
@@ -3629,7 +3645,11 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'backendConfig:getUserConfig',
     (_: unknown, backend: unknown) => {
-      if (backend !== 'claude-code' && backend !== 'opencode') {
+      if (
+        backend !== 'claude-code' &&
+        backend !== 'opencode' &&
+        backend !== 'codex'
+      ) {
         throw new Error('Invalid backend');
       }
       return readBackendUserConfig(backend);
@@ -3638,7 +3658,11 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'backendConfig:setUserConfig',
     (_: unknown, backend: unknown, content: unknown) => {
-      if (backend !== 'claude-code' && backend !== 'opencode') {
+      if (
+        backend !== 'claude-code' &&
+        backend !== 'opencode' &&
+        backend !== 'codex'
+      ) {
         throw new Error('Invalid backend');
       }
       if (typeof content !== 'string') {
@@ -3812,6 +3836,17 @@ export function registerIpcHandlers() {
       return UsageSnapshotRepository.getHistory(params);
     },
   );
+
+  ipcMain.handle(
+    'agent:usage:getDashboard',
+    (_, params: { since: string; until?: string }) => {
+      return AiUsageRepository.getDashboard(params);
+    },
+  );
+
+  ipcMain.handle('agent:usage:getTaskUsage', (_, taskId: string) => {
+    return AiUsageRepository.getTaskUsage(taskId);
+  });
 
   // Backend models
   ipcMain.handle('agent:getBackendModels', (_, backend: string) =>
@@ -4883,7 +4918,13 @@ export function registerIpcHandlers() {
       const systemProject = await getOrCreateSystemProject();
 
       // Generate a task name
-      const taskName = await generateTaskName(data.prompt);
+      const taskName = await generateTaskName(data.prompt, null, {
+        feature: 'task-name',
+        projectId: systemProject.id,
+        taskId: null,
+        stepId: null,
+        projectName: systemProject.name,
+      });
 
       // Create task in system project
       const task = await TaskRepository.create({

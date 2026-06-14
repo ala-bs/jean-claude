@@ -104,6 +104,7 @@ export const BACKEND_INTERACTION_MODE_OPTIONS: Record<
 > = {
   'claude-code': CLAUDE_CODE_INTERACTION_MODE_OPTIONS,
   opencode: OPENCODE_INTERACTION_MODE_OPTIONS,
+  codex: OPENCODE_INTERACTION_MODE_OPTIONS,
 };
 
 export function getInteractionModeOptions({
@@ -153,6 +154,7 @@ export function normalizeInteractionModeForBackend({
 export type ModelPreference = 'default' | (string & {});
 export type ThinkingEffort =
   | 'default'
+  | 'minimal'
   | 'none'
   | 'low'
   | 'medium'
@@ -770,7 +772,7 @@ function isEditorSetting(v: unknown): v is EditorSetting {
   return false;
 }
 
-const VALID_BACKENDS: AgentBackendType[] = ['claude-code', 'opencode'];
+const VALID_BACKENDS: AgentBackendType[] = ['claude-code', 'opencode', 'codex'];
 
 function isCompletionSetting(v: unknown): v is CompletionSetting {
   if (!v || typeof v !== 'object') return false;
@@ -873,6 +875,7 @@ function isEditorAutomationSetting(v: unknown): v is EditorAutomationSetting {
 
 const VALID_THINKING_EFFORTS: ThinkingEffort[] = [
   'default',
+  'minimal',
   'none',
   'low',
   'medium',
@@ -1108,6 +1111,7 @@ export const SETTINGS_DEFINITIONS = {
       models: {
         'claude-code': 'haiku',
         opencode: 'default',
+        codex: 'default',
       },
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
@@ -1117,6 +1121,7 @@ export const SETTINGS_DEFINITIONS = {
       models: {
         'claude-code': 'default',
         opencode: 'default',
+        codex: 'default',
       },
     } as BackendDefaultModelsSetting,
     validate: isBackendDefaultModelsSetting,
@@ -1132,10 +1137,12 @@ export const SETTINGS_DEFINITIONS = {
       efforts: {
         'claude-code': { default: 'default' },
         opencode: { default: 'default' },
+        codex: { default: 'default' },
       },
       selectedModels: {
         'claude-code': 'default',
         opencode: 'default',
+        codex: 'default',
       },
     } as ThinkingSettingsSetting,
     validate: isThinkingSettingsSetting,

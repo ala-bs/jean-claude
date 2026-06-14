@@ -146,6 +146,9 @@ importers:
       shiki:
         specifier: ^3.21.0
         version: 3.21.0
+      smol-toml:
+        specifier: ^1.6.1
+        version: 1.6.1
       tree-sitter-wasms:
         specifier: ^0.1.13
         version: 0.1.13
@@ -3495,8 +3498,8 @@ packages:
     resolution: {integrity: sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==}
     engines: {node: '>=6'}
 
-  deslop-js@0.0.19:
-    resolution: {integrity: sha512-gLEwJ26XSRNN5r7x/AI8Zi0Fs6uJe/junYM+jQaaVRjfagUUAerPD90fZlwjRnK0Lpb9jRzqaM9BvmHXUHkGxA==}
+  deslop-js@0.0.21:
+    resolution: {integrity: sha512-1fYusMl4tDaQ/xdHFtLfDe8kFrEeU0Vu0Pfiy2k/Gd4HSqYlQj1Z7iRqldNneRyuCzNMhwNBvhaL07Urbh5VOA==}
 
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
@@ -5447,8 +5450,8 @@ packages:
   oxc-resolver@11.20.0:
     resolution: {integrity: sha512-CblytBiV/a/ZXY34dsVU2NxhIOxMXst8CvDCtyBelVITgd7PLrKzbEbA6oKLdPjvDKDzCiW48qzmzZ+mYaqn+g==}
 
-  oxlint-plugin-react-doctor@0.4.0:
-    resolution: {integrity: sha512-iC+iV296B41pghbPEmR1oklwjTo8v9LlTVG1LTHed3ZkeuljH3Kq+SKeHB1YXvLuq9MARr+n4WDmN5r7bHtJfg==}
+  oxlint-plugin-react-doctor@0.5.1:
+    resolution: {integrity: sha512-gGx0NCPA7s8z8UYCulfhX4CiXwBI4QdQve7zaVXglakWzzdgcXMZv6pedmbKUtefegzlfzkKDcYO4lOg8vqnJw==}
     engines: {node: ^20.19.0 || >=22.12.0}
 
   oxlint@1.67.0:
@@ -5847,8 +5850,8 @@ packages:
     resolution: {integrity: sha512-I2UXoJlsqNeN3uCrlrJw0V+K6HTHU5Q1x+BWJlF99hBC6A/lKhe+IuITZXyKb8BluMReSBYUhUYGkJGgr2KPQQ==}
     hasBin: true
 
-  react-doctor@0.4.0:
-    resolution: {integrity: sha512-BWum4WfKZ9Sdv4zTlzRoog4fYEIBEWZXHnq8GaCL42XMLmoldATdix/i3xZSHD3+SqpMrUVGcuzerOL9R9P+bw==}
+  react-doctor@0.5.1:
+    resolution: {integrity: sha512-2LSJ/iYtUugr9xj01XTyU2tRtfjmGjiwyDotrnxL0raP+q4Uhp10VaiY7BqfDhBpj4HtCsC+//G1xVupTTBDoA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
 
@@ -6244,6 +6247,10 @@ packages:
   smart-buffer@4.2.0:
     resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
     engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
+
+  smol-toml@1.6.1:
+    resolution: {integrity: sha512-dWUG8F5sIIARXih1DTaQAX4SsiTXhInKf1buxdY9DIg4ZYPZK5nGM1VRIYmEbDbsHt7USo99xSLFu5Q1IqTmsg==}
+    engines: {node: '>= 18'}
 
   snake-case@3.0.4:
     resolution: {integrity: sha512-LAOh4z89bGQvl9pFfNF8V146i7o7/CqFPbqzYgP+yYzDIDeS9HaNFtXABamRW+AQzEVODcvE79ljJ+8a9YSdMg==}
@@ -10215,7 +10222,7 @@ snapshots:
 
   dequal@2.0.3: {}
 
-  deslop-js@0.0.19:
+  deslop-js@0.0.21:
     dependencies:
       '@oxc-project/types': 0.132.0
       fast-glob: 3.3.3
@@ -12785,7 +12792,7 @@ snapshots:
       '@oxc-resolver/binding-win32-arm64-msvc': 11.20.0
       '@oxc-resolver/binding-win32-x64-msvc': 11.20.0
 
-  oxlint-plugin-react-doctor@0.4.0:
+  oxlint-plugin-react-doctor@0.5.1:
     dependencies:
       '@typescript-eslint/types': 8.60.0
       eslint-scope: 9.1.2
@@ -13136,7 +13143,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  react-doctor@0.4.0(eslint@9.39.2(jiti@2.7.0)):
+  react-doctor@0.5.1(eslint@9.39.2(jiti@2.7.0)):
     dependencies:
       '@babel/code-frame': 7.29.7
       '@effect/platform-node-shared': 4.0.0-beta.70(effect@4.0.0-beta.70)
@@ -13144,13 +13151,13 @@ snapshots:
       agent-install: 0.0.5
       conf: 15.1.0
       confbox: 0.2.4
-      deslop-js: 0.0.19
+      deslop-js: 0.0.21
       effect: 4.0.0-beta.70
       eslint-plugin-react-hooks: 7.1.1(eslint@9.39.2(jiti@2.7.0))
       jiti: 2.7.0
       magicast: 0.5.3
       oxlint: 1.67.0
-      oxlint-plugin-react-doctor: 0.4.0
+      oxlint-plugin-react-doctor: 0.5.1
       prompts: 2.4.2
       typescript: 5.9.3
       vscode-languageserver: 9.0.1
@@ -13251,7 +13258,7 @@ snapshots:
       preact: 10.29.2
       prompts: 2.4.2
       react: 19.2.3
-      react-doctor: 0.4.0(eslint@9.39.2(jiti@2.7.0))
+      react-doctor: 0.5.1(eslint@9.39.2(jiti@2.7.0))
       react-dom: 19.2.3(react@19.2.3)
       react-grab: 0.1.44(react@19.2.3)
     optionalDependencies:
@@ -13687,6 +13694,8 @@ snapshots:
     optional: true
 
   smart-buffer@4.2.0: {}
+
+  smol-toml@1.6.1: {}
 
   snake-case@3.0.4:
     dependencies:

@@ -133,6 +133,7 @@ export const BackendPresetSelector = forwardRef<
         value: toBackendValue(option.value),
         label: option.label,
         description: option.description,
+        badge: option.badge,
         group: presetOptions.length > 0 ? 'Backends' : undefined,
       }),
     );

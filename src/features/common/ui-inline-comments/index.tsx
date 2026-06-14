@@ -97,6 +97,7 @@ export function InlineCommentComposer({
   mentionOptions = EMPTY_MENTION_OPTIONS,
   onSearchMentions,
   onBodyChange,
+  onEmptyChange,
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -131,6 +132,8 @@ export function InlineCommentComposer({
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   /** Called when the draft body text changes (for external persistence). */
   onBodyChange?: (body: string) => void;
+  /** Called when body + attachments become empty/non-empty. */
+  onEmptyChange?: (isEmpty: boolean) => void;
 }) {
   const [body, setBodyRaw] = useState(initialBody);
 
@@ -308,6 +311,10 @@ export function InlineCommentComposer({
 
   const isDisabled =
     isSubmitting || (!body.trim() && images.length === 0 && !canSubmitEmpty);
+  useEffect(() => {
+    onEmptyChange?.(!body.trim() && images.length === 0);
+  }, [body, images.length, onEmptyChange]);
+
   const debouncedPreviewBody = useDebouncedValue(body, 300);
   const previewMarkdown = useMemo(
     () => markdownWithLocalImages(debouncedPreviewBody, images),

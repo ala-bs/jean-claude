@@ -1642,6 +1642,7 @@ interface PullRequestResponse {
     deleteSourceBranch?: boolean;
     transitionWorkItems?: boolean;
     mergeCommitMessage?: string;
+    autoCompleteIgnoreConfigIds?: number[];
   };
   reviewers?: Array<{
     id: string;
@@ -1942,6 +1943,8 @@ function mapPullRequestResponse(
           transitionWorkItems:
             pr.completionOptions.transitionWorkItems ?? false,
           mergeCommitMessage: pr.completionOptions.mergeCommitMessage,
+          autoCompleteIgnoreConfigIds:
+            pr.completionOptions.autoCompleteIgnoreConfigIds,
         }
       : undefined,
     reviewers: (pr.reviewers ?? []).map((r) => ({
@@ -2207,6 +2210,7 @@ export async function setPullRequestAutoComplete(params: {
     deleteSourceBranch: boolean;
     transitionWorkItems: boolean;
     mergeCommitMessage?: string;
+    autoCompleteIgnoreConfigIds?: number[];
   };
 }): Promise<AzureDevOpsPullRequestDetails> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
@@ -2326,11 +2330,27 @@ export async function getPullRequestPolicyEvaluations(params: {
     data.value.map((e) => ({
       id: e.evaluationId,
       status: e.status,
+      configurationId: e.configuration.id,
       type: e.configuration.type.displayName,
       isEnabled: e.configuration.isEnabled,
       isBlocking: e.configuration.isBlocking,
-      settings: e.configuration.settings,
-      context: e.context,
+      settings: {
+        buildDefinitionId:
+          (e.configuration.settings.buildDefinitionId as number | undefined) ??
+          null,
+        displayName:
+          (e.configuration.settings.displayName as string | undefined) ?? null,
+        minimumApproverCount:
+          (e.configuration.settings.minimumApproverCount as
+            | number
+            | undefined) ?? null,
+      },
+      context: {
+        buildId: (e.context?.buildId as number | undefined) ?? null,
+        buildDefinitionId:
+          (e.context?.buildDefinitionId as number | undefined) ?? null,
+        isExpired: (e.context?.isExpired as boolean | undefined) ?? null,
+      },
     })),
   );
 

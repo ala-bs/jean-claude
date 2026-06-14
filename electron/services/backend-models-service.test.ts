@@ -1,7 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  getOrCreateCodexAppServer: vi.fn(),
+}));
+
+vi.mock('./agent-backends/codex/codex-app-server', () => ({
+  getOrCreateCodexAppServer: mocks.getOrCreateCodexAppServer,
+}));
 
 import {
   calculateTheoreticalOpenCodeCost,
+  getBackendModels,
+  parseCodexModel,
   parseOpenCodeModelsVerbose,
 } from './backend-models-service';
 
@@ -104,5 +114,53 @@ github-copilot/gpt-4.1
         outputTokens: 1_000_000,
       }),
     ).toBe(0);
+  });
+
+  it('parses Codex model metadata with reasoning efforts', () => {
+    expect(
+      parseCodexModel({
+        id: 'gpt-5.4',
+        displayName: 'GPT-5.4',
+        hidden: false,
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'minimal' },
+          { reasoningEffort: 'medium' },
+        ],
+      }),
+    ).toEqual({
+      id: 'gpt-5.4',
+      label: 'GPT-5.4',
+      supportsThinking: true,
+      thinkingEfforts: ['minimal', 'medium'],
+    });
+  });
+
+  it('fetches Codex models from app-server', async () => {
+    mocks.getOrCreateCodexAppServer.mockResolvedValue({
+      client: {
+        request: vi.fn().mockResolvedValue({
+          data: [
+            {
+              id: 'gpt-5.4',
+              displayName: 'GPT-5.4',
+              hidden: false,
+              supportedReasoningEfforts: [
+                { reasoningEffort: 'minimal' },
+                { reasoningEffort: 'medium' },
+              ],
+            },
+          ],
+        }),
+      },
+    });
+
+    await expect(getBackendModels('codex')).resolves.toEqual([
+      {
+        id: 'gpt-5.4',
+        label: 'GPT-5.4',
+        supportsThinking: true,
+        thinkingEfforts: ['minimal', 'medium'],
+      },
+    ]);
   });
 });
