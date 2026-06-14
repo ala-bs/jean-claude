@@ -642,6 +642,7 @@ export function Header() {
           onClick={() => openOverlay('usage')}
           className="ml-1 px-2"
         />
+        <NextMeetingButton />
         {api.app.isDevMode && (
           <div
             className="group relative ml-2 flex items-center gap-1 rounded-full border border-amber-400/50 bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] text-amber-200 shadow-[0_0_16px_oklch(0.8_0.18_80_/_0.22)]"
@@ -687,7 +688,6 @@ export function Header() {
           } as CSSProperties
         }
       >
-        <NextMeetingButton />
         <RamUsageDisplay />
         <CompletionCostDisplay />
         <UsageDisplay />
