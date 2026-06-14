@@ -18,27 +18,6 @@ import {
 
 const CHECKBOX_MARKER_PATTERN = /^\s*-\s+\[([ xX])\]\s*/;
 
-function trimLeadingWhitespace(content: unknown): unknown {
-  if (typeof content === 'string') return content.trimStart();
-  if (!Array.isArray(content)) return content;
-
-  let didTrim = false;
-  return content.map((item) => {
-    if (didTrim) return item;
-    if (typeof item === 'string') {
-      didTrim = true;
-      return item.trimStart();
-    }
-    if (!item || typeof item !== 'object') return item;
-
-    const record = item as Record<string, unknown>;
-    if (typeof record.text !== 'string') return item;
-
-    didTrim = true;
-    return { ...record, text: record.text.trimStart() };
-  });
-}
-
 function getCheckboxMarkdownState(content: unknown): boolean | null {
   const text = getFirstTextSegment(content);
   const match = text?.match(CHECKBOX_MARKER_PATTERN);
@@ -178,26 +157,12 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
     setValue(JSON.stringify(editor.document));
   }, [editor]);
 
-  const handleEditorKeyDownCapture = useCallback(
-    (event: KeyboardEvent) => {
-      if (event.key === 'Tab') {
-        event.preventDefault();
-
-        const blocks = editor.getSelection()?.blocks ?? [
-          editor.getTextCursorPosition().block,
-        ];
-        for (const block of blocks) {
-          const content = trimLeadingWhitespace(block.content);
-          if (content !== block.content) {
-            editor.updateBlock(block, {
-              content,
-            } as Parameters<typeof editor.updateBlock>[1]);
-          }
-        }
-      }
-    },
-    [editor],
-  );
+  const handleEditorKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, []);
 
   const handleDelete = useCallback(() => {
     isDeletedRef.current = true;
@@ -252,7 +217,7 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
 
       <div
         className="feed-note-blocknote flex-1 overflow-y-auto px-2 py-3"
-        onKeyDownCapture={handleEditorKeyDownCapture}
+        onKeyDown={handleEditorKeyDown}
       >
         <BlockNoteView
           editor={editor}
