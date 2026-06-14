@@ -25,10 +25,12 @@ import {
   type QueuedPrompt,
 } from '@shared/agent-types';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
+import type { AiUsageFeature } from '@shared/ai-usage-types';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import {
   type InteractionMode,
   type TaskNotificationEvent,
+  type TaskStepType,
   type ReviewStepMeta,
   type ThinkingEffort,
   isSkillCreationStepMeta,
@@ -228,6 +230,7 @@ interface ActiveSession {
   backendSessionId: string | null; // The session ID from the backend
   sdkSessionId: string | null; // The persistent session ID for resumption
   backendType: AgentBackendType;
+  usageFeature: AiUsageFeature;
   currentModel: string | null;
   requestedBackendType: AgentBackendType;
   swapModel?: string;
@@ -244,6 +247,27 @@ interface ActiveSession {
     questionRequest?: NormalizedQuestionRequest;
   }>;
   hasTerminalError: boolean;
+}
+
+function getUsageFeatureForStep(type: TaskStepType): AiUsageFeature {
+  switch (type) {
+    case 'skill-creation':
+      return 'skill';
+    case 'feature-map':
+      return 'feature-map';
+    case 'review':
+    case 'pr-review':
+      return 'review';
+    case 'create-pull-request':
+      return 'pr';
+    case 'agent':
+    case 'fork':
+      return 'agent';
+    default: {
+      const _exhaustive: never = type;
+      return _exhaustive;
+    }
+  }
 }
 
 class AgentService {
@@ -568,6 +592,7 @@ class AgentService {
       backendSessionId: null,
       sdkSessionId: step.sessionId ?? null,
       backendType,
+      usageFeature: getUsageFeatureForStep(step.type),
       currentModel: swapModel ?? step.modelPreference,
       requestedBackendType: requestedBackend,
       swapModel,
@@ -935,7 +960,7 @@ class AgentService {
         if (result.usage || result.cost) {
           aiUsageTrackingService.recordUsageSafe({
             context: {
-              feature: 'agent',
+              feature: session.usageFeature,
               projectId: session.projectId,
               taskId,
               stepId,

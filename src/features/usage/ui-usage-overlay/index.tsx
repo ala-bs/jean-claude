@@ -232,7 +232,12 @@ function Sparkline({
       onPointerLeave={() => setHoverIndex(null)}
       onPointerMove={handlePointerMove}
     >
-      <svg aria-hidden="true" className="h-6 w-20 overflow-visible">
+      <svg
+        aria-hidden="true"
+        className="h-6 w-20 overflow-visible"
+        preserveAspectRatio="none"
+        viewBox="0 0 92 30"
+      >
         <defs>
           <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
             <stop offset="0" stopColor={color} stopOpacity="0.32" />
@@ -246,6 +251,7 @@ function Sparkline({
           stroke={color}
           strokeLinecap="round"
           strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
         />
         {hoverPoint ? (
           <circle cx={hoverX} cy={hoverY} fill={color} r="3" />

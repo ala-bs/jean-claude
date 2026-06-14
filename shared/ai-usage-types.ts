@@ -12,6 +12,7 @@ export type AiUsageFeature =
   | 'verification-note'
   | 'review'
   | 'skill'
+  | 'feature-map'
   | 'other';
 
 export type AiUsagePricingStatus = 'priced' | 'unknown';
