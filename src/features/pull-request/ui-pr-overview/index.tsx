@@ -30,9 +30,11 @@ import {
   usePullRequestPolicyEvaluations,
   usePullRequestWorkItems,
   useRequeuePolicyEvaluation,
+  useSetAutoComplete,
   useUnlinkWorkItemFromPr,
   useUpdatePullRequestDescription,
   useUploadPullRequestAttachment,
+  getAllowedMergeStrategies,
 } from '@/hooks/use-pull-requests';
 import type {
   AzureDevOpsPullRequestDetails,
@@ -256,6 +258,7 @@ export function PrOverview({
   }, [evaluations, queuedIds]);
 
   const requeueMutation = useRequeuePolicyEvaluation(projectId, prId);
+  const autoCompleteMutation = useSetAutoComplete(projectId, prId);
 
   const handleRequeue = useCallback(
     (evaluationId: string) => {
@@ -299,6 +302,44 @@ export function PrOverview({
       }
     },
     [requeueMutation],
+  );
+
+  const ignoredAutoCompletePolicyIds = useMemo(
+    () => new Set(pr.completionOptions?.autoCompleteIgnoreConfigIds ?? []),
+    [pr.completionOptions?.autoCompleteIgnoreConfigIds],
+  );
+
+  const handleIgnoreOptionalPolicy = useCallback(
+    (configId: number) => {
+      if (!pr.autoCompleteSetBy) return;
+
+      autoCompleteMutation.mutate({
+        enabled: true,
+        autoCompleteSetById: pr.autoCompleteSetBy.id,
+        completionOptions: {
+          mergeStrategy:
+            pr.completionOptions?.mergeStrategy ??
+            getAllowedMergeStrategies(evaluations)[0] ??
+            'noFastForward',
+          deleteSourceBranch: pr.completionOptions?.deleteSourceBranch ?? true,
+          transitionWorkItems:
+            pr.completionOptions?.transitionWorkItems ?? false,
+          mergeCommitMessage: pr.completionOptions?.mergeCommitMessage,
+          autoCompleteIgnoreConfigIds: Array.from(
+            new Set([
+              ...(pr.completionOptions?.autoCompleteIgnoreConfigIds ?? []),
+              configId,
+            ]),
+          ),
+        },
+      });
+    },
+    [
+      autoCompleteMutation,
+      evaluations,
+      pr.autoCompleteSetBy,
+      pr.completionOptions,
+    ],
   );
 
   const handleSaveDescription = useCallback(async () => {
@@ -543,6 +584,11 @@ export function PrOverview({
                   )
                 : undefined
             }
+            ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
+            onIgnoreOptionalPolicy={
+              pr.autoCompleteSetBy ? handleIgnoreOptionalPolicy : undefined
+            }
+            isIgnoringOptionalPolicy={autoCompleteMutation.isPending}
           />
 
           {/* Description */}
