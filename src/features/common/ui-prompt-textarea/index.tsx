@@ -41,6 +41,7 @@ import {
 } from '@/hooks/use-project-file-paths';
 import { processAttachmentFile, MAX_FILES } from '@/lib/file-attachment-utils';
 import { formatBytes } from '@/lib/format-bytes';
+import { formatPastedPromptContent } from '@/lib/format-pasted-prompt-content';
 import { processImageFile, MAX_IMAGES } from '@/lib/image-utils';
 import {
   flattenProjectFeatures,
@@ -164,6 +165,39 @@ type MentionToken = {
   end: number;
   query: string;
 };
+
+function getPromptPasteInsertion({
+  value,
+  selectionStart,
+  selectionEnd,
+  pastedText,
+}: {
+  value: string;
+  selectionStart: number;
+  selectionEnd: number;
+  pastedText: string;
+}): string {
+  const formatted = formatPastedPromptContent(pastedText);
+  if (!formatted.startsWith('```') || formatted === pastedText)
+    return formatted;
+
+  const before = value.slice(0, selectionStart);
+  const after = value.slice(selectionEnd);
+  const prefix =
+    before && !before.endsWith('\n\n')
+      ? before.endsWith('\n')
+        ? '\n'
+        : '\n\n'
+      : '';
+  const suffix =
+    after && !after.startsWith('\n\n')
+      ? after.startsWith('\n')
+        ? '\n'
+        : '\n\n'
+      : '';
+
+  return `${prefix}${formatted}${suffix}`;
+}
 
 function getOrderedCharacterMatchScore(value: string, query: string) {
   const normalizedValue = value.toLowerCase();
@@ -883,12 +917,10 @@ export const PromptTextarea = forwardRef<
 
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLTextAreaElement>) => {
-      if (!onImageAttach) return;
-
       const items = Array.from(e.clipboardData.items);
       const imageItems = items.filter((item) => item.type.startsWith('image/'));
 
-      if (imageItems.length > 0) {
+      if (imageItems.length > 0 && onImageAttach) {
         const currentCount = images?.length ?? 0;
         const allowed = MAX_IMAGES - currentCount;
         if (allowed <= 0) return;
@@ -905,10 +937,38 @@ export const PromptTextarea = forwardRef<
             );
           }
         }
+        return;
       }
-      // If no images, default text paste proceeds
+
+      const pastedText = e.clipboardData.getData('text/plain');
+      if (!pastedText) return;
+
+      const target = e.currentTarget;
+      const selectionStart = target.selectionStart;
+      const selectionEnd = target.selectionEnd;
+      const insertion = getPromptPasteInsertion({
+        value,
+        selectionStart,
+        selectionEnd,
+        pastedText,
+      });
+
+      e.preventDefault();
+      const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+      const nextCursorPosition = selectionStart + insertion.length;
+      onChange(nextValue);
+      setCursorPosition(nextCursorPosition);
+      setCompletionCursorPosition(nextCursorPosition);
+      setCompletionTriggerId((id) => id + 1);
+      requestAnimationFrame(() => {
+        textareaRef.current?.setSelectionRange(
+          nextCursorPosition,
+          nextCursorPosition,
+        );
+        adjustHeight();
+      });
     },
-    [onImageAttach, images, showImageError],
+    [onImageAttach, images, showImageError, value, onChange, adjustHeight],
   );
 
   const handleDragOver = useCallback(
