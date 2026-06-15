@@ -33,6 +33,7 @@ describe('CodexBackend', () => {
       model: undefined,
       approvalPolicy: 'on-request',
       sandbox: 'workspace-write',
+      config: { sandbox_workspace_write: { network_access: true } },
       serviceName: 'jean_claude',
     });
   });
@@ -46,6 +47,11 @@ describe('CodexBackend', () => {
 
     expect(client.request).toHaveBeenCalledWith('thread/resume', {
       threadId: 'thread-existing',
+      cwd: '/tmp/project',
+      model: undefined,
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+      config: { sandbox_workspace_write: { network_access: true } },
     });
     expect(client.request).not.toHaveBeenCalledWith(
       'thread/start',
