@@ -46,6 +46,28 @@ export type PromptGroup = {
  */
 export type StreamMessage = PromptGroup | DisplayMessage;
 
+export interface PromptNavigationItem {
+  index: number;
+  text: string;
+}
+
+export interface MessageStreamProcessingCache {
+  entries: NormalizedEntry[];
+  isRunning?: boolean;
+  streamMessages: StreamMessage[];
+  promptIndexMap: Map<number, number>;
+  promptNavigationItems: PromptNavigationItem[];
+  lastPromptGroupIndex: number;
+}
+
+export interface MessageStreamProcessingResult {
+  streamMessages: StreamMessage[];
+  promptIndexMap: Map<number, number>;
+  promptNavigationItems: PromptNavigationItem[];
+  lastPromptGroupIndex: number;
+  cache: MessageStreamProcessingCache;
+}
+
 // --- Helpers ---
 
 function hasPendingToolWork(message: DisplayMessage): boolean {
@@ -477,4 +499,309 @@ export function groupByPrompts(
   finalizeCurrentGroup({ hasNextPrompt: false });
 
   return result;
+}
+
+function isNonEmptyUserPromptEntry(
+  entry: NormalizedEntry | undefined,
+): entry is NormalizedEntry & { type: 'user-prompt' } {
+  return entry?.type === 'user-prompt' && entry.value.trim() !== '';
+}
+
+function findCommonPrefixLength(
+  previous: NormalizedEntry[],
+  next: NormalizedEntry[],
+): number {
+  const max = Math.min(previous.length, next.length);
+  for (let i = 0; i < max; i++) {
+    if (previous[i] !== next[i]) return i;
+  }
+  return max;
+}
+
+function findCheckpointIndex(
+  entries: NormalizedEntry[],
+  changedIndex: number,
+): number {
+  for (let i = Math.min(changedIndex, entries.length - 1); i >= 0; i--) {
+    if (isNonEmptyUserPromptEntry(entries[i])) return i;
+  }
+  return 0;
+}
+
+function findStreamIndexForPrompt(
+  streamMessages: StreamMessage[],
+  promptId: string,
+): number {
+  return streamMessages.findIndex(
+    (message) =>
+      message.kind === 'prompt-group' && message.promptEntry.id === promptId,
+  );
+}
+
+function buildPromptIndexMetadata(streamMessages: StreamMessage[]): {
+  promptIndexMap: Map<number, number>;
+  promptNavigationItems: PromptNavigationItem[];
+  lastPromptGroupIndex: number;
+} {
+  const promptIndexMap = new Map<number, number>();
+  const promptNavigationItems: PromptNavigationItem[] = [];
+  let counter = 0;
+  let lastPromptGroupIndex = -1;
+
+  for (let i = 0; i < streamMessages.length; i++) {
+    const message = streamMessages[i];
+    if (message.kind === 'prompt-group') {
+      const text = message.promptEntry.value.trim();
+      promptIndexMap.set(i, counter);
+      if (text) promptNavigationItems.push({ index: counter, text });
+      counter++;
+      lastPromptGroupIndex = i;
+    } else if (
+      message.kind === 'entry' &&
+      isNonEmptyUserPromptEntry(message.entry)
+    ) {
+      promptIndexMap.set(i, counter);
+      promptNavigationItems.push({
+        index: counter,
+        text: message.entry.value.trim(),
+      });
+      counter++;
+    } else if (message.kind === 'skill') {
+      promptIndexMap.set(i, counter);
+      const skillPrompt =
+        message.promptEntry?.type === 'user-prompt'
+          ? message.promptEntry.value.trim()
+          : '';
+      const text =
+        skillPrompt ||
+        `Use skill ${
+          'skillName' in message.skillToolUse
+            ? message.skillToolUse.skillName
+            : 'unknown'
+        }`;
+      promptNavigationItems.push({ index: counter, text });
+      counter++;
+    }
+  }
+
+  return { promptIndexMap, promptNavigationItems, lastPromptGroupIndex };
+}
+
+function reusePromptNavigationItemsIfEqual(
+  next: PromptNavigationItem[],
+  previous?: PromptNavigationItem[],
+): PromptNavigationItem[] {
+  if (!previous || previous.length !== next.length) return next;
+
+  for (let i = 0; i < next.length; i++) {
+    if (
+      previous[i].index !== next[i].index ||
+      previous[i].text !== next[i].text
+    ) {
+      return next;
+    }
+  }
+
+  return previous;
+}
+
+function buildMessageStream(
+  entries: NormalizedEntry[],
+  isRunning?: boolean,
+): StreamMessage[] {
+  return groupByPrompts(mergeSkillMessages(entries), isRunning);
+}
+
+function areDisplayMessagesEqual(
+  a: DisplayMessage,
+  b: DisplayMessage,
+): boolean {
+  if (a.kind !== b.kind) return false;
+
+  if (a.kind === 'entry' && b.kind === 'entry') {
+    return a.entry === b.entry;
+  }
+
+  if (a.kind === 'skill' && b.kind === 'skill') {
+    return (
+      a.skillToolUse === b.skillToolUse &&
+      a.promptEntry === b.promptEntry &&
+      areEntriesEqual(a.childEntries, b.childEntries)
+    );
+  }
+
+  if (a.kind === 'compacting' && b.kind === 'compacting') {
+    return a.startEntry === b.startEntry && a.endEntry === b.endEntry;
+  }
+
+  if (a.kind === 'subagent' && b.kind === 'subagent') {
+    return (
+      a.toolUse === b.toolUse && areEntriesEqual(a.childEntries, b.childEntries)
+    );
+  }
+
+  return false;
+}
+
+function areEntriesEqual(a: NormalizedEntry[], b: NormalizedEntry[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function areDisplayMessageArraysEqual(
+  a: DisplayMessage[],
+  b: DisplayMessage[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (!areDisplayMessagesEqual(a[i], b[i])) return false;
+  }
+  return true;
+}
+
+function arePromptGroupsEqual(a: PromptGroup, b: PromptGroup): boolean {
+  return (
+    a.promptEntry === b.promptEntry &&
+    a.resultEntry === b.resultEntry &&
+    a.durationMs === b.durationMs &&
+    a.status === b.status &&
+    areDisplayMessageArraysEqual(a.childMessages, b.childMessages)
+  );
+}
+
+function reuseUnchangedStreamMessages(
+  next: StreamMessage[],
+  previous?: StreamMessage[],
+): StreamMessage[] {
+  if (!previous || previous.length === 0) return next;
+
+  const previousPromptGroups = new Map<string, PromptGroup>();
+  for (const message of previous) {
+    if (message.kind === 'prompt-group') {
+      previousPromptGroups.set(message.promptEntry.id, message);
+    }
+  }
+
+  let didReuse = false;
+  const reused = next.map((message, index) => {
+    const previousMessage = previous[index];
+
+    if (message.kind === 'prompt-group') {
+      const previousGroup = previousPromptGroups.get(message.promptEntry.id);
+      if (previousGroup && arePromptGroupsEqual(previousGroup, message)) {
+        didReuse = true;
+        return previousGroup;
+      }
+      return message;
+    }
+
+    if (
+      previousMessage &&
+      previousMessage.kind !== 'prompt-group' &&
+      areDisplayMessagesEqual(previousMessage, message)
+    ) {
+      didReuse = true;
+      return previousMessage;
+    }
+
+    return message;
+  });
+
+  return didReuse ? reused : next;
+}
+
+function hasGlobalMergeDependency(entry: NormalizedEntry): boolean {
+  return (
+    !!entry.parentToolId ||
+    getEditedFilePaths(entry).length > 0 ||
+    entry.type === 'file-edited'
+  );
+}
+
+function shouldRebuildMessageStream(
+  entries: NormalizedEntry[],
+  changedIndex: number,
+): boolean {
+  return entries.slice(changedIndex).some(hasGlobalMergeDependency);
+}
+
+export function processMessageStream(
+  entries: NormalizedEntry[],
+  isRunning?: boolean,
+  previousCache?: MessageStreamProcessingCache,
+): MessageStreamProcessingResult {
+  let streamMessages: StreamMessage[];
+
+  if (
+    entries.length === 0 ||
+    !previousCache ||
+    entries.length < previousCache.entries.length
+  ) {
+    streamMessages = buildMessageStream(entries, isRunning);
+  } else {
+    const commonPrefixLength = findCommonPrefixLength(
+      previousCache.entries,
+      entries,
+    );
+
+    if (
+      commonPrefixLength === entries.length &&
+      previousCache.isRunning === isRunning
+    ) {
+      return { ...previousCache, cache: previousCache };
+    }
+
+    if (shouldRebuildMessageStream(entries, commonPrefixLength)) {
+      streamMessages = buildMessageStream(entries, isRunning);
+    } else {
+      const checkpointIndex = findCheckpointIndex(entries, commonPrefixLength);
+      const checkpointEntry = entries[checkpointIndex];
+      const checkpointStreamIndex = isNonEmptyUserPromptEntry(checkpointEntry)
+        ? findStreamIndexForPrompt(
+            previousCache.streamMessages,
+            checkpointEntry.id,
+          )
+        : -1;
+
+      if (checkpointStreamIndex >= 0) {
+        streamMessages = [
+          ...previousCache.streamMessages.slice(0, checkpointStreamIndex),
+          ...buildMessageStream(entries.slice(checkpointIndex), isRunning),
+        ];
+      } else {
+        streamMessages = buildMessageStream(entries, isRunning);
+      }
+    }
+  }
+
+  streamMessages = reuseUnchangedStreamMessages(
+    streamMessages,
+    previousCache?.streamMessages,
+  );
+
+  const { promptIndexMap, lastPromptGroupIndex, promptNavigationItems } =
+    buildPromptIndexMetadata(streamMessages);
+  const stablePromptNavigationItems = reusePromptNavigationItemsIfEqual(
+    promptNavigationItems,
+    previousCache?.promptNavigationItems,
+  );
+  const cache: MessageStreamProcessingCache = {
+    entries,
+    isRunning,
+    streamMessages,
+    promptIndexMap,
+    promptNavigationItems: stablePromptNavigationItems,
+    lastPromptGroupIndex,
+  };
+
+  return {
+    streamMessages,
+    promptIndexMap,
+    promptNavigationItems: stablePromptNavigationItems,
+    lastPromptGroupIndex,
+    cache,
+  };
 }

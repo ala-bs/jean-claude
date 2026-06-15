@@ -1,10 +1,10 @@
 import type { RefObject } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { TaskTodoDropdown } from '@/features/task/ui-task-todo-dropdown';
 
-import type { StreamMessage } from '../message-merger';
+import type { PromptNavigationItem } from '../message-merger';
 import { usePromptNavigation } from '../use-prompt-navigation';
 
 function ChipTooltip({
@@ -42,14 +42,14 @@ function ChipTooltip({
   );
 }
 
-function PromptChip({
+const PromptChip = memo(function PromptChip({
   prompt,
   isCompleted,
   isCurrent,
   isFuture,
   onNavigate,
 }: {
-  prompt: { index: number; text: string };
+  prompt: PromptNavigationItem;
   isCompleted: boolean;
   isCurrent: boolean;
   isFuture: boolean;
@@ -81,62 +81,19 @@ function PromptChip({
       {hovered && <ChipTooltip text={prompt.text} triggerRef={buttonRef} />}
     </div>
   );
-}
+});
 
-export function PromptSidebar({
+export const PromptSidebar = memo(function PromptSidebar({
   scrollContainerRef,
-  streamMessages,
+  prompts,
   taskId,
   bottomPadding = 0,
 }: {
   scrollContainerRef: RefObject<HTMLDivElement | null>;
-  streamMessages: StreamMessage[];
+  prompts: PromptNavigationItem[];
   taskId?: string;
   bottomPadding?: number;
 }) {
-  const prompts = useMemo(() => {
-    const items: Array<{ index: number; text: string }> = [];
-    let promptIndex = 0;
-
-    for (const message of streamMessages) {
-      // Prompt groups are the primary prompt source
-      if (message.kind === 'prompt-group') {
-        const text = message.promptEntry.value.trim();
-        if (!text) continue;
-        items.push({ index: promptIndex, text });
-        promptIndex++;
-        continue;
-      }
-
-      // Standalone prompts (before first group)
-      if (message.kind === 'entry' && message.entry.type === 'user-prompt') {
-        const text = message.entry.value.trim();
-        if (!text) continue;
-        items.push({ index: promptIndex, text });
-        promptIndex++;
-        continue;
-      }
-
-      if (message.kind === 'skill') {
-        const skillPrompt =
-          message.promptEntry?.type === 'user-prompt'
-            ? message.promptEntry.value.trim()
-            : '';
-        const text =
-          skillPrompt ||
-          `Use skill ${
-            'skillName' in message.skillToolUse
-              ? message.skillToolUse.skillName
-              : 'unknown'
-          }`;
-        items.push({ index: promptIndex, text });
-        promptIndex++;
-      }
-    }
-
-    return items;
-  }, [streamMessages]);
-
   const totalPrompts = prompts.length;
 
   const { currentIndex, goToPrompt } = usePromptNavigation({
@@ -144,8 +101,10 @@ export function PromptSidebar({
     totalPrompts,
   });
 
-  const handleNavigate = (index: number) =>
-    goToPrompt(index, { behavior: 'instant' });
+  const handleNavigate = useCallback(
+    (index: number) => goToPrompt(index, { behavior: 'instant' }),
+    [goToPrompt],
+  );
 
   // Auto-scroll the sidebar to keep the current prompt chip visible
   const chipRefs = useRef<Map<number, HTMLElement>>(new Map());
@@ -213,4 +172,4 @@ export function PromptSidebar({
       </div>
     </div>
   );
-}
+});

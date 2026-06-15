@@ -1,5 +1,5 @@
 import { Wand2, ChevronDown, ChevronRight } from 'lucide-react';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 
 import type {
   NormalizedEntry,
@@ -13,7 +13,7 @@ import { MarkdownContent } from '../../ui-markdown-content';
  * Displays a merged skill launch + prompt as a single expandable entry.
  * Shows skill name with an expand button to reveal the full skill documentation.
  */
-export function SkillEntry({
+export const SkillEntry = memo(function SkillEntry({
   skillToolUse,
   promptEntry,
   onFilePathClick,
@@ -72,4 +72,4 @@ export function SkillEntry({
       )}
     </div>
   );
-}
+});

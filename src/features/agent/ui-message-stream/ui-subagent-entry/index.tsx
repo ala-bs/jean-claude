@@ -1,6 +1,6 @@
 import { Bot, Check, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import type { MouseEvent } from 'react';
-import { useState, useMemo } from 'react';
+import { memo, useState, useMemo } from 'react';
 
 import { formatModelName } from '@/hooks/use-model';
 import type {
@@ -34,7 +34,7 @@ function filterDisplayEntries(entries: NormalizedEntry[]): NormalizedEntry[] {
  * Shows task description + last activity when collapsed,
  * full nested message timeline when expanded.
  */
-export function SubagentEntry({
+export const SubagentEntry = memo(function SubagentEntry({
   toolUse,
   childEntries,
   onFilePathClick,
@@ -241,4 +241,4 @@ export function SubagentEntry({
       )}
     </div>
   );
-}
+});

@@ -1,12 +1,5 @@
 import type { MouseEvent } from 'react';
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-} from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 
 import type {
   AgentQuestion,
@@ -25,8 +18,11 @@ import type { InteractionMode } from '@shared/types';
 import { PermissionBar } from '../ui-permission-bar';
 import { QuestionOptions } from '../ui-question-options';
 
-import { groupByPrompts, mergeSkillMessages } from './message-merger';
-import type { StreamMessage } from './message-merger';
+import { processMessageStream } from './message-merger';
+import type {
+  MessageStreamProcessingCache,
+  StreamMessage,
+} from './message-merger';
 import {
   addBashToPermissionsItem,
   copyToClipboardItem,
@@ -131,44 +127,27 @@ export const MessageStream = memo(function MessageStream({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const processingCacheRef = useRef<MessageStreamProcessingCache>(undefined);
+  const processingCacheKeyRef = useRef<string>(undefined);
 
-  // Merge skill messages, then group by prompts
-  const displayMessages = useMemo(
-    () => mergeSkillMessages(messages),
-    [messages],
+  const processingCacheKey = `${taskId ?? ''}:${stepId ?? ''}`;
+  if (processingCacheKeyRef.current !== processingCacheKey) {
+    processingCacheRef.current = undefined;
+    processingCacheKeyRef.current = processingCacheKey;
+  }
+
+  const processedStream = processMessageStream(
+    messages,
+    isRunning,
+    processingCacheRef.current,
   );
-
-  const streamMessages = useMemo(
-    () => groupByPrompts(displayMessages, isRunning),
-    [displayMessages, isRunning],
-  );
-
-  // Prompt index map for data-prompt-index attributes (used by navigator's scroll tracking)
-  // Now computed from streamMessages — prompt groups count as prompts
-  // Also track the last prompt group index so we can auto-collapse previous ones
-  const { promptIndexMap, lastPromptGroupIndex } = useMemo(() => {
-    const map = new Map<number, number>();
-    let counter = 0;
-    let lastPgIdx = -1;
-    for (let i = 0; i < streamMessages.length; i++) {
-      const sm = streamMessages[i];
-      if (sm.kind === 'prompt-group') {
-        map.set(i, counter);
-        counter++;
-        lastPgIdx = i;
-      } else if (
-        (sm.kind === 'entry' &&
-          sm.entry.type === 'user-prompt' &&
-          sm.entry.value.trim() !== '') ||
-        sm.kind === 'skill'
-      ) {
-        // Standalone prompts (before first group) — unlikely but handle gracefully
-        map.set(i, counter);
-        counter++;
-      }
-    }
-    return { promptIndexMap: map, lastPromptGroupIndex: lastPgIdx };
-  }, [streamMessages]);
+  processingCacheRef.current = processedStream.cache;
+  const {
+    streamMessages,
+    promptIndexMap,
+    promptNavigationItems,
+    lastPromptGroupIndex,
+  } = processedStream;
 
   // Check if scroll position is near bottom
   const checkIfNearBottom = useCallback(() => {
@@ -336,7 +315,7 @@ export const MessageStream = memo(function MessageStream({
     <div className="flex h-full min-h-0">
       <PromptSidebar
         scrollContainerRef={scrollContainerRef}
-        streamMessages={streamMessages}
+        prompts={promptNavigationItems}
         taskId={taskId}
         bottomPadding={bottomPadding}
       />
