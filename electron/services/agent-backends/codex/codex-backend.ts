@@ -501,6 +501,7 @@ function updateItemTracking(
   const item = record(params?.item);
   const itemId = stringOrNull(item?.id) ?? stringOrNull(params?.itemId);
   if (itemId === null) return;
+  if (isSpeculativeAgentCommandExecution(item)) return;
 
   session.sawTurnActivity = true;
   if (notification.method === 'item/started') {
@@ -548,6 +549,18 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function isSpeculativeAgentCommandExecution(
+  item: Record<string, unknown> | undefined,
+): boolean {
+  return (
+    item !== undefined &&
+    stringOrNull(item.type) === 'commandExecution' &&
+    stringOrNull(item.source) === 'agent' &&
+    stringOrNull(item.status) === 'inProgress' &&
+    item.processId == null
+  );
 }
 
 function errorMessage(error: unknown): string {

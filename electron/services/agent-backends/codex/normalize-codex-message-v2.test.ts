@@ -238,6 +238,29 @@ describe('normalizeCodexNotification', () => {
     ]);
   });
 
+  it('ignores speculative Codex agent commandExecution items', () => {
+    const ctx = createCodexNormalizationContext();
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/started',
+          params: {
+            item: {
+              id: 'cmd-speculative',
+              type: 'commandExecution',
+              command: 'pnpm install',
+              processId: null,
+              source: 'agent',
+              status: 'inProgress',
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([]);
+  });
+
   it('attaches aggregated output for Codex commandExecution completion', () => {
     const ctx = createCodexNormalizationContext();
 
