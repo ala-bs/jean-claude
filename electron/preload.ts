@@ -517,6 +517,7 @@ contextBridge.exposeInMainWorld('api', {
         deleteSourceBranch: boolean;
         transitionWorkItems: boolean;
         mergeCommitMessage?: string;
+        autoCompleteIgnoreConfigIds?: number[];
       };
     }) => ipcRenderer.invoke('azureDevOps:setPullRequestAutoComplete', params),
     publishPullRequest: (params: {
@@ -657,6 +658,8 @@ contextBridge.exposeInMainWorld('api', {
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) =>
       ipcRenderer.invoke('shell:openInEditor', dirPath, folderContext),
+    openTeamsJoinUrl: (url: string) =>
+      ipcRenderer.invoke('shell:openTeamsJoinUrl', url),
     getAvailableEditors: () => ipcRenderer.invoke('shell:getAvailableEditors'),
     setupGlobalGitignore: () =>
       ipcRenderer.invoke('shell:setupGlobalGitignore') as Promise<{
@@ -676,6 +679,13 @@ contextBridge.exposeInMainWorld('api', {
     revealMeeting: (
       meeting: import('@shared/calendar-types').UpcomingMeeting,
     ) => ipcRenderer.invoke('calendar:revealMeeting', meeting) as Promise<void>,
+    suppressMeetingStartPopup: (
+      meeting: import('@shared/calendar-types').UpcomingMeeting,
+    ) =>
+      ipcRenderer.invoke(
+        'calendar:suppressMeetingStartPopup',
+        meeting,
+      ) as Promise<void>,
     setIgnoredMeetingIds: (ids: string[]) =>
       ipcRenderer.invoke('calendar:setIgnoredMeetingIds', ids) as Promise<void>,
   },
@@ -744,6 +754,26 @@ contextBridge.exposeInMainWorld('api', {
       since: string;
       until?: string;
     }) => ipcRenderer.invoke('agent:usage:getHistory', params),
+    getDashboard: (params: { since: string; until?: string }) =>
+      ipcRenderer.invoke('agent:usage:getDashboard', params),
+    getTaskUsage: (taskId: string) =>
+      ipcRenderer.invoke('agent:usage:getTaskUsage', taskId),
+  },
+  rateLimitSwap: {
+    getStatus: () =>
+      ipcRenderer.invoke('rate-limit-swap:status') as Promise<{
+        active: boolean;
+        swaps: Array<{ from: string; to: string }>;
+      }>,
+    resolve: (
+      backend: import('@shared/agent-backend-types').AgentBackendType,
+    ) =>
+      ipcRenderer.invoke('rate-limit-swap:resolve', backend) as Promise<{
+        backend: import('@shared/agent-backend-types').AgentBackendType;
+        model?: string;
+        thinkingEffort?: import('@shared/types').ThinkingEffort;
+        swapped: boolean;
+      }>,
   },
   usageDisplay: {
     saveSettings: (value: import('@shared/types').UsageDisplaySetting) =>
@@ -1234,6 +1264,13 @@ contextBridge.exposeInMainWorld('api', {
   codeFolding: {
     getFoldRanges: (content: string, language: string) =>
       ipcRenderer.invoke('codeFolding:getFoldRanges', content, language),
+  },
+  onRateLimitSwap: (callback: (data: { from: string; to: string }) => void) => {
+    const handler = (_: unknown, data: { from: string; to: string }) =>
+      callback(data);
+    ipcRenderer.on('rate-limit-swap:triggered', handler);
+    return () =>
+      ipcRenderer.removeListener('rate-limit-swap:triggered', handler);
   },
 });
 console.log('Preload script loaded');

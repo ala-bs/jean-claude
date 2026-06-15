@@ -104,6 +104,7 @@ export const BACKEND_INTERACTION_MODE_OPTIONS: Record<
 > = {
   'claude-code': CLAUDE_CODE_INTERACTION_MODE_OPTIONS,
   opencode: OPENCODE_INTERACTION_MODE_OPTIONS,
+  codex: OPENCODE_INTERACTION_MODE_OPTIONS,
 };
 
 export function getInteractionModeOptions({
@@ -153,6 +154,7 @@ export function normalizeInteractionModeForBackend({
 export type ModelPreference = 'default' | (string & {});
 export type ThinkingEffort =
   | 'default'
+  | 'minimal'
   | 'none'
   | 'low'
   | 'medium'
@@ -662,8 +664,26 @@ export interface BackendDefaultModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
+export interface RateLimitSwapEntry {
+  backend: AgentBackendType;
+  model?: ModelPreference;
+  thinkingEffort?: ThinkingEffort;
+  presetId?: string | null;
+  threshold?: number; // 0-1, omit on last entry (absolute fallback)
+}
+
+export interface RateLimitSwapSetting {
+  enabled: boolean;
+  chain: RateLimitSwapEntry[];
+}
+
 export interface EditorAutomationSetting {
   closeWindowsOnTaskCompletion: boolean;
+}
+
+export interface RawMessageCleanupSetting {
+  enabled: boolean;
+  retentionHours: number;
 }
 
 export interface ThinkingSettingsSetting {
@@ -707,6 +727,7 @@ export interface CalendarNotificationsSetting {
   enabled: boolean;
   leadTimeMinutes: number;
   showStartWindow: boolean;
+  meetingJoinTarget: import('./teams-url').TeamsMeetingJoinTarget;
 }
 
 export const DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES = 5;
@@ -769,7 +790,7 @@ function isEditorSetting(v: unknown): v is EditorSetting {
   return false;
 }
 
-const VALID_BACKENDS: AgentBackendType[] = ['claude-code', 'opencode'];
+const VALID_BACKENDS: AgentBackendType[] = ['claude-code', 'opencode', 'codex'];
 
 function isCompletionSetting(v: unknown): v is CompletionSetting {
   if (!v || typeof v !== 'object') return false;
@@ -864,14 +885,53 @@ function isBackendDefaultModelsSetting(
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
 }
 
+function isRateLimitSwapSetting(value: unknown): value is RateLimitSwapSetting {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.enabled !== 'boolean' || !Array.isArray(v.chain)) return false;
+
+  return v.chain.every((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const obj = entry as Record<string, unknown>;
+    return (
+      typeof obj.backend === 'string' &&
+      VALID_BACKENDS.includes(obj.backend as AgentBackendType) &&
+      (obj.model === undefined || typeof obj.model === 'string') &&
+      (obj.thinkingEffort === undefined ||
+        VALID_THINKING_EFFORTS.includes(
+          obj.thinkingEffort as ThinkingEffort,
+        )) &&
+      (obj.presetId === undefined ||
+        obj.presetId === null ||
+        typeof obj.presetId === 'string') &&
+      (obj.threshold === undefined ||
+        (typeof obj.threshold === 'number' &&
+          obj.threshold >= 0 &&
+          obj.threshold <= 1))
+    );
+  });
+}
+
 function isEditorAutomationSetting(v: unknown): v is EditorAutomationSetting {
   if (!v || typeof v !== 'object') return false;
   const obj = v as Record<string, unknown>;
   return typeof obj.closeWindowsOnTaskCompletion === 'boolean';
 }
 
+function isRawMessageCleanupSetting(v: unknown): v is RawMessageCleanupSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return (
+    typeof obj.enabled === 'boolean' &&
+    typeof obj.retentionHours === 'number' &&
+    Number.isFinite(obj.retentionHours) &&
+    obj.retentionHours >= 1
+  );
+}
+
 const VALID_THINKING_EFFORTS: ThinkingEffort[] = [
   'default',
+  'minimal',
   'none',
   'low',
   'medium',
@@ -965,6 +1025,7 @@ function isCalendarNotificationsSetting(
   return (
     typeof obj.enabled === 'boolean' &&
     typeof obj.showStartWindow === 'boolean' &&
+    (obj.meetingJoinTarget === 'web' || obj.meetingJoinTarget === 'app') &&
     typeof obj.leadTimeMinutes === 'number' &&
     Number.isInteger(obj.leadTimeMinutes) &&
     obj.leadTimeMinutes >= 1 &&
@@ -1106,6 +1167,7 @@ export const SETTINGS_DEFINITIONS = {
       models: {
         'claude-code': 'haiku',
         opencode: 'default',
+        codex: 'default',
       },
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
@@ -1115,9 +1177,17 @@ export const SETTINGS_DEFINITIONS = {
       models: {
         'claude-code': 'default',
         opencode: 'default',
+        codex: 'default',
       },
     } as BackendDefaultModelsSetting,
     validate: isBackendDefaultModelsSetting,
+  },
+  rateLimitSwap: {
+    defaultValue: {
+      enabled: false,
+      chain: [],
+    } as RateLimitSwapSetting,
+    validate: isRateLimitSwapSetting,
   },
   editorAutomation: {
     defaultValue: {
@@ -1125,15 +1195,24 @@ export const SETTINGS_DEFINITIONS = {
     } as EditorAutomationSetting,
     validate: isEditorAutomationSetting,
   },
+  rawMessageCleanup: {
+    defaultValue: {
+      enabled: true,
+      retentionHours: 24,
+    } as RawMessageCleanupSetting,
+    validate: isRawMessageCleanupSetting,
+  },
   thinkingSettings: {
     defaultValue: {
       efforts: {
         'claude-code': { default: 'default' },
         opencode: { default: 'default' },
+        codex: { default: 'default' },
       },
       selectedModels: {
         'claude-code': 'default',
         opencode: 'default',
+        codex: 'default',
       },
     } as ThinkingSettingsSetting,
     validate: isThinkingSettingsSetting,
@@ -1153,6 +1232,7 @@ export const SETTINGS_DEFINITIONS = {
       enabled: false,
       leadTimeMinutes: DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
       showStartWindow: false,
+      meetingJoinTarget: 'web',
     } as CalendarNotificationsSetting,
     validate: isCalendarNotificationsSetting,
   },

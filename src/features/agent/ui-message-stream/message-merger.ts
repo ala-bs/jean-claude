@@ -106,6 +106,38 @@ function isSyntheticUserPrompt(entry: NormalizedEntry): boolean {
   return entry.isSynthetic === true && entry.type === 'user-prompt';
 }
 
+function isSDKSyntheticUserPrompt(entry: NormalizedEntry): boolean {
+  return entry.type === 'user-prompt' && entry.isSDKSynthetic === true;
+}
+
+function hasDuplicateUserPrompt(
+  entries: NormalizedEntry[],
+  startIndex: number,
+): boolean {
+  const current = entries[startIndex];
+  if (current.type !== 'user-prompt') return false;
+
+  const currentValue = current.value.trim();
+  if (!currentValue) return false;
+
+  for (let i = startIndex + 1; i < entries.length; i++) {
+    const entry = entries[i];
+    if (isSDKSyntheticUserPrompt(entry) || entry.type === 'result') {
+      return false;
+    }
+
+    if (
+      entry.type === 'user-prompt' &&
+      !isSDKSyntheticUserPrompt(entry) &&
+      entry.value.trim() === currentValue
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function pathsMatch(a: string, b: string): boolean {
   if (!a || !b) return false;
   if (a === b) return true;
@@ -216,6 +248,14 @@ export function mergeSkillMessages(
 
     const current = entries[i];
     if (hasToolEditForFile(current, editedFilePaths)) {
+      processedIndices.add(i);
+      continue;
+    }
+
+    if (
+      isSDKSyntheticUserPrompt(current) &&
+      hasDuplicateUserPrompt(entries, i)
+    ) {
       processedIndices.add(i);
       continue;
     }

@@ -1,6 +1,7 @@
 import clsx from 'clsx';
-import { MapPin, Repeat, Video } from 'lucide-react';
+import { MapPin, Repeat, User, Video } from 'lucide-react';
 
+import { OrganizerTooltip } from '@/features/calendar/ui-organizer-tooltip';
 import {
   extractTeamsUrl,
   formatTimeRange,
@@ -164,6 +165,14 @@ export function MeetingListItem({
             <span className="flex items-center gap-1">
               <Video className="h-2.5 w-2.5" /> Teams
             </span>
+          )}
+          {meeting.organizer && (
+            <OrganizerTooltip meeting={meeting}>
+              <span className="flex max-w-[130px] items-center gap-1 truncate">
+                <User className="h-2.5 w-2.5 shrink-0" />
+                {meeting.organizer}
+              </span>
+            </OrganizerTooltip>
           )}
           {!teamsUrl && meeting.location && (
             <span className="flex max-w-[130px] items-center gap-1 truncate">

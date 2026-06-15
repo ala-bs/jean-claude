@@ -40,6 +40,7 @@ import {
   useProjectFilePaths,
 } from '@/hooks/use-project-file-paths';
 import { processAttachmentFile, MAX_FILES } from '@/lib/file-attachment-utils';
+import { formatBytes } from '@/lib/format-bytes';
 import { processImageFile, MAX_IMAGES } from '@/lib/image-utils';
 import {
   flattenProjectFeatures,
@@ -240,6 +241,8 @@ export interface PromptTextareaProps extends Omit<
   snippetVariableContext?: SnippetVariableContext;
   /** Classes for the droppable composer container */
   containerClassName?: string;
+  /** Called when slash, file, or feature autocomplete opens/closes. */
+  onAutocompleteOpenChange?: (isOpen: boolean) => void;
   /** Expand textarea height to fill the available cross-axis space. */
   fillAvailableHeight?: boolean;
 }
@@ -270,6 +273,7 @@ export const PromptTextarea = forwardRef<
     promptSnippets = [],
     snippetVariableContext,
     containerClassName,
+    onAutocompleteOpenChange,
     fillAvailableHeight = false,
     className,
     style,
@@ -329,6 +333,26 @@ export const PromptTextarea = forwardRef<
     !dropdownDismissed;
   const showDropdown =
     showMentionDropdown || showFeatureDropdown || showSlashDropdown;
+
+  useEffect(() => {
+    onAutocompleteOpenChange?.(showDropdown);
+  }, [onAutocompleteOpenChange, showDropdown]);
+
+  useEffect(() => {
+    if (!showDropdown) return;
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setDropdownDismissed(true);
+    };
+
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [showDropdown]);
+
   const dropdownPosition = useDropdownPosition({
     isOpen: showDropdown,
     triggerRef: containerRef,
@@ -1533,13 +1557,19 @@ function ImageThumbnails({
             <button
               type="button"
               onClick={() => setPreviewIndex(index)}
-              className="border-glass-border hover:border-glass-border-strong block cursor-pointer overflow-hidden rounded border"
+              className="border-glass-border hover:border-glass-border-strong relative block cursor-pointer overflow-hidden rounded border"
+              title={img.sizeBytes ? formatBytes(img.sizeBytes) : undefined}
             >
               <img
                 src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                 alt={img.filename || 'Attached image'}
                 className="h-16 w-16 object-cover"
               />
+              {img.sizeBytes && (
+                <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
+                  {formatBytes(img.sizeBytes)}
+                </span>
+              )}
             </button>
             <button
               type="button"

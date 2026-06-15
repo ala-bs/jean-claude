@@ -11,6 +11,11 @@ import type {
 } from '@shared/agent-types';
 import type { AgentUIEvent } from '@shared/agent-ui-events';
 import type {
+  AiUsageDashboard,
+  AiUsageDashboardParams,
+  AiUsageTaskUsage,
+} from '@shared/ai-usage-types';
+import type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
   AzureDevOpsCommit,
@@ -864,6 +869,7 @@ export interface Api {
         deleteSourceBranch: boolean;
         transitionWorkItems: boolean;
         mergeCommitMessage?: string;
+        autoCompleteIgnoreConfigIds?: number[];
       };
     }) => Promise<AzureDevOpsPullRequestDetails>;
     publishPullRequest: (params: {
@@ -987,6 +993,7 @@ export interface Api {
   };
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) => Promise<void>;
+    openTeamsJoinUrl: (url: string) => Promise<void>;
     getAvailableEditors: () => Promise<{ id: string; available: boolean }[]>;
     setupGlobalGitignore: () => Promise<{ success: boolean; path: string }>;
   };
@@ -994,6 +1001,7 @@ export interface Api {
     listUpcomingMeetings: () => Promise<UpcomingMeeting[]>;
     listTodayMeetings: () => Promise<UpcomingMeeting[]>;
     revealMeeting: (meeting: UpcomingMeeting) => Promise<void>;
+    suppressMeetingStartPopup: (meeting: UpcomingMeeting) => Promise<void>;
     setIgnoredMeetingIds: (ids: string[]) => Promise<void>;
   };
   agent: {
@@ -1015,10 +1023,11 @@ export interface Api {
       content: string,
     ) => Promise<void>;
     cancelQueuedPrompt: (stepId: string, promptId: string) => Promise<void>;
-    getBackendModels: (backend: string) => Promise<
+    getBackendModels: (backend: AgentBackendType) => Promise<
       {
         id: string;
         label: string;
+        contextWindow?: number;
         supportsThinking?: boolean;
         thinkingEfforts?: ThinkingEffort[];
       }[]
@@ -1063,6 +1072,20 @@ export interface Api {
       since: string;
       until?: string;
     }) => Promise<UsageSnapshot[]>;
+    getDashboard: (params: AiUsageDashboardParams) => Promise<AiUsageDashboard>;
+    getTaskUsage: (taskId: string) => Promise<AiUsageTaskUsage>;
+  };
+  rateLimitSwap: {
+    getStatus: () => Promise<{
+      active: boolean;
+      swaps: Array<{ from: string; to: string }>;
+    }>;
+    resolve: (backend: AgentBackendType) => Promise<{
+      backend: AgentBackendType;
+      model?: string;
+      thinkingEffort?: ThinkingEffort;
+      swapped: boolean;
+    }>;
   };
   usageDisplay: {
     saveSettings: (
@@ -1482,6 +1505,9 @@ export interface Api {
   codeFolding: {
     getFoldRanges: (content: string, language: string) => Promise<FoldRange[]>;
   };
+  onRateLimitSwap: (
+    callback: (data: { from: string; to: string }) => void,
+  ) => UnsubscribeFn;
 }
 
 export type ReloadPreviewProgress = {
@@ -1842,6 +1868,7 @@ export const api: Api = hasWindowApi
       },
       shell: {
         openInEditor: async () => {},
+        openTeamsJoinUrl: async () => {},
         getAvailableEditors: async () => [],
         setupGlobalGitignore: async () => ({ success: true, path: '' }),
       },
@@ -1849,6 +1876,7 @@ export const api: Api = hasWindowApi
         listUpcomingMeetings: async () => [],
         listTodayMeetings: async () => [],
         revealMeeting: async () => {},
+        suppressMeetingStartPopup: async () => {},
         setIgnoredMeetingIds: async () => {},
       },
       agent: {
@@ -1896,6 +1924,44 @@ export const api: Api = hasWindowApi
       usage: {
         getAll: async () => ({}),
         getHistory: async () => [],
+        getDashboard: async () => ({
+          totals: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            totalTokens: 0,
+            estimatedCostUsd: 0,
+            providerCostUsd: 0,
+            providerApiCostUsd: 0,
+            requests: 0,
+            taskCount: 0,
+          },
+          byDay: [],
+          byFeature: [],
+          byModel: [],
+          topTasks: [],
+          unknownPricing: [],
+        }),
+        getTaskUsage: async () => ({
+          events: [],
+          totals: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            totalTokens: 0,
+            estimatedCostUsd: 0,
+            providerCostUsd: 0,
+            providerApiCostUsd: 0,
+            requests: 0,
+            taskCount: 0,
+          },
+        }),
+      },
+      rateLimitSwap: {
+        getStatus: async () => ({ active: false, swaps: [] }),
+        resolve: async (backend) => ({ backend, swapped: false }),
       },
       usageDisplay: {
         saveSettings: async (value) => value,
@@ -2252,4 +2318,5 @@ export const api: Api = hasWindowApi
       codeFolding: {
         getFoldRanges: async () => [],
       },
+      onRateLimitSwap: () => () => {},
     } as Api);

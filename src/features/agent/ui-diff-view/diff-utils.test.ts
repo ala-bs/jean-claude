@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseUnifiedPatchToStrings } from './diff-utils';
+import {
+  countUnifiedPatchStats,
+  parseUnifiedPatchToStrings,
+} from './diff-utils';
 
 describe('parseUnifiedPatchToStrings', () => {
   it('parses opencode Index-style deletion patches', () => {
@@ -173,6 +176,54 @@ Index: /tmp/example.ts
       oldString: '',
       newString:
         '      parseUnifiedPatchToStrings(`Index: /tmp/example.md\n--- /tmp/example.md\n+++ /tmp/example.md\n@@ -0,0 +1,1 @@\n+new`),',
+    });
+  });
+
+  it('parses Codex-style hunks without trailing at signs', () => {
+    expect(parseUnifiedPatchToStrings('@@ -1 +1\n-old\n+new')).toEqual({
+      oldString: 'old',
+      newString: 'new',
+    });
+  });
+});
+
+describe('countUnifiedPatchStats', () => {
+  it('counts additions and deletions from standard git patches', () => {
+    expect(
+      countUnifiedPatchStats(`diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -1,3 +1,4 @@
+ const a = 1;
+-const b = 2;
++const b = 3;
++const c = 4;`),
+    ).toEqual({ additions: 2, deletions: 1 });
+  });
+
+  it('counts opencode separator-joined patch blocks', () => {
+    expect(
+      countUnifiedPatchStats(`Index: /tmp/example.ts
+--- /tmp/example.ts
++++ /tmp/example.ts
+@@ -1 +0,0 @@
+-old
+
+⋯
+
+Index: /tmp/example.ts
+--- /tmp/example.ts
++++ /tmp/example.ts
+@@ -0,0 +1,2 @@
++new
++next`),
+    ).toEqual({ additions: 2, deletions: 1 });
+  });
+
+  it('counts Codex-style hunks without trailing at signs', () => {
+    expect(countUnifiedPatchStats('@@ -1 +1\n-old\n+new')).toEqual({
+      additions: 1,
+      deletions: 1,
     });
   });
 });

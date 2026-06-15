@@ -21,8 +21,9 @@ import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import {
   isVideoFile,
   VideoGifConverter,
-} from '@/features/pull-request/ui-video-gif-converter';
+} from '@/features/common/ui-video-gif-converter';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { formatBytes } from '@/lib/format-bytes';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import { formatLineRangeLabel } from '@/stores/utils-comment-store';
 import type { PromptImagePart } from '@shared/agent-backend-types';
@@ -98,6 +99,7 @@ export function InlineCommentComposer({
   mentionOptions = EMPTY_MENTION_OPTIONS,
   onSearchMentions,
   onBodyChange,
+  onEmptyChange,
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -132,6 +134,8 @@ export function InlineCommentComposer({
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   /** Called when the draft body text changes (for external persistence). */
   onBodyChange?: (body: string) => void;
+  /** Called when body + attachments become empty/non-empty. */
+  onEmptyChange?: (isEmpty: boolean) => void;
 }) {
   const [body, setBodyRaw] = useState(initialBody);
 
@@ -309,6 +313,10 @@ export function InlineCommentComposer({
 
   const isDisabled =
     isSubmitting || (!body.trim() && images.length === 0 && !canSubmitEmpty);
+  useEffect(() => {
+    onEmptyChange?.(!body.trim() && images.length === 0);
+  }, [body, images.length, onEmptyChange]);
+
   const debouncedPreviewBody = useDebouncedValue(body, 300);
   const previewMarkdown = useMemo(
     () => markdownWithLocalImages(debouncedPreviewBody, images),
@@ -366,8 +374,14 @@ export function InlineCommentComposer({
               <img
                 src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                 alt={img.filename || 'Attached image'}
+                title={img.sizeBytes ? formatBytes(img.sizeBytes) : undefined}
                 className="h-8 w-8 rounded border border-glass-border object-cover"
               />
+              {img.sizeBytes && (
+                <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                  {formatBytes(img.sizeBytes)}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => handleImageRemove(index)}
@@ -751,12 +765,24 @@ export function InlineCommentBubble({
             {currentImages.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {currentImages.map((img, index) => (
-                  <img
+                  <div
                     key={`${img.filename ?? 'img'}-${index}`}
-                    src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
-                    alt={img.filename || 'Attached image'}
-                    className="h-8 w-8 rounded border border-glass-border object-cover"
-                  />
+                    className="relative"
+                  >
+                    <img
+                      src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
+                      alt={img.filename || 'Attached image'}
+                      title={
+                        img.sizeBytes ? formatBytes(img.sizeBytes) : undefined
+                      }
+                      className="h-8 w-8 rounded border border-glass-border object-cover"
+                    />
+                    {img.sizeBytes && (
+                      <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                        {formatBytes(img.sizeBytes)}
+                      </span>
+                    )}
+                  </div>
                 ))}
               </div>
             )}

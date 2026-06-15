@@ -184,6 +184,10 @@ interface OpenCodeSessionState {
   totalApiCost: number;
   /** Accumulated token usage */
   totalUsage?: TokenUsage;
+  /** Latest parent-session assistant token usage for context display */
+  contextUsage?: TokenUsage;
+  /** Single model used by accumulated assistant usage, when known. */
+  totalModel?: string;
   /** V2 normalization context */
   normalizationCtx: OpenCodeNormalizationContext;
   /** Current message index for raw persistence ordering */
@@ -303,6 +307,7 @@ export class OpenCodeBackend implements AgentBackend {
       totalCost: 0,
       totalApiCost: 0,
       totalUsage: undefined,
+      contextUsage: undefined,
       normalizationCtx: {
         emittedEntryIds: new Set(),
         rawMessages: new Map(),
@@ -942,6 +947,7 @@ export class OpenCodeBackend implements AgentBackend {
         isError: hasError,
         text: hasError ? 'Session ended' : undefined,
         durationMs,
+        model: state.totalModel,
         cost:
           state.totalCost > 0 || state.totalApiCost > 0
             ? {
@@ -952,6 +958,7 @@ export class OpenCodeBackend implements AgentBackend {
               }
             : undefined,
         usage: state.totalUsage,
+        contextUsage: state.contextUsage,
       },
     };
 
@@ -1051,21 +1058,36 @@ export class OpenCodeBackend implements AgentBackend {
   private updateUsageTotals(state: OpenCodeSessionState): void {
     let totalCost = 0;
     let totalApiCost = 0;
+    const models = new Set<string>();
     const totalUsage: TokenUsage = {
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
     };
+    let latestAssistant: OcAssistantMessage | undefined;
+    let latestTime = -Infinity;
 
     for (const message of state.normalizationCtx.rawMessages.values()) {
       if (message.role !== 'assistant') continue;
 
       const assistant = message as OcAssistantMessage;
+      const assistantTime = this.getAssistantMessageTime(assistant);
+      if (
+        assistant.tokens &&
+        assistant.sessionID === state.session.id &&
+        assistantTime >= latestTime
+      ) {
+        latestAssistant = assistant;
+        latestTime = assistantTime;
+      }
+
       if (!assistant.tokens) {
         totalCost += assistant.cost ?? 0;
         continue;
       }
+
+      models.add(`${assistant.providerID}/${assistant.modelID}`);
 
       if (assistant.cost && assistant.cost > 0) {
         totalCost += assistant.cost;
@@ -1086,20 +1108,61 @@ export class OpenCodeBackend implements AgentBackend {
         (totalUsage.cacheReadTokens ?? 0) + assistant.tokens.cache.read;
       totalUsage.cacheCreationTokens =
         (totalUsage.cacheCreationTokens ?? 0) + assistant.tokens.cache.write;
+      if (assistant.tokens.reasoning) {
+        totalUsage.reasoningTokens =
+          (totalUsage.reasoningTokens ?? 0) + assistant.tokens.reasoning;
+      }
+      const totalTokens = this.getTotalTokens(assistant);
+      if (typeof totalTokens === 'number') {
+        totalUsage.totalTokens = (totalUsage.totalTokens ?? 0) + totalTokens;
+      }
     }
 
     const hasUsage =
       totalUsage.inputTokens > 0 ||
       totalUsage.outputTokens > 0 ||
       (totalUsage.cacheReadTokens ?? 0) > 0 ||
-      (totalUsage.cacheCreationTokens ?? 0) > 0;
+      (totalUsage.cacheCreationTokens ?? 0) > 0 ||
+      (totalUsage.reasoningTokens ?? 0) > 0 ||
+      (totalUsage.totalTokens ?? 0) > 0;
 
     state.totalCost = totalCost;
     state.totalApiCost = totalCost === 0 ? totalApiCost : 0;
     state.totalUsage = hasUsage ? totalUsage : undefined;
+    state.contextUsage = latestAssistant
+      ? this.toTokenUsage(latestAssistant)
+      : undefined;
+    state.totalModel = models.size === 1 ? [...models][0] : undefined;
     state.normalizationCtx.totalCost = totalCost;
     state.normalizationCtx.totalApiCost = state.totalApiCost;
     state.normalizationCtx.totalUsage = state.totalUsage;
+    state.normalizationCtx.contextUsage = state.contextUsage;
+    state.normalizationCtx.totalModel = state.totalModel;
+  }
+
+  private getAssistantMessageTime(message: OcAssistantMessage): number {
+    return message.time.completed ?? message.time.created ?? 0;
+  }
+
+  private getTotalTokens(message: OcAssistantMessage): number | undefined {
+    const tokens = message.tokens as { total?: unknown } | undefined;
+    return typeof tokens?.total === 'number' ? tokens.total : undefined;
+  }
+
+  private toTokenUsage(message: OcAssistantMessage): TokenUsage | undefined {
+    if (!message.tokens) return undefined;
+
+    const totalTokens = this.getTotalTokens(message);
+    return {
+      inputTokens: message.tokens.input,
+      outputTokens: message.tokens.output,
+      cacheReadTokens: message.tokens.cache.read,
+      cacheCreationTokens: message.tokens.cache.write,
+      ...(message.tokens.reasoning
+        ? { reasoningTokens: message.tokens.reasoning }
+        : {}),
+      ...(typeof totalTokens === 'number' ? { totalTokens } : {}),
+    };
   }
 
   /**

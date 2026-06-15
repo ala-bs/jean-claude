@@ -47,6 +47,7 @@ export interface FeedItem {
   // Work item tracking
   workItemId?: number;
   workItemIds?: string[];
+  workItemTypes?: (string | null)[];
   workItemUrls?: string[];
   workItemUrl?: string;
   workItemType?: string;

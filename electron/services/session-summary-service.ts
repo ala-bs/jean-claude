@@ -1,4 +1,5 @@
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import type { AiUsageContext } from '@shared/ai-usage-types';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import type { ModelPreference } from '@shared/types';
 
@@ -30,6 +31,33 @@ function stringifyUnknown(value: unknown): string {
 function formatToolEntry(
   entry: Extract<NormalizedEntry, { type: 'tool-use' }>,
 ) {
+  if (entry.name === 'read') {
+    return `Tool: read\nFile: ${(entry as Extract<typeof entry, { name: 'read' }>).input.filePath}`;
+  }
+
+  if (entry.name === 'edit') {
+    return `Tool: edit\nFile: ${(entry as Extract<typeof entry, { name: 'edit' }>).input.filePath}`;
+  }
+
+  if (entry.name === 'grep') {
+    return `Tool: grep\nPattern: ${(entry as Extract<typeof entry, { name: 'grep' }>).input.pattern}`;
+  }
+
+  if (entry.name === 'glob') {
+    return `Tool: glob\nPattern: ${(entry as Extract<typeof entry, { name: 'glob' }>).input.pattern}`;
+  }
+
+  if (entry.name === 'write') {
+    return `Tool: write\nFile: ${(entry as Extract<typeof entry, { name: 'write' }>).input.filePath}`;
+  }
+
+  if (entry.name === 'todo-write') {
+    const typedEntry = entry as Extract<typeof entry, { name: 'todo-write' }>;
+    const previousCount = typedEntry.result?.oldTodos.length ?? 0;
+    const nextCount = typedEntry.result?.newTodos.length ?? 0;
+    return `Tool: todo-write\nTodos: ${previousCount} -> ${nextCount}`;
+  }
+
   const lines = [`Tool: ${entry.name}`];
 
   if ('input' in entry && entry.input !== undefined) {
@@ -66,6 +94,7 @@ function formatEntry(entry: NormalizedEntry): string | null {
     case 'system-status':
       return null;
     case 'result':
+      if (entry.isError) return null;
       return entry.value ? `Result:\n${entry.value}` : null;
     case 'tool-use':
       return formatToolEntry(entry);
@@ -85,25 +114,37 @@ function formatMessagesForSummary(messages: NormalizedEntry[]): string {
   return truncateMiddle(transcript, MAX_TRANSCRIPT_CHARS);
 }
 
-export async function summarizeNormalizedMessages({
-  backend,
-  model,
-  messages,
-}: {
-  backend: AgentBackendType;
-  model: ModelPreference;
-  messages: NormalizedEntry[];
-}): Promise<string> {
+export function buildSummaryGenerationPrompt(
+  messages: NormalizedEntry[],
+): string {
   const transcript = formatMessagesForSummary(messages);
   if (!transcript) {
     throw new Error('Cannot summarize empty message history');
   }
 
+  return `${SESSION_SUMMARY_PROMPT}\n\nPrior step normalized message history:\n\n${transcript}`;
+}
+
+export async function summarizeNormalizedMessages({
+  backend,
+  model,
+  messages,
+  usageContext,
+}: {
+  backend: AgentBackendType;
+  model: ModelPreference;
+  messages: NormalizedEntry[];
+  usageContext?: AiUsageContext;
+}): Promise<string> {
+  const prompt = buildSummaryGenerationPrompt(messages);
+
   const result = await generateText({
     backend,
     model,
     outputSchema: SESSION_SUMMARY_SCHEMA,
-    prompt: `${SESSION_SUMMARY_PROMPT}\n\nPrior step normalized message history:\n\n${transcript}`,
+    prompt,
+    throwOnError: true,
+    usageContext,
   });
 
   if (

@@ -3,6 +3,7 @@ import { forwardRef, useMemo } from 'react';
 import type { KeyboardLayer } from '@/common/context/keyboard-bindings';
 import type { BindingKey } from '@/common/context/keyboard-bindings/types';
 import { Select, type SelectOption, type SelectRef } from '@/common/ui/select';
+import type { ComponentSize } from '@/common/ui/styles';
 import { AVAILABLE_BACKENDS } from '@/features/agent/ui-backend-selector';
 import {
   useBackendModelPresetsSetting,
@@ -71,6 +72,7 @@ export const BackendPresetSelector = forwardRef<
     shortcutBehavior?: 'cycle' | 'open';
     side?: 'top' | 'bottom';
     className?: string;
+    size?: ComponentSize;
     layer?: KeyboardLayer;
   }
 >(function BackendPresetSelector(
@@ -84,6 +86,7 @@ export const BackendPresetSelector = forwardRef<
     shortcutBehavior,
     side,
     className,
+    size,
     layer,
   },
   ref,
@@ -133,6 +136,7 @@ export const BackendPresetSelector = forwardRef<
         value: toBackendValue(option.value),
         label: option.label,
         description: option.description,
+        badge: option.badge,
         group: presetOptions.length > 0 ? 'Backends' : undefined,
       }),
     );
@@ -182,6 +186,7 @@ export const BackendPresetSelector = forwardRef<
       shortcutBehavior={shortcutBehavior}
       side={side}
       className={className}
+      size={size}
       layer={layer}
     />
   );

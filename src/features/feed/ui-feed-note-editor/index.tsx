@@ -4,6 +4,7 @@ import '@blocknote/mantine/style.css';
 import { useCreateBlockNote } from '@blocknote/react';
 import { useNavigate } from '@tanstack/react-router';
 import { X } from 'lucide-react';
+import type { KeyboardEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
@@ -16,13 +17,63 @@ import {
   useUpdateFeedNote,
 } from '@/hooks/use-feed-notes';
 
+const CHECKBOX_MARKER_PATTERN = /^\s*-\s+\[([ xX])\]\s*/;
+
+function getCheckboxMarkdownState(content: unknown): boolean | null {
+  const text = getFirstTextSegment(content);
+  const match = text?.match(CHECKBOX_MARKER_PATTERN);
+  if (!match) return null;
+  return match[1].toLowerCase() === 'x';
+}
+
+function getFirstTextSegment(content: unknown): string | null {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+
+  for (const item of content) {
+    if (typeof item === 'string') return item;
+    if (!item || typeof item !== 'object') continue;
+
+    const record = item as Record<string, unknown>;
+    if (typeof record.text === 'string') return record.text;
+  }
+
+  return null;
+}
+
+function stripCheckboxMarkdownMarker(content: unknown): unknown {
+  if (typeof content === 'string') {
+    return content.replace(CHECKBOX_MARKER_PATTERN, '');
+  }
+  if (!Array.isArray(content)) return content;
+
+  let didStrip = false;
+  return content.map((item) => {
+    if (didStrip) return item;
+    if (typeof item === 'string') {
+      didStrip = true;
+      return item.replace(CHECKBOX_MARKER_PATTERN, '');
+    }
+    if (!item || typeof item !== 'object') return item;
+
+    const record = item as Record<string, unknown>;
+    if (typeof record.text !== 'string') return item;
+
+    didStrip = true;
+    return {
+      ...record,
+      text: record.text.replace(CHECKBOX_MARKER_PATTERN, ''),
+    };
+  });
+}
+
 export function FeedNoteEditor({ noteId }: { noteId: string }) {
   const navigate = useNavigate();
   const { note, isLoading } = useFeedNoteById(noteId);
   const updateNote = useUpdateFeedNote();
   const deleteNote = useDeleteFeedNote();
   const { colorScheme } = useColorScheme();
-  const editor = useCreateBlockNote();
+  const editor = useCreateBlockNote({ tabBehavior: 'prefer-indent' });
 
   const [value, setValue] = useState('');
   const [hasInitialized, setHasInitialized] = useState(false);
@@ -88,8 +139,32 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
 
   const handleEditorChange = useCallback(() => {
     if (isLoadingEditorRef.current) return;
+
+    let didNormalize = false;
+    editor.forEachBlock((block) => {
+      const checked = getCheckboxMarkdownState(block.content);
+      if (checked === null) return true;
+
+      didNormalize = true;
+      editor.updateBlock(block, {
+        type: 'checkListItem',
+        props: { checked },
+        content: stripCheckboxMarkdownMarker(block.content),
+      } as Parameters<typeof editor.updateBlock>[1]);
+      return true;
+    });
+
+    if (didNormalize) return;
+
     setValue(JSON.stringify(editor.document));
   }, [editor]);
+
+  const handleEditorKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, []);
 
   const handleDelete = useCallback(() => {
     isDeletedRef.current = true;
@@ -142,7 +217,10 @@ export function FeedNoteEditor({ noteId }: { noteId: string }) {
         </div>
       </div>
 
-      <div className="feed-note-blocknote flex-1 overflow-y-auto px-2 py-3">
+      <div
+        className="feed-note-blocknote flex-1 overflow-y-auto px-2 py-3"
+        onKeyDown={handleEditorKeyDown}
+      >
         <BlockNoteView
           editor={editor}
           theme={colorScheme}

@@ -24,6 +24,7 @@ import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
 import { ProjectOverlay } from '@/features/project/ui-project-overlay';
 import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
 import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
+import { UsageOverlay } from '@/features/usage/ui-usage-overlay';
 import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { api } from '@/lib/api';
@@ -37,6 +38,8 @@ import { useNewTaskDraft } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
+import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
+import { useToastStore } from '@/stores/toasts';
 import { useUISetting } from '@/stores/ui';
 
 export const Route = createRootRoute({
@@ -265,6 +268,14 @@ function SettingsContainer() {
   return <SettingsOverlay onClose={() => close('settings')} />;
 }
 
+function UsageContainer() {
+  const isOpen = useOverlaysStore((s) => s.activeOverlay === 'usage');
+  const close = useOverlaysStore((s) => s.close);
+
+  if (!isOpen) return null;
+  return <UsageOverlay onClose={() => close('usage')} />;
+}
+
 function BacklogContainer() {
   const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore((s) => s.activeOverlay === 'backlog');
@@ -356,6 +367,9 @@ function useCleanupNonActiveTasks() {
       // Prune task prompt drafts
       pruneOrphanedTaskPrompts(activeIds);
 
+      // Prune task review comment drafts
+      pruneOrphanedTaskReviewDrafts(activeIds);
+
       // Prune navigation task state
       // Note: clearTaskNavHistoryState also calls clearReviewCommentsForTask
       // internally, but pruneOrphanedReviewComments above already handled that.
@@ -382,6 +396,7 @@ function RootLayout() {
     >
       <ReactScanBridge />
       <NotificationTaskOpenBridge />
+      <RateLimitSwapBridge />
       <TaskMessageManager />
       <GlobalPromptFromBackModal />
       <GlobalCommands />
@@ -398,6 +413,7 @@ function RootLayout() {
       <ActivityCenterContainer />
       <CalendarContainer />
       <SettingsContainer />
+      <UsageContainer />
       <RunningCommandsContainer />
       <PipelinesOverlayContainer />
 
@@ -470,6 +486,21 @@ function NotificationTaskOpenBridge() {
       });
     });
   }, [navigate, pathname]);
+
+  return null;
+}
+
+function RateLimitSwapBridge() {
+  const addToast = useToastStore((s) => s.addToast);
+
+  useEffect(() => {
+    return api.onRateLimitSwap((data) => {
+      addToast({
+        message: `Rate limit approaching for ${data.from} — routing new tasks to ${data.to}`,
+        type: 'success',
+      });
+    });
+  }, [addToast]);
 
   return null;
 }

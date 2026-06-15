@@ -49,6 +49,8 @@ import {
   useUpdateEditorAutomationSetting,
   useUpdateEditorSetting,
   useUpdateTaskEventNotificationsSetting,
+  useRawMessageCleanupSetting,
+  useUpdateRawMessageCleanupSetting,
   useUpdateSummaryModelsSetting,
   useUpdateThinkingSettingsSetting,
   useAvailableEditors,
@@ -72,6 +74,7 @@ import {
   DEFAULT_TASK_NOTIFICATION_MODES,
   PRESET_EDITORS,
   type ModelPreference,
+  type RawMessageCleanupSetting,
   type ThinkingEffort,
   type CalendarNotificationsSetting,
   type TaskNotificationEvent,
@@ -87,6 +90,11 @@ const PROMPT_PREFACE_PLACEMENT_OPTIONS = [
 const PROMPT_PREFACE_FREQUENCY_OPTIONS = [
   { value: 'initial', label: 'Initial prompt only' },
   { value: 'each', label: 'Each prompt' },
+];
+
+const MEETING_JOIN_TARGET_OPTIONS = [
+  { value: 'web', label: 'Web browser' },
+  { value: 'app', label: 'Teams app' },
 ];
 
 const TASK_NOTIFICATION_OPTIONS: Array<{
@@ -186,12 +194,7 @@ export function EditorSettings() {
 
   return (
     <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Editor</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Choose which editor to open projects in
-      </p>
-
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         {PRESET_EDITORS.map((editor) => {
           const available = isEditorAvailable(editor.id);
           const selected = isPresetSelected(editor.id);
@@ -291,14 +294,6 @@ export function PromptPrefaceSettings() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-ink-1 text-lg font-semibold">Prompt Preface</h2>
-        <p className="text-ink-3 mt-1 text-sm">
-          Add reusable instructions to prompts before they are sent to coding
-          agents.
-        </p>
-      </div>
-
       <Textarea
         size="md"
         value={draftText}
@@ -362,6 +357,8 @@ export { CalendarNotificationSettings as CalendarSettings };
 export function MaintenanceSettings() {
   return (
     <div className="space-y-8">
+      <RawMessageCleanupSettings />
+      <div className="border-line-soft border-t" />
       <ClaudeProjectsCleanup />
       <GlobalGitignoreSetup />
     </div>
@@ -400,6 +397,95 @@ function AppearanceSettings() {
         >
           Light
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function RawMessageCleanupSettings() {
+  const { data: rawMessageCleanupSetting } = useRawMessageCleanupSetting();
+  const updateRawMessageCleanup = useUpdateRawMessageCleanupSetting();
+
+  const settings: RawMessageCleanupSetting = rawMessageCleanupSetting ?? {
+    enabled: true,
+    retentionHours: 24,
+  };
+  const [retentionInput, setRetentionInput] = useState(
+    String(settings.retentionHours),
+  );
+
+  useEffect(() => {
+    setRetentionInput(String(settings.retentionHours));
+  }, [settings.retentionHours]);
+
+  const updateSetting = (next: RawMessageCleanupSetting) => {
+    updateRawMessageCleanup.mutate(next);
+  };
+
+  const commitRetention = () => {
+    const parsed = Number.parseInt(retentionInput, 10);
+    const retentionHours = Number.isFinite(parsed)
+      ? Math.max(parsed, 1)
+      : settings.retentionHours;
+    setRetentionInput(String(retentionHours));
+    if (retentionHours !== settings.retentionHours) {
+      updateSetting({ ...settings, retentionHours });
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-start gap-3">
+        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+          <Trash2 className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-ink-1 text-lg font-semibold">
+            Raw Message Cleanup
+          </h2>
+          <p className="text-ink-3 mt-1 text-sm">
+            Save disk space by deleting raw agent messages after normalized
+            messages are safely retained.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
+          <Checkbox
+            checked={settings.enabled}
+            onChange={(enabled) => updateSetting({ ...settings, enabled })}
+            label="Clean up completed task raw messages"
+            description="Normalized messages stay available in task timelines. Raw debug payloads are removed after retention period."
+          />
+        </div>
+
+        <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
+          <label className="text-ink-2 block text-sm font-medium">
+            Keep raw messages after completion
+          </label>
+          <p className="text-ink-3 mt-1 text-xs">
+            Cleanup only touches completed tasks older than this duration.
+          </p>
+          <div className="mt-3 flex items-center gap-3">
+            <Input
+              type="number"
+              min={1}
+              step={1}
+              value={retentionInput}
+              onChange={(e) => setRetentionInput(e.target.value)}
+              onBlur={commitRetention}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  commitRetention();
+                }
+              }}
+              disabled={!settings.enabled}
+              className="w-28"
+            />
+            <span className="text-ink-3 text-sm">hours</span>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -479,7 +565,16 @@ export function BackendsSettings() {
                 checked={enabled}
                 onChange={() => handleToggle(backend.value)}
                 disabled={enabled && enabledBackends.length <= 1}
-                label={backend.label}
+                label={
+                  <span className="flex items-center gap-2">
+                    <span>{backend.label}</span>
+                    {backend.badge && (
+                      <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                        {backend.badge}
+                      </span>
+                    )}
+                  </span>
+                }
                 description={backend.description}
               />
 
@@ -547,6 +642,9 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         opencode: {
           ...(thinkingSettings?.efforts.opencode ?? { default: 'default' }),
         },
+        codex: {
+          ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
+        },
       },
       selectedModels: {
         'claude-code':
@@ -557,6 +655,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
           thinkingSettings?.selectedModels?.opencode ??
           backendDefaultModelsSetting?.models.opencode ??
           'default',
+        codex:
+          thinkingSettings?.selectedModels?.codex ??
+          backendDefaultModelsSetting?.models.codex ??
+          'default',
         [backend]: nextModel,
       },
     });
@@ -565,6 +667,7 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         'claude-code':
           backendDefaultModelsSetting?.models['claude-code'] ?? 'default',
         opencode: backendDefaultModelsSetting?.models.opencode ?? 'default',
+        codex: backendDefaultModelsSetting?.models.codex ?? 'default',
         [backend]: nextModel,
       },
     });
@@ -604,6 +707,9 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         opencode: {
           ...(thinkingSettings?.efforts.opencode ?? { default: 'default' }),
         },
+        codex: {
+          ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
+        },
         [backend]: {
           ...backendEfforts,
           [targetModel]: normalizedEffort,
@@ -617,6 +723,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         opencode:
           thinkingSettings?.selectedModels?.opencode ??
           backendDefaultModelsSetting?.models.opencode ??
+          'default',
+        codex:
+          thinkingSettings?.selectedModels?.codex ??
+          backendDefaultModelsSetting?.models.codex ??
           'default',
         [backend]: targetModel,
       },
@@ -650,6 +760,7 @@ function CalendarNotificationSettings() {
       enabled: false,
       leadTimeMinutes: DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
       showStartWindow: false,
+      meetingJoinTarget: 'web',
     };
   const isSupported = api.platform === 'darwin';
   const [leadTimeInput, setLeadTimeInput] = useState(
@@ -677,21 +788,7 @@ function CalendarNotificationSettings() {
 
   return (
     <div>
-      <div className="flex items-start gap-3">
-        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-          <Bell className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-ink-1 text-lg font-semibold">
-            Calendar Notifications
-          </h2>
-          <p className="text-ink-3 mt-1 text-sm">
-            Notify before meetings start using your macOS Calendar data.
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
+      <div className="space-y-3">
         <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
           <Checkbox
             checked={settings.enabled}
@@ -721,6 +818,28 @@ function CalendarNotificationSettings() {
             label="Show a window when meetings start"
             description="Display an always-on-top meeting window at the scheduled start time, with a quick join action when available."
           />
+        </div>
+
+        <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
+          <label className="text-ink-1 mb-1 block text-sm font-medium">
+            Open Teams meetings in
+          </label>
+          <Select
+            value={settings.meetingJoinTarget}
+            options={MEETING_JOIN_TARGET_OPTIONS}
+            onChange={(meetingJoinTarget) =>
+              updateSetting({
+                ...settings,
+                meetingJoinTarget:
+                  meetingJoinTarget as CalendarNotificationsSetting['meetingJoinTarget'],
+              })
+            }
+            disabled={!settings.enabled || !isSupported}
+            className="w-full justify-between sm:w-56"
+          />
+          <p className="text-ink-3 mt-2 text-xs">
+            Teams app uses msteams:// deep links when meeting links support it.
+          </p>
         </div>
 
         {!isSupported ? (
@@ -858,21 +977,7 @@ function TaskNotificationSettings() {
 
   return (
     <div>
-      <div className="flex items-start gap-3">
-        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-          <Bell className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-ink-1 text-lg font-semibold">
-            Task Notifications
-          </h2>
-          <p className="text-ink-3 mt-1 text-sm">
-            Choose delivery mode for each kind of task notification.
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
+      <div className="space-y-3">
         {showDesktopWarning ? (
           <div className="border-status-err/50 bg-status-err/8 rounded-lg border px-4 py-3 text-sm">
             <div className="text-ink-1 flex items-center gap-2 font-medium">
@@ -1046,12 +1151,7 @@ export function UsageDisplaySettings() {
 
   return (
     <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Usage Display</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Show rate limit usage in the header for these providers.
-      </p>
-
-      <div className="mt-4 space-y-2">
+      <div className="space-y-2">
         {USAGE_PROVIDERS.map((provider) => {
           const enabled = isEnabled(provider.value);
 
@@ -1177,6 +1277,11 @@ const SUMMARY_MODEL_BACKENDS: Record<
     description: 'Use a lightweight provider/model when available',
     defaultModel: 'default',
   },
+  codex: {
+    label: 'Codex',
+    description: 'Use default Codex model when available',
+    defaultModel: 'default',
+  },
 };
 
 export function SummaryModelSettings({
@@ -1194,6 +1299,7 @@ export function SummaryModelSettings({
   const models = summaryModelsSetting?.models ?? {
     'claude-code': SUMMARY_MODEL_BACKENDS['claude-code'].defaultModel,
     opencode: SUMMARY_MODEL_BACKENDS.opencode.defaultModel,
+    codex: SUMMARY_MODEL_BACKENDS.codex.defaultModel,
   };
 
   const setModel = (model: string) => {

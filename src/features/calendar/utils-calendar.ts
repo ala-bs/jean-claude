@@ -1,4 +1,5 @@
 import type { UpcomingMeeting } from '@shared/calendar-types';
+export { getTeamsJoinUrl } from '@shared/teams-url';
 
 const TEAMS_URL_PATTERN =
   /https?:\/\/(?:[^\s<>()"']+\.)?(?:teams\.microsoft\.com|teams\.live\.com|teams\.cloud\.microsoft)\/[^\s<>()"']+/gi;

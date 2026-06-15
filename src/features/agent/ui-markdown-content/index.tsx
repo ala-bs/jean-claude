@@ -22,6 +22,18 @@ import { sanitizeMarkdownUrl } from '@/lib/markdown-urls';
 const FILE_PATH_PATTERN =
   /([\w\-./]+\.(ts|tsx|js|jsx|py|go|rs|md|json|yaml|yml|toml|sql|sh|css|html|rb|java|kt|swift|c|cpp|h|hpp|cs|php|scss|less|xml|ini|dockerfile))(?::(\d+)(?:-(\d+))?)?/g;
 
+const PROMPT_XML_ROOT_TAGS = new Set([
+  'attached_files',
+  'feature_context',
+  'file_context_comments',
+  'overall_intent',
+  'user_review',
+]);
+
+type MarkdownSegment =
+  | { type: 'markdown'; content: string }
+  | { type: 'prompt-xml'; content: string; tag: string };
+
 function getTextContent(node: React.ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') {
     return String(node);
@@ -320,6 +332,179 @@ function isGifSource(src: string): boolean {
   } catch {
     return inspectedSrc.toLowerCase().includes('.gif');
   }
+}
+
+function getFenceMarker(
+  line: string,
+): { marker: '`' | '~'; length: number } | null {
+  const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+  if (!match) return null;
+
+  return { marker: match[1][0] as '`' | '~', length: match[1].length };
+}
+
+function getPromptXmlRootTag(line: string): string | null {
+  if (/^( {4,}|\t)/.test(line)) return null;
+
+  const match = line.trim().match(/^<([a-z_][\w:-]*)(?:\s[^>]*)?>$/);
+  if (!match || line.trim().endsWith('/>')) return null;
+
+  return PROMPT_XML_ROOT_TAGS.has(match[1]) ? match[1] : null;
+}
+
+function findPromptXmlBlockEnd(lines: string[], start: number, tag: string) {
+  const openPattern = new RegExp(`^<${tag}(?:\\s[^>]*)?>$`);
+  const closePattern = new RegExp(`^</${tag}>$`);
+  let depth = 0;
+
+  for (let index = start; index < lines.length; index += 1) {
+    const trimmed = lines[index].trim();
+
+    if (openPattern.test(trimmed)) {
+      depth += 1;
+    }
+
+    if (closePattern.test(trimmed)) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+
+  return -1;
+}
+
+export function splitPromptXmlSegments(content: string): MarkdownSegment[] {
+  const lines = content.split('\n');
+  const segments: MarkdownSegment[] = [];
+  let fence: { marker: '`' | '~'; length: number } | null = null;
+  let markdownStart = 0;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const fenceMarker = getFenceMarker(lines[index]);
+
+    if (fenceMarker) {
+      if (!fence) {
+        fence = fenceMarker;
+      } else if (
+        fence.marker === fenceMarker.marker &&
+        fenceMarker.length >= fence.length
+      ) {
+        fence = null;
+      }
+
+      continue;
+    }
+
+    if (fence) continue;
+
+    const tag = getPromptXmlRootTag(lines[index]);
+    if (!tag) continue;
+
+    const blockEnd = findPromptXmlBlockEnd(lines, index, tag);
+    const end = blockEnd >= index ? blockEnd : lines.length - 1;
+
+    if (markdownStart < index) {
+      segments.push({
+        type: 'markdown',
+        content: lines.slice(markdownStart, index).join('\n'),
+      });
+    }
+
+    segments.push({
+      type: 'prompt-xml',
+      content: lines.slice(index, end + 1).join('\n'),
+      tag,
+    });
+    index = end;
+    markdownStart = end + 1;
+  }
+
+  if (markdownStart < lines.length) {
+    segments.push({
+      type: 'markdown',
+      content: lines.slice(markdownStart).join('\n'),
+    });
+  }
+
+  return segments.filter((segment) => segment.content.length > 0);
+}
+
+function normalizeMarkdownContent(content: string): string {
+  return normalizeMarkdownImageSizeSyntax(content);
+}
+
+function PromptXmlBlock({
+  code,
+  tag,
+  onFilePathClick,
+}: {
+  code: string;
+  tag: string;
+  onFilePathClick?: (
+    filePath: string,
+    lineStart?: number,
+    lineEnd?: number,
+  ) => void;
+}) {
+  return (
+    <div className="border-line-soft bg-bg-0 mb-3 overflow-hidden rounded-lg border">
+      <div className="border-line-soft bg-bg-1 text-ink-3 flex items-center gap-2 border-b px-3 py-1.5 font-mono text-[10px] tracking-[0.08em] uppercase">
+        <span className="bg-acc h-1.5 w-1.5 rounded-full" />
+        XML prompt · {tag}
+      </div>
+      <pre className="overflow-x-auto p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre">
+        {code.split('\n').map((line, index) => (
+          <PromptXmlLine
+            key={index}
+            line={line}
+            onFilePathClick={onFilePathClick}
+          />
+        ))}
+      </pre>
+    </div>
+  );
+}
+
+function PromptXmlLine({
+  line,
+  onFilePathClick,
+}: {
+  line: string;
+  onFilePathClick?: (
+    filePath: string,
+    lineStart?: number,
+    lineEnd?: number,
+  ) => void;
+}) {
+  const tagLine = line.match(
+    /^(\s*)(&lt;|<)(\/?)([\w:-]+)([^>]*?)(\/?)(>|&gt;)$/,
+  );
+  if (!tagLine) {
+    return (
+      <span className="text-ink-1 block">
+        {line ? (
+          <TextWithFilePaths text={line} onFilePathClick={onFilePathClick} />
+        ) : (
+          ' '
+        )}
+      </span>
+    );
+  }
+
+  const [, indent, open, slash, tag, attrs, selfClose, close] = tagLine;
+  return (
+    <span className="block">
+      <span className="text-ink-4">{indent}</span>
+      <span className="text-ink-3">{open}</span>
+      <span className="text-status-run">{slash}</span>
+      <span className="text-acc-ink">{tag}</span>
+      <span className="text-ink-2">
+        <TextWithFilePaths text={attrs} onFilePathClick={onFilePathClick} />
+      </span>
+      <span className="text-status-run">{selfClose}</span>
+      <span className="text-ink-3">{close}</span>
+    </span>
+  );
 }
 
 function normalizeMarkdownImageSizeSyntax(content: string): string {
@@ -788,16 +973,28 @@ export function MarkdownContent({
     alt: string;
   } | null>(null);
   const normalizedContent = useMemo(
-    () => normalizeMarkdownImageSizeSyntax(content),
+    () => normalizeMarkdownContent(content),
     [content],
+  );
+  const normalizedExtractedContent = useMemo(
+    () =>
+      extractedContent
+        ? {
+            ...extractedContent,
+            contentWithoutImages: normalizeMarkdownContent(
+              extractedContent.contentWithoutImages,
+            ),
+          }
+        : null,
+    [extractedContent],
   );
   const resolvedExtractedContent = useMemo(
     () =>
-      extractedContent ??
+      normalizedExtractedContent ??
       (imagePresentation === 'footer-thumbnails'
         ? extractImagesFromMarkdown(normalizedContent)
         : { contentWithoutImages: normalizedContent, images: [] }),
-    [normalizedContent, extractedContent, imagePresentation],
+    [normalizedContent, normalizedExtractedContent, imagePresentation],
   );
   const renderedContent = useMemo(() => {
     if (
@@ -811,6 +1008,10 @@ export function MarkdownContent({
       .slice(0, truncateToChars)
       .trimEnd();
   }, [resolvedExtractedContent.contentWithoutImages, truncateToChars]);
+  const renderedSegments = useMemo(
+    () => splitPromptXmlSegments(renderedContent),
+    [renderedContent],
+  );
   const interactiveImages =
     enableImageModal || imagePresentation === 'footer-thumbnails';
   const footerImages = useMemo(
@@ -823,261 +1024,283 @@ export function MarkdownContent({
   return (
     <>
       <div className="jc-markdown text-ink-1 w-fit max-w-full min-w-0 text-[12.5px] leading-[1.66] break-words">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          urlTransform={customUrlTransform}
-          components={{
-            p: ({ children }) => {
-              const hasLabel = startsWithSectionLabel(children);
-              const renderedChildren = hasLabel
-                ? promoteSectionLabel(children)
-                : children;
+        {renderedSegments.map((segment, segmentIndex) =>
+          segment.type === 'prompt-xml' ? (
+            <PromptXmlBlock
+              key={segmentIndex}
+              code={segment.content}
+              tag={segment.tag}
+              onFilePathClick={onFilePathClick}
+            />
+          ) : (
+            <ReactMarkdown
+              key={segmentIndex}
+              remarkPlugins={[remarkGfm]}
+              urlTransform={customUrlTransform}
+              components={{
+                p: ({ children }) => {
+                  const hasLabel = startsWithSectionLabel(children);
+                  const renderedChildren = hasLabel
+                    ? promoteSectionLabel(children)
+                    : children;
 
-              return (
-                <p
-                  className={clsx(
-                    'mb-[13px] text-pretty whitespace-pre-line last:mb-0',
-                    hasLabel && 'mt-[22px] first:mt-0',
-                  )}
-                >
-                  {typeof renderedChildren === 'string' ? (
-                    <TextWithFilePaths
-                      text={renderedChildren}
-                      onFilePathClick={onFilePathClick}
-                    />
-                  ) : (
-                    renderedChildren
-                  )}
-                </p>
-              );
-            },
-            code: ({ className, children, ...props }) => {
-              const matchLang = /language-(\w+)/.exec(className || '');
-              const isInline =
-                !matchLang &&
-                (typeof children !== 'string' || !children.includes('\n'));
-
-              if (isInline) {
-                return (
-                  <code
-                    className="border-line-soft bg-bg-2 text-acc-ink rounded border px-1.5 py-0.5 font-mono text-[11.5px]"
-                    {...props}
-                  >
-                    {children}
-                  </code>
-                );
-              }
-
-              return (
-                <CodeBlock
-                  language={matchLang ? matchLang[1] : 'text'}
-                  code={String(children).replace(/\n$/, '')}
-                />
-              );
-            },
-            pre: ({ children }) => <>{children}</>,
-            a: ({ href, children }) => {
-              if (href?.startsWith('azure-devops-mention:')) {
-                return (
-                  <span className="text-acc-ink font-medium">{children}</span>
-                );
-              }
-
-              if (href && isBareUrlLink(href, children)) {
-                const url = href;
-
-                return (
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={url}
-                    title={url}
-                    className="bg-acc-soft border-acc-line text-acc-ink hover:text-ink-0 hover:bg-acc-soft inline-flex items-center gap-1 rounded-full border px-2 py-1 align-baseline font-mono text-[11.5px] leading-none no-underline transition-colors"
-                  >
-                    {getCollapsedUrlLabel(url)}
-                    <span className="text-[10px] opacity-70">↗</span>
-                  </a>
-                );
-              }
-
-              return (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-acc-ink border-acc-line hover:text-ink-0 hover:border-acc-ink border-b no-underline transition-colors"
-                >
-                  {children}
-                </a>
-              );
-            },
-            ul: ({ children }) => (
-              <ul className="jc-markdown-ul mb-3 list-none space-y-1.5 pl-0">
-                {children}
-              </ul>
-            ),
-            ol: ({ children }) => (
-              <ol className="jc-markdown-ol mb-3 list-none space-y-1.5 pl-0">
-                {children}
-              </ol>
-            ),
-            li: ({ children }) => (
-              <li className="jc-markdown-li relative ml-0 leading-[1.6] [&>*:first-child]:inline [&>ol]:mt-1.5 [&>ul]:mt-1.5">
-                {children}
-              </li>
-            ),
-            h1: ({ children }) => (
-              <h1 className="border-line text-acc-ink mb-3.5 border-b pb-2.5 text-lg leading-[1.3] font-semibold tracking-[-0.015em]">
-                {children}
-              </h1>
-            ),
-            h2: ({ children }) => (
-              <h2 className="border-line-soft text-acc-ink mt-[26px] mb-2.5 border-b pb-2 text-[14.5px] leading-[1.3] font-semibold tracking-[-0.015em]">
-                {children}
-              </h2>
-            ),
-            h3: ({ children }) => (
-              <h3 className="text-acc-ink mt-5 mb-2 text-[12.5px] leading-[1.3] font-semibold tracking-[0.7px] uppercase">
-                {children}
-              </h3>
-            ),
-            h4: ({ children }) => (
-              <h4 className="text-ink-0 mt-4 mb-1.5 text-[13px] leading-[1.3] font-semibold tracking-[-0.015em]">
-                {children}
-              </h4>
-            ),
-            strong: ({ children }) => (
-              <strong className="text-ink-0 font-semibold">{children}</strong>
-            ),
-            blockquote: ({ children }) => {
-              const calloutKind = getCalloutKind(children);
-              const isWarning = calloutKind === 'warning';
-
-              return (
-                <blockquote
-                  className={clsx(
-                    'mb-4 rounded-lg border border-l-2 px-3.5 py-3 not-italic',
-                    isWarning
-                      ? 'bg-status-run-soft border-status-run/40'
-                      : 'bg-acc-soft border-acc-line',
-                  )}
-                >
-                  {calloutKind && (
-                    <span
+                  return (
+                    <p
                       className={clsx(
-                        'mb-1.5 inline-flex items-center gap-1.5 text-[10.5px] font-semibold tracking-[0.7px] uppercase',
-                        isWarning ? 'text-status-run' : 'text-acc-ink',
+                        'mb-[13px] text-pretty whitespace-pre-line last:mb-0',
+                        hasLabel && 'mt-[22px] first:mt-0',
                       )}
                     >
-                      <span
-                        className={clsx(
-                          'text-bg-0 flex h-3.5 w-3.5 items-center justify-center rounded-full font-serif text-[9px] font-black italic',
-                          isWarning ? 'bg-status-run' : 'bg-acc',
-                        )}
+                      {typeof renderedChildren === 'string' ? (
+                        <TextWithFilePaths
+                          text={renderedChildren}
+                          onFilePathClick={onFilePathClick}
+                        />
+                      ) : (
+                        renderedChildren
+                      )}
+                    </p>
+                  );
+                },
+                code: ({ className, children, ...props }) => {
+                  const matchLang = /language-(\w+)/.exec(className || '');
+                  const isInline =
+                    !matchLang &&
+                    (typeof children !== 'string' || !children.includes('\n'));
+
+                  if (isInline) {
+                    return (
+                      <code
+                        className="border-line-soft bg-bg-2 text-acc-ink rounded border px-1.5 py-0.5 font-mono text-[11.5px]"
+                        {...props}
                       >
-                        i
+                        {children}
+                      </code>
+                    );
+                  }
+
+                  return (
+                    <CodeBlock
+                      language={matchLang ? matchLang[1] : 'text'}
+                      code={String(children).replace(/\n$/, '')}
+                    />
+                  );
+                },
+                pre: ({ children }) => <>{children}</>,
+                a: ({ href, children }) => {
+                  if (href?.startsWith('azure-devops-mention:')) {
+                    return (
+                      <span className="text-acc-ink font-medium">
+                        {children}
                       </span>
-                      {isWarning ? 'Warning' : 'Note'}
-                    </span>
-                  )}
-                  <div className="text-ink-2 [&_strong]:text-acc-ink text-[12.5px] leading-[1.6] [&_p]:mb-0 [&_p+p]:mt-2">
+                    );
+                  }
+
+                  if (href && isBareUrlLink(href, children)) {
+                    const url = href;
+
+                    return (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={url}
+                        title={url}
+                        className="bg-acc-soft border-acc-line text-acc-ink hover:text-ink-0 hover:bg-acc-soft inline-flex items-center gap-1 rounded-full border px-2 py-1 align-baseline font-mono text-[11.5px] leading-none no-underline transition-colors"
+                      >
+                        {getCollapsedUrlLabel(url)}
+                        <span className="text-[10px] opacity-70">↗</span>
+                      </a>
+                    );
+                  }
+
+                  return (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-acc-ink border-acc-line hover:text-ink-0 hover:border-acc-ink border-b no-underline transition-colors"
+                    >
+                      {children}
+                    </a>
+                  );
+                },
+                ul: ({ children }) => (
+                  <ul className="jc-markdown-ul mb-3 list-none space-y-1.5 pl-0">
                     {children}
+                  </ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="jc-markdown-ol mb-3 list-none space-y-1.5 pl-0">
+                    {children}
+                  </ol>
+                ),
+                li: ({ children }) => (
+                  <li className="jc-markdown-li relative ml-0 leading-[1.6] [&>*:first-child]:inline [&>ol]:mt-1.5 [&>ul]:mt-1.5">
+                    {children}
+                  </li>
+                ),
+                h1: ({ children }) => (
+                  <h1 className="border-line text-acc-ink mb-3.5 border-b pb-2.5 text-lg leading-[1.3] font-semibold tracking-[-0.015em]">
+                    {children}
+                  </h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="border-line-soft text-acc-ink mt-[26px] mb-2.5 border-b pb-2 text-[14.5px] leading-[1.3] font-semibold tracking-[-0.015em]">
+                    {children}
+                  </h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="text-acc-ink mt-5 mb-2 text-[12.5px] leading-[1.3] font-semibold tracking-[0.7px] uppercase">
+                    {children}
+                  </h3>
+                ),
+                h4: ({ children }) => (
+                  <h4 className="text-ink-0 mt-4 mb-1.5 text-[13px] leading-[1.3] font-semibold tracking-[-0.015em]">
+                    {children}
+                  </h4>
+                ),
+                strong: ({ children }) => (
+                  <strong className="text-ink-0 font-semibold">
+                    {children}
+                  </strong>
+                ),
+                blockquote: ({ children }) => {
+                  const calloutKind = getCalloutKind(children);
+                  const isWarning = calloutKind === 'warning';
+
+                  return (
+                    <blockquote
+                      className={clsx(
+                        'mb-4 rounded-lg border border-l-2 px-3.5 py-3 not-italic',
+                        isWarning
+                          ? 'bg-status-run-soft border-status-run/40'
+                          : 'bg-acc-soft border-acc-line',
+                      )}
+                    >
+                      {calloutKind && (
+                        <span
+                          className={clsx(
+                            'mb-1.5 inline-flex items-center gap-1.5 text-[10.5px] font-semibold tracking-[0.7px] uppercase',
+                            isWarning ? 'text-status-run' : 'text-acc-ink',
+                          )}
+                        >
+                          <span
+                            className={clsx(
+                              'text-bg-0 flex h-3.5 w-3.5 items-center justify-center rounded-full font-serif text-[9px] font-black italic',
+                              isWarning ? 'bg-status-run' : 'bg-acc',
+                            )}
+                          >
+                            i
+                          </span>
+                          {isWarning ? 'Warning' : 'Note'}
+                        </span>
+                      )}
+                      <div className="text-ink-2 [&_strong]:text-acc-ink text-[12.5px] leading-[1.6] [&_p]:mb-0 [&_p+p]:mt-2">
+                        {children}
+                      </div>
+                    </blockquote>
+                  );
+                },
+                table: ({ children }) => (
+                  <div className="border-line mb-3 overflow-x-auto rounded-lg border">
+                    <table className="min-w-full border-collapse text-left">
+                      {children}
+                    </table>
                   </div>
-                </blockquote>
-              );
-            },
-            table: ({ children }) => (
-              <div className="border-line mb-3 overflow-x-auto rounded-lg border">
-                <table className="min-w-full border-collapse text-left">
-                  {children}
-                </table>
-              </div>
-            ),
-            th: ({ children }) => (
-              <th className="border-line-soft bg-bg-2 text-ink-0 border px-3 py-2 text-left font-semibold">
-                {children}
-              </th>
-            ),
-            td: ({ children }) => (
-              <td className="border-line-soft border px-3 py-2">{children}</td>
-            ),
-            hr: () => <hr className="border-line my-[22px]" />,
-            img: ({ src, alt, title, style, ...props }) => {
-              if (imagePresentation === 'footer-thumbnails') {
-                return null;
-              }
-
-              // Don't render if src is empty or undefined
-              if (!src) {
-                console.log('[MarkdownContent] Skipping img with empty src');
-                return null;
-              }
-
-              const resolvedAlt = alt || '';
-              const interactive = interactiveImages;
-              const requestedSize = getMarkdownImageSizeFromTitle(title);
-              const renderedTitle = requestedSize ? undefined : title;
-
-              if (isGifSource(src)) {
-                return (
-                  <GifFrameScrubber
-                    src={src}
-                    alt={resolvedAlt}
-                    imageClassName={imageClassName}
-                    interactive={interactive}
-                    requestedSize={requestedSize}
-                    onOpen={() => setSelectedImage({ src, alt: resolvedAlt })}
-                  />
-                );
-              }
-
-              return (
-                <img
-                  src={src}
-                  alt={resolvedAlt}
-                  title={renderedTitle}
-                  className={clsx(
-                    'my-2 block max-w-full rounded',
-                    interactive && 'cursor-zoom-in',
-                    imageClassName,
-                  )}
-                  style={getSizedImageStyle(requestedSize, style)}
-                  aria-label={
-                    interactive
-                      ? resolvedAlt || 'Open image preview'
-                      : undefined
+                ),
+                th: ({ children }) => (
+                  <th className="border-line-soft bg-bg-2 text-ink-0 border px-3 py-2 text-left font-semibold">
+                    {children}
+                  </th>
+                ),
+                td: ({ children }) => (
+                  <td className="border-line-soft border px-3 py-2">
+                    {children}
+                  </td>
+                ),
+                hr: () => <hr className="border-line my-[22px]" />,
+                img: ({ src, alt, title, style, ...props }) => {
+                  if (imagePresentation === 'footer-thumbnails') {
+                    return null;
                   }
-                  role={interactive ? 'button' : undefined}
-                  tabIndex={interactive ? 0 : undefined}
-                  onClick={
-                    interactive
-                      ? (event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          setSelectedImage({ src, alt: resolvedAlt });
+
+                  // Don't render if src is empty or undefined
+                  if (!src) {
+                    console.log(
+                      '[MarkdownContent] Skipping img with empty src',
+                    );
+                    return null;
+                  }
+
+                  const resolvedAlt = alt || '';
+                  const interactive = interactiveImages;
+                  const requestedSize = getMarkdownImageSizeFromTitle(title);
+                  const renderedTitle = requestedSize ? undefined : title;
+
+                  if (isGifSource(src)) {
+                    return (
+                      <GifFrameScrubber
+                        src={src}
+                        alt={resolvedAlt}
+                        imageClassName={imageClassName}
+                        interactive={interactive}
+                        requestedSize={requestedSize}
+                        onOpen={() =>
+                          setSelectedImage({ src, alt: resolvedAlt })
                         }
-                      : undefined
+                      />
+                    );
                   }
-                  onKeyDown={
-                    interactive
-                      ? (event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            setSelectedImage({ src, alt: resolvedAlt });
-                          }
-                        }
-                      : undefined
-                  }
-                  {...props}
-                />
-              );
-            },
-          }}
-        >
-          {renderedContent}
-        </ReactMarkdown>
+
+                  return (
+                    <img
+                      src={src}
+                      alt={resolvedAlt}
+                      title={renderedTitle}
+                      className={clsx(
+                        'my-2 block max-w-full rounded',
+                        interactive && 'cursor-zoom-in',
+                        imageClassName,
+                      )}
+                      style={getSizedImageStyle(requestedSize, style)}
+                      aria-label={
+                        interactive
+                          ? resolvedAlt || 'Open image preview'
+                          : undefined
+                      }
+                      role={interactive ? 'button' : undefined}
+                      tabIndex={interactive ? 0 : undefined}
+                      onClick={
+                        interactive
+                          ? (event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setSelectedImage({ src, alt: resolvedAlt });
+                            }
+                          : undefined
+                      }
+                      onKeyDown={
+                        interactive
+                          ? (event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setSelectedImage({ src, alt: resolvedAlt });
+                              }
+                            }
+                          : undefined
+                      }
+                      {...props}
+                    />
+                  );
+                },
+              }}
+            >
+              {segment.content}
+            </ReactMarkdown>
+          ),
+        )}
       </div>
 
       {imagePresentation === 'footer-thumbnails' && footerImages.length > 0 && (

@@ -8,6 +8,7 @@ import { CountdownRing } from '@/features/calendar/ui-countdown-ring';
 import {
   extractTeamsUrl,
   formatTimeHHMM,
+  getTeamsJoinUrl,
   getMeetingState,
   relativeLabel,
   sortMeetings,
@@ -45,6 +46,7 @@ export function NextMeetingButton() {
   const { data: calendarNotificationsSetting } =
     useCalendarNotificationsSetting();
   const enabled = calendarNotificationsSetting?.enabled ?? false;
+  const meetingJoinTarget = calendarNotificationsSetting?.meetingJoinTarget;
   const canShow = enabled && api.platform === 'darwin';
   const [meetings, setMeetings] = useState<UpcomingMeeting[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -121,7 +123,18 @@ export function NextMeetingButton() {
   const handleClick = () => toggleOverlay('calendar');
   const handleJoin = (e: MouseEvent) => {
     e.stopPropagation();
-    if (teamsUrl) window.open(teamsUrl, '_blank');
+    if (teamsUrl) {
+      void api.calendar.suppressMeetingStartPopup(next).catch(() => {});
+      void api.shell
+        .openTeamsJoinUrl(getTeamsJoinUrl(teamsUrl, meetingJoinTarget))
+        .catch((error) => {
+          addToast({
+            message:
+              error instanceof Error ? error.message : 'Could not open Teams',
+            type: 'error',
+          });
+        });
+    }
   };
 
   return (

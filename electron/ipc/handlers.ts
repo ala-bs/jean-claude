@@ -43,6 +43,7 @@ import type {
   InstallSourceItemsParams,
   UpdateSourceInstallParams,
 } from '@shared/source-management-types';
+import { isValidTeamsJoinUrl } from '@shared/teams-url';
 import {
   PRESET_EDITORS,
   type InteractionMode,
@@ -79,6 +80,7 @@ import {
   DebugRepository,
   TaskSummaryRepository,
   ProjectTodoRepository,
+  AiUsageRepository,
 } from '../database/repositories';
 import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { NotificationRepository } from '../database/repositories/notifications';
@@ -244,6 +246,7 @@ import {
   cleanupFeatureMapTempDir,
   FEATURE_MAP_GIT_PATH,
   getFeatureMapTempPaths,
+  getExistingProjectFeatureMapPath,
   getProjectFeatureMap,
   saveProjectFeatureMapFromTemp,
 } from '../services/project-feature-map-generation-service';
@@ -370,7 +373,7 @@ async function pullSourceBranch({
   return `origin/${remoteBranch}`;
 }
 
-const VALID_BACKENDS = new Set<string>(['claude-code', 'opencode']);
+const VALID_BACKENDS = new Set<string>(['claude-code', 'opencode', 'codex']);
 
 async function cleanupFeatureMapTempDirsForTask(taskId: string): Promise<void> {
   const steps = await TaskStepRepository.findByTaskId(taskId);
@@ -815,6 +818,9 @@ export function registerIpcHandlers() {
         const prompt = buildProjectFeatureMapPrompt({
           project,
           tempFilePath: paths.tempFilePath,
+          existingFeatureMapPath: await getExistingProjectFeatureMapPath(
+            project.path,
+          ),
           skillName: slotConfig?.skillName,
         });
         const meta: FeatureMapStepMeta = {
@@ -1129,6 +1135,14 @@ export function registerIpcHandlers() {
           taskName = await generateTaskName(
             taskData.prompt,
             project.aiSkillSlots,
+            {
+              feature: 'task-name',
+              projectId: taskData.projectId,
+              taskId: null,
+              stepId: null,
+              taskName: taskData.name ?? null,
+              projectName: project.name,
+            },
           );
           dbg.ipc('Generated task name: %s', taskName);
           // taskName may still be null if generation fails - that's ok
@@ -2478,10 +2492,13 @@ export function registerIpcHandlers() {
         stepData.autoStart = true;
       }
 
-      const step = await StepService.create(stepData);
+      let step = await StepService.create(stepData);
 
       const shouldStartNow = start && (!hasDeps || step.status === 'ready');
       if (shouldStartNow) {
+        // Return the step as running immediately so renderer caches do not keep
+        // a stale "ready" state while the async start pipeline boots.
+        step = await StepService.update(step.id, { status: 'running' });
         dbg.ipc('Auto-starting step %s (task %s)', step.id, step.taskId);
         const window = BrowserWindow.fromWebContents(event.sender);
         if (window) {
@@ -3039,6 +3056,7 @@ export function registerIpcHandlers() {
           deleteSourceBranch: boolean;
           transitionWorkItems: boolean;
           mergeCommitMessage?: string;
+          autoCompleteIgnoreConfigIds?: number[];
         };
       },
     ) => setPullRequestAutoComplete(params),
@@ -3452,7 +3470,10 @@ export function registerIpcHandlers() {
     if (window) {
       agentService.setMainWindow(window);
     }
-    return agentService.start(stepId);
+    agentService.start(stepId).catch((err) => {
+      dbg.ipc('Error starting step %s: %O', stepId, err);
+    });
+    return;
   });
 
   ipcMain.handle(AGENT_CHANNELS.STOP, (_, stepId: string) => {
@@ -3624,7 +3645,11 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'backendConfig:getUserConfig',
     (_: unknown, backend: unknown) => {
-      if (backend !== 'claude-code' && backend !== 'opencode') {
+      if (
+        backend !== 'claude-code' &&
+        backend !== 'opencode' &&
+        backend !== 'codex'
+      ) {
         throw new Error('Invalid backend');
       }
       return readBackendUserConfig(backend);
@@ -3633,7 +3658,11 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'backendConfig:setUserConfig',
     (_: unknown, backend: unknown, content: unknown) => {
-      if (backend !== 'claude-code' && backend !== 'opencode') {
+      if (
+        backend !== 'claude-code' &&
+        backend !== 'opencode' &&
+        backend !== 'codex'
+      ) {
         throw new Error('Invalid backend');
       }
       if (typeof content !== 'string') {
@@ -3665,6 +3694,13 @@ export function registerIpcHandlers() {
     return results;
   });
 
+  ipcMain.handle('shell:openTeamsJoinUrl', async (_, url: string) => {
+    if (!isValidTeamsJoinUrl(url)) {
+      throw new Error('Invalid Teams meeting URL');
+    }
+    await shell.openExternal(url);
+  });
+
   ipcMain.handle('calendar:listUpcomingMeetings', async () => {
     if (process.platform !== 'darwin') {
       return [];
@@ -3684,6 +3720,10 @@ export function registerIpcHandlers() {
       return;
     }
     await systemCalendarService.revealMeeting(meeting);
+  });
+
+  ipcMain.handle('calendar:suppressMeetingStartPopup', async (_, meeting) => {
+    systemCalendarService.suppressMeetingStartPopup(meeting);
   });
 
   ipcMain.handle('calendar:setIgnoredMeetingIds', async (_, ids: string[]) => {
@@ -3801,6 +3841,53 @@ export function registerIpcHandlers() {
     },
   );
 
+  // Rate limit swap status
+  ipcMain.handle('rate-limit-swap:status', async () => {
+    const { rateLimitSwapService } =
+      await import('../services/rate-limit-swap-service');
+    const { SettingsRepository } =
+      await import('../database/repositories/settings');
+    const settings = await SettingsRepository.get('rateLimitSwap');
+    if (!settings?.enabled || !settings.chain?.length)
+      return { active: false, swaps: [] };
+
+    const backends = await SettingsRepository.get('backends');
+    const enabledBackends = backends?.enabledBackends ?? ['claude-code'];
+
+    const swaps: Array<{ from: string; to: string }> = [];
+    for (const backend of enabledBackends) {
+      const result = await rateLimitSwapService.resolveBackend(backend, {
+        notify: false,
+      });
+      if (result.swapped && result.skippedDueToRateLimit) {
+        swaps.push({
+          from: backend,
+          to: `${result.backend}${result.model ? ` (${result.model})` : ''}`,
+        });
+      }
+    }
+    return { active: swaps.length > 0, swaps };
+  });
+
+  ipcMain.handle(
+    'agent:usage:getDashboard',
+    (_, params: { since: string; until?: string }) => {
+      return AiUsageRepository.getDashboard(params);
+    },
+  );
+
+  ipcMain.handle('agent:usage:getTaskUsage', (_, taskId: string) => {
+    return AiUsageRepository.getTaskUsage(taskId);
+  });
+
+  ipcMain.handle(
+    'rate-limit-swap:resolve',
+    async (_, backend: AgentBackendType) => {
+      const { rateLimitSwapService } =
+        await import('../services/rate-limit-swap-service');
+      return rateLimitSwapService.resolveBackend(backend, { notify: false });
+    },
+  );
   // Backend models
   ipcMain.handle('agent:getBackendModels', (_, backend: string) =>
     backendModelsService.getBackendModels(backend as AgentBackendType),
@@ -4871,7 +4958,13 @@ export function registerIpcHandlers() {
       const systemProject = await getOrCreateSystemProject();
 
       // Generate a task name
-      const taskName = await generateTaskName(data.prompt);
+      const taskName = await generateTaskName(data.prompt, null, {
+        feature: 'task-name',
+        projectId: systemProject.id,
+        taskId: null,
+        stepId: null,
+        projectName: systemProject.name,
+      });
 
       // Create task in system project
       const task = await TaskRepository.create({

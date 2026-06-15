@@ -1,5 +1,7 @@
 import {
+  BarChart3,
   ClipboardList,
+  History,
   X,
   Menu,
   RefreshCw,
@@ -32,6 +34,7 @@ import { useProjectTodoCount } from '@/hooks/use-project-todos';
 import { useProjects } from '@/hooks/use-projects';
 import { api, type ReloadPreviewProgress } from '@/lib/api';
 import { useBacklogSelectedProjectId } from '@/stores/backlog-overlay-draft';
+import { useChangelogStore } from '@/stores/changelog';
 import { useCurrentVisibleProject } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
@@ -397,6 +400,7 @@ export function Header() {
   const { projectId } = useCurrentVisibleProject();
   const { data: projects = [] } = useProjects();
   const openOverlay = useOverlaysStore((state) => state.open);
+  const openChangelog = useChangelogStore((state) => state.open);
   const persistedBacklogProjectId = useBacklogSelectedProjectId();
   const backlogProjectId = projects.some(
     (project) => project.id === persistedBacklogProjectId,
@@ -584,6 +588,9 @@ export function Header() {
           >
             Pipelines
           </DropdownItem>
+          <DropdownItem icon={<History />} onClick={openChangelog}>
+            Changelog
+          </DropdownItem>
           <DropdownItem
             icon={<Terminal />}
             onClick={() => openOverlay('running-commands')}
@@ -627,6 +634,16 @@ export function Header() {
           <DropdownDivider />
           <DropdownInfo label="Build" value={commitHash} />
         </Dropdown>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<BarChart3 />}
+          title="AI usage"
+          aria-label="Open AI usage"
+          onClick={() => openOverlay('usage')}
+          className="ml-1 px-2"
+        />
+        <NextMeetingButton />
         {api.app.isDevMode && (
           <div
             className="border-status-run/50 bg-status-run-soft text-status-run group relative ml-2 flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] shadow-[0_0_16px_color-mix(in_srgb,var(--color-status-run)_22%,transparent)]"
@@ -673,7 +690,6 @@ export function Header() {
           } as CSSProperties
         }
       >
-        <NextMeetingButton />
         <RamUsageDisplay />
         <CompletionCostDisplay />
         <ThemeToggle />

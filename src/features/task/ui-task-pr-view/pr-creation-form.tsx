@@ -1,5 +1,13 @@
-import { Sparkles, Plus } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Image, Plus, Sparkles, X } from 'lucide-react';
+import {
+  type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
+  useCallback,
+  useRef,
+  useState,
+} from 'react';
 
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
@@ -9,6 +17,10 @@ import { Kbd } from '@/common/ui/kbd';
 import { Separator } from '@/common/ui/separator';
 import { Textarea } from '@/common/ui/textarea';
 import {
+  isVideoFile,
+  VideoGifConverter,
+} from '@/features/common/ui-video-gif-converter';
+import {
   useCreatePullRequest,
   useAddPrFileComments,
 } from '@/hooks/use-create-pull-request';
@@ -17,10 +29,24 @@ import { useAiSkillSlotsSetting } from '@/hooks/use-settings';
 import { useGenerateSummary, useTaskSummary } from '@/hooks/use-task-summary';
 import { useTask } from '@/hooks/use-tasks';
 import { useWorktreeStatus } from '@/hooks/use-worktree-diff';
+import { api } from '@/lib/api';
 import type { FileAnnotation } from '@/lib/api';
+import { feedQueryKeys } from '@/lib/feed-query-keys';
+import { formatBytes } from '@/lib/format-bytes';
+import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { usePrDraftState } from '@/stores/navigation';
 import { useToastStore } from '@/stores/toasts';
+import type { PromptImagePart } from '@shared/agent-backend-types';
+
+type StagedPrImage = PromptImagePart & { placeholderMarkdown: string };
+
+function placeholderPattern(placeholderMarkdown: string) {
+  const token = placeholderMarkdown.match(/jc-image:\/\/([^)]+)/)?.[1];
+  return token
+    ? new RegExp(`!\\[[^\\]]*\\]\\(jc-image:\\/\\/${token}\\)`, 'g')
+    : null;
+}
 
 export function PrCreationForm({
   taskId,
@@ -55,20 +81,185 @@ export function PrCreationForm({
   const [commitUnstaged, setCommitUnstaged] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [formFilledFromSummary, setFormFilledFromSummary] = useState(false);
+  const [stagedImages, setStagedImages] = useState<StagedPrImage[]>([]);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const imageTokenCounterRef = useRef(0);
   const submittedRef = useRef(false);
+  const addToast = useToastStore((s) => s.addToast);
+  const queryClient = useQueryClient();
 
   const { data: worktreeStatus } = useWorktreeStatus(taskId);
   const hasUncommittedChanges = worktreeStatus?.hasUncommittedChanges ?? false;
 
-  function handleTitleChange(newTitle: string) {
-    setTitle(newTitle);
-    setPrDraft({ title: newTitle, description });
-  }
+  const handleTitleChange = useCallback(
+    (newTitle: string) => {
+      setTitle(newTitle);
+      setPrDraft({ title: newTitle, description });
+    },
+    [description, setPrDraft],
+  );
 
-  function handleDescriptionChange(newDescription: string) {
-    setDescription(newDescription);
-    setPrDraft({ title, description: newDescription });
-  }
+  const updateDescription = useCallback(
+    (updater: string | ((current: string) => string)) => {
+      setDescription((current) => {
+        const next = typeof updater === 'function' ? updater(current) : updater;
+        setPrDraft({ title, description: next });
+        return next;
+      });
+    },
+    [setPrDraft, title],
+  );
+
+  const handleDescriptionChange = useCallback(
+    (newDescription: string) => {
+      updateDescription(newDescription);
+    },
+    [updateDescription],
+  );
+
+  const insertDescriptionMarkdown = useCallback(
+    (markdown: string) => {
+      const textarea = descriptionRef.current;
+      if (!textarea) {
+        updateDescription(
+          (current) => `${current}${current ? '\n\n' : ''}${markdown}`,
+        );
+        return;
+      }
+
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      updateDescription(
+        (current) =>
+          `${current.slice(0, start)}${markdown}${current.slice(end)}`,
+      );
+      requestAnimationFrame(() => {
+        textarea.focus();
+        const cursor = start + markdown.length;
+        textarea.setSelectionRange(cursor, cursor);
+      });
+    },
+    [updateDescription],
+  );
+
+  const stageDescriptionImage = useCallback(
+    (image: PromptImagePart) => {
+      if (stagedImages.length >= MAX_IMAGES) {
+        addToast({
+          type: 'error',
+          message: `Only ${MAX_IMAGES} images or GIFs can be attached.`,
+        });
+        return;
+      }
+
+      imageTokenCounterRef.current += 1;
+      const token = imageTokenCounterRef.current;
+      const fileName = image.filename || `image-${token}.png`;
+      const safeAltText = fileName.replace(/[[\]()\\]/g, '_');
+      const placeholderMarkdown = `![${safeAltText}](jc-image://${token})`;
+
+      insertDescriptionMarkdown(placeholderMarkdown);
+      setStagedImages((current) => [
+        ...current,
+        { ...image, placeholderMarkdown },
+      ]);
+    },
+    [addToast, insertDescriptionMarkdown, stagedImages.length],
+  );
+
+  const removeStagedImage = useCallback(
+    (index: number) => {
+      const image = stagedImages[index];
+      if (!image) return;
+      updateDescription((current) =>
+        current.replace(image.placeholderMarkdown, ''),
+      );
+      setStagedImages((current) => current.filter((_, i) => i !== index));
+    },
+    [stagedImages, updateDescription],
+  );
+
+  const stageImageFiles = useCallback(
+    async (files: File[]) => {
+      const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+      const nextVideoFile = files.find(isVideoFile);
+      if (imageFiles.length === 0 && !nextVideoFile) return;
+
+      const allowed = MAX_IMAGES - stagedImages.length;
+      if (allowed <= 0) return;
+
+      try {
+        await Promise.all(
+          imageFiles
+            .slice(0, allowed)
+            .map((file) =>
+              processImageFile(file, stageDescriptionImage, (message) =>
+                addToast({ type: 'error', message }),
+              ),
+            ),
+        );
+        if (nextVideoFile && allowed > imageFiles.length) {
+          setVideoFile(nextVideoFile);
+        }
+      } catch (error) {
+        addToast({
+          type: 'error',
+          message:
+            error instanceof Error ? error.message : 'Failed to stage image',
+        });
+      }
+    },
+    [addToast, stageDescriptionImage, stagedImages.length],
+  );
+
+  const handleImageSelection = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      await stageImageFiles(Array.from(event.target.files ?? []));
+      event.target.value = '';
+    },
+    [stageImageFiles],
+  );
+
+  const handleDescriptionPaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(event.clipboardData.files);
+      if (
+        files.some(
+          (file) => file.type.startsWith('image/') || isVideoFile(file),
+        )
+      ) {
+        event.preventDefault();
+        void stageImageFiles(files);
+      }
+    },
+    [stageImageFiles],
+  );
+
+  const handleDescriptionDrop = useCallback(
+    (event: DragEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(event.dataTransfer.files);
+      if (
+        files.some(
+          (file) => file.type.startsWith('image/') || isVideoFile(file),
+        )
+      ) {
+        event.preventDefault();
+        void stageImageFiles(files);
+      }
+    },
+    [stageImageFiles],
+  );
+
+  const handleDescriptionDragOver = useCallback(
+    (event: DragEvent<HTMLTextAreaElement>) => {
+      if (Array.from(event.dataTransfer.types).includes('Files')) {
+        event.preventDefault();
+      }
+    },
+    [],
+  );
 
   const { data: existingSummary } = useTaskSummary(taskId);
   const generateSummary = useGenerateSummary();
@@ -78,8 +269,6 @@ export function PrCreationForm({
   const addRunningJob = useBackgroundJobsStore((s) => s.addRunningJob);
   const markJobSucceeded = useBackgroundJobsStore((s) => s.markJobSucceeded);
   const markJobFailed = useBackgroundJobsStore((s) => s.markJobFailed);
-  const addToast = useToastStore((s) => s.addToast);
-
   // Check if PR description AI slot is configured (allows empty title/description)
   const { data: globalSlots } = useAiSkillSlotsSetting();
   const canAutoGeneratePrDescription = !!(
@@ -139,6 +328,8 @@ export function PrCreationForm({
   function handleCreate() {
     if (submittedRef.current) return;
     submittedRef.current = true;
+    const descriptionToCreate = description;
+    const imagesToUpload = stagedImages;
 
     // Collect checked annotations before closing
     const checkedAnnotations = annotationStates
@@ -172,11 +363,68 @@ export function PrCreationForm({
       .mutateAsync({
         taskId,
         title,
-        description,
+        description: descriptionToCreate,
         isDraft,
         commitUnstaged: hasUncommittedChanges ? commitUnstaged : undefined,
       })
       .then(async (result) => {
+        let warningMessage = result.editorCloseWarning ?? null;
+
+        if (imagesToUpload.length > 0) {
+          try {
+            let updatedDescription = descriptionToCreate;
+            for (const image of imagesToUpload) {
+              const attachment =
+                await api.azureDevOps.uploadPullRequestAttachment({
+                  providerId: repoProviderId,
+                  projectId: repoProjectId,
+                  repoId,
+                  pullRequestId: result.id,
+                  fileName: image.filename || 'image.png',
+                  mimeType: image.storageMimeType ?? image.mimeType,
+                  dataBase64: image.storageData ?? image.data,
+                });
+              const pattern = placeholderPattern(image.placeholderMarkdown);
+              updatedDescription = pattern
+                ? updatedDescription.replace(
+                    pattern,
+                    image.placeholderMarkdown.replace(
+                      /\([^)]*\)$/,
+                      `(${attachment.url})`,
+                    ),
+                  )
+                : updatedDescription;
+            }
+            await api.azureDevOps.updatePullRequestDescription({
+              providerId: repoProviderId,
+              projectId: repoProjectId,
+              repoId,
+              pullRequestId: result.id,
+              description: updatedDescription,
+            });
+            await Promise.all([
+              queryClient.invalidateQueries({
+                queryKey: ['pull-request', projectId, result.id],
+              }),
+              queryClient.invalidateQueries({
+                queryKey: ['pull-requests', projectId],
+              }),
+              queryClient.invalidateQueries({
+                queryKey: ['all-projects-pull-requests'],
+              }),
+              queryClient.invalidateQueries({ queryKey: ['tasks', taskId] }),
+              queryClient.invalidateQueries({ queryKey: feedQueryKeys.tasks }),
+              queryClient.invalidateQueries({
+                queryKey: feedQueryKeys.pullRequests,
+              }),
+            ]);
+          } catch {
+            warningMessage = warningMessage
+              ? `${warningMessage}\nPR created, but attachments could not be uploaded.`
+              : 'PR created, but attachments could not be uploaded.';
+          }
+        }
+
         // Post comments for checked annotations
         if (checkedAnnotations.length > 0) {
           try {
@@ -197,7 +445,7 @@ export function PrCreationForm({
         }
 
         markJobSucceeded(jobId, {
-          warningMessage: result.editorCloseWarning ?? null,
+          warningMessage,
         });
       })
       .catch((err: unknown) => {
@@ -314,9 +562,13 @@ export function PrCreationForm({
               </Button>
             </div>
             <Textarea
+              ref={descriptionRef}
               id="pr-description"
               value={description}
               onChange={(e) => handleDescriptionChange(e.target.value)}
+              onPaste={handleDescriptionPaste}
+              onDrop={handleDescriptionDrop}
+              onDragOver={handleDescriptionDragOver}
               placeholder={
                 canAutoGeneratePrDescription
                   ? 'Leave empty for AI generation...'
@@ -325,6 +577,58 @@ export function PrCreationForm({
               rows={8}
               autoComplete="off"
             />
+            {stagedImages.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {stagedImages.map((image, index) => (
+                  <div
+                    key={`${image.filename ?? 'img'}-${index}`}
+                    className="group relative"
+                  >
+                    <img
+                      src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
+                      alt={image.filename || 'Attached image'}
+                      title={
+                        image.sizeBytes
+                          ? formatBytes(image.sizeBytes)
+                          : undefined
+                      }
+                      className="h-10 w-10 rounded border border-white/10 object-cover"
+                    />
+                    {image.sizeBytes && (
+                      <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[8px] leading-3 text-white">
+                        {formatBytes(image.sizeBytes)}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeStagedImage(index)}
+                      className="absolute -top-1 -right-1 hidden h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white group-hover:flex"
+                      aria-label="Remove image"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              className="hidden"
+              onChange={handleImageSelection}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="mt-2"
+              icon={<Image className="h-3.5 w-3.5" />}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              Add image/GIF
+            </Button>
           </div>
 
           {/* Annotations checklist (only shown after summary) */}
@@ -400,6 +704,11 @@ export function PrCreationForm({
 
       {/* Footer with buttons */}
       <Separator />
+      <VideoGifConverter
+        file={videoFile}
+        onAttach={stageDescriptionImage}
+        onClose={() => setVideoFile(null)}
+      />
       <div className="flex gap-2 p-4">
         <Button
           type="button"

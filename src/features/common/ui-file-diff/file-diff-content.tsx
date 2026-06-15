@@ -66,6 +66,8 @@ export function FileDiffContent({
   defaultCommentFormLineRanges,
   onCommentFormClose,
   shouldKeepCommentFormRangeOnOpen,
+  getReviewCommentDraftBody,
+  onReviewCommentDraftBodyChange,
 }: {
   file: DiffFile;
   oldContent: string;
@@ -100,6 +102,12 @@ export function FileDiffContent({
   onCommentFormClose?: (range: LineRange) => void;
   /** Decide which already-open forms stay when opening another form. */
   shouldKeepCommentFormRangeOnOpen?: (range: LineRange) => boolean;
+  getReviewCommentDraftBody?: (lineStart: number, lineEnd?: number) => string;
+  onReviewCommentDraftBodyChange?: (
+    body: string,
+    lineStart: number,
+    lineEnd?: number,
+  ) => void;
   // Annotation props - optional
   annotations?: FileAnnotation[];
   // Review comment props - optional
@@ -341,6 +349,10 @@ export function FileDiffContent({
                 handleAddReviewCommentForRange(range, body, presets, images)
               }
               onCancel={() => removeRange(range)}
+              initialBody={getReviewCommentDraftBody?.(range.start, lineEnd)}
+              onBodyChange={(body) =>
+                onReviewCommentDraftBodyChange?.(body, range.start, lineEnd)
+              }
             />
           ),
         });
@@ -368,6 +380,8 @@ export function FileDiffContent({
     CommentForm,
     handleAddCommentForRange,
     handleAddReviewCommentForRange,
+    getReviewCommentDraftBody,
+    onReviewCommentDraftBodyChange,
     removeRange,
     isAddingComment,
   ]);

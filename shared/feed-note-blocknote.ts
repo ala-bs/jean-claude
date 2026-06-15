@@ -42,44 +42,85 @@ function parseBlocks(content: string): BlockNoteBlock[] | null {
 }
 
 export function markdownToBlockNoteJson(markdown: string): string {
-  const blocks = markdown.split('\n').map((line): BlockNoteBlock => {
-    const taskMatch = line.match(TASK_LINE_PATTERN);
-    if (taskMatch) {
-      return {
-        type: 'checkListItem',
-        props: { checked: taskMatch[2].toLowerCase() === 'x' },
-        content: taskMatch[4].trim(),
-      };
+  const blocks: BlockNoteBlock[] = [];
+  const stack: BlockNoteBlock[] = [];
+
+  markdown.split('\n').forEach((line) => {
+    const leadingWhitespace = line.match(/^[\t ]*/)?.[0] ?? '';
+    const trimmedLine = line.slice(leadingWhitespace.length);
+
+    if (trimmedLine.length === 0) {
+      blocks.push({ type: 'paragraph', content: line });
+      stack.length = 0;
+      return;
     }
 
-    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
-    if (headingMatch) {
-      return {
-        type: 'heading',
-        props: { level: headingMatch[1].length },
-        content: headingMatch[2],
-      };
+    const canNest = isMarkdownListLine(trimmedLine);
+    const depth = canNest
+      ? Math.min(
+          Math.floor(leadingWhitespace.replaceAll('\t', '  ').length / 2),
+          stack.length,
+        )
+      : 0;
+    const block = markdownLineToBlock(canNest ? trimmedLine : line);
+
+    if (depth === 0) {
+      blocks.push(block);
+    } else {
+      const parent = stack[depth - 1];
+      parent.children = [...(parent.children ?? []), block];
     }
 
-    const bulletMatch = line.match(/^\s*[-*+]\s+(.*)$/);
-    if (bulletMatch) {
-      return { type: 'bulletListItem', content: bulletMatch[1] };
-    }
-
-    const numberedMatch = line.match(/^\s*\d+[.)]\s+(.*)$/);
-    if (numberedMatch) {
-      return { type: 'numberedListItem', content: numberedMatch[1] };
-    }
-
-    const quoteMatch = line.match(/^>\s?(.*)$/);
-    if (quoteMatch) {
-      return { type: 'quote', content: quoteMatch[1] };
-    }
-
-    return { type: 'paragraph', content: line };
+    stack[depth] = block;
+    stack.length = depth + 1;
   });
 
   return JSON.stringify(blocks.length > 0 ? blocks : [{ type: 'paragraph' }]);
+}
+
+function isMarkdownListLine(line: string): boolean {
+  return (
+    TASK_LINE_PATTERN.test(line) ||
+    /^[-*+]\s+/.test(line) ||
+    /^\d+[.)]\s+/.test(line)
+  );
+}
+
+function markdownLineToBlock(line: string): BlockNoteBlock {
+  const taskMatch = line.match(TASK_LINE_PATTERN);
+  if (taskMatch) {
+    return {
+      type: 'checkListItem',
+      props: { checked: taskMatch[2].toLowerCase() === 'x' },
+      content: taskMatch[4].trim(),
+    };
+  }
+
+  const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+  if (headingMatch) {
+    return {
+      type: 'heading',
+      props: { level: headingMatch[1].length },
+      content: headingMatch[2],
+    };
+  }
+
+  const bulletMatch = line.match(/^\s*[-*+]\s+(.*)$/);
+  if (bulletMatch) {
+    return { type: 'bulletListItem', content: bulletMatch[1] };
+  }
+
+  const numberedMatch = line.match(/^\s*\d+[.)]\s+(.*)$/);
+  if (numberedMatch) {
+    return { type: 'numberedListItem', content: numberedMatch[1] };
+  }
+
+  const quoteMatch = line.match(/^>\s?(.*)$/);
+  if (quoteMatch) {
+    return { type: 'quote', content: quoteMatch[1] };
+  }
+
+  return { type: 'paragraph', content: line };
 }
 
 export function blockNoteJsonToMarkdown(content: string): string {

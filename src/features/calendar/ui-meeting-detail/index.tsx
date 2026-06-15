@@ -7,19 +7,23 @@ import {
   EyeOff,
   MapPin,
   Repeat,
+  User,
   Video,
 } from 'lucide-react';
 
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
 import { CountdownRing } from '@/features/calendar/ui-countdown-ring';
+import { OrganizerTooltip } from '@/features/calendar/ui-organizer-tooltip';
 import {
   extractTeamsUrl,
   formatDayHeader,
   formatTimeRange,
+  getTeamsJoinUrl,
   getMeetingState,
   minutesBetween,
 } from '@/features/calendar/utils-calendar';
+import { useCalendarNotificationsSetting } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
 import type { UpcomingMeeting } from '@shared/calendar-types';
@@ -36,6 +40,8 @@ export function MeetingDetail({
   onToggleIgnore: () => void;
 }) {
   const addToast = useToastStore((s) => s.addToast);
+  const { data: calendarNotificationsSetting } =
+    useCalendarNotificationsSetting();
 
   if (!meeting) {
     return (
@@ -66,7 +72,22 @@ export function MeetingDetail({
   };
 
   const openTeams = () => {
-    if (teamsUrl) window.open(teamsUrl, '_blank');
+    if (teamsUrl) {
+      void api.shell
+        .openTeamsJoinUrl(
+          getTeamsJoinUrl(
+            teamsUrl,
+            calendarNotificationsSetting?.meetingJoinTarget,
+          ),
+        )
+        .catch((error) => {
+          addToast({
+            message:
+              error instanceof Error ? error.message : 'Could not open Teams',
+            type: 'error',
+          });
+        });
+    }
   };
 
   return (
@@ -148,6 +169,17 @@ export function MeetingDetail({
               <Repeat className="text-ink-3 h-3 w-3" />
               recurring
             </span>
+          </>
+        )}
+        {meeting.organizer && (
+          <>
+            <span className="text-ink-4">·</span>
+            <OrganizerTooltip meeting={meeting}>
+              <span className="flex max-w-[220px] items-center gap-1.5 truncate">
+                <User className="text-ink-3 h-3 w-3 shrink-0" />
+                From {meeting.organizer}
+              </span>
+            </OrganizerTooltip>
           </>
         )}
         <span className="text-ink-4">·</span>

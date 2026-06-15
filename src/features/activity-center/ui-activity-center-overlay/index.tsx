@@ -28,7 +28,6 @@ import {
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
-import { ProjectLogo } from '@/features/project/ui-project-logo';
 import { useProjects } from '@/hooks/use-projects';
 import { api } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/time';
@@ -131,18 +130,16 @@ function ProjectPill({
       <button
         type="button"
         onClick={() => onOpenSettings(project.id)}
-        className="bg-glass-medium hover:bg-glass-light inline-flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] transition-colors"
+        className="bg-glass-medium hover:bg-glass-light inline-flex min-w-0 items-center rounded-full px-2 py-0.5 text-[10px] transition-colors"
         aria-label={`Open ${project.name} project settings`}
       >
-        <ProjectLogo project={project} size="xs" className="rounded-full" />
         <span className="text-ink-2 truncate">{project.name}</span>
       </button>
     );
   }
 
   return (
-    <span className="bg-glass-medium inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px]">
-      <ProjectLogo project={project} size="xs" className="rounded-full" />
+    <span className="bg-glass-medium inline-flex items-center rounded-full px-2 py-0.5 text-[10px]">
       <span className="text-ink-2 truncate">{project.name}</span>
     </span>
   );
@@ -456,7 +453,9 @@ export function ActivityCenterOverlay({
         ? debugLogs.filter(
             (l) =>
               matchesSearch(l.message, searchLower) ||
-              matchesSearch(l.namespace, searchLower),
+              matchesSearch(l.namespace, searchLower) ||
+              matchesSearch(l.level, searchLower) ||
+              matchesSearch(formatTimestamp(l.timestamp), searchLower),
           )
         : debugLogs,
     [debugLogs, searchLower],
@@ -904,7 +903,9 @@ export function ActivityCenterOverlay({
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Filter..."
+                placeholder={
+                  activeTab === 'debug' ? 'Filter debug logs...' : 'Filter...'
+                }
                 className="text-ink-0 placeholder:text-ink-3 border-glass-border bg-bg-0 flex-1 rounded border px-2 py-1 text-[12.5px] outline-none"
               />
               <span className="text-ink-4 shrink-0 text-[10px]">

@@ -70,7 +70,7 @@ import { TaskPrView } from '@/features/task/ui-task-pr-view';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { useAgentStream, useAgentControls } from '@/hooks/use-agent';
 import { useBackendModels } from '@/hooks/use-backend-models';
-import { useContextUsage, type ContextUsage } from '@/hooks/use-context-usage';
+import { useContextUsage } from '@/hooks/use-context-usage';
 import { useModel, formatModelName } from '@/hooks/use-model';
 import { useProject, useProjectIsGitRepository } from '@/hooks/use-projects';
 import {
@@ -106,6 +106,8 @@ import {
 import { api } from '@/lib/api';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { getDefaultModelForBackend } from '@/lib/default-models';
+import { getContextWindowForModel } from '@/lib/model-context-window';
+import { formatNumber } from '@/lib/number';
 import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
 import { getBranchFromWorktreePath } from '@/lib/worktree';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
@@ -161,6 +163,42 @@ import { ToolDiffPreviewPane } from './tool-diff-preview-pane';
 
 const LAST_ASSISTANT_MESSAGE_MAX_LENGTH = 1200;
 
+type StepTokenSummary = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  displayTokens: number;
+  totalTokens: number;
+};
+
+function getStepTokenSummary(entries: NormalizedEntry[]): StepTokenSummary {
+  const summary: StepTokenSummary = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    displayTokens: 0,
+    totalTokens: 0,
+  };
+
+  for (const entry of entries) {
+    if (entry.type !== 'result' || !entry.usage) continue;
+
+    summary.inputTokens += entry.usage.inputTokens;
+    summary.outputTokens += entry.usage.outputTokens;
+    summary.cacheReadTokens += entry.usage.cacheReadTokens ?? 0;
+    summary.cacheCreationTokens += entry.usage.cacheCreationTokens ?? 0;
+  }
+
+  summary.displayTokens =
+    summary.inputTokens + summary.outputTokens + summary.cacheCreationTokens;
+
+  summary.totalTokens = summary.displayTokens + summary.cacheReadTokens;
+
+  return summary;
+}
+
 function buildReviewChangesPrompt(): string {
   return [
     'Review the current task changes.',
@@ -208,6 +246,45 @@ function getReferenceStepForPreset({
     steps[steps.length - 1] ??
     null
   );
+}
+
+function getContinueReferenceStep({
+  steps,
+  activeStepId,
+  preferredStepId,
+}: {
+  steps: TaskStep[];
+  activeStepId: string | null;
+  preferredStepId?: string | null;
+}): TaskStep | null {
+  function isUsableContinueSource(step: TaskStep | null | undefined): boolean {
+    return Boolean(
+      step &&
+      (step.status === 'completed' ||
+        step.status === 'interrupted' ||
+        step.status === 'errored') &&
+      (step.output !== null || step.sessionId !== null),
+    );
+  }
+
+  const preferred = getReferenceStepForPreset({
+    steps,
+    activeStepId,
+    preferredStepId,
+  });
+
+  if (isUsableContinueSource(preferred)) {
+    return preferred;
+  }
+
+  for (let index = steps.length - 1; index >= 0; index--) {
+    const step = steps[index];
+    if (isUsableContinueSource(step)) {
+      return step;
+    }
+  }
+
+  return null;
 }
 
 function getLastAssistantMessage(messages: NormalizedEntry[]): string {
@@ -374,7 +451,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   } = useTaskFileExplorerState(taskId);
 
   const agentState = useAgentStream({ taskId, stepId: activeStepId });
-  const contextUsage = useContextUsage(agentState.messages);
+  const stepTokenSummary = useMemo(
+    () => getStepTokenSummary(agentState.messages),
+    [agentState.messages],
+  );
   const model = useModel(agentState.messages);
   const {
     start,
@@ -390,6 +470,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   } = useAgentControls({ taskId, stepId: activeStepId });
 
   const addToast = useToastStore((s) => s.addToast);
+  const removeReviewComment = useReviewCommentsStore((s) => s.removeComment);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
   const [isChangeWorktreePathDialogOpen, setIsChangeWorktreePathDialogOpen] =
@@ -802,6 +883,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const handleAddStep = useCallback(
     async (data: {
       promptTemplate: string;
+      hasUserPrompt: boolean;
       presetType: AddStepPresetType;
       interactionMode: InteractionMode;
       agentBackend: AgentBackendType;
@@ -809,17 +891,35 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       thinkingEffort: ThinkingEffort;
       images: PromptImagePart[];
       start: boolean;
+      includedReviewCommentIds: string[];
       reviewers?: import('@shared/types').ReviewerConfig[];
     }) => {
       const stepList = steps ?? [];
       const preferredStepId = addStepAtEnd
         ? (stepList[stepList.length - 1]?.id ?? null)
         : addStepAfterStepId;
-      const referenceStep = getReferenceStepForPreset({
-        steps: stepList,
-        activeStepId,
-        preferredStepId,
-      });
+      const referenceStep =
+        data.presetType === 'continue'
+          ? getContinueReferenceStep({
+              steps: stepList,
+              activeStepId,
+              preferredStepId,
+            })
+          : getReferenceStepForPreset({
+              steps: stepList,
+              activeStepId,
+              preferredStepId,
+            });
+
+      if (data.presetType === 'continue' && !referenceStep) {
+        addToast({
+          type: 'error',
+          message:
+            'No usable previous step to continue from. Pick step with actual messages or finish current step first.',
+        });
+        return;
+      }
+
       const insertionSortOrder = (() => {
         if (addStepAtEnd) return stepList.length;
         if (stepList.length === 0) return 0;
@@ -836,8 +936,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           : data.presetType === 'review-changes'
             ? 'Review Changes'
             : 'Step';
-      const name =
-        data.promptTemplate.split('\n')[0]?.slice(0, 40).trim() || defaultName;
+      const name = data.hasUserPrompt
+        ? data.promptTemplate.split('\n')[0]?.slice(0, 40).trim() || defaultName
+        : defaultName;
 
       const promptTemplate =
         data.presetType === 'continue' && referenceStep
@@ -846,13 +947,15 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               userPrompt: data.promptTemplate,
             })
           : data.presetType === 'review-changes'
-            ? data.promptTemplate || buildReviewChangesPrompt()
+            ? [
+                data.hasUserPrompt ? null : buildReviewChangesPrompt(),
+                data.promptTemplate,
+              ]
+                .filter((part): part is string => !!part?.trim())
+                .join('\n\n')
             : data.promptTemplate;
 
-      const dependsOn =
-        data.presetType === 'continue' && referenceStep
-          ? [referenceStep.id]
-          : [];
+      const dependsOn = referenceStep ? [referenceStep.id] : [];
 
       const isReview = data.presetType === 'review-changes';
       const reviewers = isReview ? data.reviewers : undefined;
@@ -881,6 +984,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         setAddStepAfterStepId(null);
         setAddStepAtEnd(false);
         setActiveStepId(step.id);
+        for (const commentId of data.includedReviewCommentIds) {
+          removeReviewComment(taskId, commentId);
+        }
         if (data.start) {
           setStartingStepIds((prev) => new Set(prev).add(step.id));
           if (!stepStartJobIdsRef.current.has(step.id)) {
@@ -914,6 +1020,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       addRunningJob,
       projectId,
       task?.projectId,
+      removeReviewComment,
     ],
   );
 
@@ -1831,7 +1938,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onQueue={queuePrompt}
                   queuedPrompts={agentState.queuedPrompts}
                   onStop={handleStop}
-                  contextUsage={contextUsage}
+                  entries={agentState.messages}
+                  stepTokenSummary={stepTokenSummary}
                   projectRoot={taskRootPath}
                   getCompletionContextBeforePrompt={
                     getCompletionContextBeforePrompt
@@ -1988,7 +2096,8 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onQueue,
   queuedPrompts,
   onStop,
-  contextUsage,
+  entries,
+  stepTokenSummary,
   projectRoot,
   getCompletionContextBeforePrompt,
 }: {
@@ -2001,7 +2110,8 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onQueue: (parts: PromptPart[]) => void;
   queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
-  contextUsage: ContextUsage;
+  entries: NormalizedEntry[];
+  stepTokenSummary: StepTokenSummary;
   projectRoot: string | null;
   getCompletionContextBeforePrompt: () => string;
 }) {
@@ -2013,6 +2123,8 @@ const TaskInputFooter = memo(function TaskInputFooter({
     stepId: activeStepId ?? undefined,
   });
   const { data: footerSnippets = [] } = usePromptSnippetsSetting();
+  const { data: footerBackendDefaultModelsSetting } =
+    useBackendDefaultModelsSetting();
 
   const snippetVariableContext: SnippetVariableContext = useMemo(
     () => ({
@@ -2040,6 +2152,27 @@ const TaskInputFooter = memo(function TaskInputFooter({
   const effectiveModel = activeStep?.modelPreference ?? 'default';
 
   const { data: dynamicModels } = useBackendModels(effectiveBackend);
+  const resolvedModelForContext =
+    effectiveModel === 'default'
+      ? getDefaultModelForBackend({
+          backend: effectiveBackend,
+          project: footerProject,
+          backendDefaultModels: footerBackendDefaultModelsSetting,
+        })
+      : effectiveModel;
+  const activeModelMeta = dynamicModels?.find(
+    (dynamicModel) => dynamicModel.id === resolvedModelForContext,
+  );
+  const contextWindow = getContextWindowForModel({
+    backend: effectiveBackend,
+    model: resolvedModelForContext,
+    dynamicContextWindow: activeModelMeta?.contextWindow,
+  });
+  const contextUsage = useContextUsage({
+    entries,
+    backend: effectiveBackend,
+    contextWindow,
+  });
   const thinkingCapabilities = getModelThinkingCapabilities(
     effectiveModel,
     dynamicModels,
@@ -2273,6 +2406,13 @@ const TaskInputFooter = memo(function TaskInputFooter({
     </div>
   );
 
+  const tokenControls = (
+    <>
+      <StepTokenSummaryDisplay summary={stepTokenSummary} />
+      <ContextUsageDisplay contextUsage={contextUsage} />
+    </>
+  );
+
   return (
     <div
       ref={containerRef}
@@ -2334,9 +2474,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
                 />
               </>
             }
-            controlsBeforeButtons={
-              <ContextUsageDisplay contextUsage={contextUsage} />
-            }
+            controlsBeforeButtons={tokenControls}
             buttonSize="sm"
             textareaClassName="bg-transparent px-1 py-0 text-sm leading-[20px]"
           />
@@ -2369,9 +2507,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
             controlsAboveButtons={selectorGroup}
-            controlsBeforeButtons={
-              <ContextUsageDisplay contextUsage={contextUsage} />
-            }
+            controlsBeforeButtons={tokenControls}
             buttonSize="sm"
             fillAvailableHeight
             textareaClassName="bg-transparent px-1 py-0 text-sm leading-[20px]"
@@ -2393,3 +2529,25 @@ const TaskInputFooter = memo(function TaskInputFooter({
     </div>
   );
 });
+
+function StepTokenSummaryDisplay({ summary }: { summary: StepTokenSummary }) {
+  if (summary.displayTokens === 0) return null;
+
+  const title = [
+    `Step tokens: ${summary.displayTokens.toLocaleString()} tokens`,
+    `Input: ${summary.inputTokens.toLocaleString()}`,
+    `Output: ${summary.outputTokens.toLocaleString()}`,
+    `Cache read: ${summary.cacheReadTokens.toLocaleString()}`,
+    `Cache created: ${summary.cacheCreationTokens.toLocaleString()}`,
+    `Raw total with cache read: ${summary.totalTokens.toLocaleString()}`,
+  ].join('\n');
+
+  return (
+    <div
+      className="text-ink-3 border-glass-border bg-bg-2/70 flex h-7 items-center rounded-md border px-2 text-[11px] font-medium tabular-nums"
+      title={title}
+    >
+      {formatNumber(summary.displayTokens)} tok
+    </div>
+  );
+}

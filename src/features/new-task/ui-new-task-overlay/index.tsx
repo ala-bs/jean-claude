@@ -47,6 +47,10 @@ import {
   getModelsForBackend,
 } from '@/features/agent/ui-backend-selector';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
+import {
+  RateLimitSwapPreview,
+  resolveRateLimitSwapSelection,
+} from '@/features/agent/ui-rate-limit-swap-preview';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import {
   PromptTextarea,
@@ -356,6 +360,8 @@ export function NewTaskOverlay({
   const promptInputRef = useRef<PromptTextareaRef>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const workItemImageFetchSessionRef = useRef(0);
+  const [isPromptAutocompleteOpen, setIsPromptAutocompleteOpen] =
+    useState(false);
   const [highlightedWorkItemId, setHighlightedWorkItemId] = useState<
     string | null
   >(null);
@@ -757,7 +763,6 @@ export function NewTaskOverlay({
     currentModelPreference,
     thinkingCapabilities,
   ]);
-
   const currentSourceBranch = useMemo(() => {
     const draftSourceBranch = draft?.sourceBranch;
     if (draftSourceBranch && branches.includes(draftSourceBranch)) {
@@ -1059,6 +1064,12 @@ export function NewTaskOverlay({
       finalPrompt += buildAttachedFilesXml(draftFiles);
 
       const backlogTodoIds = draft.backlogTodoIds ?? [];
+      const submitSelection = await resolveRateLimitSwapSelection({
+        backend: currentBackend,
+        model: currentModelPreference,
+        thinkingEffort: currentThinkingEffort,
+        enabled: !isNoteMode,
+      });
 
       const jobId = addRunningJob({
         type: 'task-creation',
@@ -1071,10 +1082,13 @@ export function NewTaskOverlay({
           creationInput: {
             projectId: selectedProjectId,
             prompt: finalPrompt,
-            interactionMode: currentInteractionMode,
-            agentBackend: currentBackend,
-            modelPreference: currentModelPreference,
-            thinkingEffort: currentThinkingEffort,
+            interactionMode: normalizeInteractionModeForBackend({
+              backend: submitSelection.backend,
+              mode: currentInteractionMode,
+            }),
+            agentBackend: submitSelection.backend,
+            modelPreference: submitSelection.model,
+            thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
             useWorktree: currentCreateWorktree,
             sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
             workItemIds,
@@ -1113,10 +1127,13 @@ export function NewTaskOverlay({
           projectId: selectedProjectId,
           prompt: finalPrompt,
           images: draftImages,
-          interactionMode: currentInteractionMode,
-          modelPreference: currentModelPreference,
-          thinkingEffort: currentThinkingEffort,
-          agentBackend: currentBackend,
+          interactionMode: normalizeInteractionModeForBackend({
+            backend: submitSelection.backend,
+            mode: currentInteractionMode,
+          }),
+          modelPreference: submitSelection.model,
+          thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
+          agentBackend: submitSelection.backend,
           useWorktree: currentCreateWorktree,
           sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
           workItemIds,
@@ -1171,6 +1188,7 @@ export function NewTaskOverlay({
     currentInteractionMode,
     currentModelPreference,
     currentThinkingEffort,
+    isNoteMode,
     currentCreateWorktree,
     currentUpdateWorkItemStatus,
     currentSourceBranch,
@@ -1288,6 +1306,10 @@ export function NewTaskOverlay({
 
   // Handle Escape based on current state
   const handleEscape = useCallback(() => {
+    if (isPromptAutocompleteOpen) {
+      return false;
+    }
+
     if (inputMode === 'search' && searchStep === 'compose') {
       // In compose step, go back to select
       backToSelect();
@@ -1295,7 +1317,7 @@ export function NewTaskOverlay({
       // Otherwise close overlay
       onClose();
     }
-  }, [inputMode, searchStep, backToSelect, onClose]);
+  }, [isPromptAutocompleteOpen, inputMode, searchStep, backToSelect, onClose]);
 
   // Show search input only in select step
   const showSearchInput = inputMode === 'search' && searchStep === 'select';
@@ -1392,9 +1414,7 @@ export function NewTaskOverlay({
       {
         label: 'Close or Go Back',
         shortcut: 'escape',
-        handler: () => {
-          handleEscape();
-        },
+        handler: () => handleEscape(),
       },
       {
         label: 'Discard Draft and Close',
@@ -1579,6 +1599,7 @@ export function NewTaskOverlay({
                     onFileRemove={handleFileRemove}
                     promptSnippets={promptSnippets}
                     snippetVariableContext={snippetVariableContext}
+                    onAutocompleteOpenChange={setIsPromptAutocompleteOpen}
                     containerClassName={`px-[18px] pt-3.5 ${selectedProject ? 'pb-2' : 'pb-3.5'}`}
                     className="text-ink-1 placeholder-ink-3 border-transparent bg-transparent px-0 py-0 text-sm focus:border-transparent focus:ring-0 focus:outline-none"
                   />
@@ -1763,6 +1784,14 @@ export function NewTaskOverlay({
                     disabled={thinkingOptions.length <= 1}
                     side="top"
                     layer={layer}
+                  />
+                )}
+
+                {!isNoteMode && (
+                  <RateLimitSwapPreview
+                    requestedBackend={currentBackend}
+                    model={currentModelPreference}
+                    thinkingEffort={currentThinkingEffort}
                   />
                 )}
 

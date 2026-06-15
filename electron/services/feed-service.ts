@@ -18,6 +18,7 @@ import {
   getCurrentUser,
   getPullRequestActivityMetadata,
   getPullRequestStatuses,
+  getWorkItemById,
   listPullRequests,
   queryAssignedWorkItems,
 } from './azure-devops-service';
@@ -54,6 +55,7 @@ export function invalidateWorkItemCache(): void {
 }
 
 const PR_ACTIVITY_CHUNK_SIZE = 10;
+const WORK_ITEM_TYPE_CHUNK_SIZE = 10;
 
 async function runInChunks<T>(
   items: T[],
@@ -288,6 +290,7 @@ export async function getTaskFeedItems({
     });
   }
 
+  await enrichTaskFeedItemsWithWorkItemTypes({ feedItems });
   await enrichTaskFeedItemsWithPrStatus({ feedItems, prItems });
 
   dbg.feed('getTaskFeedItems: returning %d tasks', feedItems.length);
@@ -331,6 +334,62 @@ export async function getFeedItems(): Promise<FeedItem[]> {
     workItemItems.length - filteredWorkItems.length,
   );
   return allItems;
+}
+
+async function enrichTaskFeedItemsWithWorkItemTypes({
+  feedItems,
+}: {
+  feedItems: FeedItem[];
+}): Promise<void> {
+  const projects = await ProjectRepository.findAll();
+  const providerByProjectId = new Map(
+    projects.map((project) => [project.id, project.workItemProviderId]),
+  );
+  const typeCache = new Map<string, string | null>();
+  const linkedItems = feedItems.flatMap((item) => [
+    item,
+    ...(item.children ?? []),
+  ]);
+
+  await runInChunks(linkedItems, WORK_ITEM_TYPE_CHUNK_SIZE, async (item) => {
+    if (!item.workItemIds?.length) return;
+    const providerId = providerByProjectId.get(item.projectId);
+    if (!providerId) return;
+
+    const workItemTypes = await Promise.all(
+      item.workItemIds.map(async (workItemId) => {
+        const cacheKey = `${providerId}:${workItemId}`;
+        if (typeCache.has(cacheKey)) return typeCache.get(cacheKey) ?? null;
+
+        const numericWorkItemId = Number(workItemId);
+        if (!Number.isFinite(numericWorkItemId)) {
+          typeCache.set(cacheKey, null);
+          return null;
+        }
+
+        try {
+          const workItem = await getWorkItemById({
+            providerId,
+            workItemId: numericWorkItemId,
+          });
+          const type = workItem?.fields.workItemType ?? null;
+          typeCache.set(cacheKey, type);
+          return type;
+        } catch (err) {
+          dbg.feed(
+            'enrichTaskFeedItemsWithWorkItemTypes: failed fetching work item %s for project %s: %O',
+            workItemId,
+            item.projectId,
+            err,
+          );
+          typeCache.set(cacheKey, null);
+          return null;
+        }
+      }),
+    );
+
+    item.workItemTypes = workItemTypes;
+  });
 }
 
 async function enrichTaskFeedItemsWithPrStatus({

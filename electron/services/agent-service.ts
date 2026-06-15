@@ -25,11 +25,14 @@ import {
   type QueuedPrompt,
 } from '@shared/agent-types';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
+import type { AiUsageFeature } from '@shared/ai-usage-types';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import {
   type InteractionMode,
   type TaskNotificationEvent,
+  type TaskStepType,
   type ReviewStepMeta,
+  type ThinkingEffort,
   isSkillCreationStepMeta,
 } from '@shared/types';
 import {
@@ -53,6 +56,8 @@ import { pathExists } from '../lib/fs';
 import { AGENT_BACKEND_CLASSES } from './agent-backends';
 import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
 import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
+import { buildSessionIdStepUpdate } from './agent-session-update';
+import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { resolveGlobalRules } from './global-permissions-service';
 import { getJcMcpServerPath } from './mcp-template-service';
 import { generateTaskName } from './name-generation-service';
@@ -64,7 +69,12 @@ import {
   normalizeToolRequest,
 } from './permission-settings-service';
 import { applyConfiguredPromptPreface } from './prompt-preface-service';
-import { textPrompt, getPromptText } from './prompt-utils';
+import {
+  buildAgentPromptMarkdown,
+  textPrompt,
+  getPromptText,
+} from './prompt-utils';
+import { rateLimitSwapService } from './rate-limit-swap-service';
 import { StepService } from './step-service';
 import { assertValidWorkspacePath } from './system-project-service';
 
@@ -220,9 +230,15 @@ function buildReviewPrompt({
 interface ActiveSession {
   stepId: string;
   taskId: string; // kept for worktree/project lookups
+  projectId: string;
   backendSessionId: string | null; // The session ID from the backend
   sdkSessionId: string | null; // The persistent session ID for resumption
   backendType: AgentBackendType;
+  usageFeature: AiUsageFeature;
+  currentModel: string | null;
+  requestedBackendType: AgentBackendType;
+  swapModel?: string;
+  swapThinkingEffort?: ThinkingEffort;
   backend: AgentBackend;
   messageIndex: number;
   queuedPrompts: QueuedPrompt[];
@@ -235,6 +251,27 @@ interface ActiveSession {
     questionRequest?: NormalizedQuestionRequest;
   }>;
   hasTerminalError: boolean;
+}
+
+function getUsageFeatureForStep(type: TaskStepType): AiUsageFeature {
+  switch (type) {
+    case 'skill-creation':
+      return 'skill';
+    case 'feature-map':
+      return 'feature-map';
+    case 'review':
+    case 'pr-review':
+      return 'review';
+    case 'create-pull-request':
+      return 'pr';
+    case 'agent':
+    case 'fork':
+      return 'agent';
+    default: {
+      const _exhaustive: never = type;
+      return _exhaustive;
+    }
+  }
 }
 
 class AgentService {
@@ -359,7 +396,20 @@ class AgentService {
     prompt: string,
   ): Promise<void> {
     try {
-      const name = await generateTaskName(prompt);
+      const task = await TaskRepository.findById(taskId);
+      const name = await generateTaskName(
+        prompt,
+        null,
+        task
+          ? {
+              feature: 'task-name',
+              projectId: task.projectId,
+              taskId,
+              stepId,
+              taskName: task.name,
+            }
+          : undefined,
+      );
       if (name) {
         await TaskRepository.update(taskId, { name });
         this.emitEvent(taskId, stepId, { type: 'name-updated', name });
@@ -494,8 +544,27 @@ class AgentService {
     const existingMessageCount =
       await AgentMessageRepository.getMessageCountByStepId(stepId);
 
-    const backendType: AgentBackendType = (step.agentBackend ??
+    // Resolve backend before first session start so UI-created tasks can still
+    // adapt if usage changes between creation and execution. Once a backend
+    // session exists, preserve continuity for follow-up prompts.
+    const requestedBackend: AgentBackendType = (step.agentBackend ??
       'claude-code') as AgentBackendType;
+
+    let backendType = requestedBackend;
+    let swapModel: string | undefined;
+    let swapThinkingEffort: ThinkingEffort | undefined;
+    if (!step.sessionId) {
+      const swapResult =
+        await rateLimitSwapService.resolveBackend(requestedBackend);
+      backendType = swapResult.backend;
+      swapModel = swapResult.model;
+      swapThinkingEffort = swapResult.thinkingEffort;
+      if (swapResult.swapped) {
+        console.log(
+          `[rate-limit-swap] Task ${step.taskId}: swapped ${requestedBackend} → ${backendType}`,
+        );
+      }
+    }
     const BackendClass = AGENT_BACKEND_CLASSES[backendType];
     if (!BackendClass) {
       throw new Error(`Unknown agent backend: "${backendType}"`);
@@ -523,9 +592,15 @@ class AgentService {
     const session: ActiveSession = {
       stepId,
       taskId: step.taskId,
+      projectId: task.projectId,
       backendSessionId: null,
       sdkSessionId: step.sessionId ?? null,
       backendType,
+      usageFeature: getUsageFeatureForStep(step.type),
+      currentModel: swapModel ?? step.modelPreference,
+      requestedBackendType: requestedBackend,
+      swapModel,
+      swapThinkingEffort,
       backend,
       messageIndex: existingMessageCount,
       queuedPrompts: [],
@@ -634,11 +709,18 @@ class AgentService {
         ? buildJcMcpServersConfigForCwd(workingDir)
         : undefined;
 
+    const backendChanged = session.backendType !== session.requestedBackendType;
+    const modelPreference =
+      session.swapModel ?? (backendChanged ? undefined : step?.modelPreference);
+    const thinkingEffort =
+      session.swapThinkingEffort ??
+      (backendChanged ? undefined : step?.thinkingEffort);
     const normalizedThinkingEffort = normalizeThinkingEffortForModel({
       backend: session.backendType,
-      model: step?.modelPreference ?? 'default',
-      effort: step?.thinkingEffort,
+      model: modelPreference ?? 'default',
+      effort: thinkingEffort,
     });
+    session.currentModel = modelPreference ?? null;
 
     // Start the backend
     dbg.agentSession('Starting backend for step %s', stepId);
@@ -650,6 +732,20 @@ class AgentService {
             projectPath: project.path,
             isInitialPrompt: options?.isInitialPrompt ?? false,
           });
+
+    if (session.backendType === 'opencode') {
+      const promptText = buildAgentPromptMarkdown(effectiveParts).trim();
+      if (promptText) {
+        await this.persistAndEmitSyntheticEntry(taskId, session, {
+          id: nanoid(),
+          date: new Date().toISOString(),
+          isSynthetic: true,
+          type: 'user-prompt',
+          value: promptText,
+          isSDKSynthetic: true,
+        });
+      }
+    }
 
     const agentSession = await session.backend.start(
       {
@@ -663,8 +759,8 @@ class AgentService {
             })) as InteractionMode,
         }),
         model:
-          step?.modelPreference && step.modelPreference !== 'default'
-            ? step.modelPreference
+          modelPreference && modelPreference !== 'default'
+            ? modelPreference
             : undefined,
         thinkingEffort:
           normalizedThinkingEffort !== 'default'
@@ -707,9 +803,16 @@ class AgentService {
         // Only persist the first session ID — once set it is immutable.
         const existing = await TaskStepRepository.findById(stepId);
         if (!existing?.sessionId) {
-          await TaskStepRepository.update(stepId, {
-            sessionId: event.sessionId,
-          });
+          await TaskStepRepository.update(
+            stepId,
+            buildSessionIdStepUpdate({
+              sessionId: event.sessionId,
+              backendType: session.backendType,
+              requestedBackendType: session.requestedBackendType,
+              swapModel: session.swapModel,
+              swapThinkingEffort: session.swapThinkingEffort,
+            }),
+          );
           dbg.agentSession(
             'Captured session ID for step %s: %s',
             stepId,
@@ -868,6 +971,27 @@ class AgentService {
           break;
         }
 
+        const resultEntryId = nanoid();
+
+        const resultModel = result.model ?? session.currentModel;
+
+        if (result.usage || result.cost) {
+          aiUsageTrackingService.recordUsageSafe({
+            context: {
+              feature: session.usageFeature,
+              projectId: session.projectId,
+              taskId,
+              stepId,
+            },
+            backend: session.backendType,
+            model: resultModel,
+            usage: result.usage ?? {},
+            allowEmptyUsage: !result.usage,
+            cost: result.cost,
+            sourceId: `agent-message:${resultEntryId}`,
+          });
+        }
+
         // Sync session-allowed tools back to the task
         if (
           session.backend.getSessionAllowedTools &&
@@ -924,8 +1048,9 @@ class AgentService {
         }
 
         await this.persistAndEmitSyntheticEntry(taskId, session, {
-          id: nanoid(),
+          id: resultEntryId,
           date: new Date().toISOString(),
+          model: resultModel ?? undefined,
           isSynthetic: true,
           type: 'result',
           value: result.text,
@@ -934,6 +1059,7 @@ class AgentService {
           cost: result.cost?.costUsd,
           apiCost: result.cost?.apiCostUsd,
           usage: result.usage,
+          contextUsage: result.contextUsage,
         });
 
         const status = result.isError ? 'errored' : 'completed';
@@ -1057,21 +1183,64 @@ class AgentService {
 
     this.startingSteps.add(stepId);
 
+    let session: ActiveSession | null = null;
+    let runningStep: Awaited<ReturnType<typeof TaskStepRepository.findById>>;
+
     try {
-      // Resolve prompt and validate dependencies
-      const { resolvedPrompt, step } =
-        await StepService.resolveAndValidate(stepId);
+      runningStep = await TaskStepRepository.findById(stepId);
+      if (!runningStep) {
+        throw new Error(`Step ${stepId} not found`);
+      }
 
-      // Update step status to running
+      // Surface work immediately while continue-summary synthesis runs.
       await StepService.update(stepId, { status: 'running' });
-      await StepService.syncTaskStatus(step.taskId);
+      await StepService.syncTaskStatus(runningStep.taskId);
 
-      // Create session
-      const session = await this.createSession(stepId);
+      // Create session before prompt resolution so synthetic summary entries can
+      // appear in timeline while {{summary(step.*)}} resolves.
+      session = await this.createSession(stepId);
       this.emitEvent(session.taskId, stepId, {
         type: 'status',
         status: 'running',
       });
+
+      // Resolve prompt and validate dependencies
+      const promptResolutionStartedAt = Date.now();
+      dbg.agentSession('Resolving startup prompt for step %s', stepId);
+      const { resolvedPrompt, step } = await StepService.resolveAndValidate(
+        stepId,
+        {
+          onSummaryLifecycle: {
+            onStart: async (summaryStep, prompt) => {
+              if (!session) return;
+              await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+                id: nanoid(),
+                date: new Date().toISOString(),
+                isSynthetic: true,
+                type: 'user-prompt',
+                value: prompt,
+                isSDKSynthetic: true,
+              });
+            },
+            onResolved: async (summaryStep, summary) => {
+              if (!session) return;
+              await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+                id: nanoid(),
+                date: new Date().toISOString(),
+                isSynthetic: true,
+                type: 'assistant-message',
+                value: `Summary for "${summaryStep.name}":\n\n${summary}`,
+              });
+            },
+          },
+        },
+      );
+      dbg.agentSession(
+        'Resolved startup prompt for step %s in %dms (length=%d)',
+        stepId,
+        Date.now() - promptResolutionStartedAt,
+        resolvedPrompt.length,
+      );
 
       // Build prompt parts from resolved prompt + any pending image attachments
       const pendingImages = this.pendingImageAttachments.get(session.taskId);
@@ -1143,6 +1312,32 @@ class AgentService {
       } finally {
         this.sessions.delete(stepId);
       }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+
+      if (session) {
+        await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+          id: nanoid(),
+          date: new Date().toISOString(),
+          isSynthetic: true,
+          type: 'result',
+          value: errorMessage,
+          isError: true,
+        });
+        this.sessions.delete(stepId);
+      }
+
+      if (runningStep) {
+        await StepService.errorStep(stepId);
+        this.emitEvent(runningStep.taskId, stepId, {
+          type: 'status',
+          status: 'errored',
+          error: errorMessage,
+        });
+      }
+
+      throw error;
     } finally {
       this.startingSteps.delete(stepId);
     }
