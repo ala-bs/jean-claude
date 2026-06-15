@@ -36,12 +36,6 @@ export function AzureDevOpsTab() {
       {/* Main content */}
       <div className="flex-1">
         <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-ink-1 text-lg font-semibold">Organizations</h2>
-            <p className="text-ink-3 mt-1 text-sm">
-              Connect your Azure DevOps organizations
-            </p>
-          </div>
           <Button onClick={handleShowAddPane} variant="primary" icon={<Plus />}>
             Add Organization
           </Button>

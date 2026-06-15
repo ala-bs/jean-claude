@@ -16,6 +16,8 @@ import type {
   PromptSnippetsSetting,
   ProjectPromptPrefaceSetting,
   PromptPrefaceSetting,
+  RawMessageCleanupSetting,
+  RateLimitSwapSetting,
   SummaryModelsSetting,
   TaskEventNotificationsSetting,
   ThinkingSettingsSetting,
@@ -69,6 +71,44 @@ export function useUpdateEditorSetting() {
 
 export function useEditorAutomationSetting() {
   return useSetting('editorAutomation');
+}
+
+export function useRawMessageCleanupSetting() {
+  return useSetting('rawMessageCleanup');
+}
+
+export function useUpdateRawMessageCleanupSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: RawMessageCleanupSetting) =>
+      api.settings.set('rawMessageCleanup', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'rawMessageCleanup'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const hadPrevious = queryClient.getQueryData(queryKey) !== undefined;
+      const previous =
+        queryClient.getQueryData<RawMessageCleanupSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { hadPrevious, previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.hadPrevious) {
+        queryClient.setQueryData(
+          ['settings', 'rawMessageCleanup'],
+          context.previous,
+        );
+      } else {
+        queryClient.removeQueries({
+          queryKey: ['settings', 'rawMessageCleanup'],
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'rawMessageCleanup'],
+      });
+    },
+  });
 }
 
 export function useUpdateEditorAutomationSetting() {
@@ -170,6 +210,39 @@ export function useSummaryModelsSetting() {
 
 export function useBackendDefaultModelsSetting() {
   return useSetting('backendDefaultModels');
+}
+
+// Convenience hooks for rate limit swap setting
+export function useRateLimitSwapSetting() {
+  return useSetting('rateLimitSwap');
+}
+
+export function useUpdateRateLimitSwapSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: RateLimitSwapSetting) =>
+      api.settings.set('rateLimitSwap', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'rateLimitSwap'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<RateLimitSwapSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ['settings', 'rateLimitSwap'],
+          context.previous,
+        );
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'rateLimitSwap'],
+      });
+    },
+  });
 }
 
 export function useUpdateBackendDefaultModelsSetting() {

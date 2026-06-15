@@ -23,11 +23,19 @@ import {
   getModelsForBackend,
 } from '@/features/agent/ui-backend-selector';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
+import {
+  RateLimitSwapPreview,
+  resolveRateLimitSwapSelection,
+} from '@/features/agent/ui-rate-limit-swap-preview';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import {
   PromptTextarea,
   type PromptTextareaRef,
 } from '@/features/common/ui-prompt-textarea';
+import {
+  ReviewPillsQueue,
+  reviewCommentToPill,
+} from '@/features/common/ui-review-pills';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useProject, useProjectFeatureMap } from '@/hooks/use-projects';
 import {
@@ -43,6 +51,10 @@ import {
   resolvePromptSnippet,
   type SnippetVariableContext,
 } from '@/lib/resolve-snippet-template';
+import {
+  synthesizeReviewPrompt,
+  useReviewComments,
+} from '@/stores/review-comments';
 import type {
   AgentBackendType,
   PromptImagePart,
@@ -155,6 +167,7 @@ export function AddStepDialog({
   onClose: () => void;
   onConfirm: (data: {
     promptTemplate: string;
+    hasUserPrompt: boolean;
     presetType: AddStepPresetType;
     interactionMode: InteractionMode;
     agentBackend: AgentBackendType;
@@ -162,6 +175,7 @@ export function AddStepDialog({
     thinkingEffort: ThinkingEffort;
     images: PromptImagePart[];
     start: boolean;
+    includedReviewCommentIds: string[];
     reviewers?: ReviewerConfig[];
   }) => void;
   defaultBackend?: AgentBackendType;
@@ -188,6 +202,9 @@ export function AddStepDialog({
   >(null);
   const [images, setImages] = useState<PromptImagePart[]>([]);
   const [autoStart, setAutoStart] = useState(true);
+  const [includeReviewComments, setIncludeReviewComments] = useState(true);
+  const [showReviewPreview, setShowReviewPreview] = useState(false);
+  const [isAutocompleteOpen, setIsAutocompleteOpen] = useState(false);
   const [reviewers, setReviewers] = useState<ReviewerConfig[]>(
     createDefaultReviewers(defaultBackend),
   );
@@ -215,6 +232,30 @@ export function AddStepDialog({
   const { data: stepProject } = useProject(projectId ?? '');
   const { data: featureMap = null } = useProjectFeatureMap(projectId ?? null);
   const { data: dynamicModels } = useBackendModels(backend);
+  const reviewComments = useReviewComments(taskId);
+  const openReviewComments = useMemo(
+    () => reviewComments.filter((comment) => !comment.resolved),
+    [reviewComments],
+  );
+  const reviewPills = useMemo(
+    () => openReviewComments.map(reviewCommentToPill),
+    [openReviewComments],
+  );
+  const reviewPromptParts = useMemo(
+    () => synthesizeReviewPrompt(openReviewComments),
+    [openReviewComments],
+  );
+  const reviewPromptText = useMemo(
+    () =>
+      reviewPromptParts
+        ?.filter(
+          (part): part is { type: 'text'; text: string } =>
+            part.type === 'text',
+        )
+        .map((part) => part.text)
+        .join('\n') ?? '',
+    [reviewPromptParts],
+  );
   const thinkingCapabilities = getModelThinkingCapabilities(
     model,
     dynamicModels,
@@ -259,6 +300,9 @@ export function AddStepDialog({
       setBackendModelPresetId(null);
       setImages([]);
       setAutoStart(true);
+      setIncludeReviewComments(true);
+      setShowReviewPreview(false);
+      setIsAutocompleteOpen(false);
       setReviewers(createDefaultReviewers(defaultBackend));
       setTimeout(() => textareaRef.current?.focus(), 0);
     }
@@ -272,25 +316,56 @@ export function AddStepDialog({
             reviewer.label.trim().length > 0 &&
             reviewer.focusPrompt.trim().length > 0,
         )
-      : promptTemplate.trim().length > 0;
+      : promptTemplate.trim().length > 0 ||
+        (includeReviewComments && openReviewComments.length > 0);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
+    const submitSelection = await resolveRateLimitSwapSelection({
+      backend,
+      model,
+      thinkingEffort: normalizedThinkingEffort,
+      enabled: presetType !== 'review-changes',
+    });
+
+    const expandedPrompt = expandFeatureReferencesInPrompt({
+      text: promptTemplate.trim(),
+      featureMap,
+    });
+    const shouldIncludeReviewComments =
+      includeReviewComments && openReviewComments.length > 0;
+    const reviewParts = shouldIncludeReviewComments ? reviewPromptParts : null;
+    const reviewText =
+      reviewParts
+        ?.filter(
+          (part): part is { type: 'text'; text: string } =>
+            part.type === 'text',
+        )
+        .map((part) => part.text)
+        .join('\n') ?? '';
+    const reviewImages =
+      reviewParts?.filter(
+        (part): part is PromptImagePart => part.type === 'image',
+      ) ?? [];
+
     onConfirm({
-      promptTemplate: expandFeatureReferencesInPrompt({
-        text: promptTemplate.trim(),
-        featureMap,
-      }),
+      promptTemplate: [expandedPrompt, reviewText]
+        .filter((part) => part.trim().length > 0)
+        .join('\n\n'),
+      hasUserPrompt: expandedPrompt.trim().length > 0,
       presetType,
       interactionMode: normalizeInteractionModeForBackend({
-        backend,
+        backend: submitSelection.backend,
         mode: interactionMode,
       }),
-      agentBackend: backend,
-      modelPreference: model,
-      thinkingEffort: normalizedThinkingEffort,
-      images,
+      agentBackend: submitSelection.backend,
+      modelPreference: submitSelection.model,
+      thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
+      images: [...images, ...reviewImages],
       start: autoStart,
+      includedReviewCommentIds: shouldIncludeReviewComments
+        ? openReviewComments.map((comment) => comment.id)
+        : [],
       reviewers:
         presetType === 'review-changes'
           ? reviewers.map((reviewer) => ({
@@ -313,6 +388,9 @@ export function AddStepDialog({
     autoStart,
     reviewers,
     featureMap,
+    includeReviewComments,
+    openReviewComments,
+    reviewPromptParts,
   ]);
 
   const handleEnterKey = useCallback(
@@ -352,7 +430,13 @@ export function AddStepDialog({
 
   return (
     <KeyboardLayerProvider layer={layer}>
-      <Modal isOpen={isOpen} onClose={onClose} title="Add Step" size="lg">
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="Add Step"
+        size="lg"
+        closeOnEscape={!isAutocompleteOpen}
+      >
         <div className="space-y-4">
           <div className="flex items-center gap-2">
             <Select
@@ -412,7 +496,28 @@ export function AddStepDialog({
             onImageRemove={handleImageRemove}
             promptSnippets={promptSnippets}
             snippetVariableContext={snippetVariableContext}
+            onAutocompleteOpenChange={setIsAutocompleteOpen}
           />
+          {openReviewComments.length > 0 && (
+            <div className="border-line bg-bg-1/50 rounded-lg border py-2">
+              <div className="flex items-center justify-between px-3 pb-1.5">
+                <Checkbox
+                  size="sm"
+                  checked={includeReviewComments}
+                  onChange={setIncludeReviewComments}
+                  label={`Include current comments (${openReviewComments.length})`}
+                />
+              </div>
+              <ReviewPillsQueue
+                pills={reviewPills}
+                onPreview={
+                  reviewPromptText
+                    ? () => setShowReviewPreview(true)
+                    : undefined
+                }
+              />
+            </div>
+          )}
           {presetType === 'review-changes' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -573,6 +678,13 @@ export function AddStepDialog({
               side="top"
               layer={layer}
             />
+            {presetType !== 'review-changes' && (
+              <RateLimitSwapPreview
+                requestedBackend={backend}
+                model={model}
+                thinkingEffort={normalizedThinkingEffort}
+              />
+            )}
           </div>
           <div className="flex items-center justify-between pt-1">
             <div className="flex items-center gap-2">
@@ -600,6 +712,18 @@ export function AddStepDialog({
             </div>
           </div>
         </div>
+        {showReviewPreview && (
+          <Modal
+            isOpen={showReviewPreview}
+            onClose={() => setShowReviewPreview(false)}
+            title="Review prompt preview"
+            size="lg"
+          >
+            <pre className="bg-bg-2 text-ink-1 max-h-[60vh] overflow-auto rounded-lg p-4 text-xs leading-relaxed whitespace-pre-wrap">
+              {reviewPromptText}
+            </pre>
+          </Modal>
+        )}
       </Modal>
     </KeyboardLayerProvider>
   );

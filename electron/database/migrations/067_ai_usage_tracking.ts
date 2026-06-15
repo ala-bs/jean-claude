@@ -25,6 +25,8 @@ async function backfillAgentResultUsage(db: Kysely<unknown>): Promise<void> {
     taskPrompt: string | null;
     projectName: string | null;
     projectId: string;
+    taskType: string | null;
+    stepType: string | null;
     stepBackend: string | null;
     stepModel: string | null;
   }>`
@@ -39,6 +41,8 @@ async function backfillAgentResultUsage(db: Kysely<unknown>): Promise<void> {
       tasks.prompt AS taskPrompt,
       projects.name AS projectName,
       tasks.projectId AS projectId,
+      tasks.type AS taskType,
+      task_steps.type AS stepType,
       task_steps.agentBackend AS stepBackend,
       task_steps.modelPreference AS stepModel
     FROM agent_messages
@@ -64,6 +68,7 @@ async function backfillAgentResultUsage(db: Kysely<unknown>): Promise<void> {
 
     const backend = row.stepBackend ?? 'claude-code';
     const model = row.messageModel ?? row.stepModel ?? 'default';
+    const feature = getUsageFeatureForStepType(row.stepType, row.taskType);
     const { estimatedCostUsd, pricingStatus } = estimateAiUsageCost({
       model,
       usage: entry.usage,
@@ -96,7 +101,7 @@ async function backfillAgentResultUsage(db: Kysely<unknown>): Promise<void> {
         ${`agent-message:${row.messageId}`},
         ${row.createdAt},
         ${`agent-message:${row.messageId}`},
-        'agent',
+        ${feature},
         ${row.projectId},
         ${row.taskId},
         ${row.stepId},
@@ -116,6 +121,27 @@ async function backfillAgentResultUsage(db: Kysely<unknown>): Promise<void> {
         ${AI_USAGE_PRICING_VERSION}
       )
     `.execute(db);
+  }
+}
+
+function getUsageFeatureForStepType(
+  stepType: string | null,
+  taskType: string | null,
+): string {
+  const type =
+    stepType && stepType !== 'agent' ? stepType : (taskType ?? stepType);
+  switch (type) {
+    case 'skill-creation':
+      return 'skill';
+    case 'feature-map':
+      return 'feature-map';
+    case 'review':
+    case 'pr-review':
+      return 'review';
+    case 'create-pull-request':
+      return 'pr';
+    default:
+      return 'agent';
   }
 }
 

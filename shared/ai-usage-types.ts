@@ -12,6 +12,7 @@ export type AiUsageFeature =
   | 'verification-note'
   | 'review'
   | 'skill'
+  | 'feature-map'
   | 'other';
 
 export type AiUsagePricingStatus = 'priced' | 'unknown';
@@ -76,6 +77,10 @@ export interface AiUsageDashboard {
   };
   byDay: Array<{
     date: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
     totalTokens: number;
     estimatedCostUsd: number;
     providerCostUsd: number;
@@ -84,15 +89,36 @@ export interface AiUsageDashboard {
   }>;
   byFeature: Array<{
     feature: AiUsageFeature;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
     totalTokens: number;
     estimatedCostUsd: number;
     providerCostUsd: number;
     providerApiCostUsd: number;
     requests: number;
+    models: Array<{
+      backend: string;
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
+      totalTokens: number;
+      estimatedCostUsd: number;
+      providerCostUsd: number;
+      providerApiCostUsd: number;
+      requests: number;
+    }>;
   }>;
   byModel: Array<{
     backend: string;
     model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
     totalTokens: number;
     estimatedCostUsd: number;
     providerCostUsd: number;
@@ -104,6 +130,10 @@ export interface AiUsageDashboard {
     projectId: string;
     taskName: string | null;
     projectName: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
     totalTokens: number;
     estimatedCostUsd: number;
     providerCostUsd: number;

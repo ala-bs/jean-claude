@@ -1,11 +1,13 @@
 import { BarChart3, X } from 'lucide-react';
 import type { PointerEvent, ReactNode } from 'react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
+import { Tooltip } from '@/common/ui/tooltip';
 import { useAiUsageDashboard } from '@/hooks/use-ai-usage-dashboard';
 
 type Range = 'today' | '7d' | '30d' | 'all';
@@ -42,6 +44,23 @@ function formatFeature(value: string) {
   return value.replaceAll('-', ' ');
 }
 
+function formatModelLabel({
+  backend,
+  model,
+}: {
+  backend: string;
+  model: string;
+}) {
+  return model === 'default' ? `${backend}/default` : model;
+}
+
+function cacheTokens(value: {
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}) {
+  return value.cacheReadTokens + value.cacheCreationTokens;
+}
+
 function maxOf(values: number[]) {
   return Math.max(...values, 0) || 1;
 }
@@ -52,27 +71,83 @@ function GraphTooltip({
   title,
 }: {
   title: string;
-  rows: Array<{ label: string; value: string }>;
+  rows: Array<{ color?: string; label: string; value: string }>;
   children: ReactNode;
 }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState<{
+    left: number;
+    side: 'top' | 'bottom';
+    top: number;
+  } | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+
+  function openTooltip() {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const side = rect.top > 180 ? 'top' : 'bottom';
+    setPosition({
+      left: Math.min(
+        Math.max(rect.left + rect.width / 2 - 112, 8),
+        window.innerWidth - 232,
+      ),
+      side,
+      top: side === 'top' ? rect.top - 8 : rect.bottom + 8,
+    });
+    setIsOpen(true);
+  }
+
+  function closeTooltip() {
+    setIsOpen(false);
+  }
+
   return (
-    <div className="group relative min-w-0 focus-within:z-30" tabIndex={0}>
+    <div
+      ref={triggerRef}
+      className="relative min-w-0 focus-within:z-30"
+      onBlur={closeTooltip}
+      onFocus={openTooltip}
+      onMouseEnter={openTooltip}
+      onMouseLeave={closeTooltip}
+      tabIndex={0}
+    >
       {children}
-      <div className="absolute bottom-full left-1/2 z-30 hidden w-56 -translate-x-1/2 pb-2 group-focus-within:block group-hover:block">
-        <div className="rounded-xl border border-white/10 bg-[#151521]/95 p-3 text-xs shadow-2xl select-text">
-          <div className="text-ink-0 mb-2 truncate font-medium">{title}</div>
-          <div className="space-y-1.5">
-            {rows.map((row) => (
-              <div key={row.label} className="flex justify-between gap-4">
-                <span className="text-ink-3">{row.label}</span>
-                <span className="text-ink-0 text-right tabular-nums">
-                  {row.value}
-                </span>
+      {isOpen && position
+        ? createPortal(
+            <div
+              className="fixed z-[10020] w-56 rounded-xl border border-white/10 bg-[#151521]/95 p-3 text-xs shadow-2xl select-text"
+              style={{
+                left: position.left,
+                top: position.top,
+                transform:
+                  position.side === 'top' ? 'translateY(-100%)' : undefined,
+              }}
+            >
+              <div className="text-ink-0 mb-2 truncate font-medium">
+                {title}
               </div>
-            ))}
-          </div>
-        </div>
-      </div>
+              <div className="space-y-1.5">
+                {rows.map((row) => (
+                  <div key={row.label} className="flex justify-between gap-4">
+                    <span className="text-ink-3 flex min-w-0 items-center gap-1.5">
+                      {row.color ? (
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-sm"
+                          style={{ background: row.color }}
+                        />
+                      ) : null}
+                      <span className="truncate">{row.label}</span>
+                    </span>
+                    <span className="text-ink-0 text-right tabular-nums">
+                      {row.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -115,6 +190,10 @@ function Sparkline({
   tooltipLabel: string;
 }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const values = data.map((point) => point.value);
   const max = maxOf(values);
   const points = values.length > 1 ? values : [...values, values[0] ?? 0];
@@ -141,6 +220,10 @@ function Sparkline({
       1,
     );
     setHoverIndex(Math.round(ratio * Math.max(data.length - 1, 0)));
+    setTooltipPosition({
+      left: Math.min(Math.max(event.clientX - 72, 8), window.innerWidth - 152),
+      top: Math.max(event.clientY - 76, 8),
+    });
   }
 
   return (
@@ -149,7 +232,12 @@ function Sparkline({
       onPointerLeave={() => setHoverIndex(null)}
       onPointerMove={handlePointerMove}
     >
-      <svg aria-hidden="true" className="h-6 w-20 overflow-visible">
+      <svg
+        aria-hidden="true"
+        className="h-6 w-20 overflow-visible"
+        preserveAspectRatio="none"
+        viewBox="0 0 92 30"
+      >
         <defs>
           <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
             <stop offset="0" stopColor={color} stopOpacity="0.32" />
@@ -163,25 +251,31 @@ function Sparkline({
           stroke={color}
           strokeLinecap="round"
           strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
         />
         {hoverPoint ? (
           <circle cx={hoverX} cy={hoverY} fill={color} r="3" />
         ) : null}
       </svg>
-      {hoverPoint ? (
-        <div
-          className="absolute bottom-8 z-30 min-w-36 rounded-xl border border-white/10 bg-[#151521]/95 p-2.5 text-xs shadow-2xl select-text"
-          style={{ left: `clamp(0px, ${hoverX}px, calc(100% - 144px))` }}
-        >
-          <div className="text-ink-0 mb-1 font-medium">{hoverPoint.label}</div>
-          <div className="flex justify-between gap-4">
-            <span className="text-ink-3">{tooltipLabel}</span>
-            <span className="text-ink-0 tabular-nums">
-              {formatValue(hoverPoint.value)}
-            </span>
-          </div>
-        </div>
-      ) : null}
+      {hoverPoint && tooltipPosition
+        ? createPortal(
+            <div
+              className="fixed z-[10020] min-w-36 rounded-xl border border-white/10 bg-[#151521]/95 p-2.5 text-xs shadow-2xl select-text"
+              style={{ left: tooltipPosition.left, top: tooltipPosition.top }}
+            >
+              <div className="text-ink-0 mb-1 font-medium">
+                {hoverPoint.label}
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-ink-3">{tooltipLabel}</span>
+                <span className="text-ink-0 tabular-nums">
+                  {formatValue(hoverPoint.value)}
+                </span>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -214,6 +308,101 @@ function KpiTile({
           formatValue={formatSparkValue}
           tooltipLabel={label}
         />
+      </div>
+    </div>
+  );
+}
+
+function TokenSplitCard({
+  className = '',
+  totals,
+}: {
+  className?: string;
+  totals: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    totalTokens: number;
+  };
+}) {
+  const rows = [
+    {
+      color: '#38bdf8',
+      description: 'Tokens sent to model: prompt, context, tools, and files.',
+      label: 'Input',
+      value: totals.inputTokens,
+    },
+    {
+      color: '#a78bfa',
+      description: 'Tokens generated by model in replies and tool-use output.',
+      label: 'Output',
+      value: totals.outputTokens,
+    },
+    {
+      color: '#2dd4bf',
+      description: 'Previously cached input tokens reused by provider.',
+      label: 'Cache read',
+      value: totals.cacheReadTokens,
+    },
+    {
+      color: '#f59e0b',
+      description: 'Input tokens written into provider cache for later reuse.',
+      label: 'Cache write',
+      value: totals.cacheCreationTokens,
+    },
+  ];
+
+  return (
+    <div
+      className={`border-glass-border bg-glass-light/60 rounded-2xl border p-3 ${className}`}
+    >
+      <div className="text-ink-3 text-[11px] font-semibold tracking-[0.16em] uppercase">
+        Token split
+      </div>
+      <div className="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-2">
+        {rows.map((row) => (
+          <Tooltip
+            key={row.label}
+            align="left"
+            content={
+              <div className="max-w-64 space-y-1.5">
+                <div className="text-ink-0 font-medium">{row.label}</div>
+                <div>{row.description}</div>
+                <div className="text-ink-4 tabular-nums">
+                  {formatNumber(row.value)} tokens ·{' '}
+                  {totals.totalTokens > 0
+                    ? ((row.value / totals.totalTokens) * 100).toFixed(1)
+                    : '0.0'}
+                  % of total
+                </div>
+              </div>
+            }
+            side="top"
+          >
+            <div className="grid grid-cols-[76px_1fr_60px] items-center gap-2 text-xs">
+              <span className="text-ink-3 flex items-center gap-1.5">
+                <span
+                  className="h-2 w-2 rounded-sm"
+                  style={{ background: row.color }}
+                />
+                <span className="truncate">{row.label}</span>
+              </span>
+              <span className="h-1.5 overflow-hidden rounded-full bg-white/6">
+                <span
+                  className="block h-full rounded-full"
+                  style={{
+                    background: row.color,
+                    width: `${totals.totalTokens > 0 ? (row.value / totals.totalTokens) * 100 : 0}%`,
+                  }}
+                />
+              </span>
+              <span className="text-ink-1 text-right tabular-nums">
+                {formatCompact(row.value)}
+              </span>
+            </div>
+          </Tooltip>
+        ))}
       </div>
     </div>
   );
@@ -485,9 +674,16 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
       data?.byModel.map((row, index) => ({
         ...row,
         color: MODEL_COLORS[index % MODEL_COLORS.length],
-        label: row.model === 'default' ? `${row.backend}/default` : row.model,
+        label: formatModelLabel(row),
       })) ?? [],
     [data?.byModel],
+  );
+  const modelColorByKey = useMemo(
+    () =>
+      new Map(
+        modelRows.map((row) => [`${row.backend}\n${row.model}`, row.color]),
+      ),
+    [modelRows],
   );
   const topCostModels = useMemo(
     () =>
@@ -505,7 +701,15 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
     [];
   const requestSpark =
     data?.byDay.map((day) => ({ label: day.date, value: day.requests })) ?? [];
-  const taskSpark = requestSpark;
+  const inputSpark =
+    data?.byDay.map((day) => ({ label: day.date, value: day.inputTokens })) ??
+    [];
+  const outputSpark =
+    data?.byDay.map((day) => ({ label: day.date, value: day.outputTokens })) ??
+    [];
+  const cacheSpark =
+    data?.byDay.map((day) => ({ label: day.date, value: cacheTokens(day) })) ??
+    [];
   const costSpark =
     data?.byDay.map((day) => ({
       label: day.date,
@@ -606,21 +810,44 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                     across {formatNumber(data.totals.requests)} requests ·{' '}
                     {formatNumber(data.totals.taskCount)} tasks
                   </div>
+                  <div className="text-ink-4 relative mt-1 text-xs tabular-nums">
+                    {formatCompact(data.totals.inputTokens)} input ·{' '}
+                    {formatCompact(data.totals.outputTokens)} output ·{' '}
+                    {formatCompact(cacheTokens(data.totals))} cache
+                  </div>
                   <div className="relative mt-4 space-y-2">
                     <div className="flex items-center gap-2.5">
                       <span className="h-2.5 w-2.5 rounded-sm bg-violet-300" />
-                      <span className="text-ink-3 text-xs">
-                        Estimated API value
-                      </span>
+                      <Tooltip
+                        align="left"
+                        content="Token-based market API estimate. Useful for subscription value, not billed spend."
+                        side="top"
+                      >
+                        <span
+                          className="text-ink-3 cursor-help text-xs underline decoration-white/15 underline-offset-2"
+                          tabIndex={0}
+                        >
+                          Estimated API value
+                        </span>
+                      </Tooltip>
                       <span className="ml-auto text-sm font-semibold tabular-nums">
                         {formatCost(data.totals.estimatedCostUsd)}
                       </span>
                     </div>
                     <div className="flex items-center gap-2.5">
                       <span className="h-2.5 w-2.5 rounded-sm bg-sky-400" />
-                      <span className="text-ink-3 text-xs">
-                        Provider API estimate
-                      </span>
+                      <Tooltip
+                        align="left"
+                        content="Backend-reported direct API cost when available. Often zero for subscription-backed usage."
+                        side="top"
+                      >
+                        <span
+                          className="text-ink-3 cursor-help text-xs underline decoration-white/15 underline-offset-2"
+                          tabIndex={0}
+                        >
+                          API cost
+                        </span>
+                      </Tooltip>
                       <span className="ml-auto text-sm font-semibold tabular-nums">
                         {formatOptionalCost(data.totals.providerApiCostUsd)}
                       </span>
@@ -650,21 +877,40 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <KpiTile
                   color="#a78bfa"
-                  label="Tokens"
+                  label="Total tokens"
                   spark={tokenSpark}
                   value={formatCompact(data.totals.totalTokens)}
+                />
+                <KpiTile
+                  color="#38bdf8"
+                  label="Input"
+                  spark={inputSpark}
+                  value={formatCompact(data.totals.inputTokens)}
+                />
+                <KpiTile
+                  color="#2dd4bf"
+                  label="Output"
+                  spark={outputSpark}
+                  value={formatCompact(data.totals.outputTokens)}
+                />
+                <KpiTile
+                  color="#f59e0b"
+                  label="Cache"
+                  spark={cacheSpark}
+                  value={formatCompact(cacheTokens(data.totals))}
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <TokenSplitCard
+                  className="sm:col-span-2"
+                  totals={data.totals}
                 />
                 <KpiTile
                   color="#38bdf8"
                   label="Requests"
                   spark={requestSpark}
                   value={formatNumber(data.totals.requests)}
-                />
-                <KpiTile
-                  color="#2dd4bf"
-                  label="Tasks"
-                  spark={taskSpark}
-                  value={formatNumber(data.totals.taskCount)}
                 />
                 <KpiTile
                   color="#818cf8"
@@ -699,6 +945,18 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                               {
                                 label: 'Tokens',
                                 value: formatNumber(row.totalTokens),
+                              },
+                              {
+                                label: 'Input',
+                                value: formatNumber(row.inputTokens),
+                              },
+                              {
+                                label: 'Output',
+                                value: formatNumber(row.outputTokens),
+                              },
+                              {
+                                label: 'Cache',
+                                value: formatNumber(cacheTokens(row)),
                               },
                               {
                                 label: 'Est. API',
@@ -751,9 +1009,10 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                 title="Usage by feature"
                 right={`${data.byFeature.length} features · token share`}
               >
-                <div className="text-ink-4 grid grid-cols-[140px_1fr_88px_78px_78px_70px] gap-3 border-b border-white/8 pb-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase max-lg:hidden">
+                <div className="text-ink-4 grid grid-cols-[140px_1fr_130px_88px_78px_78px_70px] gap-3 border-b border-white/8 pb-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase max-lg:hidden">
                   <span>Feature</span>
                   <span>Share</span>
+                  <span>Models</span>
                   <span className="text-right">Tokens</span>
                   <span className="text-right">Est. $</span>
                   <span className="text-right">API $</span>
@@ -763,7 +1022,7 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                   {data.byFeature.map((row, index) => (
                     <div
                       key={row.feature}
-                      className="grid items-center gap-3 py-2 lg:grid-cols-[140px_1fr_88px_78px_78px_70px]"
+                      className="grid items-center gap-3 py-2 lg:grid-cols-[140px_1fr_130px_88px_78px_78px_70px]"
                     >
                       <div className="flex min-w-0 items-center gap-2">
                         <span
@@ -784,6 +1043,18 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                             value: formatNumber(row.totalTokens),
                           },
                           {
+                            label: 'Input',
+                            value: formatNumber(row.inputTokens),
+                          },
+                          {
+                            label: 'Output',
+                            value: formatNumber(row.outputTokens),
+                          },
+                          {
+                            label: 'Cache',
+                            value: formatNumber(cacheTokens(row)),
+                          },
+                          {
                             label: 'Share',
                             value: `${data.totals.totalTokens > 0 ? ((row.totalTokens / data.totals.totalTokens) * 100).toFixed(1) : '0.0'}%`,
                           },
@@ -799,20 +1070,56 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                             label: 'Requests',
                             value: formatNumber(row.requests),
                           },
+                          ...row.models.slice(0, 4).map((model) => ({
+                            color:
+                              modelColorByKey.get(
+                                `${model.backend}\n${model.model}`,
+                              ) ?? MODEL_COLORS[index % MODEL_COLORS.length],
+                            label: formatModelLabel(model),
+                            value: formatCompact(model.totalTokens),
+                          })),
                         ]}
                         title={formatFeature(row.feature)}
                       >
                         <div className="h-2 overflow-hidden rounded-full bg-white/6">
                           <div
-                            className="h-full rounded-full"
+                            className="flex h-full rounded-full"
                             style={{
                               width: `${Math.max((row.totalTokens / maxFeatureTokens) * 100, row.totalTokens > 0 ? 1 : 0)}%`,
-                              background:
-                                MODEL_COLORS[index % MODEL_COLORS.length],
                             }}
-                          />
+                          >
+                            {row.models.map((model) => (
+                              <span
+                                key={`${row.feature}:${model.backend}:${model.model}`}
+                                className="h-full first:rounded-l-full last:rounded-r-full"
+                                style={{
+                                  width: `${row.totalTokens > 0 ? (model.totalTokens / row.totalTokens) * 100 : 0}%`,
+                                  background:
+                                    modelColorByKey.get(
+                                      `${model.backend}\n${model.model}`,
+                                    ) ??
+                                    MODEL_COLORS[index % MODEL_COLORS.length],
+                                }}
+                              />
+                            ))}
+                          </div>
                         </div>
                       </GraphTooltip>
+                      <div className="flex min-w-0 flex-wrap gap-1 max-lg:hidden">
+                        {row.models.slice(0, 2).map((model) => (
+                          <span
+                            key={`${row.feature}:${model.backend}:${model.model}`}
+                            className="text-ink-3 max-w-24 min-w-0 truncate rounded-md border border-white/8 bg-white/4 px-1.5 py-0.5 font-mono text-[10px]"
+                          >
+                            {formatModelLabel(model)}
+                          </span>
+                        ))}
+                        {row.models.length > 2 ? (
+                          <span className="text-ink-4 text-[10px]">
+                            +{row.models.length - 2}
+                          </span>
+                        ) : null}
+                      </div>
                       <span className="text-ink-2 text-right text-xs tabular-nums">
                         {formatCompact(row.totalTokens)}
                       </span>
@@ -862,6 +1169,18 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                             {
                               label: 'Tokens',
                               value: formatNumber(row.totalTokens),
+                            },
+                            {
+                              label: 'Input',
+                              value: formatNumber(row.inputTokens),
+                            },
+                            {
+                              label: 'Output',
+                              value: formatNumber(row.outputTokens),
+                            },
+                            {
+                              label: 'Cache',
+                              value: formatNumber(cacheTokens(row)),
                             },
                             {
                               label: 'Est. API',

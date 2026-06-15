@@ -83,12 +83,8 @@ export function DebugDatabase() {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-ink-1 text-lg font-semibold">Debug</h2>
-        <p className="text-ink-3 mt-1 text-sm">
-          Diagnostics for inspecting app behavior during development.
-        </p>
         {databaseSize && (
-          <div className="text-ink-2 relative mt-2 space-y-1 text-sm">
+          <div className="text-ink-2 relative space-y-1 text-sm">
             <button
               type="button"
               className="hover:text-ink-1 cursor-pointer underline decoration-dotted underline-offset-4"

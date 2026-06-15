@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
+import { OrganizerTooltip } from '@/features/calendar/ui-organizer-tooltip';
 import {
   addDays,
   extractTeamsUrl,
@@ -330,8 +331,13 @@ export function WeekView({
                 month: 'short',
                 day: 'numeric',
               })}{' '}
-              · {formatTimeRange(selected.startAt, selected.endAt)} ·{' '}
-              {selected.location || '—'}
+              · {formatTimeRange(selected.startAt, selected.endAt)}
+              {selected.organizer ? (
+                <OrganizerTooltip meeting={selected}>
+                  <span> · From {selected.organizer}</span>
+                </OrganizerTooltip>
+              ) : null}{' '}
+              · {selected.location || '-'}
             </div>
           </div>
           {teamsUrl && (

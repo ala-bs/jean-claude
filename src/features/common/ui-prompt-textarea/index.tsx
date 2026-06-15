@@ -241,6 +241,8 @@ export interface PromptTextareaProps extends Omit<
   snippetVariableContext?: SnippetVariableContext;
   /** Classes for the droppable composer container */
   containerClassName?: string;
+  /** Called when slash, file, or feature autocomplete opens/closes. */
+  onAutocompleteOpenChange?: (isOpen: boolean) => void;
   /** Expand textarea height to fill the available cross-axis space. */
   fillAvailableHeight?: boolean;
 }
@@ -271,6 +273,7 @@ export const PromptTextarea = forwardRef<
     promptSnippets = [],
     snippetVariableContext,
     containerClassName,
+    onAutocompleteOpenChange,
     fillAvailableHeight = false,
     className,
     style,
@@ -330,6 +333,26 @@ export const PromptTextarea = forwardRef<
     !dropdownDismissed;
   const showDropdown =
     showMentionDropdown || showFeatureDropdown || showSlashDropdown;
+
+  useEffect(() => {
+    onAutocompleteOpenChange?.(showDropdown);
+  }, [onAutocompleteOpenChange, showDropdown]);
+
+  useEffect(() => {
+    if (!showDropdown) return;
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setDropdownDismissed(true);
+    };
+
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [showDropdown]);
+
   const dropdownPosition = useDropdownPosition({
     isOpen: showDropdown,
     triggerRef: containerRef,
