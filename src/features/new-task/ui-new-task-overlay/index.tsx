@@ -1957,7 +1957,7 @@ export function NewTaskOverlay({
                     <Kbd shortcut="cmd+right" /> project
                   </span>
                 )}
-                {!isNoteMode && canToggleMode && showSearchInput && (
+                {!isNoteMode && canToggleMode && (
                   <>
                     <div
                       className="mx-1 h-[18px] w-px"
