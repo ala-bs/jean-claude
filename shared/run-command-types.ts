@@ -108,7 +108,8 @@ export interface RunCommandLogEvent {
   taskId: string;
   runCommandId: string;
   stream: RunCommandLogStream;
-  line: string;
+  text: string;
+  generation: number;
 }
 
 export interface PortInUse {

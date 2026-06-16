@@ -9,23 +9,57 @@ import type { RunCommandLogStream, RunStatus } from '@shared/run-command-types';
 import type { TaskStatus, TaskStepStatus } from '@shared/types';
 
 import { clearReviewCommentsForTask } from './review-comments';
+import { parseRunCommandLogBatch } from './utils-run-command-log-parser';
 
 type StepExecutionStatus = TaskStatus | TaskStepStatus;
 
 const MAX_RUN_COMMAND_LOG_LINES = 5000;
+const RUN_COMMAND_LOG_CHUNK_LINE_LIMIT = 200;
 
-interface RunCommandLogEntry {
+export interface RunCommandLogLine {
   stream: RunCommandLogStream;
   line: string;
   timestamp: number;
 }
 
-interface RunCommandLogState {
-  lines: RunCommandLogEntry[];
+export interface RunCommandLogChunk {
+  id: string;
+  lines: RunCommandLogLine[];
+  lineCount: number;
+}
+
+export interface RunCommandLogState {
+  chunks: RunCommandLogChunk[];
+  pendingLines: Record<RunCommandLogStream, RunCommandLogLine | null>;
+  trailingText: Record<RunCommandLogStream, string>;
+  totalLineCount: number;
   updatedAt: number;
+  version: number;
 }
 
 export type RunCommandLogs = Record<string, RunCommandLogState>;
+
+export function getRunCommandLogLineCount(
+  log: RunCommandLogState | null | undefined,
+): number {
+  if (!log) return 0;
+  return (
+    log.totalLineCount +
+    (log.pendingLines.stdout ? 1 : 0) +
+    (log.pendingLines.stderr ? 1 : 0)
+  );
+}
+
+export function getRunCommandLogLines(
+  log: RunCommandLogState | null | undefined,
+): RunCommandLogLine[] {
+  if (!log) return [];
+
+  const lines = log.chunks.flatMap((chunk) => chunk.lines);
+  if (log.pendingLines.stdout) lines.push(log.pendingLines.stdout);
+  if (log.pendingLines.stderr) lines.push(log.pendingLines.stderr);
+  return lines;
+}
 
 export interface TaskState {
   taskId: string;
@@ -65,6 +99,8 @@ interface TaskMessagesStore {
   pendingRequestsByTaskId: Record<string, PendingRequest>;
   /** Keyed by taskId — run command logs are task-level, not step-level */
   runCommandLogs: Record<string, RunCommandLogs>;
+  /** Keyed by taskId/runCommandId — drops stale IPC batches after log reset. */
+  runCommandLogGenerations: Record<string, Record<string, number>>;
   /** Keyed by taskId — running command status with command details */
   runCommandRunning: Record<string, RunStatus>;
   cacheLimit: number;
@@ -96,13 +132,20 @@ interface TaskMessagesStore {
   ) => void;
   setQuestion: (stepId: string, question: TaskState['pendingQuestion']) => void;
   setQueuedPrompts: (stepId: string, queuedPrompts: QueuedPrompt[]) => void;
-  appendRunCommandLine: (
+  appendRunCommandLogBatch: (
     taskId: string,
     runCommandId: string,
     stream: RunCommandLogStream,
-    line: string,
+    text: string,
+    generation: number,
   ) => void;
   clearRunCommandLogs: (taskId: string, runCommandId: string) => void;
+  resetRunCommandLogs: (taskId: string, runCommandId: string) => number;
+  applyRunCommandLogsReset: (
+    taskId: string,
+    runCommandId: string,
+    generation: number,
+  ) => void;
   clearAllRunCommandLogs: (taskId: string) => void;
   setRunCommandRunning: (taskId: string, status: RunStatus | false) => void;
   setPendingRequestForTask: (taskId: string, request: PendingRequest) => void;
@@ -161,10 +204,77 @@ function evictIfNeeded(
   return newSteps;
 }
 
+function appendLinesToChunks({
+  chunks,
+  lines,
+  runCommandId,
+}: {
+  chunks: RunCommandLogChunk[];
+  lines: RunCommandLogLine[];
+  runCommandId: string;
+}): RunCommandLogChunk[] {
+  if (lines.length === 0) return chunks;
+
+  const nextChunks = chunks.slice();
+  let current = nextChunks[nextChunks.length - 1];
+
+  for (const line of lines) {
+    if (!current || current.lineCount >= RUN_COMMAND_LOG_CHUNK_LINE_LIMIT) {
+      current = {
+        id: `${runCommandId}:${Date.now()}:${nextChunks.length}`,
+        lines: [],
+        lineCount: 0,
+      };
+      nextChunks.push(current);
+    }
+
+    current = {
+      ...current,
+      lines: [...current.lines, line],
+      lineCount: current.lineCount + 1,
+    };
+    nextChunks[nextChunks.length - 1] = current;
+  }
+
+  return nextChunks;
+}
+
+function capLogChunks({
+  chunks,
+  totalLineCount,
+}: {
+  chunks: RunCommandLogChunk[];
+  totalLineCount: number;
+}): { chunks: RunCommandLogChunk[]; totalLineCount: number } {
+  let nextChunks = chunks;
+  let nextLineCount = totalLineCount;
+
+  while (
+    nextLineCount > MAX_RUN_COMMAND_LOG_LINES &&
+    nextChunks.length > 1 &&
+    nextLineCount - nextChunks[0].lineCount >= MAX_RUN_COMMAND_LOG_LINES
+  ) {
+    const [removed, ...rest] = nextChunks;
+    nextChunks = rest;
+    nextLineCount -= removed.lineCount;
+  }
+
+  if (nextLineCount > MAX_RUN_COMMAND_LOG_LINES && nextChunks.length > 0) {
+    const excess = nextLineCount - MAX_RUN_COMMAND_LOG_LINES;
+    const [chunk, ...rest] = nextChunks;
+    const lines = chunk.lines.slice(excess);
+    nextChunks = [{ ...chunk, lines, lineCount: lines.length }, ...rest];
+    nextLineCount = MAX_RUN_COMMAND_LOG_LINES;
+  }
+
+  return { chunks: nextChunks, totalLineCount: nextLineCount };
+}
+
 export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
   steps: {},
   pendingRequestsByTaskId: {},
   runCommandLogs: {},
+  runCommandLogGenerations: {},
   runCommandRunning: {},
   cacheLimit: DEFAULT_CACHE_LIMIT,
 
@@ -322,25 +432,45 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     });
   },
 
-  appendRunCommandLine: (taskId, runCommandId, stream, line) => {
+  appendRunCommandLogBatch: (
+    taskId,
+    runCommandId,
+    stream,
+    text,
+    generation,
+  ) => {
     set((state) => {
+      const now = Date.now();
+      const currentGeneration =
+        state.runCommandLogGenerations[taskId]?.[runCommandId] ?? 0;
+      if (generation < currentGeneration) return state;
+
       const taskLogs = state.runCommandLogs[taskId] ?? {};
       const existingLog = taskLogs[runCommandId] ?? {
-        lines: [],
-        updatedAt: Date.now(),
+        chunks: [],
+        pendingLines: { stdout: null, stderr: null },
+        trailingText: { stdout: '', stderr: '' },
+        totalLineCount: 0,
+        updatedAt: now,
+        version: 0,
       };
-      const nextLines = [
-        ...existingLog.lines,
-        {
-          stream,
-          line,
-          timestamp: Date.now(),
-        },
-      ];
-      const cappedLines =
-        nextLines.length > MAX_RUN_COMMAND_LOG_LINES
-          ? nextLines.slice(-MAX_RUN_COMMAND_LOG_LINES)
-          : nextLines;
+
+      const parsed = parseRunCommandLogBatch({
+        trailingText: existingLog.trailingText[stream],
+        stream,
+        text,
+        timestamp: now,
+      });
+      const chunks = appendLinesToChunks({
+        chunks: existingLog.chunks,
+        lines: parsed.completedLines,
+        runCommandId,
+      });
+      const capped = capLogChunks({
+        chunks,
+        totalLineCount:
+          existingLog.totalLineCount + parsed.completedLines.length,
+      });
 
       return {
         runCommandLogs: {
@@ -348,8 +478,18 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
           [taskId]: {
             ...taskLogs,
             [runCommandId]: {
-              lines: cappedLines,
-              updatedAt: Date.now(),
+              chunks: capped.chunks,
+              pendingLines: {
+                ...existingLog.pendingLines,
+                [stream]: parsed.pendingLine,
+              },
+              trailingText: {
+                ...existingLog.trailingText,
+                [stream]: parsed.trailingText,
+              },
+              totalLineCount: capped.totalLineCount,
+              updatedAt: now,
+              version: existingLog.version + 1,
             },
           },
         },
@@ -374,14 +514,80 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     });
   },
 
+  resetRunCommandLogs: (taskId, runCommandId) => {
+    const currentGeneration =
+      get().runCommandLogGenerations[taskId]?.[runCommandId] ?? 0;
+    const nextGeneration = Math.max(currentGeneration + 1, Date.now());
+
+    set((state) => {
+      const taskLogs = state.runCommandLogs[taskId];
+      const restLogs = taskLogs
+        ? Object.fromEntries(
+            Object.entries(taskLogs).filter(([id]) => id !== runCommandId),
+          )
+        : {};
+
+      return {
+        runCommandLogs: {
+          ...state.runCommandLogs,
+          [taskId]: restLogs,
+        },
+        runCommandLogGenerations: {
+          ...state.runCommandLogGenerations,
+          [taskId]: {
+            ...(state.runCommandLogGenerations[taskId] ?? {}),
+            [runCommandId]: nextGeneration,
+          },
+        },
+      };
+    });
+
+    return nextGeneration;
+  },
+
+  applyRunCommandLogsReset: (taskId, runCommandId, generation) => {
+    set((state) => {
+      const currentGeneration =
+        state.runCommandLogGenerations[taskId]?.[runCommandId] ?? 0;
+      if (generation < currentGeneration) return state;
+
+      const taskLogs = state.runCommandLogs[taskId];
+      const restLogs = taskLogs
+        ? Object.fromEntries(
+            Object.entries(taskLogs).filter(([id]) => id !== runCommandId),
+          )
+        : {};
+
+      return {
+        runCommandLogs: {
+          ...state.runCommandLogs,
+          [taskId]: restLogs,
+        },
+        runCommandLogGenerations: {
+          ...state.runCommandLogGenerations,
+          [taskId]: {
+            ...(state.runCommandLogGenerations[taskId] ?? {}),
+            [runCommandId]: generation,
+          },
+        },
+      };
+    });
+  },
+
   clearAllRunCommandLogs: (taskId) => {
     set((state) => {
       if (!state.runCommandLogs[taskId]) return state;
 
       const { [taskId]: _removedLogs, ...restLogs } = state.runCommandLogs;
+      const { [taskId]: _removedGenerations, ...restGenerations } =
+        state.runCommandLogGenerations;
       void _removedLogs;
+      void _removedGenerations;
 
-      return { runCommandLogs: restLogs };
+      return {
+        runCommandLogs: restLogs,
+        runCommandLogGenerations: restGenerations,
+      };
     });
   },
 

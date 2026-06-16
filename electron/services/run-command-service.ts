@@ -24,6 +24,8 @@ import { TaskRepository } from '../database/repositories/tasks';
 import { dbg } from '../lib/debug';
 
 const execAsync = promisify(exec);
+const RUN_COMMAND_LOG_FLUSH_INTERVAL_MS = 50;
+const RUN_COMMAND_LOG_FLUSH_BYTES = 16 * 1024;
 
 type ProcessSignal = 'SIGINT' | 'SIGTERM' | 'SIGKILL';
 
@@ -134,54 +136,13 @@ function signalProcessGroupOrProcess(pid: number, signal: ProcessSignal): void {
   process.kill(pid, signal);
 }
 
-/**
- * Handle terminal line-overwrite sequences within a single line.
- *
- * Many CLI tools (Metro, webpack, npm) rewrite the current line using:
- *   - `\r`        — carriage return (cursor to column 0, next text overwrites)
- *   - `\x1b[2K`   — erase entire line
- *   - `\x1b[K`    — erase to end of line
- *   - `\x1b[1G`   — cursor to column 1
- *
- * Since we're not a full terminal emulator, we take the pragmatic approach:
- * find the last "restart" point and keep only the text after it.
- */
-function applyLineOverwrites(line: string): string {
-  let result = line;
-
-  // Find the last erase-line sequence (\x1b[2K or \x1b[K) and discard everything before it
-  // eslint-disable-next-line no-control-regex
-  const eraseMatch = /\x1b\[2?K/g;
-  let lastEraseEnd = -1;
-  let match;
-  while ((match = eraseMatch.exec(result)) !== null) {
-    lastEraseEnd = match.index + match[0].length;
-  }
-  if (lastEraseEnd > 0) {
-    result = result.substring(lastEraseEnd);
-  }
-
-  // Find the last cursor-to-column-1 (\x1b[1G) and discard everything before it
-  const cursorHomeIdx = result.lastIndexOf('\x1b[1G');
-  if (cursorHomeIdx !== -1) {
-    result = result.substring(cursorHomeIdx + 4);
-  }
-
-  // Handle bare \r — take text after the last carriage return
-  const crIdx = result.lastIndexOf('\r');
-  if (crIdx !== -1) {
-    result = result.substring(crIdx + 1);
-  }
-
-  return result;
-}
-
 type StatusChangeCallback = (taskId: string, status: RunStatus) => void;
 type LogCallback = (
   taskId: string,
   runCommandId: string,
   stream: RunCommandLogStream,
-  line: string,
+  text: string,
+  generation: number,
 ) => void;
 
 interface TrackedProcess {
@@ -191,7 +152,9 @@ interface TrackedProcess {
   pty: nodePty.IPty;
   pid: number;
   status: 'running' | 'stopped' | 'errored';
-  outputBuffers: Record<RunCommandLogStream, string>;
+  pendingLogBatches: Record<RunCommandLogStream, string>;
+  logFlushTimer: ReturnType<typeof setTimeout> | null;
+  logGeneration: number;
   /** Set to true once the 'exit' event fires */
   exited: boolean;
   /** Resolves when the process exits */
@@ -212,6 +175,7 @@ interface RunCommandContext {
 
 class RunCommandService {
   private runningProcesses = new Map<string, Map<string, TrackedProcess>>();
+  private logGenerations = new Map<string, number>();
   private commandOperationLocks = new Map<string, Promise<void>>();
   private statusChangeCallbacks: StatusChangeCallback[] = [];
   private logCallbacks: LogCallback[] = [];
@@ -224,6 +188,23 @@ class RunCommandService {
     runCommandId: string;
   }): string {
     return `${taskId}:${runCommandId}`;
+  }
+
+  private getLogGeneration(taskId: string, runCommandId: string): number {
+    return (
+      this.logGenerations.get(this.getCommandKey({ taskId, runCommandId })) ?? 0
+    );
+  }
+
+  private setLogGeneration(
+    taskId: string,
+    runCommandId: string,
+    generation: number,
+  ): void {
+    this.logGenerations.set(
+      this.getCommandKey({ taskId, runCommandId }),
+      generation,
+    );
   }
 
   private async withCommandLock<T>({
@@ -300,9 +281,12 @@ class RunCommandService {
     taskId: string,
     runCommandId: string,
     stream: RunCommandLogStream,
-    line: string,
+    text: string,
+    generation: number,
   ): void {
-    this.logCallbacks.forEach((cb) => cb(taskId, runCommandId, stream, line));
+    this.logCallbacks.forEach((cb) =>
+      cb(taskId, runCommandId, stream, text, generation),
+    );
   }
 
   private getTaskProcesses(taskId: string): Map<string, TrackedProcess> {
@@ -312,25 +296,30 @@ class RunCommandService {
     return this.runningProcesses.get(taskId)!;
   }
 
-  private flushBuffer({
+  private flushLogBatches({
     taskId,
     tracked,
-    stream,
   }: {
     taskId: string;
     tracked: TrackedProcess;
-    stream: RunCommandLogStream;
   }): void {
-    if (!tracked.outputBuffers[stream]) {
-      return;
+    if (tracked.logFlushTimer) {
+      clearTimeout(tracked.logFlushTimer);
+      tracked.logFlushTimer = null;
     }
-    this.notifyLog(
-      taskId,
-      tracked.commandId,
-      stream,
-      tracked.outputBuffers[stream],
-    );
-    tracked.outputBuffers[stream] = '';
+
+    for (const stream of ['stdout', 'stderr'] as const) {
+      const text = tracked.pendingLogBatches[stream];
+      if (!text) continue;
+      tracked.pendingLogBatches[stream] = '';
+      this.notifyLog(
+        taskId,
+        tracked.commandId,
+        stream,
+        text,
+        tracked.logGeneration,
+      );
+    }
   }
 
   private appendLogChunk({
@@ -344,26 +333,20 @@ class RunCommandService {
     stream: RunCommandLogStream;
     chunk: string;
   }): void {
-    // Normalize Windows line endings, then split on newlines
-    const normalized = chunk.replace(/\r\n/g, '\n');
-    const combined = tracked.outputBuffers[stream] + normalized;
-    const lines = combined.split('\n');
-    tracked.outputBuffers[stream] = lines.pop() ?? '';
+    tracked.pendingLogBatches[stream] += chunk;
 
-    for (const rawLine of lines) {
-      this.notifyLog(
-        taskId,
-        tracked.commandId,
-        stream,
-        applyLineOverwrites(rawLine),
-      );
+    if (
+      tracked.pendingLogBatches[stream].length >= RUN_COMMAND_LOG_FLUSH_BYTES
+    ) {
+      this.flushLogBatches({ taskId, tracked });
+      return;
     }
 
-    // Apply overwrites to the buffer itself so progressive \r updates
-    // collapse rather than accumulate
-    tracked.outputBuffers[stream] = applyLineOverwrites(
-      tracked.outputBuffers[stream],
-    );
+    if (!tracked.logFlushTimer) {
+      tracked.logFlushTimer = setTimeout(() => {
+        this.flushLogBatches({ taskId, tracked });
+      }, RUN_COMMAND_LOG_FLUSH_INTERVAL_MS);
+    }
   }
 
   private async getPortsInUse(
@@ -511,7 +494,9 @@ class RunCommandService {
       pty: ptyProcess,
       pid: ptyProcess.pid,
       status: 'running',
-      outputBuffers: { stdout: '', stderr: '' },
+      pendingLogBatches: { stdout: '', stderr: '' },
+      logFlushTimer: null,
+      logGeneration: this.getLogGeneration(taskId, command.id),
       exited: false,
       exitPromise,
     };
@@ -543,8 +528,7 @@ class RunCommandService {
         exitCode,
         signal,
       );
-      this.flushBuffer({ taskId, tracked: trackedProcess, stream: 'stdout' });
-      this.flushBuffer({ taskId, tracked: trackedProcess, stream: 'stderr' });
+      this.flushLogBatches({ taskId, tracked: trackedProcess });
       trackedProcess.exited = true;
       trackedProcess.status = exitCode === 0 ? 'stopped' : 'errored';
       exitResolve!({ exitCode, signal });
@@ -810,6 +794,36 @@ class RunCommandService {
     if (!tracked || tracked.status !== 'running') return;
 
     tracked.pty.write(input);
+  }
+
+  resetLogs({
+    taskId,
+    runCommandId,
+    generation,
+  }: {
+    taskId: string;
+    runCommandId: string;
+    generation: number;
+  }): number {
+    const nextGeneration = Math.max(
+      this.getLogGeneration(taskId, runCommandId) + 1,
+      generation,
+    );
+    this.setLogGeneration(taskId, runCommandId, nextGeneration);
+
+    const taskProcesses = this.runningProcesses.get(taskId);
+    if (!taskProcesses) return nextGeneration;
+
+    const tracked = taskProcesses.get(runCommandId);
+    if (!tracked) return nextGeneration;
+
+    if (tracked.logFlushTimer) {
+      clearTimeout(tracked.logFlushTimer);
+      tracked.logFlushTimer = null;
+    }
+    tracked.pendingLogBatches = { stdout: '', stderr: '' };
+    tracked.logGeneration = nextGeneration;
+    return nextGeneration;
   }
 
   private static VALID_SIGNALS = new Set(['SIGINT', 'SIGTERM']);

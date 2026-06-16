@@ -4229,6 +4229,26 @@ export function registerIpcHandlers() {
       runCommandService.sendInput(params),
   );
   ipcMain.handle(
+    'project:commands:run:resetLogs',
+    (
+      _,
+      params: { taskId: string; runCommandId: string; generation: number },
+    ) => {
+      const generation = runCommandService.resetLogs(params);
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+          win.webContents.send(
+            'project:commands:run:logsReset',
+            params.taskId,
+            params.runCommandId,
+            generation,
+          );
+        }
+      });
+      return generation;
+    },
+  );
+  ipcMain.handle(
     'project:commands:run:sendSignal',
     (
       _,
@@ -4317,7 +4337,7 @@ export function registerIpcHandlers() {
     }
   });
 
-  runCommandService.onLog((taskId, runCommandId, stream, line) => {
+  runCommandService.onLog((taskId, runCommandId, stream, text, generation) => {
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         win.webContents.send(
@@ -4325,7 +4345,8 @@ export function registerIpcHandlers() {
           taskId,
           runCommandId,
           stream,
-          line,
+          text,
+          generation,
         );
       }
     });

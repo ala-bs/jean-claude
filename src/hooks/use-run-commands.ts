@@ -26,8 +26,8 @@ export function useRunCommands({
   const [stoppingCommandIds, setStoppingCommandIds] = useState<string[]>([]);
   const [pendingStart, setPendingStart] = useState<PendingStart | null>(null);
 
-  const clearRunCommandLogs = useTaskMessagesStore(
-    (state) => state.clearRunCommandLogs,
+  const resetRunCommandLogs = useTaskMessagesStore(
+    (state) => state.resetRunCommandLogs,
   );
 
   useEffect(() => {
@@ -51,15 +51,28 @@ export function useRunCommands({
   const runStart = useCallback(
     async (commandIds: string[], kind: PendingStart['kind']) => {
       const uniqueCommandIds = [...new Set(commandIds)];
-      setStartingCommandIds(uniqueCommandIds);
-      setPortsInUseError(null);
-      setPendingStart({ commandIds: uniqueCommandIds, kind });
-
-      for (const commandId of uniqueCommandIds) {
-        clearRunCommandLogs(taskId, commandId);
-      }
-
       try {
+        setStartingCommandIds(uniqueCommandIds);
+        setPortsInUseError(null);
+        setPendingStart({ commandIds: uniqueCommandIds, kind });
+
+        await Promise.all(
+          uniqueCommandIds.map((runCommandId) =>
+            api.runCommands.stopCommand({ taskId, runCommandId }),
+          ),
+        );
+
+        await Promise.all(
+          uniqueCommandIds.map((runCommandId) => {
+            const generation = resetRunCommandLogs(taskId, runCommandId);
+            return api.runCommands.resetLogs({
+              taskId,
+              runCommandId,
+              generation,
+            });
+          }),
+        );
+
         const result =
           uniqueCommandIds.length === 1
             ? await api.runCommands.startCommand({
@@ -86,7 +99,7 @@ export function useRunCommands({
         setStartingCommandIds([]);
       }
     },
-    [clearRunCommandLogs, projectId, taskId, workingDir],
+    [projectId, resetRunCommandLogs, taskId, workingDir],
   );
 
   const startCommand = useCallback(

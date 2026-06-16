@@ -866,6 +866,11 @@ contextBridge.exposeInMainWorld('api', {
       runCommandId: string;
       input: string;
     }) => ipcRenderer.invoke('project:commands:run:sendInput', params),
+    resetLogs: (params: {
+      taskId: string;
+      runCommandId: string;
+      generation: number;
+    }) => ipcRenderer.invoke('project:commands:run:resetLogs', params),
     sendSignal: (params: {
       taskId: string;
       runCommandId: string;
@@ -899,7 +904,8 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         runCommandId: string,
         stream: 'stdout' | 'stderr',
-        line: string,
+        text: string,
+        generation: number,
       ) => void,
     ) => {
       const handler = (
@@ -907,11 +913,29 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         runCommandId: string,
         stream: 'stdout' | 'stderr',
-        line: string,
-      ) => callback(taskId, runCommandId, stream, line);
+        text: string,
+        generation: number,
+      ) => callback(taskId, runCommandId, stream, text, generation);
       ipcRenderer.on('project:commands:run:log', handler);
       return () =>
         ipcRenderer.removeListener('project:commands:run:log', handler);
+    },
+    onLogsReset: (
+      callback: (
+        taskId: string,
+        runCommandId: string,
+        generation: number,
+      ) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        taskId: string,
+        runCommandId: string,
+        generation: number,
+      ) => callback(taskId, runCommandId, generation);
+      ipcRenderer.on('project:commands:run:logsReset', handler);
+      return () =>
+        ipcRenderer.removeListener('project:commands:run:logsReset', handler);
     },
   },
   globalPrompt: {
