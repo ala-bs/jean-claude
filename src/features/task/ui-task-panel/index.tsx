@@ -18,7 +18,9 @@ import {
   ListTodo,
   Search,
 } from 'lucide-react';
+import type { ComponentProps } from 'react';
 import { useEffect, useState, useCallback, useMemo, useRef, memo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { useModal } from '@/common/context/modal';
 import {
@@ -71,7 +73,7 @@ import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { useAgentStream, useAgentControls } from '@/hooks/use-agent';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useContextUsage } from '@/hooks/use-context-usage';
-import { useModel, formatModelName } from '@/hooks/use-model';
+import { getModelFromEntry, formatModelName } from '@/hooks/use-model';
 import { useProject, useProjectIsGitRepository } from '@/hooks/use-projects';
 import {
   getEditorLabel,
@@ -305,6 +307,45 @@ function getLastAssistantMessage(messages: NormalizedEntry[]): string {
   return '';
 }
 
+const EMPTY_QUEUED_PROMPTS: { content: string }[] = [];
+const EMPTY_MESSAGES: NormalizedEntry[] = [];
+
+function useTaskMessageMeta(stepId: string | null) {
+  return useTaskMessagesStore(
+    useShallow((state) => {
+      const step = stepId ? state.steps[stepId] : undefined;
+      return {
+        status: step?.status ?? 'waiting',
+        error: step?.error ?? null,
+        pendingPermission: step?.pendingPermission ?? null,
+        pendingQuestion: step?.pendingQuestion ?? null,
+        queuedPrompts: step?.queuedPrompts ?? EMPTY_QUEUED_PROMPTS,
+        hasMessages: (step?.messages.length ?? 0) > 0,
+        isLoading: !stepId || !step,
+      };
+    }),
+  );
+}
+
+function getLastAssistantMessageForStep(stepId: string | null): string {
+  if (!stepId) return '';
+  const messages =
+    useTaskMessagesStore.getState().steps[stepId]?.messages ?? [];
+  return getLastAssistantMessage(messages);
+}
+
+function useStepModel(stepId: string | null): string | undefined {
+  return useTaskMessagesStore((state) => {
+    const messages = stepId ? state.steps[stepId]?.messages : undefined;
+    if (!messages) return undefined;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const model = getModelFromEntry(messages[i]);
+      if (model) return model;
+    }
+    return undefined;
+  });
+}
+
 export function TaskPanel({ taskId }: { taskId: string }) {
   const navigate = useNavigate();
   const pathname = useRouterState({
@@ -450,12 +491,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     toggleHideUnchanged: explorerToggleHideUnchanged,
   } = useTaskFileExplorerState(taskId);
 
-  const agentState = useAgentStream({ taskId, stepId: activeStepId });
-  const stepTokenSummary = useMemo(
-    () => getStepTokenSummary(agentState.messages),
-    [agentState.messages],
-  );
-  const model = useModel(agentState.messages);
+  const agentMeta = useTaskMessageMeta(activeStepId);
+  const model = useStepModel(activeStepId);
   const {
     start,
     stop,
@@ -834,9 +871,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   );
 
   const permissionProps = useMemo(() => {
-    if (!agentState.pendingPermission) return null;
+    if (!agentMeta.pendingPermission) return null;
     return {
-      request: agentState.pendingPermission,
+      request: agentMeta.pendingPermission,
       onRespond: respondToPermission,
       onAllowForSession: handleAllowToolsForSession,
       onAllowForProject: handleAllowForProject,
@@ -846,7 +883,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       worktreePath: task?.worktreePath,
     };
   }, [
-    agentState.pendingPermission,
+    agentMeta.pendingPermission,
     respondToPermission,
     handleAllowToolsForSession,
     handleAllowForProject,
@@ -857,12 +894,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   ]);
 
   const questionProps = useMemo(() => {
-    if (!agentState.pendingQuestion) return null;
+    if (!agentMeta.pendingQuestion) return null;
     return {
-      request: agentState.pendingQuestion,
+      request: agentMeta.pendingQuestion,
       onRespond: respondToQuestion,
     };
-  }, [agentState.pendingQuestion, respondToQuestion]);
+  }, [agentMeta.pendingQuestion, respondToQuestion]);
 
   const handleToggleSettingsPane = useCallback(() => {
     if (rightPane?.type === 'settings') {
@@ -1234,7 +1271,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       },
     },
     task?.status !== 'running' &&
-      agentState.status !== 'running' &&
+      agentMeta.status !== 'running' &&
       !!task?.worktreePath && {
         label: 'Delete Worktree',
         section: 'Task',
@@ -1285,7 +1322,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       },
     },
     task?.status !== 'running' &&
-      agentState.status !== 'running' && {
+      agentMeta.status !== 'running' && {
         label: 'Delete Task',
         section: 'Task',
         handler: () => {
@@ -1345,6 +1382,11 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [taskId, addReviewCommentAction, removeReviewCommentAction],
   );
 
+  const getCompletionContextBeforePrompt = useCallback(
+    () => getLastAssistantMessageForStep(activeStepId),
+    [activeStepId],
+  );
+
   if (!task || !project) {
     return (
       <div className="text-ink-3 flex h-full items-center justify-center">
@@ -1354,7 +1396,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   }
 
   const isRunning =
-    agentState.status === 'running' || activeStep?.status === 'running';
+    agentMeta.status === 'running' || activeStep?.status === 'running';
   const hasRunningStepStartJob = backgroundJobs.some(
     (job) =>
       job.status === 'running' &&
@@ -1367,13 +1409,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     hasRunningStepStartJob ||
     (!!activeStepId && startingStepIds.has(activeStepId));
   const isAgentBusy = isRunning || isStepStarting;
-  const isWaiting =
-    agentState.status === 'waiting' || task.status === 'waiting';
+  const isWaiting = agentMeta.status === 'waiting' || task.status === 'waiting';
   const taskRootPath = task.worktreePath ?? project.path;
-  const hasMessages = agentState.messages.length > 0;
-  const activeStepError = agentState.error ?? 'No error details available.';
-  const getCompletionContextBeforePrompt = () =>
-    getLastAssistantMessage(agentState.messages);
+  const hasMessages = agentMeta.hasMessages;
+  const activeStepError = agentMeta.error ?? 'No error details available.';
   const canSendMessage = !isAgentBusy && hasMessages && !!activeStep?.sessionId;
   const hasRepoLink =
     !!project.repoProviderId && !!project.repoProjectId && !!project.repoId;
@@ -1381,6 +1420,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     !!project.workItemProviderId &&
     !!project.workItemProjectId &&
     !!project.workItemProjectName;
+  const shouldRenderMessageSection =
+    !isPrViewOpen && !isDiffViewOpen && activeStep?.type !== 'pr-review';
   const backendLabel =
     AVAILABLE_BACKENDS.find(
       (backend) => backend.value === activeStep?.agentBackend,
@@ -1393,6 +1434,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         ref={taskPanelRef}
         className="bg-bg-0 flex h-full w-full overflow-hidden rounded-tl-xl"
       >
+        {!shouldRenderMessageSection && (
+          <TaskAgentStreamSync taskId={taskId} stepId={activeStepId} />
+        )}
         {/* Main content */}
         <div
           className={clsx(
@@ -1788,15 +1832,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 />
               ) : activeStep?.type === 'pr-review' ? (
                 <PrReviewValidation step={activeStep} />
-              ) : agentState.isLoading ? (
-                <div className="flex h-full items-center justify-center">
-                  <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
-                </div>
-              ) : hasMessages ? (
-                <MessageStream
-                  messages={agentState.messages}
-                  isRunning={isAgentBusy}
-                  queuedPrompts={agentState.queuedPrompts}
+              ) : (
+                <TaskMessageStreamSection
+                  taskId={taskId}
+                  stepId={activeStepId}
+                  activeStep={activeStep}
+                  taskPrompt={task.prompt}
+                  isAgentBusy={isAgentBusy}
+                  isStepStarting={isStepStarting}
+                  activeStepError={activeStepError}
+                  onStartStep={handleStartStep}
                   onFilePathClick={handleFilePathClick}
                   onToolDiffClick={handleToolDiffClick}
                   onCancelQueuedPrompt={cancelQueuedPrompt}
@@ -1807,105 +1852,15 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   pendingQuestion={questionProps}
                   onAddBashToPermissions={handleAddBashToPermissions}
                   rootPath={taskRootPath}
-                  taskId={taskId}
-                  stepId={activeStepId}
+                  respondToPermission={respondToPermission}
+                  respondToQuestion={respondToQuestion}
+                  onAllowForSession={handleAllowToolsForSession}
+                  onAllowForProject={handleAllowForProject}
+                  onAllowForProjectWorktrees={handleAllowForProjectWorktrees}
+                  onAllowGlobally={handleAllowGlobally}
+                  onSetMode={handleSetMode}
+                  worktreePath={task.worktreePath}
                 />
-              ) : (
-                <div
-                  className="h-full overflow-y-auto p-6"
-                  style={
-                    footerHeight > 0
-                      ? { paddingBottom: footerHeight }
-                      : undefined
-                  }
-                >
-                  <div className="text-ink-2 mb-2 text-sm font-medium">
-                    {activeStep?.name ?? 'Prompt'}
-                  </div>
-                  <div className="border-glass-border bg-bg-1 rounded-lg border p-4">
-                    <pre className="overflow-x-hidden font-sans text-xs whitespace-pre-wrap">
-                      {activeStep?.promptTemplate ?? task.prompt}
-                    </pre>
-                  </div>
-                  {isAgentBusy ? (
-                    <div className="border-glass-border mt-6 flex items-center justify-center gap-2 rounded-lg border border-dashed p-8">
-                      <Loader2 className="text-ink-2 h-4 w-4 animate-spin" />
-                      <p className="text-ink-2">Starting agent...</p>
-                    </div>
-                  ) : activeStep?.status === 'ready' ? (
-                    <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
-                      <Button
-                        onClick={handleStartStep}
-                        disabled={isStepStarting}
-                        loading={isStepStarting}
-                        variant="primary"
-                        icon={<Play />}
-                      >
-                        {isStepStarting ? 'Starting...' : 'Start Step'}
-                      </Button>
-                    </div>
-                  ) : activeStep?.status === 'pending' ? (
-                    <div className="border-glass-border mt-6 flex items-center justify-center rounded-lg border border-dashed p-8">
-                      <p className="text-ink-3 text-sm">
-                        Waiting for dependencies to complete
-                      </p>
-                    </div>
-                  ) : activeStep?.status === 'errored' ? (
-                    <div className="border-status-fail/30 bg-status-fail-soft mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border p-8 text-center">
-                      <p className="text-status-fail text-sm font-medium">
-                        Step failed to start
-                      </p>
-                      <p className="text-ink-2 max-w-md text-xs">
-                        {activeStepError}
-                      </p>
-                      <Button
-                        onClick={handleStartStep}
-                        disabled={isStepStarting}
-                        loading={isStepStarting}
-                        variant="secondary"
-                        icon={<RefreshCw />}
-                      >
-                        {isStepStarting ? 'Retrying...' : 'Retry Start'}
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
-                      <p className="text-ink-2">No messages loaded</p>
-                      <Button
-                        onClick={agentState.refetch}
-                        variant="secondary"
-                        icon={<RefreshCw />}
-                      >
-                        Reload messages
-                      </Button>
-                    </div>
-                  )}
-                  {/* Fallback banners when no messages yet */}
-                  {agentState.pendingPermission && (
-                    <div className="mt-4 overflow-hidden rounded-lg">
-                      <PermissionBar
-                        request={agentState.pendingPermission}
-                        onRespond={respondToPermission}
-                        onAllowForSession={handleAllowToolsForSession}
-                        onAllowForProject={handleAllowForProject}
-                        onAllowForProjectWorktrees={
-                          handleAllowForProjectWorktrees
-                        }
-                        onAllowGlobally={handleAllowGlobally}
-                        onSetMode={handleSetMode}
-                        worktreePath={task.worktreePath}
-                      />
-                    </div>
-                  )}
-                  {agentState.pendingQuestion && (
-                    <div className="mt-4 overflow-hidden rounded-lg">
-                      <QuestionOptions
-                        request={agentState.pendingQuestion}
-                        onRespond={respondToQuestion}
-                      />
-                    </div>
-                  )}
-                </div>
               )}
             </div>
           </div>
@@ -1936,10 +1891,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   canSendMessage={!!canSendMessage}
                   onSend={sendMessage}
                   onQueue={queuePrompt}
-                  queuedPrompts={agentState.queuedPrompts}
+                  queuedPrompts={agentMeta.queuedPrompts}
                   onStop={handleStop}
-                  entries={agentState.messages}
-                  stepTokenSummary={stepTokenSummary}
                   projectRoot={taskRootPath}
                   getCompletionContextBeforePrompt={
                     getCompletionContextBeforePrompt
@@ -2071,6 +2024,212 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   );
 }
 
+const TaskAgentStreamSync = memo(function TaskAgentStreamSync({
+  taskId,
+  stepId,
+}: {
+  taskId: string;
+  stepId: string | null;
+}) {
+  useAgentStream({ taskId, stepId });
+  return null;
+});
+
+const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
+  taskId,
+  stepId,
+  activeStep,
+  taskPrompt,
+  isAgentBusy,
+  isStepStarting,
+  activeStepError,
+  onStartStep,
+  onFilePathClick,
+  onToolDiffClick,
+  onCancelQueuedPrompt,
+  onUpdateQueuedPrompt,
+  onShowRawMessage,
+  bottomPadding,
+  pendingPermission,
+  pendingQuestion,
+  onAddBashToPermissions,
+  rootPath,
+  respondToPermission,
+  respondToQuestion,
+  onAllowForSession,
+  onAllowForProject,
+  onAllowForProjectWorktrees,
+  onAllowGlobally,
+  onSetMode,
+  worktreePath,
+}: {
+  taskId: string;
+  stepId: string | null;
+  activeStep?: TaskStep | null;
+  taskPrompt: string;
+  isAgentBusy: boolean;
+  isStepStarting: boolean;
+  activeStepError: string;
+  onStartStep: () => void | Promise<void>;
+  onFilePathClick?: (
+    filePath: string,
+    lineStart?: number,
+    lineEnd?: number,
+  ) => void;
+  onToolDiffClick?: (
+    filePath: string,
+    oldString: string,
+    newString: string,
+  ) => void;
+  onCancelQueuedPrompt?: (promptId: string) => void;
+  onUpdateQueuedPrompt?: (promptId: string, content: string) => void;
+  onShowRawMessage?: (entryId: string) => void;
+  bottomPadding: number;
+  pendingPermission: ComponentProps<typeof MessageStream>['pendingPermission'];
+  pendingQuestion: ComponentProps<typeof MessageStream>['pendingQuestion'];
+  onAddBashToPermissions?: (command: string) => void;
+  rootPath: string | null;
+  respondToPermission: ComponentProps<typeof PermissionBar>['onRespond'];
+  respondToQuestion: ComponentProps<typeof QuestionOptions>['onRespond'];
+  onAllowForSession?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => void;
+  onAllowForProject?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => void;
+  onAllowForProjectWorktrees?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => void;
+  onAllowGlobally?: (toolName: string, input: Record<string, unknown>) => void;
+  onSetMode?: (mode: InteractionMode) => void;
+  worktreePath?: string | null;
+}) {
+  const agentState = useAgentStream({ taskId, stepId });
+  const hasMessages = agentState.messages.length > 0;
+
+  if (agentState.isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
+      </div>
+    );
+  }
+
+  if (hasMessages) {
+    return (
+      <MessageStream
+        messages={agentState.messages}
+        isRunning={isAgentBusy}
+        queuedPrompts={agentState.queuedPrompts}
+        onFilePathClick={onFilePathClick}
+        onToolDiffClick={onToolDiffClick}
+        onCancelQueuedPrompt={onCancelQueuedPrompt}
+        onUpdateQueuedPrompt={onUpdateQueuedPrompt}
+        onShowRawMessage={onShowRawMessage}
+        bottomPadding={bottomPadding}
+        pendingPermission={pendingPermission}
+        pendingQuestion={pendingQuestion}
+        onAddBashToPermissions={onAddBashToPermissions}
+        rootPath={rootPath}
+        taskId={taskId}
+        stepId={stepId}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="h-full overflow-y-auto p-6"
+      style={bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined}
+    >
+      <div className="text-ink-2 mb-2 text-sm font-medium">
+        {activeStep?.name ?? 'Prompt'}
+      </div>
+      <div className="border-glass-border bg-bg-1 rounded-lg border p-4">
+        <pre className="overflow-x-hidden font-sans text-xs whitespace-pre-wrap">
+          {activeStep?.promptTemplate ?? taskPrompt}
+        </pre>
+      </div>
+      {isAgentBusy ? (
+        <div className="border-glass-border mt-6 flex items-center justify-center gap-2 rounded-lg border border-dashed p-8">
+          <Loader2 className="text-ink-2 h-4 w-4 animate-spin" />
+          <p className="text-ink-2">Starting agent...</p>
+        </div>
+      ) : activeStep?.status === 'ready' ? (
+        <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
+          <Button
+            onClick={onStartStep}
+            disabled={isStepStarting}
+            loading={isStepStarting}
+            variant="primary"
+            icon={<Play />}
+          >
+            {isStepStarting ? 'Starting...' : 'Start Step'}
+          </Button>
+        </div>
+      ) : activeStep?.status === 'pending' ? (
+        <div className="border-glass-border mt-6 flex items-center justify-center rounded-lg border border-dashed p-8">
+          <p className="text-ink-3 text-sm">
+            Waiting for dependencies to complete
+          </p>
+        </div>
+      ) : activeStep?.status === 'errored' ? (
+        <div className="border-status-fail/30 bg-status-fail-soft mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border p-8 text-center">
+          <p className="text-status-fail text-sm font-medium">
+            Step failed to start
+          </p>
+          <p className="text-ink-2 max-w-md text-xs">{activeStepError}</p>
+          <Button
+            onClick={onStartStep}
+            disabled={isStepStarting}
+            loading={isStepStarting}
+            variant="secondary"
+            icon={<RefreshCw />}
+          >
+            {isStepStarting ? 'Retrying...' : 'Retry Start'}
+          </Button>
+        </div>
+      ) : (
+        <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
+          <p className="text-ink-2">No messages loaded</p>
+          <Button
+            onClick={agentState.refetch}
+            variant="secondary"
+            icon={<RefreshCw />}
+          >
+            Reload messages
+          </Button>
+        </div>
+      )}
+      {agentState.pendingPermission && (
+        <div className="mt-4 overflow-hidden rounded-lg">
+          <PermissionBar
+            request={agentState.pendingPermission}
+            onRespond={respondToPermission}
+            onAllowForSession={onAllowForSession}
+            onAllowForProject={onAllowForProject}
+            onAllowForProjectWorktrees={onAllowForProjectWorktrees}
+            onAllowGlobally={onAllowGlobally}
+            onSetMode={onSetMode}
+            worktreePath={worktreePath}
+          />
+        </div>
+      )}
+      {agentState.pendingQuestion && (
+        <div className="mt-4 overflow-hidden rounded-lg">
+          <QuestionOptions
+            request={agentState.pendingQuestion}
+            onRespond={respondToQuestion}
+          />
+        </div>
+      )}
+    </div>
+  );
+});
+
 /** Whether a backend supports image attachments in prompts.
  *  All Claude models support vision. OpenCode models generally do too,
  *  but per-model capability detection requires SDK support (not yet available). */
@@ -2096,8 +2255,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onQueue,
   queuedPrompts,
   onStop,
-  entries,
-  stepTokenSummary,
   projectRoot,
   getCompletionContextBeforePrompt,
 }: {
@@ -2110,8 +2267,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onQueue: (parts: PromptPart[]) => void;
   queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
-  entries: NormalizedEntry[];
-  stepTokenSummary: StepTokenSummary;
   projectRoot: string | null;
   getCompletionContextBeforePrompt: () => string;
 }) {
@@ -2167,11 +2322,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
     backend: effectiveBackend,
     model: resolvedModelForContext,
     dynamicContextWindow: activeModelMeta?.contextWindow,
-  });
-  const contextUsage = useContextUsage({
-    entries,
-    backend: effectiveBackend,
-    contextWindow,
   });
   const thinkingCapabilities = getModelThinkingCapabilities(
     effectiveModel,
@@ -2407,10 +2557,11 @@ const TaskInputFooter = memo(function TaskInputFooter({
   );
 
   const tokenControls = (
-    <>
-      <StepTokenSummaryDisplay summary={stepTokenSummary} />
-      <ContextUsageDisplay contextUsage={contextUsage} />
-    </>
+    <TaskMessageUsageControls
+      stepId={activeStepId}
+      backend={effectiveBackend}
+      contextWindow={contextWindow}
+    />
   );
 
   return (
@@ -2527,6 +2678,37 @@ const TaskInputFooter = memo(function TaskInputFooter({
         </Modal>
       )}
     </div>
+  );
+});
+
+const TaskMessageUsageControls = memo(function TaskMessageUsageControls({
+  stepId,
+  backend,
+  contextWindow,
+}: {
+  stepId: string | null;
+  backend: AgentBackendType;
+  contextWindow: number;
+}) {
+  const entries = useTaskMessagesStore(
+    (state) =>
+      (stepId ? state.steps[stepId]?.messages : undefined) ?? EMPTY_MESSAGES,
+  );
+  const stepTokenSummary = useMemo(
+    () => getStepTokenSummary(entries),
+    [entries],
+  );
+  const contextUsage = useContextUsage({
+    entries,
+    backend,
+    contextWindow,
+  });
+
+  return (
+    <>
+      <StepTokenSummaryDisplay summary={stepTokenSummary} />
+      <ContextUsageDisplay contextUsage={contextUsage} />
+    </>
   );
 });
 
