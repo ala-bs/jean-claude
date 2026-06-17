@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
-import { groupByPrompts, mergeSkillMessages } from './message-merger';
+import {
+  groupByPrompts,
+  mergeSkillMessages,
+  processMessageStream,
+} from './message-merger';
 
 describe('message-merger', () => {
   it('marks prompt groups completed when a success result entry is present', () => {
@@ -375,6 +379,181 @@ describe('message-merger', () => {
       status: 'error',
       promptEntry: { id: 'synthetic-summary-prompt' },
       resultEntry: { id: 'summary-error', isError: true },
+    });
+  });
+
+  it('incrementally processes appended assistant message updates', () => {
+    const prompt: NormalizedEntry = {
+      id: 'prompt-1',
+      date: '2026-06-13T09:56:30.555Z',
+      type: 'user-prompt',
+      value: 'Build cache',
+    };
+    const firstAssistant: NormalizedEntry = {
+      id: 'assistant-1',
+      date: '2026-06-13T09:56:31.555Z',
+      type: 'assistant-message',
+      value: 'Working',
+    };
+    const updatedAssistant: NormalizedEntry = {
+      ...firstAssistant,
+      value: 'Working now',
+    };
+
+    const first = processMessageStream([prompt, firstAssistant], true);
+    const cached = processMessageStream(
+      [prompt, updatedAssistant],
+      true,
+      first.cache,
+    );
+    const full = processMessageStream([prompt, updatedAssistant], true);
+
+    expect(cached.streamMessages).toEqual(full.streamMessages);
+    expect(cached.streamMessages[0]).toMatchObject({
+      kind: 'prompt-group',
+      childMessages: [{ kind: 'entry', entry: { value: 'Working now' } }],
+    });
+  });
+
+  it('incrementally finalizes previous prompt when next prompt arrives', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'prompt-1',
+        date: '2026-06-13T09:56:30.555Z',
+        type: 'user-prompt',
+        value: 'First',
+      },
+    ];
+    const nextEntries: NormalizedEntry[] = [
+      ...entries,
+      {
+        id: 'prompt-2',
+        date: '2026-06-13T09:56:31.555Z',
+        type: 'user-prompt',
+        value: 'Second',
+      },
+    ];
+
+    const first = processMessageStream(entries, true);
+    const cached = processMessageStream(nextEntries, true, first.cache);
+    const full = processMessageStream(nextEntries, true);
+
+    expect(cached.streamMessages).toEqual(full.streamMessages);
+    expect(cached.streamMessages).toMatchObject([
+      { kind: 'prompt-group', status: 'interrupted' },
+      { kind: 'prompt-group', status: 'running' },
+    ]);
+  });
+
+  it('incrementally groups appended subagent child entries', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'prompt-1',
+        date: '2026-06-13T09:56:30.555Z',
+        type: 'user-prompt',
+        value: 'Explore',
+      },
+      {
+        id: 'tool-entry-1',
+        date: '2026-06-13T09:56:31.555Z',
+        type: 'tool-use',
+        toolId: 'call_subagent_1',
+        name: 'sub-agent',
+        input: {
+          agentType: 'explore',
+          description: 'Explore project',
+          prompt: 'Explore this repo',
+        },
+        result: { output: 'Done' },
+      },
+      {
+        id: 'result-1',
+        date: '2026-06-13T09:56:32.555Z',
+        isSynthetic: true,
+        type: 'result',
+        isError: false,
+      },
+    ];
+    const nextEntries: NormalizedEntry[] = [
+      ...entries,
+      {
+        id: 'child-assistant-1',
+        date: '2026-06-13T09:56:33.555Z',
+        parentToolId: 'call_subagent_1',
+        type: 'assistant-message',
+        value: 'Project summary',
+      },
+    ];
+
+    const first = processMessageStream(entries, false);
+    const cached = processMessageStream(nextEntries, false, first.cache);
+    const full = processMessageStream(nextEntries, false);
+
+    expect(cached.streamMessages).toEqual(full.streamMessages);
+    expect(cached.streamMessages[0]).toMatchObject({
+      kind: 'prompt-group',
+      childMessages: [
+        { kind: 'subagent', childEntries: [{ id: 'child-assistant-1' }] },
+      ],
+    });
+  });
+
+  it('rebuilds when an appended subagent child belongs to an earlier prompt', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'prompt-1',
+        date: '2026-06-13T09:56:30.555Z',
+        type: 'user-prompt',
+        value: 'Explore',
+      },
+      {
+        id: 'tool-entry-1',
+        date: '2026-06-13T09:56:31.555Z',
+        type: 'tool-use',
+        toolId: 'call_subagent_1',
+        name: 'sub-agent',
+        input: {
+          agentType: 'explore',
+          description: 'Explore project',
+          prompt: 'Explore this repo',
+        },
+        result: { output: 'Done' },
+      },
+      {
+        id: 'result-1',
+        date: '2026-06-13T09:56:32.555Z',
+        isSynthetic: true,
+        type: 'result',
+        isError: false,
+      },
+      {
+        id: 'prompt-2',
+        date: '2026-06-13T09:56:33.555Z',
+        type: 'user-prompt',
+        value: 'Continue',
+      },
+    ];
+    const nextEntries: NormalizedEntry[] = [
+      ...entries,
+      {
+        id: 'child-assistant-1',
+        date: '2026-06-13T09:56:34.555Z',
+        parentToolId: 'call_subagent_1',
+        type: 'assistant-message',
+        value: 'Project summary',
+      },
+    ];
+
+    const first = processMessageStream(entries, false);
+    const cached = processMessageStream(nextEntries, false, first.cache);
+    const full = processMessageStream(nextEntries, false);
+
+    expect(cached.streamMessages).toEqual(full.streamMessages);
+    expect(cached.streamMessages[0]).toMatchObject({
+      kind: 'prompt-group',
+      childMessages: [
+        { kind: 'subagent', childEntries: [{ id: 'child-assistant-1' }] },
+      ],
     });
   });
 });

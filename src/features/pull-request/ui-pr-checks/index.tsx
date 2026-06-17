@@ -160,8 +160,12 @@ function getVisibleEvaluations(evaluations: EvaluationWithOptimistic[]) {
   });
 }
 
+function isRequiredCheck(evaluation: EvaluationWithOptimistic) {
+  return evaluation.configuration.isBlocking;
+}
+
 function getSummary(evaluations: EvaluationWithOptimistic[]) {
-  const required = evaluations.filter((e) => e.isBlocking);
+  const required = evaluations.filter(isRequiredCheck);
   const passed = required.filter((e) => e.status === 'approved').length;
   const failed = required.filter((e) => e.status === 'rejected').length;
   const running = required.filter(
@@ -185,6 +189,9 @@ export function PrChecks({
   expandedBuildId,
   onExpandCheck,
   renderExpanded,
+  ignoredAutoCompletePolicyIds,
+  onIgnoreOptionalPolicy,
+  isIgnoringOptionalPolicy,
 }: {
   evaluations: EvaluationWithOptimistic[];
   isLoading?: boolean;
@@ -196,6 +203,9 @@ export function PrChecks({
   expandedBuildId?: number | null;
   onExpandCheck?: (buildId: number | null) => void;
   renderExpanded?: (buildId: number) => ReactNode;
+  ignoredAutoCompletePolicyIds?: Set<number>;
+  onIgnoreOptionalPolicy?: (configId: number) => void;
+  isIgnoringOptionalPolicy?: boolean;
 }) {
   const visibleEvaluations = useMemo(
     () => getVisibleEvaluations(evaluations),
@@ -212,7 +222,9 @@ export function PrChecks({
       notApplicable: 5,
     };
     return [...visibleEvaluations].sort((a, b) => {
-      if (a.isBlocking !== b.isBlocking) return a.isBlocking ? -1 : 1;
+      if (isRequiredCheck(a) !== isRequiredCheck(b)) {
+        return isRequiredCheck(a) ? -1 : 1;
+      }
       if (a._optimisticQueued !== b._optimisticQueued)
         return a._optimisticQueued ? -1 : 1;
       const aPending = isPending(a);
@@ -340,6 +352,9 @@ export function PrChecks({
                   ? renderExpanded(buildId)
                   : null
               }
+              ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
+              onIgnoreOptionalPolicy={onIgnoreOptionalPolicy}
+              isIgnoringOptionalPolicy={isIgnoringOptionalPolicy}
             />
           );
         })}
@@ -396,6 +411,9 @@ export function PrChecks({
                       ? renderExpanded(buildId)
                       : null
                   }
+                  ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
+                  onIgnoreOptionalPolicy={onIgnoreOptionalPolicy}
+                  isIgnoringOptionalPolicy={isIgnoringOptionalPolicy}
                 />
               );
             })}
@@ -415,6 +433,9 @@ function CheckRow({
   onToggleExpand,
   hasBorderTop,
   expandedContent,
+  ignoredAutoCompletePolicyIds,
+  onIgnoreOptionalPolicy,
+  isIgnoringOptionalPolicy,
 }: {
   evaluation: EvaluationWithOptimistic;
   onRequeue?: (evaluationId: string) => void;
@@ -425,10 +446,22 @@ function CheckRow({
   onToggleExpand?: () => void;
   hasBorderTop?: boolean;
   expandedContent?: ReactNode;
+  ignoredAutoCompletePolicyIds?: Set<number>;
+  onIgnoreOptionalPolicy?: (configId: number) => void;
+  isIgnoringOptionalPolicy?: boolean;
 }) {
   const name = getDisplayName(evaluation);
   const showQueue = canQueue(evaluation) && onRequeue;
   const queueLabel = getQueueLabel(evaluation);
+  const isOptional = !isRequiredCheck(evaluation);
+  const isIgnoredForAutoComplete = ignoredAutoCompletePolicyIds?.has(
+    evaluation.configuration.id,
+  );
+  const canIgnoreForAutoComplete =
+    isOptional &&
+    isBuildPolicy(evaluation) &&
+    !!onIgnoreOptionalPolicy &&
+    !isIgnoredForAutoComplete;
 
   const buildId = evaluation.context?.buildId;
   const isClickable = !!onToggleExpand || (!!buildId && !!onCheckClick);
@@ -471,11 +504,33 @@ function CheckRow({
         </span>
 
         {/* Optional badge */}
-        {!evaluation.isBlocking && (
+        {isOptional && (
           <span className="border-glass-border text-ink-4 shrink-0 rounded border px-1.5 py-0.5 text-[10px] tracking-wider uppercase">
             Optional
           </span>
         )}
+
+        {canIgnoreForAutoComplete && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onIgnoreOptionalPolicy(evaluation.configuration.id);
+            }}
+            disabled={isIgnoringOptionalPolicy}
+            className="text-status-pr hover:bg-status-pr/15 shrink-0 rounded px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50"
+          >
+            Ignore for auto-complete
+          </button>
+        )}
+
+        {isOptional &&
+          isBuildPolicy(evaluation) &&
+          isIgnoredForAutoComplete && (
+            <span className="text-status-done bg-status-done/10 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium">
+              Ignored
+            </span>
+          )}
 
         {/* Status label */}
         <span

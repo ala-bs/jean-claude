@@ -95,6 +95,7 @@ export function RunCommandsConfig({
       name: null,
       command: '',
       ports: [],
+      envVars: [],
       confirmBeforeRun: false,
       confirmMessage: null,
     });

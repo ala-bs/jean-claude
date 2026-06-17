@@ -33,11 +33,39 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
 }
 
-function formatCompact(value: number) {
-  return new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: value >= 10_000 ? 1 : 0,
-    notation: value >= 10_000 ? 'compact' : 'standard',
-  }).format(value);
+function formatTokenCount(value: number) {
+  const units = [
+    { suffix: 'B', value: 1_000_000_000 },
+    { suffix: 'M', value: 1_000_000 },
+    { suffix: 'k', value: 1_000 },
+  ];
+
+  for (const [index, unit] of units.entries()) {
+    if (value < unit.value) continue;
+
+    const scaled = value / unit.value;
+    if (scaled >= 100) {
+      const rounded = Math.round(scaled);
+      if (rounded >= 1_000 && index > 0) return `1${units[index - 1].suffix}`;
+      return `${rounded}${unit.suffix}`;
+    }
+    if (scaled >= 10) return `${Math.round(scaled)}${unit.suffix}`;
+
+    const rounded = Math.round(scaled * 10) / 10;
+    if (rounded >= 10) return `${Math.round(rounded)}${unit.suffix}`;
+
+    const whole = Math.trunc(rounded);
+    const decimal = Math.round((rounded - whole) * 10);
+    return decimal > 0
+      ? `${whole}${unit.suffix}${decimal}`
+      : `${whole}${unit.suffix}`;
+  }
+
+  return formatNumber(value);
+}
+
+function formatTokenTooltip(value: number) {
+  return `${formatTokenCount(value)} (${formatNumber(value)})`;
 }
 
 function formatFeature(value: string) {
@@ -59,6 +87,13 @@ function cacheTokens(value: {
   cacheCreationTokens: number;
 }) {
   return value.cacheReadTokens + value.cacheCreationTokens;
+}
+
+function inputOutputTokens(value: {
+  inputTokens: number;
+  outputTokens: number;
+}) {
+  return value.inputTokens + value.outputTokens;
 }
 
 function maxOf(values: number[]) {
@@ -370,7 +405,7 @@ function TokenSplitCard({
                 <div className="text-ink-0 font-medium">{row.label}</div>
                 <div>{row.description}</div>
                 <div className="text-ink-4 tabular-nums">
-                  {formatNumber(row.value)} tokens ·{' '}
+                  {formatTokenTooltip(row.value)} tokens ·{' '}
                   {totals.totalTokens > 0
                     ? ((row.value / totals.totalTokens) * 100).toFixed(1)
                     : '0.0'}
@@ -398,7 +433,7 @@ function TokenSplitCard({
                 />
               </span>
               <span className="text-ink-1 text-right tabular-nums">
-                {formatCompact(row.value)}
+                {formatTokenCount(row.value)}
               </span>
             </div>
           </Tooltip>
@@ -586,9 +621,11 @@ function SpendChart({
 }
 
 function Donut({
+  rawTotalTokens,
   segments,
   total,
 }: {
+  rawTotalTokens?: number;
   total: number;
   segments: Array<{ label: string; value: number; color: string }>;
 }) {
@@ -611,10 +648,18 @@ function Donut({
     <div className="flex items-center gap-4">
       <GraphTooltip
         rows={[
-          { label: 'Total tokens', value: formatNumber(total) },
+          { label: 'Input + output', value: formatTokenTooltip(total) },
+          ...(rawTotalTokens === undefined
+            ? []
+            : [
+                {
+                  label: 'Total tokens',
+                  value: formatTokenTooltip(rawTotalTokens),
+                },
+              ]),
           { label: 'Models', value: formatNumber(segments.length) },
         ]}
-        title="Tokens by model"
+        title="Input + output by model"
       >
         <div
           className="relative h-28 w-28 shrink-0 rounded-full"
@@ -624,10 +669,10 @@ function Donut({
         >
           <div className="bg-bg-1 absolute inset-4 flex flex-col items-center justify-center rounded-full border border-white/5">
             <span className="text-ink-0 text-base font-semibold tabular-nums">
-              {formatCompact(total)}
+              {formatTokenCount(total)}
             </span>
             <span className="text-ink-4 text-[11px] tracking-[0.14em] uppercase">
-              tokens
+              I/O tok
             </span>
           </div>
         </div>
@@ -637,7 +682,10 @@ function Donut({
           <GraphTooltip
             key={segment.label}
             rows={[
-              { label: 'Tokens', value: formatNumber(segment.value) },
+              {
+                label: 'Input + output',
+                value: formatTokenTooltip(segment.value),
+              },
               {
                 label: 'Share',
                 value: `${total > 0 ? ((segment.value / total) * 100).toFixed(1) : '0.0'}%`,
@@ -654,7 +702,7 @@ function Donut({
                 {segment.label}
               </span>
               <span className="text-ink-4 tabular-nums">
-                {formatCompact(segment.value)}
+                {formatTokenCount(segment.value)}
               </span>
             </div>
           </GraphTooltip>
@@ -693,12 +741,18 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
     [modelRows],
   );
   const topTokenModels = useMemo(
-    () => [...modelRows].sort((a, b) => b.totalTokens - a.totalTokens),
+    () =>
+      [...modelRows].sort(
+        (a, b) => inputOutputTokens(b) - inputOutputTokens(a),
+      ),
     [modelRows],
   );
+  const totalInputOutputTokens = data ? inputOutputTokens(data.totals) : 0;
   const tokenSpark =
-    data?.byDay.map((day) => ({ label: day.date, value: day.totalTokens })) ??
-    [];
+    data?.byDay.map((day) => ({
+      label: day.date,
+      value: inputOutputTokens(day),
+    })) ?? [];
   const requestSpark =
     data?.byDay.map((day) => ({ label: day.date, value: day.requests })) ?? [];
   const inputSpark =
@@ -717,7 +771,7 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
     })) ?? [];
   const maxModelCost = maxOf(topCostModels.map((row) => row.estimatedCostUsd));
   const maxFeatureTokens = maxOf(
-    data?.byFeature.map((row) => row.totalTokens) ?? [],
+    data?.byFeature.map((row) => inputOutputTokens(row)) ?? [],
   );
   const maxTaskCost = maxOf(
     data?.topTasks.map((row) => row.estimatedCostUsd) ?? [],
@@ -811,9 +865,9 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                     {formatNumber(data.totals.taskCount)} tasks
                   </div>
                   <div className="text-ink-4 relative mt-1 text-xs tabular-nums">
-                    {formatCompact(data.totals.inputTokens)} input ·{' '}
-                    {formatCompact(data.totals.outputTokens)} output ·{' '}
-                    {formatCompact(cacheTokens(data.totals))} cache
+                    {formatTokenCount(data.totals.inputTokens)} input ·{' '}
+                    {formatTokenCount(data.totals.outputTokens)} output ·{' '}
+                    {formatTokenCount(cacheTokens(data.totals))} cache
                   </div>
                   <div className="relative mt-4 space-y-2">
                     <div className="flex items-center gap-2.5">
@@ -877,27 +931,31 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <KpiTile
                   color="#a78bfa"
-                  label="Total tokens"
+                  formatSparkValue={formatTokenCount}
+                  label="Input + output"
                   spark={tokenSpark}
-                  value={formatCompact(data.totals.totalTokens)}
+                  value={formatTokenCount(totalInputOutputTokens)}
                 />
                 <KpiTile
                   color="#38bdf8"
+                  formatSparkValue={formatTokenCount}
                   label="Input"
                   spark={inputSpark}
-                  value={formatCompact(data.totals.inputTokens)}
+                  value={formatTokenCount(data.totals.inputTokens)}
                 />
                 <KpiTile
                   color="#2dd4bf"
+                  formatSparkValue={formatTokenCount}
                   label="Output"
                   spark={outputSpark}
-                  value={formatCompact(data.totals.outputTokens)}
+                  value={formatTokenCount(data.totals.outputTokens)}
                 />
                 <KpiTile
                   color="#f59e0b"
+                  formatSparkValue={formatTokenCount}
                   label="Cache"
                   spark={cacheSpark}
-                  value={formatCompact(cacheTokens(data.totals))}
+                  value={formatTokenCount(cacheTokens(data.totals))}
                 />
               </div>
 
@@ -943,20 +1001,26 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                           <GraphTooltip
                             rows={[
                               {
-                                label: 'Tokens',
-                                value: formatNumber(row.totalTokens),
+                                label: 'Input + output',
+                                value: formatTokenTooltip(
+                                  inputOutputTokens(row),
+                                ),
                               },
                               {
                                 label: 'Input',
-                                value: formatNumber(row.inputTokens),
+                                value: formatTokenTooltip(row.inputTokens),
                               },
                               {
                                 label: 'Output',
-                                value: formatNumber(row.outputTokens),
+                                value: formatTokenTooltip(row.outputTokens),
                               },
                               {
                                 label: 'Cache',
-                                value: formatNumber(cacheTokens(row)),
+                                value: formatTokenTooltip(cacheTokens(row)),
+                              },
+                              {
+                                label: 'Total tokens',
+                                value: formatTokenTooltip(row.totalTokens),
                               },
                               {
                                 label: 'Est. API',
@@ -993,14 +1057,15 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                     )}
                   </div>
                 </Panel>
-                <Panel title="Tokens by model">
+                <Panel title="Input + output by model">
                   <Donut
+                    rawTotalTokens={data.totals.totalTokens}
                     segments={topTokenModels.map((row) => ({
                       color: row.color,
                       label: row.label,
-                      value: row.totalTokens,
+                      value: inputOutputTokens(row),
                     }))}
-                    total={data.totals.totalTokens}
+                    total={totalInputOutputTokens}
                   />
                 </Panel>
               </div>
@@ -1013,7 +1078,7 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                   <span>Feature</span>
                   <span>Share</span>
                   <span>Models</span>
-                  <span className="text-right">Tokens</span>
+                  <span className="text-right">I/O tok</span>
                   <span className="text-right">Est. $</span>
                   <span className="text-right">API $</span>
                   <span className="text-right">Req.</span>
@@ -1039,24 +1104,28 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                       <GraphTooltip
                         rows={[
                           {
-                            label: 'Tokens',
-                            value: formatNumber(row.totalTokens),
+                            label: 'Input + output',
+                            value: formatTokenTooltip(inputOutputTokens(row)),
                           },
                           {
                             label: 'Input',
-                            value: formatNumber(row.inputTokens),
+                            value: formatTokenTooltip(row.inputTokens),
                           },
                           {
                             label: 'Output',
-                            value: formatNumber(row.outputTokens),
+                            value: formatTokenTooltip(row.outputTokens),
                           },
                           {
                             label: 'Cache',
-                            value: formatNumber(cacheTokens(row)),
+                            value: formatTokenTooltip(cacheTokens(row)),
+                          },
+                          {
+                            label: 'Total tokens',
+                            value: formatTokenTooltip(row.totalTokens),
                           },
                           {
                             label: 'Share',
-                            value: `${data.totals.totalTokens > 0 ? ((row.totalTokens / data.totals.totalTokens) * 100).toFixed(1) : '0.0'}%`,
+                            value: `${totalInputOutputTokens > 0 ? ((inputOutputTokens(row) / totalInputOutputTokens) * 100).toFixed(1) : '0.0'}%`,
                           },
                           {
                             label: 'Est. API',
@@ -1076,7 +1145,7 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                                 `${model.backend}\n${model.model}`,
                               ) ?? MODEL_COLORS[index % MODEL_COLORS.length],
                             label: formatModelLabel(model),
-                            value: formatCompact(model.totalTokens),
+                            value: formatTokenTooltip(inputOutputTokens(model)),
                           })),
                         ]}
                         title={formatFeature(row.feature)}
@@ -1085,7 +1154,7 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                           <div
                             className="flex h-full rounded-full"
                             style={{
-                              width: `${Math.max((row.totalTokens / maxFeatureTokens) * 100, row.totalTokens > 0 ? 1 : 0)}%`,
+                              width: `${Math.max((inputOutputTokens(row) / maxFeatureTokens) * 100, inputOutputTokens(row) > 0 ? 1 : 0)}%`,
                             }}
                           >
                             {row.models.map((model) => (
@@ -1093,7 +1162,7 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                                 key={`${row.feature}:${model.backend}:${model.model}`}
                                 className="h-full first:rounded-l-full last:rounded-r-full"
                                 style={{
-                                  width: `${row.totalTokens > 0 ? (model.totalTokens / row.totalTokens) * 100 : 0}%`,
+                                  width: `${inputOutputTokens(row) > 0 ? (inputOutputTokens(model) / inputOutputTokens(row)) * 100 : 0}%`,
                                   background:
                                     modelColorByKey.get(
                                       `${model.backend}\n${model.model}`,
@@ -1121,7 +1190,7 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                         ) : null}
                       </div>
                       <span className="text-ink-2 text-right text-xs tabular-nums">
-                        {formatCompact(row.totalTokens)}
+                        {formatTokenCount(inputOutputTokens(row))}
                       </span>
                       <span className="text-ink-2 text-right text-xs tabular-nums">
                         {formatCost(row.estimatedCostUsd)}
@@ -1157,7 +1226,7 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                         {row.projectName ?? row.projectId}
                       </span>
                       <span className="text-ink-3 text-right text-xs tabular-nums">
-                        {formatCompact(row.totalTokens)}
+                        {formatTokenCount(inputOutputTokens(row))}
                       </span>
                       <div className="flex items-center justify-end gap-2">
                         <GraphTooltip
@@ -1167,20 +1236,24 @@ export function UsageOverlay({ onClose }: { onClose: () => void }) {
                               value: row.projectName ?? row.projectId,
                             },
                             {
-                              label: 'Tokens',
-                              value: formatNumber(row.totalTokens),
+                              label: 'Input + output',
+                              value: formatTokenTooltip(inputOutputTokens(row)),
                             },
                             {
                               label: 'Input',
-                              value: formatNumber(row.inputTokens),
+                              value: formatTokenTooltip(row.inputTokens),
                             },
                             {
                               label: 'Output',
-                              value: formatNumber(row.outputTokens),
+                              value: formatTokenTooltip(row.outputTokens),
                             },
                             {
                               label: 'Cache',
-                              value: formatNumber(cacheTokens(row)),
+                              value: formatTokenTooltip(cacheTokens(row)),
+                            },
+                            {
+                              label: 'Total tokens',
+                              value: formatTokenTooltip(row.totalTokens),
                             },
                             {
                               label: 'Est. API',

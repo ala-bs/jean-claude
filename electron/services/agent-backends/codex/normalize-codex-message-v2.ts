@@ -305,6 +305,8 @@ function createToolEntry(
   }
 
   if (type === 'command' || type === 'commandExecution') {
+    if (isSpeculativeAgentCommandExecution(item)) return undefined;
+
     const command = str(item.command) ?? str(item.cmd) ?? str(item.text);
     if (command === undefined || command.trim() === '') return undefined;
 
@@ -401,6 +403,17 @@ function addToolResult(
   if (content === undefined && !isError) return undefined;
 
   return { ...entry, result: content ?? { isError, error } };
+}
+
+function isSpeculativeAgentCommandExecution(
+  item: Record<string, unknown>,
+): boolean {
+  return (
+    str(item.type) === 'commandExecution' &&
+    str(item.source) === 'agent' &&
+    str(item.status) === 'inProgress' &&
+    item.processId == null
+  );
 }
 
 function isUserMessageItem(item: Record<string, unknown>): boolean {

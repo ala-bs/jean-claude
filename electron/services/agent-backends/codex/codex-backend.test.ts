@@ -33,6 +33,7 @@ describe('CodexBackend', () => {
       model: undefined,
       approvalPolicy: 'on-request',
       sandbox: 'workspace-write',
+      config: { sandbox_workspace_write: { network_access: true } },
       serviceName: 'jean_claude',
     });
   });
@@ -46,6 +47,11 @@ describe('CodexBackend', () => {
 
     expect(client.request).toHaveBeenCalledWith('thread/resume', {
       threadId: 'thread-existing',
+      cwd: '/tmp/project',
+      model: undefined,
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+      config: { sandbox_workspace_write: { network_access: true } },
     });
     expect(client.request).not.toHaveBeenCalledWith(
       'thread/start',
@@ -440,6 +446,77 @@ describe('CodexBackend', () => {
         threadId: 'thread-1',
         turnId: 'turn-1',
         item: { id: 'cmd-1', type: 'commandExecution', command: 'true' },
+      },
+    });
+    await iterator.next();
+
+    const complete = iterator.next();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(complete).resolves.toMatchObject({
+      value: { type: 'complete', result: { isError: false } },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({ done: true });
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('does not wait on speculative Codex agent command executions', async () => {
+    vi.useFakeTimers();
+    const { backend, emitNotification, unsubscribe } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Hello' },
+    ]);
+    const iterator = session.events[Symbol.asyncIterator]();
+    await iterator.next();
+
+    emitNotification({
+      method: 'item/started',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'cmd-speculative',
+          type: 'commandExecution',
+          command: 'pnpm install',
+          processId: null,
+          source: 'agent',
+          status: 'inProgress',
+        },
+      },
+    });
+
+    emitNotification({
+      method: 'item/started',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'cmd-real',
+          type: 'commandExecution',
+          command: 'pnpm install',
+          processId: '123',
+          source: 'unifiedExecStartup',
+          status: 'inProgress',
+        },
+      },
+    });
+    await iterator.next();
+
+    emitNotification({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'cmd-real',
+          type: 'commandExecution',
+          command: 'pnpm install',
+          processId: '123',
+          source: 'unifiedExecStartup',
+          status: 'failed',
+          exitCode: 1,
+        },
       },
     });
     await iterator.next();

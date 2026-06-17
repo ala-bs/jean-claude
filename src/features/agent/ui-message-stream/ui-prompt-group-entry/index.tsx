@@ -1,6 +1,6 @@
 import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import type { MouseEvent } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 
 import { countUnifiedPatchStats } from '@/features/agent/ui-diff-view/diff-utils';
 import { formatModelName } from '@/hooks/use-model';
@@ -317,7 +317,7 @@ function getRunningStartDate({
 // ── Sub-components ─────────────────────────────────────────────────────
 
 /** Prompt section — glass card, expand/collapse for long prompts only */
-function PromptSection({
+const PromptSection = memo(function PromptSection({
   group,
   onFilePathClick,
   onContextMenu,
@@ -406,7 +406,120 @@ function PromptSection({
       </div>
     </div>
   );
+}, arePromptSectionPropsEqual);
+
+function arePromptSectionPropsEqual(
+  prev: {
+    group: PromptGroup;
+    onFilePathClick?: (
+      filePath: string,
+      lineStart?: number,
+      lineEnd?: number,
+    ) => void;
+    onContextMenu?: (e: MouseEvent, entry: NormalizedEntry) => void;
+  },
+  next: {
+    group: PromptGroup;
+    onFilePathClick?: (
+      filePath: string,
+      lineStart?: number,
+      lineEnd?: number,
+    ) => void;
+    onContextMenu?: (e: MouseEvent, entry: NormalizedEntry) => void;
+  },
+): boolean {
+  return (
+    prev.group.promptEntry === next.group.promptEntry &&
+    prev.onFilePathClick === next.onFilePathClick &&
+    prev.onContextMenu === next.onContextMenu
+  );
 }
+
+const AgentHeader = memo(function AgentHeader({
+  detailsExpanded,
+  onToggleDetails,
+  onContextMenu,
+  isActiveGroup,
+  runningStartDate,
+  completedDurationLabel,
+  stepCount,
+  resultStats,
+}: {
+  detailsExpanded: boolean;
+  onToggleDetails: () => void;
+  onContextMenu?: (e: MouseEvent) => void;
+  isActiveGroup: boolean;
+  runningStartDate?: string;
+  completedDurationLabel: string | null;
+  stepCount: number;
+  resultStats?: string | null;
+}) {
+  return (
+    <div
+      className="text-ink-3 flex cursor-pointer items-center gap-2 px-3 py-1.5 font-mono text-[10.5px] tracking-wide uppercase select-none"
+      style={{
+        borderBottom: detailsExpanded
+          ? '1px solid var(--color-glass-border)'
+          : 'none',
+        background: 'var(--theme-agent-panel-header-bg)',
+      }}
+      onClick={onToggleDetails}
+      onContextMenu={onContextMenu}
+    >
+      {detailsExpanded ? (
+        <ChevronDown className="h-2.5 w-2.5" />
+      ) : (
+        <ChevronRight className="h-2.5 w-2.5" />
+      )}
+
+      {isActiveGroup ? (
+        <>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="bg-acc h-1.5 w-1.5 rounded-full"
+              style={{
+                boxShadow:
+                  '0 0 8px var(--color-acc), 0 0 14px color-mix(in oklch, var(--color-acc) 60%, transparent)',
+                animation: 'rg-pulse-glow 1.4s ease-in-out infinite',
+              }}
+            />
+            <span className="rg-running-text uppercase">
+              running
+              <span className="rg-running-dots">
+                <span>.</span>
+                <span>.</span>
+                <span>.</span>
+              </span>
+            </span>
+          </span>
+          <RunningTimer
+            startDate={runningStartDate}
+            className="text-ink-4 ml-1.5"
+          />
+        </>
+      ) : (
+        <>
+          {completedDurationLabel && (
+            <span className="text-ink-4 tracking-normal normal-case">
+              {completedDurationLabel}
+            </span>
+          )}
+          <span className="text-ink-2">{stepCount} steps</span>
+          {resultStats && (
+            <span className="text-ink-4 ml-1.5 tracking-normal normal-case">
+              {resultStats}
+            </span>
+          )}
+        </>
+      )}
+
+      <div className="flex-1" />
+      <span className="text-ink-4 tracking-normal normal-case">
+        {detailsExpanded ? 'hide timeline' : 'show timeline'}
+      </span>
+    </div>
+  );
+});
 
 /** Subagent card — shimmer sweep + pulse-ring indicator */
 function SubagentCard({
@@ -779,7 +892,7 @@ function RunningSummary({
  *    - Completed: result block with ✓, stats, bullets
  *    - Error/Interrupted: starts expanded
  */
-export function PromptGroupEntry({
+export const PromptGroupEntry = memo(function PromptGroupEntry({
   group,
   isLast = false,
   isTaskRunning = false,
@@ -922,6 +1035,13 @@ export function PromptGroupEntry({
         return !current;
       }),
     [defaultDetailsExpanded],
+  );
+
+  const handleAgentHeaderContextMenu = useCallback(
+    (e: MouseEvent) => {
+      onPromptContextMenu?.(e, group.promptEntry);
+    },
+    [onPromptContextMenu, group.promptEntry],
   );
 
   // Compute step count for header
@@ -1077,74 +1197,18 @@ export function PromptGroupEntry({
             border: '1px solid var(--theme-agent-panel-border)',
           }}
         >
-          {/* Header bar */}
-          <div
-            className="text-ink-3 flex cursor-pointer items-center gap-2 px-3 py-1.5 font-mono text-[10.5px] tracking-wide uppercase select-none"
-            style={{
-              borderBottom: detailsExpanded
-                ? '1px solid var(--color-glass-border)'
-                : 'none',
-              background: 'var(--theme-agent-panel-header-bg)',
-            }}
-            onClick={toggleDetails}
+          <AgentHeader
+            detailsExpanded={detailsExpanded}
+            onToggleDetails={toggleDetails}
             onContextMenu={
-              onPromptContextMenu
-                ? (e) => onPromptContextMenu(e, group.promptEntry)
-                : undefined
+              onPromptContextMenu ? handleAgentHeaderContextMenu : undefined
             }
-          >
-            {detailsExpanded ? (
-              <ChevronDown className="h-2.5 w-2.5" />
-            ) : (
-              <ChevronRight className="h-2.5 w-2.5" />
-            )}
-
-            {isActiveGroup ? (
-              <>
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className="bg-acc h-1.5 w-1.5 rounded-full"
-                    style={{
-                      boxShadow:
-                        '0 0 8px var(--color-acc), 0 0 14px color-mix(in oklch, var(--color-acc) 60%, transparent)',
-                      animation: 'rg-pulse-glow 1.4s ease-in-out infinite',
-                    }}
-                  />
-                  <span className="rg-running-text uppercase">
-                    running
-                    <span className="rg-running-dots">
-                      <span>.</span>
-                      <span>.</span>
-                      <span>.</span>
-                    </span>
-                  </span>
-                </span>
-                <RunningTimer
-                  startDate={runningStartDate}
-                  className="text-ink-4 ml-1.5"
-                />
-              </>
-            ) : (
-              <>
-                {completedDurationLabel && (
-                  <span className="text-ink-4 tracking-normal normal-case">
-                    {completedDurationLabel}
-                  </span>
-                )}
-                <span className="text-ink-2">{stepCount} steps</span>
-                {resultSummary?.stats && (
-                  <span className="text-ink-4 ml-1.5 tracking-normal normal-case">
-                    {resultSummary.stats}
-                  </span>
-                )}
-              </>
-            )}
-
-            <div className="flex-1" />
-            <span className="text-ink-4 tracking-normal normal-case">
-              {detailsExpanded ? 'hide timeline' : 'show timeline'}
-            </span>
-          </div>
+            isActiveGroup={isActiveGroup}
+            runningStartDate={runningStartDate}
+            completedDurationLabel={completedDurationLabel}
+            stepCount={stepCount}
+            resultStats={resultSummary?.stats}
+          />
 
           {/* Body */}
           <div className="px-3.5 py-2.5">
@@ -1327,4 +1391,4 @@ export function PromptGroupEntry({
       )}
     </div>
   );
-}
+});

@@ -242,6 +242,7 @@ export interface ProjectCommandTable {
   name: string | null;
   command: string;
   ports: string; // JSON array stored as text
+  envVars: string; // JSON array stored as text
   confirmBeforeRun: Generated<number>; // 0 or 1
   confirmMessage: string | null;
   sortOrder: Generated<number>;

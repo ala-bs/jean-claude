@@ -1,5 +1,6 @@
 import { exec } from 'child_process';
 import { readFile, stat } from 'fs/promises';
+import { createServer } from 'net';
 import { join, relative } from 'path';
 import { promisify } from 'util';
 
@@ -18,6 +19,8 @@ import type {
 } from '@shared/run-command-types';
 
 import { ProjectCommandRepository } from '../database/repositories/project-commands';
+import { ProjectRepository } from '../database/repositories/projects';
+import { TaskRepository } from '../database/repositories/tasks';
 import { dbg } from '../lib/debug';
 
 const execAsync = promisify(exec);
@@ -193,6 +196,18 @@ interface TrackedProcess {
   exited: boolean;
   /** Resolves when the process exits */
   exitPromise: Promise<{ exitCode: number; signal?: number }>;
+}
+
+interface RunCommandContext {
+  taskName: string;
+  projectName: string;
+  worktreePath: string;
+  projectPath: string;
+  taskBranch: string;
+  sourceBranch: string;
+  defaultBranch: string;
+  prId: string;
+  prUrl: string;
 }
 
 class RunCommandService {
@@ -373,16 +388,99 @@ class RunCommandService {
     return portsInUse;
   }
 
-  private spawnTrackedCommand({
+  private async getAvailablePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const server = createServer();
+      server.unref();
+      server.on('error', reject);
+      server.listen(0, () => {
+        const address = server.address();
+        server.close(() => {
+          if (address && typeof address === 'object') {
+            resolve(address.port);
+            return;
+          }
+          reject(new Error('Failed to allocate available port'));
+        });
+      });
+    });
+  }
+
+  private async getRunCommandContext({
+    taskId,
+    projectId,
+    workingDir,
+  }: {
+    taskId: string;
+    projectId: string;
+    workingDir: string;
+  }): Promise<RunCommandContext> {
+    const [task, project] = await Promise.all([
+      TaskRepository.findById(taskId),
+      ProjectRepository.findById(projectId),
+    ]);
+
+    return {
+      taskName: task?.name?.trim() || task?.prompt.trim() || taskId,
+      projectName: project?.name ?? projectId,
+      worktreePath: workingDir,
+      projectPath: project?.path ?? '',
+      taskBranch: task?.branchName ?? '',
+      sourceBranch: task?.sourceBranch ?? '',
+      defaultBranch: project?.defaultBranch ?? '',
+      prId: task?.pullRequestId ?? '',
+      prUrl: task?.pullRequestUrl ?? '',
+    };
+  }
+
+  private async getCommandEnv({
+    command,
+    context,
+  }: {
+    command: ProjectCommand;
+    context: RunCommandContext;
+  }): Promise<Record<string, string>> {
+    const env: Record<string, string> = {};
+    const addEnv = (name: string | undefined, value: string) => {
+      const trimmed = name?.trim();
+      if (trimmed) env[trimmed] = value;
+    };
+
+    const shouldAllocateAvailablePort = command.envVars.some(
+      (envVar) => envVar.source === 'availablePort' && envVar.name.trim(),
+    );
+    const availablePort = shouldAllocateAvailablePort
+      ? String(await this.getAvailablePort())
+      : '';
+
+    for (const envVar of command.envVars) {
+      if (!envVar.name.trim()) continue;
+
+      const value =
+        envVar.source === 'custom'
+          ? (envVar.value ?? '')
+          : envVar.source === 'availablePort'
+            ? availablePort
+            : context[envVar.source];
+      addEnv(envVar.name, value);
+    }
+
+    return env;
+  }
+
+  private async spawnTrackedCommand({
     taskId,
     workingDir,
     command,
+    context,
   }: {
     taskId: string;
     workingDir: string;
     command: ProjectCommand;
-  }): void {
+    context: RunCommandContext;
+  }): Promise<void> {
     dbg.runCommand('Spawning command via PTY: %s', command.command);
+    const commandEnv = await this.getCommandEnv({ command, context });
 
     const shell =
       process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/sh';
@@ -396,7 +494,7 @@ class RunCommandService {
       cols: 120,
       rows: 30,
       cwd: workingDir,
-      env: getProcessEnvWithoutNodeEnv(),
+      env: { ...getProcessEnvWithoutNodeEnv(), ...commandEnv },
     });
 
     let exitResolve: (value: { exitCode: number; signal?: number }) => void;
@@ -615,7 +713,12 @@ class RunCommandService {
       };
     }
 
-    this.spawnTrackedCommand({ taskId, workingDir, command });
+    const context = await this.getRunCommandContext({
+      taskId,
+      projectId,
+      workingDir,
+    });
+    await this.spawnTrackedCommand({ taskId, workingDir, command, context });
 
     this.notifyStatusChange(taskId);
     return this.getRunStatus(taskId);
@@ -659,13 +762,21 @@ class RunCommandService {
       };
     }
 
-    await Promise.all(
-      validCommands.map((command) =>
-        this.spawnTrackedCommand({ taskId, workingDir, command }),
-      ),
-    );
+    const context = await this.getRunCommandContext({
+      taskId,
+      projectId,
+      workingDir,
+    });
 
-    this.notifyStatusChange(taskId);
+    try {
+      await Promise.all(
+        validCommands.map((command) =>
+          this.spawnTrackedCommand({ taskId, workingDir, command, context }),
+        ),
+      );
+    } finally {
+      this.notifyStatusChange(taskId);
+    }
     return this.getRunStatus(taskId);
   }
 

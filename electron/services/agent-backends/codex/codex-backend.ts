@@ -132,13 +132,14 @@ export class CodexBackend implements AgentBackend {
 
     try {
       const { client } = await getOrCreateCodexAppServer();
+      const threadConfig = createCodexThreadConfig(config);
       const threadResult = config.sessionId
-        ? await client.request('thread/resume', { threadId: config.sessionId })
+        ? await client.request('thread/resume', {
+            threadId: config.sessionId,
+            ...threadConfig,
+          })
         : await client.request('thread/start', {
-            cwd: config.cwd,
-            model: config.model === 'default' ? undefined : config.model,
-            approvalPolicy: toCodexApprovalPolicy(config.interactionMode),
-            sandbox: toCodexSandbox(config.interactionMode),
+            ...threadConfig,
             serviceName: 'jean_claude',
           });
 
@@ -420,6 +421,25 @@ function toCodexSandbox(mode: InteractionMode): string {
   return 'workspace-write';
 }
 
+function createCodexThreadConfig(config: AgentBackendConfig): {
+  cwd: string;
+  model: string | undefined;
+  approvalPolicy: string;
+  sandbox: string;
+  config?: { sandbox_workspace_write: { network_access: boolean } };
+} {
+  const sandbox = toCodexSandbox(config.interactionMode);
+  return {
+    cwd: config.cwd,
+    model: config.model === 'default' ? undefined : config.model,
+    approvalPolicy: toCodexApprovalPolicy(config.interactionMode),
+    sandbox,
+    ...(sandbox === 'workspace-write'
+      ? { config: { sandbox_workspace_write: { network_access: true } } }
+      : {}),
+  };
+}
+
 function idFromResult(result: unknown, key: string): string | null {
   const data = record(result);
   const nested = record(data?.[key]);
@@ -501,6 +521,7 @@ function updateItemTracking(
   const item = record(params?.item);
   const itemId = stringOrNull(item?.id) ?? stringOrNull(params?.itemId);
   if (itemId === null) return;
+  if (isSpeculativeAgentCommandExecution(item)) return;
 
   session.sawTurnActivity = true;
   if (notification.method === 'item/started') {
@@ -548,6 +569,18 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function isSpeculativeAgentCommandExecution(
+  item: Record<string, unknown> | undefined,
+): boolean {
+  return (
+    item !== undefined &&
+    stringOrNull(item.type) === 'commandExecution' &&
+    stringOrNull(item.source) === 'agent' &&
+    stringOrNull(item.status) === 'inProgress' &&
+    item.processId == null
+  );
 }
 
 function errorMessage(error: unknown): string {

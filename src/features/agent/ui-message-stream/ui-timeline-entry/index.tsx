@@ -10,7 +10,7 @@ import {
   PackageOpen,
 } from 'lucide-react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { codeToTokens, type ThemedToken } from 'shiki';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -1136,7 +1136,7 @@ export function CompactingEntry({ isComplete }: { isComplete: boolean }) {
   );
 }
 
-export function TimelineEntry({
+export const TimelineEntry = memo(function TimelineEntry({
   entry,
   resultDurationMs,
   onFilePathClick,
@@ -1209,4 +1209,4 @@ export function TimelineEntry({
     default:
       return null;
   }
-}
+});
