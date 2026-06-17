@@ -26,6 +26,7 @@ import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import {
   RateLimitSwapPreview,
   resolveRateLimitSwapSelection,
+  useRateLimitSwapPreview,
 } from '@/features/agent/ui-rate-limit-swap-preview';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import {
@@ -210,6 +211,7 @@ export function AddStepDialog({
     createDefaultReviewers(defaultBackend),
   );
   const textareaRef = useRef<PromptTextareaRef>(null);
+  const userTouchedSelectionRef = useRef(false);
 
   const { data: backendsSetting } = useBackendsSetting();
   const { data: backendDefaultModelsSetting } =
@@ -272,6 +274,12 @@ export function AddStepDialog({
     effort: thinkingEffort,
     capabilities: thinkingCapabilities,
   });
+  const { data: rateLimitSuggestion } = useRateLimitSwapPreview(
+    backend,
+    isOpen &&
+      presetType !== 'review-changes' &&
+      !userTouchedSelectionRef.current,
+  );
   const snippetVariableContext: SnippetVariableContext = useMemo(
     () => ({
       task: stepTask
@@ -292,6 +300,7 @@ export function AddStepDialog({
 
   useEffect(() => {
     if (isOpen) {
+      userTouchedSelectionRef.current = false;
       setInteractionMode('ask');
       setBackend(defaultBackend);
       setModel(defaultModel);
@@ -306,6 +315,39 @@ export function AddStepDialog({
       setTimeout(() => textareaRef.current?.focus(), 0);
     }
   }, [defaultBackend, defaultModel, defaultThinkingEffort, isOpen]);
+
+  useEffect(() => {
+    if (
+      !isOpen ||
+      presetType === 'review-changes' ||
+      !rateLimitSuggestion?.swapped ||
+      userTouchedSelectionRef.current
+    ) {
+      return;
+    }
+
+    const nextBackend = rateLimitSuggestion.backend;
+    setBackend(nextBackend);
+    setBackendModelPresetId(null);
+    setModel(
+      rateLimitSuggestion.model ??
+        (nextBackend !== backend ? 'default' : model),
+    );
+    setThinkingEffort(
+      rateLimitSuggestion.thinkingEffort ??
+        (nextBackend !== backend ? 'default' : normalizedThinkingEffort),
+    );
+    setInteractionMode((mode) =>
+      normalizeInteractionModeForBackend({ backend: nextBackend, mode }),
+    );
+  }, [
+    backend,
+    isOpen,
+    model,
+    normalizedThinkingEffort,
+    presetType,
+    rateLimitSuggestion,
+  ]);
 
   const canSubmit =
     presetType === 'review-changes'
@@ -656,6 +698,7 @@ export function AddStepDialog({
               side="top"
               layer={layer}
               onChange={(selection) => {
+                userTouchedSelectionRef.current = true;
                 setBackend(selection.backend);
                 setBackendModelPresetId(selection.presetId);
                 setModel(selection.model);
@@ -675,7 +718,10 @@ export function AddStepDialog({
             />
             <ThinkingSelector
               value={normalizedThinkingEffort}
-              onChange={setThinkingEffort}
+              onChange={(nextThinkingEffort) => {
+                userTouchedSelectionRef.current = true;
+                setThinkingEffort(nextThinkingEffort);
+              }}
               options={thinkingOptions}
               disabled={thinkingOptions.length <= 1}
               side="top"
@@ -686,6 +732,19 @@ export function AddStepDialog({
                 requestedBackend={backend}
                 model={model}
                 thinkingEffort={normalizedThinkingEffort}
+                onApplySuggestion={(selection) => {
+                  userTouchedSelectionRef.current = true;
+                  setBackend(selection.backend);
+                  setBackendModelPresetId(null);
+                  setModel(selection.model as ModelPreference);
+                  setThinkingEffort(selection.thinkingEffort as ThinkingEffort);
+                  setInteractionMode((mode) =>
+                    normalizeInteractionModeForBackend({
+                      backend: selection.backend,
+                      mode,
+                    }),
+                  );
+                }}
               />
             )}
           </div>

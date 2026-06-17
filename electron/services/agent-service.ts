@@ -76,7 +76,6 @@ import {
   textPrompt,
   getPromptText,
 } from './prompt-utils';
-import { rateLimitSwapService } from './rate-limit-swap-service';
 import { StepService } from './step-service';
 import { assertValidWorkspacePath } from './system-project-service';
 
@@ -557,27 +556,12 @@ class AgentService {
     const existingMessageCount =
       await AgentMessageRepository.getMessageCountByStepId(stepId);
 
-    // Resolve backend before first session start so UI-created tasks can still
-    // adapt if usage changes between creation and execution. Once a backend
-    // session exists, preserve continuity for follow-up prompts.
     const requestedBackend: AgentBackendType = (step.agentBackend ??
       'claude-code') as AgentBackendType;
 
-    let backendType = requestedBackend;
-    let swapModel: string | undefined;
-    let swapThinkingEffort: ThinkingEffort | undefined;
-    if (!step.sessionId) {
-      const swapResult =
-        await rateLimitSwapService.resolveBackend(requestedBackend);
-      backendType = swapResult.backend;
-      swapModel = swapResult.model;
-      swapThinkingEffort = swapResult.thinkingEffort;
-      if (swapResult.swapped) {
-        console.log(
-          `[rate-limit-swap] Task ${step.taskId}: swapped ${requestedBackend} → ${backendType}`,
-        );
-      }
-    }
+    const backendType = requestedBackend;
+    const swapModel: string | undefined = undefined;
+    const swapThinkingEffort: ThinkingEffort | undefined = undefined;
     const BackendClass = AGENT_BACKEND_CLASSES[backendType];
     if (!BackendClass) {
       throw new Error(`Unknown agent backend: "${backendType}"`);

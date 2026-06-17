@@ -50,6 +50,7 @@ import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import {
   RateLimitSwapPreview,
   resolveRateLimitSwapSelection,
+  useRateLimitSwapPreview,
 } from '@/features/agent/ui-rate-limit-swap-preview';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import {
@@ -339,6 +340,7 @@ export function NewTaskOverlay({
     updateDraft,
     clearDraft,
   } = useNewTaskDraft();
+  const userTouchedSelectionRef = useRef(false);
 
   const { data: projects = [] } = useProjects();
   const reorderProjectsMutation = useReorderProjects();
@@ -347,6 +349,10 @@ export function NewTaskOverlay({
   const createVerificationNoteMutation = useCreateWorkItemVerificationNote();
   const deleteBacklogTodo = useDeleteProjectTodo();
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    userTouchedSelectionRef.current = false;
+  }, [selectedProjectId]);
   const addRunningJob = useBackgroundJobsStore((state) => state.addRunningJob);
   const markJobSucceeded = useBackgroundJobsStore(
     (state) => state.markJobSucceeded,
@@ -763,6 +769,50 @@ export function NewTaskOverlay({
     currentModelPreference,
     thinkingCapabilities,
   ]);
+  const { data: rateLimitSuggestion } = useRateLimitSwapPreview(
+    currentBackend,
+    !isNoteMode && !draft?.agentBackend && !draft?.modelPreference,
+  );
+  useEffect(() => {
+    if (
+      isNoteMode ||
+      !rateLimitSuggestion?.swapped ||
+      userTouchedSelectionRef.current ||
+      draft?.agentBackend ||
+      draft?.modelPreference
+    ) {
+      return;
+    }
+
+    const nextBackend = rateLimitSuggestion.backend;
+    const nextModel =
+      rateLimitSuggestion.model ??
+      (nextBackend !== currentBackend ? 'default' : currentModelPreference);
+    const nextThinkingEffort =
+      rateLimitSuggestion.thinkingEffort ??
+      (nextBackend !== currentBackend ? 'default' : currentThinkingEffort);
+    updateDraft({
+      agentBackend: nextBackend,
+      modelPreference: nextModel,
+      thinkingEffort: nextThinkingEffort,
+      backendModelPresetId: null,
+      shouldAutoSelectBackendModelPreset: false,
+      interactionMode: normalizeInteractionModeForBackend({
+        backend: nextBackend,
+        mode: currentInteractionMode,
+      }),
+    });
+  }, [
+    currentBackend,
+    currentInteractionMode,
+    currentModelPreference,
+    currentThinkingEffort,
+    draft?.agentBackend,
+    draft?.modelPreference,
+    isNoteMode,
+    rateLimitSuggestion,
+    updateDraft,
+  ]);
   const currentSourceBranch = useMemo(() => {
     const draftSourceBranch = draft?.sourceBranch;
     if (draftSourceBranch && branches.includes(draftSourceBranch)) {
@@ -1106,6 +1156,7 @@ export function NewTaskOverlay({
       setIsFetchingWorkItemImages(false);
       void triggerAnimation();
       clearDraft();
+      userTouchedSelectionRef.current = false;
       // Clear file comments for this project
       if (selectedProjectId) {
         useComposerFileCommentsStore
@@ -1737,6 +1788,7 @@ export function NewTaskOverlay({
                     side="top"
                     layer={layer}
                     onChange={(selection) => {
+                      userTouchedSelectionRef.current = true;
                       const normalizedMode = normalizeInteractionModeForBackend(
                         {
                           backend: selection.backend,
@@ -1777,9 +1829,10 @@ export function NewTaskOverlay({
                 {!isNoteMode && (
                   <ThinkingSelector
                     value={currentThinkingEffort}
-                    onChange={(thinkingEffort) =>
-                      updateDraft({ thinkingEffort })
-                    }
+                    onChange={(thinkingEffort) => {
+                      userTouchedSelectionRef.current = true;
+                      updateDraft({ thinkingEffort });
+                    }}
                     options={thinkingOptions}
                     disabled={thinkingOptions.length <= 1}
                     side="top"
@@ -1792,6 +1845,21 @@ export function NewTaskOverlay({
                     requestedBackend={currentBackend}
                     model={currentModelPreference}
                     thinkingEffort={currentThinkingEffort}
+                    onApplySuggestion={(selection) => {
+                      userTouchedSelectionRef.current = true;
+                      updateDraft({
+                        agentBackend: selection.backend,
+                        backendModelPresetId: null,
+                        shouldAutoSelectBackendModelPreset: false,
+                        interactionMode: normalizeInteractionModeForBackend({
+                          backend: selection.backend,
+                          mode: currentInteractionMode,
+                        }),
+                        modelPreference: selection.model,
+                        thinkingEffort:
+                          selection.thinkingEffort as ThinkingEffort,
+                      });
+                    }}
                   />
                 )}
 
