@@ -231,13 +231,6 @@ function normalizeCalendarNotificationsSetting(
   }
 
   const obj = value as Record<string, unknown>;
-  if (
-    typeof obj.showStartWindow === 'boolean' &&
-    (obj.meetingJoinTarget === 'web' || obj.meetingJoinTarget === 'app')
-  ) {
-    return null;
-  }
-
   return {
     ...obj,
     showStartWindow:

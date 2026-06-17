@@ -118,4 +118,28 @@ describe('SettingsRepository legacy normalization', () => {
 
     expect(insertInto).toHaveBeenCalledWith('settings');
   });
+
+  it('keeps valid calendar notification app join target', async () => {
+    executeTakeFirst.mockResolvedValue({
+      key: 'calendarNotifications',
+      value: JSON.stringify({
+        enabled: true,
+        leadTimeMinutes: 5,
+        showStartWindow: true,
+        meetingJoinTarget: 'app',
+      }),
+      updatedAt: '2026-06-12T00:00:00.000Z',
+    });
+
+    await expect(
+      SettingsRepository.get('calendarNotifications'),
+    ).resolves.toEqual({
+      enabled: true,
+      leadTimeMinutes: 5,
+      showStartWindow: true,
+      meetingJoinTarget: 'app',
+    });
+
+    expect(insertInto).not.toHaveBeenCalled();
+  });
 });
