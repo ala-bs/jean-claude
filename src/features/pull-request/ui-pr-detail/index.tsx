@@ -41,7 +41,7 @@ import { PrCommits } from '../ui-pr-commits';
 import { PrDiffView } from '../ui-pr-diff-view';
 import { PrHeader } from '../ui-pr-header';
 import { PrOverview } from '../ui-pr-overview';
-import { getCommentCountByPrFile } from '../utils-pr-comment-counts';
+import { getCommentStatusCountByPrFile } from '../utils-pr-comment-counts';
 
 const PR_DETAIL_TABS: PrDetailTab[] = ['overview', 'files', 'commits'];
 
@@ -220,8 +220,8 @@ export function PrDetail({
     }));
   }, [files]);
 
-  const commentCountByFile = useMemo(() => {
-    return getCommentCountByPrFile({ files, threads });
+  const commentStatusCountByFile = useMemo(() => {
+    return getCommentStatusCountByPrFile({ files, threads });
   }, [files, threads]);
 
   const filePaths = useMemo(() => files.map((f) => f.path), [files]);
@@ -371,7 +371,7 @@ export function PrDetail({
                   files={diffFiles}
                   selectedPath={selectedFile}
                   onSelectFile={setSelectedFile}
-                  commentCountByFile={commentCountByFile}
+                  commentStatusCountByFile={commentStatusCountByFile}
                   draftCountByFile={draftCountByFile}
                 />
               )}

@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronRight,
+  CheckCircle2,
   File,
   Folder,
   MessageCircle,
@@ -26,6 +27,7 @@ export function DiffFileTree({
   onSelectFile,
   filesWithAnnotations,
   commentCountByFile,
+  commentStatusCountByFile,
   draftCountByFile,
   collapsedFolders: externalCollapsedFolders,
   onToggleFolder: externalOnToggleFolder,
@@ -37,6 +39,11 @@ export function DiffFileTree({
   filesWithAnnotations?: Set<string>;
   /** Number of comments to show per file path */
   commentCountByFile?: Record<string, number>;
+  /** Number of active/resolved comments to show per file path */
+  commentStatusCountByFile?: Record<
+    string,
+    { active: number; resolved: number }
+  >;
   /** Number of unsent draft comments per file path */
   draftCountByFile?: Record<string, number>;
   /** Externally-managed set of collapsed folder paths (for persistence). When provided, takes precedence over local state. */
@@ -109,6 +116,11 @@ export function DiffFileTree({
     [commentCountByFile],
   );
 
+  const getCommentStatusCount = useCallback(
+    (path: string) => commentStatusCountByFile?.[path],
+    [commentStatusCountByFile],
+  );
+
   const getDraftCount = useCallback(
     (path: string) => draftCountByFile?.[path] ?? 0,
     [draftCountByFile],
@@ -127,6 +139,7 @@ export function DiffFileTree({
           onToggleFolder={toggleFolder}
           hasAnnotation={hasAnnotation}
           getCommentCount={getCommentCount}
+          getCommentStatusCount={getCommentStatusCount}
           getDraftCount={getDraftCount}
         />
       ))}
@@ -143,6 +156,7 @@ function TreeNodeRow({
   onToggleFolder,
   hasAnnotation,
   getCommentCount,
+  getCommentStatusCount,
   getDraftCount,
 }: {
   node: TreeNode;
@@ -153,6 +167,9 @@ function TreeNodeRow({
   onToggleFolder: (path: string) => void;
   hasAnnotation: (path: string) => boolean;
   getCommentCount: (path: string) => number;
+  getCommentStatusCount: (
+    path: string,
+  ) => { active: number; resolved: number } | undefined;
   getDraftCount: (path: string) => number;
 }) {
   const isExpanded = expandedFolders.has(node.path);
@@ -188,6 +205,7 @@ function TreeNodeRow({
               onToggleFolder={onToggleFolder}
               hasAnnotation={hasAnnotation}
               getCommentCount={getCommentCount}
+              getCommentStatusCount={getCommentStatusCount}
               getDraftCount={getDraftCount}
             />
           ))}
@@ -198,6 +216,10 @@ function TreeNodeRow({
   // File node
   const statusIndicator = getStatusIndicatorOrEmpty(node.status);
   const fileHasAnnotation = hasAnnotation(node.path);
+  const commentStatusCount = getCommentStatusCount(node.path);
+  const commentStatusTotal = commentStatusCount
+    ? commentStatusCount.active + commentStatusCount.resolved
+    : 0;
   const commentCount = getCommentCount(node.path);
   const draftCount = getDraftCount(node.path);
 
@@ -226,7 +248,30 @@ function TreeNodeRow({
           aria-label="Has AI annotations"
         />
       )}
-      {commentCount > 0 && (
+      {commentStatusCount && commentStatusTotal > 0 ? (
+        <>
+          <span
+            className="bg-acc-soft text-acc-ink ml-1 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 font-mono text-[9.5px]"
+            aria-label={`${commentStatusCount.active} active review comment${commentStatusCount.active !== 1 ? 's' : ''}`}
+            title="Active comments"
+          >
+            {commentStatusCount.active > 0 && (
+              <MessageCircle className="h-2.5 w-2.5" />
+            )}
+            {commentStatusCount.active}
+          </span>
+          <span
+            className="text-ink-3 bg-glass-medium ml-1 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 font-mono text-[9.5px]"
+            aria-label={`${commentStatusCount.resolved} resolved review comment${commentStatusCount.resolved !== 1 ? 's' : ''}`}
+            title="Resolved comments"
+          >
+            {commentStatusCount.resolved > 0 && (
+              <CheckCircle2 className="h-2.5 w-2.5" />
+            )}
+            {commentStatusCount.resolved}
+          </span>
+        </>
+      ) : commentCount > 0 ? (
         <span
           className="bg-acc-soft text-acc-ink ml-1 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 font-mono text-[9.5px]"
           aria-label={`${commentCount} review comment${commentCount !== 1 ? 's' : ''}`}
@@ -234,7 +279,7 @@ function TreeNodeRow({
           <MessageCircle className="h-2.5 w-2.5" />
           {commentCount}
         </span>
-      )}
+      ) : null}
       {draftCount > 0 && (
         <span
           className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-full bg-yellow-900/40 px-1.5 font-mono text-[9.5px] text-yellow-300"
