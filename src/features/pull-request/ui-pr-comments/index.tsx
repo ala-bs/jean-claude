@@ -956,26 +956,11 @@ export function PrInlineCommentTimeline({
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const { data: currentUser } = useCurrentAzureUser(projectId ?? '');
   const isResolved =
     threadStatus !== undefined &&
     threadStatus !== 'active' &&
     threadStatus !== 'pending' &&
     threadStatus !== 'unknown';
-
-  const canDeleteComment = useCallback(
-    (comment: PrTimelineComment) => {
-      if (!currentUser) return false;
-      const currentEmail = currentUser.emailAddress.toLowerCase();
-      const commentEmail = comment.author.uniqueName?.toLowerCase();
-      return (
-        currentUser.id === comment.author.id ||
-        currentUser.identityId === comment.author.id ||
-        currentEmail === commentEmail
-      );
-    },
-    [currentUser],
-  );
 
   const firstComment = comments[0];
   const remainingComments = comments.slice(1);
@@ -1003,111 +988,72 @@ export function PrInlineCommentTimeline({
         </div>
       )}
       <div className="px-4 py-3">
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => setCollapsed((value) => !value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              setCollapsed((value) => !value);
-            }
-          }}
-          className="hover:bg-glass-light -mx-1 flex w-[calc(100%+0.5rem)] items-start gap-3 rounded px-1 py-1 text-left transition-colors"
-        >
-          <TimelineAvatar comment={firstComment} providerId={providerId} />
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 flex items-center gap-2">
-              <span className="text-ink-0 text-sm font-medium">
-                {firstComment.author.displayName}
-              </span>
-              <span className="text-ink-3 text-xs">
-                {formatRelativeTime(firstComment.publishedDate)}
-              </span>
-              {remainingComments.length > 0 && (
-                <span className="bg-glass-medium text-ink-3 rounded px-1.5 py-0.5 text-[10px]">
-                  {remainingComments.length} repl
-                  {remainingComments.length === 1 ? 'y' : 'ies'}
-                </span>
-              )}
-              {threadId !== undefined &&
-                projectId &&
-                prId !== undefined &&
-                canDeleteComment(firstComment) && (
-                  <InlineCommentDeleteButton
-                    threadId={threadId}
-                    commentId={firstComment.id}
-                    projectId={projectId}
-                    prId={prId}
-                  />
-                )}
-            </div>
-            <div
-              className={clsx(
-                'text-ink-1 text-xs leading-relaxed',
-                collapsed && 'line-clamp-2',
-              )}
-            >
-              <AzureMarkdownContent
-                markdown={firstComment.content}
-                providerId={providerId}
-                mentionDisplayNames={mentionDisplayNames}
-              />
-            </div>
-          </div>
-          {remainingComments.length > 0 && (
-            <ChevronDown
-              className={clsx(
-                'text-ink-3 mt-1 h-3.5 w-3.5 transition-transform',
-                !collapsed && 'rotate-180',
-              )}
+        {threadId !== undefined && projectId && prId !== undefined ? (
+          comments.map((comment, index) => (
+            <ThreadComment
+              key={comment.id}
+              comment={comment}
+              providerId={providerId}
+              connect={index < comments.length - 1 || !isResolved}
+              mentionDisplayNames={mentionDisplayNames}
+              threadId={threadId}
+              projectId={projectId}
+              prId={prId}
+              mentionOptions={mentionOptions}
+              onSearchMentions={onSearchMentions}
+              onUploadImage={onUploadImage}
             />
-          )}
-        </div>
-
-        {!collapsed && remainingComments.length > 0 && (
-          <div className="mt-2">
-            {remainingComments.map((comment, index) => (
-              <div
-                key={comment.id}
-                className="flex items-stretch gap-3 pb-3 last:pb-0"
-              >
-                <div className="flex w-[26px] shrink-0 flex-col items-center">
-                  <TimelineAvatar comment={comment} providerId={providerId} />
-                  {index < remainingComments.length - 1 && (
-                    <div className="bg-glass-border mt-1.5 w-px flex-1 rounded" />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 flex items-center gap-2">
-                    <span className="text-ink-0 text-sm font-medium">
-                      {comment.author.displayName}
-                    </span>
-                    <span className="text-ink-3 text-xs">
-                      {formatRelativeTime(comment.publishedDate)}
-                    </span>
-                    {threadId !== undefined &&
-                      projectId &&
-                      prId !== undefined &&
-                      canDeleteComment(comment) && (
-                        <InlineCommentDeleteButton
-                          threadId={threadId}
-                          commentId={comment.id}
-                          projectId={projectId}
-                          prId={prId}
-                        />
-                      )}
-                  </div>
-                  <div className="text-ink-1 text-xs leading-relaxed">
-                    <AzureMarkdownContent
-                      markdown={comment.content}
-                      providerId={providerId}
-                      mentionDisplayNames={mentionDisplayNames}
-                    />
-                  </div>
-                </div>
+          ))
+        ) : (
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setCollapsed((value) => !value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setCollapsed((value) => !value);
+              }
+            }}
+            className="hover:bg-glass-light -mx-1 flex w-[calc(100%+0.5rem)] items-start gap-3 rounded px-1 py-1 text-left transition-colors"
+          >
+            <TimelineAvatar comment={firstComment} providerId={providerId} />
+            <div className="min-w-0 flex-1">
+              <div className="mb-1 flex items-center gap-2">
+                <span className="text-ink-0 text-sm font-medium">
+                  {firstComment.author.displayName}
+                </span>
+                <span className="text-ink-3 text-xs">
+                  {formatRelativeTime(firstComment.publishedDate)}
+                </span>
+                {remainingComments.length > 0 && (
+                  <span className="bg-glass-medium text-ink-3 rounded px-1.5 py-0.5 text-[10px]">
+                    {remainingComments.length} repl
+                    {remainingComments.length === 1 ? 'y' : 'ies'}
+                  </span>
+                )}
               </div>
-            ))}
+              <div
+                className={clsx(
+                  'text-ink-1 text-xs leading-relaxed',
+                  collapsed && 'line-clamp-2',
+                )}
+              >
+                <AzureMarkdownContent
+                  markdown={firstComment.content}
+                  providerId={providerId}
+                  mentionDisplayNames={mentionDisplayNames}
+                />
+              </div>
+            </div>
+            {remainingComments.length > 0 && (
+              <ChevronDown
+                className={clsx(
+                  'text-ink-3 mt-1 h-3.5 w-3.5 transition-transform',
+                  !collapsed && 'rotate-180',
+                )}
+              />
+            )}
           </div>
         )}
 
@@ -1127,69 +1073,6 @@ export function PrInlineCommentTimeline({
           )}
       </div>
     </div>
-  );
-}
-
-function InlineCommentDeleteButton({
-  threadId,
-  commentId,
-  projectId,
-  prId,
-}: {
-  threadId: number;
-  commentId: number;
-  projectId: string;
-  prId: number;
-}) {
-  const deleteComment = useDeleteThreadComment(projectId, prId);
-  const [isConfirming, setIsConfirming] = useState(false);
-
-  if (isConfirming) {
-    return (
-      <div
-        className="flex items-center gap-1"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
-        role="presentation"
-      >
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setIsConfirming(false)}
-          className="text-ink-3 h-6 px-1.5 text-[11px]"
-        >
-          Cancel
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            deleteComment.mutate(
-              { threadId, commentId },
-              { onSettled: () => setIsConfirming(false) },
-            );
-          }}
-          loading={deleteComment.isPending}
-          className="h-6 px-1.5 text-[11px] text-red-400 hover:text-red-300"
-        >
-          Delete
-        </Button>
-      </div>
-    );
-  }
-
-  return (
-    <IconButton
-      variant="ghost"
-      size="sm"
-      icon={<Trash2 className="h-3 w-3" />}
-      tooltip="Delete comment"
-      onClick={(event) => {
-        event.stopPropagation();
-        setIsConfirming(true);
-      }}
-      className="text-ink-3 hover:text-ink-1 h-6 w-6"
-    />
   );
 }
 

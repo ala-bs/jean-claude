@@ -18,8 +18,9 @@ import {
   ListTodo,
   Search,
 } from 'lucide-react';
-import type { ComponentProps } from 'react';
+import type { ComponentProps, PointerEvent, ReactNode } from 'react';
 import { useEffect, useState, useCallback, useMemo, useRef, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useModal } from '@/common/context/modal';
@@ -71,6 +72,8 @@ import { StepFlowBar } from '@/features/task/ui-step-flow-bar';
 import { TaskPrView } from '@/features/task/ui-task-pr-view';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { useAgentStream, useAgentControls } from '@/hooks/use-agent';
+import { useAgentResourceSnapshots } from '@/hooks/use-agent-resource-snapshots';
+import type { AgentResourceSample } from '@/hooks/use-agent-resource-snapshots';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useContextUsage } from '@/hooks/use-context-usage';
 import { getModelFromEntry, formatModelName } from '@/hooks/use-model';
@@ -114,6 +117,7 @@ import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
 import { getBranchFromWorktreePath } from '@/lib/worktree';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import {
+  type AddStepPresetType,
   useNavigationStore,
   useTaskState,
   useDiffViewState,
@@ -151,7 +155,7 @@ import {
   type ThinkingEffort,
 } from '@shared/types';
 
-import { AddStepDialog, type AddStepPresetType } from './add-step-dialog';
+import { AddStepDialog } from './add-step-dialog';
 import { ChangeWorktreePathDialog } from './change-worktree-path-dialog';
 import { CommandLogsPane } from './command-logs-pane';
 import { CompleteTaskDialog } from './complete-task-dialog';
@@ -309,6 +313,539 @@ function getLastAssistantMessage(messages: NormalizedEntry[]): string {
 
 const EMPTY_QUEUED_PROMPTS: { content: string }[] = [];
 const EMPTY_MESSAGES: NormalizedEntry[] = [];
+
+function formatResourceBytes(bytes: number): string {
+  const mb = bytes / 1_048_576;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
+}
+
+function formatResourceTime(isoDate: string): string {
+  return new Date(isoDate).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function getResourceSparklinePath({
+  values,
+  width,
+  height,
+  minValue = Math.min(...values),
+  maxValue = Math.max(...values),
+}: {
+  values: number[];
+  width: number;
+  height: number;
+  minValue?: number;
+  maxValue?: number;
+}): string {
+  if (values.length === 0) return '';
+
+  return values
+    .map((value, index) => {
+      const point = getResourceSparklinePoint({
+        value,
+        index,
+        count: values.length,
+        width,
+        height,
+        minValue,
+        maxValue,
+      });
+      return `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
+    })
+    .join(' ');
+}
+
+function getResourceSparklinePoint({
+  value,
+  index,
+  count,
+  width,
+  height,
+  minValue,
+  maxValue,
+}: {
+  value: number;
+  index: number;
+  count: number;
+  width: number;
+  height: number;
+  minValue: number;
+  maxValue: number;
+}): { x: number; y: number } {
+  const range = maxValue - minValue;
+  const normalized = range <= 0 ? 0.5 : (value - minValue) / range;
+  const xStep = count > 1 ? width / (count - 1) : 0;
+  return {
+    x: index * xStep,
+    y: height - Math.max(0, Math.min(1, normalized)) * height,
+  };
+}
+
+function AgentResourceChartTooltip({
+  label,
+  sample,
+  formatValue,
+}: {
+  label: string;
+  sample: AgentResourceSample;
+  formatValue: (value: number) => string;
+}) {
+  const value = label === 'CPU' ? sample.cpuPercent : sample.rssBytes;
+  return (
+    <div className="border-glass-border bg-bg-0/95 pointer-events-none absolute -top-1 right-1 z-10 rounded-md border px-2 py-1 text-[10px] shadow-[0_10px_30px_rgba(0,0,0,0.32)]">
+      <div className="text-ink-0 font-mono tabular-nums">
+        {formatValue(value)}
+      </div>
+      <div className="text-ink-4 mt-0.5 font-mono whitespace-nowrap">
+        {formatResourceTime(sample.sampledAt)}
+      </div>
+    </div>
+  );
+}
+
+function AgentResourceMicroSpark({
+  accentClassName,
+  values,
+}: {
+  accentClassName: string;
+  values: number[];
+}) {
+  const width = 30;
+  const height = 13;
+  const path = getResourceSparklinePath({
+    values: values.length > 0 ? values : [0],
+    width,
+    height,
+  });
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="block shrink-0"
+      aria-hidden
+    >
+      <path
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.4"
+        className={accentClassName}
+        opacity="0.9"
+      />
+    </svg>
+  );
+}
+
+function AgentResourceChart({
+  label,
+  value,
+  samples,
+  formatValue,
+  maxValue,
+  accentClassName,
+}: {
+  label: string;
+  value: number;
+  samples: AgentResourceSample[];
+  formatValue: (value: number) => string;
+  maxValue?: number;
+  accentClassName: string;
+}) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const width = 150;
+  const height = 34;
+  const values = samples.map((sample) =>
+    label === 'CPU' ? sample.cpuPercent : sample.rssBytes,
+  );
+  const path = getResourceSparklinePath({
+    values: values.length > 0 ? values : [value],
+    width,
+    height,
+    minValue: maxValue === undefined ? undefined : 0,
+    maxValue,
+  });
+  const hoverSample = hoverIndex === null ? null : samples[hoverIndex];
+  const hoverValue = hoverIndex === null ? undefined : values[hoverIndex];
+  const hoverPoint =
+    hoverIndex === null || hoverValue === undefined
+      ? null
+      : getResourceSparklinePoint({
+          value: hoverValue,
+          index: hoverIndex,
+          count: values.length,
+          width,
+          height,
+          minValue: maxValue === undefined ? Math.min(...values) : 0,
+          maxValue: maxValue ?? Math.max(...values),
+        });
+  const samplePoints = values.map((sampleValue, index) =>
+    getResourceSparklinePoint({
+      value: sampleValue,
+      index,
+      count: values.length,
+      width,
+      height,
+      minValue: maxValue === undefined ? Math.min(...values) : 0,
+      maxValue: maxValue ?? Math.max(...values),
+    }),
+  );
+  const areaPath = path ? `${path} L ${width} ${height} L 0 ${height} Z` : '';
+
+  function handlePointerMove(event: PointerEvent<SVGSVGElement>) {
+    if (samples.length === 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(
+      Math.max((event.clientX - rect.left) / rect.width, 0),
+      1,
+    );
+    setHoverIndex(Math.round(ratio * (samples.length - 1)));
+  }
+
+  return (
+    <div className="relative">
+      <div className="mb-1.5 flex items-baseline gap-2">
+        <span
+          className={clsx(
+            'h-1.5 w-1.5 rounded-[2px] bg-current',
+            accentClassName,
+          )}
+        />
+        <span className="text-ink-2 text-[11px] font-medium">{label}</span>
+        <span className="flex-1" />
+        <span className="text-ink-0 font-mono text-[17px] font-semibold tracking-[-0.02em] tabular-nums">
+          {formatValue(value)}
+        </span>
+      </div>
+      <div className="bg-bg-0/45 overflow-hidden rounded-md">
+        <svg
+          width="100%"
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          className="block"
+          aria-hidden
+          onPointerLeave={() => setHoverIndex(null)}
+          onPointerMove={handlePointerMove}
+        >
+          {areaPath ? (
+            <path
+              d={areaPath}
+              fill="currentColor"
+              className={clsx(accentClassName, 'opacity-20')}
+            />
+          ) : null}
+          <path
+            d={path}
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.6"
+            className={accentClassName}
+          />
+          {samplePoints.map((point, index) => (
+            <circle
+              key={`${samples[index]?.sampledAt ?? index}-${label}`}
+              cx={point.x}
+              cy={point.y}
+              r="1.4"
+              className={accentClassName}
+              fill="currentColor"
+              opacity="0.55"
+            />
+          ))}
+          {hoverSample && hoverPoint ? (
+            <circle
+              cx={hoverPoint.x}
+              cy={hoverPoint.y}
+              r="3"
+              className={accentClassName}
+              fill="currentColor"
+            />
+          ) : null}
+        </svg>
+      </div>
+      <div className="text-ink-4 mt-1 flex justify-between font-mono text-[9.5px] tabular-nums">
+        <span>60s</span>
+        <span>
+          peak{' '}
+          {formatValue(Math.max(value, ...values, label === 'CPU' ? 0 : 1))}
+        </span>
+      </div>
+      {hoverSample ? (
+        <AgentResourceChartTooltip
+          label={label}
+          sample={hoverSample}
+          formatValue={formatValue}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AgentResourceHoverPanel({
+  backendLabel,
+  cpuSamples,
+  displayCpu,
+  displayRss,
+  rootPid,
+  rssMax,
+  rssSamples,
+}: {
+  backendLabel: string;
+  cpuSamples: AgentResourceSample[];
+  rssSamples: AgentResourceSample[];
+  displayCpu: number;
+  displayRss: number;
+  rootPid: number | null;
+  rssMax: number;
+}) {
+  const firstSample = [...cpuSamples, ...rssSamples].sort((a, b) =>
+    a.sampledAt.localeCompare(b.sampledAt),
+  )[0];
+  const historySeconds = firstSample
+    ? Math.max(
+        1,
+        Math.round(
+          (Date.now() - new Date(firstSample.sampledAt).getTime()) / 1000,
+        ),
+      )
+    : 0;
+
+  return (
+    <div className="border-glass-border bg-bg-1/95 w-[312px] rounded-xl border p-3.5 text-[11px] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_0_0_1px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="border-ink-4 text-ink-3 flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border">
+          <span className="bg-ink-3 h-1.5 w-1.5 rounded-[1px]" />
+        </span>
+        <div className="text-ink-0 text-xs font-semibold tracking-[-0.01em]">
+          Agent Resources
+        </div>
+        <span className="flex-1" />
+        <div className="text-ink-4 font-mono text-[10px] tabular-nums">
+          {rootPid === null ? 'PID n/a' : `PID ${rootPid}`}
+        </div>
+      </div>
+      <div className="space-y-2">
+        <AgentResourceChart
+          label="CPU"
+          value={displayCpu}
+          samples={cpuSamples}
+          formatValue={(value) => `${value.toFixed(1)}%`}
+          maxValue={Math.max(
+            200,
+            displayCpu,
+            ...cpuSamples.map((sample) => sample.cpuPercent),
+          )}
+          accentClassName="text-[oklch(0.74_0.19_295)]"
+        />
+        <div className="bg-ink-4/15 h-px" />
+        <AgentResourceChart
+          label="Memory"
+          value={displayRss}
+          samples={rssSamples}
+          formatValue={formatResourceBytes}
+          maxValue={rssMax}
+          accentClassName="text-[oklch(0.78_0.16_155)]"
+        />
+      </div>
+      <div className="border-ink-4/15 mt-3 flex gap-4 border-t pt-2.5">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-4 text-[9.5px] tracking-[0.06em] uppercase">
+            Window
+          </span>
+          <span className="text-ink-1 font-mono text-[11.5px]">
+            {historySeconds}s
+          </span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-4 text-[9.5px] tracking-[0.06em] uppercase">
+            Samples
+          </span>
+          <span className="text-ink-1 font-mono text-[11.5px]">
+            {Math.max(cpuSamples.length, rssSamples.length)}
+          </span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-4 text-[9.5px] tracking-[0.06em] uppercase">
+            Backend
+          </span>
+          <span className="text-ink-1 font-mono text-[11.5px]">
+            {backendLabel}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentResourceTooltip({
+  children,
+  content,
+}: {
+  children: ReactNode;
+  content: ReactNode;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearCloseTimer = useCallback(() => {
+    if (!closeTimerRef.current) return;
+    clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  }, []);
+
+  const open = useCallback(() => {
+    clearCloseTimer();
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) {
+      setPosition({
+        left: Math.min(
+          Math.max(rect.left + rect.width / 2 - 156, 8),
+          Math.max(window.innerWidth - 320, 8),
+        ),
+        top: rect.bottom + 8,
+      });
+    }
+    setIsOpen(true);
+  }, [clearCloseTimer]);
+
+  const scheduleClose = useCallback(() => {
+    clearCloseTimer();
+    closeTimerRef.current = setTimeout(() => setIsOpen(false), 120);
+  }, [clearCloseTimer]);
+
+  useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        onFocus={open}
+        onBlur={scheduleClose}
+        onMouseEnter={open}
+        onMouseLeave={scheduleClose}
+        tabIndex={0}
+      >
+        {children}
+      </div>
+      {isOpen && position
+        ? createPortal(
+            <div
+              className="fixed z-[10020]"
+              onMouseEnter={open}
+              onMouseLeave={scheduleClose}
+              style={{ left: position.left, top: position.top }}
+            >
+              {content}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function AgentResourcePill({
+  backendLabel,
+  isRunning,
+  stepId,
+}: {
+  backendLabel: string;
+  stepId: string;
+  isRunning: boolean;
+}) {
+  const { data, historyByStepId } = useAgentResourceSnapshots();
+  const snapshot = data?.find((item) => item.stepId === stepId);
+  const history = historyByStepId[stepId] ?? [];
+  if (snapshot?.unsupportedReason || (!snapshot && history.length === 0)) {
+    return null;
+  }
+
+  const lastSample = history[history.length - 1] ?? snapshot;
+  const displayCpu = isRunning
+    ? (snapshot?.cpuPercent ?? lastSample.cpuPercent)
+    : 0;
+  const displayRss = isRunning
+    ? (snapshot?.rssBytes ?? lastSample.rssBytes)
+    : 0;
+  const stoppedSample =
+    !isRunning && lastSample
+      ? {
+          ...lastSample,
+          sampledAt: new Date().toISOString(),
+          cpuPercent: 0,
+          rssBytes: 0,
+        }
+      : null;
+  const samples = stoppedSample ? [...history, stoppedSample] : history;
+  const rootPid = snapshot?.rootPid ?? lastSample?.rootPid ?? null;
+  const rssMax = Math.max(
+    lastSample?.peakRssBytes ?? 0,
+    ...samples.map((sample) => sample.rssBytes),
+    1,
+  );
+  const cpuValues = samples.map((sample) => sample.cpuPercent);
+  const rssValues = samples.map((sample) => sample.rssBytes);
+
+  return (
+    <AgentResourceTooltip
+      content={
+        <AgentResourceHoverPanel
+          backendLabel={backendLabel}
+          cpuSamples={samples}
+          displayCpu={displayCpu}
+          displayRss={displayRss}
+          rootPid={rootPid}
+          rssMax={rssMax}
+          rssSamples={samples}
+        />
+      }
+    >
+      <div className="border-glass-border bg-bg-0/25 text-ink-1 hover:border-accent-1/40 hover:bg-bg-2 flex h-7 w-[178px] cursor-default items-center gap-2 rounded-[7px] border px-2 pr-2.5 font-mono text-[11.5px] font-semibold tabular-nums transition-colors">
+        <span
+          className={clsx(
+            'h-[5px] w-[5px] rounded-full',
+            isRunning
+              ? 'animate-pulse bg-[oklch(0.74_0.19_295)] shadow-[0_0_7px_oklch(0.74_0.19_295)]'
+              : 'bg-ink-4/60',
+          )}
+        />
+        <span className="inline-flex min-w-0 flex-1 items-center gap-1.5">
+          <AgentResourceMicroSpark
+            values={cpuValues}
+            accentClassName="text-[oklch(0.74_0.19_295)]"
+          />
+          <span className="min-w-[42px] text-right">
+            {displayCpu.toFixed(1)}%
+          </span>
+        </span>
+        <span className="bg-ink-4/25 h-[13px] w-px" />
+        <span className="inline-flex min-w-0 flex-1 items-center gap-1.5">
+          <AgentResourceMicroSpark
+            values={rssValues}
+            accentClassName="text-[oklch(0.78_0.16_155)]"
+          />
+          <span className="min-w-[45px] text-right">
+            {formatResourceBytes(displayRss).replace(' ', '')}
+          </span>
+        </span>
+      </div>
+    </AgentResourceTooltip>
+  );
+}
 
 function useTaskMessageMeta(stepId: string | null) {
   return useTaskMessagesStore(
@@ -954,7 +1491,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           message:
             'No usable previous step to continue from. Pick step with actual messages or finish current step first.',
         });
-        return;
+        return false;
       }
 
       const insertionSortOrder = (() => {
@@ -1037,12 +1574,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             stepStartJobIdsRef.current.set(step.id, jobId);
           }
         }
+        return true;
       } catch (error) {
         addToast({
           type: 'error',
           message:
             error instanceof Error ? error.message : 'Failed to create step',
         });
+        return false;
       }
     },
     [
@@ -1468,6 +2007,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
             {/* Center: Branch, PR badge, Work items */}
             <div className="flex min-w-0 shrink items-center gap-2">
+              {activeStepId && (
+                <AgentResourcePill
+                  stepId={activeStepId}
+                  isRunning={activeStep?.status === 'running'}
+                  backendLabel={backendLabel}
+                />
+              )}
+
               {/* Backend chip */}
               <Chip size="sm" className="max-w-40">
                 {backendLabel}
@@ -1967,7 +2514,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             setAddStepAfterStepId(null);
             setAddStepAtEnd(false);
           }}
-          onConfirm={(data) => void handleAddStep(data)}
+          onConfirm={handleAddStep}
           defaultBackend={defaultAddStepBackend}
           defaultModel={defaultAddStepModel}
           defaultThinkingEffort={activeStep?.thinkingEffort ?? 'default'}

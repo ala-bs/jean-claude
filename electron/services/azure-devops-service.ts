@@ -1684,6 +1684,18 @@ interface CommitsListResponse {
   value: CommitResponse[];
 }
 
+interface PullRequestIterationResponse {
+  id: number;
+  commonRefCommit?: { commitId: string };
+  sourceRefCommit?: { commitId: string };
+  targetRefCommit?: { commitId: string };
+}
+
+interface PullRequestIterationsListResponse {
+  count: number;
+  value: PullRequestIterationResponse[];
+}
+
 // GitPullRequestChange from Azure DevOps API
 // changeType can be: None(0), Add(1), Edit(2), Encoding(4), Rename(8), Delete(16),
 // Undelete(32), Branch(64), Merge(128), Lock(256), Rollback(512), SourceRename(1024),
@@ -1709,6 +1721,33 @@ interface ChangesListResponse {
   changeEntries: ChangeResponse[];
   nextSkip?: number;
   nextTop?: number;
+}
+
+async function getLatestPullRequestIteration(params: {
+  authHeader: string;
+  orgName: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<PullRequestIterationResponse | null> {
+  const iterationsUrl = `https://dev.azure.com/${params.orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations?api-version=7.0`;
+  const iterationsResponse = await fetch(iterationsUrl, {
+    headers: { Authorization: params.authHeader },
+  });
+
+  if (!iterationsResponse.ok) {
+    const error = await iterationsResponse.text();
+    throw new Error(`Failed to get pull request iterations: ${error}`);
+  }
+
+  const iterationsData: PullRequestIterationsListResponse =
+    await iterationsResponse.json();
+
+  if (iterationsData.value.length === 0) {
+    return null;
+  }
+
+  return iterationsData.value[iterationsData.value.length - 1];
 }
 
 interface CommentResponse {
@@ -2602,27 +2641,20 @@ export async function getPullRequestChanges(params: {
 }): Promise<AzureDevOpsFileChange[]> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
 
-  // First get the iterations to find the latest one
-  const iterationsUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations?api-version=7.0`;
-  const iterationsResponse = await fetch(iterationsUrl, {
-    headers: { Authorization: authHeader },
+  const latestIteration = await getLatestPullRequestIteration({
+    authHeader,
+    orgName,
+    projectId: params.projectId,
+    repoId: params.repoId,
+    pullRequestId: params.pullRequestId,
   });
 
-  if (!iterationsResponse.ok) {
-    const error = await iterationsResponse.text();
-    throw new Error(`Failed to get pull request iterations: ${error}`);
-  }
-
-  const iterationsData: { count: number; value: Array<{ id: number }> } =
-    await iterationsResponse.json();
-
-  if (iterationsData.count === 0) {
+  if (!latestIteration) {
     return [];
   }
 
   // Get changes from the latest iteration
-  const latestIterationId =
-    iterationsData.value[iterationsData.value.length - 1].id;
+  const latestIterationId = latestIteration.id;
   const changesUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations/${latestIterationId}/changes?api-version=7.0`;
 
   const changesResponse = await fetch(changesUrl, {
@@ -2737,27 +2769,29 @@ export async function getPullRequestFileContent(params: {
 }): Promise<string> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
 
-  // First get the PR to find source and target refs
-  const prUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
-  const prResponse = await fetch(prUrl, {
-    headers: { Authorization: authHeader },
+  const latestIteration = await getLatestPullRequestIteration({
+    authHeader,
+    orgName,
+    projectId: params.projectId,
+    repoId: params.repoId,
+    pullRequestId: params.pullRequestId,
   });
 
-  if (!prResponse.ok) {
-    const error = await prResponse.text();
-    throw new Error(`Failed to get pull request: ${error}`);
+  if (!latestIteration) {
+    return '';
   }
 
-  const pr: { sourceRefName: string; targetRefName: string } =
-    await prResponse.json();
-
-  // Determine which version to fetch
-  const versionDescriptor =
+  const versionCommitId =
     params.version === 'base'
-      ? pr.targetRefName.replace('refs/heads/', '')
-      : pr.sourceRefName.replace('refs/heads/', '');
+      ? (latestIteration.commonRefCommit?.commitId ??
+        latestIteration.targetRefCommit?.commitId)
+      : latestIteration.sourceRefCommit?.commitId;
 
-  const contentUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/items?path=${encodeURIComponent(params.filePath)}&versionDescriptor.version=${encodeURIComponent(versionDescriptor)}&versionDescriptor.versionType=branch&api-version=7.0`;
+  if (!versionCommitId) {
+    return '';
+  }
+
+  const contentUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/items?path=${encodeURIComponent(params.filePath)}&versionDescriptor.version=${encodeURIComponent(versionCommitId)}&versionDescriptor.versionType=commit&api-version=7.0`;
 
   const response = await fetch(contentUrl, {
     headers: { Authorization: authHeader },

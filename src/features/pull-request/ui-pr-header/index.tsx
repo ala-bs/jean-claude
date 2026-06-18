@@ -57,7 +57,13 @@ function getStatusBadge(
 ) {
   if (isDraft) {
     return (
-      <Chip size="sm" color="neutral" pill icon={<GitPullRequest />}>
+      <Chip
+        size="sm"
+        color="neutral"
+        pill
+        icon={<GitPullRequest />}
+        className="!bg-amber-300 !font-semibold !text-amber-950 ring-1 ring-amber-100/70"
+      >
         Draft
       </Chip>
     );

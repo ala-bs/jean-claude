@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 import { AGENT_CHANNELS } from '@shared/agent-types';
+import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
 import type { DebugLogEntry } from '@shared/debug-log-types';
 import type {
@@ -740,6 +741,9 @@ contextBridge.exposeInMainWorld('api', {
         taskId,
         stepId,
       ),
+    getResourceSnapshots: () =>
+      ipcRenderer.invoke('agent:resources:getSnapshots'),
+    getResourceHistory: () => ipcRenderer.invoke('agent:resources:getHistory'),
     compactRawMessages: (taskId: string) =>
       ipcRenderer.invoke(AGENT_CHANNELS.COMPACT_RAW_MESSAGES, taskId),
     reprocessNormalization: (taskId: string) =>
@@ -773,7 +777,7 @@ contextBridge.exposeInMainWorld('api', {
       since: string;
       until?: string;
     }) => ipcRenderer.invoke('agent:usage:getHistory', params),
-    getDashboard: (params: { since: string; until?: string }) =>
+    getDashboard: (params: AiUsageDashboardParams) =>
       ipcRenderer.invoke('agent:usage:getDashboard', params),
     getTaskUsage: (taskId: string) =>
       ipcRenderer.invoke('agent:usage:getTaskUsage', taskId),
@@ -866,6 +870,11 @@ contextBridge.exposeInMainWorld('api', {
       runCommandId: string;
       input: string;
     }) => ipcRenderer.invoke('project:commands:run:sendInput', params),
+    resetLogs: (params: {
+      taskId: string;
+      runCommandId: string;
+      generation: number;
+    }) => ipcRenderer.invoke('project:commands:run:resetLogs', params),
     sendSignal: (params: {
       taskId: string;
       runCommandId: string;
@@ -899,7 +908,8 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         runCommandId: string,
         stream: 'stdout' | 'stderr',
-        line: string,
+        text: string,
+        generation: number,
       ) => void,
     ) => {
       const handler = (
@@ -907,11 +917,29 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         runCommandId: string,
         stream: 'stdout' | 'stderr',
-        line: string,
-      ) => callback(taskId, runCommandId, stream, line);
+        text: string,
+        generation: number,
+      ) => callback(taskId, runCommandId, stream, text, generation);
       ipcRenderer.on('project:commands:run:log', handler);
       return () =>
         ipcRenderer.removeListener('project:commands:run:log', handler);
+    },
+    onLogsReset: (
+      callback: (
+        taskId: string,
+        runCommandId: string,
+        generation: number,
+      ) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        taskId: string,
+        runCommandId: string,
+        generation: number,
+      ) => callback(taskId, runCommandId, generation);
+      ipcRenderer.on('project:commands:run:logsReset', handler);
+      return () =>
+        ipcRenderer.removeListener('project:commands:run:logsReset', handler);
     },
   },
   globalPrompt: {

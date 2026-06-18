@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -8,12 +9,46 @@ import {
 } from 'react';
 
 import { api } from '@/lib/api';
+import type {
+  RunCommandLogChunk,
+  RunCommandLogLine,
+  RunCommandLogState,
+} from '@/stores/task-messages';
 
 import { AnsiLine } from './ansi-line';
 import { keyEventToTerminalInput } from './key-event-to-terminal-input';
 
 const TERMINAL_FONT_FAMILY =
   'var(--font-mono), "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols 2", sans-serif';
+
+const LogLine = memo(function LogLine({ entry }: { entry: RunCommandLogLine }) {
+  return (
+    <div
+      className={clsx(
+        '-mx-1 border-l-2 px-2 break-words whitespace-pre-wrap transition-colors hover:bg-white/[0.03]',
+        entry.stream === 'stderr'
+          ? 'border-status-fail/70 text-status-fail hover:bg-status-fail/5'
+          : 'text-ink-1 border-ink-4/25 hover:border-ink-3/60',
+      )}
+    >
+      <AnsiLine line={entry.line} />
+    </div>
+  );
+});
+
+const LogChunk = memo(function LogChunk({
+  chunk,
+}: {
+  chunk: RunCommandLogChunk;
+}) {
+  return (
+    <>
+      {chunk.lines.map((entry, index) => (
+        <LogLine key={`${entry.timestamp}-${index}`} entry={entry} />
+      ))}
+    </>
+  );
+});
 
 /**
  * Interactive terminal log viewer with ANSI color rendering, auto-scroll,
@@ -22,7 +57,7 @@ const TERMINAL_FONT_FAMILY =
  * Used by both the task panel's command logs pane and the running commands overlay.
  */
 export function InteractiveLog({
-  lines,
+  log,
   taskId,
   runCommandId,
   isRunning,
@@ -31,11 +66,7 @@ export function InteractiveLog({
   emptyText = 'Waiting for output...',
   className,
 }: {
-  lines: readonly {
-    line: string;
-    stream: 'stdout' | 'stderr';
-    timestamp: number;
-  }[];
+  log: RunCommandLogState | null;
   taskId: string;
   runCommandId: string;
   isRunning: boolean;
@@ -49,6 +80,12 @@ export function InteractiveLog({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+  const hasLogOutput = !!(
+    log &&
+    (log.totalLineCount > 0 ||
+      log.pendingLines.stdout ||
+      log.pendingLines.stderr)
+  );
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -58,14 +95,13 @@ export function InteractiveLog({
       el.scrollHeight - el.scrollTop - el.clientHeight < 32;
   }, []);
 
-  // Auto-scroll to bottom when new log lines arrive (if user was at bottom)
-  const lineCount = lines.length;
+  // Auto-scroll to bottom when new log output arrives (if user was at bottom)
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && isAtBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [lineCount, runCommandId]);
+  }, [log?.version, runCommandId]);
 
   // Forward raw keystrokes to the process when the log area is focused.
   const handleKeyDown = useCallback(
@@ -109,22 +145,20 @@ export function InteractiveLog({
           isRunning && 'cursor-text',
         )}
       >
-        {lines.length === 0 ? (
+        {!hasLogOutput || !log ? (
           <p className="text-ink-4">{emptyText}</p>
         ) : (
-          lines.map((entry, index) => (
-            <div
-              key={`${entry.timestamp}-${index}`}
-              className={clsx(
-                '-mx-1 border-l-2 px-2 break-words whitespace-pre-wrap transition-colors hover:bg-white/[0.03]',
-                entry.stream === 'stderr'
-                  ? 'border-status-fail/70 text-status-fail hover:bg-status-fail/5'
-                  : 'text-ink-1 border-ink-4/25 hover:border-ink-3/60',
-              )}
-            >
-              <AnsiLine line={entry.line} />
-            </div>
-          ))
+          <>
+            {log.chunks.map((chunk) => (
+              <LogChunk key={chunk.id} chunk={chunk} />
+            ))}
+            {log.pendingLines.stdout && (
+              <LogLine entry={log.pendingLines.stdout} />
+            )}
+            {log.pendingLines.stderr && (
+              <LogLine entry={log.pendingLines.stderr} />
+            )}
+          </>
         )}
       </div>
 

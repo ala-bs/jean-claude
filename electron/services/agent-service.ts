@@ -56,6 +56,7 @@ import { pathExists } from '../lib/fs';
 import { AGENT_BACKEND_CLASSES } from './agent-backends';
 import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
 import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
+import { agentResourceMonitorService } from './agent-resource-monitor-service';
 import { buildSessionIdStepUpdate } from './agent-session-update';
 import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { emitStepUpsert, emitTaskUpsert } from './cache-event-service';
@@ -75,7 +76,6 @@ import {
   textPrompt,
   getPromptText,
 } from './prompt-utils';
-import { rateLimitSwapService } from './rate-limit-swap-service';
 import { StepService } from './step-service';
 import { assertValidWorkspacePath } from './system-project-service';
 
@@ -143,16 +143,13 @@ function buildJcMcpServersConfigForCwd(
   cwd: string,
 ): Record<
   string,
-  { command: string; args: string[]; env: Record<string, string> }
+  { command: string; args: string[]; env?: Record<string, string> }
 > {
   const serverPath = getJcMcpServerPath();
   return {
     'jean-claude-mcp': {
       command: 'node',
-      args: [serverPath],
-      env: {
-        JC_MCP_WORKDIR: cwd,
-      },
+      args: [serverPath, '--workdir', cwd],
     },
   };
 }
@@ -281,6 +278,15 @@ class AgentService {
   private mainWindow: BrowserWindow | null = null;
   private focusedTaskId: string | null = null;
   private pendingImageAttachments = new Map<string, PromptImagePart[]>();
+
+  constructor() {
+    agentResourceMonitorService.setSnapshotListener((snapshot) => {
+      this.emitEvent(snapshot.taskId, snapshot.stepId, {
+        type: 'resource-snapshot',
+        snapshot,
+      });
+    });
+  }
 
   setMainWindow(window: BrowserWindow) {
     this.mainWindow = window;
@@ -550,27 +556,12 @@ class AgentService {
     const existingMessageCount =
       await AgentMessageRepository.getMessageCountByStepId(stepId);
 
-    // Resolve backend before first session start so UI-created tasks can still
-    // adapt if usage changes between creation and execution. Once a backend
-    // session exists, preserve continuity for follow-up prompts.
     const requestedBackend: AgentBackendType = (step.agentBackend ??
       'claude-code') as AgentBackendType;
 
-    let backendType = requestedBackend;
-    let swapModel: string | undefined;
-    let swapThinkingEffort: ThinkingEffort | undefined;
-    if (!step.sessionId) {
-      const swapResult =
-        await rateLimitSwapService.resolveBackend(requestedBackend);
-      backendType = swapResult.backend;
-      swapModel = swapResult.model;
-      swapThinkingEffort = swapResult.thinkingEffort;
-      if (swapResult.swapped) {
-        console.log(
-          `[rate-limit-swap] Task ${step.taskId}: swapped ${requestedBackend} → ${backendType}`,
-        );
-      }
-    }
+    const backendType = requestedBackend;
+    const swapModel: string | undefined = undefined;
+    const swapThinkingEffort: ThinkingEffort | undefined = undefined;
     const BackendClass = AGENT_BACKEND_CLASSES[backendType];
     if (!BackendClass) {
       throw new Error(`Unknown agent backend: "${backendType}"`);
@@ -783,13 +774,25 @@ class AgentService {
     session.backendSessionId = agentSession.sessionId;
 
     // Process the event stream
-    for await (const event of agentSession.events) {
-      if (session.abortController.signal.aborted) {
-        dbg.agentSession('Step %s aborted, breaking event loop', stepId);
-        break;
-      }
+    agentResourceMonitorService.start({
+      taskId,
+      stepId,
+      backend: session.backendType,
+      rootPid: agentSession.rootPid ?? null,
+    });
 
-      await this.processEvent(stepId, session, event);
+    try {
+      for await (const event of agentSession.events) {
+        if (session.abortController.signal.aborted) {
+          dbg.agentSession('Step %s aborted, breaking event loop', stepId);
+          break;
+        }
+
+        await this.processEvent(stepId, session, event);
+      }
+    } finally {
+      await agentResourceMonitorService.stop(stepId);
+      await session.backend.stop(agentSession.sessionId);
     }
   }
 
@@ -1390,6 +1393,7 @@ class AgentService {
     if (session.backendSessionId) {
       await session.backend.stop(session.backendSessionId);
     }
+    await agentResourceMonitorService.stop(stepId);
 
     // Emit a custom interruption entry
     await this.persistAndEmitSyntheticEntry(taskId, session, {

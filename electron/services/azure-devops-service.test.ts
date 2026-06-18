@@ -18,6 +18,7 @@ vi.mock('../database/repositories/tokens', () => ({
 }));
 
 import {
+  getPullRequestFileContent,
   setPullRequestAutoComplete,
   uploadPullRequestAttachment,
 } from './azure-devops-service';
@@ -220,6 +221,184 @@ describe('setPullRequestAutoComplete', () => {
           },
         }),
       }),
+    );
+  });
+});
+
+describe('getPullRequestFileContent', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('loads base content from PR iteration common commit instead of target branch head', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes('/pullrequests/123/iterations?')) {
+        return jsonResponse(
+          {
+            count: 1,
+            value: [
+              {
+                id: 7,
+                commonRefCommit: { commitId: 'common-commit' },
+                sourceRefCommit: { commitId: 'source-commit' },
+                targetRefCommit: { commitId: 'target-commit' },
+              },
+            ],
+          },
+          { ok: true },
+        );
+      }
+
+      if (
+        url.includes('/items?') &&
+        url.includes('versionDescriptor.version=common-commit') &&
+        url.includes('versionDescriptor.versionType=commit')
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+          text: async () => 'base content',
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(
+      getPullRequestFileContent({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+        filePath: '/src/file.ts',
+        version: 'base',
+      }),
+    ).resolves.toBe('base content');
+
+    const urls = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+    expect(urls.some((url) => url.includes('versionType=branch'))).toBe(false);
+    expect(urls).toContain(
+      'https://dev.azure.com/org/project/_apis/git/repositories/repo/items?path=%2Fsrc%2Ffile.ts&versionDescriptor.version=common-commit&versionDescriptor.versionType=commit&api-version=7.0',
+    );
+  });
+
+  it('loads head content from PR iteration source commit', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes('/pullrequests/123/iterations?')) {
+        return jsonResponse(
+          {
+            count: 1,
+            value: [
+              {
+                id: 7,
+                commonRefCommit: { commitId: 'common-commit' },
+                sourceRefCommit: { commitId: 'source-commit' },
+                targetRefCommit: { commitId: 'target-commit' },
+              },
+            ],
+          },
+          { ok: true },
+        );
+      }
+
+      if (
+        url.includes('/items?') &&
+        url.includes('versionDescriptor.version=source-commit') &&
+        url.includes('versionDescriptor.versionType=commit')
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+          text: async () => 'head content',
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(
+      getPullRequestFileContent({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+        filePath: '/src/file.ts',
+        version: 'head',
+      }),
+    ).resolves.toBe('head content');
+
+    const urls = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+    expect(urls).toContain(
+      'https://dev.azure.com/org/project/_apis/git/repositories/repo/items?path=%2Fsrc%2Ffile.ts&versionDescriptor.version=source-commit&versionDescriptor.versionType=commit&api-version=7.0',
+    );
+  });
+
+  it('falls back to PR iteration target commit when common commit is absent', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes('/pullrequests/123/iterations?')) {
+        return jsonResponse(
+          {
+            count: 1,
+            value: [
+              {
+                id: 7,
+                sourceRefCommit: { commitId: 'source-commit' },
+                targetRefCommit: { commitId: 'target-commit' },
+              },
+            ],
+          },
+          { ok: true },
+        );
+      }
+
+      if (
+        url.includes('/items?') &&
+        url.includes('versionDescriptor.version=target-commit') &&
+        url.includes('versionDescriptor.versionType=commit')
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+          text: async () => 'target content',
+        } as Response;
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(
+      getPullRequestFileContent({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+        filePath: '/src/file.ts',
+        version: 'base',
+      }),
+    ).resolves.toBe('target content');
+
+    const urls = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+    expect(urls).toContain(
+      'https://dev.azure.com/org/project/_apis/git/repositories/repo/items?path=%2Fsrc%2Ffile.ts&versionDescriptor.version=target-commit&versionDescriptor.versionType=commit&api-version=7.0',
     );
   });
 });

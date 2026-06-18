@@ -40,8 +40,11 @@ export function TaskMessageManager() {
   const clearPendingRequestForTask = useTaskMessagesStore(
     (s) => s.clearPendingRequestForTask,
   );
-  const appendRunCommandLine = useTaskMessagesStore(
-    (s) => s.appendRunCommandLine,
+  const appendRunCommandLogBatch = useTaskMessagesStore(
+    (s) => s.appendRunCommandLogBatch,
+  );
+  const applyRunCommandLogsReset = useTaskMessagesStore(
+    (s) => s.applyRunCommandLogsReset,
   );
   const setRunCommandRunning = useTaskMessagesStore(
     (s) => s.setRunCommandRunning,
@@ -152,13 +155,29 @@ export function TaskMessageManager() {
 
   useEffect(() => {
     const unsub = api.runCommands.onLog(
-      (taskId, runCommandId, stream, line) => {
-        appendRunCommandLine(taskId, runCommandId, stream, line);
+      (taskId, runCommandId, stream, text, generation) => {
+        appendRunCommandLogBatch(
+          taskId,
+          runCommandId,
+          stream,
+          text,
+          generation,
+        );
       },
     );
 
     return unsub;
-  }, [appendRunCommandLine]);
+  }, [appendRunCommandLogBatch]);
+
+  useEffect(() => {
+    const unsub = api.runCommands.onLogsReset(
+      (taskId, runCommandId, generation) => {
+        applyRunCommandLogsReset(taskId, runCommandId, generation);
+      },
+    );
+
+    return unsub;
+  }, [applyRunCommandLogsReset]);
 
   // Subscribe to run command status changes AND initialize runCommandRunning
   // from the main process. Both live in the same effect so the listener is

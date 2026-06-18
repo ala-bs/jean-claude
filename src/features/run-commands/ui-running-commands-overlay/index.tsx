@@ -19,9 +19,6 @@ import {
   type CommandRunStatus,
 } from '@shared/run-command-types';
 
-/** Stable empty array to avoid unstable selector references. */
-const EMPTY_ARRAY: never[] = [];
-
 /** Keys the overlay handles itself — don't forward to PTY. */
 const OVERLAY_IGNORED_KEYS = new Set(['Escape']);
 
@@ -44,8 +41,8 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [stoppingKeys, setStoppingKeys] = useState<Set<string>>(new Set());
   const addToast = useToastStore((s) => s.addToast);
-  const clearRunCommandLogs = useTaskMessagesStore(
-    (s) => s.clearRunCommandLogs,
+  const resetRunCommandLogs = useTaskMessagesStore(
+    (s) => s.resetRunCommandLogs,
   );
 
   const runningCommands = useMemo(() => {
@@ -132,11 +129,16 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
 
   const handleClearSelectedLogs = useCallback(() => {
     if (!selectedCommand) return;
-    clearRunCommandLogs(
+    const generation = resetRunCommandLogs(
       selectedCommand.taskId,
       selectedCommand.commandStatus.id,
     );
-  }, [clearRunCommandLogs, selectedCommand]);
+    void api.runCommands.resetLogs({
+      taskId: selectedCommand.taskId,
+      runCommandId: selectedCommand.commandStatus.id,
+      generation,
+    });
+  }, [resetRunCommandLogs, selectedCommand]);
 
   const handleArrowNavigation = useCallback(
     (direction: 'up' | 'down') => {
@@ -369,8 +371,8 @@ function LogViewer({
   isStopping: boolean;
   onStop: () => void;
 }) {
-  const logLines = useTaskMessagesStore(
-    (s) => s.runCommandLogs[taskId]?.[runCommandId]?.lines ?? EMPTY_ARRAY,
+  const log = useTaskMessagesStore(
+    (s) => s.runCommandLogs[taskId]?.[runCommandId] ?? null,
   );
 
   return (
@@ -400,7 +402,7 @@ function LogViewer({
       </div>
 
       <InteractiveLog
-        lines={logLines}
+        log={log}
         taskId={taskId}
         runCommandId={runCommandId}
         isRunning

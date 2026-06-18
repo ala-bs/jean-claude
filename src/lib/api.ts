@@ -4,6 +4,7 @@ import type {
   AgentMigrationPreviewResult,
   ManagedAgent,
 } from '@shared/agent-management-types';
+import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
 import type {
   AgentQuestion,
   PermissionResponse,
@@ -1037,6 +1038,8 @@ export interface Api {
       taskId: string,
       stepId: string,
     ) => Promise<DebugMessageWithRawData[]>;
+    getResourceSnapshots: () => Promise<AgentResourceSnapshot[]>;
+    getResourceHistory: () => Promise<Record<string, AgentResourceSnapshot[]>>;
     compactRawMessages: (taskId: string) => Promise<void>;
     reprocessNormalization: (taskId: string) => Promise<number>;
     getPendingRequest: (stepId: string) => Promise<
@@ -1142,6 +1145,11 @@ export interface Api {
       runCommandId: string;
       input: string;
     }) => Promise<void>;
+    resetLogs: (params: {
+      taskId: string;
+      runCommandId: string;
+      generation: number;
+    }) => Promise<number>;
     sendSignal: (params: {
       taskId: string;
       runCommandId: string;
@@ -1162,7 +1170,15 @@ export interface Api {
         taskId: string,
         runCommandId: string,
         stream: 'stdout' | 'stderr',
-        line: string,
+        text: string,
+        generation: number,
+      ) => void,
+    ) => () => void;
+    onLogsReset: (
+      callback: (
+        taskId: string,
+        runCommandId: string,
+        generation: number,
       ) => void,
     ) => () => void;
   };
@@ -1910,6 +1926,8 @@ export const api: Api = hasWindowApi
         getMessages: async () => [],
         getMessageCount: async () => 0,
         getMessagesWithRawData: async () => [],
+        getResourceSnapshots: async () => [],
+        getResourceHistory: async () => ({}),
         compactRawMessages: async () => {},
         reprocessNormalization: async () => 0,
         getPendingRequest: async () => null,
@@ -2015,6 +2033,7 @@ export const api: Api = hasWindowApi
         }),
         stopCommand: async () => {},
         sendInput: async () => {},
+        resetLogs: async () => 0,
         sendSignal: async () => {},
         getStatus: async () => ({
           isRunning: false,
@@ -2030,6 +2049,7 @@ export const api: Api = hasWindowApi
         }),
         onStatusChange: () => () => {},
         onLog: () => () => {},
+        onLogsReset: () => () => {},
       },
       globalPrompt: {
         onShow: () => () => {},

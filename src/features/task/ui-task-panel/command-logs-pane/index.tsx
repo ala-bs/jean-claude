@@ -24,6 +24,8 @@ import { useRunCommands } from '@/hooks/use-run-commands';
 import { api } from '@/lib/api';
 import { useCommandLogsPaneWidth } from '@/stores/navigation';
 import {
+  getRunCommandLogLineCount,
+  type RunCommandLogState,
   type RunCommandLogs,
   useTaskMessagesStore,
 } from '@/stores/task-messages';
@@ -32,6 +34,62 @@ import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
 
 const EMPTY_RUN_COMMAND_LOGS: RunCommandLogs = {};
+
+function hasLogContent(log: RunCommandLogState | null | undefined): boolean {
+  return getRunCommandLogLineCount(log) > 0;
+}
+
+function logIncludesQuery(
+  log: RunCommandLogState | null | undefined,
+  query: string,
+): boolean {
+  if (!log) return false;
+
+  for (const chunk of log.chunks) {
+    if (chunk.lines.some((entry) => entry.line.toLowerCase().includes(query))) {
+      return true;
+    }
+  }
+
+  return (
+    log.pendingLines.stdout?.line.toLowerCase().includes(query) === true ||
+    log.pendingLines.stderr?.line.toLowerCase().includes(query) === true
+  );
+}
+
+function filterLogByQuery(
+  log: RunCommandLogState | null,
+  query: string,
+): RunCommandLogState | null {
+  if (!log || !query) return log;
+
+  let totalLineCount = 0;
+  const chunks = log.chunks
+    .map((chunk) => {
+      const lines = chunk.lines.filter((entry) =>
+        entry.line.toLowerCase().includes(query),
+      );
+      totalLineCount += lines.length;
+      return { ...chunk, lines, lineCount: lines.length };
+    })
+    .filter((chunk) => chunk.lineCount > 0);
+
+  return {
+    ...log,
+    chunks,
+    pendingLines: {
+      stdout:
+        log.pendingLines.stdout?.line.toLowerCase().includes(query) === true
+          ? log.pendingLines.stdout
+          : null,
+      stderr:
+        log.pendingLines.stderr?.line.toLowerCase().includes(query) === true
+          ? log.pendingLines.stderr
+          : null,
+    },
+    totalLineCount,
+  };
+}
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -67,8 +125,8 @@ export function CommandLogsPane({
   const runCommandLogs =
     useTaskMessagesStore((state) => state.runCommandLogs[taskId]) ??
     EMPTY_RUN_COMMAND_LOGS;
-  const clearRunCommandLogs = useTaskMessagesStore(
-    (state) => state.clearRunCommandLogs,
+  const resetRunCommandLogs = useTaskMessagesStore(
+    (state) => state.resetRunCommandLogs,
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingConfirm, setPendingConfirm] = useState<{
@@ -96,7 +154,7 @@ export function CommandLogsPane({
     () =>
       commands.filter(
         (command) =>
-          (runCommandLogs[command.id]?.lines.length ?? 0) > 0 ||
+          hasLogContent(runCommandLogs[command.id]) ||
           runningCommandIds.has(command.id),
       ),
     [commands, runCommandLogs, runningCommandIds],
@@ -114,18 +172,16 @@ export function CommandLogsPane({
         return true;
       }
 
-      return (
-        runCommandLogs[tab.id]?.lines.some((entry) =>
-          entry.line.toLowerCase().includes(normalizedSearchQuery),
-        ) ?? false
-      );
+      return logIncludesQuery(runCommandLogs[tab.id], normalizedSearchQuery);
     });
   }, [normalizedSearchQuery, runCommandLogs, tabs]);
 
+  const selectableTabs = normalizedSearchQuery ? filteredTabs : tabs;
   const activeCommandId =
-    selectedCommandId && tabs.some((tab) => tab.id === selectedCommandId)
+    selectedCommandId &&
+    selectableTabs.some((tab) => tab.id === selectedCommandId)
       ? selectedCommandId
-      : (tabs[0]?.id ?? null);
+      : (selectableTabs[0]?.id ?? null);
   const activeLog = activeCommandId ? runCommandLogs[activeCommandId] : null;
   const isActiveRunning = !!(
     activeCommandId && runningCommandIds.has(activeCommandId)
@@ -219,13 +275,8 @@ export function CommandLogsPane({
     if (isInteractiveTarget(event.target)) return;
     paneRef.current?.focus();
   }, []);
-  const filteredActiveLines = useMemo(() => {
-    if (!activeLog) return [];
-    if (!normalizedSearchQuery) return activeLog.lines;
-
-    return activeLog.lines.filter((entry) =>
-      entry.line.toLowerCase().includes(normalizedSearchQuery),
-    );
+  const activeLogView = useMemo(() => {
+    return filterLogByQuery(activeLog, normalizedSearchQuery);
   }, [activeLog, normalizedSearchQuery]);
   const hasAnyTabs = tabs.length > 0;
   const showNoSearchMatches =
@@ -280,7 +331,13 @@ export function CommandLogsPane({
           </Button>
           <IconButton
             onClick={() => {
-              if (activeCommandId) clearRunCommandLogs(taskId, activeCommandId);
+              if (!activeCommandId) return;
+              const generation = resetRunCommandLogs(taskId, activeCommandId);
+              void api.runCommands.resetLogs({
+                taskId,
+                runCommandId: activeCommandId,
+                generation,
+              });
             }}
             size="sm"
             icon={<Trash2 />}
@@ -333,7 +390,7 @@ export function CommandLogsPane({
 
           {activeCommandId && (
             <InteractiveLog
-              lines={filteredActiveLines}
+              log={activeLogView}
               taskId={taskId}
               runCommandId={activeCommandId}
               isRunning={isActiveRunning}

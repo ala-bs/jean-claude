@@ -45,9 +45,6 @@ const byManualLowPriorityThenProjectPriority = ({
       Number(lowPriorityIds.has(a.id)) - Number(lowPriorityIds.has(b.id));
     if (manualLow !== 0) return manualLow;
 
-    const draftLow = Number(Boolean(a.isDraft)) - Number(Boolean(b.isDraft));
-    if (draftLow !== 0) return draftLow;
-
     const aProjectOrder = prProjectOrder.get(a.projectId);
     const bProjectOrder = prProjectOrder.get(b.projectId);
     if (aProjectOrder !== undefined || bProjectOrder !== undefined) {
@@ -161,6 +158,7 @@ export function partitionFeedItems({
       high.push(item);
     } else if (
       item.source === 'pull-request' &&
+      !item.isDraft &&
       PR_REVIEW_ATTENTIONS.has(item.attention)
     ) {
       prReviews.push(item);

@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, ListTodo } from 'lucide-react';
 import { nanoid } from 'nanoid';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 
 import { BranchSelect } from '@/common/ui/branch-select';
@@ -15,6 +15,7 @@ import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import {
   RateLimitSwapPreview,
   resolveRateLimitSwapSelection,
+  useRateLimitSwapPreview,
 } from '@/features/agent/ui-rate-limit-swap-preview';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { WorkItemsBrowser } from '@/features/agent/ui-work-items-browser';
@@ -75,6 +76,7 @@ function NewTask() {
 
   const { draft, hasDraft, setDraft, clearDraft } =
     useNewTaskFormStore(projectId);
+  const userTouchedSelectionRef = useRef(hasDraft);
   const {
     name,
     prompt,
@@ -158,8 +160,52 @@ function NewTask() {
         'default',
       capabilities: thinkingCapabilities,
     });
+  const { data: rateLimitSuggestion } = useRateLimitSwapPreview(
+    effectiveAgentBackend,
+    !userTouchedSelectionRef.current,
+  );
   useEffect(() => {
-    if (!backendsSetting || !project || hasDraft) return;
+    if (!rateLimitSuggestion?.swapped || userTouchedSelectionRef.current)
+      return;
+
+    const nextBackend = rateLimitSuggestion.backend;
+    const nextModel =
+      rateLimitSuggestion.model ??
+      (nextBackend !== effectiveAgentBackend
+        ? 'default'
+        : effectiveModelPreference);
+    const nextThinkingEffort =
+      rateLimitSuggestion.thinkingEffort ??
+      (nextBackend !== effectiveAgentBackend
+        ? 'default'
+        : effectiveThinkingEffort);
+    setDraft({
+      agentBackend: nextBackend,
+      modelPreference: nextModel,
+      thinkingEffort: nextThinkingEffort,
+      backendModelPresetId: null,
+      shouldAutoSelectBackendModelPreset: false,
+      interactionMode: normalizeInteractionModeForBackend({
+        backend: nextBackend,
+        mode: interactionMode,
+      }),
+    });
+  }, [
+    effectiveAgentBackend,
+    effectiveModelPreference,
+    effectiveThinkingEffort,
+    interactionMode,
+    rateLimitSuggestion,
+    setDraft,
+  ]);
+  useEffect(() => {
+    if (
+      !backendsSetting ||
+      !project ||
+      hasDraft ||
+      rateLimitSuggestion?.swapped
+    )
+      return;
 
     const resolved =
       project.defaultAgentBackend ?? backendsSetting.defaultBackend;
@@ -212,6 +258,7 @@ function NewTask() {
     hasDraft,
     interactionMode,
     project,
+    rateLimitSuggestion?.swapped,
     setDraft,
     thinkingSettings,
   ]);
@@ -430,6 +477,7 @@ function NewTask() {
               model={effectiveModelPreference}
               selectedPresetId={effectiveBackendModelPresetId}
               onChange={(selection) => {
+                userTouchedSelectionRef.current = true;
                 const nextThinkingCapabilities = getModelThinkingCapabilities(
                   selection.model,
                   dynamicModels,
@@ -462,15 +510,30 @@ function NewTask() {
             <ThinkingSelector
               value={effectiveThinkingEffort}
               options={thinkingOptions}
-              onChange={(nextThinkingEffort) =>
-                setDraft({ thinkingEffort: nextThinkingEffort })
-              }
+              onChange={(nextThinkingEffort) => {
+                userTouchedSelectionRef.current = true;
+                setDraft({ thinkingEffort: nextThinkingEffort });
+              }}
               disabled={thinkingOptions.length <= 1}
             />
             <RateLimitSwapPreview
               requestedBackend={effectiveAgentBackend}
               model={effectiveModelPreference}
               thinkingEffort={effectiveThinkingEffort}
+              onApplySuggestion={(selection) => {
+                userTouchedSelectionRef.current = true;
+                setDraft({
+                  agentBackend: selection.backend,
+                  backendModelPresetId: null,
+                  shouldAutoSelectBackendModelPreset: false,
+                  modelPreference: selection.model,
+                  thinkingEffort: selection.thinkingEffort as ThinkingEffort,
+                  interactionMode: normalizeInteractionModeForBackend({
+                    backend: selection.backend,
+                    mode: interactionMode,
+                  }),
+                });
+              }}
             />
             <Button
               variant="secondary"
