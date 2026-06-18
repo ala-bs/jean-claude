@@ -5,7 +5,10 @@ import type {
   AzureDevOpsFileChange,
 } from '@/lib/api';
 
-import { getCommentCountByPrFile } from './utils-pr-comment-counts';
+import {
+  getCommentCountByPrFile,
+  getCommentStatusCountByPrFile,
+} from './utils-pr-comment-counts';
 
 function thread(
   filePath: string,
@@ -71,5 +74,21 @@ describe('PR comment counts by file', () => {
         ],
       }),
     ).toEqual({});
+  });
+
+  it('splits active and resolved comment counts by file', () => {
+    const files: AzureDevOpsFileChange[] = [
+      { path: '/src/app.ts', changeType: 'edit' },
+    ];
+
+    expect(
+      getCommentStatusCountByPrFile({
+        files,
+        threads: [
+          thread('/src/app.ts', 2, { status: 'active' }),
+          thread('/src/app.ts', 1, { status: 'fixed' }),
+        ],
+      }),
+    ).toEqual({ '/src/app.ts': { active: 2, resolved: 1 } });
   });
 });

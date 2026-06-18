@@ -25,39 +25,30 @@ export async function resolveRateLimitSwapSelection({
   backend,
   model,
   thinkingEffort,
-  enabled = true,
+  enabled: _enabled = true,
 }: {
   backend: AgentBackendType;
   model: string;
   thinkingEffort: string;
   enabled?: boolean;
 }) {
-  if (!enabled) {
-    return { backend, model, thinkingEffort };
-  }
-
-  const result = await api.rateLimitSwap.resolve(backend);
-  if (!result.swapped) {
-    return { backend, model, thinkingEffort };
-  }
-
-  const backendChanged = result.backend !== backend;
-  return {
-    backend: result.backend,
-    model: result.model ?? (backendChanged ? 'default' : model),
-    thinkingEffort:
-      result.thinkingEffort ?? (backendChanged ? 'default' : thinkingEffort),
-  };
+  return { backend, model, thinkingEffort };
 }
 
 export function RateLimitSwapPreview({
   requestedBackend,
   model,
   thinkingEffort,
+  onApplySuggestion,
 }: {
   requestedBackend: AgentBackendType;
   model?: string | null;
   thinkingEffort?: string | null;
+  onApplySuggestion?: (selection: {
+    backend: AgentBackendType;
+    model: string;
+    thinkingEffort: string;
+  }) => void;
 }) {
   const { data } = useRateLimitSwapPreview(requestedBackend);
   if (!data?.swapped) return null;
@@ -66,6 +57,12 @@ export function RateLimitSwapPreview({
   const effectiveModel = data.model ?? (backendChanged ? 'default' : model);
   const effectiveThinking =
     data.thinkingEffort ?? (backendChanged ? 'default' : thinkingEffort);
+  const selectionAlreadyMatchesSuggestion =
+    !backendChanged &&
+    effectiveModel === model &&
+    effectiveThinking === thinkingEffort;
+  if (selectionAlreadyMatchesSuggestion) return null;
+
   const details = [
     effectiveModel && effectiveModel !== 'default' ? effectiveModel : null,
     effectiveThinking && effectiveThinking !== 'default'
@@ -74,12 +71,23 @@ export function RateLimitSwapPreview({
   ].filter(Boolean);
 
   return (
-    <div className="border-acc/25 bg-acc/10 text-acc flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs whitespace-nowrap">
-      <span className="text-ink-3">Uses</span>
+    <button
+      type="button"
+      onClick={() =>
+        onApplySuggestion?.({
+          backend: data.backend,
+          model: effectiveModel ?? 'default',
+          thinkingEffort: effectiveThinking ?? 'default',
+        })
+      }
+      className="flex cursor-pointer items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-xs whitespace-nowrap text-amber-300 transition-colors hover:border-amber-400/40 hover:bg-amber-500/15"
+    >
+      <span className="text-ink-3">Rate limit swapper suggests</span>
       <span className="font-medium">{BACKEND_LABELS[data.backend]}</span>
       {details.length > 0 && (
         <span className="text-ink-3">({details.join(', ')})</span>
       )}
-    </div>
+      <span className="text-ink-3">- click to use</span>
+    </button>
   );
 }

@@ -9,7 +9,10 @@ import { Kbd } from '@/common/ui/kbd';
 import { useProjectCommandGroups } from '@/hooks/use-project-command-groups';
 import { useProjectCommands } from '@/hooks/use-project-commands';
 import { useRunCommands } from '@/hooks/use-run-commands';
-import { useTaskMessagesStore } from '@/stores/task-messages';
+import {
+  getRunCommandLogLineCount,
+  useTaskMessagesStore,
+} from '@/stores/task-messages';
 import { getRunCommandDisplayName } from '@shared/run-command-types';
 
 import { ConfirmRunModal } from './confirm-run-modal';
@@ -55,8 +58,14 @@ export function RunButton({
     message: string | null;
   } | null>(null);
 
-  const runCommandLogs =
-    useTaskMessagesStore((state) => state.runCommandLogs[taskId]) ?? {};
+  const hasRunCommandLogEntries = useTaskMessagesStore((state) => {
+    const runCommandLogs = state.runCommandLogs[taskId];
+    if (!runCommandLogs) return false;
+
+    return Object.values(runCommandLogs).some(
+      (entry) => getRunCommandLogLineCount(entry) > 0,
+    );
+  });
 
   const menuItems = useMemo(
     () =>
@@ -84,8 +93,7 @@ export function RunButton({
   ).length;
 
   const hasLogEntries =
-    Object.values(runCommandLogs).some((entry) => entry.lines.length > 0) ||
-    (status?.commands.length ?? 0) > 0;
+    hasRunCommandLogEntries || (status?.commands.length ?? 0) > 0;
 
   const executeCommand = (runCommandId: string) => {
     onRunCommand([runCommandId]);

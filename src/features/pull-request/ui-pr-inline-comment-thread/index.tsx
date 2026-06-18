@@ -37,13 +37,17 @@ export function PrInlineCommentThread({
         content: comment.content,
         commentType: 'text',
         author: {
+          id: comment.authorId,
           displayName: comment.author,
           uniqueName: comment.uniqueName ?? comment.author,
           imageUrl: comment.imageUrl,
         },
-        usersLiked: [],
+        usersLiked: comment.usersLiked ?? [],
         publishedDate: comment.publishedDate ?? new Date().toISOString(),
-        lastUpdatedDate: comment.publishedDate ?? new Date().toISOString(),
+        lastUpdatedDate:
+          comment.lastUpdatedDate ??
+          comment.publishedDate ??
+          new Date().toISOString(),
       }))}
       providerId={providerId}
       mentionDisplayNames={mentionDisplayNames}
@@ -72,9 +76,12 @@ export function convertPrThreadsForFile(
       status: thread.status,
       comments: thread.comments.map((comment) => ({
         id: comment.id,
+        authorId: comment.author.id,
         author: comment.author.displayName,
         content: comment.content,
+        usersLiked: comment.usersLiked,
         publishedDate: comment.publishedDate,
+        lastUpdatedDate: comment.lastUpdatedDate,
         imageUrl: comment.author.imageUrl,
         uniqueName: comment.author.uniqueName,
       })),

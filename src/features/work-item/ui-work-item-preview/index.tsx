@@ -126,7 +126,13 @@ export function WorkItemPreview({
         </span>
       </div>
 
-      <div className="mt-3 grid min-h-0 flex-1 gap-4 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]">
+      <div
+        className={`mt-3 grid min-h-0 flex-1 gap-4 overflow-hidden ${
+          showCommentsAside
+            ? 'xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]'
+            : 'grid-cols-1'
+        }`}
+      >
         <div className="min-h-0 overflow-y-auto">
           {activeTab === 'content' && (
             <div>
