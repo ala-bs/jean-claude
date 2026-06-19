@@ -44,9 +44,25 @@ describe('formatPastedPromptContent', () => {
     expect(formatPastedPromptContent('hello world')).toBe('hello world');
   });
 
+  it('trims normal single-line text', () => {
+    expect(formatPastedPromptContent('  hello world\n')).toBe('hello world');
+  });
+
   it('leaves fenced content unchanged', () => {
     const fenced = '```ts\nconst ok = true;\n```';
 
     expect(formatPastedPromptContent(fenced)).toBe(fenced);
+  });
+
+  it('trims fenced content', () => {
+    const fenced = '```ts\nconst ok = true;\n```';
+
+    expect(formatPastedPromptContent(`\n${fenced}\n`)).toBe(fenced);
+  });
+
+  it('trims before wrapping multi-line text', () => {
+    expect(formatPastedPromptContent(' first line\nsecond line\n')).toBe(
+      '```\nfirst line\nsecond line\n```',
+    );
   });
 });
