@@ -47,6 +47,7 @@ import { BackendConfigSettings } from '@/features/settings/ui-backend-config-set
 import { DebugDatabase } from '@/features/settings/ui-debug-database';
 import {
   EditorSettings,
+  AppearanceSettings,
   NotificationsSettings,
   CalendarSettings,
   UsageDisplaySettings,
@@ -108,6 +109,7 @@ function getGlobalSections(): GlobalSection[] {
   if (_cachedGlobalSections) return _cachedGlobalSections;
 
   const generalSubs: GlobalSubItem[] = [
+    { id: 'appearance', label: 'Appearance' },
     { id: 'editor', label: 'Editor' },
     { id: 'notifications', label: 'Notifications' },
     ...(api.platform === 'darwin'
@@ -381,6 +383,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
       label: 'Workspace',
       items: [
         globalLeaf('general', 'editor', 'General'),
+        globalLeaf('general', 'appearance'),
         globalLeaf('general', 'notifications'),
         ...(api.platform === 'darwin'
           ? [globalLeaf('general', 'calendar')]
@@ -572,6 +575,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
     switch (subId) {
       case 'editor':
         return 'Where projects open and how they launch.';
+      case 'appearance':
+        return 'Visual effects and motion preferences.';
       case 'notifications':
         return 'How and when jean-claude lets you know about runs.';
       case 'calendar':
@@ -597,6 +602,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
     switch (`${selection.sectionId}:${selection.subId}`) {
       case 'general:editor':
         return <EditorSettings />;
+      case 'general:appearance':
+        return <AppearanceSettings />;
       case 'general:notifications':
         return <NotificationsSettings />;
       case 'general:calendar':

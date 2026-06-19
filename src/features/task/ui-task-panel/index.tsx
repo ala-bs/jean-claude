@@ -819,7 +819,7 @@ function AgentResourcePill({
           className={clsx(
             'h-[5px] w-[5px] rounded-full',
             isRunning
-              ? 'animate-pulse bg-[oklch(0.74_0.19_295)] shadow-[0_0_7px_oklch(0.74_0.19_295)]'
+              ? 'resource-status-pulse animate-pulse bg-[oklch(0.74_0.19_295)] shadow-[0_0_7px_oklch(0.74_0.19_295)]'
               : 'bg-ink-4/60',
           )}
         />

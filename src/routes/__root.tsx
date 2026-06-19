@@ -25,6 +25,7 @@ import { ProjectOverlay } from '@/features/project/ui-project-overlay';
 import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
 import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
 import { UsageOverlay } from '@/features/usage/ui-usage-overlay';
+import { useAppearanceSetting } from '@/hooks/use-settings';
 import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { api } from '@/lib/api';
@@ -398,6 +399,7 @@ function RootLayout() {
       <NotificationTaskOpenBridge />
       <RateLimitSwapBridge />
       <TaskMessageManager />
+      <AppearanceBridge />
       <GlobalPromptFromBackModal />
       <GlobalCommands />
       {/* <TaskCommands /> */}
@@ -426,6 +428,18 @@ function RootLayout() {
       </div>
     </div>
   );
+}
+
+function AppearanceBridge() {
+  const { data: appearanceSetting } = useAppearanceSetting();
+
+  useEffect(() => {
+    document.documentElement.dataset.reduceMotion = String(
+      appearanceSetting?.reduceMotion ?? true,
+    );
+  }, [appearanceSetting?.reduceMotion]);
+
+  return null;
 }
 
 function ReactScanBridge() {
