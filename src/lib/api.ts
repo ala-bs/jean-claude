@@ -892,6 +892,7 @@ export interface Api {
     ) => Promise<{ content: string; language: string } | null>;
     getFileSize: (filePath: string) => Promise<number | null>;
     readImageAsDataUrl: (filePath: string) => Promise<string | null>;
+    getImageUrl: (filePath: string) => Promise<string | null>;
     listDirectory: (
       dirPath: string,
       projectRoot: string,
@@ -1844,6 +1845,7 @@ export const api: Api = hasWindowApi
         readFile: async () => null,
         getFileSize: async () => null,
         readImageAsDataUrl: async () => null,
+        getImageUrl: async () => null,
         listDirectory: async () => null,
         listProjectFiles: async () => [],
         writeAttachmentFile: async () => '',

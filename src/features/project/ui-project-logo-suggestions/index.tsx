@@ -13,9 +13,9 @@ function LogoSuggestion({
   isSelected: boolean;
   onSelect: (path: string) => void;
 }) {
-  const { data: dataUrl } = useQuery({
+  const { data: imageUrl } = useQuery({
     queryKey: ['project-logo-suggestion', logo.path],
-    queryFn: () => api.fs.readImageAsDataUrl(logo.path),
+    queryFn: () => api.fs.getImageUrl(logo.path),
     staleTime: Infinity,
   });
 
@@ -28,9 +28,9 @@ function LogoSuggestion({
         isSelected && 'border-acc bg-acc/10',
       )}
     >
-      {dataUrl ? (
+      {imageUrl ? (
         <img
-          src={dataUrl}
+          src={imageUrl}
           alt=""
           className="h-9 w-9 shrink-0 rounded-lg object-cover"
         />

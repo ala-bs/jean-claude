@@ -228,6 +228,7 @@ import {
   editGlobalPermission,
 } from '../services/global-permissions-service';
 import { handlePromptResponse } from '../services/global-prompt-service';
+import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
 import {
   MCP_PRESETS,
   getEnabledTemplatesForProject,
@@ -3679,6 +3680,18 @@ export function registerIpcHandlers() {
       const buffer = await fs.readFile(filePath);
       const base64 = buffer.toString('base64');
       return `data:${mimeType};base64,${base64}`;
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('fs:getImageUrl', async (_, filePath: string) => {
+    try {
+      const imageUrl = encodeLocalImageUrl(filePath);
+      if (!imageUrl) return null;
+
+      const stat = await fs.stat(filePath);
+      return stat.isFile() ? imageUrl : null;
     } catch {
       return null;
     }

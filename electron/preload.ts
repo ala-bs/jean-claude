@@ -657,6 +657,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('fs:getFileSize', filePath),
     readImageAsDataUrl: (filePath: string) =>
       ipcRenderer.invoke('fs:readImageAsDataUrl', filePath),
+    getImageUrl: (filePath: string) =>
+      ipcRenderer.invoke('fs:getImageUrl', filePath),
     listDirectory: (dirPath: string, projectRoot: string) =>
       ipcRenderer.invoke('fs:listDirectory', dirPath, projectRoot),
     listProjectFiles: (projectRoot: string) =>
