@@ -693,7 +693,8 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
             projectColor: project.color,
             projectLogoPath: project.logoPath,
             projectPriority: project.prPriority as 'high' | 'normal' | 'low',
-            title: `#${pr.id}`,
+            title: pr.title,
+            isDraft: pr.isDraft,
             isOwnedByCurrentUser:
               !!project.repoProviderId &&
               pr.createdBy.uniqueName.toLowerCase() ===

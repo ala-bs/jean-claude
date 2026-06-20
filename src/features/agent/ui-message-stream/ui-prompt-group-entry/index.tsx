@@ -476,7 +476,7 @@ const AgentHeader = memo(function AgentHeader({
         <>
           <span className="inline-flex items-center gap-1.5">
             <span
-              className="bg-acc h-1.5 w-1.5 rounded-full"
+              className="rg-pulse-glow bg-acc h-1.5 w-1.5 rounded-full"
               style={{
                 boxShadow:
                   '0 0 8px var(--color-acc), 0 0 14px color-mix(in oklch, var(--color-acc) 60%, transparent)',
@@ -547,7 +547,7 @@ function SubagentCard({
     >
       {/* Shimmer sweep */}
       <div
-        className="pointer-events-none absolute inset-0"
+        className="rg-shimmer-sweep pointer-events-none absolute inset-0"
         style={{
           background: `linear-gradient(110deg,
             transparent 0%, transparent 40%,
@@ -564,7 +564,7 @@ function SubagentCard({
           style={{ opacity: 0.85, boxShadow: '0 0 8px var(--color-acc)' }}
         />
         <span
-          className="border-acc absolute inset-0 rounded-full border"
+          className="rg-pulse-ring border-acc absolute inset-0 rounded-full border"
           style={{ animation: 'rg-pulse-ring 1.8s ease-out infinite' }}
         />
       </div>
@@ -644,7 +644,7 @@ function TodoRow({
         )}
         {todo.current && !todo.done && (
           <span
-            className="bg-acc h-1.5 w-1.5 rounded-full"
+            className="rg-pulse-glow bg-acc h-1.5 w-1.5 rounded-full"
             style={{ animation: 'rg-pulse-glow 1.4s ease-in-out infinite' }}
           />
         )}
@@ -763,7 +763,7 @@ function RunningSummary({
               }}
             >
               <span
-                className="bg-acc h-1 w-1 rounded-full"
+                className="rg-pulse-glow bg-acc h-1 w-1 rounded-full"
                 style={{
                   animation: 'rg-pulse-glow 1.4s ease-in-out infinite',
                 }}
@@ -786,7 +786,7 @@ function RunningSummary({
             <span>tools</span>
             <span className="text-ink-3 inline-flex items-center gap-1 rounded-full bg-glass-subtle px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
               <span
-                className="bg-acc h-1 w-1 rounded-full"
+                className="rg-pulse-glow bg-acc h-1 w-1 rounded-full"
                 style={{
                   animation: 'rg-pulse-glow 1.4s ease-in-out infinite',
                 }}
@@ -811,7 +811,7 @@ function RunningSummary({
       {/* Context compaction */}
       {activity.isCompacting && (
         <div className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500 shadow-[0_0_6px_theme(colors.amber.500/40)]" />
+          <span className="rg-pulse-glow h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500 shadow-[0_0_6px_theme(colors.amber.500/40)]" />
           <span className="text-ink-3 font-mono text-[10px] tracking-wider uppercase">
             compacting context…
           </span>

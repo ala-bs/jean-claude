@@ -228,6 +228,7 @@ import {
   editGlobalPermission,
 } from '../services/global-permissions-service';
 import { handlePromptResponse } from '../services/global-prompt-service';
+import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
 import {
   MCP_PRESETS,
   getEnabledTemplatesForProject,
@@ -3589,6 +3590,16 @@ export function registerIpcHandlers() {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle('dialog:openFiles', async (event) => {
+    dbg.ipc('dialog:openFiles called');
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(window!, {
+      properties: ['openFile', 'multiSelections'],
+    });
+    dbg.ipc('dialog:openFiles result: %o', result);
+    return result.canceled ? null : result.filePaths;
+  });
+
   // Projects: get detected projects from all known CLI sources
   ipcMain.handle('projects:getDetected', async () => {
     const existingProjects = await ProjectRepository.findAll();
@@ -3653,6 +3664,15 @@ export function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle('fs:getFileSize', async (_, filePath: string) => {
+    try {
+      const stat = await fs.stat(filePath);
+      return stat.isFile() ? stat.size : null;
+    } catch {
+      return null;
+    }
+  });
+
   ipcMain.handle('fs:readImageAsDataUrl', async (_, filePath: string) => {
     try {
       const mimeType = getImageMimeType(filePath);
@@ -3660,6 +3680,18 @@ export function registerIpcHandlers() {
       const buffer = await fs.readFile(filePath);
       const base64 = buffer.toString('base64');
       return `data:${mimeType};base64,${base64}`;
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('fs:getImageUrl', async (_, filePath: string) => {
+    try {
+      const imageUrl = encodeLocalImageUrl(filePath);
+      if (!imageUrl) return null;
+
+      const stat = await fs.stat(filePath);
+      return stat.isFile() ? imageUrl : null;
     } catch {
       return null;
     }

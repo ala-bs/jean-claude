@@ -803,9 +803,9 @@ export function ProjectSettings({
     queryFn: () => api.projects.detectLogos(project?.path ?? ''),
     enabled: !!project?.path,
   });
-  const { data: logoPreviewDataUrl } = useQuery({
+  const { data: logoPreviewUrl } = useQuery({
     queryKey: ['project-logo-preview', project?.logoPath],
-    queryFn: () => api.fs.readImageAsDataUrl(project?.logoPath ?? ''),
+    queryFn: () => api.fs.getImageUrl(project?.logoPath ?? ''),
     enabled: !!project?.logoPath,
     staleTime: Infinity,
   });
@@ -1363,7 +1363,7 @@ export function ProjectSettings({
                 type="button"
                 className="rounded-xl transition-transform hover:scale-105 disabled:hover:scale-100"
                 onClick={() => setIsLogoPreviewOpen(true)}
-                disabled={!logoPreviewDataUrl}
+                disabled={!logoPreviewUrl}
                 aria-label="Preview project logo"
               >
                 <ProjectLogo project={{ ...project, color }} size="lg" />
@@ -1839,7 +1839,7 @@ export function ProjectSettings({
       <ImagePreviewModal
         isOpen={isLogoPreviewOpen}
         title={`${project.name} logo`}
-        imageUrl={logoPreviewDataUrl ?? null}
+        imageUrl={logoPreviewUrl ?? null}
         onClose={() => setIsLogoPreviewOpen(false)}
       />
       <Modal
@@ -1910,7 +1910,7 @@ function GeneratedLogoHistoryItem({
 }) {
   const { data: imageUrl } = useQuery({
     queryKey: ['project-logo-history-image', logo.path],
-    queryFn: () => api.fs.readImageAsDataUrl(logo.path),
+    queryFn: () => api.fs.getImageUrl(logo.path),
     staleTime: Infinity,
   });
 
