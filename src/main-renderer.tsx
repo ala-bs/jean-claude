@@ -6,6 +6,8 @@ import App from './app';
 
 import './index.css';
 
+document.documentElement.dataset.reduceMotion = 'true';
+
 function getInitialReactScanEnabled(): boolean {
   try {
     const raw = window.localStorage.getItem('ui-store');

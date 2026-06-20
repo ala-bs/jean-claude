@@ -12,6 +12,10 @@ import {
   fetchAuthenticatedImageStream,
 } from './services/azure-image-proxy-service';
 import { upsertBuiltinSkills } from './services/builtin-skills-service';
+import {
+  fetchLocalImage,
+  LOCAL_IMAGE_PROTOCOL,
+} from './services/local-image-protocol-service';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { runCommandService } from './services/run-command-service';
@@ -28,6 +32,12 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       corsEnabled: true,
+    },
+  },
+  {
+    scheme: LOCAL_IMAGE_PROTOCOL,
+    privileges: {
+      secure: true,
     },
   },
 ]);
@@ -266,6 +276,12 @@ app.whenReady().then(async () => {
     return fetchAuthenticatedImageStream({ providerId, imageUrl });
   });
   dbg.main('azure-image-proxy protocol handler registered');
+
+  dbg.main('Registering local image protocol handler...');
+  protocol.handle(LOCAL_IMAGE_PROTOCOL, (request) =>
+    fetchLocalImage(request.url),
+  );
+  dbg.main('local image protocol handler registered');
 
   dbg.main('Running database migrations...');
   let shouldQuitOnMigrationWindowClose = false;

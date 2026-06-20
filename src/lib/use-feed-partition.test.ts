@@ -46,7 +46,7 @@ describe('partitionFeedItems', () => {
     expect(result.lowPriorityItems.map((item) => item.id)).toEqual([]);
   });
 
-  it('skips draft PRs in the carousel', async () => {
+  it('keeps draft PRs in the carousel', async () => {
     const draft = prItem({ id: 'pr:project-1:1', isDraft: true });
     const normal = prItem({ id: 'pr:project-1:2' });
 
@@ -60,8 +60,11 @@ describe('partitionFeedItems', () => {
       taskOwnedPrIds: new Set(),
     });
 
-    expect(result.prReviewItems.map((item) => item.id)).toEqual([normal.id]);
-    expect(result.normalItems.map((item) => item.id)).toEqual([draft.id]);
+    expect(result.prReviewItems.map((item) => item.id)).toEqual([
+      draft.id,
+      normal.id,
+    ]);
+    expect(result.normalItems.map((item) => item.id)).toEqual([]);
     expect(result.lowPriorityItems.map((item) => item.id)).toEqual([]);
   });
 
