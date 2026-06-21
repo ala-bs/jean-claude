@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { BUILTIN_SNIPPETS, BUILTIN_SNIPPET_IDS } from '@/lib/builtin-snippets';
 import type {
   AiGenerationSetting,
+  AppearanceSetting,
   BackendDefaultModelsSetting,
   BackendModelPresetsSetting,
   AiSkillSlotsSetting,
@@ -188,6 +189,36 @@ export function useCompletionSetting() {
 // Convenience hooks for usage display setting
 export function useUsageDisplaySetting() {
   return useSetting('usageDisplay');
+}
+
+export function useAppearanceSetting() {
+  return useSetting('appearance');
+}
+
+export function useUpdateAppearanceSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: AppearanceSetting) =>
+      api.settings.set('appearance', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'appearance'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const hadPrevious = queryClient.getQueryData(queryKey) !== undefined;
+      const previous = queryClient.getQueryData<AppearanceSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { hadPrevious, previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.hadPrevious) {
+        queryClient.setQueryData(['settings', 'appearance'], context.previous);
+      } else {
+        queryClient.removeQueries({ queryKey: ['settings', 'appearance'] });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'appearance'] });
+    },
+  });
 }
 
 export function useUpdateUsageDisplaySetting() {

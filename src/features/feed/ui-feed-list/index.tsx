@@ -829,7 +829,7 @@ function PrReviewCarouselCard({
     item.pullRequestId,
   );
   const title = cachedPr?.title ?? item.title;
-  const isDraft = cachedPr?.isDraft ?? item.isDraft;
+  const isDraft = cachedPr?.isDraft ?? item.isDraft ?? false;
   const ownerName =
     cachedPr?.createdBy.displayName ?? item.subtitle ?? item.ownerName ?? '';
   const isHighPriority = project.priority === 'high';
@@ -879,7 +879,7 @@ function PrReviewCarouselCard({
             {stateLabel}
           </span>
           {isDraft && (
-            <span className="border-glass-border text-ink-3 rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wide">
+            <span className="rounded bg-amber-300 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wide text-amber-950 ring-1 ring-amber-100/70">
               Draft
             </span>
           )}

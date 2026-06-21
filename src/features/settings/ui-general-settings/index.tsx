@@ -36,6 +36,7 @@ import {
 import {
   getEditorLabel,
   useBackendDefaultModelsSetting,
+  useAppearanceSetting,
   useBackendsSetting,
   useCalendarNotificationsSetting,
   useEditorAutomationSetting,
@@ -45,6 +46,7 @@ import {
   useThinkingSettingsSetting,
   useUpdateBackendsSetting,
   useUpdateBackendDefaultModelsSetting,
+  useUpdateAppearanceSetting,
   useUpdateCalendarNotificationsSetting,
   useUpdateEditorAutomationSetting,
   useUpdateEditorSetting,
@@ -145,6 +147,27 @@ const TASK_NOTIFICATION_MODES: Array<{
     description: 'Never show desktop notifications for task events.',
   },
 ];
+
+export function AppearanceSettings() {
+  const { data: appearanceSetting } = useAppearanceSetting();
+  const updateAppearance = useUpdateAppearanceSetting();
+  const reduceMotion = appearanceSetting?.reduceMotion ?? true;
+
+  return (
+    <div className="space-y-4">
+      <div className="border-line-soft bg-bg-0 rounded-lg border px-4 py-3">
+        <Checkbox
+          checked={reduceMotion}
+          onChange={(checked) =>
+            updateAppearance.mutate({ reduceMotion: checked })
+          }
+          label="Reduce motion"
+          description="Use static running and unread indicators instead of animated effects. Helps reduce Electron Helper (GPU) CPU usage."
+        />
+      </div>
+    </div>
+  );
+}
 
 export function EditorSettings() {
   const { data: editorSetting, isLoading } = useEditorSetting();

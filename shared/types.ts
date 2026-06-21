@@ -656,6 +656,10 @@ export interface UsageDisplaySetting {
   copilotToken?: string;
 }
 
+export interface AppearanceSetting {
+  reduceMotion: boolean;
+}
+
 export interface SummaryModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
@@ -865,6 +869,12 @@ function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
   if (obj.copilotToken !== undefined && typeof obj.copilotToken !== 'string')
     return false;
   return true;
+}
+
+function isAppearanceSetting(v: unknown): v is AppearanceSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return typeof obj.reduceMotion === 'boolean';
 }
 
 function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
@@ -1161,6 +1171,12 @@ export const SETTINGS_DEFINITIONS = {
       copilotToken: '',
     } as UsageDisplaySetting,
     validate: isUsageDisplaySetting,
+  },
+  appearance: {
+    defaultValue: {
+      reduceMotion: true,
+    } as AppearanceSetting,
+    validate: isAppearanceSetting,
   },
   summaryModels: {
     defaultValue: {

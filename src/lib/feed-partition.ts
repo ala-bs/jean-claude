@@ -158,7 +158,6 @@ export function partitionFeedItems({
       high.push(item);
     } else if (
       item.source === 'pull-request' &&
-      !item.isDraft &&
       PR_REVIEW_ATTENTIONS.has(item.attention)
     ) {
       prReviews.push(item);
