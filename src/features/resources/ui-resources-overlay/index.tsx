@@ -44,6 +44,37 @@ function formatCompactBytes(bytes: number): string {
   return formatBytes(bytes).replace(' ', '');
 }
 
+function snapshotRootKey(snapshot: AgentResourceSnapshot): string {
+  return snapshot.rootPid === null
+    ? `step:${snapshot.stepId}`
+    : `pid:${snapshot.rootPid}`;
+}
+
+function getUniqueProcessSamples(snapshots: AgentResourceSnapshot[]) {
+  const latestByRoot = new Map<string, AgentResourceSnapshot>();
+
+  for (const snapshot of snapshots) {
+    const key = snapshotRootKey(snapshot);
+    const existing = latestByRoot.get(key);
+    if (
+      existing === undefined ||
+      Date.parse(snapshot.sampledAt) > Date.parse(existing.sampledAt)
+    ) {
+      latestByRoot.set(key, snapshot);
+    }
+  }
+
+  const totals = Array.from(latestByRoot.values()).reduce(
+    (acc, snapshot) => ({
+      cpu: acc.cpu + snapshot.cpuPercent,
+      rss: acc.rss + snapshot.rssBytes,
+    }),
+    { cpu: 0, rss: 0 },
+  );
+
+  return { latestByRoot, totals };
+}
+
 function sparkPath(values: number[], width: number, height: number) {
   if (values.length === 0) return '';
   const max = Math.max(...values, 1);
@@ -231,13 +262,17 @@ function Gauge({
 
 function SessionRow({
   history,
+  rootCpu,
   snapshot,
+  sharedRootCount,
   stepName,
   taskName,
   totalCpu,
 }: {
   snapshot: AgentResourceSnapshot;
   history: AgentResourceSample[];
+  rootCpu: number;
+  sharedRootCount: number;
   taskName: string;
   stepName: string;
   totalCpu: number;
@@ -245,7 +280,8 @@ function SessionRow({
   const samples = history.length > 0 ? history : [snapshot];
   const cpuValues = samples.map((sample) => sample.cpuPercent);
   const rssValues = samples.map((sample) => sample.rssBytes);
-  const loadShare = totalCpu > 0 ? (snapshot.cpuPercent / totalCpu) * 100 : 0;
+  const attributedCpu = rootCpu / sharedRootCount;
+  const loadShare = totalCpu > 0 ? (attributedCpu / totalCpu) * 100 : 0;
 
   return (
     <div className="grid items-center gap-4 border-t border-white/7 px-1 py-3 lg:grid-cols-[minmax(0,1fr)_84px_132px_84px_132px_56px]">
@@ -262,6 +298,7 @@ function SessionRow({
         <div className="text-ink-4 mt-1 ml-3.5 truncate text-[10px]">
           {stepName} · PID {snapshot.rootPid ?? '?'} · {snapshot.pids.length}{' '}
           pids · {formatElapsed(snapshot.sampledAt)}
+          {sharedRootCount > 1 ? ` · shared by ${sharedRootCount}` : ''}
         </div>
         <div className="mt-2 ml-3.5 max-w-60">
           <LoadBar
@@ -376,14 +413,24 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
     })),
   });
 
-  const totalCpu = supportedSnapshots.reduce(
-    (sum, snapshot) => sum + snapshot.cpuPercent,
-    0,
+  const rootSessionCounts = useMemo(
+    () =>
+      supportedSnapshots.reduce((counts, snapshot) => {
+        const key = snapshotRootKey(snapshot);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        return counts;
+      }, new Map<string, number>()),
+    [supportedSnapshots],
   );
-  const totalRss = supportedSnapshots.reduce(
-    (sum, snapshot) => sum + snapshot.rssBytes,
-    0,
+  const uniqueProcessSamples = useMemo(
+    () => getUniqueProcessSamples(supportedSnapshots),
+    [supportedSnapshots],
   );
+  const totalCpu = uniqueProcessSamples.totals.cpu;
+  const totalRss = uniqueProcessSamples.totals.rss;
+  const sharedRootCount = Array.from(rootSessionCounts.values()).filter(
+    (count) => count > 1,
+  ).length;
   const appCpu = memory
     ? memory.mainProcess.cpuPercent + memory.rendererProcess.cpuPercent
     : 0;
@@ -474,6 +521,13 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
                       {formatNumber(supportedSnapshots.length)}
                     </span>{' '}
                     sessions
+                    {sharedRootCount > 0 ? (
+                      <span className="text-ink-4">
+                        {' '}
+                        · {formatNumber(sharedRootCount)} shared PID
+                        {sharedRootCount === 1 ? '' : 's'}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
 
@@ -575,7 +629,7 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
                     Running agent sessions
                   </span>
                   <span className="text-ink-4 text-xs">
-                    bars show share of total agent CPU
+                    totals count each shared PID once
                   </span>
                 </div>
 
@@ -603,6 +657,14 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
                         key={snapshot.stepId}
                         snapshot={snapshot}
                         history={historyByStepId[snapshot.stepId] ?? []}
+                        rootCpu={
+                          uniqueProcessSamples.latestByRoot.get(
+                            snapshotRootKey(snapshot),
+                          )?.cpuPercent ?? snapshot.cpuPercent
+                        }
+                        sharedRootCount={
+                          rootSessionCounts.get(snapshotRootKey(snapshot)) ?? 1
+                        }
                         taskName={
                           taskQueries[index]?.data?.name ?? snapshot.taskId
                         }
