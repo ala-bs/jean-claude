@@ -124,7 +124,7 @@ describe('CodexBackend', () => {
       threadId: 'thread-1',
       input: [
         { type: 'text', text: 'Read this' },
-        { type: 'image', data: 'base64-data', mimeType: 'image/png' },
+        { type: 'image', url: 'data:image/png;base64,base64-data' },
         { type: 'text', text: 'Attached file: /tmp/file.txt' },
       ],
       model: 'gpt-5',

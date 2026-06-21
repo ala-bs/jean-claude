@@ -410,7 +410,9 @@ function partsToCodexInput(parts: PromptPart[]): unknown[] {
   return parts.flatMap<unknown>((part) => {
     if (part.type === 'text') return [{ type: 'text', text: part.text }];
     if (part.type === 'image') {
-      return [{ type: 'image', data: part.data, mimeType: part.mimeType }];
+      return [
+        { type: 'image', url: `data:${part.mimeType};base64,${part.data}` },
+      ];
     }
     return [{ type: 'text', text: `Attached file: ${part.filePath}` }];
   });
