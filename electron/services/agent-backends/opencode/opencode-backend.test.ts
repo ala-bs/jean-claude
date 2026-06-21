@@ -1,13 +1,14 @@
 import { EventEmitter } from 'node:events';
 
 import type { AssistantMessage, Part } from '@opencode-ai/sdk/v2';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, AgentTaskContext } from '@shared/agent-backend-types';
 
 const createOpencodeClientMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const settingsGetMock = vi.hoisted(() => vi.fn());
 
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
@@ -23,6 +24,9 @@ vi.mock('../../../database/repositories', () => ({
   RawMessageRepository: {
     compactOpenCodeRawMessagesForTask: vi.fn(),
   },
+  SettingsRepository: {
+    get: settingsGetMock,
+  },
 }));
 
 vi.mock('../../../lib/debug', () => ({
@@ -32,14 +36,29 @@ vi.mock('../../../lib/debug', () => ({
   },
 }));
 
-import { OpenCodeBackend } from './opencode-backend';
+import {
+  killAllOpenCodeServersSync,
+  OpenCodeBackend,
+} from './opencode-backend';
 import { applyDeltaToMessageParts } from './opencode-message-delta';
 
-afterEach(() => {
+beforeEach(() => {
+  settingsGetMock.mockResolvedValue({ mode: 'standalone' });
+});
+
+afterEach(async () => {
+  await new OpenCodeBackend({
+    taskId: 'cleanup-task',
+    sessionStartIndex: 0,
+    persistRaw: vi.fn(async () => 'raw-cleanup'),
+  }).dispose();
+  killAllOpenCodeServersSync();
   createOpencodeClientMock.mockReset();
   spawnMock.mockReset();
   spawnSyncMock.mockReset();
+  settingsGetMock.mockReset();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function createMockProcess(pid = 1234) {
@@ -64,12 +83,12 @@ function mockOpencodeServer(client: unknown, pid = 1234) {
   const proc = createMockProcess(pid);
   spawnMock.mockReturnValue(proc);
   createOpencodeClientMock.mockReturnValue(client);
-  queueMicrotask(() => {
+  setTimeout(() => {
     proc.stdout.emit(
       'data',
       Buffer.from('opencode server listening on http://127.0.0.1:4321\n'),
     );
-  });
+  }, 0);
   return proc;
 }
 
@@ -181,6 +200,234 @@ describe('OpenCodeBackend event stream', () => {
       ),
     ).rejects.toThrow('session create failed');
 
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-1234, 'SIGTERM');
+    }
+  });
+
+  it('kills tracked OpenCode servers during sync process cleanup', async () => {
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        create: vi.fn(async () => ({ data: { id: 'session-1' } })),
+      },
+    };
+    mockOpencodeServer(client, 2468);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    await backend.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'hi' }],
+    );
+
+    killAllOpenCodeServersSync();
+
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        'taskkill',
+        ['/pid', '2468', '/T', '/F'],
+        { windowsHide: true },
+      );
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-2468, 'SIGTERM');
+    }
+  });
+
+  it('reuses shared server and closes it after idle timeout', async () => {
+    settingsGetMock.mockResolvedValue({ mode: 'shared' });
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi
+          .fn()
+          .mockResolvedValueOnce({ data: { id: 'session-1' } })
+          .mockResolvedValueOnce({ data: { id: 'session-2' } }),
+      },
+    };
+    mockOpencodeServer(client, 4321);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const session1 = await backend.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'hi' }],
+    );
+    const session2 = await backend.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'again' }],
+    );
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(session1.rootPid).toBe(4321);
+    expect(session2.rootPid).toBe(4321);
+    vi.useFakeTimers();
+    await backend.stop(session1.sessionId);
+    await backend.stop(session2.sessionId);
+    expect(processKill).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-4321, 'SIGTERM');
+    }
+  });
+
+  it('keeps failed shared startup alive until idle timeout', async () => {
+    settingsGetMock.mockResolvedValue({ mode: 'shared' });
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    vi.useFakeTimers();
+    const client = {
+      session: {
+        create: vi.fn(async () => {
+          throw new Error('session create failed');
+        }),
+      },
+    };
+    mockOpencodeServer(client, 4321);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const startPromise = backend.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'hi' }],
+    );
+    const startExpectation = expect(startPromise).rejects.toThrow(
+      'session create failed',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await startExpectation;
+
+    expect(processKill).not.toHaveBeenCalled();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-4321, 'SIGTERM');
+    }
+  });
+
+  it('does not close shared server when another backend instance has active sessions', async () => {
+    settingsGetMock.mockResolvedValue({ mode: 'shared' });
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi
+          .fn()
+          .mockResolvedValueOnce({ data: { id: 'session-1' } })
+          .mockResolvedValueOnce({ data: { id: 'session-2' } }),
+      },
+    };
+    mockOpencodeServer(client, 4321);
+    const backend1 = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const backend2 = new OpenCodeBackend({
+      taskId: 'task-2',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-2'),
+    });
+
+    await backend1.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'one' }],
+    );
+    const session2 = await backend2.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'two' }],
+    );
+
+    await backend1.dispose();
+    expect(processKill).not.toHaveBeenCalled();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+
+    await backend2.stop(session2.sessionId);
+    await backend2.dispose();
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-4321, 'SIGTERM');
+    }
+  });
+
+  it('uses standalone server for runtime MCP even when shared mode is enabled', async () => {
+    settingsGetMock.mockResolvedValue({ mode: 'shared' });
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi.fn(async () => ({ data: { id: 'session-1' } })),
+      },
+    };
+    mockOpencodeServer(client, 1234);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const session = await backend.start(
+      {
+        type: 'opencode',
+        cwd: '/tmp/project',
+        interactionMode: 'auto',
+        mcpServers: {
+          docs: { command: 'node', args: ['server.js'] },
+        },
+      },
+      [{ type: 'text', text: 'hi' }],
+    );
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'opencode',
+      ['serve', '--hostname=127.0.0.1', '--port=0'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            mcp: {
+              docs: {
+                type: 'local',
+                command: ['node', 'server.js'],
+                enabled: true,
+                timeout: 30 * 60 * 1000,
+              },
+            },
+          }),
+        }),
+      }),
+    );
+
+    await backend.stop(session.sessionId);
     if (process.platform === 'win32') {
       expect(spawnSyncMock).toHaveBeenCalledOnce();
     } else {

@@ -43,7 +43,10 @@ import { AgentsSettings } from '@/features/settings/ui-agents-settings';
 import { AiGenerationSettings } from '@/features/settings/ui-ai-generation-settings';
 import { AutocompleteSettings } from '@/features/settings/ui-autocomplete-settings';
 import { AzureDevOpsTab } from '@/features/settings/ui-azure-devops-tab';
-import { BackendConfigSettings } from '@/features/settings/ui-backend-config-settings';
+import {
+  BackendConfigSettings,
+  OpenCodeProcessModeSettings,
+} from '@/features/settings/ui-backend-config-settings';
 import { DebugDatabase } from '@/features/settings/ui-debug-database';
 import {
   EditorSettings,
@@ -138,6 +141,7 @@ function getGlobalSections(): GlobalSection[] {
       subtitle: 'Backends, thinking defaults, and model presets',
       subs: [
         { id: 'presets', label: 'Model Presets' },
+        { id: 'process-mode', label: 'Process Mode' },
         { id: 'prompt-preface', label: 'Prompt Preface' },
         { id: 'rate-limit-swap', label: 'Rate Limit Swap' },
         { id: 'claude-code', label: 'Claude Code', layout: 'fill' },
@@ -398,6 +402,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
       label: 'Agents',
       items: [
         globalLeaf('coding-agents', 'presets', 'Defaults'),
+        globalLeaf('coding-agents', 'process-mode', 'Process Mode'),
         globalLeaf('coding-agents', 'claude-code', 'Claude Code'),
         globalLeaf('coding-agents', 'opencode', 'OpenCode'),
         globalLeaf('coding-agents', 'codex', 'Codex'),
@@ -596,6 +601,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
     switch (subId) {
       case 'prompt-preface':
         return 'Reusable instructions injected into coding agent prompts.';
+      case 'process-mode':
+        return 'Choose how OpenCode server processes are managed for new steps.';
     }
   }
   return '';
@@ -627,6 +634,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <AgentsSettings />;
       case 'coding-agents:presets':
         return <ModelPresetsSettings />;
+      case 'coding-agents:process-mode':
+        return <OpenCodeProcessModeSettings />;
       case 'coding-agents:prompt-preface':
         return <PromptPrefaceSettings />;
       case 'coding-agents:rate-limit-swap':

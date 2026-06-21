@@ -2,8 +2,8 @@
 // Wraps the @opencode-ai/sdk client into the common AgentBackend interface.
 //
 // Architecture:
-// - Uses createOpencode() to spawn a dedicated server + client per session
-// - Per-session servers make process resource tracking and cleanup precise
+// - Uses dedicated per-session servers by default for precise resource tracking
+// - Can use a shared server when users prefer lower process overhead
 // - Events received via SSE subscription, filtered by session ID
 // - Permissions handled via client.permission.reply()
 // - Sessions created via client.session.create() + client.session.prompt()
@@ -40,7 +40,10 @@ import type { TokenUsage } from '@shared/normalized-message-v2';
 import type { InteractionMode } from '@shared/types';
 
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
-import { RawMessageRepository } from '../../../database/repositories';
+import {
+  RawMessageRepository,
+  SettingsRepository,
+} from '../../../database/repositories';
 import { dbg } from '../../../lib/debug';
 import { calculateTheoreticalOpenCodeCost } from '../../backend-models-service';
 import {
@@ -65,9 +68,13 @@ interface ServerHandle {
 
 type RuntimeMcpServers = NonNullable<AgentBackendConfig['mcpServers']>;
 const RUNTIME_MCP_TIMEOUT_MS = 30 * 60 * 1000;
+const SHARED_SERVER_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 let serverInstance: ServerHandle | null = null;
 let serverInitPromise: Promise<ServerHandle> | null = null;
+let sharedServerSessionCount = 0;
+let sharedServerIdleCloseTimer: ReturnType<typeof setTimeout> | null = null;
+const trackedOpenCodeServerPids = new Set<number>();
 
 type OpencodeServerConfig = {
   mcp?: ReturnType<typeof toOpenCodeMcpConfig>;
@@ -83,6 +90,7 @@ function getServerPid(server: ServerHandle['server']): number | undefined {
  * Singleton — only one server per app instance.
  */
 export async function getOrCreateServer(): Promise<ServerHandle> {
+  cancelSharedServerIdleClose();
   if (serverInstance) return serverInstance;
 
   if (serverInitPromise) {
@@ -109,6 +117,49 @@ export async function getOrCreateServer(): Promise<ServerHandle> {
   })();
 
   return (await serverInitPromise)!;
+}
+
+async function acquireSharedServer(): Promise<ServerHandle> {
+  const server = await getOrCreateServer();
+  sharedServerSessionCount += 1;
+  return server;
+}
+
+function releaseSharedServer(): void {
+  sharedServerSessionCount = Math.max(0, sharedServerSessionCount - 1);
+  if (sharedServerSessionCount > 0 || !serverInstance) return;
+
+  cancelSharedServerIdleClose();
+  sharedServerIdleCloseTimer = setTimeout(() => {
+    if (sharedServerSessionCount > 0 || !serverInstance) return;
+    dbg.agent('Closing idle shared OpenCode server');
+    serverInstance.server.close();
+    serverInstance = null;
+    serverInitPromise = null;
+    sharedServerIdleCloseTimer = null;
+  }, SHARED_SERVER_IDLE_TIMEOUT_MS);
+}
+
+async function closeSharedServerIfIdleNow(): Promise<void> {
+  if (serverInitPromise) {
+    await serverInitPromise.catch(() => null);
+  }
+  if (sharedServerSessionCount > 0 || !serverInstance) return;
+  dbg.agent('Shutting down idle OpenCode server');
+  cancelSharedServerIdleClose();
+  serverInstance.server.close();
+  serverInstance = null;
+  serverInitPromise = null;
+}
+
+export async function closeIdleOpenCodeSharedServerNow(): Promise<void> {
+  await closeSharedServerIfIdleNow();
+}
+
+function cancelSharedServerIdleClose(): void {
+  if (!sharedServerIdleCloseTimer) return;
+  clearTimeout(sharedServerIdleCloseTimer);
+  sharedServerIdleCloseTimer = null;
 }
 
 function toOpenCodeMcpConfig(runtimeMcpServers: RuntimeMcpServers): {
@@ -181,6 +232,11 @@ async function createOpencodeServerHandle(options: {
       },
     },
   );
+  if (typeof proc.pid === 'number') {
+    const pid = proc.pid;
+    trackedOpenCodeServerPids.add(pid);
+    proc.once('exit', () => trackedOpenCodeServerPids.delete(pid));
+  }
 
   const url = await waitForOpencodeServerUrl(proc, options.timeout);
   const removeLogDrains = attachOpencodeLogDrains(proc);
@@ -303,6 +359,29 @@ function stopOpencodeProcess(proc: ChildProcessWithoutNullStreams): void {
   proc.kill();
 }
 
+export function killAllOpenCodeServersSync(): void {
+  for (const pid of trackedOpenCodeServerPids) {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        windowsHide: true,
+      });
+      continue;
+    }
+    try {
+      process.kill(-pid, 'SIGTERM');
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      try {
+        process.kill(pid, 'SIGTERM');
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Process may already be dead.
+      }
+    }
+  }
+  trackedOpenCodeServerPids.clear();
+}
+
 // --- Backend deps (injected by agent-service for raw persistence) ---
 
 // --- Session tracking ---
@@ -393,7 +472,7 @@ export class OpenCodeBackend implements AgentBackend {
     parts: PromptPart[],
   ): Promise<AgentSession> {
     dbg.agent(
-      'OpenCodeBackend.start() — cwd: %s, sessionId: %s, model: %s, mode: %s, dedicatedServer: true, mcpServerCount: %d',
+      'OpenCodeBackend.start() — cwd: %s, sessionId: %s, model: %s, mode: %s, mcpServerCount: %d',
       config.cwd,
       config.sessionId ?? '(new)',
       config.model ?? '(default)',
@@ -401,12 +480,23 @@ export class OpenCodeBackend implements AgentBackend {
       Object.keys(config.mcpServers ?? {}).length,
     );
 
-    const serverHandle = await createDedicatedServer(config);
+    const processSetting = await SettingsRepository.get('opencodeProcess');
+    const hasRuntimeMcpServers =
+      Object.keys(config.mcpServers ?? {}).length > 0;
+    const useSharedServer =
+      processSetting.mode === 'shared' && !hasRuntimeMcpServers;
+    const serverHandle = useSharedServer
+      ? await acquireSharedServer()
+      : await createDedicatedServer(config);
     const { client } = serverHandle;
 
     dbg.agent(
-      'OpenCodeBackend.start() — server ready at %s',
+      'OpenCodeBackend.start() — %s server ready at %s%s',
+      useSharedServer ? 'shared' : 'standalone',
       serverHandle.server.url,
+      processSetting.mode === 'shared' && hasRuntimeMcpServers
+        ? ' (shared disabled by runtime MCP servers)'
+        : '',
     );
 
     // Create or resume an OpenCode session
@@ -443,7 +533,11 @@ export class OpenCodeBackend implements AgentBackend {
         session = await this.createSession(client, config);
       }
     } catch (error) {
-      serverHandle.server.close();
+      if (useSharedServer) {
+        releaseSharedServer();
+      } else {
+        serverHandle.server.close();
+      }
       throw error;
     }
 
@@ -478,7 +572,7 @@ export class OpenCodeBackend implements AgentBackend {
       emittedQuestionRequestIds: new Set(),
       permissionRules: config.permissionRules ?? [],
       serverHandle,
-      ownsServerHandle: true,
+      ownsServerHandle: !useSharedServer,
       serverClosed: false,
     };
 
@@ -611,13 +705,7 @@ export class OpenCodeBackend implements AgentBackend {
       await this.stop(sessionId);
     }
 
-    // Shut down the server
-    if (serverInstance) {
-      dbg.agent('Shutting down OpenCode server');
-      serverInstance.server.close();
-      serverInstance = null;
-      serverInitPromise = null;
-    }
+    await closeSharedServerIfIdleNow();
   }
 
   // --- Private helpers ---
@@ -1121,6 +1209,10 @@ export class OpenCodeBackend implements AgentBackend {
 
   private closeDedicatedServer(state: OpenCodeSessionState): void {
     if (!state.ownsServerHandle || state.serverClosed) {
+      if (!state.ownsServerHandle && !state.serverClosed) {
+        releaseSharedServer();
+        state.serverClosed = true;
+      }
       return;
     }
     state.serverHandle.server.close();

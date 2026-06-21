@@ -6,6 +6,10 @@ import fixPath from 'fix-path';
 import { migrateDatabase } from './database';
 import { registerIpcHandlers } from './ipc/handlers';
 import { dbg } from './lib/debug';
+import {
+  closeIdleOpenCodeSharedServerNow,
+  killAllOpenCodeServersSync,
+} from './services/agent-backends/opencode/opencode-backend';
 import { agentService } from './services/agent-service';
 import {
   decodeProxyUrl,
@@ -361,19 +365,66 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('before-quit', async () => {
-  dbg.main('App quitting, stopping all commands...');
+let isQuittingAfterCleanup = false;
+const QUIT_CLEANUP_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Quit cleanup timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
+}
+
+app.on('before-quit', (event) => {
+  if (isQuittingAfterCleanup) return;
+
+  event.preventDefault();
+  isQuittingAfterCleanup = true;
+
+  void (async () => {
+    try {
+      await withTimeout(
+        (async () => {
+          dbg.main('App quitting, stopping agents and commands...');
+          await agentService.stopAll({ reason: 'shutdown' });
+          dbg.main('All agents stopped');
+          await closeIdleOpenCodeSharedServerNow();
+          dbg.main('Idle shared OpenCode server stopped');
+          await runCommandService.stopAllCommands();
+          dbg.main('All commands stopped');
+        })(),
+        QUIT_CLEANUP_TIMEOUT_MS,
+      );
+    } catch (error) {
+      dbg.main('Error during quit cleanup: %O', error);
+      runCommandService.killAllProcessGroupsSync();
+      killAllOpenCodeServersSync();
+    } finally {
+      app.quit();
+    }
+  })();
+
   systemCalendarService.stop();
   pipelineTrackingService.stop();
   rawMessageCleanupService.stop();
-  await runCommandService.stopAllCommands();
-  dbg.main('All commands stopped');
 });
 
 // Synchronous last-resort cleanup: kill all process groups when the Node.js
 // process exits (covers SIGINT, SIGTERM, uncaught exceptions — not kill -9).
 process.on('exit', () => {
   runCommandService.killAllProcessGroupsSync();
+  killAllOpenCodeServersSync();
 });
 
 app.on('window-all-closed', () => {

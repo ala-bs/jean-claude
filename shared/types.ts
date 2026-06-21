@@ -668,6 +668,12 @@ export interface BackendDefaultModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
+export type OpenCodeProcessMode = 'standalone' | 'shared';
+
+export interface OpenCodeProcessSetting {
+  mode: OpenCodeProcessMode;
+}
+
 export interface RateLimitSwapEntry {
   backend: AgentBackendType;
   model?: ModelPreference;
@@ -893,6 +899,12 @@ function isBackendDefaultModelsSetting(
   if (!obj.models || typeof obj.models !== 'object') return false;
   const models = obj.models as Record<string, unknown>;
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+}
+
+function isOpenCodeProcessSetting(v: unknown): v is OpenCodeProcessSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return obj.mode === 'standalone' || obj.mode === 'shared';
 }
 
 function isRateLimitSwapSetting(value: unknown): value is RateLimitSwapSetting {
@@ -1207,6 +1219,12 @@ export const SETTINGS_DEFINITIONS = {
       },
     } as BackendDefaultModelsSetting,
     validate: isBackendDefaultModelsSetting,
+  },
+  opencodeProcess: {
+    defaultValue: {
+      mode: 'standalone',
+    } as OpenCodeProcessSetting,
+    validate: isOpenCodeProcessSetting,
   },
   rateLimitSwap: {
     defaultValue: {

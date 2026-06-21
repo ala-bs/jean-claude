@@ -14,9 +14,11 @@ import {
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
 import { Textarea } from '@/common/ui/textarea';
+import { useSetting, useUpdateSetting } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import type { OpenCodeProcessMode } from '@shared/types';
 
 type ConfigObject = Record<string, unknown>;
 
@@ -66,6 +68,23 @@ const BACKEND_META: Record<
     userPath: '~/.codex/config.toml',
   },
 };
+
+const OPENCODE_PROCESS_OPTIONS = [
+  {
+    value: 'standalone',
+    label: 'Standalone per task step',
+    description: 'Best resource tracking; more process overhead.',
+  },
+  {
+    value: 'shared',
+    label: 'Shared app server',
+    description: 'Lower overhead; resource usage attributed less precisely.',
+  },
+] satisfies Array<{
+  value: OpenCodeProcessMode;
+  label: string;
+  description: string;
+}>;
 
 const CLAUDE_FIELDS: ConfigField[] = [
   {
@@ -1638,6 +1657,45 @@ function FieldCard({
       )}
 
       {error && <div className="mt-1.5 text-[11px] text-red-300">{error}</div>}
+    </div>
+  );
+}
+
+export function OpenCodeProcessModeSettings() {
+  const setting = useSetting('opencodeProcess');
+  const updateSetting = useUpdateSetting<'opencodeProcess'>();
+  const addToast = useToastStore((s) => s.addToast);
+  const value = setting.data?.mode ?? 'standalone';
+
+  return (
+    <div className="border-line-soft bg-bg-1/60 mt-3 rounded-lg border p-3">
+      <div className="text-ink-1 text-xs font-semibold">Process mode</div>
+      <p className="text-ink-3 mt-1 text-[11px]">
+        Applies to new OpenCode steps. Standalone enables per-step resource
+        usage tracking. Shared reduces OpenCode server overhead, but shared
+        server usage may appear under multiple OpenCode steps. Steps with
+        runtime MCP servers still use standalone.
+      </p>
+      <div className="mt-2 max-w-sm">
+        <Select
+          value={value}
+          disabled={setting.isLoading || updateSetting.isPending}
+          onChange={(mode) =>
+            updateSetting.mutate(
+              {
+                key: 'opencodeProcess',
+                value: { mode: mode as OpenCodeProcessMode },
+              },
+              {
+                onError: (error) => {
+                  addToast({ message: formatError(error), type: 'error' });
+                },
+              },
+            )
+          }
+          options={OPENCODE_PROCESS_OPTIONS}
+        />
+      </div>
     </div>
   );
 }

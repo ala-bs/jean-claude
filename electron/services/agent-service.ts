@@ -11,6 +11,7 @@ import type {
   AgentBackend,
   AgentBackendType,
   AgentEvent,
+  AgentSession,
   NormalizedPermissionRequest,
   NormalizedQuestion,
   NormalizedQuestionRequest,
@@ -230,6 +231,7 @@ interface ActiveSession {
   taskId: string; // kept for worktree/project lookups
   projectId: string;
   backendSessionId: string | null; // The session ID from the backend
+  backendStartPromise?: Promise<AgentSession>;
   sdkSessionId: string | null; // The persistent session ID for resumption
   backendType: AgentBackendType;
   usageFeature: AiUsageFeature;
@@ -744,7 +746,7 @@ class AgentService {
       }
     }
 
-    const agentSession = await session.backend.start(
+    session.backendStartPromise = session.backend.start(
       {
         type: session.backendType,
         cwd: workingDir,
@@ -770,8 +772,10 @@ class AgentService {
       },
       effectiveParts,
     );
+    const agentSession = await session.backendStartPromise;
 
     session.backendSessionId = agentSession.sessionId;
+    session.backendStartPromise = undefined;
 
     // Process the event stream
     agentResourceMonitorService.start({
@@ -1359,7 +1363,10 @@ class AgentService {
     }
   }
 
-  async stop(stepId: string): Promise<void> {
+  async stop(
+    stepId: string,
+    options: { reason?: 'user' | 'shutdown' } = {},
+  ): Promise<void> {
     dbg.agentSession('Stopping step %s', stepId);
 
     const session = this.sessions.get(stepId);
@@ -1389,30 +1396,66 @@ class AgentService {
 
     session.abortController.abort();
 
-    // Stop the backend
-    if (session.backendSessionId) {
-      await session.backend.stop(session.backendSessionId);
+    // Stop the backend even if stop races with backend startup completing.
+    const backendSessionId =
+      session.backendSessionId ??
+      (await session.backendStartPromise
+        ?.then((agentSession) => agentSession.sessionId)
+        .catch((error) => {
+          dbg.agentSession(
+            'Backend startup for step %s failed while stopping: %O',
+            stepId,
+            error,
+          );
+          return null;
+        })) ??
+      null;
+    if (backendSessionId) {
+      await session.backend.stop(backendSessionId);
     }
     await agentResourceMonitorService.stop(stepId);
 
-    // Emit a custom interruption entry
-    await this.persistAndEmitSyntheticEntry(taskId, session, {
-      id: nanoid(),
-      date: new Date().toISOString(),
-      isSynthetic: true,
-      type: 'result',
-      value: 'Task interrupted by user',
-      isError: true,
-    });
+    if (options.reason !== 'shutdown') {
+      await this.persistAndEmitSyntheticEntry(taskId, session, {
+        id: nanoid(),
+        date: new Date().toISOString(),
+        isSynthetic: true,
+        type: 'result',
+        value: 'Task interrupted by user',
+        isError: true,
+      });
+    }
 
     await StepService.interruptStep(stepId);
     this.emitEvent(taskId, stepId, {
       type: 'status',
       status: 'interrupted',
-      error: 'Stopped by user',
+      error:
+        options.reason === 'shutdown'
+          ? 'Stopped by app shutdown'
+          : 'Stopped by user',
     });
     this.sessions.delete(stepId);
     dbg.agentSession('Step %s stopped and session cleaned up', stepId);
+  }
+
+  async stopAll(options: { reason?: 'user' | 'shutdown' } = {}): Promise<void> {
+    const stepIds = [...this.sessions.keys()];
+    dbg.agentSession('Stopping all active agent sessions (%d)', stepIds.length);
+    const results = await Promise.allSettled(
+      stepIds.map((stepId) => this.stop(stepId, options)),
+    );
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) {
+      dbg.agentSession(
+        'Failed to stop %d active agent sessions during stopAll',
+        failures.length,
+      );
+      throw new Error(
+        `Failed to stop ${failures.length} active agent sessions`,
+      );
+    }
+    dbg.agentSession('All active agent sessions stopped');
   }
 
   async respond(
