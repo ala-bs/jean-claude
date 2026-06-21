@@ -1,24 +1,23 @@
 import {
-  Activity,
   Check,
   ChevronLeft,
   ChevronRight,
   Copy,
+  ExternalLink,
   GitPullRequest,
+  MessageSquareText,
+  Sparkles,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { type CSSProperties, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
-
-
 
 import {
   getWeekRange,
   groupWorkActivityEvents,
 } from '@shared/work-activity-utils';
-import { Button } from '@/common/ui/button';
 import { IconButton } from '@/common/ui/icon-button';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
@@ -26,11 +25,34 @@ import { useToastStore } from '@/stores/toasts';
 import { useWorkActivity } from '@/hooks/use-work-activity';
 import type { WorkActivityEvent } from '@shared/work-activity-types';
 
-
+const PROJECT_COLORS = [
+  'oklch(0.78 0.16 205)',
+  'oklch(0.78 0.16 155)',
+  'oklch(0.78 0.16 75)',
+  'oklch(0.74 0.19 295)',
+  'oklch(0.74 0.18 25)',
+  'oklch(0.8 0.14 245)',
+  'oklch(0.82 0.13 330)',
+  'oklch(0.76 0.14 180)',
+  'oklch(0.84 0.12 110)',
+  'oklch(0.7 0.16 20)',
+  'oklch(0.78 0.15 285)',
+  'oklch(0.8 0.13 230)',
+];
 
 const dayFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: 'short',
   month: 'short',
+  day: 'numeric',
+  timeZone: 'UTC',
+});
+
+const shortDayFormatter = new Intl.DateTimeFormat(undefined, {
+  weekday: 'short',
+  timeZone: 'UTC',
+});
+
+const dayNumberFormatter = new Intl.DateTimeFormat(undefined, {
   day: 'numeric',
   timeZone: 'UTC',
 });
@@ -57,11 +79,28 @@ function formatDay(date: string) {
   return dayFormatter.format(new Date(`${date}T00:00:00.000Z`));
 }
 
+function formatShortDay(date: string) {
+  return shortDayFormatter.format(new Date(`${date}T00:00:00.000Z`));
+}
+
+function formatDayNumber(date: string) {
+  return dayNumberFormatter.format(new Date(`${date}T00:00:00.000Z`));
+}
+
 function formatWeekLabel(range: { start: string; end: string }) {
   const start = new Date(range.start);
   const end = new Date(range.end);
   end.setUTCDate(end.getUTCDate() - 1);
   return `${weekLabelFormatter.format(start)} - ${weekLabelFormatter.format(end)}`;
+}
+
+function getWeekDays(range: { start: string }) {
+  const start = new Date(range.start);
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(start);
+    date.setUTCDate(start.getUTCDate() + index);
+    return date.toISOString().slice(0, 10);
+  });
 }
 
 function formatEventType(type: WorkActivityEvent['type']) {
@@ -106,19 +145,108 @@ function formatCompactMarkdown(events: WorkActivityEvent[]) {
     .join('\n\n');
 }
 
-function uniqueCount<T>(items: T[]) {
-  return new Set(items.filter(Boolean)).size;
+function hashString(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function projectColor(projectId: string) {
+  return PROJECT_COLORS[hashString(projectId) % PROJECT_COLORS.length];
+}
+
+function wholePercentages(rows: { id: string; count: number }[]) {
+  const active = rows.filter((row) => row.count > 0);
+  const total = active.reduce((sum, row) => sum + row.count, 0);
+  if (total === 0) return new Map<string, number>();
+
+  const units = active.map((row) => {
+    const raw = (row.count / total) * 100;
+    return {
+      id: row.id,
+      value: Math.floor(raw),
+      remainder: raw - Math.floor(raw),
+    };
+  });
+  let left = 100 - units.reduce((sum, unit) => sum + unit.value, 0);
+  for (const unit of [...units].sort((a, b) => b.remainder - a.remainder)) {
+    if (left <= 0) break;
+    unit.value += 1;
+    left -= 1;
+  }
+
+  return new Map(units.map((unit) => [unit.id, unit.value]));
+}
+
+function eventProjectId(event: WorkActivityEvent) {
+  return event.projectId ?? 'unknown-project';
+}
+
+function eventProjectName(event: WorkActivityEvent) {
+  return event.projectName ?? 'Unknown project';
+}
+
+function getDateKey(iso: string) {
+  return new Date(iso).toISOString().slice(0, 10);
+}
+
+function getTodayKey() {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+  )
+    .toISOString()
+    .slice(0, 10);
+}
+
+function formatDayMarkdown(day: string, events: WorkActivityEvent[]) {
+  if (events.length === 0) return `${formatDay(day)}\nNo work activity recorded.`;
+
+  const grouped = groupWorkActivityEvents(events);
+  const lines = [`${formatDay(day)} - ${events.length} events`, ''];
+  for (const project of grouped.flatMap((group) => group.projects)) {
+    lines.push(project.projectName ?? 'Unknown project');
+    for (const workItem of project.workItems) {
+      lines.push(`- ${getWorkItemLabel(workItem.workItemId)}`);
+      for (const event of workItem.events) {
+        lines.push(
+          `  - ${timeFormatter.format(new Date(event.occurredAt))} ${formatEventType(event.type)}: ${getEventLabel(event)}`,
+        );
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+function Dot({ color, glow = false }: { color: string; glow?: boolean }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2">
-      <div className="text-ink-0 text-lg font-semibold tabular-nums">
+    <span
+      className="h-2.5 w-2.5 shrink-0 rounded-full"
+      style={{
+        background: color,
+        boxShadow: glow
+          ? `0 0 0 3px color-mix(in oklch, ${color} 20%, transparent)`
+          : undefined,
+      }}
+    />
+  );
+}
+
+function Percentage({
+  value,
+  className,
+}: {
+  value: number;
+  className?: string;
+}) {
+  return (
+    <div className={clsx('flex items-baseline gap-0.5', className)}>
+      <span className="text-ink-0 text-2xl leading-none font-semibold tabular-nums tracking-[-0.03em]">
         {value}
-      </div>
-      <div className="text-ink-3 text-[11px] font-medium tracking-wide uppercase">
-        {label}
-      </div>
+      </span>
+      <span className="text-ink-3 text-xs font-medium">%</span>
     </div>
   );
 }
@@ -127,26 +255,118 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
   const layer = useKeyboardLayer('dialog', { exclusive: true });
   const addToast = useToastStore((state) => state.addToast);
   const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [dayCopied, setDayCopied] = useState(false);
   const [rawCopied, setRawCopied] = useState(false);
   const range = useMemo(
     () => getWeekRange(selectedDate.toISOString()),
     [selectedDate],
   );
+  const weekDays = useMemo(() => getWeekDays(range), [range]);
   const { data: events = [], isLoading, isError } = useWorkActivity(range);
-  const grouped = useMemo(() => groupWorkActivityEvents(events), [events]);
-  const metrics = useMemo(
-    () => ({
-      events: events.length,
-      projects: uniqueCount(events.map((event) => event.projectId)),
-      workItems: uniqueCount(events.flatMap((event) => event.workItemIds)),
-      prs: uniqueCount(
-        events.map((event) => event.pullRequest?.pullRequestId ?? null),
+
+  const sortedEvents = useMemo(
+    () =>
+      [...events].sort((left, right) =>
+        left.occurredAt.localeCompare(right.occurredAt),
       ),
-      tasks: uniqueCount(events.map((event) => event.taskId)),
-    }),
     [events],
   );
+
+  const daySummaries = useMemo(() => {
+    const max = Math.max(
+      1,
+      ...weekDays.map(
+        (day) =>
+          sortedEvents.filter((event) => getDateKey(event.occurredAt) === day)
+            .length,
+      ),
+    );
+
+    return weekDays.map((day) => {
+      const dayEvents = sortedEvents.filter(
+        (event) => getDateKey(event.occurredAt) === day,
+      );
+      const projectCounts = new Map<string, { name: string; count: number }>();
+      for (const event of dayEvents) {
+        const id = eventProjectId(event);
+        const current = projectCounts.get(id) ?? {
+          name: eventProjectName(event),
+          count: 0,
+        };
+        projectCounts.set(id, { ...current, count: current.count + 1 });
+      }
+      const rows = [...projectCounts.entries()]
+        .map(([id, row]) => ({ id, ...row }))
+        .sort((left, right) => right.count - left.count);
+      const percentages = wholePercentages(rows);
+      return {
+        day,
+        events: dayEvents,
+        rows: rows.map((row) => ({
+          ...row,
+          pct: percentages.get(row.id) ?? 0,
+        })),
+        total: dayEvents.length,
+        height: dayEvents.length
+          ? Math.max(12, (dayEvents.length / max) * 100)
+          : 0,
+      };
+    });
+  }, [sortedEvents, weekDays]);
+
+  const selectedSummary = useMemo(
+    () => {
+      if (selectedDay) {
+        return daySummaries.find((summary) => summary.day === selectedDay);
+      }
+
+      const latestWithEvents = [...daySummaries]
+        .reverse()
+        .find((summary) => summary.total > 0);
+      if (latestWithEvents) return latestWithEvents;
+
+      const todayKey = getTodayKey();
+      return (
+        daySummaries.find((summary) => summary.day === todayKey) ??
+        daySummaries.at(-1)
+      );
+    },
+    [daySummaries, selectedDay],
+  );
+
+  const weekProjects = useMemo(() => {
+    const projectCounts = new Map<string, { name: string; count: number }>();
+    for (const event of sortedEvents) {
+      const id = eventProjectId(event);
+      const current = projectCounts.get(id) ?? {
+        name: eventProjectName(event),
+        count: 0,
+      };
+      projectCounts.set(id, { ...current, count: current.count + 1 });
+    }
+    const rows = [...projectCounts.entries()]
+      .map(([id, row]) => ({ id, ...row }))
+      .sort((left, right) => right.count - left.count);
+    const percentages = wholePercentages(rows);
+    return rows.map((row) => ({ ...row, pct: percentages.get(row.id) ?? 0 }));
+  }, [sortedEvents]);
+
+  const projectColors = useMemo(
+    () =>
+      new Map(
+        weekProjects.map((project, index) => [
+          project.id,
+          PROJECT_COLORS[index % PROJECT_COLORS.length],
+        ]),
+      ),
+    [weekProjects],
+  );
+
+  function getProjectColor(projectId: string) {
+    return projectColors.get(projectId) ?? projectColor(projectId);
+  }
 
   useCommands(
     'work-activity-overlay',
@@ -183,203 +403,383 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function copySelectedDay() {
+    if (!selectedSummary) return;
+
+    try {
+      await navigator.clipboard.writeText(
+        formatDayMarkdown(selectedSummary.day, selectedSummary.events),
+      );
+      setDayCopied(true);
+      window.setTimeout(() => setDayCopied(false), 1400);
+      addToast({ type: 'success', message: 'Day activity copied' });
+    } catch {
+      addToast({ type: 'error', message: 'Failed to copy day activity' });
+    }
+  }
+
   return createPortal(
     <FocusLock returnFocus>
       <div
-        className="fixed inset-0 z-[9998] flex items-start justify-center bg-black/55 px-4 pt-[54px] backdrop-blur-md sm:px-6"
+        className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/60 p-4 backdrop-blur-md sm:p-6"
         onClick={onClose}
       >
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="work-activity-title"
-          className="border-glass-border shadow-modal text-ink-0 relative flex h-[min(760px,calc(100vh-70px))] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border bg-[#101018]"
+          className="border-glass-border text-ink-1 relative flex h-[min(720px,calc(100vh-48px))] w-full max-w-[1080px] flex-col overflow-hidden rounded-[20px] border bg-[linear-gradient(180deg,oklch(0.175_0.014_275),oklch(0.135_0.012_275))] shadow-[0_50px_120px_-36px_oklch(0_0_0/0.85),0_0_0_1px_oklch(0_0_0/0.4)]"
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="pointer-events-none absolute -top-28 right-8 h-64 w-64 rounded-full bg-sky-500/15 blur-3xl" />
-          <div className="pointer-events-none absolute top-28 left-12 h-44 w-44 rounded-full bg-emerald-400/10 blur-3xl" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_80%_at_100%_0%,oklch(0.78_0.16_205/0.07),transparent_55%)]" />
 
-          <div className="border-glass-border relative border-b bg-gradient-to-b from-sky-400/10 to-transparent px-4 py-3 sm:px-5">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-300/20 bg-sky-400/15 text-sky-200 shadow-[0_0_30px_rgba(56,189,248,0.18)]">
-                <Activity className="h-4 w-4" />
-              </div>
-              <div className="min-w-[180px] flex-1">
-                <div
-                  id="work-activity-title"
-                  className="text-ink-0 text-base font-semibold tracking-[-0.03em]"
-                >
-                  Work Activity
-                </div>
-                <div className="text-ink-3 text-xs">
-                  Weekly record of task prompts, PR comments, and approvals.
-                </div>
-              </div>
-              <div className="flex items-center gap-1 rounded-xl border border-white/8 bg-black/15 p-1">
-                <IconButton
-                  variant="ghost"
-                  size="sm"
-                  icon={<ChevronLeft />}
-                  tooltip="Previous week"
-                  onClick={() => setSelectedDate((date) => shiftWeek(date, -1))}
-                />
-                <div className="text-ink-1 min-w-32 px-2 text-center text-xs font-semibold tabular-nums">
-                  {formatWeekLabel(range)}
-                </div>
-                <IconButton
-                  variant="ghost"
-                  size="sm"
-                  icon={<ChevronRight />}
-                  tooltip="Next week"
-                  onClick={() => setSelectedDate((date) => shiftWeek(date, 1))}
-                />
-              </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={copyTimesheet}
-                disabled={events.length === 0}
+          <header className="border-line-soft relative flex shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3 sm:flex-nowrap sm:px-6 sm:py-4">
+            <div className="border-status-azure/30 bg-status-azure-soft text-status-azure flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] border">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div className="min-w-[180px] flex-1">
+              <div
+                id="work-activity-title"
+                className="text-ink-0 text-lg leading-tight font-semibold tracking-[-0.02em]"
               >
-                {copied ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-                Copy Timesheet
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={copyRawJson}
-                disabled={events.length === 0}
-              >
-                {rawCopied ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-                Copy JSON
-              </Button>
+                Work Activity
+              </div>
+              <div className="text-ink-3 text-xs">
+                Whole week at a glance - taller means more activity, color is
+                split.
+              </div>
+            </div>
+
+            <div className="border-line-soft flex items-center gap-1 rounded-[11px] border bg-black/25 p-1">
               <IconButton
                 variant="ghost"
                 size="sm"
-                onClick={onClose}
-                icon={<X />}
-                tooltip="Close"
+                icon={<ChevronLeft />}
+                tooltip="Previous week"
+                onClick={() => {
+                  setSelectedDay(null);
+                  setSelectedDate((date) => shiftWeek(date, -1));
+                }}
+              />
+              <div className="text-ink-1 min-w-32 px-2 text-center text-xs font-semibold tabular-nums">
+                {formatWeekLabel(range)}
+              </div>
+              <IconButton
+                variant="ghost"
+                size="sm"
+                icon={<ChevronRight />}
+                tooltip="Next week"
+                onClick={() => {
+                  setSelectedDay(null);
+                  setSelectedDate((date) => shiftWeek(date, 1));
+                }}
               />
             </div>
-          </div>
 
-          <div className="relative min-h-0 flex-1 overflow-auto p-3 sm:p-4">
-            <div className="grid gap-2 sm:grid-cols-5">
-              <Metric label="Events" value={metrics.events} />
-              <Metric label="Projects" value={metrics.projects} />
-              <Metric label="Work items" value={metrics.workItems} />
-              <Metric label="PRs" value={metrics.prs} />
-              <Metric label="Tasks" value={metrics.tasks} />
-            </div>
+            <button
+              type="button"
+              onClick={copyTimesheet}
+              disabled={events.length === 0}
+              className="bg-status-azure text-bg-0 inline-flex h-[38px] items-center gap-2 rounded-[10px] border border-status-azure px-4 text-[13px] font-semibold shadow-[0_8px_24px_-10px_var(--color-status-azure)] transition-colors hover:bg-status-azure/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied ? 'Copied' : 'Copy timesheet'}
+            </button>
+            <button
+              type="button"
+              onClick={copyRawJson}
+              disabled={events.length === 0}
+              className="border-line bg-glass-light text-ink-1 hover:bg-glass-medium inline-flex h-[38px] items-center gap-2 rounded-[10px] border px-4 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {rawCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              JSON
+            </button>
+            <IconButton
+              variant="ghost"
+              size="sm"
+              onClick={onClose}
+              icon={<X />}
+              tooltip="Close"
+              className="border-line-soft bg-glass-light h-9 w-9 rounded-[10px] border"
+            />
+          </header>
 
-            <div className="mt-3 space-y-3">
-              {isLoading ? (
-                <div className="text-ink-3 flex h-56 items-center justify-center rounded-2xl border border-dashed border-white/10 text-sm">
-                  Loading work activity...
-                </div>
-              ) : isError ? (
-                <div className="text-status-fail flex h-56 items-center justify-center rounded-2xl border border-dashed border-red-400/20 text-sm">
-                  Failed to load work activity.
-                </div>
-              ) : grouped.length === 0 ? (
-                <div className="text-ink-3 flex h-56 items-center justify-center rounded-2xl border border-dashed border-white/10 text-sm">
-                  No work activity recorded for this week.
-                </div>
-              ) : (
-                grouped.map((day) => (
-                  <section
-                    key={day.date}
-                    className="rounded-2xl border border-white/10 bg-white/[0.025] p-3"
-                  >
-                    <div className="text-ink-0 mb-3 text-sm font-semibold">
-                      {formatDay(day.date)}
-                    </div>
-                    <div className="space-y-3">
-                      {day.projects.map((project) => (
-                        <div key={project.projectId} className="space-y-2">
-                          <div className="text-ink-2 text-xs font-semibold">
-                            {project.projectName ?? 'Unknown project'}
-                          </div>
-                          <div className="space-y-2">
-                            {project.workItems.map((workItem) => (
+          <div className="relative grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[1fr_340px]">
+            {isLoading || isError || events.length === 0 ? (
+              <div className="col-span-full flex min-h-0 items-center justify-center p-6">
+                <StatePanel
+                  label={
+                    isLoading
+                      ? 'Loading work activity...'
+                      : isError
+                        ? 'Failed to load work activity.'
+                        : 'No work activity recorded this week.'
+                  }
+                  tone={isError ? 'error' : 'muted'}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="border-line-soft flex min-w-0 flex-col border-b p-5 sm:border-r sm:border-b-0 sm:p-6">
+              <div className="grid min-h-[340px] flex-1 grid-cols-7 gap-2.5">
+                {daySummaries.map((summary) => {
+                  const selected = summary.day === selectedSummary?.day;
+                  return (
+                    <button
+                      key={summary.day}
+                      type="button"
+                      aria-label={`Select ${formatDay(summary.day)} (${summary.total} event${summary.total === 1 ? '' : 's'})`}
+                      aria-pressed={selected}
+                      onClick={() => {
+                        setSelectedDay(summary.day);
+                        setDayCopied(false);
+                      }}
+                      className={clsx(
+                        'group flex min-w-0 flex-col items-center gap-2.5 rounded-[13px] border px-1.5 py-3 transition-colors',
+                        selected
+                          ? 'border-line bg-white/[0.055]'
+                          : 'border-transparent hover:bg-white/[0.025]',
+                      )}
+                    >
+                      <div
+                        className={clsx(
+                          'font-mono text-[11px]',
+                          summary.total
+                            ? selected
+                              ? 'text-ink-0'
+                              : 'text-ink-2'
+                            : 'text-ink-4',
+                        )}
+                      >
+                        {summary.total || '-'}
+                      </div>
+                      <div
+                        className={clsx(
+                          'border-line-soft flex min-h-0 w-full max-w-16 flex-1 flex-col justify-end overflow-hidden rounded-lg border bg-white/[0.035]',
+                          selected &&
+                            'border-status-azure/40 shadow-[0_0_0_1px_color-mix(in_oklch,var(--color-status-azure)_22%,transparent),0_10px_30px_-12px_var(--color-status-azure)]',
+                        )}
+                      >
+                        {summary.total ? (
+                          <div
+                            className="flex w-full flex-col"
+                            style={{ height: `${summary.height}%` }}
+                          >
+                            {summary.rows.map((row, index) => (
                               <div
-                                key={workItem.workItemId}
-                                className="rounded-xl border border-white/8 bg-black/15 p-3"
+                                key={row.id}
+                                className="flex min-h-1 items-center justify-center"
+                                style={{
+                                  height: `${row.pct}%`,
+                                  background: getProjectColor(row.id),
+                                  borderTopLeftRadius: index === 0 ? 7 : 0,
+                                  borderTopRightRadius: index === 0 ? 7 : 0,
+                                }}
+                                title={`${row.name} ${row.pct}%`}
                               >
-                                <div className="mb-2 flex items-center justify-between gap-3">
-                                  <div className="text-ink-1 text-xs font-semibold">
-                                    {getWorkItemLabel(workItem.workItemId)}
-                                  </div>
-                                  <div className="text-ink-4 text-[11px] tabular-nums">
-                                    {workItem.events.length} event
-                                    {workItem.events.length === 1 ? '' : 's'}
-                                  </div>
-                                </div>
-                                <div className="space-y-1.5">
-                                  {workItem.events.map((event) => (
-                                    <div
-                                      key={event.id}
-                                      className="flex items-start gap-2 text-xs"
-                                    >
-                                      <span className="text-ink-4 w-16 shrink-0 pt-0.5 tabular-nums">
-                                        {timeFormatter.format(
-                                          new Date(event.occurredAt),
-                                        )}
-                                      </span>
-                                      <span
-                                        className={clsx(
-                                          'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',
-                                          event.type === 'task_prompted'
-                                            ? 'bg-sky-300'
-                                            : 'bg-emerald-300',
-                                        )}
-                                      />
-                                      <span className="min-w-0 flex-1">
-                                        <span className="text-ink-2 font-medium">
-                                          {formatEventType(event.type)}
-                                        </span>
-                                        <span className="text-ink-4 mx-1">
-                                          -
-                                        </span>
-                                        <span className="text-ink-1">
-                                          {getEventLabel(event)}
-                                        </span>
-                                      </span>
-                                      {event.pullRequest?.url ? (
-                                        <a
-                                          className="text-ink-3 hover:text-ink-0 shrink-0"
-                                          href={event.pullRequest.url}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          title="Open PR"
-                                        >
-                                          <GitPullRequest className="h-3.5 w-3.5" />
-                                        </a>
-                                      ) : null}
-                                    </div>
-                                  ))}
-                                </div>
+                                {row.pct >= 22 ? (
+                                  <span className="text-bg-0 text-[10px] font-bold">
+                                    {row.pct}%
+                                  </span>
+                                ) : null}
                               </div>
                             ))}
                           </div>
-                        </div>
-                      ))}
+                        ) : null}
+                      </div>
+                      <div className="flex items-baseline gap-1">
+                        <span
+                          className={clsx(
+                            'text-xs font-semibold',
+                            summary.total
+                              ? selected
+                                ? 'text-ink-0'
+                                : 'text-ink-1'
+                              : 'text-ink-4',
+                          )}
+                        >
+                          {formatShortDay(summary.day)}
+                        </span>
+                        <span className="text-ink-4 text-[11px]">
+                          {formatDayNumber(summary.day)}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="border-line-soft mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t pt-4">
+                {weekProjects.length === 0 ? (
+                  <span className="text-ink-4 text-xs">No project activity</span>
+                ) : (
+                  weekProjects.map((project) => (
+                    <div
+                      key={project.id}
+                      className="flex min-w-0 items-center gap-2"
+                    >
+                      <Dot color={getProjectColor(project.id)} />
+                      <span className="text-ink-2 max-w-36 truncate text-xs">
+                        {project.name}
+                      </span>
+                      <span className="text-ink-4 text-[11px] tabular-nums">
+                        {project.pct}%
+                      </span>
+                      <span className="text-ink-4 text-[11px] tabular-nums">
+                        {project.count} ev
+                      </span>
                     </div>
-                  </section>
-                ))
+                  ))
+                )}
+              </div>
+                </div>
+
+                <aside className="min-h-0 overflow-y-auto bg-black/10 p-4 sm:p-5">
+              <div className="border-line-soft border-b pb-4">
+                <div className="text-status-azure text-[11px] font-bold tracking-[0.11em] uppercase">
+                  {selectedSummary?.day === weekDays.at(-1)
+                    ? 'Latest day'
+                    : 'Selected'}
+                </div>
+                <div className="text-ink-0 mt-1 text-lg font-semibold tracking-[-0.02em]">
+                  {selectedSummary ? formatDay(selectedSummary.day) : 'No day'}
+                </div>
+                <div className="mt-1 flex items-center gap-3">
+                  <span className="text-ink-3 text-xs">
+                    {selectedSummary?.total ?? 0} events
+                    {' · '}
+                    {selectedSummary?.rows.length ?? 0} projects
+                  </span>
+                  <div className="flex-1" />
+                  {(selectedSummary?.total ?? 0) > 0 ? (
+                    <button
+                      type="button"
+                      onClick={copySelectedDay}
+                      className="border-line bg-glass-light text-ink-1 hover:bg-glass-medium inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors"
+                    >
+                      {dayCopied ? (
+                        <Check className="h-3.5 w-3.5" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                      {dayCopied ? 'Copied' : 'Copy day'}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+                  {selectedSummary && selectedSummary.total > 0 ? (
+                <div className="pt-3">
+                  <div className="space-y-0.5">
+                    {selectedSummary.rows.map((row) => (
+                      <div
+                        key={row.id}
+                        className="border-line-soft flex items-center justify-between gap-3 border-b py-3"
+                      >
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <Dot color={getProjectColor(row.id)} glow />
+                          <div className="min-w-0">
+                            <div className="text-ink-0 truncate text-sm font-semibold">
+                              {row.name}
+                            </div>
+                            <div className="text-ink-4 text-[11px]">
+                              {row.count} event{row.count === 1 ? '' : 's'}
+                            </div>
+                          </div>
+                        </div>
+                        <Percentage value={row.pct} />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="text-ink-3 mt-5 mb-2 text-[10px] font-semibold tracking-[0.09em] uppercase">
+                    Activity
+                  </div>
+                  <div className="space-y-2">
+                    {selectedSummary.events.map((event) => (
+                      <EventRow
+                        key={event.id}
+                        event={event}
+                        color={getProjectColor(eventProjectId(event))}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <StatePanel label="Nothing tracked on this day." />
               )}
-            </div>
+                </aside>
+              </>
+            )}
           </div>
+
         </div>
       </div>
     </FocusLock>,
     document.body,
+  );
+}
+
+function StatePanel({
+  label,
+  tone = 'muted',
+}: {
+  label: string;
+  tone?: 'muted' | 'error';
+}) {
+  return (
+    <div
+      className={clsx(
+        'mt-5 flex h-44 items-center justify-center rounded-xl border border-dashed text-sm',
+        tone === 'error'
+          ? 'border-status-fail/25 text-status-fail'
+          : 'border-line-soft text-ink-4',
+      )}
+    >
+      {label}
+    </div>
+  );
+}
+
+function EventRow({
+  event,
+  color,
+}: {
+  event: WorkActivityEvent;
+  color: string;
+}) {
+  const style = { '--event-color': color } as CSSProperties;
+
+  return (
+    <div className="flex gap-2.5" style={style}>
+      <span className="mt-0.5 h-auto w-0.5 shrink-0 rounded-full bg-[var(--event-color)]" />
+      <div className="min-w-0 flex-1">
+        <div className="text-ink-4 flex items-center gap-2 text-[10.5px]">
+          <span className="font-mono tabular-nums">
+            {timeFormatter.format(new Date(event.occurredAt))}
+          </span>
+          {event.type === 'task_prompted' ? (
+            <MessageSquareText className="h-3 w-3 text-[var(--event-color)]" />
+          ) : (
+            <GitPullRequest className="h-3 w-3 text-[var(--event-color)]" />
+          )}
+          <span>{formatEventType(event.type)}</span>
+          {event.pullRequest?.url ? (
+            <a
+              className="text-ink-3 hover:text-ink-0 ml-auto"
+              href={event.pullRequest.url}
+              target="_blank"
+              rel="noreferrer"
+              title="Open PR"
+            >
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          ) : null}
+        </div>
+        <div className="text-ink-1 mt-1 line-clamp-2 text-xs leading-snug">
+          {getEventLabel(event)}
+        </div>
+      </div>
+    </div>
   );
 }
