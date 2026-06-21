@@ -2907,6 +2907,18 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:getWorkItemHistory',
+    async (
+      _event,
+      params: { providerId: string; projectName: string; workItemId: number },
+    ) => {
+      const { getWorkItemHistory } =
+        await import('../services/azure-devops-service');
+      return getWorkItemHistory(params);
+    },
+  );
+
+  ipcMain.handle(
     'azureDevOps:addWorkItemComment',
     async (
       _event,

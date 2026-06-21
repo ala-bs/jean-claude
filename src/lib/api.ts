@@ -284,6 +284,17 @@ export interface WorkItemComment {
   createdDate: string;
 }
 
+export interface WorkItemHistoryEntry {
+  id: number;
+  revisedBy: string;
+  revisedDate: string;
+  fields: Array<{
+    name: string;
+    oldValue?: string;
+    newValue?: string;
+  }>;
+}
+
 export interface AzureDevOpsIteration {
   id: string;
   name: string;
@@ -661,6 +672,11 @@ export interface Api {
       projectName: string;
       workItemId: number;
     }) => Promise<WorkItemComment[]>;
+    getWorkItemHistory: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => Promise<WorkItemHistoryEntry[]>;
     addWorkItemComment: (params: {
       providerId: string;
       projectName: string;
@@ -1781,6 +1797,7 @@ export const api: Api = hasWindowApi
         },
         getRelatedTestCases: async () => [],
         getWorkItemComments: async () => [],
+        getWorkItemHistory: async () => [],
         addWorkItemComment: async () => {
           throw new Error('API not available');
         },

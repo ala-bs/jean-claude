@@ -129,6 +129,17 @@ export interface AzureDevOpsWorkItemState {
   category?: string;
 }
 
+export interface WorkItemHistoryEntry {
+  id: number;
+  revisedBy: string;
+  revisedDate: string;
+  fields: Array<{
+    name: string;
+    oldValue?: string;
+    newValue?: string;
+  }>;
+}
+
 interface WiqlResponse {
   workItems: Array<{ id: number; url: string }>;
 }
@@ -158,6 +169,39 @@ interface WorkItemsBatchResponse {
       'System.ChangedDate'?: string;
     };
     relations?: WorkItemRelation[];
+  }>;
+}
+
+interface WorkItemUpdateRelation {
+  rel?: string;
+  url?: string;
+  attributes?: {
+    name?: string;
+    comment?: string;
+  };
+}
+
+interface WorkItemUpdateResponse {
+  count?: number;
+  value?: Array<{
+    id: number;
+    revisedBy?: { displayName?: string };
+    revisedDate?: string;
+    fields?: Record<
+      string,
+      {
+        oldValue?: unknown;
+        newValue?: unknown;
+      }
+    >;
+    relations?: {
+      added?: WorkItemUpdateRelation[];
+      removed?: WorkItemUpdateRelation[];
+      updated?: Array<{
+        oldValue?: WorkItemUpdateRelation;
+        newValue?: WorkItemUpdateRelation;
+      }>;
+    };
   }>;
 }
 
@@ -996,6 +1040,158 @@ export async function getWorkItemComments(params: {
       createdDate: c.createdDate ?? '',
     }),
   );
+}
+
+const WORK_ITEM_FIELD_LABELS: Record<string, string> = {
+  'System.AssignedTo': 'Assigned To',
+  'System.AreaPath': 'Area Path',
+  'System.CreatedBy': 'Created By',
+  'System.CreatedDate': 'Created Date',
+  'System.Description': 'Description',
+  'System.History': 'Comment',
+  'System.IterationPath': 'Iteration Path',
+  'System.Reason': 'Reason',
+  'System.State': 'State',
+  'System.Tags': 'Tags',
+  'System.Title': 'Title',
+  'System.WorkItemType': 'Work Item Type',
+  'Microsoft.VSTS.Common.AcceptanceCriteria': 'Acceptance Criteria',
+  'Microsoft.VSTS.Common.Priority': 'Priority',
+  'Microsoft.VSTS.Common.ResolvedReason': 'Resolved Reason',
+  'Microsoft.VSTS.Scheduling.Effort': 'Effort',
+  'Microsoft.VSTS.Scheduling.RemainingWork': 'Remaining Work',
+  'Microsoft.VSTS.TCM.ReproSteps': 'Repro Steps',
+};
+
+const WORK_ITEM_HISTORY_IGNORED_FIELDS = new Set([
+  'System.AuthorizedAs',
+  'System.AuthorizedDate',
+  'System.ChangedBy',
+  'System.ChangedDate',
+  'System.CommentCount',
+  'System.Id',
+  'System.PersonId',
+  'System.Rev',
+  'System.RevisedDate',
+  'System.Watermark',
+]);
+
+function formatWorkItemHistoryValue(value: unknown): string | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'object' && 'displayName' in value) {
+    const displayName = (value as { displayName?: unknown }).displayName;
+    return typeof displayName === 'string' ? displayName : undefined;
+  }
+  return JSON.stringify(value);
+}
+
+function getWorkItemFieldLabel(refName: string): string {
+  if (WORK_ITEM_FIELD_LABELS[refName]) return WORK_ITEM_FIELD_LABELS[refName];
+  return refName.split('.').at(-1) ?? refName;
+}
+
+function getWorkItemRelationLabel(relation: WorkItemUpdateRelation): string {
+  return (
+    relation.attributes?.name ??
+    relation.rel?.split('.').at(-1)?.replace(/-/g, ' ') ??
+    'Link'
+  );
+}
+
+function formatWorkItemRelation(relation: WorkItemUpdateRelation): string {
+  const label = getWorkItemRelationLabel(relation);
+  const target = relation.url?.split('/').at(-1);
+  const comment = relation.attributes?.comment;
+  return [
+    target ? `${label} #${target}` : label,
+    comment ? `(${comment})` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function mapWorkItemUpdateFields(
+  entry: NonNullable<WorkItemUpdateResponse['value']>[number],
+): WorkItemHistoryEntry['fields'] {
+  const fieldChanges = Object.entries(entry.fields ?? {})
+    .filter(([refName]) => !WORK_ITEM_HISTORY_IGNORED_FIELDS.has(refName))
+    .map(([refName, change]) => ({
+      name: getWorkItemFieldLabel(refName),
+      oldValue: formatWorkItemHistoryValue(change.oldValue),
+      newValue: formatWorkItemHistoryValue(change.newValue),
+    }));
+
+  const relationChanges: WorkItemHistoryEntry['fields'] = [
+    ...(entry.relations?.added ?? []).map((relation) => ({
+      name: 'Added Link',
+      newValue: formatWorkItemRelation(relation),
+    })),
+    ...(entry.relations?.removed ?? []).map((relation) => ({
+      name: 'Removed Link',
+      oldValue: formatWorkItemRelation(relation),
+    })),
+    ...(entry.relations?.updated ?? []).map((relation) => ({
+      name: 'Updated Link',
+      oldValue: relation.oldValue
+        ? formatWorkItemRelation(relation.oldValue)
+        : undefined,
+      newValue: relation.newValue
+        ? formatWorkItemRelation(relation.newValue)
+        : undefined,
+    })),
+  ];
+
+  return [...fieldChanges, ...relationChanges];
+}
+
+export async function getWorkItemHistory(params: {
+  providerId: string;
+  projectName: string;
+  workItemId: number;
+}): Promise<WorkItemHistoryEntry[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const updates: NonNullable<WorkItemUpdateResponse['value']> = [];
+  const pageSize = 200;
+
+  for (let skip = 0; ; skip += pageSize) {
+    const response = await fetch(
+      `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/updates?$top=${pageSize}&$skip=${skip}&api-version=7.1`,
+      {
+        headers: { Authorization: authHeader },
+      },
+    );
+
+    if (!response.ok) {
+      if (response.status === 404) return [];
+      const error = await response.text();
+      throw new Error(
+        `Failed to fetch history for work item ${params.workItemId}: ${error}`,
+      );
+    }
+
+    const data: WorkItemUpdateResponse = await response.json();
+    const page = data.value ?? [];
+    updates.push(...page);
+
+    if (page.length < pageSize) break;
+  }
+
+  return updates
+    .map((entry) => ({
+      id: entry.id,
+      revisedBy: entry.revisedBy?.displayName ?? 'Unknown',
+      revisedDate: entry.revisedDate ?? '',
+      fields: mapWorkItemUpdateFields(entry),
+    }))
+    .filter((entry) => entry.fields.length > 0)
+    .sort(
+      (a, b) =>
+        new Date(b.revisedDate).getTime() - new Date(a.revisedDate).getTime(),
+    );
 }
 
 export async function addWorkItemComment(params: {

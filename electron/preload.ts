@@ -329,6 +329,11 @@ contextBridge.exposeInMainWorld('api', {
       projectName: string;
       workItemId: number;
     }) => ipcRenderer.invoke('azureDevOps:getWorkItemComments', params),
+    getWorkItemHistory: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemHistory', params),
     addWorkItemComment: (params: {
       providerId: string;
       projectName: string;
