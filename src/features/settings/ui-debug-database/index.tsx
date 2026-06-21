@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
-import { useState, useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
+import { useRegisterOverlay } from '@/common/context/overlay';
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
 import { Switch } from '@/common/ui/switch';
@@ -26,6 +27,14 @@ export function DebugDatabase() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [showTableSizes, setShowTableSizes] = useState(false);
+  const tableSizesRef = useRef<HTMLDivElement | null>(null);
+
+  useRegisterOverlay({
+    id: 'debug-database-table-sizes',
+    refs: [tableSizesRef],
+    onClose: () => setShowTableSizes(false),
+    enabled: showTableSizes,
+  });
 
   // Auto-select first table when loaded
   const activeTable = selectedTable ?? tableNames[0] ?? null;
@@ -84,7 +93,10 @@ export function DebugDatabase() {
     <div className="flex flex-col gap-4">
       <div>
         {databaseSize && (
-          <div className="text-ink-2 relative space-y-1 text-sm">
+          <div
+            ref={tableSizesRef}
+            className="text-ink-2 relative space-y-1 text-sm"
+          >
             <button
               type="button"
               className="hover:text-ink-1 cursor-pointer underline decoration-dotted underline-offset-4"
