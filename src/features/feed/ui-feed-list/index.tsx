@@ -19,7 +19,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { useCommands } from '@/common/hooks/use-commands';
@@ -53,6 +53,84 @@ type PrProjectOrderOption = {
   logoPath?: string | null | undefined;
   prCount: number;
 };
+
+type FeedSelection = {
+  currentNoteId?: string;
+  currentPrId?: string;
+  currentProjectId?: string;
+  currentTaskId?: string;
+  currentWorkItemId?: string;
+};
+
+function isFeedItemSelected(
+  item: {
+    taskId?: string;
+    pullRequestId?: number;
+    workItemId?: number;
+    noteId?: string;
+    projectId: string;
+  },
+  selection: FeedSelection,
+) {
+  if (item.noteId && selection.currentNoteId) {
+    return item.noteId === selection.currentNoteId;
+  }
+  if (item.taskId) {
+    return item.taskId === selection.currentTaskId;
+  }
+  if (item.workItemId && selection.currentWorkItemId) {
+    return (
+      String(item.workItemId) === selection.currentWorkItemId &&
+      item.projectId === (selection.currentProjectId ?? item.projectId)
+    );
+  }
+  if (!item.pullRequestId || !selection.currentPrId) {
+    return false;
+  }
+  const prMatches = String(item.pullRequestId) === selection.currentPrId;
+  if (!prMatches) {
+    return false;
+  }
+  if (!selection.currentProjectId) {
+    return true;
+  }
+  return item.projectId === selection.currentProjectId;
+}
+
+function getSelectedSubtaskId(item: FeedItem, currentTaskId?: string) {
+  if (!currentTaskId) return null;
+  return item.children?.some((child) => child.taskId === currentTaskId)
+    ? currentTaskId
+    : null;
+}
+
+function getFocusedWorkItemId(item: FeedItem, currentWorkItemId?: string) {
+  if (!currentWorkItemId) return null;
+  if (item.workItemIds?.includes(currentWorkItemId)) return currentWorkItemId;
+  return item.children?.some((child) =>
+    child.workItemIds?.includes(currentWorkItemId),
+  )
+    ? currentWorkItemId
+    : null;
+}
+
+function getFocusedRailPrId(item: FeedItem, currentPrId?: string) {
+  return currentPrId &&
+    item.source === 'task' &&
+    item.pullRequestId &&
+    String(item.pullRequestId) === currentPrId
+    ? currentPrId
+    : null;
+}
+
+function itemSelectionKey(item: FeedItem, selection: FeedSelection) {
+  return [
+    isFeedItemSelected(item, selection) ? 'selected' : '',
+    getSelectedSubtaskId(item, selection.currentTaskId) ?? '',
+    getFocusedWorkItemId(item, selection.currentWorkItemId) ?? '',
+    getFocusedRailPrId(item, selection.currentPrId) ?? '',
+  ].join(':');
+}
 
 function MiniProjectLabel({ item }: { item: FeedItem }) {
   const project = useFeedItemProject(item);
@@ -161,33 +239,109 @@ function PrReviewContextMenu({
 
 function FeedCard({
   item,
+  selection,
+  onDragStartItem,
+  onDragOverItem,
+  onDragOver,
+  onDropItem,
+  onDrop,
   ...props
 }: {
   item: FeedItem;
+  selection: FeedSelection;
   isSelected?: boolean;
+  currentTaskId?: string;
+  currentWorkItemId?: string;
+  currentPrId?: string;
   isDraggable?: boolean;
-  onDragStart?: () => void;
+  onDragStartItem?: (id: string) => void;
+  onDragOverItem?: (event: React.DragEvent, id: string) => void;
   onDragOver?: (e: React.DragEvent) => void;
   onDragLeave?: () => void;
+  onDropItem?: (event: React.DragEvent, id: string) => void;
   onDrop?: (e: React.DragEvent) => void;
   onDragEnd?: () => void;
 }) {
+  const handleDragStart = useCallback(() => {
+    onDragStartItem?.(item.id);
+  }, [item.id, onDragStartItem]);
+  const handleDragOver = useCallback(
+    (event: React.DragEvent) => {
+      if (onDragOverItem) {
+        onDragOverItem(event, item.id);
+        return;
+      }
+      onDragOver?.(event);
+    },
+    [item.id, onDragOver, onDragOverItem],
+  );
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      if (onDropItem) {
+        onDropItem(event, item.id);
+        return;
+      }
+      onDrop?.(event);
+    },
+    [item.id, onDrop, onDropItem],
+  );
+
   if (item.source === 'note') {
-    return <FeedNoteCard item={item} {...props} />;
+    return (
+      <FeedNoteCard
+        item={item}
+        {...props}
+        onDragStart={onDragStartItem ? handleDragStart : undefined}
+        onDragOver={onDragOverItem || onDragOver ? handleDragOver : undefined}
+        onDrop={onDropItem || onDrop ? handleDrop : undefined}
+      />
+    );
   }
-  return <FeedItemCard item={item} {...props} />;
+  return (
+    <FeedItemCard
+      item={item}
+      {...props}
+      currentTaskId={selection.currentTaskId}
+      currentWorkItemId={selection.currentWorkItemId}
+      currentPrId={selection.currentPrId}
+      onDragStart={onDragStartItem ? handleDragStart : undefined}
+      onDragOver={onDragOverItem || onDragOver ? handleDragOver : undefined}
+      onDrop={onDropItem || onDrop ? handleDrop : undefined}
+    />
+  );
 }
+
+const MemoFeedCard = memo(FeedCard, (prev, next) => {
+  if (
+    prev.item !== next.item ||
+    prev.isDraggable !== next.isDraggable ||
+    prev.onDragStartItem !== next.onDragStartItem ||
+    prev.onDragOverItem !== next.onDragOverItem ||
+    prev.onDragOver !== next.onDragOver ||
+    prev.onDragLeave !== next.onDragLeave ||
+    prev.onDropItem !== next.onDropItem ||
+    prev.onDrop !== next.onDrop ||
+    prev.onDragEnd !== next.onDragEnd
+  ) {
+    return false;
+  }
+
+  return (
+    itemSelectionKey(prev.item, prev.selection) ===
+    itemSelectionKey(next.item, next.selection)
+  );
+});
 
 function StackableZone({
   items,
-  isItemSelected,
+  selection,
   onDragStart,
   onDragEnd,
   sticky,
   collapsedOverlap = 28,
 }: {
   items: FeedItem[];
-  isItemSelected: (item: FeedItem) => boolean;
+  selection: FeedSelection;
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
   sticky?: boolean;
@@ -231,11 +385,12 @@ function StackableZone({
               index > 0 ? (expanded ? 6 : -collapsedOverlap) : undefined,
           }}
         >
-          <FeedCard
+          <MemoFeedCard
             item={item}
-            isSelected={isItemSelected(item)}
+            selection={selection}
+            isSelected={isFeedItemSelected(item, selection)}
             isDraggable
-            onDragStart={() => onDragStart(item.id)}
+            onDragStartItem={onDragStart}
             onDragEnd={onDragEnd}
           />
         </div>
@@ -411,12 +566,12 @@ function SaveFilterPresetModal({
 
 function HorizontalPrReviewStack({
   items,
-  isItemSelected,
+  selection,
   onOpen,
   onMarkLowPriority,
 }: {
   items: FeedItem[];
-  isItemSelected: (item: FeedItem) => boolean;
+  selection: FeedSelection;
   onOpen: (item: FeedItem) => void;
   onMarkLowPriority: (item: FeedItem) => void;
 }) {
@@ -691,7 +846,7 @@ function HorizontalPrReviewStack({
             key={item.id}
             item={item}
             position={index - safeIndex}
-            isSelected={isItemSelected(item)}
+            isSelected={isFeedItemSelected(item, selection)}
             onFocus={() => setFocusedIndex(index)}
             onOpen={() => onOpen(item)}
             onContextMenu={(event) => handleContextMenu(event, item, index)}
@@ -1005,6 +1160,10 @@ export function FeedList() {
     [],
   );
 
+  const handlePinnedDragLeave = useCallback(() => {
+    setDragOverId(null);
+  }, []);
+
   const handlePinnedDrop = useCallback(
     (e: React.DragEvent, targetId: string) => {
       e.preventDefault();
@@ -1066,7 +1225,29 @@ export function FeedList() {
     setDragOverPinZone(false);
   }, []);
 
+  const handleMarkPrLowPriority = useCallback(
+    (item: FeedItem) => markLowPriority(item.id),
+    [markLowPriority],
+  );
+
   const currentNoteId = params.noteId as string | undefined;
+
+  const selection = useMemo(
+    () => ({
+      currentNoteId,
+      currentPrId,
+      currentProjectId,
+      currentTaskId,
+      currentWorkItemId,
+    }),
+    [
+      currentNoteId,
+      currentPrId,
+      currentProjectId,
+      currentTaskId,
+      currentWorkItemId,
+    ],
+  );
 
   const isItemSelected = useCallback(
     (item: {
@@ -1075,38 +1256,8 @@ export function FeedList() {
       workItemId?: number;
       noteId?: string;
       projectId: string;
-    }) => {
-      if (item.noteId && currentNoteId) {
-        return item.noteId === currentNoteId;
-      }
-      if (item.taskId) {
-        return item.taskId === currentTaskId;
-      }
-      if (item.workItemId && currentWorkItemId) {
-        return (
-          String(item.workItemId) === currentWorkItemId &&
-          item.projectId === (currentProjectId ?? item.projectId)
-        );
-      }
-      if (!item.pullRequestId || !currentPrId) {
-        return false;
-      }
-      const prMatches = String(item.pullRequestId) === currentPrId;
-      if (!prMatches) {
-        return false;
-      }
-      if (!currentProjectId) {
-        return true;
-      }
-      return item.projectId === currentProjectId;
-    },
-    [
-      currentNoteId,
-      currentPrId,
-      currentProjectId,
-      currentTaskId,
-      currentWorkItemId,
-    ],
+    }) => isFeedItemSelected(item, selection),
+    [selection],
   );
 
   const navigateToItem = useCallback(
@@ -1552,15 +1703,16 @@ export function FeedList() {
           )}
         >
           {pinnedItems.map((item) => (
-            <FeedCard
+            <MemoFeedCard
               key={item.id}
               item={item}
-              isSelected={isItemSelected(item)}
+              selection={selection}
+              isSelected={isFeedItemSelected(item, selection)}
               isDraggable
-              onDragStart={() => handlePinnedDragStart(item.id)}
-              onDragOver={(e) => handlePinnedDragOver(e, item.id)}
-              onDragLeave={() => setDragOverId(null)}
-              onDrop={(e) => handlePinnedDrop(e, item.id)}
+              onDragStartItem={handlePinnedDragStart}
+              onDragOverItem={handlePinnedDragOver}
+              onDragLeave={handlePinnedDragLeave}
+              onDropItem={handlePinnedDrop}
               onDragEnd={handleDragEnd}
             />
           ))}
@@ -1576,9 +1728,9 @@ export function FeedList() {
       {prReviewItems.length > 0 && (
         <HorizontalPrReviewStack
           items={prReviewItems}
-          isItemSelected={isItemSelected}
+          selection={selection}
           onOpen={navigateToFeedItem}
-          onMarkLowPriority={(item) => markLowPriority(item.id)}
+          onMarkLowPriority={handleMarkPrLowPriority}
         />
       )}
 
@@ -1622,7 +1774,7 @@ export function FeedList() {
       {actionNeededItems.length > 0 && (
         <StackableZone
           items={actionNeededItems}
-          isItemSelected={isItemSelected}
+          selection={selection}
           onDragStart={setDraggedId}
           onDragEnd={handleDragEnd}
           sticky
@@ -1634,7 +1786,7 @@ export function FeedList() {
       {activeTaskItems.length > 0 && (
         <StackableZone
           items={activeTaskItems}
-          isItemSelected={isItemSelected}
+          selection={selection}
           onDragStart={setDraggedId}
           onDragEnd={handleDragEnd}
         />
@@ -1644,12 +1796,13 @@ export function FeedList() {
       {highPriorityItems.length > 0 && (
         <div className="flex flex-col">
           {highPriorityItems.map((item) => (
-            <FeedCard
+            <MemoFeedCard
               key={item.id}
               item={item}
-              isSelected={isItemSelected(item)}
+              selection={selection}
+              isSelected={isFeedItemSelected(item, selection)}
               isDraggable
-              onDragStart={() => setDraggedId(item.id)}
+              onDragStartItem={setDraggedId}
               onDragEnd={handleDragEnd}
             />
           ))}
@@ -1665,12 +1818,13 @@ export function FeedList() {
       {/* Auto-sorted zone */}
       <div className="flex flex-col">
         {normalItems.map((item) => (
-          <FeedCard
+          <MemoFeedCard
             key={item.id}
             item={item}
-            isSelected={isItemSelected(item)}
+            selection={selection}
+            isSelected={isFeedItemSelected(item, selection)}
             isDraggable
-            onDragStart={() => setDraggedId(item.id)}
+            onDragStartItem={setDraggedId}
             onDragEnd={handleDragEnd}
           />
         ))}
@@ -1693,10 +1847,11 @@ export function FeedList() {
           {lowPriorityExpanded && (
             <div className="flex flex-col pt-1 opacity-60">
               {lowPriorityItems.map((item) => (
-                <FeedCard
+                <MemoFeedCard
                   key={item.id}
                   item={item}
-                  isSelected={isItemSelected(item)}
+                  selection={selection}
+                  isSelected={isFeedItemSelected(item, selection)}
                 />
               ))}
             </div>

@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
 import {
   ArrowDownNarrowWide,
@@ -409,6 +409,9 @@ function RailPrCiStatus({
 export function FeedItemCard({
   item,
   isSelected,
+  currentTaskId,
+  currentWorkItemId,
+  currentPrId,
   isSubtask,
   isDraggable,
   onDragStart,
@@ -419,6 +422,9 @@ export function FeedItemCard({
 }: {
   item: FeedItem;
   isSelected?: boolean;
+  currentTaskId?: string;
+  currentWorkItemId?: string;
+  currentPrId?: string;
   isSubtask?: boolean;
   isDraggable?: boolean;
   onDragStart?: () => void;
@@ -428,10 +434,6 @@ export function FeedItemCard({
   onDragEnd?: () => void;
 }) {
   const navigate = useNavigate();
-  const params = useParams({ strict: false });
-  const currentTaskId = (params as { taskId?: string }).taskId;
-  const currentWorkItemId = (params as { workItemId?: string }).workItemId;
-  const currentPrId = (params as { prId?: string }).prId;
   const pin = useFeedStore((s) => s.pin);
   const unpin = useFeedStore((s) => s.unpin);
   const dismiss = useFeedStore((s) => s.dismiss);
