@@ -72,6 +72,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:getFeatureMap', projectId),
     createFeatureMapTask: (projectId: string) =>
       ipcRenderer.invoke('projects:createFeatureMapTask', projectId),
+    getFeatureMapDraftDiff: (stepId: string) =>
+      ipcRenderer.invoke('projects:getFeatureMapDraftDiff', stepId),
     saveFeatureMapFromTask: (stepId: string) =>
       ipcRenderer.invoke('projects:saveFeatureMapFromTask', stepId),
     removeLogo: (projectId: string) =>

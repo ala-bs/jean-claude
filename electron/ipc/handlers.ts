@@ -198,6 +198,7 @@ import {
   getExistingProjectFeatureMapPath,
   getFeatureMapTempPaths,
   getProjectFeatureMap,
+  getProjectFeatureMapDraftDiff,
   saveProjectFeatureMapFromTemp,
 } from '../services/project-feature-map-generation-service';
 import {
@@ -1084,6 +1085,32 @@ export function registerIpcHandlers() {
       const updatedTask = await TaskRepository.markUserCompleted(step.taskId);
       emitTaskUpsert(updatedTask);
       return featureMap;
+    },
+  );
+  ipcMain.handle(
+    'projects:getFeatureMapDraftDiff',
+    async (_, stepId: string) => {
+      dbg.ipc('projects:getFeatureMapDraftDiff %s', stepId);
+      const step = await TaskStepRepository.findById(stepId);
+      if (!step || step.type !== 'feature-map') {
+        throw new Error('Invalid stepId: must reference a feature-map step');
+      }
+      if (!isFeatureMapStepMeta(step.meta)) {
+        throw new Error(
+          'Invalid step: missing or malformed feature-map metadata',
+        );
+      }
+      const meta = step.meta;
+
+      const project = await ProjectRepository.findById(meta.projectId);
+      if (!project || project.path !== meta.projectPath) {
+        throw new Error('Feature map project metadata is stale');
+      }
+
+      return getProjectFeatureMapDraftDiff({
+        projectPath: project.path,
+        tempFilePath: meta.tempFilePath,
+      });
     },
   );
   ipcMain.handle('projects:detectLogos', (_, projectPath: string) => {
