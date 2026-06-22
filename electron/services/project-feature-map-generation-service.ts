@@ -82,6 +82,25 @@ export async function saveProjectFeatureMapFromTemp({
   return featureMap;
 }
 
+export async function getProjectFeatureMapDraftDiff({
+  projectPath,
+  tempFilePath,
+}: {
+  projectPath: string;
+  tempFilePath: string;
+}) {
+  const newContent = await readFile(tempFilePath, 'utf8');
+  const existingPath = await getExistingProjectFeatureMapPath(projectPath);
+  const oldContent = existingPath ? await readFile(existingPath, 'utf8') : '';
+
+  return {
+    path: FEATURE_MAP_GIT_PATH,
+    status: existingPath ? ('modified' as const) : ('added' as const),
+    oldContent,
+    newContent,
+  };
+}
+
 export async function cleanupFeatureMapTempDir(tempDir: string): Promise<void> {
   await rm(tempDir, { recursive: true, force: true });
 }
@@ -129,13 +148,25 @@ Output file: ${tempFilePath}${
       : ''
   }`;
   const skillInstruction = skillName
-    ? `Use the "${skillName}" skill to create the feature map.\n\n`
+    ? `Use the "${skillName}" skill to ${
+        existingFeatureMapPath ? 'update' : 'create'
+      } the feature map.\n\n`
     : '';
   const schemaBlock = `<feature_map_yaml_schema>
 ${FEATURE_MAP_YAML_SCHEMA}
 </feature_map_yaml_schema>`;
+  const iterationInstructions = existingFeatureMapPath
+    ? `
+Update mode:
+- Read the existing feature map first.
+- Preserve accurate existing nodes, names, summaries, and structure.
+- Explore code to find missing, newly added, or shallowly documented user-facing features.
+- Add or refine only the parts needed to close gaps.
+- Output the complete updated YAML, not a partial patch.`
+    : '';
 
   return `${skillInstruction}${projectDetails}
+${iterationInstructions}
 
 Write the feature map YAML to the output file.
 The YAML must match this schema:
