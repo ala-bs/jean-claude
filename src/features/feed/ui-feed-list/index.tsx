@@ -879,7 +879,7 @@ function PrReviewCarouselCard({
             {stateLabel}
           </span>
           {isDraft && (
-            <span className="rounded bg-amber-300 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wide text-amber-950 ring-1 ring-amber-100/70">
+            <span className="bg-status-run-soft text-status-run ring-status-run/25 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wide ring-1">
               Draft
             </span>
           )}
@@ -1448,7 +1448,7 @@ export function FeedList() {
                           role="menuitem"
                           tabIndex={-1}
                           onClick={() => deleteFilterPreset(preset.id)}
-                          className="text-ink-3 hover:bg-glass-medium focus:bg-glass-medium mr-1 flex h-7 w-7 items-center justify-center rounded transition-colors hover:text-red-400 focus:text-red-400 focus:outline-none"
+                          className="text-ink-3 hover:bg-glass-medium focus:bg-glass-medium hover:text-status-fail focus:text-status-fail mr-1 flex h-7 w-7 items-center justify-center rounded transition-colors focus:outline-none"
                           title={`Delete ${preset.name}`}
                           aria-label={`Delete ${preset.name}`}
                         >

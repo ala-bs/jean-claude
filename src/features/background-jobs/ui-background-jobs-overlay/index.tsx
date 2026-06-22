@@ -225,7 +225,7 @@ function JobRow({
           'bg-acc/[0.08] border-acc/20 backdrop-blur-sm',
         job.status === 'succeeded' &&
           'bg-status-done/[0.08] border-status-done/20',
-        job.status === 'failed' && 'bg-status-fail/[0.08] border-red-400/20',
+        job.status === 'failed' && 'bg-status-fail/[0.08] border-status-fail/20',
       )}
     >
       <div className="flex items-start gap-2">

@@ -1619,7 +1619,7 @@ function ImageThumbnails({
                 className="h-16 w-16 object-cover"
               />
               {img.sizeBytes && (
-                <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
+                <span className="absolute right-0 bottom-0 left-0 bg-scrim-strong px-0.5 py-px text-center font-mono text-[9px] leading-3 text-chrome-fg">
                   {formatBytes(img.sizeBytes)}
                 </span>
               )}

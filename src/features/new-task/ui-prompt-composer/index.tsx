@@ -354,7 +354,7 @@ function decodeHtmlEntities(text: string): string {
   let result = text.replace(/&[a-z]+;/gi, (entity) => {
     return HTML_ENTITIES[entity.toLowerCase()] ?? entity;
   });
-  // Numeric entities: &#123; or &#x1F4A9;
+  // theme-audit:ignore — numeric entities e.g. &#123; or &#x1F4A9;
   result = result.replace(/&#x([0-9a-f]+);/gi, (_m, hex: string) =>
     String.fromCodePoint(parseInt(hex, 16)),
   );
@@ -1153,7 +1153,7 @@ export function PromptComposer({
                       </span>
                     </span>
                     {image.sizeBytes && (
-                      <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
+                      <span className="absolute right-0 bottom-0 left-0 bg-scrim-strong px-0.5 py-px text-center font-mono text-[9px] leading-3 text-chrome-fg">
                         {formatBytes(image.sizeBytes)}
                       </span>
                     )}

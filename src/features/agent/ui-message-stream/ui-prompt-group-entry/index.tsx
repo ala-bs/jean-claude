@@ -700,7 +700,7 @@ function ResultBlock({
 }) {
   if (isError) {
     return (
-      <div className="flex items-center gap-2 text-xs text-red-400">
+      <div className="text-status-fail flex items-center gap-2 text-xs">
         <AlertCircle className="h-3 w-3 shrink-0" />
         <span>{resultText || 'Unknown error'}</span>
       </div>
@@ -811,7 +811,7 @@ function RunningSummary({
       {/* Context compaction */}
       {activity.isCompacting && (
         <div className="flex items-center gap-1.5">
-          <span className="rg-pulse-glow h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500 shadow-[0_0_6px_theme(colors.amber.500/40)]" />
+          <span className="bg-status-run shadow-[0_0_6px_color-mix(in_srgb,var(--color-status-run)_40%,transparent)] h-1.5 w-1.5 animate-pulse rounded-full" />
           <span className="text-ink-3 font-mono text-[10px] tracking-wider uppercase">
             compacting context…
           </span>
