@@ -882,6 +882,7 @@ export interface Api {
   dialog: {
     openDirectory: () => Promise<string | null>;
     openImageFile: () => Promise<string | null>;
+    openFiles: () => Promise<string[] | null>;
     openApplication: () => Promise<{ path: string; name: string } | null>;
   };
   fs: {
@@ -889,7 +890,9 @@ export interface Api {
     readFile: (
       filePath: string,
     ) => Promise<{ content: string; language: string } | null>;
+    getFileSize: (filePath: string) => Promise<number | null>;
     readImageAsDataUrl: (filePath: string) => Promise<string | null>;
+    getImageUrl: (filePath: string) => Promise<string | null>;
     listDirectory: (
       dirPath: string,
       projectRoot: string,
@@ -1834,12 +1837,15 @@ export const api: Api = hasWindowApi
       dialog: {
         openDirectory: async () => null,
         openImageFile: async () => null,
+        openFiles: async () => null,
         openApplication: async () => null,
       },
       fs: {
         readPackageJson: async () => null,
         readFile: async () => null,
+        getFileSize: async () => null,
         readImageAsDataUrl: async () => null,
+        getImageUrl: async () => null,
         listDirectory: async () => null,
         listProjectFiles: async () => [],
         writeAttachmentFile: async () => '',

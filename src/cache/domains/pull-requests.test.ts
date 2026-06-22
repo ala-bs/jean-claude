@@ -183,7 +183,10 @@ describe('pull request cache domain', () => {
     ingestPullRequest({
       providerId: 'github',
       repoId: 'repo-1',
-      pullRequest: createPullRequest({ title: 'Updated summary title' }),
+      pullRequest: createPullRequest({
+        title: 'Updated summary title',
+        isDraft: true,
+      }),
     });
 
     expect(
@@ -194,6 +197,7 @@ describe('pull request cache domain', () => {
       }),
     ).toMatchObject({
       title: 'Updated summary title',
+      isDraft: true,
       description: 'Detailed description',
       autoCompleteSetBy: { id: 'user-2', displayName: 'User Two' },
       completionOptions: { deleteSourceBranch: true },

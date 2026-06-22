@@ -61,11 +61,11 @@ function isAlreadyFenced(value: string): boolean {
 
 export function formatPastedPromptContent(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed || isAlreadyFenced(value)) return value;
+  if (!trimmed || isAlreadyFenced(trimmed)) return trimmed;
 
   const language = getPasteLanguage(trimmed);
-  const shouldWrap = language !== null || /\r?\n/.test(value);
-  if (!shouldWrap) return value;
+  const shouldWrap = language !== null || /\r?\n/.test(trimmed);
+  if (!shouldWrap) return trimmed;
 
-  return `\`\`\`${language ?? ''}\n${value}\n\`\`\``;
+  return `\`\`\`${language ?? ''}\n${trimmed}\n\`\`\``;
 }
