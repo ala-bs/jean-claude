@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "description": "Personal productivity GUI to manage coding agents across multiple projects",
   "type": "module",
+  "packageManager": "pnpm@10.32.1",
   "main": "./out/main/index.js",
   "volta": {
     "node": "20.18.0"
