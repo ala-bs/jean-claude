@@ -430,6 +430,12 @@ export interface Api {
     regenerateSummary: (projectId: string) => Promise<Project>;
     getFeatureMap: (projectId: string) => Promise<ProjectFeatureMap | null>;
     createFeatureMapTask: (projectId: string) => Promise<Task>;
+    getFeatureMapDraftDiff: (stepId: string) => Promise<{
+      path: string;
+      status: 'added' | 'modified';
+      oldContent: string;
+      newContent: string;
+    }>;
     saveFeatureMapFromTask: (stepId: string) => Promise<ProjectFeatureMap>;
     removeLogo: (projectId: string) => Promise<Project>;
     delete: (id: string) => Promise<void>;
@@ -1622,6 +1628,9 @@ export const api: Api = hasWindowApi
         },
         getFeatureMap: async () => null,
         createFeatureMapTask: async () => {
+          throw new Error('API not available');
+        },
+        getFeatureMapDraftDiff: async () => {
           throw new Error('API not available');
         },
         saveFeatureMapFromTask: async () => {
