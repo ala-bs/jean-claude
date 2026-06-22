@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
-import { groupByPrompts, mergeSkillMessages } from './message-merger';
+import {
+  groupByPrompts,
+  mergeSkillMessages,
+  processMessageStream,
+} from './message-merger';
 
 describe('message-merger', () => {
   it('marks prompt groups completed when a success result entry is present', () => {
@@ -206,6 +210,349 @@ describe('message-merger', () => {
           kind: 'subagent',
           childEntries: [{ id: 'child-prompt-1' }, { id: 'child-assistant-1' }],
         },
+      ],
+    });
+  });
+
+  it('keeps a lone SDK synthetic prompt as running work', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'synthetic-summary-prompt',
+        date: '2026-06-13T09:56:30.555Z',
+        isSynthetic: true,
+        type: 'user-prompt',
+        value: 'Summarize the prior step context for continuation.',
+        isSDKSynthetic: true,
+      },
+    ];
+
+    const merged = mergeSkillMessages(entries);
+    const groups = groupByPrompts(merged, true);
+
+    expect(merged).toHaveLength(1);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      kind: 'prompt-group',
+      status: 'running',
+      promptEntry: { id: 'synthetic-summary-prompt' },
+    });
+  });
+
+  it('keeps SDK synthetic prompts when later content is not a duplicate prompt', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'synthetic-summary-prompt',
+        date: '2026-06-13T09:56:30.555Z',
+        isSynthetic: true,
+        type: 'user-prompt',
+        value: 'Summarize the prior step context for continuation.',
+        isSDKSynthetic: true,
+      },
+      {
+        id: 'summary-content',
+        date: '2026-06-13T09:56:31.555Z',
+        isSynthetic: true,
+        type: 'assistant-message',
+        value: 'Summary for "Step 1":\n\nDid work.',
+      },
+    ];
+
+    const merged = mergeSkillMessages(entries);
+    const groups = groupByPrompts(merged, false);
+
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toMatchObject({
+      kind: 'entry',
+      entry: { id: 'synthetic-summary-prompt' },
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      kind: 'prompt-group',
+      promptEntry: { id: 'synthetic-summary-prompt' },
+      childMessages: [{ kind: 'entry', entry: { id: 'summary-content' } }],
+    });
+  });
+
+  it('deduplicates SDK synthetic prompts when a real prompt has the same text', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'sdk-prompt-echo',
+        date: '2026-06-13T09:56:30.555Z',
+        isSynthetic: true,
+        type: 'user-prompt',
+        value: 'Implement the design.',
+        isSDKSynthetic: true,
+      },
+      {
+        id: 'initial-prompt',
+        date: '2026-06-13T09:56:31.555Z',
+        isSynthetic: true,
+        type: 'user-prompt',
+        value: 'Implement the design.',
+      },
+    ];
+
+    const merged = mergeSkillMessages(entries);
+    const groups = groupByPrompts(merged, true);
+
+    expect(merged).toHaveLength(1);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      kind: 'prompt-group',
+      promptEntry: { id: 'initial-prompt' },
+    });
+  });
+
+  it('does not deduplicate against same-text prompts from later turns', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'sdk-prompt-1',
+        date: '2026-06-13T09:56:30.555Z',
+        isSynthetic: true,
+        type: 'user-prompt',
+        value: 'continue',
+        isSDKSynthetic: true,
+      },
+      {
+        id: 'assistant-1',
+        date: '2026-06-13T09:56:31.555Z',
+        type: 'assistant-message',
+        value: 'First response',
+      },
+      {
+        id: 'sdk-prompt-2',
+        date: '2026-06-13T09:56:32.555Z',
+        isSynthetic: true,
+        type: 'user-prompt',
+        value: 'continue',
+        isSDKSynthetic: true,
+      },
+      {
+        id: 'real-prompt-2',
+        date: '2026-06-13T09:56:33.555Z',
+        type: 'user-prompt',
+        value: 'continue',
+      },
+    ];
+
+    const merged = mergeSkillMessages(entries);
+    const groups = groupByPrompts(merged, true);
+
+    expect(merged).toHaveLength(3);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({
+      kind: 'prompt-group',
+      promptEntry: { id: 'sdk-prompt-1' },
+    });
+    expect(groups[1]).toMatchObject({
+      kind: 'prompt-group',
+      promptEntry: { id: 'real-prompt-2' },
+    });
+  });
+
+  it('keeps SDK synthetic prompts when their run fails', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'synthetic-summary-prompt',
+        date: '2026-06-13T09:56:30.555Z',
+        isSynthetic: true,
+        type: 'user-prompt',
+        value: 'Summarize the prior step context for continuation.',
+        isSDKSynthetic: true,
+      },
+      {
+        id: 'summary-error',
+        date: '2026-06-13T09:57:30.581Z',
+        isSynthetic: true,
+        type: 'result',
+        value: 'Failed to summarize step "Step 1" using backend opencode',
+        isError: true,
+      },
+    ];
+
+    const merged = mergeSkillMessages(entries);
+    const groups = groupByPrompts(merged, false);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      kind: 'prompt-group',
+      status: 'error',
+      promptEntry: { id: 'synthetic-summary-prompt' },
+      resultEntry: { id: 'summary-error', isError: true },
+    });
+  });
+
+  it('incrementally processes appended assistant message updates', () => {
+    const prompt: NormalizedEntry = {
+      id: 'prompt-1',
+      date: '2026-06-13T09:56:30.555Z',
+      type: 'user-prompt',
+      value: 'Build cache',
+    };
+    const firstAssistant: NormalizedEntry = {
+      id: 'assistant-1',
+      date: '2026-06-13T09:56:31.555Z',
+      type: 'assistant-message',
+      value: 'Working',
+    };
+    const updatedAssistant: NormalizedEntry = {
+      ...firstAssistant,
+      value: 'Working now',
+    };
+
+    const first = processMessageStream([prompt, firstAssistant], true);
+    const cached = processMessageStream(
+      [prompt, updatedAssistant],
+      true,
+      first.cache,
+    );
+    const full = processMessageStream([prompt, updatedAssistant], true);
+
+    expect(cached.streamMessages).toEqual(full.streamMessages);
+    expect(cached.streamMessages[0]).toMatchObject({
+      kind: 'prompt-group',
+      childMessages: [{ kind: 'entry', entry: { value: 'Working now' } }],
+    });
+  });
+
+  it('incrementally finalizes previous prompt when next prompt arrives', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'prompt-1',
+        date: '2026-06-13T09:56:30.555Z',
+        type: 'user-prompt',
+        value: 'First',
+      },
+    ];
+    const nextEntries: NormalizedEntry[] = [
+      ...entries,
+      {
+        id: 'prompt-2',
+        date: '2026-06-13T09:56:31.555Z',
+        type: 'user-prompt',
+        value: 'Second',
+      },
+    ];
+
+    const first = processMessageStream(entries, true);
+    const cached = processMessageStream(nextEntries, true, first.cache);
+    const full = processMessageStream(nextEntries, true);
+
+    expect(cached.streamMessages).toEqual(full.streamMessages);
+    expect(cached.streamMessages).toMatchObject([
+      { kind: 'prompt-group', status: 'interrupted' },
+      { kind: 'prompt-group', status: 'running' },
+    ]);
+  });
+
+  it('incrementally groups appended subagent child entries', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'prompt-1',
+        date: '2026-06-13T09:56:30.555Z',
+        type: 'user-prompt',
+        value: 'Explore',
+      },
+      {
+        id: 'tool-entry-1',
+        date: '2026-06-13T09:56:31.555Z',
+        type: 'tool-use',
+        toolId: 'call_subagent_1',
+        name: 'sub-agent',
+        input: {
+          agentType: 'explore',
+          description: 'Explore project',
+          prompt: 'Explore this repo',
+        },
+        result: { output: 'Done' },
+      },
+      {
+        id: 'result-1',
+        date: '2026-06-13T09:56:32.555Z',
+        isSynthetic: true,
+        type: 'result',
+        isError: false,
+      },
+    ];
+    const nextEntries: NormalizedEntry[] = [
+      ...entries,
+      {
+        id: 'child-assistant-1',
+        date: '2026-06-13T09:56:33.555Z',
+        parentToolId: 'call_subagent_1',
+        type: 'assistant-message',
+        value: 'Project summary',
+      },
+    ];
+
+    const first = processMessageStream(entries, false);
+    const cached = processMessageStream(nextEntries, false, first.cache);
+    const full = processMessageStream(nextEntries, false);
+
+    expect(cached.streamMessages).toEqual(full.streamMessages);
+    expect(cached.streamMessages[0]).toMatchObject({
+      kind: 'prompt-group',
+      childMessages: [
+        { kind: 'subagent', childEntries: [{ id: 'child-assistant-1' }] },
+      ],
+    });
+  });
+
+  it('rebuilds when an appended subagent child belongs to an earlier prompt', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'prompt-1',
+        date: '2026-06-13T09:56:30.555Z',
+        type: 'user-prompt',
+        value: 'Explore',
+      },
+      {
+        id: 'tool-entry-1',
+        date: '2026-06-13T09:56:31.555Z',
+        type: 'tool-use',
+        toolId: 'call_subagent_1',
+        name: 'sub-agent',
+        input: {
+          agentType: 'explore',
+          description: 'Explore project',
+          prompt: 'Explore this repo',
+        },
+        result: { output: 'Done' },
+      },
+      {
+        id: 'result-1',
+        date: '2026-06-13T09:56:32.555Z',
+        isSynthetic: true,
+        type: 'result',
+        isError: false,
+      },
+      {
+        id: 'prompt-2',
+        date: '2026-06-13T09:56:33.555Z',
+        type: 'user-prompt',
+        value: 'Continue',
+      },
+    ];
+    const nextEntries: NormalizedEntry[] = [
+      ...entries,
+      {
+        id: 'child-assistant-1',
+        date: '2026-06-13T09:56:34.555Z',
+        parentToolId: 'call_subagent_1',
+        type: 'assistant-message',
+        value: 'Project summary',
+      },
+    ];
+
+    const first = processMessageStream(entries, false);
+    const cached = processMessageStream(nextEntries, false, first.cache);
+    const full = processMessageStream(nextEntries, false);
+
+    expect(cached.streamMessages).toEqual(full.streamMessages);
+    expect(cached.streamMessages[0]).toMatchObject({
+      kind: 'prompt-group',
+      childMessages: [
+        { kind: 'subagent', childEntries: [{ id: 'child-assistant-1' }] },
       ],
     });
   });

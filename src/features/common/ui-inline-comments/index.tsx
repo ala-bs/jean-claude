@@ -1,23 +1,36 @@
 import { ImagePlus, Pencil, X } from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type React from 'react';
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+
+
 import {
   EMPTY_MENTION_OPTIONS,
   MENTION_TEXTAREA_CLASS,
-  MentionTextarea,
   type MentionOption,
+  MentionTextarea,
 } from '@/common/ui/mention-textarea';
-import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import {
   isVideoFile,
   VideoGifConverter,
-} from '@/features/pull-request/ui-video-gif-converter';
+} from '@/features/common/ui-video-gif-converter';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
+import { formatBytes } from '@/lib/format-bytes';
 import { formatLineRangeLabel } from '@/stores/utils-comment-store';
+import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
+
+
 
 // ---------------------------------------------------------------------------
 // Shared styling constants for inline comment UI
@@ -87,6 +100,8 @@ export function InlineCommentComposer({
   showCancel = true,
   mentionOptions = EMPTY_MENTION_OPTIONS,
   onSearchMentions,
+  onBodyChange,
+  onEmptyChange,
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -119,8 +134,23 @@ export function InlineCommentComposer({
   /** People available for @ mention insertion. */
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
+  /** Called when the draft body text changes (for external persistence). */
+  onBodyChange?: (body: string) => void;
+  /** Called when body + attachments become empty/non-empty. */
+  onEmptyChange?: (isEmpty: boolean) => void;
 }) {
-  const [body, setBody] = useState(initialBody);
+  const [body, setBodyRaw] = useState(initialBody);
+
+  const setBody = useCallback(
+    (value: string | ((prev: string) => string)) => {
+      setBodyRaw((prev) => {
+        const next = typeof value === 'function' ? value(prev) : value;
+        onBodyChange?.(next);
+        return next;
+      });
+    },
+    [onBodyChange],
+  );
   const [images, setImages] = useState<InlineComposerImage[]>(initialImages);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -135,24 +165,27 @@ export function InlineCommentComposer({
 
   const lineLabel = formatLineRangeLabel(lineStart, lineEnd);
 
-  const insertTextAtCursor = useCallback((text: string) => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      setBody((current) => `${current}${current ? '\n\n' : ''}${text}`);
-      return;
-    }
+  const insertTextAtCursor = useCallback(
+    (text: string) => {
+      const textarea = textareaRef.current;
+      if (!textarea) {
+        setBody((current) => `${current}${current ? '\n\n' : ''}${text}`);
+        return;
+      }
 
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    setBody(
-      (current) => `${current.slice(0, start)}${text}${current.slice(end)}`,
-    );
-    requestAnimationFrame(() => {
-      textarea.focus();
-      const cursor = start + text.length;
-      textarea.setSelectionRange(cursor, cursor);
-    });
-  }, []);
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      setBody(
+        (current) => `${current.slice(0, start)}${text}${current.slice(end)}`,
+      );
+      requestAnimationFrame(() => {
+        textarea.focus();
+        const cursor = start + text.length;
+        textarea.setSelectionRange(cursor, cursor);
+      });
+    },
+    [setBody],
+  );
 
   const handleImageAttach = useCallback(
     (image: PromptImagePart) => {
@@ -180,18 +213,21 @@ export function InlineCommentComposer({
     [allowImages, insertImagesInBody, insertTextAtCursor],
   );
 
-  const handleImageRemove = useCallback((index: number) => {
-    const image = imagesRef.current[index];
-    if (image?.placeholderMarkdown) {
-      setBody((current) =>
-        current.replace(image.placeholderMarkdown ?? '', ''),
-      );
-    }
+  const handleImageRemove = useCallback(
+    (index: number) => {
+      const image = imagesRef.current[index];
+      if (image?.placeholderMarkdown) {
+        setBody((current) =>
+          current.replace(image.placeholderMarkdown ?? '', ''),
+        );
+      }
 
-    const nextImages = imagesRef.current.filter((_, i) => i !== index);
-    imagesRef.current = nextImages;
-    setImages(nextImages);
-  }, []);
+      const nextImages = imagesRef.current.filter((_, i) => i !== index);
+      imagesRef.current = nextImages;
+      setImages(nextImages);
+    },
+    [setBody],
+  );
 
   const handleSubmit = useCallback(() => {
     if (isSubmitting) return;
@@ -279,7 +315,15 @@ export function InlineCommentComposer({
 
   const isDisabled =
     isSubmitting || (!body.trim() && images.length === 0 && !canSubmitEmpty);
-  const previewMarkdown = markdownWithLocalImages(body, images);
+  useEffect(() => {
+    onEmptyChange?.(!body.trim() && images.length === 0);
+  }, [body, images.length, onEmptyChange]);
+
+  const debouncedPreviewBody = useDebouncedValue(body, 300);
+  const previewMarkdown = useMemo(
+    () => markdownWithLocalImages(debouncedPreviewBody, images),
+    [debouncedPreviewBody, images],
+  );
 
   return (
     <div className="flex flex-col gap-2">
@@ -332,8 +376,14 @@ export function InlineCommentComposer({
               <img
                 src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                 alt={img.filename || 'Attached image'}
+                title={img.sizeBytes ? formatBytes(img.sizeBytes) : undefined}
                 className="h-8 w-8 rounded border border-white/10 object-cover"
               />
+              {img.sizeBytes && (
+                <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                  {formatBytes(img.sizeBytes)}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => handleImageRemove(index)}
@@ -532,7 +582,11 @@ export function InlineCommentBubble({
     setIsEditing(false);
   }, [editBody, editImages, body, currentImages, onEdit, cancelEditing]);
 
-  const editPreviewMarkdown = markdownWithLocalImages(editBody, editImages);
+  const debouncedEditPreviewBody = useDebouncedValue(editBody, 300);
+  const editPreviewMarkdown = useMemo(
+    () => markdownWithLocalImages(debouncedEditPreviewBody, editImages),
+    [debouncedEditPreviewBody, editImages],
+  );
 
   // Focus textarea when entering edit mode
   useEffect(() => {
@@ -713,12 +767,24 @@ export function InlineCommentBubble({
             {currentImages.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {currentImages.map((img, index) => (
-                  <img
+                  <div
                     key={`${img.filename ?? 'img'}-${index}`}
-                    src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
-                    alt={img.filename || 'Attached image'}
-                    className="h-8 w-8 rounded border border-white/10 object-cover"
-                  />
+                    className="relative"
+                  >
+                    <img
+                      src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
+                      alt={img.filename || 'Attached image'}
+                      title={
+                        img.sizeBytes ? formatBytes(img.sizeBytes) : undefined
+                      }
+                      className="h-8 w-8 rounded border border-white/10 object-cover"
+                    />
+                    {img.sizeBytes && (
+                      <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                        {formatBytes(img.sizeBytes)}
+                      </span>
+                    )}
+                  </div>
                 ))}
               </div>
             )}

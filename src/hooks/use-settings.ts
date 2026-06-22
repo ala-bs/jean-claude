@@ -1,26 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
-import { api } from '@/lib/api';
-import { BUILTIN_SNIPPETS, BUILTIN_SNIPPET_IDS } from '@/lib/builtin-snippets';
+
+
 import type {
   AiGenerationSetting,
-  BackendModelPresetsSetting,
   AiSkillSlotsSetting,
+  AppearanceSetting,
   AppSettings,
+  BackendDefaultModelsSetting,
+  BackendModelPresetsSetting,
   BackendsSetting,
   CalendarNotificationsSetting,
   EditorAutomationSetting,
   EditorSetting,
-  PromptSnippetsSetting,
   ProjectPromptPrefaceSetting,
   PromptPrefaceSetting,
+  PromptSnippetsSetting,
+  RateLimitSwapSetting,
+  RawMessageCleanupSetting,
   SummaryModelsSetting,
   TaskEventNotificationsSetting,
   ThinkingSettingsSetting,
   UsageDisplaySetting,
 } from '@shared/types';
+import { BUILTIN_SNIPPET_IDS, BUILTIN_SNIPPETS } from '@/lib/builtin-snippets';
+import { api } from '@/lib/api';
 import { PRESET_EDITORS } from '@shared/types';
+
+
 
 export function useSetting<K extends keyof AppSettings>(key: K) {
   return useQuery({
@@ -68,6 +76,44 @@ export function useUpdateEditorSetting() {
 
 export function useEditorAutomationSetting() {
   return useSetting('editorAutomation');
+}
+
+export function useRawMessageCleanupSetting() {
+  return useSetting('rawMessageCleanup');
+}
+
+export function useUpdateRawMessageCleanupSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: RawMessageCleanupSetting) =>
+      api.settings.set('rawMessageCleanup', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'rawMessageCleanup'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const hadPrevious = queryClient.getQueryData(queryKey) !== undefined;
+      const previous =
+        queryClient.getQueryData<RawMessageCleanupSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { hadPrevious, previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.hadPrevious) {
+        queryClient.setQueryData(
+          ['settings', 'rawMessageCleanup'],
+          context.previous,
+        );
+      } else {
+        queryClient.removeQueries({
+          queryKey: ['settings', 'rawMessageCleanup'],
+        });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'rawMessageCleanup'],
+      });
+    },
+  });
 }
 
 export function useUpdateEditorAutomationSetting() {
@@ -121,6 +167,18 @@ export function useUpdateBackendsSetting() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (value: BackendsSetting) => api.settings.set('backends', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'backends'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<BackendsSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(['settings', 'backends'], context.previous);
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings', 'backends'] });
     },
@@ -137,21 +195,118 @@ export function useUsageDisplaySetting() {
   return useSetting('usageDisplay');
 }
 
+export function useAppearanceSetting() {
+  return useSetting('appearance');
+}
+
+export function useUpdateAppearanceSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: AppearanceSetting) =>
+      api.settings.set('appearance', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'appearance'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const hadPrevious = queryClient.getQueryData(queryKey) !== undefined;
+      const previous = queryClient.getQueryData<AppearanceSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { hadPrevious, previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.hadPrevious) {
+        queryClient.setQueryData(['settings', 'appearance'], context.previous);
+      } else {
+        queryClient.removeQueries({ queryKey: ['settings', 'appearance'] });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'appearance'] });
+    },
+  });
+}
+
 export function useUpdateUsageDisplaySetting() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (value: UsageDisplaySetting) =>
-      api.settings.set('usageDisplay', value),
+      api.usageDisplay.saveSettings(value),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['settings', 'usageDisplay'],
       });
+      queryClient.invalidateQueries({ queryKey: ['backend-usage'] });
     },
   });
 }
 
 export function useSummaryModelsSetting() {
   return useSetting('summaryModels');
+}
+
+export function useBackendDefaultModelsSetting() {
+  return useSetting('backendDefaultModels');
+}
+
+// Convenience hooks for rate limit swap setting
+export function useRateLimitSwapSetting() {
+  return useSetting('rateLimitSwap');
+}
+
+export function useUpdateRateLimitSwapSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: RateLimitSwapSetting) =>
+      api.settings.set('rateLimitSwap', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'rateLimitSwap'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<RateLimitSwapSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ['settings', 'rateLimitSwap'],
+          context.previous,
+        );
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'rateLimitSwap'],
+      });
+    },
+  });
+}
+
+export function useUpdateBackendDefaultModelsSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: BackendDefaultModelsSetting) =>
+      api.settings.set('backendDefaultModels', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'backendDefaultModels'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous =
+        queryClient.getQueryData<BackendDefaultModelsSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ['settings', 'backendDefaultModels'],
+          context.previous,
+        );
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'backendDefaultModels'],
+      });
+    },
+  });
 }
 
 export function useUpdateSummaryModelsSetting() {
@@ -176,6 +331,22 @@ export function useUpdateThinkingSettingsSetting() {
   return useMutation({
     mutationFn: (value: ThinkingSettingsSetting) =>
       api.settings.set('thinkingSettings', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'thinkingSettings'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous =
+        queryClient.getQueryData<ThinkingSettingsSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ['settings', 'thinkingSettings'],
+          context.previous,
+        );
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['settings', 'thinkingSettings'],
@@ -231,6 +402,22 @@ export function useUpdateBackendModelPresetsSetting() {
   return useMutation({
     mutationFn: (value: BackendModelPresetsSetting) =>
       api.settings.set('backendModelPresets', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'backendModelPresets'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous =
+        queryClient.getQueryData<BackendModelPresetsSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ['settings', 'backendModelPresets'],
+          context.previous,
+        );
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['settings', 'backendModelPresets'],

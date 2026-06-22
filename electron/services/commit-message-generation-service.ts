@@ -5,13 +5,15 @@ import type { AgentBackendType } from '@shared/agent-backend-types';
 
 import { dbg } from '../lib/debug';
 
-import { generateText } from './ai-generation-service';
-import { resolveAiSkillSlot } from './ai-skill-slot-resolver';
 import {
   getWorktreeCommitLog,
   getWorktreeDiff,
   getWorktreeUnifiedDiff,
 } from './worktree-service';
+import { generateText } from './ai-generation-service';
+import { resolveAiSkillSlot } from './ai-skill-slot-resolver';
+
+
 
 const execAsync = promisify(exec) as (
   command: string,
@@ -122,6 +124,7 @@ export async function generateMergeCommitMessage({
   backend,
   model,
   skillName,
+  usageContext,
 }: {
   branchName: string;
   targetBranch: string;
@@ -131,6 +134,7 @@ export async function generateMergeCommitMessage({
   backend: AgentBackendType;
   model: string;
   skillName?: string | null;
+  usageContext?: Parameters<typeof generateText>[0]['usageContext'];
 }): Promise<{ title: string; body: string } | null> {
   const prompt = buildPrompt({
     branchName,
@@ -154,6 +158,7 @@ export async function generateMergeCommitMessage({
     skillName,
     outputSchema: COMMIT_MESSAGE_SCHEMA,
     throwOnError: true,
+    usageContext,
   });
 
   const parsed = parseTitleBodyResult(result);
@@ -172,11 +177,13 @@ export async function generateMergeCommitMessage({
  */
 export async function generateMergeMessageForTask(
   task: {
+    id?: string;
     worktreePath: string | null;
     startCommitHash: string | null;
     sourceBranch: string | null;
     branchName: string | null;
     projectId: string;
+    name?: string | null;
   },
   project: {
     aiSkillSlots: Parameters<typeof resolveAiSkillSlot>[1];
@@ -253,6 +260,13 @@ export async function generateMergeMessageForTask(
       backend: slotConfig.backend,
       model: slotConfig.model,
       skillName: slotConfig.skillName,
+      usageContext: {
+        feature: 'merge-message',
+        projectId: task.projectId,
+        taskId: task.id ?? null,
+        stepId: null,
+        taskName: task.name ?? null,
+      },
     });
 
     if (result) {
@@ -326,11 +340,13 @@ ${sanitizeForPrompt(stagedDiff) || '(no changes)'}
  */
 export async function generateCommitMessageForTask(
   task: {
+    id?: string;
     worktreePath: string | null;
     startCommitHash: string | null;
     sourceBranch: string | null;
     branchName: string | null;
     projectId: string;
+    name?: string | null;
   },
   project: {
     aiSkillSlots: Parameters<typeof resolveAiSkillSlot>[1];
@@ -377,6 +393,13 @@ export async function generateCommitMessageForTask(
       prompt,
       skillName: slotConfig.skillName,
       outputSchema: COMMIT_MESSAGE_SCHEMA,
+      usageContext: {
+        feature: 'commit-message',
+        projectId: task.projectId,
+        taskId: task.id ?? null,
+        stepId: null,
+        taskName: task.name ?? null,
+      },
     });
 
     const parsed = parseTitleBodyResult(result);

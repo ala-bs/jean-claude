@@ -1,11 +1,12 @@
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
 
-import { Button } from '@/common/ui/button';
 import {
-  useMcpTemplates,
   useDeleteMcpTemplate,
+  useMcpTemplates,
 } from '@/hooks/use-mcp-templates';
+import { Button } from '@/common/ui/button';
+
 
 import { McpTemplateForm } from './mcp-template-form';
 import { McpTemplateList } from './mcp-template-list';
@@ -54,14 +55,10 @@ export function McpServersSettings() {
       {/* Left: List */}
       <div className="w-80 flex-shrink-0">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-ink-1 text-lg font-semibold">MCP Servers</h2>
           <Button onClick={handleCreate} size="sm" icon={<Plus />}>
             Add
           </Button>
         </div>
-        <p className="text-ink-3 mb-4 text-sm">
-          Configure MCP servers to auto-install when creating worktrees.
-        </p>
         <McpTemplateList
           templates={templates ?? []}
           selectedId={selectedId}

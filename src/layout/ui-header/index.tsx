@@ -1,40 +1,47 @@
 import {
+  Activity,
+  BarChart3,
   ClipboardList,
-  X,
+  History,
   Menu,
   RefreshCw,
   SlidersHorizontal,
   Terminal,
   Workflow,
+  X,
 } from 'lucide-react';
 import {
+  type CSSProperties,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
 } from 'react';
 
-import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
-import { useModal } from '@/common/context/modal';
-import { useCommands } from '@/common/hooks/use-commands';
-import { Button } from '@/common/ui/button';
+import { api, type ReloadPreviewProgress } from '@/lib/api';
 import {
   Dropdown,
   DropdownDivider,
   DropdownInfo,
   DropdownItem,
 } from '@/common/ui/dropdown';
+import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
-import { useProjectTodoCount } from '@/hooks/use-project-todos';
-import { useProjects } from '@/hooks/use-projects';
-import { api, type ReloadPreviewProgress } from '@/lib/api';
 import { useBacklogSelectedProjectId } from '@/stores/backlog-overlay-draft';
+import { useChangelogStore } from '@/stores/changelog';
+import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentVisibleProject } from '@/stores/navigation';
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
+import { useModal } from '@/common/context/modal';
 import { useOverlaysStore } from '@/stores/overlays';
+import { useProjects } from '@/hooks/use-projects';
+import { useProjectTodoCount } from '@/hooks/use-project-todos';
 import { useTaskMessagesStore } from '@/stores/task-messages';
+
+
 
 import { ActivityButton } from './activity-button';
 import { CompletionCostDisplay } from './completion-cost-display';
@@ -191,11 +198,11 @@ function ReloadPreviewModal({
     : Math.min(reloadStepCount - 1, activeStepIndex);
 
   useEffect(() => {
-    setProgress(initialReloadProgress);
+    startTransition(() => setProgress(initialReloadProgress));
     progressRef.current = initialReloadProgress;
-    setStepStartedAt(startedAt);
+    startTransition(() => setStepStartedAt(startedAt));
     stepStartedAtRef.current = startedAt;
-    setStepDurations({});
+    startTransition(() => setStepDurations({}));
     return api.app.onReloadPreviewProgress((nextProgress) => {
       const currentProgress = progressRef.current;
       if (currentProgress.step !== nextProgress.step) {
@@ -396,6 +403,7 @@ export function Header() {
   const { projectId } = useCurrentVisibleProject();
   const { data: projects = [] } = useProjects();
   const openOverlay = useOverlaysStore((state) => state.open);
+  const openChangelog = useChangelogStore((state) => state.open);
   const persistedBacklogProjectId = useBacklogSelectedProjectId();
   const backlogProjectId = projects.some(
     (project) => project.id === persistedBacklogProjectId,
@@ -583,6 +591,9 @@ export function Header() {
           >
             Pipelines
           </DropdownItem>
+          <DropdownItem icon={<History />} onClick={openChangelog}>
+            Changelog
+          </DropdownItem>
           <DropdownItem
             icon={<Terminal />}
             onClick={() => openOverlay('running-commands')}
@@ -626,6 +637,25 @@ export function Header() {
           <DropdownDivider />
           <DropdownInfo label="Build" value={commitHash} />
         </Dropdown>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<BarChart3 />}
+          title="AI usage"
+          aria-label="Open AI usage"
+          onClick={() => openOverlay('usage')}
+          className="ml-1 px-2"
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<Activity />}
+          title="Work activity"
+          aria-label="Open work activity"
+          onClick={() => openOverlay('work-activity')}
+          className="px-2"
+        />
+        <NextMeetingButton />
         {api.app.isDevMode && (
           <div
             className="group relative ml-2 flex items-center gap-1 rounded-full border border-amber-400/50 bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] text-amber-200 shadow-[0_0_16px_oklch(0.8_0.18_80_/_0.22)]"
@@ -671,7 +701,6 @@ export function Header() {
           } as CSSProperties
         }
       >
-        <NextMeetingButton />
         <RamUsageDisplay />
         <CompletionCostDisplay />
         <UsageDisplay />

@@ -1,9 +1,12 @@
-import { useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { useCallback, useMemo } from 'react';
+import { useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+
+
 import { clearReviewCommentsForTask } from './review-comments';
+import { clearTaskReviewDraftsForTask } from './task-review-comment-drafts';
 
 // Discriminated union for right pane types
 export type RightPane =
@@ -35,6 +38,12 @@ export type RightPane =
     };
 
 export type ReviewMode = 'changes' | 'files' | 'commits';
+export type AddStepPresetType = 'new-session' | 'continue' | 'review-changes';
+
+interface AddStepDialogDraft {
+  promptTemplate: string;
+  presetType: AddStepPresetType;
+}
 
 interface DiffViewState {
   selectedFilePath: string | null;
@@ -61,11 +70,15 @@ export type PrDetailTab = 'overview' | 'files' | 'commits';
 interface PrViewState {
   selectedFile: string | null;
   activeTab: PrDetailTab;
+  selectedCommitId: string | null;
+  selectedCommitFile: string | null;
 }
 
 const defaultPrViewState: PrViewState = {
   selectedFile: null,
   activeTab: 'overview',
+  selectedCommitId: null,
+  selectedCommitFile: null,
 };
 
 interface TaskState {
@@ -76,6 +89,11 @@ interface TaskState {
   activeStepId: string | null;
   prDraft?: PrDraft;
 }
+
+const defaultAddStepDialogDraft: AddStepDialogDraft = {
+  promptTemplate: '',
+  presetType: 'new-session',
+};
 
 const defaultDiffViewState: DiffViewState = {
   selectedFilePath: null,
@@ -192,6 +210,7 @@ interface NavigationState {
 
   // Per-task: state including right pane
   taskState: Record<string, TaskState>; // taskId -> state
+  addStepDrafts: Record<string, AddStepDialogDraft>; // taskId -> draft
 
   // Per-PR: view state (selected file, active tab)
   prState: Record<string, PrViewState>; // `${projectId}:${prId}` -> state
@@ -225,8 +244,12 @@ interface NavigationState {
   ) => void;
   setActiveStepId: (taskId: string, stepId: string | null) => void;
   setPrDraft: (taskId: string, draft: PrDraft) => void;
+  setAddStepDraft: (taskId: string, draft: Partial<AddStepDialogDraft>) => void;
+  clearAddStepDraft: (taskId: string) => void;
   setPrSelectedFile: (prKey: string, filePath: string | null) => void;
   setPrActiveTab: (prKey: string, tab: PrDetailTab) => void;
+  setPrSelectedCommit: (prKey: string, commitId: string | null) => void;
+  setPrSelectedCommitFile: (prKey: string, filePath: string | null) => void;
   clearPrNavState: (prKey: string) => void;
   reconcilePrState: (activePrKeys: Set<string>) => void;
   setReviewMode: (taskId: string, mode: ReviewMode) => void;
@@ -251,6 +274,7 @@ const useStore = create<NavigationState>()(
       sidebarTab: 'tasks' as 'tasks' | 'prs',
       lastTaskByProject: {},
       taskState: {},
+      addStepDrafts: {},
       prState: {},
 
       setLastLocation: (location) => set({ lastLocation: location }),
@@ -492,6 +516,28 @@ const useStore = create<NavigationState>()(
           };
         }),
 
+      setAddStepDraft: (taskId, draft) =>
+        set((state) => ({
+          addStepDrafts: {
+            ...state.addStepDrafts,
+            [taskId]: {
+              ...defaultAddStepDialogDraft,
+              ...state.addStepDrafts[taskId],
+              ...draft,
+            },
+          },
+        })),
+
+      clearAddStepDraft: (taskId) =>
+        set((state) => {
+          if (!state.addStepDrafts[taskId]) return state;
+
+          const { [taskId]: _, ...restAddStepDrafts } = state.addStepDrafts;
+          return {
+            addStepDrafts: restAddStepDrafts,
+          };
+        }),
+
       setReviewMode: (taskId, mode) =>
         set((state) => ({
           taskState: {
@@ -531,6 +577,31 @@ const useStore = create<NavigationState>()(
           },
         })),
 
+      setPrSelectedCommit: (prKey, commitId) =>
+        set((state) => ({
+          prState: {
+            ...state.prState,
+            [prKey]: {
+              ...defaultPrViewState,
+              ...state.prState[prKey],
+              selectedCommitId: commitId,
+              selectedCommitFile: null,
+            },
+          },
+        })),
+
+      setPrSelectedCommitFile: (prKey, filePath) =>
+        set((state) => ({
+          prState: {
+            ...state.prState,
+            [prKey]: {
+              ...defaultPrViewState,
+              ...state.prState[prKey],
+              selectedCommitFile: filePath,
+            },
+          },
+        })),
+
       clearPrNavState: (prKey) =>
         set((state) => {
           const { [prKey]: _, ...rest } = state.prState;
@@ -565,11 +636,13 @@ const useStore = create<NavigationState>()(
         }),
 
       clearTaskNavHistoryState: (taskId) => {
-        // Clear associated review comments (outside zustand set to avoid circular state)
+        // Clear associated review state (outside zustand set to avoid circular state)
         clearReviewCommentsForTask(taskId);
+        clearTaskReviewDraftsForTask(taskId);
 
         set((state) => {
           const { [taskId]: _, ...restTaskState } = state.taskState;
+          const { [taskId]: __, ...restAddStepDrafts } = state.addStepDrafts;
 
           // Also remove from lastTaskByProject if this task was the last viewed
           const newLastTaskByProject = { ...state.lastTaskByProject };
@@ -595,6 +668,7 @@ const useStore = create<NavigationState>()(
 
           return {
             taskState: restTaskState,
+            addStepDrafts: restAddStepDrafts,
             lastTaskByProject: newLastTaskByProject,
             lastLocation: newLastLocation,
           };
@@ -621,6 +695,7 @@ const useStore = create<NavigationState>()(
             },
           ]),
         ),
+        addStepDrafts: state.addStepDrafts,
       }),
       merge: (persisted, current) => {
         const persistedState = persisted as Partial<NavigationState>;
@@ -628,27 +703,43 @@ const useStore = create<NavigationState>()(
 
         // Rehydrate collapsedFolders from arrays back to Sets
         if (persistedState.taskState) {
+          const migratedAddStepDrafts: Record<string, AddStepDialogDraft> = {};
           merged.taskState = Object.fromEntries(
             Object.entries(persistedState.taskState).map(
               ([taskId, taskState]) => [
                 taskId,
-                {
-                  ...defaultTaskState,
-                  ...taskState,
-                  diffView: {
-                    ...defaultDiffViewState,
-                    ...taskState.diffView,
-                    collapsedFolders: new Set(
-                      (taskState.diffView?.collapsedFolders as any) ?? [],
-                    ),
-                    reviewMode:
-                      (taskState.diffView?.reviewMode as ReviewMode) ??
-                      'changes',
-                  },
-                },
+                (() => {
+                  const legacyTaskState = taskState as TaskState & {
+                    addStepDraft?: AddStepDialogDraft;
+                  };
+                  if (legacyTaskState.addStepDraft) {
+                    migratedAddStepDrafts[taskId] =
+                      legacyTaskState.addStepDraft;
+                  }
+                  const { addStepDraft: _, ...taskStateWithoutDraft } =
+                    legacyTaskState;
+                  return {
+                    ...defaultTaskState,
+                    ...taskStateWithoutDraft,
+                    diffView: {
+                      ...defaultDiffViewState,
+                      ...taskState.diffView,
+                      collapsedFolders: new Set(
+                        (taskState.diffView?.collapsedFolders as any) ?? [],
+                      ),
+                      reviewMode:
+                        (taskState.diffView?.reviewMode as ReviewMode) ??
+                        'changes',
+                    },
+                  };
+                })(),
               ],
             ),
           );
+          merged.addStepDrafts = {
+            ...migratedAddStepDrafts,
+            ...persistedState.addStepDrafts,
+          };
         }
 
         return merged as NavigationState;
@@ -901,6 +992,26 @@ export function useTaskState(taskId: string) {
   };
 }
 
+export function useAddStepDialogDraft(taskId: string) {
+  const draft = useStore(
+    (state) => state.addStepDrafts[taskId] ?? defaultAddStepDialogDraft,
+  );
+  const setDraftAction = useStore((state) => state.setAddStepDraft);
+  const clearDraftAction = useStore((state) => state.clearAddStepDraft);
+
+  const setDraft = useCallback(
+    (update: Partial<AddStepDialogDraft>) => setDraftAction(taskId, update),
+    [taskId, setDraftAction],
+  );
+
+  const clearDraft = useCallback(
+    () => clearDraftAction(taskId),
+    [taskId, clearDraftAction],
+  );
+
+  return { draft, setDraft, clearDraft };
+}
+
 export function useTaskFileExplorerState(taskId: string) {
   const fileExplorerState = useStore(
     (state) =>
@@ -1086,7 +1197,40 @@ export function usePrDetailState(projectId: string, prId: number) {
     [prKey, clearPrNavStateAction],
   );
 
-  return { selectedFile, activeTab, setSelectedFile, setActiveTab, clearState };
+  const selectedCommitId = useStore(
+    (state) => state.prState[prKey]?.selectedCommitId ?? null,
+  );
+  const selectedCommitFile = useStore(
+    (state) => state.prState[prKey]?.selectedCommitFile ?? null,
+  );
+  const setPrSelectedCommitAction = useStore(
+    (state) => state.setPrSelectedCommit,
+  );
+  const setPrSelectedCommitFileAction = useStore(
+    (state) => state.setPrSelectedCommitFile,
+  );
+
+  const setSelectedCommit = useCallback(
+    (commitId: string | null) => setPrSelectedCommitAction(prKey, commitId),
+    [prKey, setPrSelectedCommitAction],
+  );
+
+  const setSelectedCommitFile = useCallback(
+    (filePath: string | null) => setPrSelectedCommitFileAction(prKey, filePath),
+    [prKey, setPrSelectedCommitFileAction],
+  );
+
+  return {
+    selectedFile,
+    activeTab,
+    selectedCommitId,
+    selectedCommitFile,
+    setSelectedFile,
+    setActiveTab,
+    setSelectedCommit,
+    setSelectedCommitFile,
+    clearState,
+  };
 }
 
 // Hook for diff file tree width

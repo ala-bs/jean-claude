@@ -1,23 +1,30 @@
 import type {
-  Event as OcEvent,
-  Part as OcPart,
-  Message as OcMessage,
   AssistantMessage as OcAssistantMessage,
+  Event as OcEvent,
+  Message as OcMessage,
+  Part as OcPart,
 } from '@opencode-ai/sdk/v2';
 
 import type { AgentMessage } from '@shared/agent-types';
-import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import { CURRENT_NORMALIZATION_VERSION } from '@shared/normalized-message-v2';
+import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
-import type { NormalizationContext } from '../../services/agent-backends/claude/normalize-claude-message-v2';
-import { normalizeClaudeMessageV2 } from '../../services/agent-backends/claude/normalize-claude-message-v2';
+
+import {
+  createCodexNormalizationContext,
+  normalizeCodexNotification,
+} from '../../services/agent-backends/codex/normalize-codex-message-v2';
 import {
   normalizeOpenCodeV2,
   type OpenCodeNormalizationContext,
   type OpenCodeRawInput,
 } from '../../services/agent-backends/opencode/normalize-opencode-message-v2';
-import { replayOpenCodeContextUpdate } from '../../services/agent-backends/opencode/opencode-context-replay';
 import { db } from '../index';
+import type { NormalizationContext } from '../../services/agent-backends/claude/normalize-claude-message-v2';
+import { normalizeClaudeMessageV2 } from '../../services/agent-backends/claude/normalize-claude-message-v2';
+import { replayOpenCodeContextUpdate } from '../../services/agent-backends/opencode/opencode-context-replay';
+
+
 
 import { decodeRawMessageData } from './raw-message-data';
 
@@ -293,7 +300,7 @@ export const AgentMessageRepository = {
     for (const raw of rawRows) {
       pairs.push({
         messageIndex: raw.messageIndex,
-        rawData: decodeRawMessageData(raw),
+        rawData: await decodeRawMessageData(raw),
         rawFormat: raw.rawFormat,
         backendSessionId: raw.backendSessionId,
         normalizedData: normalizedByRawId.get(raw.rawId) ?? null,
@@ -382,7 +389,7 @@ export const AgentMessageRepository = {
       };
 
       for (const raw of rawRows) {
-        const rawData = decodeRawMessageData(raw);
+        const rawData = await decodeRawMessageData(raw);
         if (!rawData || raw.rawFormat !== 'claude-code') continue;
         const rawMsg = JSON.parse(rawData) as AgentMessage;
         const events = normalizeClaudeMessageV2(rawMsg, claudeCtx);
@@ -439,7 +446,7 @@ export const AgentMessageRepository = {
       };
 
       for (const raw of rawRows) {
-        const rawData = decodeRawMessageData(raw);
+        const rawData = await decodeRawMessageData(raw);
         if (!rawData || raw.rawFormat !== 'opencode') continue;
         const parsed = JSON.parse(rawData);
 
@@ -490,6 +497,61 @@ export const AgentMessageRepository = {
         for (const event of events) {
           if (event.type === 'entry') {
             ocCtx.emittedEntryIds.add(event.entry.id);
+            const idx = entries.length;
+            entries.push({
+              originalIndex: raw.messageIndex,
+              rawMessageId: raw.id,
+              stepId: raw.stepId,
+              entry: event.entry,
+            });
+            if (event.entry.type === 'tool-use') {
+              toolIdToEntryIndex.set(event.entry.toolId, idx);
+            }
+          }
+          if (event.type === 'entry-update') {
+            const idx = entries.findIndex((e) => e.entry.id === event.entry.id);
+            if (idx !== -1) {
+              entries[idx].entry = event.entry;
+            }
+          }
+          if (event.type === 'tool-result') {
+            const idx = toolIdToEntryIndex.get(event.toolId);
+            if (idx !== undefined) {
+              const existing = entries[idx].entry;
+              if (existing.type === 'tool-use') {
+                entries[idx].entry = {
+                  ...existing,
+                  result: event.result,
+                } as NormalizedEntry;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (formats.has('codex')) {
+      const codexCtx = createCodexNormalizationContext();
+
+      for (const raw of rawRows) {
+        const rawData = await decodeRawMessageData(raw);
+        if (!rawData || raw.rawFormat !== 'codex') continue;
+        const parsed = JSON.parse(rawData) as {
+          method?: unknown;
+          params?: unknown;
+        };
+        if (typeof parsed.method !== 'string') continue;
+
+        const events = normalizeCodexNotification(
+          {
+            method: parsed.method,
+            params: record(parsed.params),
+          },
+          codexCtx,
+        );
+
+        for (const event of events) {
+          if (event.type === 'entry') {
             const idx = entries.length;
             entries.push({
               originalIndex: raw.messageIndex,
@@ -577,4 +639,11 @@ function tryParseJson(content: string): Record<string, unknown> | null {
     // not JSON
   }
   return null;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
 }

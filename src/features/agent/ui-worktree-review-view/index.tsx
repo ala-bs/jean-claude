@@ -1,5 +1,3 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import clsx from 'clsx';
 import { FileX, FolderX, Loader2, RefreshCw } from 'lucide-react';
 import React, {
   useCallback,
@@ -8,45 +6,54 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
 
-import { useCommands } from '@/common/hooks/use-commands';
-import { Separator } from '@/common/ui/separator';
-import { getFilesWithAnnotations } from '@/features/agent/ui-diff-annotation';
-import { SummaryPanel } from '@/features/agent/ui-summary-panel';
-import { WorktreeActions } from '@/features/agent/ui-worktree-actions';
-import {
-  DiffFileTree,
-  FileDiffContent,
-  normalizeWorktreeStatus,
-} from '@/features/common/ui-file-diff';
-import type { DiffFile, DiffFileStatus } from '@/features/common/ui-file-diff';
-import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
-import { useTaskSummary } from '@/hooks/use-task-summary';
-import {
-  useWorktreeDiff,
-  useWorktreeFileContent,
-  useWorktreeCommits,
-  useWorktreeCommitDiff,
-  useWorktreeCommitFileContent,
-} from '@/hooks/use-worktree-diff';
+
 import {
   api,
   type FileAnnotation,
   type WorktreeCommit,
   type WorktreeDiffFile,
 } from '@/lib/api';
-import { useBackgroundJobsStore } from '@/stores/background-jobs';
-import { useDiffFileTreeWidth, type ReviewMode } from '@/stores/navigation';
+import type { DiffFile, DiffFileStatus } from '@/features/common/ui-file-diff';
 import {
-  useReviewCommentsStore,
-  useReviewCommentsForFile,
-  useReviewCommentsForCommitFile,
-  useReviewCommentsByFile,
-  useReviewCommentsByCommitFile,
-  type ReviewPresetId,
-} from '@/stores/review-comments';
-import type { PromptImagePart } from '@shared/agent-backend-types';
+  DiffFileTree,
+  FileDiffContent,
+  normalizeWorktreeStatus,
+} from '@/features/common/ui-file-diff';
 import { isImagePath, isSvgPath } from '@shared/image-types';
+import { type ReviewMode, useDiffFileTreeWidth } from '@/stores/navigation';
+import {
+  type ReviewPresetId,
+  useReviewCommentsByCommitFile,
+  useReviewCommentsByFile,
+  useReviewCommentsForCommitFile,
+  useReviewCommentsForFile,
+  useReviewCommentsStore,
+} from '@/stores/review-comments';
+import {
+  useTaskReviewDraftCountByFile,
+  useTaskReviewFileDrafts,
+} from '@/stores/task-review-comment-drafts';
+import {
+  useWorktreeCommitDiff,
+  useWorktreeCommitFileContent,
+  useWorktreeCommits,
+  useWorktreeDiff,
+  useWorktreeFileContent,
+} from '@/hooks/use-worktree-diff';
+import { getFilesWithAnnotations } from '@/features/agent/ui-diff-annotation';
+import type { PromptImagePart } from '@shared/agent-backend-types';
+import { Separator } from '@/common/ui/separator';
+import { SummaryPanel } from '@/features/agent/ui-summary-panel';
+import { useBackgroundJobsStore } from '@/stores/background-jobs';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
+import { useTaskSummary } from '@/hooks/use-task-summary';
+import { WorktreeActions } from '@/features/agent/ui-worktree-actions';
+
+
 
 import { ReviewCommitsPanel } from './review-commits-panel';
 import { ReviewFilesTree } from './review-files-tree';
@@ -182,7 +189,12 @@ export function WorktreeReviewView({
 
   // Review comments state
   const commentCountByFile = useReviewCommentsByFile(taskId);
+  const draftCountByFile = useTaskReviewDraftCountByFile({ taskId });
   const commitCommentCountByFile = useReviewCommentsByCommitFile({
+    taskId,
+    commitHash: selectedCommitHash,
+  });
+  const commitDraftCountByFile = useTaskReviewDraftCountByFile({
     taskId,
     commitHash: selectedCommitHash,
   });
@@ -307,10 +319,10 @@ export function WorktreeReviewView({
   );
 
   // Keyboard shortcut for opening submit review overlay (cmd+enter)
-  const selectedFile = useMemo(() => {
-    if (!selectedFilePath || !data?.files) return null;
-    return data.files.find((f) => f.path === selectedFilePath) ?? null;
-  }, [selectedFilePath, data?.files]);
+  const selectedFile =
+    selectedFilePath && data?.files
+      ? (data.files.find((f) => f.path === selectedFilePath) ?? null)
+      : null;
 
   // Convert worktree files to unified DiffFile format for the tree
   const diffFiles: DiffFile[] = useMemo(() => {
@@ -318,7 +330,7 @@ export function WorktreeReviewView({
       path: f.path,
       status: normalizeWorktreeStatus(f.status),
     }));
-  }, [data?.files]);
+  }, [data]);
 
   // Build set of files that have annotations for the tree indicator
   const filesWithAnnotations = useMemo(() => {
@@ -342,7 +354,7 @@ export function WorktreeReviewView({
       }
     }
     return map;
-  }, [fileExplorerRootPath, data?.files]);
+  }, [fileExplorerRootPath, data]);
 
   const fileExplorerCommentCountByFile = useMemo(() => {
     const map = new Map<string, number>();
@@ -354,6 +366,17 @@ export function WorktreeReviewView({
 
     return map;
   }, [fileExplorerRootPath, commentCountByFile]);
+
+  const fileExplorerDraftCountByFile = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!fileExplorerRootPath) return map;
+
+    for (const [filePath, count] of Object.entries(draftCountByFile)) {
+      map.set(fileExplorerRootPath + '/' + filePath, count);
+    }
+
+    return map;
+  }, [fileExplorerRootPath, draftCountByFile]);
 
   if (isLoading) {
     return (
@@ -456,6 +479,7 @@ export function WorktreeReviewView({
                 onSelectFile={onSelectFile}
                 filesWithAnnotations={filesWithAnnotations}
                 commentCountByFile={commentCountByFile}
+                draftCountByFile={draftCountByFile}
                 collapsedFolders={collapsedFolders}
                 onToggleFolder={onToggleFolder}
               />
@@ -485,6 +509,7 @@ export function WorktreeReviewView({
               diffFiles={diffFilesMap}
               hideUnchanged={fileExplorerHideUnchanged}
               commentCountsByFile={fileExplorerCommentCountByFile}
+              draftCountsByFile={fileExplorerDraftCountByFile}
             />
           )}
           {effectiveReviewMode === 'commits' && (
@@ -498,6 +523,7 @@ export function WorktreeReviewView({
               onSelectCommitFile={setSelectedCommitFile}
               commitDiffFilesCount={commitDiffFiles?.length ?? 0}
               commentCountByFile={commitCommentCountByFile}
+              draftCountByFile={commitDraftCountByFile}
             />
           )}
         </div>
@@ -651,6 +677,19 @@ function WorktreeFileDiffContent({
 
   // Get review comments for this specific file
   const fileReviewComments = useReviewCommentsForFile(taskId, file.path);
+  const { setDraft, clearDraft, getBody, defaultCommentFormLineRanges } =
+    useTaskReviewFileDrafts({ taskId, filePath: file.path });
+
+  const handleReviewDraftBodyChange = useCallback(
+    (body: string, lineStart: number, lineEnd?: number) => {
+      if (body.trim()) {
+        setDraft({ body, lineStart, lineEnd });
+      } else {
+        clearDraft(lineStart, lineEnd);
+      }
+    },
+    [setDraft, clearDraft],
+  );
 
   if (error) {
     return (
@@ -669,6 +708,7 @@ function WorktreeFileDiffContent({
 
   return (
     <FileDiffContent
+      key={file.path}
       file={diffFile}
       oldContent={data?.oldContent ?? ''}
       newContent={data?.newContent ?? ''}
@@ -683,6 +723,23 @@ function WorktreeFileDiffContent({
       onDeleteReviewComment={onDeleteReviewComment}
       onEditReviewComment={onEditReviewComment}
       onResolveReviewComment={onResolveReviewComment}
+      defaultCommentFormLineRanges={defaultCommentFormLineRanges}
+      onCommentFormClose={(range) =>
+        clearDraft(
+          range.start,
+          range.end !== range.start ? range.end : undefined,
+        )
+      }
+      shouldKeepCommentFormRangeOnOpen={(range) =>
+        Boolean(
+          getBody(
+            range.start,
+            range.end !== range.start ? range.end : undefined,
+          ).trim(),
+        )
+      }
+      getReviewCommentDraftBody={getBody}
+      onReviewCommentDraftBodyChange={handleReviewDraftBodyChange}
     />
   );
 }
@@ -814,6 +871,19 @@ function PlainFileViewer({
     enabled: isRasterImage,
   });
   const fileReviewComments = useReviewCommentsForFile(taskId, relativePath);
+  const { setDraft, clearDraft, getBody, defaultCommentFormLineRanges } =
+    useTaskReviewFileDrafts({ taskId, filePath: relativePath });
+
+  const handleReviewDraftBodyChange = useCallback(
+    (body: string, lineStart: number, lineEnd?: number) => {
+      if (body.trim()) {
+        setDraft({ body, lineStart, lineEnd });
+      } else {
+        clearDraft(lineStart, lineEnd);
+      }
+    },
+    [setDraft, clearDraft],
+  );
 
   if (isLoading || isImageLoading) {
     return (
@@ -834,6 +904,7 @@ function PlainFileViewer({
 
     return (
       <FileDiffContent
+        key={relativePath}
         file={{ path: relativePath, status: 'unchanged' }}
         oldContent=""
         newContent=""
@@ -844,6 +915,23 @@ function PlainFileViewer({
         onDeleteReviewComment={onDeleteReviewComment}
         onEditReviewComment={onEditReviewComment}
         onResolveReviewComment={onResolveReviewComment}
+        defaultCommentFormLineRanges={defaultCommentFormLineRanges}
+        onCommentFormClose={(range) =>
+          clearDraft(
+            range.start,
+            range.end !== range.start ? range.end : undefined,
+          )
+        }
+        shouldKeepCommentFormRangeOnOpen={(range) =>
+          Boolean(
+            getBody(
+              range.start,
+              range.end !== range.start ? range.end : undefined,
+            ).trim(),
+          )
+        }
+        getReviewCommentDraftBody={getBody}
+        onReviewCommentDraftBodyChange={handleReviewDraftBodyChange}
       />
     );
   }
@@ -858,6 +946,7 @@ function PlainFileViewer({
 
   return (
     <FileDiffContent
+      key={relativePath}
       file={{ path: relativePath, status: 'unchanged' }}
       oldContent={data.content}
       newContent={data.content}
@@ -866,6 +955,23 @@ function PlainFileViewer({
       onDeleteReviewComment={onDeleteReviewComment}
       onEditReviewComment={onEditReviewComment}
       onResolveReviewComment={onResolveReviewComment}
+      defaultCommentFormLineRanges={defaultCommentFormLineRanges}
+      onCommentFormClose={(range) =>
+        clearDraft(
+          range.start,
+          range.end !== range.start ? range.end : undefined,
+        )
+      }
+      shouldKeepCommentFormRangeOnOpen={(range) =>
+        Boolean(
+          getBody(
+            range.start,
+            range.end !== range.start ? range.end : undefined,
+          ).trim(),
+        )
+      }
+      getReviewCommentDraftBody={getBody}
+      onReviewCommentDraftBodyChange={handleReviewDraftBodyChange}
     />
   );
 }
@@ -913,6 +1019,18 @@ function CommitFileDiffContent({
     commitHash,
     filePath,
   });
+  const { setDraft, clearDraft, getBody, defaultCommentFormLineRanges } =
+    useTaskReviewFileDrafts({ taskId, filePath, commitHash });
+  const handleReviewDraftBodyChange = useCallback(
+    (body: string, lineStart: number, lineEnd?: number) => {
+      if (body.trim()) {
+        setDraft({ body, lineStart, lineEnd });
+      } else {
+        clearDraft(lineStart, lineEnd);
+      }
+    },
+    [setDraft, clearDraft],
+  );
   const handleAddCommitReviewComment = useCallback(
     (params: {
       filePath: string;
@@ -944,6 +1062,7 @@ function CommitFileDiffContent({
 
   return (
     <FileDiffContent
+      key={`${commitHash}:${filePath}`}
       file={diffFile}
       oldContent={data?.oldContent ?? ''}
       newContent={data?.newContent ?? ''}
@@ -956,6 +1075,23 @@ function CommitFileDiffContent({
       onDeleteReviewComment={onDeleteReviewComment}
       onEditReviewComment={onEditReviewComment}
       onResolveReviewComment={onResolveReviewComment}
+      defaultCommentFormLineRanges={defaultCommentFormLineRanges}
+      onCommentFormClose={(range) =>
+        clearDraft(
+          range.start,
+          range.end !== range.start ? range.end : undefined,
+        )
+      }
+      shouldKeepCommentFormRangeOnOpen={(range) =>
+        Boolean(
+          getBody(
+            range.start,
+            range.end !== range.start ? range.end : undefined,
+          ).trim(),
+        )
+      }
+      getReviewCommentDraftBody={getBody}
+      onReviewCommentDraftBodyChange={handleReviewDraftBodyChange}
     />
   );
 }
@@ -973,6 +1109,7 @@ function CommitsSidebarSplit({
   onSelectCommitFile,
   commitDiffFilesCount,
   commentCountByFile,
+  draftCountByFile,
 }: {
   commits: WorktreeCommit[];
   isCommitsLoading: boolean;
@@ -983,6 +1120,7 @@ function CommitsSidebarSplit({
   onSelectCommitFile: (path: string | null) => void;
   commitDiffFilesCount: number;
   commentCountByFile?: Record<string, number>;
+  draftCountByFile?: Record<string, number>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [commitsPanelHeight, setCommitsPanelHeight] = useState<number | null>(
@@ -1000,9 +1138,8 @@ function CommitsSidebarSplit({
     }
   }, [hasFiles, commitsPanelHeight]);
 
-  const handleResizeStart = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      e.preventDefault();
+  const handleResizeStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
       setIsResizing(true);
       const startY = e.clientY;
       const startHeight = commitsPanelHeight ?? 200;
@@ -1028,11 +1165,9 @@ function CommitsSidebarSplit({
         document.removeEventListener('mouseup', handleMouseUp);
       };
 
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    },
-    [commitsPanelHeight],
-  );
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
 
   return (
     <div
@@ -1082,6 +1217,7 @@ function CommitsSidebarSplit({
                 selectedPath={selectedCommitFile}
                 onSelectFile={onSelectCommitFile}
                 commentCountByFile={commentCountByFile}
+                draftCountByFile={draftCountByFile}
               />
             </div>
           </div>

@@ -2,7 +2,11 @@ import type { Buffer } from 'node:buffer';
 
 import { Generated, Insertable, Selectable, Updateable } from 'kysely';
 
-import type { ProviderType, ProjectType, TaskStatus } from '@shared/types';
+import type {
+  AiUsageFeature,
+  AiUsagePricingStatus,
+} from '@shared/ai-usage-types';
+import type { ProjectType, ProviderType, TaskStatus } from '@shared/types';
 
 // Re-export shared types for convenience
 export type {
@@ -49,6 +53,10 @@ export interface Database {
   notifications: NotificationTable;
   tracked_pipelines: TrackedPipelineTable;
   usage_snapshots: UsageSnapshotTable;
+  ai_usage_events: AiUsageEventTable;
+  ai_usage_task_totals: AiUsageTaskTotalTable;
+  ai_usage_daily_totals: AiUsageDailyTotalTable;
+  work_activity_events: WorkActivityEventTable;
 }
 
 export interface TokenTable {
@@ -133,6 +141,7 @@ export interface TaskTable {
   pullRequestId: string | null;
   pullRequestUrl: string | null;
   pendingMessage: string | null;
+  todoItems: string | null; // JSON array of task todo items
   parentTaskId: string | null;
   createdAt: Generated<string>;
   updatedAt: string;
@@ -234,6 +243,7 @@ export interface ProjectCommandTable {
   name: string | null;
   command: string;
   ports: string; // JSON array stored as text
+  envVars: string; // JSON array stored as text
   confirmBeforeRun: Generated<number>; // 0 or 1
   confirmMessage: string | null;
   sortOrder: Generated<number>;
@@ -384,3 +394,94 @@ export interface UsageSnapshotTable {
 
 export type UsageSnapshotRow = Selectable<UsageSnapshotTable>;
 export type NewUsageSnapshotRow = Insertable<UsageSnapshotTable>;
+
+export interface AiUsageEventTable {
+  id: Generated<string>;
+  createdAt: string;
+  sourceId: string | null;
+  feature: AiUsageFeature;
+  projectId: string | null;
+  taskId: string | null;
+  stepId: string | null;
+  taskName: string | null;
+  projectName: string | null;
+  backend: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  providerCostUsd: number | null;
+  providerApiCostUsd: number | null;
+  pricingStatus: AiUsagePricingStatus;
+  pricingVersion: string;
+}
+
+export type AiUsageEventRow = Selectable<AiUsageEventTable>;
+export type NewAiUsageEventRow = Insertable<AiUsageEventTable>;
+
+export interface AiUsageTaskTotalTable {
+  taskId: string;
+  projectId: string;
+  taskName: string | null;
+  projectName: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  providerCostUsd: number;
+  providerApiCostUsd: number;
+  requests: number;
+  updatedAt: string;
+}
+
+export type AiUsageTaskTotalRow = Selectable<AiUsageTaskTotalTable>;
+export type NewAiUsageTaskTotalRow = Insertable<AiUsageTaskTotalTable>;
+
+export interface AiUsageDailyTotalTable {
+  date: string;
+  feature: AiUsageFeature;
+  backend: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  providerCostUsd: number;
+  providerApiCostUsd: number;
+  requests: number;
+  updatedAt: string;
+}
+
+export type AiUsageDailyTotalRow = Selectable<AiUsageDailyTotalTable>;
+export type NewAiUsageDailyTotalRow = Insertable<AiUsageDailyTotalTable>;
+
+export interface WorkActivityEventTable {
+  id: Generated<string>;
+  occurredAt: string;
+  type: string;
+  projectId: string | null;
+  projectName: string | null;
+  providerId: string | null;
+  azureOrgId: string | null;
+  azureProjectId: string | null;
+  repoId: string | null;
+  taskId: string | null;
+  taskTitle: string | null;
+  stepId: string | null;
+  promptSnippet: string | null;
+  promptLength: number | null;
+  workItemIdsJson: string;
+  workItemsJson: string;
+  pullRequestJson: string | null;
+  metadataJson: string;
+}
+
+export type WorkActivityEventRow = Selectable<WorkActivityEventTable>;
+export type NewWorkActivityEventRow = Insertable<WorkActivityEventTable>;

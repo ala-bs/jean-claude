@@ -1,4 +1,3 @@
-import clsx from 'clsx';
 import {
   ChevronDown,
   ChevronRight,
@@ -6,7 +5,10 @@ import {
   Folder,
   FolderOpen,
   Loader2,
+  PenLine,
 } from 'lucide-react';
+import clsx from 'clsx';
+
 
 import type { DiffFileStatus } from '@/features/common/ui-file-diff/types';
 import { useDirectoryListing } from '@/hooks/use-directory-listing';
@@ -37,6 +39,7 @@ export function FileTree({
   expandedDirs,
   onToggleDir,
   commentCountsByFile,
+  draftCountsByFile,
   filterPaths,
   diffFiles,
   hideUnchanged,
@@ -50,6 +53,8 @@ export function FileTree({
   onToggleDir: (path: string) => void;
   /** Optional: comment counts per file path (for badge display) */
   commentCountsByFile?: Map<string, number>;
+  /** Optional: draft counts per file path (for badge display) */
+  draftCountsByFile?: Map<string, number>;
   /** Optional: when set, only show entries whose path is in this set */
   filterPaths?: Set<string> | null;
   /** Map of ABSOLUTE path -> diff info for changed files */
@@ -102,6 +107,7 @@ export function FileTree({
           expandedDirs={expandedDirs}
           onToggleDir={onToggleDir}
           commentCountsByFile={commentCountsByFile}
+          draftCountsByFile={draftCountsByFile}
           filterPaths={filterPaths}
           diffFiles={diffFiles}
           hideUnchanged={hideUnchanged}
@@ -166,6 +172,7 @@ function FileTreeNode({
   expandedDirs,
   onToggleDir,
   commentCountsByFile,
+  draftCountsByFile,
   filterPaths,
   diffFiles,
   hideUnchanged,
@@ -179,6 +186,7 @@ function FileTreeNode({
   expandedDirs: Set<string>;
   onToggleDir: (path: string) => void;
   commentCountsByFile?: Map<string, number>;
+  draftCountsByFile?: Map<string, number>;
   filterPaths?: Set<string> | null;
   diffFiles?: Map<string, DiffInfo>;
   hideUnchanged?: boolean;
@@ -188,6 +196,7 @@ function FileTreeNode({
   const isExpanded = filterPaths ? true : expandedDirs.has(entry.path);
   const isSelected = entry.path === selectedFilePath;
   const commentCount = commentCountsByFile?.get(entry.path) ?? 0;
+  const draftCount = draftCountsByFile?.get(entry.path) ?? 0;
 
   const fileDiffInfo = diffFiles?.get(entry.path);
   const changedDescendantCount =
@@ -205,6 +214,18 @@ function FileTreeNode({
     (() => {
       const prefix = entry.path + '/';
       for (const key of commentCountsByFile.keys()) {
+        if (key.startsWith(prefix)) return true;
+      }
+      return false;
+    })();
+  const hasDescendantDrafts =
+    !isExpanded &&
+    entry.isDirectory &&
+    draftCountsByFile &&
+    draftCountsByFile.size > 0 &&
+    (() => {
+      const prefix = entry.path + '/';
+      for (const key of draftCountsByFile.keys()) {
         if (key.startsWith(prefix)) return true;
       }
       return false;
@@ -239,12 +260,13 @@ function FileTreeNode({
               {changedDescendantCount}
             </span>
           )}
-          {hasDescendantComments && !(!isExpanded && hasChangedDescendants) && (
-            <span
-              className="bg-acc mr-2 ml-auto h-1.5 w-1.5 shrink-0 rounded-full"
-              aria-label="Contains commented files"
-            />
-          )}
+          {(hasDescendantComments || hasDescendantDrafts) &&
+            !(!isExpanded && hasChangedDescendants) && (
+              <span
+                className="bg-acc mr-2 ml-auto h-1.5 w-1.5 shrink-0 rounded-full"
+                aria-label="Contains comments or drafts"
+              />
+            )}
         </button>
         {isExpanded && (
           <DirectoryChildren
@@ -256,6 +278,7 @@ function FileTreeNode({
             expandedDirs={expandedDirs}
             onToggleDir={onToggleDir}
             commentCountsByFile={commentCountsByFile}
+            draftCountsByFile={draftCountsByFile}
             filterPaths={filterPaths}
             diffFiles={diffFiles}
             hideUnchanged={hideUnchanged}
@@ -287,27 +310,35 @@ function FileTreeNode({
       <span className={clsx('truncate', isDeleted && 'line-through')}>
         <HighlightedTreeName name={entry.name} searchQuery={searchQuery} />
       </span>
-      {fileDiffInfo && (
-        <span
-          className={clsx(
-            'mr-2 ml-auto shrink-0 text-xs',
-            fileDiffInfo.status === 'modified' && 'text-orange-400',
-            fileDiffInfo.status === 'added' && 'text-green-400',
-            fileDiffInfo.status === 'deleted' && 'text-red-400',
-          )}
-        >
-          {fileDiffInfo.status === 'modified'
-            ? 'M'
-            : fileDiffInfo.status === 'added'
-              ? 'A'
-              : 'D'}
-        </span>
-      )}
-      {commentCount > 0 && (
-        <span className="bg-acc/20 text-acc-ink mr-2 ml-auto shrink-0 rounded-full px-1.5 py-px text-[9px] leading-none font-medium">
-          {commentCount}
-        </span>
-      )}
+      <span className="mr-2 ml-auto flex shrink-0 items-center gap-1">
+        {fileDiffInfo && (
+          <span
+            className={clsx(
+              'shrink-0 text-xs',
+              fileDiffInfo.status === 'modified' && 'text-orange-400',
+              fileDiffInfo.status === 'added' && 'text-green-400',
+              fileDiffInfo.status === 'deleted' && 'text-red-400',
+            )}
+          >
+            {fileDiffInfo.status === 'modified'
+              ? 'M'
+              : fileDiffInfo.status === 'added'
+                ? 'A'
+                : 'D'}
+          </span>
+        )}
+        {commentCount > 0 && (
+          <span className="bg-acc/20 text-acc-ink shrink-0 rounded-full px-1.5 py-px text-[9px] leading-none font-medium">
+            {commentCount}
+          </span>
+        )}
+        {draftCount > 0 && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-yellow-900/40 px-1.5 py-px font-mono text-[9px] leading-none font-medium text-yellow-300">
+            <PenLine className="h-2.5 w-2.5" />
+            {draftCount}
+          </span>
+        )}
+      </span>
     </button>
   );
 }
@@ -321,6 +352,7 @@ function DirectoryChildren({
   expandedDirs,
   onToggleDir,
   commentCountsByFile,
+  draftCountsByFile,
   filterPaths,
   diffFiles,
   hideUnchanged,
@@ -334,6 +366,7 @@ function DirectoryChildren({
   expandedDirs: Set<string>;
   onToggleDir: (path: string) => void;
   commentCountsByFile?: Map<string, number>;
+  draftCountsByFile?: Map<string, number>;
   filterPaths?: Set<string> | null;
   diffFiles?: Map<string, DiffInfo>;
   hideUnchanged?: boolean;
@@ -393,6 +426,7 @@ function DirectoryChildren({
           expandedDirs={expandedDirs}
           onToggleDir={onToggleDir}
           commentCountsByFile={commentCountsByFile}
+          draftCountsByFile={draftCountsByFile}
           filterPaths={filterPaths}
           diffFiles={diffFiles}
           hideUnchanged={hideUnchanged}

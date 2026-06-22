@@ -1,17 +1,18 @@
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
-import { useState, useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
-import { Button } from '@/common/ui/button';
-import { Input } from '@/common/ui/input';
-import { Switch } from '@/common/ui/switch';
 import {
-  useDeleteOldCompletedTasks,
   useDebugDatabaseSize,
   useDebugTableNames,
   useDebugTableQuery,
+  useDeleteOldCompletedTasks,
   useOldCompletedTasksCount,
 } from '@/hooks/use-debug';
 import { useUISetting, useUIStore } from '@/stores/ui';
+import { Button } from '@/common/ui/button';
+import { Input } from '@/common/ui/input';
+import { Switch } from '@/common/ui/switch';
+import { useRegisterOverlay } from '@/common/context/overlay';
 
 const PAGE_SIZE = 20;
 
@@ -26,6 +27,14 @@ export function DebugDatabase() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [showTableSizes, setShowTableSizes] = useState(false);
+  const tableSizesRef = useRef<HTMLDivElement | null>(null);
+
+  useRegisterOverlay({
+    id: 'debug-database-table-sizes',
+    refs: [tableSizesRef],
+    onClose: () => setShowTableSizes(false),
+    enabled: showTableSizes,
+  });
 
   // Auto-select first table when loaded
   const activeTable = selectedTable ?? tableNames[0] ?? null;
@@ -83,12 +92,11 @@ export function DebugDatabase() {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-ink-1 text-lg font-semibold">Debug</h2>
-        <p className="text-ink-3 mt-1 text-sm">
-          Diagnostics for inspecting app behavior during development.
-        </p>
         {databaseSize && (
-          <div className="text-ink-2 relative mt-2 space-y-1 text-sm">
+          <div
+            ref={tableSizesRef}
+            className="text-ink-2 relative space-y-1 text-sm"
+          >
             <button
               type="button"
               className="hover:text-ink-1 cursor-pointer underline decoration-dotted underline-offset-4"
@@ -98,7 +106,7 @@ export function DebugDatabase() {
               Current DB size: {formatBytes(databaseSize.bytes)}
             </button>
             {showTableSizes && (
-              <div className="border-glass-border bg-bg-1 text-ink-2 absolute z-10 mt-2 max-h-72 w-72 overflow-y-auto rounded-lg border p-3 shadow-lg">
+              <div className="border-glass-border text-ink-2 absolute isolate z-[10020] mt-2 max-h-72 w-72 overflow-y-auto rounded-lg border bg-[rgb(20,18,30)] p-3 shadow-lg">
                 <div className="text-ink-1 mb-2 text-xs font-semibold tracking-wide uppercase">
                   Table sizes
                 </div>

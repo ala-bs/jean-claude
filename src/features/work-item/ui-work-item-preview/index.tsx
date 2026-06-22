@@ -1,20 +1,28 @@
 import {
+  ChevronDown,
   ChevronRight,
   FileText,
   FlaskConical,
+  Loader2,
   MessagesSquare,
 } from 'lucide-react';
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
 
-import { Kbd } from '@/common/ui/kbd';
-import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
+
+import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import {
   useAddWorkItemComment,
   useRelatedTestCases,
+  useUpdateWorkItemState,
   useWorkItemComments,
+  useWorkItemStates,
 } from '@/hooks/use-work-items';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
+import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
+import { Kbd } from '@/common/ui/kbd';
+
+
 
 import { WorkItemComments } from '../ui-work-item-comments';
 type DetailsTab = 'content' | 'comments' | 'test-cases';
@@ -47,19 +55,35 @@ export function WorkItemPreview({
       projectName: projectName ?? null,
       workItemId,
     });
+  const { data: availableStates = [], isLoading: isLoadingStates } =
+    useWorkItemStates({
+      providerId: providerId ?? null,
+      projectName: projectName ?? null,
+      workItemType: workItem?.fields.workItemType ?? null,
+    });
   const addComment = useAddWorkItemComment();
+  const updateState = useUpdateWorkItemState();
 
   const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
   const [activeTab, setActiveTab] = useState<DetailsTab>('content');
+  const [currentState, setCurrentState] = useState(
+    workItem?.fields.state ?? '',
+  );
+  const workItemIdRef = useRef(workItemId);
 
   useEffect(() => {
     if (!hasTestCases && activeTab === 'test-cases') {
-      setActiveTab('content');
+      startTransition(() => setActiveTab('content'));
     }
     if (showCommentsAside && activeTab === 'comments') {
-      setActiveTab('content');
+      startTransition(() => setActiveTab('content'));
     }
   }, [hasTestCases, activeTab, showCommentsAside]);
+
+  useEffect(() => {
+    startTransition(() => setCurrentState(workItem?.fields.state ?? ''));
+    workItemIdRef.current = workItem?.id ?? null;
+  }, [workItem?.id, workItem?.fields.state]);
 
   if (!workItem) {
     return (
@@ -70,7 +94,7 @@ export function WorkItemPreview({
   }
 
   const { id, fields } = workItem;
-  const { workItemType, state, assignedTo } = fields;
+  const { workItemType, assignedTo } = fields;
   const hasReproSteps = workItemType === 'Bug' && !!fields.reproSteps;
 
   return (
@@ -105,7 +129,13 @@ export function WorkItemPreview({
         </span>
       </div>
 
-      <div className="mt-3 grid min-h-0 flex-1 gap-4 overflow-hidden xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]">
+      <div
+        className={`mt-3 grid min-h-0 flex-1 gap-4 overflow-hidden ${
+          showCommentsAside
+            ? 'xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]'
+            : 'grid-cols-1'
+        }`}
+      >
         <div className="min-h-0 overflow-y-auto">
           {activeTab === 'content' && (
             <div>
@@ -119,7 +149,30 @@ export function WorkItemPreview({
 
                 <div className="flex items-center gap-1">
                   <span className="text-ink-3">State:</span>
-                  <span className="text-ink-1">{state}</span>
+                  {providerId ? (
+                    <EditableStateValue
+                      state={currentState}
+                      states={availableStates.map((s) => s.name)}
+                      isPending={updateState.isPending}
+                      isLoading={isLoadingStates}
+                      onChange={(nextState) => {
+                        const previousState = currentState;
+                        setCurrentState(nextState);
+                        updateState.mutate(
+                          { providerId, workItemId: id, state: nextState },
+                          {
+                            onError: () => {
+                              if (workItemIdRef.current === id) {
+                                setCurrentState(previousState);
+                              }
+                            },
+                          },
+                        );
+                      }}
+                    />
+                  ) : (
+                    <span className="text-ink-1">{currentState}</span>
+                  )}
                 </div>
               </div>
 
@@ -231,6 +284,62 @@ export function WorkItemPreview({
         )}
       </div>
     </div>
+  );
+}
+
+function EditableStateValue({
+  state,
+  states: availableStates,
+  isPending,
+  isLoading,
+  onChange,
+}: {
+  state: string;
+  states: string[];
+  isPending: boolean;
+  isLoading: boolean;
+  onChange: (state: string) => void;
+}) {
+  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
+  const states = availableStates.includes(state)
+    ? availableStates
+    : [state, ...availableStates];
+
+  const handleSelect = useCallback(
+    (nextState: string) => {
+      dropdownRef.current?.toggle();
+      if (nextState !== state) onChange(nextState);
+    },
+    [onChange, state],
+  );
+
+  return (
+    <Dropdown
+      dropdownRef={dropdownRef}
+      trigger={
+        <button
+          type="button"
+          disabled={isPending || states.length <= 1}
+          className="text-ink-1 hover:text-acc-ink flex items-center gap-1 rounded px-1 py-0.5 text-xs transition-colors disabled:opacity-60"
+        >
+          {(isPending || isLoading) && (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          )}
+          {state}
+          {states.length > 1 && <ChevronDown className="h-3 w-3 opacity-60" />}
+        </button>
+      }
+    >
+      {states.map((nextState) => (
+        <DropdownItem
+          key={nextState}
+          onClick={() => handleSelect(nextState)}
+          checked={nextState === state}
+        >
+          {nextState}
+        </DropdownItem>
+      ))}
+    </Dropdown>
   );
 }
 

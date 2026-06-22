@@ -1,61 +1,85 @@
-import { Trash2, Plus } from 'lucide-react';
-import { nanoid } from 'nanoid';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import { nanoid } from 'nanoid';
+
+
 
 import {
-  KeyboardLayerProvider,
-  useKeyboardLayer,
-} from '@/common/context/keyboard-bindings';
-import { useCommands } from '@/common/hooks/use-commands';
-import { Button } from '@/common/ui/button';
-import { Checkbox } from '@/common/ui/checkbox';
-import { IconButton } from '@/common/ui/icon-button';
-import { Input } from '@/common/ui/input';
-import { Kbd } from '@/common/ui/kbd';
-import { Modal } from '@/common/ui/modal';
-import { Select, type SelectOption } from '@/common/ui/select';
-import { Textarea } from '@/common/ui/textarea';
-import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
-import {
-  AVAILABLE_BACKENDS,
-  getModelThinkingCapabilities,
-  getModelsForBackend,
-} from '@/features/agent/ui-backend-selector';
-import { ModeSelector } from '@/features/agent/ui-mode-selector';
-import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
-import {
-  PromptTextarea,
-  type PromptTextareaRef,
-} from '@/features/common/ui-prompt-textarea';
-import { useBackendModels } from '@/hooks/use-backend-models';
-import { useProject, useProjectFeatureMap } from '@/hooks/use-projects';
-import {
-  useBackendsSetting,
-  usePromptSnippetsSetting,
-} from '@/hooks/use-settings';
-import { useSkills } from '@/hooks/use-skills';
-import { useTask } from '@/hooks/use-tasks';
-import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
-import {
-  resolvePromptSnippet,
-  type SnippetVariableContext,
-} from '@/lib/resolve-snippet-template';
+  type AddStepPresetType,
+  useAddStepDialogDraft,
+  useNavigationStore,
+} from '@/stores/navigation';
 import type {
   AgentBackendType,
   PromptImagePart,
 } from '@shared/agent-backend-types';
 import {
+  AVAILABLE_BACKENDS,
+  getModelsForBackend,
+  getModelThinkingCapabilities,
+} from '@/features/agent/ui-backend-selector';
+import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
 import {
-  normalizeInteractionModeForBackend,
   type InteractionMode,
   type ModelPreference,
+  normalizeInteractionModeForBackend,
   type ReviewerConfig,
   type ThinkingEffort,
 } from '@shared/types';
+import {
+  KeyboardLayerProvider,
+  useKeyboardLayer,
+} from '@/common/context/keyboard-bindings';
+import {
+  PromptTextarea,
+  type PromptTextareaRef,
+} from '@/features/common/ui-prompt-textarea';
+import {
+  RateLimitSwapPreview,
+  resolveRateLimitSwapSelection,
+  useRateLimitSwapPreview,
+} from '@/features/agent/ui-rate-limit-swap-preview';
+import {
+  resolvePromptSnippet,
+  type SnippetVariableContext,
+} from '@/lib/resolve-snippet-template';
+import {
+  reviewCommentToPill,
+  ReviewPillsQueue,
+} from '@/features/common/ui-review-pills';
+import { Select, type SelectOption } from '@/common/ui/select';
+import {
+  synthesizeReviewPrompt,
+  useReviewComments,
+} from '@/stores/review-comments';
+import {
+  useBackendDefaultModelsSetting,
+  useBackendsSetting,
+  usePromptSnippetsSetting,
+} from '@/hooks/use-settings';
+import { useProject, useProjectFeatureMap } from '@/hooks/use-projects';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { Button } from '@/common/ui/button';
+import { Checkbox } from '@/common/ui/checkbox';
+import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
+import { getDefaultModelForBackend } from '@/lib/default-models';
+import { IconButton } from '@/common/ui/icon-button';
+import { Input } from '@/common/ui/input';
+import { Kbd } from '@/common/ui/kbd';
+import { Modal } from '@/common/ui/modal';
+import { ModeSelector } from '@/features/agent/ui-mode-selector';
+import { Textarea } from '@/common/ui/textarea';
+import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
+import { useBackendModels } from '@/hooks/use-backend-models';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useSkills } from '@/hooks/use-skills';
+import { useTask } from '@/hooks/use-tasks';
+
+
 
 function createDefaultReviewers(backend: AgentBackendType): ReviewerConfig[] {
   return [
@@ -117,8 +141,6 @@ function ReviewerModelSelect({
   );
 }
 
-export type AddStepPresetType = 'new-session' | 'continue' | 'review-changes';
-
 const STEP_PRESET_OPTIONS = [
   {
     value: 'new-session',
@@ -137,6 +159,183 @@ const STEP_PRESET_OPTIONS = [
   },
 ] as const;
 
+function AddStepPromptSection({
+  taskId,
+  presetType,
+  isOpen,
+  skills,
+  projectRoot,
+  projectId,
+  featureMap,
+  images,
+  promptSnippets,
+  snippetVariableContext,
+  onEnterKey,
+  onImageAttach,
+  onImageRemove,
+  onAutocompleteOpenChange,
+}: {
+  taskId: string;
+  presetType: AddStepPresetType;
+  isOpen: boolean;
+  skills: ReturnType<typeof useSkills>['data'];
+  projectRoot?: string | null;
+  projectId?: string;
+  featureMap: ReturnType<typeof useProjectFeatureMap>['data'];
+  images: PromptImagePart[];
+  promptSnippets: ReturnType<typeof usePromptSnippetsSetting>['data'];
+  snippetVariableContext: SnippetVariableContext;
+  onEnterKey: (e: KeyboardEvent<HTMLTextAreaElement>) => true | undefined;
+  onImageAttach: (image: PromptImagePart) => void;
+  onImageRemove: (index: number) => void;
+  onAutocompleteOpenChange: (isOpen: boolean) => void;
+}) {
+  const { draft, setDraft } = useAddStepDialogDraft(taskId);
+  const { promptTemplate } = draft;
+  const textareaRef = useRef<PromptTextareaRef>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    }
+  }, [isOpen]);
+
+  const stepSnippets = useMemo(
+    () => promptSnippets.filter((s) => s.enabled && s.contexts.newTaskStep),
+    [promptSnippets],
+  );
+
+  return (
+    <>
+      {stepSnippets.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {stepSnippets.map((snippet) => (
+            <button
+              key={snippet.id}
+              type="button"
+              className="bg-bg-2 text-ink-2 hover:bg-bg-3 hover:text-ink-1 rounded-full px-2.5 py-0.5 text-xs transition-colors"
+              onClick={() => {
+                const { output } = resolvePromptSnippet(
+                  snippet,
+                  snippetVariableContext,
+                );
+                setDraft({ promptTemplate: output });
+                setTimeout(() => textareaRef.current?.focus(), 0);
+              }}
+            >
+              {snippet.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <PromptTextarea
+        ref={textareaRef}
+        value={promptTemplate}
+        onChange={(value) => setDraft({ promptTemplate: value })}
+        onEnterKey={onEnterKey}
+        placeholder={
+          presetType === 'review-changes'
+            ? 'Optional: add any extra review focus...'
+            : 'Describe what this step should do...'
+        }
+        maxHeight={200}
+        showCommands
+        skills={skills}
+        enableFilePathAutocomplete={!!projectRoot}
+        projectRoot={projectRoot}
+        projectId={projectId}
+        featureMap={featureMap}
+        images={images}
+        onImageAttach={onImageAttach}
+        onImageRemove={onImageRemove}
+        promptSnippets={promptSnippets}
+        snippetVariableContext={snippetVariableContext}
+        onAutocompleteOpenChange={onAutocompleteOpenChange}
+      />
+    </>
+  );
+}
+
+function AddStepSubmitButton({
+  taskId,
+  presetType,
+  hasReviewComments,
+  reviewersValid,
+  onSubmit,
+}: {
+  taskId: string;
+  presetType: AddStepPresetType;
+  hasReviewComments: boolean;
+  reviewersValid: boolean;
+  onSubmit: () => void;
+}) {
+  const promptTemplate = useNavigationStore(
+    (state) => state.addStepDrafts[taskId]?.promptTemplate ?? '',
+  );
+  const canSubmit =
+    presetType === 'review-changes'
+      ? reviewersValid
+      : promptTemplate.trim().length > 0 || hasReviewComments;
+
+  return (
+    <Button
+      type="button"
+      onClick={onSubmit}
+      disabled={!canSubmit}
+      variant="primary"
+    >
+      Add Step
+      <Kbd shortcut="cmd+enter" className="ml-1" />
+    </Button>
+  );
+}
+
+function AddStepDialogFooter({
+  taskId,
+  presetType,
+  hasReviewComments,
+  reviewersValid,
+  autoStart,
+  onAutoStartChange,
+  onClose,
+  onSubmit,
+}: {
+  taskId: string;
+  presetType: AddStepPresetType;
+  hasReviewComments: boolean;
+  reviewersValid: boolean;
+  autoStart: boolean;
+  onAutoStartChange: (enabled: boolean) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between pt-1">
+      <div className="flex items-center gap-2">
+        <Checkbox
+          size="sm"
+          checked={autoStart}
+          onChange={onAutoStartChange}
+          label="Auto-start"
+        />
+        <Kbd shortcut="cmd+shift+s" />
+      </div>
+      <div className="flex gap-3">
+        <Button type="button" onClick={onClose} variant="ghost">
+          Cancel
+        </Button>
+        <AddStepSubmitButton
+          taskId={taskId}
+          presetType={presetType}
+          hasReviewComments={hasReviewComments}
+          reviewersValid={reviewersValid}
+          onSubmit={onSubmit}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function AddStepDialog({
   isOpen,
   onClose,
@@ -153,6 +352,7 @@ export function AddStepDialog({
   onClose: () => void;
   onConfirm: (data: {
     promptTemplate: string;
+    hasUserPrompt: boolean;
     presetType: AddStepPresetType;
     interactionMode: InteractionMode;
     agentBackend: AgentBackendType;
@@ -160,8 +360,9 @@ export function AddStepDialog({
     thinkingEffort: ThinkingEffort;
     images: PromptImagePart[];
     start: boolean;
+    includedReviewCommentIds: string[];
     reviewers?: ReviewerConfig[];
-  }) => void;
+  }) => boolean | Promise<boolean>;
   defaultBackend?: AgentBackendType;
   defaultModel?: ModelPreference;
   defaultThinkingEffort?: ThinkingEffort | null;
@@ -171,9 +372,26 @@ export function AddStepDialog({
   projectId?: string;
 }) {
   const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
-  const [promptTemplate, setPromptTemplate] = useState('');
-  const [presetType, setPresetType] =
-    useState<AddStepPresetType>('new-session');
+  const presetType = useNavigationStore(
+    (state) => state.addStepDrafts[taskId]?.presetType ?? 'new-session',
+  );
+  const setDraftAction = useNavigationStore((state) => state.setAddStepDraft);
+  const clearDraftAction = useNavigationStore(
+    (state) => state.clearAddStepDraft,
+  );
+  const setDraft = useCallback(
+    (
+      update: Partial<{
+        promptTemplate: string;
+        presetType: AddStepPresetType;
+      }>,
+    ) => setDraftAction(taskId, update),
+    [taskId, setDraftAction],
+  );
+  const clearDraft = useCallback(
+    () => clearDraftAction(taskId),
+    [taskId, clearDraftAction],
+  );
   const [interactionMode, setInteractionMode] =
     useState<InteractionMode>('ask');
   const [backend, setBackend] = useState<AgentBackendType>(defaultBackend);
@@ -186,12 +404,22 @@ export function AddStepDialog({
   >(null);
   const [images, setImages] = useState<PromptImagePart[]>([]);
   const [autoStart, setAutoStart] = useState(true);
+  const [includeReviewComments, setIncludeReviewComments] = useState(true);
+  const [showReviewPreview, setShowReviewPreview] = useState(false);
+  const [isAutocompleteOpen, setIsAutocompleteOpen] = useState(false);
   const [reviewers, setReviewers] = useState<ReviewerConfig[]>(
     createDefaultReviewers(defaultBackend),
   );
-  const textareaRef = useRef<PromptTextareaRef>(null);
+  const userTouchedSelectionRef = useRef(false);
+  const [userTouchedSelection, setUserTouchedSelection] = useState(false);
+  const markUserTouchedSelection = useCallback(() => {
+    userTouchedSelectionRef.current = true;
+    setUserTouchedSelection(true);
+  }, []);
 
   const { data: backendsSetting } = useBackendsSetting();
+  const { data: backendDefaultModelsSetting } =
+    useBackendDefaultModelsSetting();
   const enabledBackends =
     backendsSetting?.enabledBackends ??
     ([defaultBackend] as AgentBackendType[]);
@@ -211,6 +439,30 @@ export function AddStepDialog({
   const { data: stepProject } = useProject(projectId ?? '');
   const { data: featureMap = null } = useProjectFeatureMap(projectId ?? null);
   const { data: dynamicModels } = useBackendModels(backend);
+  const reviewComments = useReviewComments(taskId);
+  const openReviewComments = useMemo(
+    () => reviewComments.filter((comment) => !comment.resolved),
+    [reviewComments],
+  );
+  const reviewPills = useMemo(
+    () => openReviewComments.map(reviewCommentToPill),
+    [openReviewComments],
+  );
+  const reviewPromptParts = useMemo(
+    () => synthesizeReviewPrompt(openReviewComments),
+    [openReviewComments],
+  );
+  const reviewPromptText = useMemo(
+    () =>
+      reviewPromptParts
+        ?.filter(
+          (part): part is { type: 'text'; text: string } =>
+            part.type === 'text',
+        )
+        .map((part) => part.text)
+        .join('\n') ?? '',
+    [reviewPromptParts],
+  );
   const thinkingCapabilities = getModelThinkingCapabilities(
     model,
     dynamicModels,
@@ -226,6 +478,10 @@ export function AddStepDialog({
     effort: thinkingEffort,
     capabilities: thinkingCapabilities,
   });
+  const { data: rateLimitSuggestion } = useRateLimitSwapPreview(
+    backend,
+    isOpen && presetType !== 'review-changes' && !userTouchedSelection,
+  );
   const snippetVariableContext: SnippetVariableContext = useMemo(
     () => ({
       task: stepTask
@@ -246,49 +502,127 @@ export function AddStepDialog({
 
   useEffect(() => {
     if (isOpen) {
-      setPromptTemplate('');
-      setPresetType('new-session');
-      setInteractionMode('ask');
-      setBackend(defaultBackend);
-      setModel(defaultModel);
-      setThinkingEffort(defaultThinkingEffort ?? 'default');
-      setBackendModelPresetId(null);
-      setImages([]);
-      setAutoStart(true);
-      setReviewers(createDefaultReviewers(defaultBackend));
-      setTimeout(() => textareaRef.current?.focus(), 0);
+      userTouchedSelectionRef.current = false;
+      startTransition(() => setUserTouchedSelection(false));
+      startTransition(() => setInteractionMode('ask'));
+      startTransition(() => setBackend(defaultBackend));
+      startTransition(() => setModel(defaultModel));
+      startTransition(() => setThinkingEffort(defaultThinkingEffort ?? 'default'));
+      startTransition(() => setBackendModelPresetId(null));
+      startTransition(() => setImages([]));
+      startTransition(() => setAutoStart(true));
+      startTransition(() => setIncludeReviewComments(true));
+      startTransition(() => setShowReviewPreview(false));
+      startTransition(() => setIsAutocompleteOpen(false));
+      startTransition(() => setReviewers(createDefaultReviewers(defaultBackend)));
     }
-  }, [isOpen, defaultBackend, defaultModel, defaultThinkingEffort]);
+  }, [defaultBackend, defaultModel, defaultThinkingEffort, isOpen]);
 
-  const canSubmit =
-    presetType === 'review-changes'
-      ? reviewers.length > 0 &&
-        reviewers.every(
-          (reviewer) =>
-            reviewer.label.trim().length > 0 &&
-            reviewer.focusPrompt.trim().length > 0,
-        )
-      : promptTemplate.trim().length > 0;
+  useEffect(() => {
+    if (
+      !isOpen ||
+      presetType === 'review-changes' ||
+      !rateLimitSuggestion?.swapped ||
+      userTouchedSelection
+    ) {
+      return;
+    }
 
-  const handleSubmit = useCallback(() => {
+    const nextBackend = rateLimitSuggestion.backend;
+    startTransition(() => setBackend(nextBackend));
+    startTransition(() => setBackendModelPresetId(null));
+    startTransition(() =>
+      setModel(
+        rateLimitSuggestion.model ??
+          (nextBackend !== backend ? 'default' : model),
+      ),
+    );
+    startTransition(() =>
+      setThinkingEffort(
+        rateLimitSuggestion.thinkingEffort ??
+          (nextBackend !== backend ? 'default' : normalizedThinkingEffort),
+      ),
+    );
+    startTransition(() =>
+      setInteractionMode((mode) =>
+        normalizeInteractionModeForBackend({ backend: nextBackend, mode }),
+      ),
+    );
+  }, [
+    backend,
+    isOpen,
+    model,
+    normalizedThinkingEffort,
+    presetType,
+    rateLimitSuggestion,
+    userTouchedSelection,
+  ]);
+
+  const reviewersValid =
+    reviewers.length > 0 &&
+    reviewers.every(
+      (reviewer) =>
+        reviewer.label.trim().length > 0 &&
+        reviewer.focusPrompt.trim().length > 0,
+    );
+
+  const handleSubmit = useCallback(async () => {
+    const currentDraft = useNavigationStore.getState().addStepDrafts[taskId];
+    const promptTemplate = currentDraft?.promptTemplate ?? '';
+    const submitPresetType = currentDraft?.presetType ?? 'new-session';
+    const canSubmit =
+      submitPresetType === 'review-changes'
+        ? reviewersValid
+        : promptTemplate.trim().length > 0 ||
+          (includeReviewComments && openReviewComments.length > 0);
     if (!canSubmit) return;
-    onConfirm({
-      promptTemplate: expandFeatureReferencesInPrompt({
-        text: promptTemplate.trim(),
-        featureMap,
-      }),
-      presetType,
+    const submitSelection = await resolveRateLimitSwapSelection({
+      backend,
+      model,
+      thinkingEffort: normalizedThinkingEffort,
+      enabled: submitPresetType !== 'review-changes',
+    });
+
+    const expandedPrompt = expandFeatureReferencesInPrompt({
+      text: promptTemplate.trim(),
+      featureMap,
+    });
+    const shouldIncludeReviewComments =
+      includeReviewComments && openReviewComments.length > 0;
+    const reviewParts = shouldIncludeReviewComments ? reviewPromptParts : null;
+    const reviewText =
+      reviewParts
+        ?.filter(
+          (part): part is { type: 'text'; text: string } =>
+            part.type === 'text',
+        )
+        .map((part) => part.text)
+        .join('\n') ?? '';
+    const reviewImages =
+      reviewParts?.filter(
+        (part): part is PromptImagePart => part.type === 'image',
+      ) ?? [];
+
+    const didConfirm = await onConfirm({
+      promptTemplate: [expandedPrompt, reviewText]
+        .filter((part) => part.trim().length > 0)
+        .join('\n\n'),
+      hasUserPrompt: expandedPrompt.trim().length > 0,
+      presetType: submitPresetType,
       interactionMode: normalizeInteractionModeForBackend({
-        backend,
+        backend: submitSelection.backend,
         mode: interactionMode,
       }),
-      agentBackend: backend,
-      modelPreference: model,
-      thinkingEffort: normalizedThinkingEffort,
-      images,
+      agentBackend: submitSelection.backend,
+      modelPreference: submitSelection.model,
+      thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
+      images: [...images, ...reviewImages],
       start: autoStart,
+      includedReviewCommentIds: shouldIncludeReviewComments
+        ? openReviewComments.map((comment) => comment.id)
+        : [],
       reviewers:
-        presetType === 'review-changes'
+        submitPresetType === 'review-changes'
           ? reviewers.map((reviewer) => ({
               ...reviewer,
               label: reviewer.label.trim(),
@@ -296,11 +630,10 @@ export function AddStepDialog({
             }))
           : undefined,
     });
+    if (didConfirm) clearDraft();
   }, [
-    canSubmit,
+    taskId,
     onConfirm,
-    promptTemplate,
-    presetType,
     interactionMode,
     backend,
     model,
@@ -308,7 +641,12 @@ export function AddStepDialog({
     images,
     autoStart,
     reviewers,
+    reviewersValid,
     featureMap,
+    includeReviewComments,
+    openReviewComments,
+    reviewPromptParts,
+    clearDraft,
   ]);
 
   const handleEnterKey = useCallback(
@@ -348,67 +686,61 @@ export function AddStepDialog({
 
   return (
     <KeyboardLayerProvider layer={layer}>
-      <Modal isOpen={isOpen} onClose={onClose} title="Add Step" size="lg">
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="Add Step"
+        size="lg"
+        closeOnEscape={!isAutocompleteOpen}
+      >
         <div className="space-y-4">
           <div className="flex items-center gap-2">
             <Select
               value={presetType}
-              onChange={(value) => setPresetType(value as AddStepPresetType)}
+              onChange={(value) =>
+                setDraft({ presetType: value as AddStepPresetType })
+              }
               options={[...STEP_PRESET_OPTIONS]}
               shortcut="cmd+t"
               side="top"
             />
           </div>
-          {(() => {
-            const stepSnippets = promptSnippets.filter(
-              (s) => s.enabled && s.contexts.newTaskStep,
-            );
-            if (stepSnippets.length === 0) return null;
-            return (
-              <div className="flex flex-wrap gap-1.5">
-                {stepSnippets.map((snippet) => (
-                  <button
-                    key={snippet.id}
-                    type="button"
-                    className="bg-bg-2 text-ink-2 hover:bg-bg-3 hover:text-ink-1 rounded-full px-2.5 py-0.5 text-xs transition-colors"
-                    onClick={() => {
-                      const { output } = resolvePromptSnippet(
-                        snippet,
-                        snippetVariableContext,
-                      );
-                      setPromptTemplate(output);
-                      setTimeout(() => textareaRef.current?.focus(), 0);
-                    }}
-                  >
-                    {snippet.name}
-                  </button>
-                ))}
-              </div>
-            );
-          })()}
-          <PromptTextarea
-            ref={textareaRef}
-            value={promptTemplate}
-            onChange={setPromptTemplate}
-            onEnterKey={handleEnterKey}
-            placeholder={
-              presetType === 'review-changes'
-                ? 'Optional: add any extra review focus...'
-                : 'Describe what this step should do...'
-            }
-            maxHeight={200}
-            showCommands
+          <AddStepPromptSection
+            taskId={taskId}
+            presetType={presetType}
+            isOpen={isOpen}
             skills={skills}
-            enableFilePathAutocomplete={!!projectRoot}
             projectRoot={projectRoot}
             projectId={projectId}
             featureMap={featureMap}
             images={images}
-            onImageAttach={handleImageAttach}
-            onImageRemove={handleImageRemove}
             promptSnippets={promptSnippets}
             snippetVariableContext={snippetVariableContext}
+            onEnterKey={handleEnterKey}
+            onImageAttach={handleImageAttach}
+            onImageRemove={handleImageRemove}
+            onAutocompleteOpenChange={setIsAutocompleteOpen}
           />
+          {openReviewComments.length > 0 && (
+            <div className="border-line bg-bg-1/50 rounded-lg border py-2">
+              <div className="flex items-center justify-between px-3 pb-1.5">
+                <Checkbox
+                  size="sm"
+                  checked={includeReviewComments}
+                  onChange={setIncludeReviewComments}
+                  label={`Include current comments (${openReviewComments.length})`}
+                />
+              </div>
+              <ReviewPillsQueue
+                pills={reviewPills}
+                onPreview={
+                  reviewPromptText
+                    ? () => setShowReviewPreview(true)
+                    : undefined
+                }
+              />
+            </div>
+          )}
           {presetType === 'review-changes' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -465,7 +797,12 @@ export function AddStepDialog({
                                 ? {
                                     ...r,
                                     backend: value as AgentBackendType,
-                                    model: 'default',
+                                    model: getDefaultModelForBackend({
+                                      backend: value as AgentBackendType,
+                                      project: stepProject,
+                                      backendDefaultModels:
+                                        backendDefaultModelsSetting,
+                                    }),
                                   }
                                 : r,
                             ),
@@ -514,7 +851,7 @@ export function AddStepDialog({
                   </div>
                 ))}
               </div>
-              {!canSubmit && (
+              {!reviewersValid && (
                 <p className="text-status-run text-xs">
                   Add at least one reviewer and fill every label/focus prompt.
                 </p>
@@ -539,6 +876,7 @@ export function AddStepDialog({
               side="top"
               layer={layer}
               onChange={(selection) => {
+                markUserTouchedSelection();
                 setBackend(selection.backend);
                 setBackendModelPresetId(selection.presetId);
                 setModel(selection.model);
@@ -558,39 +896,61 @@ export function AddStepDialog({
             />
             <ThinkingSelector
               value={normalizedThinkingEffort}
-              onChange={setThinkingEffort}
+              onChange={(nextThinkingEffort) => {
+                markUserTouchedSelection();
+                setThinkingEffort(nextThinkingEffort);
+              }}
               options={thinkingOptions}
               disabled={thinkingOptions.length <= 1}
               side="top"
               layer={layer}
             />
-          </div>
-          <div className="flex items-center justify-between pt-1">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                size="sm"
-                checked={autoStart}
-                onChange={setAutoStart}
-                label="Auto-start"
+            {presetType !== 'review-changes' && (
+              <RateLimitSwapPreview
+                requestedBackend={backend}
+                model={model}
+                thinkingEffort={normalizedThinkingEffort}
+                onApplySuggestion={(selection) => {
+                  markUserTouchedSelection();
+                  setBackend(selection.backend);
+                  setBackendModelPresetId(null);
+                  setModel(selection.model as ModelPreference);
+                  setThinkingEffort(selection.thinkingEffort as ThinkingEffort);
+                  setInteractionMode((mode) =>
+                    normalizeInteractionModeForBackend({
+                      backend: selection.backend,
+                      mode,
+                    }),
+                  );
+                }}
               />
-              <Kbd shortcut="cmd+shift+s" />
-            </div>
-            <div className="flex gap-3">
-              <Button type="button" onClick={onClose} variant="ghost">
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                variant="primary"
-              >
-                Add Step
-                <Kbd shortcut="cmd+enter" className="ml-1" />
-              </Button>
-            </div>
+            )}
           </div>
+          <AddStepDialogFooter
+            taskId={taskId}
+            presetType={presetType}
+            hasReviewComments={
+              includeReviewComments && openReviewComments.length > 0
+            }
+            reviewersValid={reviewersValid}
+            autoStart={autoStart}
+            onAutoStartChange={setAutoStart}
+            onClose={onClose}
+            onSubmit={handleSubmit}
+          />
         </div>
+        {showReviewPreview && (
+          <Modal
+            isOpen={showReviewPreview}
+            onClose={() => setShowReviewPreview(false)}
+            title="Review prompt preview"
+            size="lg"
+          >
+            <pre className="bg-bg-2 text-ink-1 max-h-[60vh] overflow-auto rounded-lg p-4 text-xs leading-relaxed whitespace-pre-wrap">
+              {reviewPromptText}
+            </pre>
+          </Modal>
+        )}
       </Modal>
     </KeyboardLayerProvider>
   );

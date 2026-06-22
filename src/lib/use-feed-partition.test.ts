@@ -19,6 +19,21 @@ function prItem(overrides: Partial<FeedItem> & { id: string }): FeedItem {
   };
 }
 
+function taskItem(overrides: Partial<FeedItem> & { id: string }): FeedItem {
+  return {
+    source: 'task',
+    attention: 'waiting',
+    timestamp: '2026-05-30T00:00:00.000Z',
+    projectId: 'project-1',
+    projectName: 'Project',
+    projectColor: '#fff',
+    projectPriority: 'normal',
+    title: overrides.id,
+    taskId: overrides.id,
+    ...overrides,
+  };
+}
+
 describe('partitionFeedItems', () => {
   it('keeps manually low-priority PRs at the end of the carousel', async () => {
     const markedLow = prItem({ id: 'pr:project-1:1' });
@@ -46,7 +61,7 @@ describe('partitionFeedItems', () => {
     expect(result.lowPriorityItems.map((item) => item.id)).toEqual([]);
   });
 
-  it('treats draft PRs as low priority in the carousel', async () => {
+  it('keeps draft PRs in the carousel', async () => {
     const draft = prItem({ id: 'pr:project-1:1', isDraft: true });
     const normal = prItem({ id: 'pr:project-1:2' });
 
@@ -61,9 +76,10 @@ describe('partitionFeedItems', () => {
     });
 
     expect(result.prReviewItems.map((item) => item.id)).toEqual([
-      normal.id,
       draft.id,
+      normal.id,
     ]);
+    expect(result.normalItems.map((item) => item.id)).toEqual([]);
     expect(result.lowPriorityItems.map((item) => item.id)).toEqual([]);
   });
 
@@ -96,6 +112,39 @@ describe('partitionFeedItems', () => {
       secondProject.id,
       firstProject.id,
       unorderedProject.id,
+    ]);
+  });
+
+  it('orders task parents by latest child task activity', async () => {
+    const parentWithRecentChild = taskItem({
+      id: 'task:parent-with-recent-child',
+      timestamp: '2026-05-30T00:00:00.000Z',
+      children: [
+        taskItem({
+          id: 'task:recent-child',
+          timestamp: '2026-06-02T00:00:00.000Z',
+          parentTaskId: 'parent-with-recent-child',
+        }),
+      ],
+    });
+    const newerParent = taskItem({
+      id: 'task:newer-parent',
+      timestamp: '2026-06-01T00:00:00.000Z',
+    });
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [newerParent, parentWithRecentChild],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      taskOwnedPrIds: new Set(),
+    });
+
+    expect(result.highPriorityItems.map((item) => item.id)).toEqual([
+      parentWithRecentChild.id,
+      newerParent.id,
     ]);
   });
 });

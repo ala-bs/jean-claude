@@ -1,15 +1,19 @@
-import { MemoryStick } from 'lucide-react';
-
-import { Tooltip } from '@/common/ui/tooltip';
 import {
   MAX_MEMORY_USAGE_SAMPLES,
-  useMemoryUsage,
   type MemoryUsageSample,
+  useMemoryUsage,
 } from '@/hooks/use-memory-usage';
+import { MemoryStick } from 'lucide-react';
+import { Tooltip } from '@/common/ui/tooltip';
+import { useOverlaysStore } from '@/stores/overlays';
+import { useState } from 'react';
 
 function formatBytes(bytes: number): string {
-  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(0)} MB`;
+  const megabytes = bytes / 1_048_576;
+  if (megabytes > 1000) {
+    return `${(megabytes / 1000).toFixed(1).replace('.', ',')}GB`;
+  }
+  if (megabytes >= 1) return `${megabytes.toFixed(0)} MB`;
   return `${(bytes / 1_024).toFixed(0)} KB`;
 }
 
@@ -104,6 +108,11 @@ function ResourceMetricRow({
 
 export function RamUsageDisplay() {
   const { data, history } = useMemoryUsage();
+  const openOverlay = useOverlaysStore((s) => s.open);
+  const isResourcesOpen = useOverlaysStore(
+    (s) => s.activeOverlay === 'resources',
+  );
+  const [nowMs] = useState(() => Date.now());
 
   if (!data) return null;
 
@@ -159,8 +168,35 @@ export function RamUsageDisplay() {
 
   const oldestSample = history[0] as MemoryUsageSample | undefined;
   const historyMinutes = oldestSample
-    ? Math.max(1, Math.round((Date.now() - oldestSample.sampledAt) / 60_000))
+    ? Math.max(1, Math.round((nowMs - oldestSample.sampledAt) / 60_000))
     : 0;
+
+  const trigger = (
+    <div
+      className="text-ink-2 flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-white/5 focus:outline-none focus-visible:ring-1 focus-visible:ring-white/25"
+      role="button"
+      tabIndex={0}
+      title="Open resource metrics"
+      aria-label="Open resource metrics"
+      onClick={() => openOverlay('resources')}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openOverlay('resources');
+        }
+      }}
+    >
+      <MemoryStick size={14} />
+      <span className="text-xs">
+        {formatBytes(data.totalRssBytes)} ·{' '}
+        {formatCpu(
+          data.mainProcess.cpuPercent + data.rendererProcess.cpuPercent,
+        )}
+      </span>
+    </div>
+  );
+
+  if (isResourcesOpen) return trigger;
 
   return (
     <Tooltip
@@ -183,15 +219,7 @@ export function RamUsageDisplay() {
       side="bottom"
       minWidth={270}
     >
-      <div className="text-ink-2 flex cursor-default items-center gap-1.5 rounded px-1.5 py-0.5">
-        <MemoryStick size={14} />
-        <span className="text-xs">
-          {formatBytes(data.totalRssBytes)} ·{' '}
-          {formatCpu(
-            data.mainProcess.cpuPercent + data.rendererProcess.cpuPercent,
-          )}
-        </span>
-      </div>
+      {trigger}
     </Tooltip>
   );
 }

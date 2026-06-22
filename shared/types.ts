@@ -2,19 +2,20 @@
 // These are plain TypeScript types without database-specific dependencies
 
 import type { AgentBackendType, PromptImagePart } from './agent-backend-types';
-import type { ProjectPriority } from './feed-types';
 import {
   DEFAULT_OPENAI_LOGO_BASE_IMAGE_ID,
   isOpenAiLogoBaseImageId,
   type OpenAiBaseImageMode,
   type OpenAiLogoBaseImageId,
 } from './openai-logo-bases';
-import type { PermissionScope } from './permission-types';
 import {
   DEFAULT_PROMPT_PREFACE_SETTING,
   isPromptPrefaceSetting,
 } from './prompt-preface-types';
+import type { PermissionScope } from './permission-types';
+import type { ProjectPriority } from './feed-types';
 import type { UsageProviderType } from './usage-types';
+
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
 
@@ -54,6 +55,12 @@ export type TaskStatus =
   | 'errored'
   | 'interrupted';
 export type InteractionMode = 'ask' | 'auto' | 'plan';
+
+export interface TaskTodoItem {
+  id: string;
+  title: string;
+  checked: boolean;
+}
 
 export interface BackendInteractionModeOption {
   value: InteractionMode;
@@ -98,6 +105,7 @@ export const BACKEND_INTERACTION_MODE_OPTIONS: Record<
 > = {
   'claude-code': CLAUDE_CODE_INTERACTION_MODE_OPTIONS,
   opencode: OPENCODE_INTERACTION_MODE_OPTIONS,
+  codex: OPENCODE_INTERACTION_MODE_OPTIONS,
 };
 
 export function getInteractionModeOptions({
@@ -147,6 +155,7 @@ export function normalizeInteractionModeForBackend({
 export type ModelPreference = 'default' | (string & {});
 export type ThinkingEffort =
   | 'default'
+  | 'minimal'
   | 'none'
   | 'low'
   | 'medium'
@@ -343,6 +352,7 @@ export interface Task {
   pullRequestId: string | null;
   pullRequestUrl: string | null;
   pendingMessage: string | null;
+  todoItems: TaskTodoItem[];
   parentTaskId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -370,6 +380,7 @@ export interface NewTask {
   pullRequestId?: string | null;
   pullRequestUrl?: string | null;
   pendingMessage?: string | null;
+  todoItems?: TaskTodoItem[];
   parentTaskId?: string | null;
   createdAt?: string;
   updatedAt: string;
@@ -392,6 +403,7 @@ export interface UpdateTask {
   pullRequestId?: string | null;
   pullRequestUrl?: string | null;
   pendingMessage?: string | null;
+  todoItems?: TaskTodoItem[];
   parentTaskId?: string | null;
   updatedAt?: string;
 }
@@ -642,18 +654,52 @@ export interface CompletionSetting {
 
 export interface UsageDisplaySetting {
   enabledProviders: UsageProviderType[];
+  copilotToken?: string;
+}
+
+export interface AppearanceSetting {
+  reduceMotion: boolean;
 }
 
 export interface SummaryModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
+export interface BackendDefaultModelsSetting {
+  models: Record<AgentBackendType, ModelPreference>;
+}
+
+export type OpenCodeProcessMode = 'standalone' | 'shared';
+
+export interface OpenCodeProcessSetting {
+  mode: OpenCodeProcessMode;
+}
+
+export interface RateLimitSwapEntry {
+  backend: AgentBackendType;
+  model?: ModelPreference;
+  thinkingEffort?: ThinkingEffort;
+  presetId?: string | null;
+  threshold?: number; // 0-1, omit on last entry (absolute fallback)
+}
+
+export interface RateLimitSwapSetting {
+  enabled: boolean;
+  chain: RateLimitSwapEntry[];
+}
+
 export interface EditorAutomationSetting {
   closeWindowsOnTaskCompletion: boolean;
 }
 
+export interface RawMessageCleanupSetting {
+  enabled: boolean;
+  retentionHours: number;
+}
+
 export interface ThinkingSettingsSetting {
   efforts: Record<AgentBackendType, Record<string, ThinkingEffort>>;
+  selectedModels?: Record<AgentBackendType, ModelPreference>;
 }
 
 export interface BackendModelPreset {
@@ -692,6 +738,7 @@ export interface CalendarNotificationsSetting {
   enabled: boolean;
   leadTimeMinutes: number;
   showStartWindow: boolean;
+  meetingJoinTarget: import('./teams-url').TeamsMeetingJoinTarget;
 }
 
 export const DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES = 5;
@@ -754,7 +801,7 @@ function isEditorSetting(v: unknown): v is EditorSetting {
   return false;
 }
 
-const VALID_BACKENDS: AgentBackendType[] = ['claude-code', 'opencode'];
+const VALID_BACKENDS: AgentBackendType[] = ['claude-code', 'opencode', 'codex'];
 
 function isCompletionSetting(v: unknown): v is CompletionSetting {
   if (!v || typeof v !== 'object') return false;
@@ -809,7 +856,12 @@ function isBackendsSetting(v: unknown): v is BackendsSetting {
   return true;
 }
 
-const VALID_USAGE_PROVIDERS: UsageProviderType[] = ['claude-code', 'codex'];
+const VALID_USAGE_PROVIDERS: UsageProviderType[] = [
+  'claude-code',
+  'codex',
+  'gemini',
+  'copilot',
+];
 
 function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
   if (!v || typeof v !== 'object') return false;
@@ -821,7 +873,15 @@ function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
     )
   )
     return false;
+  if (obj.copilotToken !== undefined && typeof obj.copilotToken !== 'string')
+    return false;
   return true;
+}
+
+function isAppearanceSetting(v: unknown): v is AppearanceSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return typeof obj.reduceMotion === 'boolean';
 }
 
 function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
@@ -832,14 +892,69 @@ function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
 }
 
+function isBackendDefaultModelsSetting(
+  v: unknown,
+): v is BackendDefaultModelsSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  if (!obj.models || typeof obj.models !== 'object') return false;
+  const models = obj.models as Record<string, unknown>;
+  return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+}
+
+function isOpenCodeProcessSetting(v: unknown): v is OpenCodeProcessSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return obj.mode === 'standalone' || obj.mode === 'shared';
+}
+
+function isRateLimitSwapSetting(value: unknown): value is RateLimitSwapSetting {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.enabled !== 'boolean' || !Array.isArray(v.chain)) return false;
+
+  return v.chain.every((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const obj = entry as Record<string, unknown>;
+    return (
+      typeof obj.backend === 'string' &&
+      VALID_BACKENDS.includes(obj.backend as AgentBackendType) &&
+      (obj.model === undefined || typeof obj.model === 'string') &&
+      (obj.thinkingEffort === undefined ||
+        VALID_THINKING_EFFORTS.includes(
+          obj.thinkingEffort as ThinkingEffort,
+        )) &&
+      (obj.presetId === undefined ||
+        obj.presetId === null ||
+        typeof obj.presetId === 'string') &&
+      (obj.threshold === undefined ||
+        (typeof obj.threshold === 'number' &&
+          obj.threshold >= 0 &&
+          obj.threshold <= 1))
+    );
+  });
+}
+
 function isEditorAutomationSetting(v: unknown): v is EditorAutomationSetting {
   if (!v || typeof v !== 'object') return false;
   const obj = v as Record<string, unknown>;
   return typeof obj.closeWindowsOnTaskCompletion === 'boolean';
 }
 
+function isRawMessageCleanupSetting(v: unknown): v is RawMessageCleanupSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return (
+    typeof obj.enabled === 'boolean' &&
+    typeof obj.retentionHours === 'number' &&
+    Number.isFinite(obj.retentionHours) &&
+    obj.retentionHours >= 1
+  );
+}
+
 const VALID_THINKING_EFFORTS: ThinkingEffort[] = [
   'default',
+  'minimal',
   'none',
   'low',
   'medium',
@@ -853,6 +968,19 @@ function isThinkingSettingsSetting(v: unknown): v is ThinkingSettingsSetting {
   const obj = v as Record<string, unknown>;
   if (!obj.efforts || typeof obj.efforts !== 'object') return false;
   const efforts = obj.efforts as Record<string, unknown>;
+  if (obj.selectedModels !== undefined) {
+    if (!obj.selectedModels || typeof obj.selectedModels !== 'object') {
+      return false;
+    }
+    const selectedModels = obj.selectedModels as Record<string, unknown>;
+    if (
+      !VALID_BACKENDS.every(
+        (backend) => typeof selectedModels[backend] === 'string',
+      )
+    ) {
+      return false;
+    }
+  }
   return VALID_BACKENDS.every((backend) => {
     const backendEfforts = efforts[backend];
     if (!backendEfforts || typeof backendEfforts !== 'object') return false;
@@ -920,6 +1048,7 @@ function isCalendarNotificationsSetting(
   return (
     typeof obj.enabled === 'boolean' &&
     typeof obj.showStartWindow === 'boolean' &&
+    (obj.meetingJoinTarget === 'web' || obj.meetingJoinTarget === 'app') &&
     typeof obj.leadTimeMinutes === 'number' &&
     Number.isInteger(obj.leadTimeMinutes) &&
     obj.leadTimeMinutes >= 1 &&
@@ -1028,6 +1157,16 @@ function isPromptSnippetsSetting(
   );
 }
 
+export type WorkActivitySetting = { enabled: boolean };
+
+function isWorkActivitySetting(value: unknown): value is WorkActivitySetting {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    typeof (value as Record<string, unknown>).enabled === 'boolean'
+  );
+}
+
 export const SETTINGS_DEFINITIONS = {
   editor: {
     defaultValue: { type: 'preset', id: 'vscode' } as EditorSetting,
@@ -1052,17 +1191,48 @@ export const SETTINGS_DEFINITIONS = {
   usageDisplay: {
     defaultValue: {
       enabledProviders: [],
+      copilotToken: '',
     } as UsageDisplaySetting,
     validate: isUsageDisplaySetting,
+  },
+  appearance: {
+    defaultValue: {
+      reduceMotion: true,
+    } as AppearanceSetting,
+    validate: isAppearanceSetting,
   },
   summaryModels: {
     defaultValue: {
       models: {
         'claude-code': 'haiku',
         opencode: 'default',
+        codex: 'default',
       },
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
+  },
+  backendDefaultModels: {
+    defaultValue: {
+      models: {
+        'claude-code': 'default',
+        opencode: 'default',
+        codex: 'default',
+      },
+    } as BackendDefaultModelsSetting,
+    validate: isBackendDefaultModelsSetting,
+  },
+  opencodeProcess: {
+    defaultValue: {
+      mode: 'standalone',
+    } as OpenCodeProcessSetting,
+    validate: isOpenCodeProcessSetting,
+  },
+  rateLimitSwap: {
+    defaultValue: {
+      enabled: false,
+      chain: [],
+    } as RateLimitSwapSetting,
+    validate: isRateLimitSwapSetting,
   },
   editorAutomation: {
     defaultValue: {
@@ -1070,11 +1240,24 @@ export const SETTINGS_DEFINITIONS = {
     } as EditorAutomationSetting,
     validate: isEditorAutomationSetting,
   },
+  rawMessageCleanup: {
+    defaultValue: {
+      enabled: true,
+      retentionHours: 24,
+    } as RawMessageCleanupSetting,
+    validate: isRawMessageCleanupSetting,
+  },
   thinkingSettings: {
     defaultValue: {
       efforts: {
         'claude-code': { default: 'default' },
         opencode: { default: 'default' },
+        codex: { default: 'default' },
+      },
+      selectedModels: {
+        'claude-code': 'default',
+        opencode: 'default',
+        codex: 'default',
       },
     } as ThinkingSettingsSetting,
     validate: isThinkingSettingsSetting,
@@ -1094,6 +1277,7 @@ export const SETTINGS_DEFINITIONS = {
       enabled: false,
       leadTimeMinutes: DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
       showStartWindow: false,
+      meetingJoinTarget: 'web',
     } as CalendarNotificationsSetting,
     validate: isCalendarNotificationsSetting,
   },
@@ -1123,6 +1307,10 @@ export const SETTINGS_DEFINITIONS = {
   promptPreface: {
     defaultValue: DEFAULT_PROMPT_PREFACE_SETTING,
     validate: isPromptPrefaceSetting,
+  },
+  workActivity: {
+    defaultValue: { enabled: true } as WorkActivitySetting,
+    validate: isWorkActivitySetting,
   },
 } satisfies Record<string, SettingDefinition<unknown>>;
 

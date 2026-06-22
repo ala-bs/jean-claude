@@ -1,4 +1,6 @@
 import { nanoid } from 'nanoid';
+import { sql } from 'kysely';
+
 
 import type { AgentBackendType } from '@shared/agent-backend-types';
 
@@ -94,7 +96,7 @@ export const RawMessageRepository = {
     rawData: unknown;
     rawFormat: AgentBackendType;
   }) => {
-    const encoded = encodeRawMessageData(rawData);
+    const encoded = await encodeRawMessageData(rawData);
 
     return db
       .insertInto('raw_messages')
@@ -118,7 +120,7 @@ export const RawMessageRepository = {
    * Used when a streaming update replaces a previous snapshot.
    */
   updateRawData: async (rowId: string, rawData: unknown) => {
-    const encoded = encodeRawMessageData(rawData);
+    const encoded = await encodeRawMessageData(rawData);
 
     await db
       .updateTable('raw_messages')
@@ -142,10 +144,12 @@ export const RawMessageRepository = {
       .orderBy('messageIndex', 'asc')
       .execute();
 
-    return rows.map((row) => ({
-      ...row,
-      rawData: decodeRawMessageData(row),
-    }));
+    return Promise.all(
+      rows.map(async (row) => ({
+        ...row,
+        rawData: await decodeRawMessageData(row),
+      })),
+    );
   },
 
   /**
@@ -153,6 +157,52 @@ export const RawMessageRepository = {
    */
   deleteByTaskId: async (taskId: string) => {
     return db.deleteFrom('raw_messages').where('taskId', '=', taskId).execute();
+  },
+
+  /**
+   * Delete raw messages for user-completed tasks updated before the cutoff.
+   * Normalized messages remain; rawMessageId references are nulled explicitly.
+   */
+  deleteForCompletedTasksUpdatedBefore: async (
+    cutoffIso: string,
+  ): Promise<number> => {
+    const results = await db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('agent_messages')
+        .set({ rawMessageId: null })
+        .where('rawMessageId', 'in', (eb) =>
+          eb
+            .selectFrom('raw_messages')
+            .innerJoin('tasks', 'tasks.id', 'raw_messages.taskId')
+            .select('raw_messages.id')
+            .where('tasks.userCompleted', '=', 1)
+            .where('tasks.updatedAt', '<', cutoffIso),
+        )
+        .execute();
+
+      return trx
+        .deleteFrom('raw_messages')
+        .where('id', 'in', (eb) =>
+          eb
+            .selectFrom('raw_messages')
+            .innerJoin('tasks', 'tasks.id', 'raw_messages.taskId')
+            .select('raw_messages.id')
+            .where('tasks.userCompleted', '=', 1)
+            .where('tasks.updatedAt', '<', cutoffIso),
+        )
+        .execute();
+    });
+
+    return results.reduce(
+      (count, result) => count + Number(result.numDeletedRows),
+      0,
+    );
+  },
+
+  reclaimDeletedStorage: async (): Promise<void> => {
+    await sql`PRAGMA wal_checkpoint(TRUNCATE)`.execute(db);
+    await sql`VACUUM`.execute(db);
+    await sql`PRAGMA wal_checkpoint(TRUNCATE)`.execute(db);
   },
 
   /**
@@ -187,15 +237,17 @@ export const RawMessageRepository = {
         .execute();
 
       // Parse all rows once upfront to avoid double JSON.parse across passes
-      const parsedRows = rows.map((row) => {
-        let parsed: unknown = null;
-        try {
-          parsed = JSON.parse(decodeRawMessageData(row));
-        } catch {
-          // leave as null
-        }
-        return { ...row, parsed };
-      });
+      const parsedRows = await Promise.all(
+        rows.map(async (row) => {
+          let parsed: unknown = null;
+          try {
+            parsed = JSON.parse(await decodeRawMessageData(row));
+          } catch {
+            // leave as null
+          }
+          return { ...row, parsed };
+        }),
+      );
 
       const updates: Array<{ id: string; rawData: unknown }> = [];
       const deleteIds: string[] = [];
@@ -338,7 +390,7 @@ export const RawMessageRepository = {
 
       // --- Apply updates and deletes ---
       for (const update of updates) {
-        const encoded = encodeRawMessageData(update.rawData);
+        const encoded = await encodeRawMessageData(update.rawData);
         await trx
           .updateTable('raw_messages')
           .set({

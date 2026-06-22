@@ -56,6 +56,61 @@ describe('feed-note-checkboxes', () => {
     ]);
   });
 
+  it('converts two-space indented list items to nested BlockNote children', () => {
+    expect(
+      JSON.parse(
+        markdownToBlockNoteJson('- Parent\n  - Child\n    - Grandchild'),
+      ),
+    ).toMatchObject([
+      {
+        type: 'bulletListItem',
+        content: 'Parent',
+        children: [
+          {
+            type: 'bulletListItem',
+            content: 'Child',
+            children: [{ type: 'bulletListItem', content: 'Grandchild' }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('converts indented checklist items to nested BlockNote children', () => {
+    expect(
+      JSON.parse(markdownToBlockNoteJson('- [ ] Parent\n  - [x] Child')),
+    ).toMatchObject([
+      {
+        type: 'checkListItem',
+        props: { checked: false },
+        content: 'Parent',
+        children: [
+          {
+            type: 'checkListItem',
+            props: { checked: true },
+            content: 'Child',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('preserves leading spaces for non-list lines when converting markdown', () => {
+    expect(JSON.parse(markdownToBlockNoteJson('  indented paragraph'))).toEqual(
+      [{ type: 'paragraph', content: '  indented paragraph' }],
+    );
+  });
+
+  it('does not attach indented list items to blank-line paragraphs', () => {
+    expect(
+      JSON.parse(markdownToBlockNoteJson('- Parent\n\n  - Child')),
+    ).toEqual([
+      { type: 'bulletListItem', content: 'Parent' },
+      { type: 'paragraph', content: '' },
+      { type: 'bulletListItem', content: 'Child' },
+    ]);
+  });
+
   it('toggles the matching checklist block in BlockNote content', () => {
     const content = JSON.stringify([
       { type: 'paragraph', content: 'Title' },

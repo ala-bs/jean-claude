@@ -1,28 +1,105 @@
-import clsx from 'clsx';
+import {
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { RotateCw, Search, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import clsx from 'clsx';
 
+
+
+import {
+  getRunCommandLogLineCount,
+  type RunCommandLogs,
+  type RunCommandLogState,
+  useTaskMessagesStore,
+} from '@/stores/task-messages';
+import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
+import { ConfirmRunModal } from '@/features/agent/ui-run-button/confirm-run-modal';
+import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
-import { Kbd } from '@/common/ui/kbd';
-import { Separator } from '@/common/ui/separator';
-import { ConfirmRunModal } from '@/features/agent/ui-run-button/confirm-run-modal';
-import { KillPortsModal } from '@/features/agent/ui-run-button/kill-ports-modal';
 import { InteractiveLog } from '@/features/common/interactive-log';
+import { Kbd } from '@/common/ui/kbd';
+import { keyEventToTerminalInput } from '@/features/common/interactive-log/key-event-to-terminal-input';
+import { KillPortsModal } from '@/features/agent/ui-run-button/kill-ports-modal';
+import { Separator } from '@/common/ui/separator';
+import { useCommandLogsPaneWidth } from '@/stores/navigation';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProjectCommands } from '@/hooks/use-project-commands';
 import { useRunCommands } from '@/hooks/use-run-commands';
-import { useCommandLogsPaneWidth } from '@/stores/navigation';
-import {
-  type RunCommandLogs,
-  useTaskMessagesStore,
-} from '@/stores/task-messages';
-import { getRunCommandDisplayName } from '@shared/run-command-types';
+
+
 
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
 
 const EMPTY_RUN_COMMAND_LOGS: RunCommandLogs = {};
+
+function hasLogContent(log: RunCommandLogState | null | undefined): boolean {
+  return getRunCommandLogLineCount(log) > 0;
+}
+
+function logIncludesQuery(
+  log: RunCommandLogState | null | undefined,
+  query: string,
+): boolean {
+  if (!log) return false;
+
+  for (const chunk of log.chunks) {
+    if (chunk.lines.some((entry) => entry.line.toLowerCase().includes(query))) {
+      return true;
+    }
+  }
+
+  return (
+    log.pendingLines.stdout?.line.toLowerCase().includes(query) === true ||
+    log.pendingLines.stderr?.line.toLowerCase().includes(query) === true
+  );
+}
+
+function filterLogByQuery(
+  log: RunCommandLogState | null,
+  query: string,
+): RunCommandLogState | null {
+  if (!log || !query) return log;
+
+  let totalLineCount = 0;
+  const chunks = log.chunks
+    .map((chunk) => {
+      const lines = chunk.lines.filter((entry) =>
+        entry.line.toLowerCase().includes(query),
+      );
+      totalLineCount += lines.length;
+      return { ...chunk, lines, lineCount: lines.length };
+    })
+    .filter((chunk) => chunk.lineCount > 0);
+
+  return {
+    ...log,
+    chunks,
+    pendingLines: {
+      stdout:
+        log.pendingLines.stdout?.line.toLowerCase().includes(query) === true
+          ? log.pendingLines.stdout
+          : null,
+      stderr:
+        log.pendingLines.stderr?.line.toLowerCase().includes(query) === true
+          ? log.pendingLines.stderr
+          : null,
+    },
+    totalLineCount,
+  };
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+
+  return !!target.closest('input, textarea, select, button, [contenteditable]');
+}
 
 export function CommandLogsPane({
   taskId,
@@ -52,8 +129,8 @@ export function CommandLogsPane({
   const runCommandLogs =
     useTaskMessagesStore((state) => state.runCommandLogs[taskId]) ??
     EMPTY_RUN_COMMAND_LOGS;
-  const clearRunCommandLogs = useTaskMessagesStore(
-    (state) => state.clearRunCommandLogs,
+  const resetRunCommandLogs = useTaskMessagesStore(
+    (state) => state.resetRunCommandLogs,
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingConfirm, setPendingConfirm] = useState<{
@@ -81,7 +158,7 @@ export function CommandLogsPane({
     () =>
       commands.filter(
         (command) =>
-          (runCommandLogs[command.id]?.lines.length ?? 0) > 0 ||
+          hasLogContent(runCommandLogs[command.id]) ||
           runningCommandIds.has(command.id),
       ),
     [commands, runCommandLogs, runningCommandIds],
@@ -99,18 +176,16 @@ export function CommandLogsPane({
         return true;
       }
 
-      return (
-        runCommandLogs[tab.id]?.lines.some((entry) =>
-          entry.line.toLowerCase().includes(normalizedSearchQuery),
-        ) ?? false
-      );
+      return logIncludesQuery(runCommandLogs[tab.id], normalizedSearchQuery);
     });
   }, [normalizedSearchQuery, runCommandLogs, tabs]);
 
+  const selectableTabs = normalizedSearchQuery ? filteredTabs : tabs;
   const activeCommandId =
-    selectedCommandId && tabs.some((tab) => tab.id === selectedCommandId)
+    selectedCommandId &&
+    selectableTabs.some((tab) => tab.id === selectedCommandId)
       ? selectedCommandId
-      : (tabs[0]?.id ?? null);
+      : (selectableTabs[0]?.id ?? null);
   const activeLog = activeCommandId ? runCommandLogs[activeCommandId] : null;
   const isActiveRunning = !!(
     activeCommandId && runningCommandIds.has(activeCommandId)
@@ -129,7 +204,8 @@ export function CommandLogsPane({
         restartInFlightRef.current = false;
       }
     },
-    [startCommand],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
 
   const requestRestartActiveCommand = useCallback(() => {
@@ -160,6 +236,8 @@ export function CommandLogsPane({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+
       const pane = paneRef.current;
       const target = event.target;
       if (!(target instanceof Node) || !pane?.contains(target)) return;
@@ -178,18 +256,32 @@ export function CommandLogsPane({
           requestRestartActiveCommand();
         }
       }
+
+      if (!activeCommandId || !isActiveRunning || isInteractiveTarget(target)) {
+        return;
+      }
+
+      const input = keyEventToTerminalInput(event);
+      if (input === null) return;
+
+      event.preventDefault();
+      void api.runCommands.sendInput({
+        taskId,
+        runCommandId: activeCommandId,
+        input,
+      });
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [requestRestartActiveCommand]);
-  const filteredActiveLines = useMemo(() => {
-    if (!activeLog) return [];
-    if (!normalizedSearchQuery) return activeLog.lines;
+  }, [activeCommandId, isActiveRunning, requestRestartActiveCommand, taskId]);
 
-    return activeLog.lines.filter((entry) =>
-      entry.line.toLowerCase().includes(normalizedSearchQuery),
-    );
+  const focusPaneInput = useCallback((event: MouseEvent) => {
+    if (isInteractiveTarget(event.target)) return;
+    paneRef.current?.focus();
+  }, []);
+  const activeLogView = useMemo(() => {
+    return filterLogByQuery(activeLog, normalizedSearchQuery);
   }, [activeLog, normalizedSearchQuery]);
   const hasAnyTabs = tabs.length > 0;
   const showNoSearchMatches =
@@ -208,6 +300,8 @@ export function CommandLogsPane({
   return (
     <div
       ref={paneRef}
+      tabIndex={-1}
+      onMouseDown={focusPaneInput}
       style={{ width }}
       className="panel-edge-shadow bg-bg-0 relative flex h-full flex-col"
     >
@@ -242,7 +336,13 @@ export function CommandLogsPane({
           </Button>
           <IconButton
             onClick={() => {
-              if (activeCommandId) clearRunCommandLogs(taskId, activeCommandId);
+              if (!activeCommandId) return;
+              const generation = resetRunCommandLogs(taskId, activeCommandId);
+              void api.runCommands.resetLogs({
+                taskId,
+                runCommandId: activeCommandId,
+                generation,
+              });
             }}
             size="sm"
             icon={<Trash2 />}
@@ -295,7 +395,7 @@ export function CommandLogsPane({
 
           {activeCommandId && (
             <InteractiveLog
-              lines={filteredActiveLines}
+              log={activeLogView}
               taskId={taskId}
               runCommandId={activeCommandId}
               isRunning={isActiveRunning}

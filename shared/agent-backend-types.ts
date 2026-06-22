@@ -2,12 +2,14 @@
 // All agent backends (Claude Code, OpenCode, etc.) normalize to these types.
 // The rest of the app (IPC, database, UI) only sees these types.
 
-import type { NormalizationEvent } from './normalized-message-v2';
+import type { InteractionMode, ThinkingEffort } from './types';
 import type {
   PermissionScope,
   ResolvedPermissionRule,
 } from './permission-types';
-import type { InteractionMode, ThinkingEffort } from './types';
+import type { NormalizationEvent } from './normalized-message-v2';
+
+
 
 // Re-export shared types that live in normalized-message-v2
 export type {
@@ -20,7 +22,7 @@ export type {
 
 // --- Backend identification ---
 
-export type AgentBackendType = 'claude-code' | 'opencode';
+export type AgentBackendType = 'claude-code' | 'opencode' | 'codex';
 
 // --- Prompt content parts ---
 
@@ -37,6 +39,8 @@ export type PromptImagePart = {
   mimeType: string;
   /** Optional original filename */
   filename?: string;
+  /** Original byte size when known */
+  sizeBytes?: number;
   /** AVIF-compressed base64 for storage (set by UI before IPC) */
   storageData?: string;
   /** MIME type of the storage version */
@@ -76,6 +80,7 @@ export interface AgentBackendConfig {
 export interface AgentSession {
   sessionId: string;
   events: AsyncIterable<AgentEvent>;
+  rootPid?: number;
 }
 
 /**

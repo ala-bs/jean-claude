@@ -1,8 +1,9 @@
-import type { MentionOption } from '@/common/ui/mention-textarea';
-import type { CommentThread } from '@/features/common/ui-file-diff';
 import type { AzureDevOpsCommentThread } from '@/lib/api';
+import type { CommentThread } from '@/features/common/ui-file-diff';
 import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
+import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+
 
 import { PrInlineCommentTimeline } from '../ui-pr-comments';
 
@@ -31,17 +32,23 @@ export function PrInlineCommentThread({
       projectId={projectId}
       prId={prId}
       canResolve={isActiveThreadStatus(thread.status)}
+      threadStatus={thread.status}
       comments={thread.comments.map((comment) => ({
         id: comment.id ?? 0,
         content: comment.content,
         commentType: 'text',
         author: {
+          id: comment.authorId,
           displayName: comment.author,
           uniqueName: comment.uniqueName ?? comment.author,
           imageUrl: comment.imageUrl,
         },
+        usersLiked: comment.usersLiked ?? [],
         publishedDate: comment.publishedDate ?? new Date().toISOString(),
-        lastUpdatedDate: comment.publishedDate ?? new Date().toISOString(),
+        lastUpdatedDate:
+          comment.lastUpdatedDate ??
+          comment.publishedDate ??
+          new Date().toISOString(),
       }))}
       providerId={providerId}
       mentionDisplayNames={mentionDisplayNames}
@@ -70,9 +77,12 @@ export function convertPrThreadsForFile(
       status: thread.status,
       comments: thread.comments.map((comment) => ({
         id: comment.id,
+        authorId: comment.author.id,
         author: comment.author.displayName,
         content: comment.content,
+        usersLiked: comment.usersLiked,
         publishedDate: comment.publishedDate,
+        lastUpdatedDate: comment.lastUpdatedDate,
         imageUrl: comment.author.imageUrl,
         uniqueName: comment.author.uniqueName,
       })),

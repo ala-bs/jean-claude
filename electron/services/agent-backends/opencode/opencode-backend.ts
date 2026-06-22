@@ -2,21 +2,27 @@
 // Wraps the @opencode-ai/sdk client into the common AgentBackend interface.
 //
 // Architecture:
-// - Uses createOpencode() to spawn a server + client on first use
-// - Server is shared across all sessions (one per app instance)
+// - Uses dedicated per-session servers by default for precise resource tracking
+// - Can use a shared server when users prefer lower process overhead
 // - Events received via SSE subscription, filtered by session ID
 // - Permissions handled via client.permission.reply()
 // - Sessions created via client.session.create() + client.session.prompt()
 
 import {
-  createOpencode,
-  type OpencodeClient,
-  type Session as OcSession,
-  type Event as OcEvent,
-  type Part as OcPart,
-  type Message as OcMessage,
+  type ChildProcessWithoutNullStreams,
+  spawn,
+  spawnSync,
+} from 'node:child_process';
+
+import {
+  createOpencodeClient,
   type AssistantMessage as OcAssistantMessage,
+  type Event as OcEvent,
+  type Message as OcMessage,
+  type Part as OcPart,
   type PermissionRequest as OcPermission,
+  type Session as OcSession,
+  type OpencodeClient,
 } from '@opencode-ai/sdk/v2';
 
 import type {
@@ -30,18 +36,24 @@ import type {
   NormalizedQuestionRequest,
   PromptPart,
 } from '@shared/agent-backend-types';
-import type { TokenUsage } from '@shared/normalized-message-v2';
 import type { InteractionMode } from '@shared/types';
+import type { TokenUsage } from '@shared/normalized-message-v2';
 
-import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
-import { RawMessageRepository } from '../../../database/repositories';
-import { dbg } from '../../../lib/debug';
-import { calculateTheoreticalOpenCodeCost } from '../../backend-models-service';
+
 import {
   compileForOpenCode,
   evaluatePermissionWithMatch,
   normalizeToolRequest,
 } from '../../permission-settings-service';
+import {
+  RawMessageRepository,
+  SettingsRepository,
+} from '../../../database/repositories';
+import { calculateTheoreticalOpenCodeCost } from '../../backend-models-service';
+import { dbg } from '../../../lib/debug';
+import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
+
+
 
 import {
   normalizeOpenCodeV2,
@@ -50,24 +62,40 @@ import {
 } from './normalize-opencode-message-v2';
 import { applyDeltaToMessageParts } from './opencode-message-delta';
 
+
+
 // --- Server lifecycle (singleton) ---
 
 interface ServerHandle {
   client: OpencodeClient;
-  server: { url: string; close(): void };
+  server: { url: string; close(): void; process?: { pid?: number } };
 }
 
 type RuntimeMcpServers = NonNullable<AgentBackendConfig['mcpServers']>;
 const RUNTIME_MCP_TIMEOUT_MS = 30 * 60 * 1000;
+const SHARED_SERVER_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 let serverInstance: ServerHandle | null = null;
 let serverInitPromise: Promise<ServerHandle> | null = null;
+let sharedServerSessionCount = 0;
+let sharedServerIdleCloseTimer: ReturnType<typeof setTimeout> | null = null;
+const trackedOpenCodeServerPids = new Set<number>();
+
+type OpencodeServerConfig = {
+  mcp?: ReturnType<typeof toOpenCodeMcpConfig>;
+};
+
+function getServerPid(server: ServerHandle['server']): number | undefined {
+  const maybeProcess = (server as { process?: { pid?: unknown } }).process;
+  return typeof maybeProcess?.pid === 'number' ? maybeProcess.pid : undefined;
+}
 
 /**
  * Get or create the shared OpenCode server + client.
  * Singleton — only one server per app instance.
  */
 export async function getOrCreateServer(): Promise<ServerHandle> {
+  cancelSharedServerIdleClose();
   if (serverInstance) return serverInstance;
 
   if (serverInitPromise) {
@@ -78,7 +106,7 @@ export async function getOrCreateServer(): Promise<ServerHandle> {
   serverInitPromise = (async () => {
     dbg.agent('Starting OpenCode server...');
     try {
-      const instance = await createOpencode({
+      const instance = await createOpencodeServerHandle({
         hostname: '127.0.0.1',
         port: 0,
         timeout: 30_000,
@@ -96,15 +124,53 @@ export async function getOrCreateServer(): Promise<ServerHandle> {
   return (await serverInitPromise)!;
 }
 
-function hasRuntimeMcpServers(config: AgentBackendConfig): boolean {
-  return !!config.mcpServers && Object.keys(config.mcpServers).length > 0;
+async function acquireSharedServer(): Promise<ServerHandle> {
+  const server = await getOrCreateServer();
+  sharedServerSessionCount += 1;
+  return server;
+}
+
+function releaseSharedServer(): void {
+  sharedServerSessionCount = Math.max(0, sharedServerSessionCount - 1);
+  if (sharedServerSessionCount > 0 || !serverInstance) return;
+
+  cancelSharedServerIdleClose();
+  sharedServerIdleCloseTimer = setTimeout(() => {
+    if (sharedServerSessionCount > 0 || !serverInstance) return;
+    dbg.agent('Closing idle shared OpenCode server');
+    serverInstance.server.close();
+    serverInstance = null;
+    serverInitPromise = null;
+    sharedServerIdleCloseTimer = null;
+  }, SHARED_SERVER_IDLE_TIMEOUT_MS);
+}
+
+async function closeSharedServerIfIdleNow(): Promise<void> {
+  if (serverInitPromise) {
+    await serverInitPromise.catch(() => null);
+  }
+  if (sharedServerSessionCount > 0 || !serverInstance) return;
+  dbg.agent('Shutting down idle OpenCode server');
+  cancelSharedServerIdleClose();
+  serverInstance.server.close();
+  serverInstance = null;
+  serverInitPromise = null;
+}
+
+export async function closeIdleOpenCodeSharedServerNow(): Promise<void> {
+  await closeSharedServerIfIdleNow();
+}
+
+function cancelSharedServerIdleClose(): void {
+  if (!sharedServerIdleCloseTimer) return;
+  clearTimeout(sharedServerIdleCloseTimer);
+  sharedServerIdleCloseTimer = null;
 }
 
 function toOpenCodeMcpConfig(runtimeMcpServers: RuntimeMcpServers): {
   [key: string]: {
     type: 'local';
     command: string[];
-    environment?: Record<string, string>;
     enabled: boolean;
     timeout: number;
   };
@@ -113,7 +179,6 @@ function toOpenCodeMcpConfig(runtimeMcpServers: RuntimeMcpServers): {
     [key: string]: {
       type: 'local';
       command: string[];
-      environment?: Record<string, string>;
       enabled: boolean;
       timeout: number;
     };
@@ -122,10 +187,14 @@ function toOpenCodeMcpConfig(runtimeMcpServers: RuntimeMcpServers): {
   for (const [name, server] of Object.entries(runtimeMcpServers)) {
     const command = [server.command, ...(server.args ?? [])];
     if (command.length === 0 || !command[0]) continue;
+    if (server.env && Object.keys(server.env).length > 0) {
+      throw new Error(
+        `OpenCode runtime MCP server "${name}" cannot include env values because OpenCode receives runtime config through OPENCODE_CONFIG_CONTENT`,
+      );
+    }
     mcp[name] = {
       type: 'local',
       command,
-      ...(server.env ? { environment: server.env } : {}),
       enabled: true,
       timeout: RUNTIME_MCP_TIMEOUT_MS,
     };
@@ -143,14 +212,179 @@ async function createDedicatedServer(
     'Starting dedicated OpenCode server with %d runtime MCP servers',
     Object.keys(mcp).length,
   );
-  return createOpencode({
+  return createOpencodeServerHandle({
     hostname: '127.0.0.1',
     port: 0,
     timeout: 30_000,
-    config: {
-      mcp,
-    },
+    ...(Object.keys(mcp).length > 0 ? { config: { mcp } } : {}),
   });
+}
+
+async function createOpencodeServerHandle(options: {
+  hostname: string;
+  port: number;
+  timeout: number;
+  config?: OpencodeServerConfig;
+}): Promise<ServerHandle> {
+  const proc = spawn(
+    'opencode',
+    ['serve', `--hostname=${options.hostname}`, `--port=${options.port}`],
+    {
+      detached: process.platform !== 'win32',
+      env: {
+        ...process.env,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config ?? {}),
+      },
+    },
+  );
+  if (typeof proc.pid === 'number') {
+    const pid = proc.pid;
+    trackedOpenCodeServerPids.add(pid);
+    proc.once('exit', () => trackedOpenCodeServerPids.delete(pid));
+  }
+
+  const url = await waitForOpencodeServerUrl(proc, options.timeout);
+  const removeLogDrains = attachOpencodeLogDrains(proc);
+  return {
+    client: createOpencodeClient({ baseUrl: url }),
+    server: {
+      url,
+      process: { pid: proc.pid },
+      close() {
+        removeLogDrains();
+        stopOpencodeProcess(proc);
+      },
+    },
+  };
+}
+
+function attachOpencodeLogDrains(
+  proc: ChildProcessWithoutNullStreams,
+): () => void {
+  const drain = () => {};
+  proc.stdout.on('data', drain);
+  proc.stderr.on('data', drain);
+  return () => {
+    proc.stdout.off('data', drain);
+    proc.stderr.off('data', drain);
+  };
+}
+
+function waitForOpencodeServerUrl(
+  proc: ChildProcessWithoutNullStreams,
+  timeout: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let output = '';
+    let settled = false;
+    const appendOutput = (chunk: Buffer) => {
+      output = `${output}${chunk.toString()}`.slice(-8_192);
+    };
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      proc.stdout.off('data', handleStdout);
+      proc.stderr.off('data', handleStderr);
+      proc.off('exit', handleExit);
+      proc.off('error', handleError);
+      callback();
+    };
+    const timeoutId = setTimeout(() => {
+      finish(() => {
+        stopOpencodeProcess(proc);
+        reject(
+          new Error(`Timeout waiting for server to start after ${timeout}ms`),
+        );
+      });
+    }, timeout);
+
+    const handleStdout = (chunk: Buffer) => {
+      if (settled) return;
+      appendOutput(chunk);
+      for (const line of output.split('\n')) {
+        if (!line.startsWith('opencode server listening')) continue;
+
+        const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
+        if (!match) {
+          finish(() => {
+            stopOpencodeProcess(proc);
+            reject(
+              new Error(`Failed to parse server url from output: ${line}`),
+            );
+          });
+          return;
+        }
+
+        finish(() => resolve(match[1]));
+        return;
+      }
+    };
+
+    const handleStderr = (chunk: Buffer) => appendOutput(chunk);
+
+    const handleExit = (code: number | null) => {
+      finish(() => {
+        const outputText = output.trim();
+        reject(
+          new Error(
+            `Server exited with code ${code}${outputText ? `\nServer output: ${outputText}` : ''}`,
+          ),
+        );
+      });
+    };
+
+    const handleError = (error: Error) => {
+      finish(() => reject(error));
+    };
+
+    proc.stdout.on('data', handleStdout);
+    proc.stderr.on('data', handleStderr);
+    proc.on('exit', handleExit);
+    proc.on('error', handleError);
+  });
+}
+
+function stopOpencodeProcess(proc: ChildProcessWithoutNullStreams): void {
+  if (proc.exitCode !== null || proc.signalCode !== null) return;
+  if (process.platform === 'win32' && proc.pid) {
+    spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
+      windowsHide: true,
+    });
+    return;
+  }
+  if (proc.pid) {
+    try {
+      process.kill(-proc.pid, 'SIGTERM');
+      return;
+    } catch {
+      // Fall back to root process kill if process groups are unavailable.
+    }
+  }
+  proc.kill();
+}
+
+export function killAllOpenCodeServersSync(): void {
+  for (const pid of trackedOpenCodeServerPids) {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        windowsHide: true,
+      });
+      continue;
+    }
+    try {
+      process.kill(-pid, 'SIGTERM');
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      try {
+        process.kill(pid, 'SIGTERM');
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Process may already be dead.
+      }
+    }
+  }
+  trackedOpenCodeServerPids.clear();
 }
 
 // --- Backend deps (injected by agent-service for raw persistence) ---
@@ -184,6 +418,10 @@ interface OpenCodeSessionState {
   totalApiCost: number;
   /** Accumulated token usage */
   totalUsage?: TokenUsage;
+  /** Latest parent-session assistant token usage for context display */
+  contextUsage?: TokenUsage;
+  /** Single model used by accumulated assistant usage, when known. */
+  totalModel?: string;
   /** V2 normalization context */
   normalizationCtx: OpenCodeNormalizationContext;
   /** Current message index for raw persistence ordering */
@@ -239,57 +477,73 @@ export class OpenCodeBackend implements AgentBackend {
     parts: PromptPart[],
   ): Promise<AgentSession> {
     dbg.agent(
-      'OpenCodeBackend.start() — cwd: %s, sessionId: %s, model: %s, mode: %s, hasMcpServers: %s',
+      'OpenCodeBackend.start() — cwd: %s, sessionId: %s, model: %s, mode: %s, mcpServerCount: %d',
       config.cwd,
       config.sessionId ?? '(new)',
       config.model ?? '(default)',
       config.interactionMode,
-      hasRuntimeMcpServers(config),
+      Object.keys(config.mcpServers ?? {}).length,
     );
 
-    const ownsServerHandle = hasRuntimeMcpServers(config);
-    const serverHandle = ownsServerHandle
-      ? await createDedicatedServer(config)
-      : await getOrCreateServer();
+    const processSetting = await SettingsRepository.get('opencodeProcess');
+    const hasRuntimeMcpServers =
+      Object.keys(config.mcpServers ?? {}).length > 0;
+    const useSharedServer =
+      processSetting.mode === 'shared' && !hasRuntimeMcpServers;
+    const serverHandle = useSharedServer
+      ? await acquireSharedServer()
+      : await createDedicatedServer(config);
     const { client } = serverHandle;
 
     dbg.agent(
-      'OpenCodeBackend.start() — server ready at %s',
+      'OpenCodeBackend.start() — %s server ready at %s%s',
+      useSharedServer ? 'shared' : 'standalone',
       serverHandle.server.url,
+      processSetting.mode === 'shared' && hasRuntimeMcpServers
+        ? ' (shared disabled by runtime MCP servers)'
+        : '',
     );
 
     // Create or resume an OpenCode session
     let session: OcSession;
-
-    if (config.sessionId) {
-      // Try to resume existing session — never fall back to creating a new one
-      try {
-        const existing = await client.session.get({
-          sessionID: config.sessionId,
-          directory: config.cwd,
-        });
-        if (existing.data) {
-          session = existing.data;
-          dbg.agent('Resuming OpenCode session %s', session.id);
-        } else {
+    try {
+      if (config.sessionId) {
+        // Try to resume existing session — never fall back to creating a new one
+        try {
+          const existing = await client.session.get({
+            sessionID: config.sessionId,
+            directory: config.cwd,
+          });
+          if (existing.data) {
+            session = existing.data;
+            dbg.agent('Resuming OpenCode session %s', session.id);
+          } else {
+            throw new Error(
+              `Failed to resume OpenCode session ${config.sessionId}: session not found`,
+            );
+          }
+        } catch (error) {
+          // Re-throw if it's already our error, otherwise wrap it
+          if (
+            error instanceof Error &&
+            error.message.includes('Failed to resume')
+          ) {
+            throw error;
+          }
           throw new Error(
-            `Failed to resume OpenCode session ${config.sessionId}: session not found`,
+            `Failed to resume OpenCode session ${config.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-      } catch (error) {
-        // Re-throw if it's already our error, otherwise wrap it
-        if (
-          error instanceof Error &&
-          error.message.includes('Failed to resume')
-        ) {
-          throw error;
-        }
-        throw new Error(
-          `Failed to resume OpenCode session ${config.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+      } else {
+        session = await this.createSession(client, config);
       }
-    } else {
-      session = await this.createSession(client, config);
+    } catch (error) {
+      if (useSharedServer) {
+        releaseSharedServer();
+      } else {
+        serverHandle.server.close();
+      }
+      throw error;
     }
 
     const state: OpenCodeSessionState = {
@@ -303,6 +557,7 @@ export class OpenCodeBackend implements AgentBackend {
       totalCost: 0,
       totalApiCost: 0,
       totalUsage: undefined,
+      contextUsage: undefined,
       normalizationCtx: {
         emittedEntryIds: new Set(),
         rawMessages: new Map(),
@@ -322,7 +577,7 @@ export class OpenCodeBackend implements AgentBackend {
       emittedQuestionRequestIds: new Set(),
       permissionRules: config.permissionRules ?? [],
       serverHandle,
-      ownsServerHandle,
+      ownsServerHandle: !useSharedServer,
       serverClosed: false,
     };
 
@@ -334,6 +589,7 @@ export class OpenCodeBackend implements AgentBackend {
     return {
       sessionId: session.id,
       events,
+      rootPid: getServerPid(serverHandle.server),
     };
   }
 
@@ -454,13 +710,7 @@ export class OpenCodeBackend implements AgentBackend {
       await this.stop(sessionId);
     }
 
-    // Shut down the server
-    if (serverInstance) {
-      dbg.agent('Shutting down OpenCode server');
-      serverInstance.server.close();
-      serverInstance = null;
-      serverInitPromise = null;
-    }
+    await closeSharedServerIfIdleNow();
   }
 
   // --- Private helpers ---
@@ -942,6 +1192,7 @@ export class OpenCodeBackend implements AgentBackend {
         isError: hasError,
         text: hasError ? 'Session ended' : undefined,
         durationMs,
+        model: state.totalModel,
         cost:
           state.totalCost > 0 || state.totalApiCost > 0
             ? {
@@ -952,6 +1203,7 @@ export class OpenCodeBackend implements AgentBackend {
               }
             : undefined,
         usage: state.totalUsage,
+        contextUsage: state.contextUsage,
       },
     };
 
@@ -962,6 +1214,10 @@ export class OpenCodeBackend implements AgentBackend {
 
   private closeDedicatedServer(state: OpenCodeSessionState): void {
     if (!state.ownsServerHandle || state.serverClosed) {
+      if (!state.ownsServerHandle && !state.serverClosed) {
+        releaseSharedServer();
+        state.serverClosed = true;
+      }
       return;
     }
     state.serverHandle.server.close();
@@ -1051,21 +1307,36 @@ export class OpenCodeBackend implements AgentBackend {
   private updateUsageTotals(state: OpenCodeSessionState): void {
     let totalCost = 0;
     let totalApiCost = 0;
+    const models = new Set<string>();
     const totalUsage: TokenUsage = {
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
     };
+    let latestAssistant: OcAssistantMessage | undefined;
+    let latestTime = -Infinity;
 
     for (const message of state.normalizationCtx.rawMessages.values()) {
       if (message.role !== 'assistant') continue;
 
       const assistant = message as OcAssistantMessage;
+      const assistantTime = this.getAssistantMessageTime(assistant);
+      if (
+        assistant.tokens &&
+        assistant.sessionID === state.session.id &&
+        assistantTime >= latestTime
+      ) {
+        latestAssistant = assistant;
+        latestTime = assistantTime;
+      }
+
       if (!assistant.tokens) {
         totalCost += assistant.cost ?? 0;
         continue;
       }
+
+      models.add(`${assistant.providerID}/${assistant.modelID}`);
 
       if (assistant.cost && assistant.cost > 0) {
         totalCost += assistant.cost;
@@ -1086,20 +1357,61 @@ export class OpenCodeBackend implements AgentBackend {
         (totalUsage.cacheReadTokens ?? 0) + assistant.tokens.cache.read;
       totalUsage.cacheCreationTokens =
         (totalUsage.cacheCreationTokens ?? 0) + assistant.tokens.cache.write;
+      if (assistant.tokens.reasoning) {
+        totalUsage.reasoningTokens =
+          (totalUsage.reasoningTokens ?? 0) + assistant.tokens.reasoning;
+      }
+      const totalTokens = this.getTotalTokens(assistant);
+      if (typeof totalTokens === 'number') {
+        totalUsage.totalTokens = (totalUsage.totalTokens ?? 0) + totalTokens;
+      }
     }
 
     const hasUsage =
       totalUsage.inputTokens > 0 ||
       totalUsage.outputTokens > 0 ||
       (totalUsage.cacheReadTokens ?? 0) > 0 ||
-      (totalUsage.cacheCreationTokens ?? 0) > 0;
+      (totalUsage.cacheCreationTokens ?? 0) > 0 ||
+      (totalUsage.reasoningTokens ?? 0) > 0 ||
+      (totalUsage.totalTokens ?? 0) > 0;
 
     state.totalCost = totalCost;
     state.totalApiCost = totalCost === 0 ? totalApiCost : 0;
     state.totalUsage = hasUsage ? totalUsage : undefined;
+    state.contextUsage = latestAssistant
+      ? this.toTokenUsage(latestAssistant)
+      : undefined;
+    state.totalModel = models.size === 1 ? [...models][0] : undefined;
     state.normalizationCtx.totalCost = totalCost;
     state.normalizationCtx.totalApiCost = state.totalApiCost;
     state.normalizationCtx.totalUsage = state.totalUsage;
+    state.normalizationCtx.contextUsage = state.contextUsage;
+    state.normalizationCtx.totalModel = state.totalModel;
+  }
+
+  private getAssistantMessageTime(message: OcAssistantMessage): number {
+    return message.time.completed ?? message.time.created ?? 0;
+  }
+
+  private getTotalTokens(message: OcAssistantMessage): number | undefined {
+    const tokens = message.tokens as { total?: unknown } | undefined;
+    return typeof tokens?.total === 'number' ? tokens.total : undefined;
+  }
+
+  private toTokenUsage(message: OcAssistantMessage): TokenUsage | undefined {
+    if (!message.tokens) return undefined;
+
+    const totalTokens = this.getTotalTokens(message);
+    return {
+      inputTokens: message.tokens.input,
+      outputTokens: message.tokens.output,
+      cacheReadTokens: message.tokens.cache.read,
+      cacheCreationTokens: message.tokens.cache.write,
+      ...(message.tokens.reasoning
+        ? { reasoningTokens: message.tokens.reasoning }
+        : {}),
+      ...(typeof totalTokens === 'number' ? { totalTokens } : {}),
+    };
   }
 
   /**

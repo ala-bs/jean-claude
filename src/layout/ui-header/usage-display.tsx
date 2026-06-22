@@ -1,10 +1,10 @@
+import { type ComponentType, type SVGProps, useState } from 'react';
 import clsx from 'clsx';
 import { Loader2 } from 'lucide-react';
-import type { ComponentType, SVGProps } from 'react';
 
-import { IconClaude, IconCodex } from '@/common/ui/icons';
-import { Tooltip } from '@/common/ui/tooltip';
-import { useBackendUsage } from '@/hooks/use-usage';
+
+
+import { IconClaude, IconCodex, IconGithubCopilot } from '@/common/ui/icons';
 import type {
   UsageDisplayData,
   UsageLevel,
@@ -12,7 +12,11 @@ import type {
   UsageRange,
   UsageResult,
 } from '@shared/usage-types';
+import { Tooltip } from '@/common/ui/tooltip';
 import { USAGE_PROVIDERS } from '@shared/usage-types';
+import { useBackendUsage } from '@/hooks/use-usage';
+
+
 
 import { UsageHistoryChart } from './usage-history-chart';
 
@@ -92,6 +96,7 @@ const PROVIDER_ICONS: Partial<
 > = {
   'claude-code': IconClaude,
   codex: IconCodex,
+  copilot: IconGithubCopilot,
 };
 
 function getProviderMeta(providerType: UsageProviderType) {
@@ -202,7 +207,7 @@ function ProviderUsageChip({
   const Icon = PROVIDER_ICONS[providerType];
 
   const { data } = result;
-  const primary = data?.limits.find((l) => l.isPrimary);
+  const primary = data?.limits.find((l) => l.isPrimary) ?? data?.limits[0];
   if (!data || !primary) {
     if (result.error?.type === 'no_token') return null;
 
@@ -294,7 +299,8 @@ function ProviderUsageChip({
 
 export function UsageDisplay() {
   const { data: usageMap, isLoading, dataUpdatedAt } = useBackendUsage();
-  const fetchedAtMs = dataUpdatedAt || Date.now();
+  const [fallbackFetchedAtMs] = useState(() => Date.now());
+  const fetchedAtMs = dataUpdatedAt || fallbackFetchedAtMs;
 
   if (isLoading) {
     return (

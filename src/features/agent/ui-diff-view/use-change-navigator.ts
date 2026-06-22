@@ -1,5 +1,6 @@
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
 
 import {
   computeDiff,
@@ -242,7 +243,7 @@ export function useChangeNavigator({
 
   // Reset current hunk when hunks change
   useEffect(() => {
-    setCurrentHunkIndex(0);
+    startTransition(() => setCurrentHunkIndex(0));
   }, [hunks]);
 
   const scrollToHunk = useCallback(
@@ -258,13 +259,13 @@ export function useChangeNavigator({
         }
 
         setCurrentHunkIndex(hunkIndex);
-        row.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        row.scrollIntoView({ behavior: 'instant', block: 'start' });
 
-        // Allow scroll handler to resume after smooth scroll completes
+        // Allow scroll handler to resume after instant scroll completes
         navigationTimeoutRef.current = setTimeout(() => {
           isNavigatingRef.current = false;
           navigationTimeoutRef.current = null;
-        }, 500);
+        }, 50);
       }
     },
     [findHunkRow],

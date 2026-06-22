@@ -1,11 +1,12 @@
 import { FolderOpen, Search, X } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 
-import { useCommands } from '@/common/hooks/use-commands';
-import { IconButton } from '@/common/ui/icon-button';
 import type { DiffFileStatus } from '@/features/common/ui-file-diff/types';
 import { FileTree } from '@/features/task/ui-task-panel/file-explorer-pane/file-tree';
+import { IconButton } from '@/common/ui/icon-button';
+import { useCommands } from '@/common/hooks/use-commands';
 import { useProjectFilePaths } from '@/hooks/use-project-file-paths';
+
 
 const MAX_SEARCH_RESULTS = 200;
 
@@ -173,6 +174,7 @@ export function ReviewFilesTree({
   diffFiles,
   hideUnchanged,
   commentCountsByFile,
+  draftCountsByFile,
   bottomPadding = 0,
 }: {
   rootPath: string;
@@ -186,6 +188,7 @@ export function ReviewFilesTree({
   >;
   hideUnchanged: boolean;
   commentCountsByFile?: Map<string, number>;
+  draftCountsByFile?: Map<string, number>;
   bottomPadding?: number;
 }) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -282,6 +285,7 @@ export function ReviewFilesTree({
             expandedDirs={expandedDirs}
             onToggleDir={onToggleDir}
             commentCountsByFile={commentCountsByFile}
+            draftCountsByFile={draftCountsByFile}
             filterPaths={searchFilterPaths}
             diffFiles={diffFiles}
             hideUnchanged={!isSearching && hideUnchanged}

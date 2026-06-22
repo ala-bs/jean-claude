@@ -1,14 +1,15 @@
 import {
   createContext,
+  type ReactNode,
+  type RefObject,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
-  type ReactNode,
-  type RefObject,
 } from 'react';
 
+import { useLatestRef } from '@/hooks/use-latest-ref';
 const RootOverlayContext = createContext<{
   register: (
     id: string,
@@ -68,9 +69,22 @@ export function RootOverlay({ children }: { children: ReactNode }) {
       }
     };
 
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+
+      const handler = handlersRef.current[handlersRef.current.length - 1];
+      if (!handler) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      handler.onClose();
+    };
+
     document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown, true);
     return () => {
       document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown, true);
     };
   }, []);
 
@@ -108,10 +122,8 @@ export function useRegisterOverlay({
   enabled?: boolean;
 }): void {
   const root = useRootOverlay();
-  const refsRef = useRef(refs);
-  refsRef.current = refs;
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const refsRef = useLatestRef(refs);
+  const onCloseRef = useLatestRef(onClose);
 
   useEffect(() => {
     if (!enabled) return;
@@ -127,5 +139,5 @@ export function useRegisterOverlay({
     );
 
     return root.register(id, refsProxy, () => onCloseRef.current());
-  }, [id, root, enabled]);
+  }, [id, root, enabled, refsRef, onCloseRef]);
 }

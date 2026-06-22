@@ -10,6 +10,8 @@ import {
   getOpenCodeFallbackCost,
   type OpenCodeModelCost,
 } from './opencode-pricing';
+import { getOrCreateCodexAppServer } from './agent-backends/codex/codex-app-server';
+
 
 const execAsync = promisify(exec) as (
   command: string,
@@ -23,10 +25,18 @@ const OPENCODE_THINKING_VARIANTS = new Set<ThinkingEffort>([
   'max',
   'xhigh',
 ]);
+const CODEX_THINKING_VARIANTS = new Set<ThinkingEffort>([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]);
 
 export interface BackendModel {
   id: string;
   label: string;
+  contextWindow?: number;
   supportsThinking?: boolean;
   thinkingEfforts?: ThinkingEffort[];
   cost?: OpenCodeModelCost;
@@ -60,6 +70,11 @@ const modelCache = new Map<
   { models: BackendModel[]; fetchedAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const OPENCODE_MODELS_EXEC_OPTIONS: ExecOptions = {
+  encoding: 'utf-8',
+  maxBuffer: 2 * 1024 * 1024,
+  timeout: 30_000,
+};
 
 /**
  * Fetch available models for a given backend.
@@ -76,6 +91,10 @@ export async function getBackendModels(
     return fetchOpenCodeModels();
   }
 
+  if (backend === 'codex') {
+    return fetchCodexModels();
+  }
+
   dbg.agent('Unknown backend type for model discovery: %s', backend);
   return [];
 }
@@ -88,12 +107,26 @@ async function fetchOpenCodeModels(): Promise<BackendModel[]> {
   }
 
   try {
-    const { stdout } = await execAsync('opencode models --verbose', {
-      encoding: 'utf-8',
-      timeout: 10_000,
-    });
+    const { stdout } = await execAsync(
+      'opencode models --verbose',
+      OPENCODE_MODELS_EXEC_OPTIONS,
+    );
 
-    const models = parseOpenCodeModelsVerbose(stdout);
+    let models = parseOpenCodeModelsVerbose(stdout);
+    if (!models.some((model) => model.id.startsWith('openai/'))) {
+      try {
+        const { stdout: openAIStdout } = await execAsync(
+          'opencode models openai --verbose',
+          OPENCODE_MODELS_EXEC_OPTIONS,
+        );
+        models = mergeOpenCodeModelLists(
+          models,
+          parseOpenCodeModelsVerbose(openAIStdout),
+        );
+      } catch (error) {
+        dbg.agent('Failed to fetch OpenCode OpenAI models: %O', error);
+      }
+    }
 
     dbg.agent('Discovered %d OpenCode models', models.length);
     modelCache.set('opencode', { models, fetchedAt: Date.now() });
@@ -103,6 +136,22 @@ async function fetchOpenCodeModels(): Promise<BackendModel[]> {
     // Return cached value (even if stale) on error, or empty array
     return cached?.models ?? [];
   }
+}
+
+export function mergeOpenCodeModelLists(
+  baseModels: BackendModel[],
+  additionalModels: BackendModel[],
+): BackendModel[] {
+  const seen = new Set(baseModels.map((model) => model.id));
+  const merged = [...baseModels];
+
+  for (const model of additionalModels) {
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    merged.push(model);
+  }
+
+  return merged;
 }
 
 export function parseOpenCodeModelsVerbose(stdout: string): BackendModel[] {
@@ -138,6 +187,7 @@ export function parseOpenCodeModelsVerbose(stdout: string): BackendModel[] {
         name?: string;
         cost?: OpenCodeModelCost;
         capabilities?: { reasoning?: boolean };
+        limit?: { context?: unknown };
         variants?: Record<string, unknown>;
       };
       const thinkingEfforts = Object.keys(metadata.variants ?? {}).filter(
@@ -150,6 +200,9 @@ export function parseOpenCodeModelsVerbose(stdout: string): BackendModel[] {
         supportsThinking:
           metadata.capabilities?.reasoning === true ||
           thinkingEfforts.length > 0,
+        ...(isValidContextWindow(metadata.limit?.context)
+          ? { contextWindow: metadata.limit.context }
+          : {}),
         ...(thinkingEfforts.length > 0 ? { thinkingEfforts } : {}),
         ...(metadata.cost ? { cost: metadata.cost } : {}),
       });
@@ -164,6 +217,92 @@ export function parseOpenCodeModelsVerbose(stdout: string): BackendModel[] {
   }
 
   return models;
+}
+
+function isValidContextWindow(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+async function fetchCodexModels(): Promise<BackendModel[]> {
+  const cached = modelCache.get('codex');
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.models;
+  }
+
+  try {
+    const { client } = await getOrCreateCodexAppServer();
+    const models: BackendModel[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const result = (await client.request('model/list', {
+        ...(cursor ? { after: cursor } : {}),
+      })) as {
+        data?: unknown[];
+        hasMore?: boolean;
+        nextCursor?: string | null;
+      };
+
+      for (const item of result.data ?? []) {
+        const model = parseCodexModel(item);
+        if (model) models.push(model);
+      }
+
+      cursor = result.hasMore ? (result.nextCursor ?? undefined) : undefined;
+    } while (cursor);
+
+    dbg.agent('Discovered %d Codex models', models.length);
+    modelCache.set('codex', { models, fetchedAt: Date.now() });
+    return models;
+  } catch (error) {
+    dbg.agent('Failed to fetch Codex models: %O', error);
+    return cached?.models ?? [];
+  }
+}
+
+export function parseCodexModel(item: unknown): BackendModel | null {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const model = item as {
+    id?: unknown;
+    displayName?: unknown;
+    hidden?: unknown;
+    supportedReasoningEfforts?: unknown;
+  };
+
+  if (
+    model.hidden === true ||
+    typeof model.id !== 'string' ||
+    !model.id.trim()
+  ) {
+    return null;
+  }
+
+  const thinkingEfforts = Array.isArray(model.supportedReasoningEfforts)
+    ? model.supportedReasoningEfforts
+        .map((effort) =>
+          effort && typeof effort === 'object' && !Array.isArray(effort)
+            ? (effort as { reasoningEffort?: unknown }).reasoningEffort
+            : undefined,
+        )
+        .filter(
+          (effort): effort is ThinkingEffort =>
+            typeof effort === 'string' &&
+            CODEX_THINKING_VARIANTS.has(effort as ThinkingEffort),
+        )
+    : [];
+
+  return {
+    id: model.id,
+    label:
+      typeof model.displayName === 'string' && model.displayName.trim()
+        ? model.displayName
+        : formatModelLabel(model.id),
+    supportsThinking: thinkingEfforts.length > 0,
+    ...(thinkingEfforts.length > 0 ? { thinkingEfforts } : {}),
+  };
 }
 
 export function calculateTheoreticalOpenCodeCost({

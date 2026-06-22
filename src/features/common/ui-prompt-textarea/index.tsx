@@ -1,5 +1,12 @@
-import clsx from 'clsx';
-import Fuse from 'fuse.js';
+import type {
+  ChangeEvent,
+  ClipboardEvent,
+  DragEvent,
+  KeyboardEvent,
+  SyntheticEvent,
+  TextareaHTMLAttributes,
+  UIEvent,
+} from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,52 +19,57 @@ import {
   X,
 } from 'lucide-react';
 import {
-  useState,
-  useRef,
+  forwardRef,
+  startTransition,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
-  forwardRef,
-  useImperativeHandle,
+  useRef,
+  useState,
 } from 'react';
-import type {
-  KeyboardEvent,
-  ChangeEvent,
-  ClipboardEvent,
-  DragEvent,
-  SyntheticEvent,
-  TextareaHTMLAttributes,
-  UIEvent,
-} from 'react';
+import clsx from 'clsx';
 import { createPortal } from 'react-dom';
+import Fuse from 'fuse.js';
 
-import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
-import { FileEditorDialog } from '@/features/common/ui-file-editor-dialog';
-import { useInlineCompletion } from '@/hooks/use-inline-completion';
+
+
+import {
+  type FlatProjectFeature,
+  flattenProjectFeatures,
+  getFeatureReferenceText,
+  getReferencedFeatures,
+} from '@/lib/prompt-feature-context';
 import {
   getFilePathSuggestions,
   useProjectFilePaths,
 } from '@/hooks/use-project-file-paths';
-import { processAttachmentFile, MAX_FILES } from '@/lib/file-attachment-utils';
-import { processImageFile, MAX_IMAGES } from '@/lib/image-utils';
 import {
-  flattenProjectFeatures,
-  getFeatureReferenceText,
-  getReferencedFeatures,
-  type FlatProjectFeature,
-} from '@/lib/prompt-feature-context';
-import { resolveMessageInputText } from '@/lib/resolve-message-input-text';
-import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
-import { resolvePromptSnippet } from '@/lib/resolve-snippet-template';
-import { useToastStore } from '@/stores/toasts';
+  MAX_FILES,
+  processAttachmentFile,
+  processAttachmentPath,
+} from '@/lib/file-attachment-utils';
+import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
+import type { ProjectFeatureMap, PromptSnippet } from '@shared/types';
 import type {
   PromptFilePart,
   PromptImagePart,
 } from '@shared/agent-backend-types';
+import { FileEditorDialog } from '@/features/common/ui-file-editor-dialog';
+import { formatBytes } from '@/lib/format-bytes';
+import { formatPastedPromptContent } from '@/lib/format-pasted-prompt-content';
+import { resolveMessageInputText } from '@/lib/resolve-message-input-text';
+import { resolvePromptSnippet } from '@/lib/resolve-snippet-template';
 import type { Skill } from '@shared/skill-types';
-import type { ProjectFeatureMap, PromptSnippet } from '@shared/types';
+import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
+import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
+import { useInlineCompletion } from '@/hooks/use-inline-completion';
+import { useToastStore } from '@/stores/toasts';
 
+
+
+import { useLatestRef } from '@/hooks/use-latest-ref';
 const COMMANDS = [
   { command: '/init', description: 'Initialize CLAUDE.md in project' },
   { command: '/compact', description: 'Compact conversation history' },
@@ -164,6 +176,39 @@ type MentionToken = {
   query: string;
 };
 
+function getPromptPasteInsertion({
+  value,
+  selectionStart,
+  selectionEnd,
+  pastedText,
+}: {
+  value: string;
+  selectionStart: number;
+  selectionEnd: number;
+  pastedText: string;
+}): string {
+  const formatted = formatPastedPromptContent(pastedText);
+  if (!formatted.startsWith('```') || formatted === pastedText)
+    return formatted;
+
+  const before = value.slice(0, selectionStart);
+  const after = value.slice(selectionEnd);
+  const prefix =
+    before && !before.endsWith('\n\n')
+      ? before.endsWith('\n')
+        ? '\n'
+        : '\n\n'
+      : '';
+  const suffix =
+    after && !after.startsWith('\n\n')
+      ? after.startsWith('\n')
+        ? '\n'
+        : '\n\n'
+      : '';
+
+  return `${prefix}${formatted}${suffix}`;
+}
+
 function getOrderedCharacterMatchScore(value: string, query: string) {
   const normalizedValue = value.toLowerCase();
   const normalizedQuery = query.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -240,6 +285,8 @@ export interface PromptTextareaProps extends Omit<
   snippetVariableContext?: SnippetVariableContext;
   /** Classes for the droppable composer container */
   containerClassName?: string;
+  /** Called when slash, file, or feature autocomplete opens/closes. */
+  onAutocompleteOpenChange?: (isOpen: boolean) => void;
   /** Expand textarea height to fill the available cross-axis space. */
   fillAvailableHeight?: boolean;
 }
@@ -270,6 +317,7 @@ export const PromptTextarea = forwardRef<
     promptSnippets = [],
     snippetVariableContext,
     containerClassName,
+    onAutocompleteOpenChange,
     fillAvailableHeight = false,
     className,
     style,
@@ -329,6 +377,26 @@ export const PromptTextarea = forwardRef<
     !dropdownDismissed;
   const showDropdown =
     showMentionDropdown || showFeatureDropdown || showSlashDropdown;
+
+  useEffect(() => {
+    onAutocompleteOpenChange?.(showDropdown);
+  }, [onAutocompleteOpenChange, showDropdown]);
+
+  useEffect(() => {
+    if (!showDropdown) return;
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setDropdownDismissed(true);
+    };
+
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [showDropdown]);
+
   const dropdownPosition = useDropdownPosition({
     isOpen: showDropdown,
     triggerRef: containerRef,
@@ -571,7 +639,7 @@ export const PromptTextarea = forwardRef<
   // Reset selected index when filtered items change
   useEffect(() => {
     shouldScrollSelectionRef.current = false;
-    setSelectedIndex(defaultSelectedIndex);
+    startTransition(() => setSelectedIndex(defaultSelectedIndex));
   }, [defaultSelectedIndex, filteredItems]);
 
   // Auto-scroll only for keyboard navigation, not mouse hover.
@@ -600,7 +668,7 @@ export const PromptTextarea = forwardRef<
       }
       // Keep dismissed while adding characters after selection
     } else {
-      setDropdownDismissed(false);
+      startTransition(() => setDropdownDismissed(false));
     }
     prevValueRef.current = value;
   }, [value, dropdownDismissed, activeMentionToken, activeFeatureToken]);
@@ -859,12 +927,10 @@ export const PromptTextarea = forwardRef<
 
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLTextAreaElement>) => {
-      if (!onImageAttach) return;
-
       const items = Array.from(e.clipboardData.items);
       const imageItems = items.filter((item) => item.type.startsWith('image/'));
 
-      if (imageItems.length > 0) {
+      if (imageItems.length > 0 && onImageAttach) {
         const currentCount = images?.length ?? 0;
         const allowed = MAX_IMAGES - currentCount;
         if (allowed <= 0) return;
@@ -881,10 +947,38 @@ export const PromptTextarea = forwardRef<
             );
           }
         }
+        return;
       }
-      // If no images, default text paste proceeds
+
+      const pastedText = e.clipboardData.getData('text/plain');
+      if (!pastedText) return;
+
+      const target = e.currentTarget;
+      const selectionStart = target.selectionStart;
+      const selectionEnd = target.selectionEnd;
+      const insertion = getPromptPasteInsertion({
+        value,
+        selectionStart,
+        selectionEnd,
+        pastedText,
+      });
+
+      e.preventDefault();
+      const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+      const nextCursorPosition = selectionStart + insertion.length;
+      onChange(nextValue);
+      setCursorPosition(nextCursorPosition);
+      setCompletionCursorPosition(nextCursorPosition);
+      setCompletionTriggerId((id) => id + 1);
+      requestAnimationFrame(() => {
+        textareaRef.current?.setSelectionRange(
+          nextCursorPosition,
+          nextCursorPosition,
+        );
+        adjustHeight();
+      });
     },
-    [onImageAttach, images, showImageError],
+    [onImageAttach, images, showImageError, value, onChange, adjustHeight],
   );
 
   const handleDragOver = useCallback(
@@ -975,29 +1069,25 @@ export const PromptTextarea = forwardRef<
     [onImageAttach, images, showImageError],
   );
 
-  const nonImageFileInputRef = useRef<HTMLInputElement>(null);
+  const handleOpenFilePicker = useCallback(async () => {
+    if (!onFileAttach || !projectRoot) return;
 
-  const handleNonImageFileSelect = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      if (!onFileAttach || !projectRoot || !e.target.files) return;
+    const currentFileCount = files?.length ?? 0;
+    const allowedFiles = MAX_FILES - currentFileCount;
+    if (allowedFiles <= 0) return;
 
-      const currentFileCount = files?.length ?? 0;
-      const allowedFiles = MAX_FILES - currentFileCount;
-      if (allowedFiles <= 0) return;
+    const selectedPaths = await window.api.dialog.openFiles();
+    if (!selectedPaths) return;
 
-      const selectedFiles = Array.from(e.target.files);
-      for (const file of selectedFiles.slice(0, allowedFiles)) {
-        void processAttachmentFile(
-          file,
-          projectRoot,
-          onFileAttach,
-          showImageError,
-        );
-      }
-      e.target.value = '';
-    },
-    [onFileAttach, files, projectRoot, showImageError],
-  );
+    for (const sourcePath of selectedPaths.slice(0, allowedFiles)) {
+      void processAttachmentPath(
+        sourcePath,
+        projectRoot,
+        onFileAttach,
+        showImageError,
+      );
+    }
+  }, [onFileAttach, files, projectRoot, showImageError]);
 
   const handleFileCreate = useCallback(
     async (filename: string, content: string) => {
@@ -1122,7 +1212,6 @@ export const PromptTextarea = forwardRef<
                 dropdownPosition.actualAlign === 'right'
                   ? window.innerWidth - dropdownPosition.left
                   : undefined,
-              width: containerRef.current?.getBoundingClientRect().width,
               maxHeight: dropdownPosition.maxHeight,
               maxWidth: dropdownPosition.maxWidth,
             }}
@@ -1455,16 +1544,9 @@ export const PromptTextarea = forwardRef<
             )}
             {onFileAttach && projectRoot && (
               <>
-                <input
-                  ref={nonImageFileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={handleNonImageFileSelect}
-                />
                 <button
                   type="button"
-                  onClick={() => nonImageFileInputRef.current?.click()}
+                  onClick={() => void handleOpenFilePicker()}
                   className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1"
                   title="Attach file"
                 >
@@ -1533,13 +1615,19 @@ function ImageThumbnails({
             <button
               type="button"
               onClick={() => setPreviewIndex(index)}
-              className="border-glass-border hover:border-glass-border-strong block cursor-pointer overflow-hidden rounded border"
+              className="border-glass-border hover:border-glass-border-strong relative block cursor-pointer overflow-hidden rounded border"
+              title={img.sizeBytes ? formatBytes(img.sizeBytes) : undefined}
             >
               <img
                 src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
                 alt={img.filename || 'Attached image'}
                 className="h-16 w-16 object-cover"
               />
+              {img.sizeBytes && (
+                <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
+                  {formatBytes(img.sizeBytes)}
+                </span>
+              )}
             </button>
             <button
               type="button"
@@ -1608,8 +1696,7 @@ function ImagePreviewDialog({
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const img = images[currentIndex];
 
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const onCloseRef = useLatestRef(onClose);
 
   useEffect(() => {
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
@@ -1624,7 +1711,7 @@ function ImagePreviewDialog({
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [images.length]);
+  }, [images.length, onCloseRef]);
 
   if (!img) return null;
 

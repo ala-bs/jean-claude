@@ -1,23 +1,27 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
-import clsx from 'clsx';
 import { CheckCircle2, CircleAlert, Copy, Loader2, X } from 'lucide-react';
-import { useMemo, type ReactNode } from 'react';
+import { type ReactNode, useMemo } from 'react';
+import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
+import { useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 
-import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
-import { useCommands } from '@/common/hooks/use-commands';
-import { Button } from '@/common/ui/button';
-import { IconButton } from '@/common/ui/icon-button';
-import { api } from '@/lib/api';
-import { formatRelativeTime } from '@/lib/time';
+
+
 import {
-  useBackgroundJobsStore,
-  getRunningJobsCount,
   type BackgroundJob,
+  getRunningJobsCount,
+  useBackgroundJobsStore,
 } from '@/stores/background-jobs';
+import { api } from '@/lib/api';
+import { Button } from '@/common/ui/button';
+import { formatRelativeTime } from '@/lib/time';
+import { IconButton } from '@/common/ui/icon-button';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useToastStore } from '@/stores/toasts';
+
+
 
 export function BackgroundJobsOverlay({ onClose }: { onClose: () => void }) {
   const layer = useKeyboardLayer('overlay', {
@@ -476,6 +480,19 @@ function JobDetails({ job }: { job: BackgroundJob }) {
         <div className="text-ink-2 mt-1 space-y-0.5 text-xs">
           <p>Branch: {typedJob.details.branchName}</p>
           <p className="truncate">Path: {typedJob.details.worktreePath}</p>
+        </div>
+      );
+    },
+    'pipeline-run': (typedJob) => {
+      if (typedJob.type !== 'pipeline-run') return null;
+
+      return (
+        <div className="text-ink-2 mt-1 space-y-0.5 text-xs">
+          <p className="truncate">Pipeline: {typedJob.details.pipelineName}</p>
+          <p>
+            {typedJob.details.kind === 'build' ? 'Build' : 'Release'}:{' '}
+            {typedJob.details.runName}
+          </p>
         </div>
       );
     },

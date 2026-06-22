@@ -1,141 +1,57 @@
-import { useNavigate, useRouterState } from '@tanstack/react-router';
-import clsx from 'clsx';
 import {
-  Loader2,
-  Play,
-  Trash2,
+  Bug,
   ExternalLink,
-  RefreshCw,
-  Settings,
+  FolderSymlink,
+  FolderTree,
   GitBranch,
   GitCompare,
   GitFork,
   GitPullRequest,
-  MoreHorizontal,
-  FolderTree,
-  FolderSymlink,
-  Bug,
   ListTodo,
+  Loader2,
+  MoreHorizontal,
+  Play,
+  RefreshCw,
   Search,
+  Settings,
+  Trash2,
 } from 'lucide-react';
-import { useEffect, useState, useCallback, useMemo, useRef, memo } from 'react';
+import type { ComponentProps, PointerEvent, ReactNode } from 'react';
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
+import clsx from 'clsx';
+import { createPortal } from 'react-dom';
+import { useShallow } from 'zustand/react/shallow';
 
-import { useModal } from '@/common/context/modal';
+
+
 import {
-  ReviewProvider,
-  type ReviewCommentParams,
-} from '@/common/context/review-context';
-import { useCommands } from '@/common/hooks/use-commands';
-import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
-import { Button } from '@/common/ui/button';
-import { Chip } from '@/common/ui/chip';
-import {
-  Dropdown,
-  DropdownItem,
-  DropdownDivider,
-  DropdownInfo,
-} from '@/common/ui/dropdown';
-import { Input } from '@/common/ui/input';
-import { Kbd } from '@/common/ui/kbd';
-import { Modal } from '@/common/ui/modal';
-import { Separator } from '@/common/ui/separator';
-import { AddPermissionModal } from '@/features/agent/ui-add-permission-modal';
-import {
-  AVAILABLE_BACKENDS,
-  getModelsForBackend,
-  getModelThinkingCapabilities,
-} from '@/features/agent/ui-backend-selector';
-import { ContextUsageDisplay } from '@/features/agent/ui-context-usage-display';
-import { FilePreviewPane } from '@/features/agent/ui-file-preview-pane';
-import { MessageInput } from '@/features/agent/ui-message-input';
-import { MessageStream } from '@/features/agent/ui-message-stream';
-import { ModeModelComboSelector } from '@/features/agent/ui-mode-model-combo';
-import { ModeSelector } from '@/features/agent/ui-mode-selector';
-import { ModelSelector } from '@/features/agent/ui-model-selector';
-import { PermissionBar } from '@/features/agent/ui-permission-bar';
-import { PrBadge } from '@/features/agent/ui-pr-badge';
-import { QuestionOptions } from '@/features/agent/ui-question-options';
-import { RunButton } from '@/features/agent/ui-run-button';
-import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
-import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
-import {
-  ReviewPillsQueue,
-  reviewCommentToPill,
-} from '@/features/common/ui-review-pills';
-import { FeatureMapSaveAction } from '@/features/task/ui-feature-map-save-action';
-import { PrReviewValidation } from '@/features/task/ui-pr-review-validation';
-import { SkillPublishAction } from '@/features/task/ui-skill-publish-action';
-import { StepFlowBar } from '@/features/task/ui-step-flow-bar';
-import { TaskPrView } from '@/features/task/ui-task-pr-view';
-import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
-import { useAgentStream, useAgentControls } from '@/hooks/use-agent';
-import { useBackendModels } from '@/hooks/use-backend-models';
-import { useContextUsage, type ContextUsage } from '@/hooks/use-context-usage';
-import { useModel, formatModelName } from '@/hooks/use-model';
-import { useProject, useProjectIsGitRepository } from '@/hooks/use-projects';
-import {
-  getEditorLabel,
-  useEditorSetting,
-  usePromptSnippetsSetting,
-} from '@/hooks/use-settings';
-import { useSkills } from '@/hooks/use-skills';
-import {
-  useCreateStep,
-  useStep,
-  useSteps,
-  useUpdateStep,
-} from '@/hooks/use-steps';
-import { useTaskRootPath } from '@/hooks/use-task-root-path';
-import {
-  useTask,
-  useDeleteTask,
-  useDeleteWorktree,
-  useSetTaskMode,
-  useUpdateTask,
-  useClearTaskUserCompleted,
-  useAddSessionAllowedTool,
-  useRemoveSessionAllowedTool,
-  useAllowForProject,
-  useAllowForProjectWorktrees,
-  useAllowGlobally,
-  useToggleTaskUserCompleted,
-  useCompleteTask,
-} from '@/hooks/use-tasks';
-import { api } from '@/lib/api';
-import type { AzureDevOpsWorkItem } from '@/lib/api';
-import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
-import { getBranchFromWorktreePath } from '@/lib/worktree';
-import { useBackgroundJobsStore } from '@/stores/background-jobs';
-import {
-  useNavigationStore,
-  useTaskState,
+  type AddStepPresetType,
+  type ReviewMode,
   useDiffViewState,
+  useNavigationStore,
   usePrViewState,
   useTaskFileExplorerState,
-  type ReviewMode,
+  useTaskState,
 } from '@/stores/navigation';
-import { useNewTaskDraftStore } from '@/stores/new-task-draft';
-import { useOverlaysStore } from '@/stores/overlays';
-import {
-  useReviewComments,
-  useReviewCommentsStore,
-  synthesizeReviewPrompt,
-  type ReviewPresetId,
-} from '@/stores/review-comments';
-import { useTaskMessagesStore } from '@/stores/task-messages';
-import { useTaskPrompt } from '@/stores/task-prompts';
-import { useToastStore } from '@/stores/toasts';
-import { DiffViewMode, useUIStore } from '@/stores/ui';
 import type {
   AgentBackendType,
   PromptImagePart,
   PromptPart,
 } from '@shared/agent-backend-types';
-import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import {
-  getThinkingEffortOptions,
-  normalizeThinkingEffortForModel,
-} from '@shared/thinking-settings';
+  AVAILABLE_BACKENDS,
+  getModelsForBackend,
+  getModelThinkingCapabilities,
+} from '@/features/agent/ui-backend-selector';
+import { DiffViewMode, useUIStore } from '@/stores/ui';
+import {
+  Dropdown,
+  DropdownDivider,
+  DropdownInfo,
+  DropdownItem,
+} from '@/common/ui/dropdown';
+import { formatModelName, getModelFromEntry } from '@/hooks/use-model';
 import {
   getDefaultInteractionModeForBackend,
   type InteractionMode,
@@ -143,20 +59,157 @@ import {
   type TaskStep,
   type ThinkingEffort,
 } from '@shared/types';
+import {
+  getEditorLabel,
+  useBackendDefaultModelsSetting,
+  useBackendsSetting,
+  useEditorSetting,
+  usePromptSnippetsSetting,
+} from '@/hooks/use-settings';
+import {
+  getThinkingEffortOptions,
+  normalizeThinkingEffortForModel,
+} from '@shared/thinking-settings';
+import {
+  type ReviewCommentParams,
+  ReviewProvider,
+} from '@/common/context/review-context';
+import {
+  reviewCommentToPill,
+  ReviewPillsQueue,
+} from '@/features/common/ui-review-pills';
+import {
+  type ReviewPresetId,
+  synthesizeReviewPrompt,
+  useReviewComments,
+  useReviewCommentsStore,
+} from '@/stores/review-comments';
+import {
+  useAddSessionAllowedTool,
+  useAllowForProject,
+  useAllowForProjectWorktrees,
+  useAllowGlobally,
+  useClearTaskUserCompleted,
+  useCompleteTask,
+  useDeleteTask,
+  useDeleteWorktree,
+  useRemoveSessionAllowedTool,
+  useSetTaskMode,
+  useTask,
+  useToggleTaskUserCompleted,
+  useUpdateTask,
+} from '@/hooks/use-tasks';
+import { useAgentControls, useAgentStream } from '@/hooks/use-agent';
+import {
+  useCreateStep,
+  useStep,
+  useSteps,
+  useUpdateStep,
+} from '@/hooks/use-steps';
+import { useProject, useProjectIsGitRepository } from '@/hooks/use-projects';
+import { AddPermissionModal } from '@/features/agent/ui-add-permission-modal';
+import type { AgentResourceSample } from '@/hooks/use-agent-resource-snapshots';
+import { api } from '@/lib/api';
+import type { AzureDevOpsWorkItem } from '@/lib/api';
+import { Button } from '@/common/ui/button';
+import { Chip } from '@/common/ui/chip';
+import { ContextUsageDisplay } from '@/features/agent/ui-context-usage-display';
+import { FeatureMapSaveAction } from '@/features/task/ui-feature-map-save-action';
+import { FilePreviewPane } from '@/features/agent/ui-file-preview-pane';
+import { formatNumber } from '@/lib/number';
+import { getBranchFromWorktreePath } from '@/lib/worktree';
+import { getContextWindowForModel } from '@/lib/model-context-window';
+import { getDefaultModelForBackend } from '@/lib/default-models';
+import { Input } from '@/common/ui/input';
+import { Kbd } from '@/common/ui/kbd';
+import { MessageInput } from '@/features/agent/ui-message-input';
+import { MessageStream } from '@/features/agent/ui-message-stream';
+import { Modal } from '@/common/ui/modal';
+import { ModelSelector } from '@/features/agent/ui-model-selector';
+import { ModeModelComboSelector } from '@/features/agent/ui-mode-model-combo';
+import { ModeSelector } from '@/features/agent/ui-mode-selector';
+import type { NormalizedEntry } from '@shared/normalized-message-v2';
+import { PermissionBar } from '@/features/agent/ui-permission-bar';
+import { PrBadge } from '@/features/agent/ui-pr-badge';
+import { PrReviewValidation } from '@/features/task/ui-pr-review-validation';
+import { QuestionOptions } from '@/features/agent/ui-question-options';
+import { RunButton } from '@/features/agent/ui-run-button';
+import { Separator } from '@/common/ui/separator';
+import { SkillPublishAction } from '@/features/task/ui-skill-publish-action';
+import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
+import { StepFlowBar } from '@/features/task/ui-step-flow-bar';
+import { TaskPrView } from '@/features/task/ui-task-pr-view';
+import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
+import { useAgentResourceSnapshots } from '@/hooks/use-agent-resource-snapshots';
+import { useBackendModels } from '@/hooks/use-backend-models';
+import { useBackgroundJobsStore } from '@/stores/background-jobs';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useContextUsage } from '@/hooks/use-context-usage';
+import { useModal } from '@/common/context/modal';
+import { useNewTaskDraftStore } from '@/stores/new-task-draft';
+import { useOverlaysStore } from '@/stores/overlays';
+import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
+import { useSkills } from '@/hooks/use-skills';
+import { useTaskMessagesStore } from '@/stores/task-messages';
+import { useTaskPrompt } from '@/stores/task-prompts';
+import { useTaskRootPath } from '@/hooks/use-task-root-path';
+import { useToastStore } from '@/stores/toasts';
+import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
+import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
 
-import { AddStepDialog, type AddStepPresetType } from './add-step-dialog';
+
+
+import { getTaskTitle, TaskNameEditor } from './task-name-editor';
+import { AddStepDialog } from './add-step-dialog';
 import { ChangeWorktreePathDialog } from './change-worktree-path-dialog';
 import { CommandLogsPane } from './command-logs-pane';
 import { CompleteTaskDialog } from './complete-task-dialog';
-import { TASK_PANEL_HEADER_HEIGHT_CLS } from './constants';
 import { DebugMessagesPane } from './debug-messages-pane';
 import { DeleteTaskDialog } from './delete-task-dialog';
-import { getTaskTitle, TaskNameEditor } from './task-name-editor';
+import { TASK_PANEL_HEADER_HEIGHT_CLS } from './constants';
 import { TaskPendingNoteInput } from './task-pending-note-input';
 import { TaskSettingsPane } from './task-settings-pane';
 import { ToolDiffPreviewPane } from './tool-diff-preview-pane';
 
+
+
 const LAST_ASSISTANT_MESSAGE_MAX_LENGTH = 1200;
+
+type StepTokenSummary = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  displayTokens: number;
+  totalTokens: number;
+};
+
+function getStepTokenSummary(entries: NormalizedEntry[]): StepTokenSummary {
+  const summary: StepTokenSummary = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    displayTokens: 0,
+    totalTokens: 0,
+  };
+
+  for (const entry of entries) {
+    if (entry.type !== 'result' || !entry.usage) continue;
+
+    summary.inputTokens += entry.usage.inputTokens;
+    summary.outputTokens += entry.usage.outputTokens;
+    summary.cacheReadTokens += entry.usage.cacheReadTokens ?? 0;
+    summary.cacheCreationTokens += entry.usage.cacheCreationTokens ?? 0;
+  }
+
+  summary.displayTokens =
+    summary.inputTokens + summary.outputTokens + summary.cacheCreationTokens;
+
+  summary.totalTokens = summary.displayTokens + summary.cacheReadTokens;
+
+  return summary;
+}
 
 function buildReviewChangesPrompt(): string {
   return [
@@ -207,6 +260,45 @@ function getReferenceStepForPreset({
   );
 }
 
+function getContinueReferenceStep({
+  steps,
+  activeStepId,
+  preferredStepId,
+}: {
+  steps: TaskStep[];
+  activeStepId: string | null;
+  preferredStepId?: string | null;
+}): TaskStep | null {
+  function isUsableContinueSource(step: TaskStep | null | undefined): boolean {
+    return Boolean(
+      step &&
+      (step.status === 'completed' ||
+        step.status === 'interrupted' ||
+        step.status === 'errored') &&
+      (step.output !== null || step.sessionId !== null),
+    );
+  }
+
+  const preferred = getReferenceStepForPreset({
+    steps,
+    activeStepId,
+    preferredStepId,
+  });
+
+  if (isUsableContinueSource(preferred)) {
+    return preferred;
+  }
+
+  for (let index = steps.length - 1; index >= 0; index--) {
+    const step = steps[index];
+    if (isUsableContinueSource(step)) {
+      return step;
+    }
+  }
+
+  return null;
+}
+
 function getLastAssistantMessage(messages: NormalizedEntry[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -223,6 +315,579 @@ function getLastAssistantMessage(messages: NormalizedEntry[]): string {
   }
 
   return '';
+}
+
+const EMPTY_QUEUED_PROMPTS: { content: string }[] = [];
+const EMPTY_MESSAGES: NormalizedEntry[] = [];
+
+function formatResourceBytes(bytes: number): string {
+  const mb = bytes / 1_048_576;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
+}
+
+function formatResourceTime(isoDate: string): string {
+  return new Date(isoDate).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function getResourceSparklinePath({
+  values,
+  width,
+  height,
+  minValue = Math.min(...values),
+  maxValue = Math.max(...values),
+}: {
+  values: number[];
+  width: number;
+  height: number;
+  minValue?: number;
+  maxValue?: number;
+}): string {
+  if (values.length === 0) return '';
+
+  return values
+    .map((value, index) => {
+      const point = getResourceSparklinePoint({
+        value,
+        index,
+        count: values.length,
+        width,
+        height,
+        minValue,
+        maxValue,
+      });
+      return `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
+    })
+    .join(' ');
+}
+
+function getResourceSparklinePoint({
+  value,
+  index,
+  count,
+  width,
+  height,
+  minValue,
+  maxValue,
+}: {
+  value: number;
+  index: number;
+  count: number;
+  width: number;
+  height: number;
+  minValue: number;
+  maxValue: number;
+}): { x: number; y: number } {
+  const range = maxValue - minValue;
+  const normalized = range <= 0 ? 0.5 : (value - minValue) / range;
+  const xStep = count > 1 ? width / (count - 1) : 0;
+  return {
+    x: index * xStep,
+    y: height - Math.max(0, Math.min(1, normalized)) * height,
+  };
+}
+
+function AgentResourceChartTooltip({
+  label,
+  sample,
+  formatValue,
+}: {
+  label: string;
+  sample: AgentResourceSample;
+  formatValue: (value: number) => string;
+}) {
+  const value = label === 'CPU' ? sample.cpuPercent : sample.rssBytes;
+  return (
+    <div className="border-glass-border bg-bg-0/95 pointer-events-none absolute -top-1 right-1 z-10 rounded-md border px-2 py-1 text-[10px] shadow-[0_10px_30px_rgba(0,0,0,0.32)]">
+      <div className="text-ink-0 font-mono tabular-nums">
+        {formatValue(value)}
+      </div>
+      <div className="text-ink-4 mt-0.5 font-mono whitespace-nowrap">
+        {formatResourceTime(sample.sampledAt)}
+      </div>
+    </div>
+  );
+}
+
+function AgentResourceMicroSpark({
+  accentClassName,
+  values,
+}: {
+  accentClassName: string;
+  values: number[];
+}) {
+  const width = 26;
+  const height = 13;
+  const path = getResourceSparklinePath({
+    values: values.length > 0 ? values : [0],
+    width,
+    height,
+  });
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="block shrink-0"
+      aria-hidden
+    >
+      <path
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.4"
+        className={accentClassName}
+        opacity="0.9"
+      />
+    </svg>
+  );
+}
+
+function AgentResourceChart({
+  label,
+  value,
+  samples,
+  formatValue,
+  maxValue,
+  accentClassName,
+}: {
+  label: string;
+  value: number;
+  samples: AgentResourceSample[];
+  formatValue: (value: number) => string;
+  maxValue?: number;
+  accentClassName: string;
+}) {
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const width = 150;
+  const height = 34;
+  const values = samples.map((sample) =>
+    label === 'CPU' ? sample.cpuPercent : sample.rssBytes,
+  );
+  const path = getResourceSparklinePath({
+    values: values.length > 0 ? values : [value],
+    width,
+    height,
+    minValue: maxValue === undefined ? undefined : 0,
+    maxValue,
+  });
+  const hoverSample = hoverIndex === null ? null : samples[hoverIndex];
+  const hoverValue = hoverIndex === null ? undefined : values[hoverIndex];
+  const hoverPoint =
+    hoverIndex === null || hoverValue === undefined
+      ? null
+      : getResourceSparklinePoint({
+          value: hoverValue,
+          index: hoverIndex,
+          count: values.length,
+          width,
+          height,
+          minValue: maxValue === undefined ? Math.min(...values) : 0,
+          maxValue: maxValue ?? Math.max(...values),
+        });
+  const samplePoints = values.map((sampleValue, index) =>
+    getResourceSparklinePoint({
+      value: sampleValue,
+      index,
+      count: values.length,
+      width,
+      height,
+      minValue: maxValue === undefined ? Math.min(...values) : 0,
+      maxValue: maxValue ?? Math.max(...values),
+    }),
+  );
+  const areaPath = path ? `${path} L ${width} ${height} L 0 ${height} Z` : '';
+
+  function handlePointerMove(event: PointerEvent<SVGSVGElement>) {
+    if (samples.length === 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(
+      Math.max((event.clientX - rect.left) / rect.width, 0),
+      1,
+    );
+    setHoverIndex(Math.round(ratio * (samples.length - 1)));
+  }
+
+  return (
+    <div className="relative">
+      <div className="mb-1.5 flex items-baseline gap-2">
+        <span
+          className={clsx(
+            'h-1.5 w-1.5 rounded-[2px] bg-current',
+            accentClassName,
+          )}
+        />
+        <span className="text-ink-2 text-[11px] font-medium">{label}</span>
+        <span className="flex-1" />
+        <span className="text-ink-0 font-mono text-[17px] font-semibold tracking-[-0.02em] tabular-nums">
+          {formatValue(value)}
+        </span>
+      </div>
+      <div className="bg-bg-0/45 overflow-hidden rounded-md">
+        <svg
+          width="100%"
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          className="block"
+          aria-hidden
+          onPointerLeave={() => setHoverIndex(null)}
+          onPointerMove={handlePointerMove}
+        >
+          {areaPath ? (
+            <path
+              d={areaPath}
+              fill="currentColor"
+              className={clsx(accentClassName, 'opacity-20')}
+            />
+          ) : null}
+          <path
+            d={path}
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.6"
+            className={accentClassName}
+          />
+          {samplePoints.map((point, index) => (
+            <circle
+              key={`${samples[index]?.sampledAt ?? index}-${label}`}
+              cx={point.x}
+              cy={point.y}
+              r="1.4"
+              className={accentClassName}
+              fill="currentColor"
+              opacity="0.55"
+            />
+          ))}
+          {hoverSample && hoverPoint ? (
+            <circle
+              cx={hoverPoint.x}
+              cy={hoverPoint.y}
+              r="3"
+              className={accentClassName}
+              fill="currentColor"
+            />
+          ) : null}
+        </svg>
+      </div>
+      <div className="text-ink-4 mt-1 flex justify-between font-mono text-[9.5px] tabular-nums">
+        <span>60s</span>
+        <span>
+          peak{' '}
+          {formatValue(Math.max(value, ...values, label === 'CPU' ? 0 : 1))}
+        </span>
+      </div>
+      {hoverSample ? (
+        <AgentResourceChartTooltip
+          label={label}
+          sample={hoverSample}
+          formatValue={formatValue}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AgentResourceHoverPanel({
+  backendLabel,
+  cpuSamples,
+  displayCpu,
+  displayRss,
+  rootPid,
+  rssMax,
+  rssSamples,
+}: {
+  backendLabel: string;
+  cpuSamples: AgentResourceSample[];
+  rssSamples: AgentResourceSample[];
+  displayCpu: number;
+  displayRss: number;
+  rootPid: number | null;
+  rssMax: number;
+}) {
+  const [nowMs] = useState(() => Date.now());
+  const firstSample = [...cpuSamples, ...rssSamples].sort((a, b) =>
+    a.sampledAt.localeCompare(b.sampledAt),
+  )[0];
+  const historySeconds = firstSample
+    ? Math.max(
+        1,
+        Math.round(
+          (nowMs - new Date(firstSample.sampledAt).getTime()) / 1000,
+        ),
+      )
+    : 0;
+
+  return (
+    <div className="border-glass-border bg-bg-1/95 w-[312px] rounded-xl border p-3.5 text-[11px] shadow-[0_24px_64px_rgba(0,0,0,0.6),0_0_0_1px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="border-ink-4 text-ink-3 flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border">
+          <span className="bg-ink-3 h-1.5 w-1.5 rounded-[1px]" />
+        </span>
+        <div className="text-ink-0 text-xs font-semibold tracking-[-0.01em]">
+          Agent Resources
+        </div>
+        <span className="flex-1" />
+        <div className="text-ink-4 font-mono text-[10px] tabular-nums">
+          {rootPid === null ? 'PID n/a' : `PID ${rootPid}`}
+        </div>
+      </div>
+      <div className="space-y-2">
+        <AgentResourceChart
+          label="CPU"
+          value={displayCpu}
+          samples={cpuSamples}
+          formatValue={(value) => `${value.toFixed(1)}%`}
+          maxValue={Math.max(
+            200,
+            displayCpu,
+            ...cpuSamples.map((sample) => sample.cpuPercent),
+          )}
+          accentClassName="text-[oklch(0.74_0.19_295)]"
+        />
+        <div className="bg-ink-4/15 h-px" />
+        <AgentResourceChart
+          label="Memory"
+          value={displayRss}
+          samples={rssSamples}
+          formatValue={formatResourceBytes}
+          maxValue={rssMax}
+          accentClassName="text-[oklch(0.78_0.16_155)]"
+        />
+      </div>
+      <div className="border-ink-4/15 mt-3 flex gap-4 border-t pt-2.5">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-4 text-[9.5px] tracking-[0.06em] uppercase">
+            Window
+          </span>
+          <span className="text-ink-1 font-mono text-[11.5px]">
+            {historySeconds}s
+          </span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-4 text-[9.5px] tracking-[0.06em] uppercase">
+            Samples
+          </span>
+          <span className="text-ink-1 font-mono text-[11.5px]">
+            {Math.max(cpuSamples.length, rssSamples.length)}
+          </span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-4 text-[9.5px] tracking-[0.06em] uppercase">
+            Backend
+          </span>
+          <span className="text-ink-1 font-mono text-[11.5px]">
+            {backendLabel}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentResourceTooltip({
+  children,
+  content,
+}: {
+  children: ReactNode;
+  content: ReactNode;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [position, setPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearCloseTimer = useCallback(() => {
+    if (!closeTimerRef.current) return;
+    clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = null;
+  }, []);
+
+  const open = useCallback(() => {
+    clearCloseTimer();
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (rect) {
+      setPosition({
+        left: Math.min(
+          Math.max(rect.left + rect.width / 2 - 156, 8),
+          Math.max(window.innerWidth - 320, 8),
+        ),
+        top: rect.bottom + 8,
+      });
+    }
+    setIsOpen(true);
+  }, [clearCloseTimer]);
+
+  const scheduleClose = useCallback(() => {
+    clearCloseTimer();
+    closeTimerRef.current = setTimeout(() => setIsOpen(false), 120);
+  }, [clearCloseTimer]);
+
+  useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        onFocus={open}
+        onBlur={scheduleClose}
+        onMouseEnter={open}
+        onMouseLeave={scheduleClose}
+        tabIndex={0}
+      >
+        {children}
+      </div>
+      {isOpen && position
+        ? createPortal(
+            <div
+              className="fixed z-[10020]"
+              onMouseEnter={open}
+              onMouseLeave={scheduleClose}
+              style={{ left: position.left, top: position.top }}
+            >
+              {content}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function AgentResourcePill({
+  backendLabel,
+  isRunning,
+  stepId,
+}: {
+  backendLabel: string;
+  stepId: string;
+  isRunning: boolean;
+}) {
+  const { data, historyByStepId } = useAgentResourceSnapshots();
+  const snapshot = data?.find((item) => item.stepId === stepId);
+  const history = historyByStepId[stepId] ?? [];
+  if (snapshot?.unsupportedReason || (!snapshot && history.length === 0)) {
+    return null;
+  }
+
+  const lastSample = history[history.length - 1] ?? snapshot;
+  const displayCpu = isRunning
+    ? (snapshot?.cpuPercent ?? lastSample.cpuPercent)
+    : 0;
+  const displayRss = isRunning
+    ? (snapshot?.rssBytes ?? lastSample.rssBytes)
+    : 0;
+  const stoppedSample =
+    !isRunning && lastSample
+      ? {
+          ...lastSample,
+          sampledAt: new Date().toISOString(),
+          cpuPercent: 0,
+          rssBytes: 0,
+        }
+      : null;
+  const samples = stoppedSample ? [...history, stoppedSample] : history;
+  const rootPid = snapshot?.rootPid ?? lastSample?.rootPid ?? null;
+  const rssMax = Math.max(
+    lastSample?.peakRssBytes ?? 0,
+    ...samples.map((sample) => sample.rssBytes),
+    1,
+  );
+  const cpuValues = samples.map((sample) => sample.cpuPercent);
+  const rssValues = samples.map((sample) => sample.rssBytes);
+
+  return (
+    <AgentResourceTooltip
+      content={
+        <AgentResourceHoverPanel
+          backendLabel={backendLabel}
+          cpuSamples={samples}
+          displayCpu={displayCpu}
+          displayRss={displayRss}
+          rootPid={rootPid}
+          rssMax={rssMax}
+          rssSamples={samples}
+        />
+      }
+    >
+      <div className="border-glass-border bg-bg-0/25 text-ink-1 hover:border-accent-1/40 hover:bg-bg-2 flex h-7 w-[196px] cursor-default items-center gap-1.5 rounded-[7px] border px-2 font-mono text-[11.5px] font-semibold tabular-nums transition-colors">
+        <span
+          className={clsx(
+            'h-[5px] w-[5px] rounded-full',
+            isRunning
+              ? 'resource-status-pulse animate-pulse bg-[oklch(0.74_0.19_295)] shadow-[0_0_7px_oklch(0.74_0.19_295)]'
+              : 'bg-ink-4/60',
+          )}
+        />
+        <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+          <AgentResourceMicroSpark
+            values={cpuValues}
+            accentClassName="text-[oklch(0.74_0.19_295)]"
+          />
+          <span className="min-w-[42px] text-right">
+            {displayCpu.toFixed(1)}%
+          </span>
+        </span>
+        <span className="bg-ink-4/25 h-[13px] w-px" />
+        <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+          <AgentResourceMicroSpark
+            values={rssValues}
+            accentClassName="text-[oklch(0.78_0.16_155)]"
+          />
+          <span className="min-w-[45px] text-right">
+            {formatResourceBytes(displayRss).replace(' ', '')}
+          </span>
+        </span>
+      </div>
+    </AgentResourceTooltip>
+  );
+}
+
+function useTaskMessageMeta(stepId: string | null) {
+  return useTaskMessagesStore(
+    useShallow((state) => {
+      const step = stepId ? state.steps[stepId] : undefined;
+      return {
+        status: step?.status ?? 'waiting',
+        error: step?.error ?? null,
+        pendingPermission: step?.pendingPermission ?? null,
+        pendingQuestion: step?.pendingQuestion ?? null,
+        queuedPrompts: step?.queuedPrompts ?? EMPTY_QUEUED_PROMPTS,
+        hasMessages: (step?.messages.length ?? 0) > 0,
+        isLoading: !stepId || !step,
+      };
+    }),
+  );
+}
+
+function getLastAssistantMessageForStep(stepId: string | null): string {
+  if (!stepId) return '';
+  const messages =
+    useTaskMessagesStore.getState().steps[stepId]?.messages ?? [];
+  return getLastAssistantMessage(messages);
+}
+
+function useStepModel(stepId: string | null): string | undefined {
+  return useTaskMessagesStore((state) => {
+    const messages = stepId ? state.steps[stepId]?.messages : undefined;
+    if (!messages) return undefined;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const model = getModelFromEntry(messages[i]);
+      if (model) return model;
+    }
+    return undefined;
+  });
 }
 
 export function TaskPanel({ taskId }: { taskId: string }) {
@@ -302,6 +967,21 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   // Steps data for auto-selection
   const { data: steps } = useSteps(taskId);
   const { data: activeStep } = useStep(activeStepId ?? '');
+  const { data: backendsSetting } = useBackendsSetting();
+  const { data: backendDefaultModelsSetting } =
+    useBackendDefaultModelsSetting();
+  const defaultAddStepBackend =
+    activeStep?.agentBackend ??
+    project?.defaultAgentBackend ??
+    backendsSetting?.defaultBackend ??
+    'claude-code';
+  const defaultAddStepModel =
+    activeStep?.modelPreference ??
+    getDefaultModelForBackend({
+      backend: defaultAddStepBackend,
+      project,
+      backendDefaultModels: backendDefaultModelsSetting,
+    });
   const isSkillCreationTask = task?.type === 'skill-creation';
 
   // Diff view state
@@ -355,9 +1035,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     toggleHideUnchanged: explorerToggleHideUnchanged,
   } = useTaskFileExplorerState(taskId);
 
-  const agentState = useAgentStream({ taskId, stepId: activeStepId });
-  const contextUsage = useContextUsage(agentState.messages);
-  const model = useModel(agentState.messages);
+  const agentMeta = useTaskMessageMeta(activeStepId);
+  const model = useStepModel(activeStepId);
   const {
     start,
     stop,
@@ -372,6 +1051,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   } = useAgentControls({ taskId, stepId: activeStepId });
 
   const addToast = useToastStore((s) => s.addToast);
+  const removeReviewComment = useReviewCommentsStore((s) => s.removeComment);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
   const [isChangeWorktreePathDialogOpen, setIsChangeWorktreePathDialogOpen] =
@@ -485,7 +1165,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
   // Reset work items editor when switching tasks
   useEffect(() => {
-    setShowWorkItemsEditor(false);
+    startTransition(() => setShowWorkItemsEditor(false));
   }, [taskId]);
 
   // Notify backend this task is focused (dismisses completion notifications, etc.)
@@ -526,7 +1206,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     if (activeStep?.sessionId) {
       await navigator.clipboard.writeText(activeStep.sessionId);
     }
-  }, [activeStep?.sessionId]);
+  }, [activeStep]);
 
   const handleFilePathClick = useCallback(
     (filePath: string, lineStart?: number, lineEnd?: number) => {
@@ -625,7 +1305,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         content: `The worktree path no longer exists:\n${task.worktreePath}\n\nThe worktree may have been deleted or moved.`,
       });
     }
-  }, [task?.worktreePath, isDiffViewOpen, diffSelectedFile, modal]);
+  }, [task, isDiffViewOpen, diffSelectedFile, modal]);
 
   const handleDeleteWorktree = useCallback(() => {
     if (!task?.worktreePath) return;
@@ -663,7 +1343,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         }
       },
     });
-  }, [task?.worktreePath, task?.branchName, taskId, deleteWorktree, modal]);
+  }, [task, taskId, deleteWorktree, modal]);
 
   const handleChangeWorktreePath = useCallback(
     (newPath: string) => {
@@ -735,9 +1415,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   );
 
   const permissionProps = useMemo(() => {
-    if (!agentState.pendingPermission) return null;
+    if (!agentMeta.pendingPermission) return null;
     return {
-      request: agentState.pendingPermission,
+      request: agentMeta.pendingPermission,
       onRespond: respondToPermission,
       onAllowForSession: handleAllowToolsForSession,
       onAllowForProject: handleAllowForProject,
@@ -747,7 +1427,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       worktreePath: task?.worktreePath,
     };
   }, [
-    agentState.pendingPermission,
+    agentMeta.pendingPermission,
     respondToPermission,
     handleAllowToolsForSession,
     handleAllowForProject,
@@ -758,12 +1438,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   ]);
 
   const questionProps = useMemo(() => {
-    if (!agentState.pendingQuestion) return null;
+    if (!agentMeta.pendingQuestion) return null;
     return {
-      request: agentState.pendingQuestion,
+      request: agentMeta.pendingQuestion,
       onRespond: respondToQuestion,
     };
-  }, [agentState.pendingQuestion, respondToQuestion]);
+  }, [agentMeta.pendingQuestion, respondToQuestion]);
 
   const handleToggleSettingsPane = useCallback(() => {
     if (rightPane?.type === 'settings') {
@@ -781,9 +1461,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     openDebugMessages();
   }, [rightPane, closeRightPane, openDebugMessages]);
 
-  const handleAddStep = useCallback(
-    async (data: {
+  const handleAddStep = async (data: {
       promptTemplate: string;
+      hasUserPrompt: boolean;
       presetType: AddStepPresetType;
       interactionMode: InteractionMode;
       agentBackend: AgentBackendType;
@@ -791,17 +1471,35 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       thinkingEffort: ThinkingEffort;
       images: PromptImagePart[];
       start: boolean;
+      includedReviewCommentIds: string[];
       reviewers?: import('@shared/types').ReviewerConfig[];
     }) => {
       const stepList = steps ?? [];
       const preferredStepId = addStepAtEnd
         ? (stepList[stepList.length - 1]?.id ?? null)
         : addStepAfterStepId;
-      const referenceStep = getReferenceStepForPreset({
-        steps: stepList,
-        activeStepId,
-        preferredStepId,
-      });
+      const referenceStep =
+        data.presetType === 'continue'
+          ? getContinueReferenceStep({
+              steps: stepList,
+              activeStepId,
+              preferredStepId,
+            })
+          : getReferenceStepForPreset({
+              steps: stepList,
+              activeStepId,
+              preferredStepId,
+            });
+
+      if (data.presetType === 'continue' && !referenceStep) {
+        addToast({
+          type: 'error',
+          message:
+            'No usable previous step to continue from. Pick step with actual messages or finish current step first.',
+        });
+        return false;
+      }
+
       const insertionSortOrder = (() => {
         if (addStepAtEnd) return stepList.length;
         if (stepList.length === 0) return 0;
@@ -818,8 +1516,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           : data.presetType === 'review-changes'
             ? 'Review Changes'
             : 'Step';
-      const name =
-        data.promptTemplate.split('\n')[0]?.slice(0, 40).trim() || defaultName;
+      const name = data.hasUserPrompt
+        ? data.promptTemplate.split('\n')[0]?.slice(0, 40).trim() || defaultName
+        : defaultName;
 
       const promptTemplate =
         data.presetType === 'continue' && referenceStep
@@ -828,13 +1527,15 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               userPrompt: data.promptTemplate,
             })
           : data.presetType === 'review-changes'
-            ? data.promptTemplate || buildReviewChangesPrompt()
+            ? [
+                data.hasUserPrompt ? null : buildReviewChangesPrompt(),
+                data.promptTemplate,
+              ]
+                .filter((part): part is string => !!part?.trim())
+                .join('\n\n')
             : data.promptTemplate;
 
-      const dependsOn =
-        data.presetType === 'continue' && referenceStep
-          ? [referenceStep.id]
-          : [];
+      const dependsOn = referenceStep ? [referenceStep.id] : [];
 
       const isReview = data.presetType === 'review-changes';
       const reviewers = isReview ? data.reviewers : undefined;
@@ -859,10 +1560,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               }
             : {}),
         });
-        setIsAddStepDialogOpen(false);
-        setAddStepAfterStepId(null);
-        setAddStepAtEnd(false);
+        startTransition(() => setIsAddStepDialogOpen(false));
+        startTransition(() => setAddStepAfterStepId(null));
+        startTransition(() => setAddStepAtEnd(false));
         setActiveStepId(step.id);
+        for (const commentId of data.includedReviewCommentIds) {
+          removeReviewComment(taskId, commentId);
+        }
         if (data.start) {
           setStartingStepIds((prev) => new Set(prev).add(step.id));
           if (!stepStartJobIdsRef.current.has(step.id)) {
@@ -876,28 +1580,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             stepStartJobIdsRef.current.set(step.id, jobId);
           }
         }
+        return true;
       } catch (error) {
         addToast({
           type: 'error',
           message:
             error instanceof Error ? error.message : 'Failed to create step',
         });
+        return false;
       }
-    },
-    [
-      taskId,
-      createStep,
-      setActiveStepId,
-      addToast,
-      steps,
-      activeStepId,
-      addStepAfterStepId,
-      addStepAtEnd,
-      addRunningJob,
-      projectId,
-      task?.projectId,
-    ],
-  );
+  };
 
   const handleStartStep = useCallback(async () => {
     if (!activeStepId) return;
@@ -961,12 +1653,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
   useEffect(() => {
     if (!activeStepId || activeStep?.status === 'ready') return;
-    setStartingStepIds((prev) => {
+    startTransition(() => setStartingStepIds((prev) => {
       if (!prev.has(activeStepId)) return prev;
       const next = new Set(prev);
       next.delete(activeStepId);
       return next;
-    });
+    }));
   }, [activeStepId, activeStep?.status]);
 
   const handleMergeStarted = useCallback(() => {
@@ -1109,7 +1801,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       },
     },
     task?.status !== 'running' &&
-      agentState.status !== 'running' &&
+      agentMeta.status !== 'running' &&
       !!task?.worktreePath && {
         label: 'Delete Worktree',
         section: 'Task',
@@ -1160,7 +1852,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       },
     },
     task?.status !== 'running' &&
-      agentState.status !== 'running' && {
+      agentMeta.status !== 'running' && {
         label: 'Delete Task',
         section: 'Task',
         handler: () => {
@@ -1220,6 +1912,11 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [taskId, addReviewCommentAction, removeReviewCommentAction],
   );
 
+  const getCompletionContextBeforePrompt = useCallback(
+    () => getLastAssistantMessageForStep(activeStepId),
+    [activeStepId],
+  );
+
   if (!task || !project) {
     return (
       <div className="text-ink-3 flex h-full items-center justify-center">
@@ -1229,7 +1926,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   }
 
   const isRunning =
-    agentState.status === 'running' || activeStep?.status === 'running';
+    agentMeta.status === 'running' || activeStep?.status === 'running';
   const hasRunningStepStartJob = backgroundJobs.some(
     (job) =>
       job.status === 'running' &&
@@ -1242,13 +1939,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     hasRunningStepStartJob ||
     (!!activeStepId && startingStepIds.has(activeStepId));
   const isAgentBusy = isRunning || isStepStarting;
-  const isWaiting =
-    agentState.status === 'waiting' || task.status === 'waiting';
+  const isWaiting = agentMeta.status === 'waiting' || task.status === 'waiting';
   const taskRootPath = task.worktreePath ?? project.path;
-  const hasMessages = agentState.messages.length > 0;
-  const activeStepError = agentState.error ?? 'No error details available.';
-  const getCompletionContextBeforePrompt = () =>
-    getLastAssistantMessage(agentState.messages);
+  const hasMessages = agentMeta.hasMessages;
+  const activeStepError = agentMeta.error ?? 'No error details available.';
   const canSendMessage = !isAgentBusy && hasMessages && !!activeStep?.sessionId;
   const hasRepoLink =
     !!project.repoProviderId && !!project.repoProjectId && !!project.repoId;
@@ -1256,6 +1950,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     !!project.workItemProviderId &&
     !!project.workItemProjectId &&
     !!project.workItemProjectName;
+  const shouldRenderMessageSection =
+    !isPrViewOpen && !isDiffViewOpen && activeStep?.type !== 'pr-review';
   const backendLabel =
     AVAILABLE_BACKENDS.find(
       (backend) => backend.value === activeStep?.agentBackend,
@@ -1268,6 +1964,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         ref={taskPanelRef}
         className="bg-bg-0 flex h-full w-full overflow-hidden rounded-tl-xl"
       >
+        {!shouldRenderMessageSection && (
+          <TaskAgentStreamSync taskId={taskId} stepId={activeStepId} />
+        )}
         {/* Main content */}
         <div
           className={clsx(
@@ -1299,6 +1998,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
             {/* Center: Branch, PR badge, Work items */}
             <div className="flex min-w-0 shrink items-center gap-2">
+              {activeStepId && (
+                <AgentResourcePill
+                  stepId={activeStepId}
+                  isRunning={activeStep?.status === 'running'}
+                  backendLabel={backendLabel}
+                />
+              )}
+
               {/* Backend chip */}
               <Chip size="sm" className="max-w-40">
                 {backendLabel}
@@ -1663,15 +2370,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 />
               ) : activeStep?.type === 'pr-review' ? (
                 <PrReviewValidation step={activeStep} />
-              ) : agentState.isLoading ? (
-                <div className="flex h-full items-center justify-center">
-                  <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
-                </div>
-              ) : hasMessages ? (
-                <MessageStream
-                  messages={agentState.messages}
-                  isRunning={isAgentBusy}
-                  queuedPrompts={agentState.queuedPrompts}
+              ) : (
+                <TaskMessageStreamSection
+                  taskId={taskId}
+                  stepId={activeStepId}
+                  activeStep={activeStep}
+                  taskPrompt={task.prompt}
+                  isAgentBusy={isAgentBusy}
+                  isStepStarting={isStepStarting}
+                  activeStepError={activeStepError}
+                  onStartStep={handleStartStep}
                   onFilePathClick={handleFilePathClick}
                   onToolDiffClick={handleToolDiffClick}
                   onCancelQueuedPrompt={cancelQueuedPrompt}
@@ -1682,105 +2390,15 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   pendingQuestion={questionProps}
                   onAddBashToPermissions={handleAddBashToPermissions}
                   rootPath={taskRootPath}
-                  taskId={taskId}
-                  stepId={activeStepId}
+                  respondToPermission={respondToPermission}
+                  respondToQuestion={respondToQuestion}
+                  onAllowForSession={handleAllowToolsForSession}
+                  onAllowForProject={handleAllowForProject}
+                  onAllowForProjectWorktrees={handleAllowForProjectWorktrees}
+                  onAllowGlobally={handleAllowGlobally}
+                  onSetMode={handleSetMode}
+                  worktreePath={task.worktreePath}
                 />
-              ) : (
-                <div
-                  className="h-full overflow-y-auto p-6"
-                  style={
-                    footerHeight > 0
-                      ? { paddingBottom: footerHeight }
-                      : undefined
-                  }
-                >
-                  <div className="text-ink-2 mb-2 text-sm font-medium">
-                    {activeStep?.name ?? 'Prompt'}
-                  </div>
-                  <div className="border-glass-border bg-bg-1 rounded-lg border p-4">
-                    <pre className="overflow-x-hidden font-sans text-xs whitespace-pre-wrap">
-                      {activeStep?.promptTemplate ?? task.prompt}
-                    </pre>
-                  </div>
-                  {isAgentBusy ? (
-                    <div className="border-glass-border mt-6 flex items-center justify-center gap-2 rounded-lg border border-dashed p-8">
-                      <Loader2 className="text-ink-2 h-4 w-4 animate-spin" />
-                      <p className="text-ink-2">Starting agent...</p>
-                    </div>
-                  ) : activeStep?.status === 'ready' ? (
-                    <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
-                      <Button
-                        onClick={handleStartStep}
-                        disabled={isStepStarting}
-                        loading={isStepStarting}
-                        variant="primary"
-                        icon={<Play />}
-                      >
-                        {isStepStarting ? 'Starting...' : 'Start Step'}
-                      </Button>
-                    </div>
-                  ) : activeStep?.status === 'pending' ? (
-                    <div className="border-glass-border mt-6 flex items-center justify-center rounded-lg border border-dashed p-8">
-                      <p className="text-ink-3 text-sm">
-                        Waiting for dependencies to complete
-                      </p>
-                    </div>
-                  ) : activeStep?.status === 'errored' ? (
-                    <div className="border-status-fail/30 bg-status-fail-soft mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border p-8 text-center">
-                      <p className="text-status-fail text-sm font-medium">
-                        Step failed to start
-                      </p>
-                      <p className="text-ink-2 max-w-md text-xs">
-                        {activeStepError}
-                      </p>
-                      <Button
-                        onClick={handleStartStep}
-                        disabled={isStepStarting}
-                        loading={isStepStarting}
-                        variant="secondary"
-                        icon={<RefreshCw />}
-                      >
-                        {isStepStarting ? 'Retrying...' : 'Retry Start'}
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
-                      <p className="text-ink-2">No messages loaded</p>
-                      <Button
-                        onClick={agentState.refetch}
-                        variant="secondary"
-                        icon={<RefreshCw />}
-                      >
-                        Reload messages
-                      </Button>
-                    </div>
-                  )}
-                  {/* Fallback banners when no messages yet */}
-                  {agentState.pendingPermission && (
-                    <div className="mt-4 overflow-hidden rounded-lg">
-                      <PermissionBar
-                        request={agentState.pendingPermission}
-                        onRespond={respondToPermission}
-                        onAllowForSession={handleAllowToolsForSession}
-                        onAllowForProject={handleAllowForProject}
-                        onAllowForProjectWorktrees={
-                          handleAllowForProjectWorktrees
-                        }
-                        onAllowGlobally={handleAllowGlobally}
-                        onSetMode={handleSetMode}
-                        worktreePath={task.worktreePath}
-                      />
-                    </div>
-                  )}
-                  {agentState.pendingQuestion && (
-                    <div className="mt-4 overflow-hidden rounded-lg">
-                      <QuestionOptions
-                        request={agentState.pendingQuestion}
-                        onRespond={respondToQuestion}
-                      />
-                    </div>
-                  )}
-                </div>
               )}
             </div>
           </div>
@@ -1811,9 +2429,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   canSendMessage={!!canSendMessage}
                   onSend={sendMessage}
                   onQueue={queuePrompt}
-                  queuedPrompts={agentState.queuedPrompts}
+                  queuedPrompts={agentMeta.queuedPrompts}
                   onStop={handleStop}
-                  contextUsage={contextUsage}
                   projectRoot={taskRootPath}
                   getCompletionContextBeforePrompt={
                     getCompletionContextBeforePrompt
@@ -1888,9 +2505,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             setAddStepAfterStepId(null);
             setAddStepAtEnd(false);
           }}
-          onConfirm={(data) => void handleAddStep(data)}
-          defaultBackend={activeStep?.agentBackend ?? 'claude-code'}
-          defaultModel={activeStep?.modelPreference ?? 'default'}
+          onConfirm={handleAddStep}
+          defaultBackend={defaultAddStepBackend}
+          defaultModel={defaultAddStepModel}
           defaultThinkingEffort={activeStep?.thinkingEffort ?? 'default'}
           taskId={taskId}
           activeStepId={activeStepId ?? undefined}
@@ -1945,6 +2562,212 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   );
 }
 
+const TaskAgentStreamSync = memo(function TaskAgentStreamSync({
+  taskId,
+  stepId,
+}: {
+  taskId: string;
+  stepId: string | null;
+}) {
+  useAgentStream({ taskId, stepId });
+  return null;
+});
+
+const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
+  taskId,
+  stepId,
+  activeStep,
+  taskPrompt,
+  isAgentBusy,
+  isStepStarting,
+  activeStepError,
+  onStartStep,
+  onFilePathClick,
+  onToolDiffClick,
+  onCancelQueuedPrompt,
+  onUpdateQueuedPrompt,
+  onShowRawMessage,
+  bottomPadding,
+  pendingPermission,
+  pendingQuestion,
+  onAddBashToPermissions,
+  rootPath,
+  respondToPermission,
+  respondToQuestion,
+  onAllowForSession,
+  onAllowForProject,
+  onAllowForProjectWorktrees,
+  onAllowGlobally,
+  onSetMode,
+  worktreePath,
+}: {
+  taskId: string;
+  stepId: string | null;
+  activeStep?: TaskStep | null;
+  taskPrompt: string;
+  isAgentBusy: boolean;
+  isStepStarting: boolean;
+  activeStepError: string;
+  onStartStep: () => void | Promise<void>;
+  onFilePathClick?: (
+    filePath: string,
+    lineStart?: number,
+    lineEnd?: number,
+  ) => void;
+  onToolDiffClick?: (
+    filePath: string,
+    oldString: string,
+    newString: string,
+  ) => void;
+  onCancelQueuedPrompt?: (promptId: string) => void;
+  onUpdateQueuedPrompt?: (promptId: string, content: string) => void;
+  onShowRawMessage?: (entryId: string) => void;
+  bottomPadding: number;
+  pendingPermission: ComponentProps<typeof MessageStream>['pendingPermission'];
+  pendingQuestion: ComponentProps<typeof MessageStream>['pendingQuestion'];
+  onAddBashToPermissions?: (command: string) => void;
+  rootPath: string | null;
+  respondToPermission: ComponentProps<typeof PermissionBar>['onRespond'];
+  respondToQuestion: ComponentProps<typeof QuestionOptions>['onRespond'];
+  onAllowForSession?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => void;
+  onAllowForProject?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => void;
+  onAllowForProjectWorktrees?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => void;
+  onAllowGlobally?: (toolName: string, input: Record<string, unknown>) => void;
+  onSetMode?: (mode: InteractionMode) => void;
+  worktreePath?: string | null;
+}) {
+  const agentState = useAgentStream({ taskId, stepId });
+  const hasMessages = agentState.messages.length > 0;
+
+  if (agentState.isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
+      </div>
+    );
+  }
+
+  if (hasMessages) {
+    return (
+      <MessageStream
+        messages={agentState.messages}
+        isRunning={isAgentBusy}
+        queuedPrompts={agentState.queuedPrompts}
+        onFilePathClick={onFilePathClick}
+        onToolDiffClick={onToolDiffClick}
+        onCancelQueuedPrompt={onCancelQueuedPrompt}
+        onUpdateQueuedPrompt={onUpdateQueuedPrompt}
+        onShowRawMessage={onShowRawMessage}
+        bottomPadding={bottomPadding}
+        pendingPermission={pendingPermission}
+        pendingQuestion={pendingQuestion}
+        onAddBashToPermissions={onAddBashToPermissions}
+        rootPath={rootPath}
+        taskId={taskId}
+        stepId={stepId}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="h-full overflow-y-auto p-6"
+      style={bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined}
+    >
+      <div className="text-ink-2 mb-2 text-sm font-medium">
+        {activeStep?.name ?? 'Prompt'}
+      </div>
+      <div className="border-glass-border bg-bg-1 rounded-lg border p-4">
+        <pre className="overflow-x-hidden font-sans text-xs whitespace-pre-wrap">
+          {activeStep?.promptTemplate ?? taskPrompt}
+        </pre>
+      </div>
+      {isAgentBusy ? (
+        <div className="border-glass-border mt-6 flex items-center justify-center gap-2 rounded-lg border border-dashed p-8">
+          <Loader2 className="text-ink-2 h-4 w-4 animate-spin" />
+          <p className="text-ink-2">Starting agent...</p>
+        </div>
+      ) : activeStep?.status === 'ready' ? (
+        <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
+          <Button
+            onClick={onStartStep}
+            disabled={isStepStarting}
+            loading={isStepStarting}
+            variant="primary"
+            icon={<Play />}
+          >
+            {isStepStarting ? 'Starting...' : 'Start Step'}
+          </Button>
+        </div>
+      ) : activeStep?.status === 'pending' ? (
+        <div className="border-glass-border mt-6 flex items-center justify-center rounded-lg border border-dashed p-8">
+          <p className="text-ink-3 text-sm">
+            Waiting for dependencies to complete
+          </p>
+        </div>
+      ) : activeStep?.status === 'errored' ? (
+        <div className="border-status-fail/30 bg-status-fail-soft mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border p-8 text-center">
+          <p className="text-status-fail text-sm font-medium">
+            Step failed to start
+          </p>
+          <p className="text-ink-2 max-w-md text-xs">{activeStepError}</p>
+          <Button
+            onClick={onStartStep}
+            disabled={isStepStarting}
+            loading={isStepStarting}
+            variant="secondary"
+            icon={<RefreshCw />}
+          >
+            {isStepStarting ? 'Retrying...' : 'Retry Start'}
+          </Button>
+        </div>
+      ) : (
+        <div className="border-glass-border mt-6 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8">
+          <p className="text-ink-2">No messages loaded</p>
+          <Button
+            onClick={agentState.refetch}
+            variant="secondary"
+            icon={<RefreshCw />}
+          >
+            Reload messages
+          </Button>
+        </div>
+      )}
+      {agentState.pendingPermission && (
+        <div className="mt-4 overflow-hidden rounded-lg">
+          <PermissionBar
+            request={agentState.pendingPermission}
+            onRespond={respondToPermission}
+            onAllowForSession={onAllowForSession}
+            onAllowForProject={onAllowForProject}
+            onAllowForProjectWorktrees={onAllowForProjectWorktrees}
+            onAllowGlobally={onAllowGlobally}
+            onSetMode={onSetMode}
+            worktreePath={worktreePath}
+          />
+        </div>
+      )}
+      {agentState.pendingQuestion && (
+        <div className="mt-4 overflow-hidden rounded-lg">
+          <QuestionOptions
+            request={agentState.pendingQuestion}
+            onRespond={respondToQuestion}
+          />
+        </div>
+      )}
+    </div>
+  );
+});
+
 /** Whether a backend supports image attachments in prompts.
  *  All Claude models support vision. OpenCode models generally do too,
  *  but per-model capability detection requires SDK support (not yet available). */
@@ -1970,7 +2793,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onQueue,
   queuedPrompts,
   onStop,
-  contextUsage,
   projectRoot,
   getCompletionContextBeforePrompt,
 }: {
@@ -1983,7 +2805,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onQueue: (parts: PromptPart[]) => void;
   queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
-  contextUsage: ContextUsage;
   projectRoot: string | null;
   getCompletionContextBeforePrompt: () => string;
 }) {
@@ -1995,6 +2816,8 @@ const TaskInputFooter = memo(function TaskInputFooter({
     stepId: activeStepId ?? undefined,
   });
   const { data: footerSnippets = [] } = usePromptSnippetsSetting();
+  const { data: footerBackendDefaultModelsSetting } =
+    useBackendDefaultModelsSetting();
 
   const snippetVariableContext: SnippetVariableContext = useMemo(
     () => ({
@@ -2022,6 +2845,22 @@ const TaskInputFooter = memo(function TaskInputFooter({
   const effectiveModel = activeStep?.modelPreference ?? 'default';
 
   const { data: dynamicModels } = useBackendModels(effectiveBackend);
+  const resolvedModelForContext =
+    effectiveModel === 'default'
+      ? getDefaultModelForBackend({
+          backend: effectiveBackend,
+          project: footerProject,
+          backendDefaultModels: footerBackendDefaultModelsSetting,
+        })
+      : effectiveModel;
+  const activeModelMeta = dynamicModels?.find(
+    (dynamicModel) => dynamicModel.id === resolvedModelForContext,
+  );
+  const contextWindow = getContextWindowForModel({
+    backend: effectiveBackend,
+    model: resolvedModelForContext,
+    dynamicContextWindow: activeModelMeta?.contextWindow,
+  });
   const thinkingCapabilities = getModelThinkingCapabilities(
     effectiveModel,
     dynamicModels,
@@ -2255,6 +3094,14 @@ const TaskInputFooter = memo(function TaskInputFooter({
     </div>
   );
 
+  const tokenControls = (
+    <TaskMessageUsageControls
+      stepId={activeStepId}
+      backend={effectiveBackend}
+      contextWindow={contextWindow}
+    />
+  );
+
   return (
     <div
       ref={containerRef}
@@ -2316,9 +3163,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
                 />
               </>
             }
-            controlsBeforeButtons={
-              <ContextUsageDisplay contextUsage={contextUsage} />
-            }
+            controlsBeforeButtons={tokenControls}
             buttonSize="sm"
             textareaClassName="bg-transparent px-1 py-0 text-sm leading-[20px]"
           />
@@ -2351,9 +3196,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
             controlsAboveButtons={selectorGroup}
-            controlsBeforeButtons={
-              <ContextUsageDisplay contextUsage={contextUsage} />
-            }
+            controlsBeforeButtons={tokenControls}
             buttonSize="sm"
             fillAvailableHeight
             textareaClassName="bg-transparent px-1 py-0 text-sm leading-[20px]"
@@ -2375,3 +3218,56 @@ const TaskInputFooter = memo(function TaskInputFooter({
     </div>
   );
 });
+
+const TaskMessageUsageControls = memo(function TaskMessageUsageControls({
+  stepId,
+  backend,
+  contextWindow,
+}: {
+  stepId: string | null;
+  backend: AgentBackendType;
+  contextWindow: number;
+}) {
+  const entries = useTaskMessagesStore(
+    (state) =>
+      (stepId ? state.steps[stepId]?.messages : undefined) ?? EMPTY_MESSAGES,
+  );
+  const stepTokenSummary = useMemo(
+    () => getStepTokenSummary(entries),
+    [entries],
+  );
+  const contextUsage = useContextUsage({
+    entries,
+    backend,
+    contextWindow,
+  });
+
+  return (
+    <>
+      <StepTokenSummaryDisplay summary={stepTokenSummary} />
+      <ContextUsageDisplay contextUsage={contextUsage} />
+    </>
+  );
+});
+
+function StepTokenSummaryDisplay({ summary }: { summary: StepTokenSummary }) {
+  if (summary.displayTokens === 0) return null;
+
+  const title = [
+    `Step tokens: ${summary.displayTokens.toLocaleString()} tokens`,
+    `Input: ${summary.inputTokens.toLocaleString()}`,
+    `Output: ${summary.outputTokens.toLocaleString()}`,
+    `Cache read: ${summary.cacheReadTokens.toLocaleString()}`,
+    `Cache created: ${summary.cacheCreationTokens.toLocaleString()}`,
+    `Raw total with cache read: ${summary.totalTokens.toLocaleString()}`,
+  ].join('\n');
+
+  return (
+    <div
+      className="text-ink-3 border-glass-border bg-bg-2/70 flex h-7 items-center rounded-md border px-2 text-[11px] font-medium tabular-nums"
+      title={title}
+    >
+      {formatNumber(summary.displayTokens)} tok
+    </div>
+  );
+}

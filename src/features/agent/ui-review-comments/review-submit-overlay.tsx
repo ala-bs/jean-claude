@@ -1,19 +1,25 @@
 import { ChevronDown, ChevronRight, Send, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 
+import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import {
   KeyboardLayerProvider,
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
+import type { ModelPreference, TaskStep } from '@shared/types';
+import {
+  useBackendDefaultModelsSetting,
+  useBackendsSetting,
+} from '@/hooks/use-settings';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { getDefaultModelForBackend } from '@/lib/default-models';
 import { getModelsForBackend } from '@/features/agent/ui-backend-selector';
-import { useBackendModels } from '@/hooks/use-backend-models';
-import { useBackendsSetting } from '@/hooks/use-settings';
 import type { ReviewComment } from '@/stores/review-comments';
 import { synthesizeReviewPrompt } from '@/stores/review-comments';
-import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
-import type { ModelPreference, TaskStep } from '@shared/types';
+import { useBackendModels } from '@/hooks/use-backend-models';
+
+
 
 export interface ReviewSubmitTargetConfig {
   agentBackend: AgentBackendType;
@@ -79,7 +85,9 @@ function ReviewSubmitOverlayContent({
         ? targetSelection.stepId
         : null;
   const backendsSettingQuery = useBackendsSetting();
+  const backendDefaultModelsQuery = useBackendDefaultModelsSetting();
   const backendsSetting = backendsSettingQuery.data;
+  const backendDefaultModels = backendDefaultModelsQuery.data;
   const enabledBackends = useMemo(
     () =>
       backendsSetting?.enabledBackends ??
@@ -104,8 +112,15 @@ function ReviewSubmitOverlayContent({
   );
   const defaultNewStepModel =
     effectiveNewStepBackend === defaultNewStepBackend
-      ? (activeStep?.modelPreference ?? 'default')
-      : 'default';
+      ? (activeStep?.modelPreference ??
+        getDefaultModelForBackend({
+          backend: effectiveNewStepBackend,
+          backendDefaultModels,
+        }))
+      : getDefaultModelForBackend({
+          backend: effectiveNewStepBackend,
+          backendDefaultModels,
+        });
   const effectiveNewStepModel = newStepModelOverride ?? defaultNewStepModel;
   useEffect(() => {
     const hasResolvedModels =
@@ -115,7 +130,7 @@ function ReviewSubmitOverlayContent({
       hasResolvedModels &&
       !availableModels.some((model) => model.value === effectiveNewStepModel)
     ) {
-      setNewStepModelOverride('default');
+      startTransition(() => setNewStepModelOverride('default'));
     }
   }, [
     availableModels,

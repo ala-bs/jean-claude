@@ -18,6 +18,12 @@ describe('Content-Security-Policy', () => {
     expect(html).toContain("media-src 'self' blob:");
   });
 
+  it('allows local project logo images', () => {
+    const html = readFileSync(resolve(__dirname, '../../index.html'), 'utf8');
+
+    expect(html).toContain('jc-local-image:');
+  });
+
   it('uses bundled Monaco instead of the default CDN loader', () => {
     const editor = readFileSync(
       resolve(__dirname, '../common/ui/handlebars-editor/index.tsx'),

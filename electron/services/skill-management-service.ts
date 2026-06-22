@@ -2,7 +2,6 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 
-import type { AgentBackendType } from '@shared/agent-backend-types';
 import type {
   AgentSkillPathConfig,
   LegacySkillMigrationExecuteResult,
@@ -11,17 +10,21 @@ import type {
   ManagedSkill,
   SkillScope,
 } from '@shared/skill-types';
+import type { AgentBackendType } from '@shared/agent-backend-types';
 
-import { dbg } from '../lib/debug';
-import { isEnoent } from '../lib/fs';
+
 import {
   buildSkillMd,
   extractBody,
   parseFrontmatter,
 } from '../lib/skill-frontmatter';
+import { dbg } from '../lib/debug';
+import { isEnoent } from '../lib/fs';
 
-import { JC_BUILTIN_SKILLS_DIR } from './builtin-skills-service';
+
 import { getSourceProvenanceByInstalledPathMap } from './source-manifest-store';
+import { JC_BUILTIN_SKILLS_DIR } from './builtin-skills-service';
+
 
 // --- Jean-Claude canonical skill storage ---
 //
@@ -31,6 +34,7 @@ import { getSourceProvenanceByInstalledPathMap } from './source-manifest-store';
 // Backend-expected paths contain symlinks pointing to this canonical location:
 //   ~/.claude/skills/<skillName>  →  ~/.config/jean-claude/skills/user/<skillName>/
 //   ~/.config/opencode/skills/<skillName>  →  ~/.config/jean-claude/skills/user/<skillName>/
+//   ~/.codex/skills/<skillName>  →  ~/.config/jean-claude/skills/user/<skillName>/
 //
 // Enable  = create symlink in the backend's skills dir
 // Disable = remove the symlink (canonical stays in JC folder, skill is never lost)
@@ -72,6 +76,11 @@ const SKILL_PATH_CONFIGS: Record<AgentBackendType, AgentSkillPathConfig> = {
     userSkillsDir: path.join(os.homedir(), '.config', 'opencode', 'skills'),
     projectSkillsDir: '.opencode/skills',
     projectSkillsDirs: ['.opencode/skills', '.claude/skills', '.agents/skills'],
+  },
+  codex: {
+    userSkillsDir: path.join(os.homedir(), '.codex', 'skills'),
+    projectSkillsDir: '.codex/skills',
+    projectSkillsDirs: ['.codex/skills', '.agents/skills'],
   },
 };
 
@@ -495,7 +504,7 @@ export async function syncBuiltinSkillSymlinks(): Promise<void> {
 async function discoverJcManagedUserSkillsForBackend(
   backendType: AgentBackendType,
 ): Promise<ManagedSkill[]> {
-  const config = SKILL_PATH_CONFIGS[backendType];
+  const config = getSkillPathConfig(backendType);
   const skills: ManagedSkill[] = [];
 
   try {
@@ -550,7 +559,7 @@ async function discoverJcManagedUserSkillsForBackend(
 async function discoverLegacyUserSkills(
   backendType: AgentBackendType,
 ): Promise<ManagedSkill[]> {
-  const config = SKILL_PATH_CONFIGS[backendType];
+  const config = getSkillPathConfig(backendType);
   const skills: ManagedSkill[] = [];
   const seenSkillPaths = new Set<string>();
 
@@ -771,7 +780,7 @@ async function discoverLegacyMigrationCandidates({
     reason?: string;
   }>
 > {
-  const config = SKILL_PATH_CONFIGS[backendType];
+  const config = getSkillPathConfig(backendType);
   const candidates: Array<{
     backendType: AgentBackendType;
     name: string;
@@ -927,7 +936,7 @@ async function discoverSkillsForBackend({
   backendType: AgentBackendType;
   projectPath?: string;
 }): Promise<ManagedSkill[]> {
-  const config = SKILL_PATH_CONFIGS[backendType];
+  const config = getSkillPathConfig(backendType);
   const results: ManagedSkill[] = [];
 
   // JC-managed user skills: canonical in JC folder, symlinked to backend path
@@ -1050,21 +1059,20 @@ export async function getAllManagedSkillsUnified({
 }
 
 /**
- * Returns a preview of all legacy skills across both backends, classifying each
+ * Returns a preview of all legacy skills across all backends, classifying each
  * as migratable, conflicting, or invalid. No filesystem changes are made.
  */
 export async function previewLegacySkillMigration(): Promise<LegacySkillMigrationPreviewResult> {
-  const claudeCandidates = await discoverLegacyMigrationCandidates({
-    backendType: 'claude-code',
-  });
-  const opencodeCandidates = await discoverLegacyMigrationCandidates({
-    backendType: 'opencode',
-  });
+  const candidates = await Promise.all(
+    Object.keys(SKILL_PATH_CONFIGS).map((backendType) =>
+      discoverLegacyMigrationCandidates({
+        backendType: backendType as AgentBackendType,
+      }),
+    ),
+  );
 
   const items = await Promise.all(
-    [...claudeCandidates, ...opencodeCandidates].map((candidate) =>
-      createMigrationPreviewItem(candidate),
-    ),
+    candidates.flat().map((candidate) => createMigrationPreviewItem(candidate)),
   );
 
   return { items };
@@ -1236,7 +1244,7 @@ export async function createSkill({
   if (scope === 'project') {
     // Project skills live directly in the project directory — no JC canonical store
     const projectBackend = enabledBackendsList[0];
-    const config = SKILL_PATH_CONFIGS[projectBackend];
+    const config = getSkillPathConfig(projectBackend);
     if (!projectPath || !config.projectSkillsDir) {
       throw new Error('Project path required for project-scoped skills');
     }
@@ -1293,7 +1301,7 @@ export async function createSkill({
   const createdSymlinks: string[] = [];
   try {
     for (const backend of enabledBackendsList) {
-      const cfg = SKILL_PATH_CONFIGS[backend];
+      const cfg = getSkillPathConfig(backend);
       const symlinkPath = path.join(cfg.userSkillsDir, dirName);
       await fs.mkdir(cfg.userSkillsDir, { recursive: true });
       await fs.symlink(canonicalPath, symlinkPath);
@@ -1442,7 +1450,7 @@ export async function disableSkill({
   skillPath: string;
   backendType: AgentBackendType;
 }): Promise<void> {
-  const config = SKILL_PATH_CONFIGS[backendType];
+  const config = getSkillPathConfig(backendType);
   const symlinkPath = path.join(config.userSkillsDir, path.basename(skillPath));
 
   try {
@@ -1471,7 +1479,7 @@ export async function enableSkill({
   skillPath: string;
   backendType: AgentBackendType;
 }): Promise<void> {
-  const config = SKILL_PATH_CONFIGS[backendType];
+  const config = getSkillPathConfig(backendType);
   const symlinkPath = path.join(config.userSkillsDir, path.basename(skillPath));
 
   // Ensure the backend's skills directory exists

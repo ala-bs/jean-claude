@@ -1,4 +1,3 @@
-import clsx from 'clsx';
 import { Check, ChevronDown } from 'lucide-react';
 import React, {
   forwardRef,
@@ -9,23 +8,29 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 
+
+
+import { type ComponentSize, sizeClasses } from '@/common/ui/styles';
 import {
-  useRegisterKeyboardBindings,
   type KeyboardLayer,
+  useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
 import type { BindingKey } from '@/common/context/keyboard-bindings/types';
-import { useRegisterOverlay } from '@/common/context/overlay';
-import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
 import { Kbd } from '@/common/ui/kbd';
-import { sizeClasses, type ComponentSize } from '@/common/ui/styles';
+import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
+import { useRegisterOverlay } from '@/common/context/overlay';
+
+
 
 export interface SelectOption<T extends string> {
   value: T;
   label: string;
   description?: string;
   group?: string;
+  badge?: string;
 }
 
 export interface SelectRef {
@@ -265,7 +270,14 @@ export const Select = forwardRef<
           className,
         )}
       >
-        <span className="truncate">{selectedOption?.label}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate">{selectedOption?.label}</span>
+          {selectedOption?.badge && (
+            <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+              {selectedOption.badge}
+            </span>
+          )}
+        </span>
         {displayShortcut ? (
           <Kbd shortcut={displayShortcut} />
         ) : (
@@ -306,7 +318,7 @@ export const Select = forwardRef<
               return (
                 <React.Fragment key={option.value}>
                   {showGroupLabel && (
-                    <div className="text-ink-4 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[0.14em] uppercase first:pt-1">
+                    <div className="text-ink-4 bg-bg-1 sticky -top-1 z-10 px-3 pt-2 pb-1 text-[10px] font-semibold tracking-[0.14em] uppercase first:pt-1">
                       {option.group}
                     </div>
                   )}
@@ -332,15 +344,22 @@ export const Select = forwardRef<
                       {option.value === value && <Check className="h-3 w-3" />}
                     </span>
                     <div className="flex flex-col">
-                      <span
-                        className={clsx(
-                          s.text,
-                          option.value === value
-                            ? 'text-ink-1 font-medium'
-                            : 'text-ink-1',
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={clsx(
+                            s.text,
+                            option.value === value
+                              ? 'text-ink-1 font-medium'
+                              : 'text-ink-1',
+                          )}
+                        >
+                          {option.label}
+                        </span>
+                        {option.badge && (
+                          <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                            {option.badge}
+                          </span>
                         )}
-                      >
-                        {option.label}
                       </span>
                       {option.description && (
                         <span className="text-ink-3 text-xs">

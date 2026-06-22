@@ -1,29 +1,35 @@
 import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import type { MouseEvent } from 'react';
-import { useCallback, useMemo, useState } from 'react';
 
-import { formatModelName } from '@/hooks/use-model';
-import { extractImagesFromMarkdown } from '@/lib/markdown-images';
-import { formatNumber } from '@/lib/number';
+
 import { ensureUtc, formatDuration } from '@/lib/time';
 import type {
   NormalizedEntry,
   NormalizedToolUse,
   ToolUseByName,
 } from '@shared/normalized-message-v2';
+import { countUnifiedPatchStats } from '@/features/agent/ui-diff-view/diff-utils';
+import { extractImagesFromMarkdown } from '@/lib/markdown-images';
+import { formatModelName } from '@/hooks/use-model';
+import { formatNumber } from '@/lib/number';
 
-import { MarkdownContent } from '../../ui-markdown-content';
+
+
 import type { DisplayMessage, PromptGroup } from '../message-merger';
+import {
+  getLastActivitySummary,
+  getTodoProgress,
+  getToolActivitySummary,
+} from '../ui-subagent-entry/last-activity';
 import { CommentableWrapper } from '../ui-commentable-text-entry';
+import { MarkdownContent } from '../../ui-markdown-content';
 import { RunningTimer } from '../ui-running-timer';
 import { SkillEntry } from '../ui-skill-entry';
 import { SubagentEntry } from '../ui-subagent-entry';
-import {
-  getToolActivitySummary,
-  getLastActivitySummary,
-  getTodoProgress,
-} from '../ui-subagent-entry/last-activity';
 import { TimelineEntry } from '../ui-timeline-entry';
+
+
 
 import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 
@@ -31,6 +37,7 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 
 const PROMPT_MAX_CHARS = 300;
 const RECENT_RUNNING_MESSAGE_COUNT = 5;
+const EMPTY_DISPLAY_MESSAGES: DisplayMessage[] = [];
 
 type RunningActivityMessage =
   | {
@@ -316,7 +323,7 @@ function getRunningStartDate({
 // ── Sub-components ─────────────────────────────────────────────────────
 
 /** Prompt section — glass card, expand/collapse for long prompts only */
-function PromptSection({
+const PromptSection = memo(function PromptSection({
   group,
   onFilePathClick,
   onContextMenu,
@@ -405,7 +412,120 @@ function PromptSection({
       </div>
     </div>
   );
+}, arePromptSectionPropsEqual);
+
+function arePromptSectionPropsEqual(
+  prev: {
+    group: PromptGroup;
+    onFilePathClick?: (
+      filePath: string,
+      lineStart?: number,
+      lineEnd?: number,
+    ) => void;
+    onContextMenu?: (e: MouseEvent, entry: NormalizedEntry) => void;
+  },
+  next: {
+    group: PromptGroup;
+    onFilePathClick?: (
+      filePath: string,
+      lineStart?: number,
+      lineEnd?: number,
+    ) => void;
+    onContextMenu?: (e: MouseEvent, entry: NormalizedEntry) => void;
+  },
+): boolean {
+  return (
+    prev.group.promptEntry === next.group.promptEntry &&
+    prev.onFilePathClick === next.onFilePathClick &&
+    prev.onContextMenu === next.onContextMenu
+  );
 }
+
+const AgentHeader = memo(function AgentHeader({
+  detailsExpanded,
+  onToggleDetails,
+  onContextMenu,
+  isActiveGroup,
+  runningStartDate,
+  completedDurationLabel,
+  stepCount,
+  resultStats,
+}: {
+  detailsExpanded: boolean;
+  onToggleDetails: () => void;
+  onContextMenu?: (e: MouseEvent) => void;
+  isActiveGroup: boolean;
+  runningStartDate?: string;
+  completedDurationLabel: string | null;
+  stepCount: number;
+  resultStats?: string | null;
+}) {
+  return (
+    <div
+      className="text-ink-3 flex cursor-pointer items-center gap-2 px-3 py-1.5 font-mono text-[10.5px] tracking-wide uppercase select-none"
+      style={{
+        borderBottom: detailsExpanded
+          ? '1px solid oklch(1 0 0 / 0.06)'
+          : 'none',
+        background: 'oklch(1 0 0 / 0.02)',
+      }}
+      onClick={onToggleDetails}
+      onContextMenu={onContextMenu}
+    >
+      {detailsExpanded ? (
+        <ChevronDown className="h-2.5 w-2.5" />
+      ) : (
+        <ChevronRight className="h-2.5 w-2.5" />
+      )}
+
+      {isActiveGroup ? (
+        <>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="rg-pulse-glow bg-acc h-1.5 w-1.5 rounded-full"
+              style={{
+                boxShadow:
+                  '0 0 8px var(--color-acc), 0 0 14px color-mix(in oklch, var(--color-acc) 60%, transparent)',
+                animation: 'rg-pulse-glow 1.4s ease-in-out infinite',
+              }}
+            />
+            <span className="rg-running-text uppercase">
+              running
+              <span className="rg-running-dots">
+                <span>.</span>
+                <span>.</span>
+                <span>.</span>
+              </span>
+            </span>
+          </span>
+          <RunningTimer
+            startDate={runningStartDate}
+            className="text-ink-4 ml-1.5"
+          />
+        </>
+      ) : (
+        <>
+          {completedDurationLabel && (
+            <span className="text-ink-4 tracking-normal normal-case">
+              {completedDurationLabel}
+            </span>
+          )}
+          <span className="text-ink-2">{stepCount} steps</span>
+          {resultStats && (
+            <span className="text-ink-4 ml-1.5 tracking-normal normal-case">
+              {resultStats}
+            </span>
+          )}
+        </>
+      )}
+
+      <div className="flex-1" />
+      <span className="text-ink-4 tracking-normal normal-case">
+        {detailsExpanded ? 'hide timeline' : 'show timeline'}
+      </span>
+    </div>
+  );
+});
 
 /** Subagent card — shimmer sweep + pulse-ring indicator */
 function SubagentCard({
@@ -433,7 +553,7 @@ function SubagentCard({
     >
       {/* Shimmer sweep */}
       <div
-        className="pointer-events-none absolute inset-0"
+        className="rg-shimmer-sweep pointer-events-none absolute inset-0"
         style={{
           background: `linear-gradient(110deg,
             transparent 0%, transparent 40%,
@@ -450,7 +570,7 @@ function SubagentCard({
           style={{ opacity: 0.85, boxShadow: '0 0 8px var(--color-acc)' }}
         />
         <span
-          className="border-acc absolute inset-0 rounded-full border"
+          className="rg-pulse-ring border-acc absolute inset-0 rounded-full border"
           style={{ animation: 'rg-pulse-ring 1.8s ease-out infinite' }}
         />
       </div>
@@ -530,7 +650,7 @@ function TodoRow({
         )}
         {todo.current && !todo.done && (
           <span
-            className="bg-acc h-1.5 w-1.5 rounded-full"
+            className="rg-pulse-glow bg-acc h-1.5 w-1.5 rounded-full"
             style={{ animation: 'rg-pulse-glow 1.4s ease-in-out infinite' }}
           />
         )}
@@ -649,7 +769,7 @@ function RunningSummary({
               }}
             >
               <span
-                className="bg-acc h-1 w-1 rounded-full"
+                className="rg-pulse-glow bg-acc h-1 w-1 rounded-full"
                 style={{
                   animation: 'rg-pulse-glow 1.4s ease-in-out infinite',
                 }}
@@ -672,7 +792,7 @@ function RunningSummary({
             <span>tools</span>
             <span className="text-ink-3 inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-1.5 py-px text-[9.5px] font-semibold tracking-normal">
               <span
-                className="bg-acc h-1 w-1 rounded-full"
+                className="rg-pulse-glow bg-acc h-1 w-1 rounded-full"
                 style={{
                   animation: 'rg-pulse-glow 1.4s ease-in-out infinite',
                 }}
@@ -697,7 +817,7 @@ function RunningSummary({
       {/* Context compaction */}
       {activity.isCompacting && (
         <div className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500 shadow-[0_0_6px_theme(colors.amber.500/40)]" />
+          <span className="rg-pulse-glow h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500 shadow-[0_0_6px_theme(colors.amber.500/40)]" />
           <span className="text-ink-3 font-mono text-[10px] tracking-wider uppercase">
             compacting context…
           </span>
@@ -767,6 +887,161 @@ function RunningSummary({
   );
 }
 
+function getVisibleChildMessageCount(childMessages: DisplayMessage[]): number {
+  let count = 0;
+  for (const dm of childMessages) {
+    if (shouldRenderChildMessage(dm)) count++;
+  }
+  return count;
+}
+
+function getCompletedTodos(
+  childMessages: DisplayMessage[],
+): Array<{ text: string; done: boolean; current: boolean }> | null {
+  const allEntries: NormalizedEntry[] = [];
+  for (const dm of childMessages) {
+    if (dm.kind === 'entry') allEntries.push(dm.entry);
+    if (dm.kind === 'subagent') allEntries.push(...dm.childEntries);
+    if (dm.kind === 'skill') allEntries.push(...dm.childEntries);
+  }
+  const todoProgress = getTodoProgress(allEntries);
+  if (!todoProgress) return null;
+  const todos: Array<{ text: string; done: boolean; current: boolean }> = [];
+  for (let i = allEntries.length - 1; i >= 0; i--) {
+    const entry = allEntries[i];
+    if (entry.type !== 'tool-use' || entry.name !== 'todo-write') continue;
+    const todoEntry = entry as ToolUseByName<'todo-write'>;
+    const todoItems = todoEntry.result?.newTodos ?? todoEntry.input.todos;
+    if (todoItems && todoItems.length > 0) {
+      for (const t of todoItems) {
+        todos.push({
+          text: t.description ?? t.content,
+          done: t.status === 'completed',
+          current: t.status === 'in_progress',
+        });
+      }
+      break;
+    }
+  }
+  return todos.length > 0 ? todos : null;
+}
+
+type FileStats = {
+  fileCount: number;
+  added: number;
+  removed: number;
+};
+
+function isFileChangeToolEntry(entry: NormalizedEntry): boolean {
+  return (
+    entry.type === 'tool-use' &&
+    (entry.name === 'edit' || entry.name === 'write')
+  );
+}
+
+function getFileChangeToolEntries(
+  childMessages: DisplayMessage[],
+): NormalizedEntry[] {
+  const entries: NormalizedEntry[] = [];
+
+  function addEntry(entry: NormalizedEntry) {
+    if (isFileChangeToolEntry(entry)) entries.push(entry);
+  }
+
+  for (const dm of childMessages) {
+    if (dm.kind === 'entry') addEntry(dm.entry);
+    if (dm.kind === 'subagent') dm.childEntries.forEach(addEntry);
+    if (dm.kind === 'skill') dm.childEntries.forEach(addEntry);
+  }
+
+  return entries;
+}
+
+function getFileStats(fileChangeEntries: NormalizedEntry[]): FileStats | null {
+  const files = new Set<string>();
+  let added = 0;
+  let removed = 0;
+
+  function countLines(s: string): number {
+    if (!s) return 0;
+    return s.split('\n').length;
+  }
+
+  for (const entry of fileChangeEntries) {
+    if (entry.type !== 'tool-use') continue;
+    if (entry.name === 'edit') {
+      const e = entry as ToolUseByName<'edit'>;
+      const editFiles = e.input.files ?? [
+        {
+          filePath: e.input.filePath,
+          type: 'update' as const,
+          before: e.input.oldString,
+          after: e.input.newString,
+          additions: undefined,
+          deletions: undefined,
+        },
+      ];
+      for (const file of editFiles) {
+        files.add(file.filePath);
+        if (
+          typeof file.additions === 'number' ||
+          typeof file.deletions === 'number'
+        ) {
+          added += file.additions ?? 0;
+          removed += file.deletions ?? 0;
+          continue;
+        }
+        if (file.patch) {
+          const patchStats = countUnifiedPatchStats(file.patch);
+          if (patchStats) {
+            added += patchStats.additions;
+            removed += patchStats.deletions;
+            continue;
+          }
+        }
+        const oldLines = countLines(file.before ?? e.input.oldString);
+        const newLines = countLines(file.after ?? e.input.newString);
+        if (newLines > oldLines) added += newLines - oldLines;
+        else removed += oldLines - newLines;
+      }
+    } else if (entry.name === 'write') {
+      const w = entry as ToolUseByName<'write'>;
+      const writeFiles = w.input.files ?? [
+        {
+          filePath: w.input.filePath,
+          type: 'add' as const,
+          after: w.input.value,
+          additions: undefined,
+          deletions: undefined,
+        },
+      ];
+      for (const file of writeFiles) {
+        files.add(file.filePath);
+        if (
+          typeof file.additions === 'number' ||
+          typeof file.deletions === 'number'
+        ) {
+          added += file.additions ?? 0;
+          removed += file.deletions ?? 0;
+          continue;
+        }
+        if (file.patch) {
+          const patchStats = countUnifiedPatchStats(file.patch);
+          if (patchStats) {
+            added += patchStats.additions;
+            removed += patchStats.deletions;
+            continue;
+          }
+        }
+        added += countLines(file.after ?? w.input.value);
+      }
+    }
+  }
+
+  if (files.size === 0) return null;
+  return { fileCount: files.size, added, removed };
+}
+
 // ── Main component ─────────────────────────────────────────────────────
 
 /**
@@ -778,7 +1053,7 @@ function RunningSummary({
  *    - Completed: result block with ✓, stats, bullets
  *    - Error/Interrupted: starts expanded
  */
-export function PromptGroupEntry({
+export const PromptGroupEntry = memo(function PromptGroupEntry({
   group,
   isLast = false,
   isTaskRunning = false,
@@ -879,40 +1154,18 @@ export function PromptGroupEntry({
   }, [isActiveGroup, group.childMessages]);
 
   const visibleChildMessages = useMemo(
-    () => group.childMessages.filter(shouldRenderChildMessage),
-    [group.childMessages],
+    () =>
+      detailsExpanded
+        ? group.childMessages.filter(shouldRenderChildMessage)
+        : EMPTY_DISPLAY_MESSAGES,
+    [detailsExpanded, group.childMessages],
   );
 
   // Extract todos for collapsed non-running state
   const completedTodos = useMemo(() => {
-    if (isActiveGroup) return null;
-    const allEntries: NormalizedEntry[] = [];
-    for (const dm of group.childMessages) {
-      if (dm.kind === 'entry') allEntries.push(dm.entry);
-      if (dm.kind === 'subagent') allEntries.push(...dm.childEntries);
-      if (dm.kind === 'skill') allEntries.push(...dm.childEntries);
-    }
-    const todoProgress = getTodoProgress(allEntries);
-    if (!todoProgress) return null;
-    const todos: Array<{ text: string; done: boolean; current: boolean }> = [];
-    for (let i = allEntries.length - 1; i >= 0; i--) {
-      const entry = allEntries[i];
-      if (entry.type !== 'tool-use' || entry.name !== 'todo-write') continue;
-      const todoEntry = entry as ToolUseByName<'todo-write'>;
-      const todoItems = todoEntry.result?.newTodos ?? todoEntry.input.todos;
-      if (todoItems && todoItems.length > 0) {
-        for (const t of todoItems) {
-          todos.push({
-            text: t.description ?? t.content,
-            done: t.status === 'completed',
-            current: t.status === 'in_progress',
-          });
-        }
-        break;
-      }
-    }
-    return todos.length > 0 ? todos : null;
-  }, [isActiveGroup, group.childMessages]);
+    if (isActiveGroup || detailsExpanded) return null;
+    return getCompletedTodos(group.childMessages);
+  }, [detailsExpanded, isActiveGroup, group.childMessages]);
 
   const toggleDetails = useCallback(
     () =>
@@ -923,8 +1176,18 @@ export function PromptGroupEntry({
     [defaultDetailsExpanded],
   );
 
+  const handleAgentHeaderContextMenu = useCallback(
+    (e: MouseEvent) => {
+      onPromptContextMenu?.(e, group.promptEntry);
+    },
+    [onPromptContextMenu, group.promptEntry],
+  );
+
   // Compute step count for header
-  const stepCount = visibleChildMessages.length;
+  const stepCount = useMemo(
+    () => getVisibleChildMessageCount(group.childMessages),
+    [group.childMessages],
+  );
 
   const runningStartDate = useMemo(
     () =>
@@ -937,80 +1200,8 @@ export function PromptGroupEntry({
 
   // Compute file edit/write stats from child messages
   const fileStats = useMemo(() => {
-    const files = new Set<string>();
-    let added = 0;
-    let removed = 0;
-
-    function countLines(s: string): number {
-      if (!s) return 0;
-      return s.split('\n').length;
-    }
-
-    function processEntries(entries: NormalizedEntry[]) {
-      for (const entry of entries) {
-        if (entry.type !== 'tool-use') continue;
-        if (entry.name === 'edit') {
-          const e = entry as ToolUseByName<'edit'>;
-          const editFiles = e.input.files ?? [
-            {
-              filePath: e.input.filePath,
-              type: 'update' as const,
-              before: e.input.oldString,
-              after: e.input.newString,
-              additions: undefined,
-              deletions: undefined,
-            },
-          ];
-          for (const file of editFiles) {
-            files.add(file.filePath);
-            if (
-              typeof file.additions === 'number' ||
-              typeof file.deletions === 'number'
-            ) {
-              added += file.additions ?? 0;
-              removed += file.deletions ?? 0;
-              continue;
-            }
-            const oldLines = countLines(file.before ?? e.input.oldString);
-            const newLines = countLines(file.after ?? e.input.newString);
-            if (newLines > oldLines) added += newLines - oldLines;
-            else removed += oldLines - newLines;
-          }
-        } else if (entry.name === 'write') {
-          const w = entry as ToolUseByName<'write'>;
-          const writeFiles = w.input.files ?? [
-            {
-              filePath: w.input.filePath,
-              type: 'add' as const,
-              after: w.input.value,
-              additions: undefined,
-              deletions: undefined,
-            },
-          ];
-          for (const file of writeFiles) {
-            files.add(file.filePath);
-            if (
-              typeof file.additions === 'number' ||
-              typeof file.deletions === 'number'
-            ) {
-              added += file.additions ?? 0;
-              removed += file.deletions ?? 0;
-              continue;
-            }
-            added += countLines(file.after ?? w.input.value);
-          }
-        }
-      }
-    }
-
-    for (const dm of group.childMessages) {
-      if (dm.kind === 'entry') processEntries([dm.entry]);
-      if (dm.kind === 'subagent') processEntries(dm.childEntries);
-      if (dm.kind === 'skill') processEntries(dm.childEntries);
-    }
-
-    if (files.size === 0) return null;
-    return { fileCount: files.size, added, removed };
+    const fileChangeEntries = getFileChangeToolEntries(group.childMessages);
+    return getFileStats(fileChangeEntries);
   }, [group.childMessages]);
 
   return (
@@ -1061,73 +1252,18 @@ export function PromptGroupEntry({
           }}
         >
           {/* Header bar */}
-          <div
-            className="text-ink-3 flex cursor-pointer items-center gap-2 px-3 py-1.5 font-mono text-[10.5px] tracking-wide uppercase select-none"
-            style={{
-              borderBottom: detailsExpanded
-                ? '1px solid oklch(1 0 0 / 0.06)'
-                : 'none',
-              background: 'oklch(1 0 0 / 0.02)',
-            }}
-            onClick={toggleDetails}
+          <AgentHeader
+            detailsExpanded={detailsExpanded}
+            onToggleDetails={toggleDetails}
             onContextMenu={
-              onPromptContextMenu
-                ? (e) => onPromptContextMenu(e, group.promptEntry)
-                : undefined
+              onPromptContextMenu ? handleAgentHeaderContextMenu : undefined
             }
-          >
-            {detailsExpanded ? (
-              <ChevronDown className="h-2.5 w-2.5" />
-            ) : (
-              <ChevronRight className="h-2.5 w-2.5" />
-            )}
-
-            {isActiveGroup ? (
-              <>
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className="bg-acc h-1.5 w-1.5 rounded-full"
-                    style={{
-                      boxShadow:
-                        '0 0 8px var(--color-acc), 0 0 14px color-mix(in oklch, var(--color-acc) 60%, transparent)',
-                      animation: 'rg-pulse-glow 1.4s ease-in-out infinite',
-                    }}
-                  />
-                  <span className="rg-running-text uppercase">
-                    running
-                    <span className="rg-running-dots">
-                      <span>.</span>
-                      <span>.</span>
-                      <span>.</span>
-                    </span>
-                  </span>
-                </span>
-                <RunningTimer
-                  startDate={runningStartDate}
-                  className="text-ink-4 ml-1.5"
-                />
-              </>
-            ) : (
-              <>
-                {completedDurationLabel && (
-                  <span className="text-ink-4 tracking-normal normal-case">
-                    {completedDurationLabel}
-                  </span>
-                )}
-                <span className="text-ink-2">{stepCount} steps</span>
-                {resultSummary?.stats && (
-                  <span className="text-ink-4 ml-1.5 tracking-normal normal-case">
-                    {resultSummary.stats}
-                  </span>
-                )}
-              </>
-            )}
-
-            <div className="flex-1" />
-            <span className="text-ink-4 tracking-normal normal-case">
-              {detailsExpanded ? 'hide timeline' : 'show timeline'}
-            </span>
-          </div>
+            isActiveGroup={isActiveGroup}
+            runningStartDate={runningStartDate}
+            completedDurationLabel={completedDurationLabel}
+            stepCount={stepCount}
+            resultStats={resultSummary?.stats}
+          />
 
           {/* Body */}
           <div className="px-3.5 py-2.5">
@@ -1310,4 +1446,4 @@ export function PromptGroupEntry({
       )}
     </div>
   );
-}
+});

@@ -1,12 +1,15 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { startTransition, useEffect, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
+
+
+import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
 import { Switch } from '@/common/ui/switch';
 import { useCompletionSetting } from '@/hooks/use-settings';
-import { api } from '@/lib/api';
+
 
 export function AutocompleteSettings() {
   const { data: setting, isLoading } = useCompletionSetting();
@@ -26,12 +29,12 @@ export function AutocompleteSettings() {
   // Sync local state from loaded setting
   useEffect(() => {
     if (setting) {
-      setEnabled(setting.enabled);
-      setModel(setting.model || 'codestral-latest');
-      setServerUrl(setting.serverUrl);
+      startTransition(() => setEnabled(setting.enabled));
+      startTransition(() => setModel(setting.model || 'codestral-latest'));
+      startTransition(() => setServerUrl(setting.serverUrl));
       // Don't set apiKey — it's encrypted, show placeholder instead
-      setHasApiKey(!!setting.apiKey);
-      setApiKey('');
+      startTransition(() => setHasApiKey(!!setting.apiKey));
+      startTransition(() => setApiKey(''));
     }
   }, [setting]);
 
@@ -95,18 +98,8 @@ export function AutocompleteSettings() {
 
   return (
     <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Autocomplete</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Inline ghost text completions powered by Mistral Codestral FIM
-        (Fill-in-the-Middle). Press{' '}
-        <kbd className="bg-glass-medium text-ink-1 rounded px-1 py-0.5 text-xs">
-          Tab
-        </kbd>{' '}
-        to accept a suggestion.
-      </p>
-
       {/* Setup guide */}
-      <div className="border-glass-border bg-bg-1/50 mt-4 max-w-lg rounded-lg border px-4 py-3">
+      <div className="border-glass-border bg-bg-1/50 max-w-lg rounded-lg border px-4 py-3">
         <p className="text-ink-1 text-sm font-medium">Getting started</p>
         <ol className="text-ink-2 mt-2 list-inside list-decimal space-y-1 text-sm">
           <li>

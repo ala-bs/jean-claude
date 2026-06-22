@@ -6,6 +6,9 @@ export interface UpcomingMeeting {
   endAt: string;
   location: string;
   calendarName: string;
+  /** Event organizer / invite sender, when Calendar exposes it */
+  organizer?: string;
+  organizerEmail?: string;
   notes: string;
   url: string;
   /** Attendee initials (optional, not all backends provide this) */

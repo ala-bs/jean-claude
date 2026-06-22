@@ -10,7 +10,9 @@ const SOURCE_ORDER: Record<FeedItem['source'], number> = {
 const bySourceThenTimestamp = (a: FeedItem, b: FeedItem) => {
   const so = SOURCE_ORDER[a.source] - SOURCE_ORDER[b.source];
   if (so !== 0) return so;
-  return b.timestamp < a.timestamp ? -1 : b.timestamp > a.timestamp ? 1 : 0;
+  const aTimestamp = getFeedItemActivityTimestamp(a);
+  const bTimestamp = getFeedItemActivityTimestamp(b);
+  return bTimestamp < aTimestamp ? -1 : bTimestamp > aTimestamp ? 1 : 0;
 };
 
 const PRIORITY_ORDER: Record<FeedItem['projectPriority'], number> = {
@@ -19,20 +21,42 @@ const PRIORITY_ORDER: Record<FeedItem['projectPriority'], number> = {
   low: 2,
 };
 
+function getFeedItemActivityTimestamp(item: FeedItem): string {
+  if (item.source !== 'task' || !item.children?.length) {
+    return item.timestamp;
+  }
+
+  return item.children.reduce(
+    (latest, child) => (child.timestamp > latest ? child.timestamp : latest),
+    item.timestamp,
+  );
+}
+
+export function getFeedPullRequestIdentityKey(item: FeedItem) {
+  if (item.pullRequestId == null) {
+    return null;
+  }
+
+  if (item.pullRequestProviderId && item.pullRequestRepoId) {
+    return `${item.pullRequestProviderId}:${item.pullRequestRepoId}:${item.pullRequestId}`;
+  }
+
+  return `${item.projectId}:${item.pullRequestId}`;
+}
+
 const byManualLowPriorityThenProjectPriority = ({
   lowPriorityIds,
   prProjectOrder,
+  getProjectPriority,
 }: {
   lowPriorityIds: Set<string>;
   prProjectOrder: Map<string, number>;
+  getProjectPriority: (item: FeedItem) => FeedItem['projectPriority'];
 }) => {
   return (a: FeedItem, b: FeedItem) => {
     const manualLow =
       Number(lowPriorityIds.has(a.id)) - Number(lowPriorityIds.has(b.id));
     if (manualLow !== 0) return manualLow;
-
-    const draftLow = Number(Boolean(a.isDraft)) - Number(Boolean(b.isDraft));
-    if (draftLow !== 0) return draftLow;
 
     const aProjectOrder = prProjectOrder.get(a.projectId);
     const bProjectOrder = prProjectOrder.get(b.projectId);
@@ -43,11 +67,14 @@ const byManualLowPriorityThenProjectPriority = ({
       if (projectOrder !== 0) return projectOrder;
     }
 
-    const priority =
-      PRIORITY_ORDER[a.projectPriority] - PRIORITY_ORDER[b.projectPriority];
+    const aPriority = getProjectPriority(a);
+    const bPriority = getProjectPriority(b);
+    const priority = PRIORITY_ORDER[aPriority] - PRIORITY_ORDER[bPriority];
     if (priority !== 0) return priority;
 
-    return b.timestamp < a.timestamp ? -1 : b.timestamp > a.timestamp ? 1 : 0;
+    const aTimestamp = getFeedItemActivityTimestamp(a);
+    const bTimestamp = getFeedItemActivityTimestamp(b);
+    return bTimestamp < aTimestamp ? -1 : bTimestamp > aTimestamp ? 1 : 0;
   };
 };
 
@@ -71,8 +98,10 @@ export function partitionFeedItems({
   pinnedIds,
   dismissedIds,
   lowPriorityIds,
-  taskOwnedPrIds,
+  taskOwnedPrIds = new Set(),
+  taskOwnedPrKeys = new Set(),
   prProjectOrder = [],
+  getProjectPriority = (item) => item.projectPriority,
 }: {
   visibleFeedItems: FeedItem[];
   hiddenProjectIdSet: Set<string>;
@@ -80,8 +109,10 @@ export function partitionFeedItems({
   pinnedIds: Set<string>;
   dismissedIds: Set<string>;
   lowPriorityIds: Set<string>;
-  taskOwnedPrIds: Set<number>;
+  taskOwnedPrIds?: Set<number>;
+  taskOwnedPrKeys?: Set<string>;
   prProjectOrder?: string[];
+  getProjectPriority?: (item: FeedItem) => FeedItem['projectPriority'];
 }) {
   const items = visibleFeedItems.filter(
     (item) => !hiddenProjectIdSet.has(item.projectId),
@@ -99,7 +130,8 @@ export function partitionFeedItems({
     if (
       item.source === 'pull-request' &&
       item.pullRequestId != null &&
-      taskOwnedPrIds.has(item.pullRequestId)
+      (taskOwnedPrIds.has(item.pullRequestId) ||
+        taskOwnedPrKeys.has(getFeedPullRequestIdentityKey(item) ?? ''))
     ) {
       continue;
     }
@@ -118,7 +150,8 @@ export function partitionFeedItems({
     if (
       item.source === 'pull-request' &&
       item.pullRequestId != null &&
-      taskOwnedPrIds.has(item.pullRequestId)
+      (taskOwnedPrIds.has(item.pullRequestId) ||
+        taskOwnedPrKeys.has(getFeedPullRequestIdentityKey(item) ?? ''))
     ) {
       continue;
     }
@@ -145,9 +178,9 @@ export function partitionFeedItems({
       prReviews.push(item);
     } else if (lowPriorityIds.has(item.id)) {
       low.push(item);
-    } else if (item.projectPriority === 'low') {
+    } else if (getProjectPriority(item) === 'low') {
       low.push(item);
-    } else if (item.projectPriority === 'high') {
+    } else if (getProjectPriority(item) === 'high') {
       high.push(item);
     } else {
       rest.push(item);
@@ -161,6 +194,7 @@ export function partitionFeedItems({
       prProjectOrder: new Map(
         prProjectOrder.map((projectId, index) => [projectId, index]),
       ),
+      getProjectPriority,
     }),
   );
   activeTasks.sort(bySourceThenTimestamp);

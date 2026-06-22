@@ -8,11 +8,12 @@
  * Recursion is guarded by the JC_MCP_DEPTH environment variable (max depth 3).
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createOpencode } from '@opencode-ai/sdk/v2';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+
 
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { ThinkingEffort } from '@shared/types';
@@ -30,6 +31,11 @@ const THINKING_EFFORT_ENUM = z.enum([
 ]);
 
 function getMcpWorkingDirectory(): string {
+  const workdirArgIndex = process.argv.indexOf('--workdir');
+  const workdirArg =
+    workdirArgIndex >= 0 ? process.argv[workdirArgIndex + 1]?.trim() : '';
+  if (workdirArg) return workdirArg;
+
   const configured = process.env.JC_MCP_WORKDIR?.trim();
   if (configured) return configured;
   return process.cwd();
@@ -50,7 +56,11 @@ function getCurrentDepth(): number {
  * Strips NODE_ENV to avoid interfering with tools like vitest.
  */
 function buildSubAgentEnv(currentDepth: number): Record<string, string> {
-  const { NODE_ENV: _nodeEnv, ...rest } = process.env;
+  const {
+    NODE_ENV: _nodeEnv,
+    OPENCODE_CONFIG_CONTENT: _opencodeConfig,
+    ...rest
+  } = process.env;
   return {
     ...(rest as Record<string, string>),
     JC_MCP_DEPTH: String(currentDepth + 1),

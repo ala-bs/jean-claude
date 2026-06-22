@@ -1,5 +1,8 @@
+import { memo, type MouseEvent, useMemo } from 'react';
 import Anser from 'anser';
-import { memo, useMemo } from 'react';
+
+
+import { splitLogTextLinks } from './utils-log-links';
 
 /**
  * ANSI color class → CSS color value.
@@ -61,6 +64,34 @@ export const AnsiLine = memo(function AnsiLine({ line }: { line: string }) {
 
   if (!segments || segments.length === 0) return <> </>;
 
+  const renderTextWithLinks = (content: string, keyPrefix: string) =>
+    splitLogTextLinks(content).map((part, index) => {
+      if (part.type === 'text') {
+        return <span key={`${keyPrefix}-text-${index}`}>{part.text}</span>;
+      }
+
+      const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+        event.preventDefault();
+
+        if (!event.metaKey && !event.ctrlKey) return;
+
+        event.stopPropagation();
+        window.open(part.url, '_blank', 'noopener,noreferrer');
+      };
+
+      return (
+        <a
+          key={`${keyPrefix}-link-${index}`}
+          href={part.url}
+          onClick={handleClick}
+          className="underline decoration-current/45 underline-offset-2 hover:decoration-current"
+          title="Cmd-click to open"
+        >
+          {part.text}
+        </a>
+      );
+    });
+
   return (
     <>
       {segments.map((segment, i) => {
@@ -112,12 +143,12 @@ export const AnsiLine = memo(function AnsiLine({ line }: { line: string }) {
 
         // If no styling, render plain text (avoids extra DOM nodes)
         if (Object.keys(style).length === 0) {
-          return <span key={i}>{content}</span>;
+          return <span key={i}>{renderTextWithLinks(content, String(i))}</span>;
         }
 
         return (
           <span key={i} style={style}>
-            {content}
+            {renderTextWithLinks(content, String(i))}
           </span>
         );
       })}

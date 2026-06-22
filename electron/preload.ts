@@ -1,25 +1,33 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
-import { AGENT_CHANNELS } from '@shared/agent-types';
-import type { DebugLogEntry } from '@shared/debug-log-types';
-import type {
-  GlobalPrompt,
-  GlobalPromptResponse,
-} from '@shared/global-prompt-types';
-import type {
-  AppNotification,
-  TaskNotificationTarget,
-} from '@shared/notification-types';
-import type {
-  GetYamlParametersIpcParams,
-  QueueBuildIpcParams,
-} from '@shared/pipeline-types';
 import type {
   AddGitHubSourceParams,
   InstallSourceItemsParams,
   UpdateSourceInstallParams,
 } from '@shared/source-management-types';
+import type {
+  AppNotification,
+  TaskNotificationTarget,
+} from '@shared/notification-types';
+import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
+import type {
+  GetYamlParametersIpcParams,
+  QueueBuildIpcParams,
+} from '@shared/pipeline-types';
+import type {
+  GlobalPrompt,
+  GlobalPromptResponse,
+} from '@shared/global-prompt-types';
+import type {
+  NewWorkActivityEvent,
+  WorkActivityWeekParams,
+} from '@shared/work-activity-types';
+import { AGENT_CHANNELS } from '@shared/agent-types';
+import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
+import type { DebugLogEntry } from '@shared/debug-log-types';
+
+
 
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
@@ -31,6 +39,15 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('windowState:fullscreen-changed', handler);
       return () =>
         ipcRenderer.removeListener('windowState:fullscreen-changed', handler);
+    },
+  },
+  cache: {
+    setSubscriptions: (update: CacheSubscriptionUpdate) =>
+      ipcRenderer.invoke('cache:setSubscriptions', update),
+    onEvent: (callback: (event: CacheEvent) => void) => {
+      const handler = (_: unknown, event: CacheEvent) => callback(event);
+      ipcRenderer.on('cache:event', handler);
+      return () => ipcRenderer.removeListener('cache:event', handler);
     },
   },
   projects: {
@@ -292,6 +309,11 @@ contextBridge.exposeInMainWorld('api', {
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
     getWorkItemById: (params: { providerId: string; workItemId: number }) =>
       ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    getWorkItemStates: (params: {
+      providerId: string;
+      projectName: string;
+      workItemType: string;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemStates', params),
     updateWorkItemState: (params: {
       providerId: string;
       workItemId: number;
@@ -307,6 +329,11 @@ contextBridge.exposeInMainWorld('api', {
       projectName: string;
       workItemId: number;
     }) => ipcRenderer.invoke('azureDevOps:getWorkItemComments', params),
+    getWorkItemHistory: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemHistory', params),
     addWorkItemComment: (params: {
       providerId: string;
       projectName: string;
@@ -379,6 +406,20 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:getPullRequestChanges', params),
+    getCommitChanges: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+    }) => ipcRenderer.invoke('azureDevOps:getCommitChanges', params),
+    getFileContentAtCommit: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+      filePath: string;
+      version: 'current' | 'parent';
+    }) => ipcRenderer.invoke('azureDevOps:getFileContentAtCommit', params),
     getPullRequestFileContent: (params: {
       providerId: string;
       projectId: string;
@@ -447,6 +488,23 @@ contextBridge.exposeInMainWorld('api', {
       commentId: number;
       content: string;
     }) => ipcRenderer.invoke('azureDevOps:updateThreadComment', params),
+    deleteThreadComment: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      threadId: number;
+      commentId: number;
+    }) => ipcRenderer.invoke('azureDevOps:deleteThreadComment', params),
+    setThreadCommentLike: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      threadId: number;
+      commentId: number;
+      liked: boolean;
+    }) => ipcRenderer.invoke('azureDevOps:setThreadCommentLike', params),
     updateThreadStatus: (params: {
       providerId: string;
       projectId: string;
@@ -490,6 +548,7 @@ contextBridge.exposeInMainWorld('api', {
         deleteSourceBranch: boolean;
         transitionWorkItems: boolean;
         mergeCommitMessage?: string;
+        autoCompleteIgnoreConfigIds?: number[];
       };
     }) => ipcRenderer.invoke('azureDevOps:setPullRequestAutoComplete', params),
     publishPullRequest: (params: {
@@ -502,6 +561,7 @@ contextBridge.exposeInMainWorld('api', {
   dialog: {
     openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),
     openImageFile: () => ipcRenderer.invoke('dialog:openImageFile'),
+    openFiles: () => ipcRenderer.invoke('dialog:openFiles'),
     openApplication: () => ipcRenderer.invoke('dialog:openApplication'),
   },
   settings: {
@@ -604,8 +664,12 @@ contextBridge.exposeInMainWorld('api', {
     readPackageJson: (dirPath: string) =>
       ipcRenderer.invoke('fs:readPackageJson', dirPath),
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
+    getFileSize: (filePath: string) =>
+      ipcRenderer.invoke('fs:getFileSize', filePath),
     readImageAsDataUrl: (filePath: string) =>
       ipcRenderer.invoke('fs:readImageAsDataUrl', filePath),
+    getImageUrl: (filePath: string) =>
+      ipcRenderer.invoke('fs:getImageUrl', filePath),
     listDirectory: (dirPath: string, projectRoot: string) =>
       ipcRenderer.invoke('fs:listDirectory', dirPath, projectRoot),
     listProjectFiles: (projectRoot: string) =>
@@ -630,6 +694,8 @@ contextBridge.exposeInMainWorld('api', {
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) =>
       ipcRenderer.invoke('shell:openInEditor', dirPath, folderContext),
+    openTeamsJoinUrl: (url: string) =>
+      ipcRenderer.invoke('shell:openTeamsJoinUrl', url),
     getAvailableEditors: () => ipcRenderer.invoke('shell:getAvailableEditors'),
     setupGlobalGitignore: () =>
       ipcRenderer.invoke('shell:setupGlobalGitignore') as Promise<{
@@ -649,6 +715,13 @@ contextBridge.exposeInMainWorld('api', {
     revealMeeting: (
       meeting: import('@shared/calendar-types').UpcomingMeeting,
     ) => ipcRenderer.invoke('calendar:revealMeeting', meeting) as Promise<void>,
+    suppressMeetingStartPopup: (
+      meeting: import('@shared/calendar-types').UpcomingMeeting,
+    ) =>
+      ipcRenderer.invoke(
+        'calendar:suppressMeetingStartPopup',
+        meeting,
+      ) as Promise<void>,
     setIgnoredMeetingIds: (ids: string[]) =>
       ipcRenderer.invoke('calendar:setIgnoredMeetingIds', ids) as Promise<void>,
   },
@@ -684,6 +757,9 @@ contextBridge.exposeInMainWorld('api', {
         taskId,
         stepId,
       ),
+    getResourceSnapshots: () =>
+      ipcRenderer.invoke('agent:resources:getSnapshots'),
+    getResourceHistory: () => ipcRenderer.invoke('agent:resources:getHistory'),
     compactRawMessages: (taskId: string) =>
       ipcRenderer.invoke(AGENT_CHANNELS.COMPACT_RAW_MESSAGES, taskId),
     reprocessNormalization: (taskId: string) =>
@@ -717,6 +793,45 @@ contextBridge.exposeInMainWorld('api', {
       since: string;
       until?: string;
     }) => ipcRenderer.invoke('agent:usage:getHistory', params),
+    getDashboard: (params: AiUsageDashboardParams) =>
+      ipcRenderer.invoke('agent:usage:getDashboard', params),
+    getTaskUsage: (taskId: string) =>
+      ipcRenderer.invoke('agent:usage:getTaskUsage', taskId),
+  },
+  workActivity: {
+    record: (event: NewWorkActivityEvent) =>
+      ipcRenderer.invoke('workActivity:record', event),
+    getRange: (params: WorkActivityWeekParams) =>
+      ipcRenderer.invoke('workActivity:getRange', params),
+    deleteBefore: (before: string) =>
+      ipcRenderer.invoke('workActivity:deleteBefore', before),
+    deleteAll: () => ipcRenderer.invoke('workActivity:deleteAll'),
+  },
+  rateLimitSwap: {
+    getStatus: () =>
+      ipcRenderer.invoke('rate-limit-swap:status') as Promise<{
+        active: boolean;
+        swaps: Array<{ from: string; to: string }>;
+      }>,
+    resolve: (
+      backend: import('@shared/agent-backend-types').AgentBackendType,
+    ) =>
+      ipcRenderer.invoke('rate-limit-swap:resolve', backend) as Promise<{
+        backend: import('@shared/agent-backend-types').AgentBackendType;
+        model?: string;
+        thinkingEffort?: import('@shared/types').ThinkingEffort;
+        swapped: boolean;
+      }>,
+  },
+  usageDisplay: {
+    saveSettings: (value: import('@shared/types').UsageDisplaySetting) =>
+      ipcRenderer.invoke('usageDisplay:saveSettings', value),
+  },
+  copilotAuth: {
+    requestDeviceCode: () =>
+      ipcRenderer.invoke('copilotAuth:requestDeviceCode'),
+    completeDeviceLogin: (deviceCode: unknown) =>
+      ipcRenderer.invoke('copilotAuth:completeDeviceLogin', deviceCode),
   },
   projectCommands: {
     findByProjectId: (projectId: string) =>
@@ -780,6 +895,11 @@ contextBridge.exposeInMainWorld('api', {
       runCommandId: string;
       input: string;
     }) => ipcRenderer.invoke('project:commands:run:sendInput', params),
+    resetLogs: (params: {
+      taskId: string;
+      runCommandId: string;
+      generation: number;
+    }) => ipcRenderer.invoke('project:commands:run:resetLogs', params),
     sendSignal: (params: {
       taskId: string;
       runCommandId: string;
@@ -813,7 +933,8 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         runCommandId: string,
         stream: 'stdout' | 'stderr',
-        line: string,
+        text: string,
+        generation: number,
       ) => void,
     ) => {
       const handler = (
@@ -821,11 +942,29 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         runCommandId: string,
         stream: 'stdout' | 'stderr',
-        line: string,
-      ) => callback(taskId, runCommandId, stream, line);
+        text: string,
+        generation: number,
+      ) => callback(taskId, runCommandId, stream, text, generation);
       ipcRenderer.on('project:commands:run:log', handler);
       return () =>
         ipcRenderer.removeListener('project:commands:run:log', handler);
+    },
+    onLogsReset: (
+      callback: (
+        taskId: string,
+        runCommandId: string,
+        generation: number,
+      ) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        taskId: string,
+        runCommandId: string,
+        generation: number,
+      ) => callback(taskId, runCommandId, generation);
+      ipcRenderer.on('project:commands:run:logsReset', handler);
+      return () =>
+        ipcRenderer.removeListener('project:commands:run:logsReset', handler);
     },
   },
   globalPrompt: {
@@ -1197,6 +1336,13 @@ contextBridge.exposeInMainWorld('api', {
   codeFolding: {
     getFoldRanges: (content: string, language: string) =>
       ipcRenderer.invoke('codeFolding:getFoldRanges', content, language),
+  },
+  onRateLimitSwap: (callback: (data: { from: string; to: string }) => void) => {
+    const handler = (_: unknown, data: { from: string; to: string }) =>
+      callback(data);
+    ipcRenderer.on('rate-limit-swap:triggered', handler);
+    return () =>
+      ipcRenderer.removeListener('rate-limit-swap:triggered', handler);
   },
 });
 console.log('Preload script loaded');

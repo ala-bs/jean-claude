@@ -1,5 +1,6 @@
-import type { TodoItem } from './agent-types';
 import type { InteractionMode } from './types';
+import type { TodoItem } from './agent-types';
+
 export type NormalizedEntry = {
   id: string;
   date: string;
@@ -28,6 +29,7 @@ export type NormalizedEntryBody =
       cost?: number;
       apiCost?: number;
       usage?: TokenUsage;
+      contextUsage?: TokenUsage;
     }
   | NormalizedToolUse;
 
@@ -238,14 +240,18 @@ export interface TokenUsage {
   outputTokens: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
 }
 
 export interface NormalizedResult {
   text?: string;
   isError: boolean;
+  model?: string;
   cost?: CostInfo;
   durationMs?: number;
   usage?: TokenUsage;
+  contextUsage?: TokenUsage;
 }
 
 export interface NormalizedPermissionRequest {

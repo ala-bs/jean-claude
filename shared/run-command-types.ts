@@ -2,12 +2,49 @@
 
 export type CommandStatus = 'running' | 'stopped' | 'errored';
 
+export type RunCommandEnvSource =
+  | 'taskName'
+  | 'projectName'
+  | 'availablePort'
+  | 'worktreePath'
+  | 'projectPath'
+  | 'taskBranch'
+  | 'sourceBranch'
+  | 'defaultBranch'
+  | 'prId'
+  | 'prUrl'
+  | 'custom';
+
+export interface RunCommandEnvVar {
+  source: RunCommandEnvSource;
+  name: string;
+  value?: string;
+}
+
+export const RUN_COMMAND_ENV_SOURCES: Array<{
+  key: RunCommandEnvSource;
+  label: string;
+}> = [
+  { key: 'taskName', label: 'Task name' },
+  { key: 'projectName', label: 'Project name' },
+  { key: 'worktreePath', label: 'Worktree path' },
+  { key: 'projectPath', label: 'Project path' },
+  { key: 'taskBranch', label: 'Task branch' },
+  { key: 'sourceBranch', label: 'Source branch' },
+  { key: 'defaultBranch', label: 'Default branch' },
+  { key: 'prId', label: 'PR ID' },
+  { key: 'prUrl', label: 'PR URL' },
+  { key: 'availablePort', label: 'Available port' },
+  { key: 'custom', label: 'Custom value' },
+];
+
 export interface ProjectCommand {
   id: string;
   projectId: string;
   name: string | null;
   command: string;
   ports: number[];
+  envVars: RunCommandEnvVar[];
   confirmBeforeRun: boolean;
   confirmMessage: string | null;
   sortOrder: number;
@@ -21,7 +58,12 @@ export type NewProjectCommand = Omit<
 export type UpdateProjectCommand = Partial<
   Pick<
     ProjectCommand,
-    'name' | 'command' | 'ports' | 'confirmBeforeRun' | 'confirmMessage'
+    | 'name'
+    | 'command'
+    | 'ports'
+    | 'envVars'
+    | 'confirmBeforeRun'
+    | 'confirmMessage'
   >
 >;
 
@@ -66,7 +108,8 @@ export interface RunCommandLogEvent {
   taskId: string;
   runCommandId: string;
   stream: RunCommandLogStream;
-  line: string;
+  text: string;
+  generation: number;
 }
 
 export interface PortInUse {

@@ -1,10 +1,13 @@
-import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { scan } from 'react-scan';
+import { StrictMode } from 'react';
+
 
 import App from './app';
 
 import './index.css';
+
+document.documentElement.dataset.reduceMotion = 'true';
 
 function getInitialReactScanEnabled(): boolean {
   try {

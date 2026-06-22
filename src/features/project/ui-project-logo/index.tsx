@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
+import { useQuery } from '@tanstack/react-query';
+
 
 import { api } from '@/lib/api';
 import type { Project } from '@shared/types';
@@ -13,9 +14,9 @@ export function ProjectLogo({
   size?: 'xs' | 'sm' | 'md' | 'lg';
   className?: string;
 }) {
-  const { data: logoDataUrl } = useQuery({
+  const { data: logoUrl } = useQuery({
     queryKey: ['project-logo', project.logoPath],
-    queryFn: () => api.fs.readImageAsDataUrl(project.logoPath ?? ''),
+    queryFn: () => api.fs.getImageUrl(project.logoPath ?? ''),
     enabled: !!project.logoPath,
     staleTime: Infinity,
   });
@@ -29,10 +30,10 @@ export function ProjectLogo({
           ? 'h-16 w-16'
           : 'h-9 w-9';
 
-  if (logoDataUrl) {
+  if (logoUrl) {
     return (
       <img
-        src={logoDataUrl}
+        src={logoUrl}
         alt={`${project.name} logo`}
         className={clsx(
           sizeClass,
@@ -69,14 +70,14 @@ export function ProjectLogoBackground({
   size?: 'sm' | 'md';
   fixedHeight?: boolean;
 }) {
-  const { data: logoDataUrl } = useQuery({
+  const { data: logoUrl } = useQuery({
     queryKey: ['project-logo', project.logoPath],
-    queryFn: () => api.fs.readImageAsDataUrl(project.logoPath ?? ''),
+    queryFn: () => api.fs.getImageUrl(project.logoPath ?? ''),
     enabled: !!project.logoPath,
     staleTime: Infinity,
   });
 
-  if (!logoDataUrl && !showColorFallback) return null;
+  if (!logoUrl && !showColorFallback) return null;
 
   const maskGradient =
     size === 'sm'
@@ -100,7 +101,7 @@ export function ProjectLogoBackground({
       ? 'top-0 h-14 w-14 translate-x-[42%]'
       : 'top-0 h-28 w-28 translate-x-[30%]';
 
-  if (!logoDataUrl) {
+  if (!logoUrl) {
     return (
       <div
         className={clsx(
@@ -118,7 +119,7 @@ export function ProjectLogoBackground({
 
   return (
     <img
-      src={logoDataUrl}
+      src={logoUrl}
       alt=""
       className={clsx(
         'pointer-events-none absolute right-0 object-cover object-right saturate-125',

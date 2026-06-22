@@ -1,19 +1,11 @@
 // electron/services/azure-devops-service.ts
 
+import { createHash } from 'crypto';
 import { spawn } from 'child_process';
+
 
 import TurndownService from 'turndown';
 
-import type {
-  AzureDevOpsPullRequest,
-  AzureDevOpsPullRequestDetails,
-  AzureDevOpsCommit,
-  AzureDevOpsFileChange,
-  AzureDevOpsCommentThread,
-  AzureDevOpsComment,
-  AzureDevOpsIdentity,
-  ReviewerVoteStatus,
-} from '@shared/azure-devops-types';
 import type {
   AzureBuildDefinition,
   AzureBuildDefinitionDetail,
@@ -26,16 +18,29 @@ import type {
   AzureReleaseDetail,
   YamlPipelineParameter,
 } from '@shared/pipeline-types';
+import type {
+  AzureDevOpsComment,
+  AzureDevOpsCommentThread,
+  AzureDevOpsCommit,
+  AzureDevOpsFileChange,
+  AzureDevOpsIdentity,
+  AzureDevOpsPullRequest,
+  AzureDevOpsPullRequestDetails,
+  ReviewerVoteStatus,
+} from '@shared/azure-devops-types';
 
+
+import { dbg } from '../lib/debug';
 import { ProviderRepository } from '../database/repositories/providers';
 import { TokenRepository } from '../database/repositories/tokens';
-import { dbg } from '../lib/debug';
 
-import { sendGlobalPromptToWindow } from './global-prompt-service';
+
 import {
   parseYamlParameters,
   validateYamlFilename,
 } from './yaml-pipeline-parser';
+import { sendGlobalPromptToWindow } from './global-prompt-service';
+
 
 export type {
   AzureDevOpsPullRequest,
@@ -118,6 +123,23 @@ export interface AzureDevOpsIteration {
   isCurrent: boolean;
 }
 
+export interface AzureDevOpsWorkItemState {
+  name: string;
+  color?: string;
+  category?: string;
+}
+
+export interface WorkItemHistoryEntry {
+  id: number;
+  revisedBy: string;
+  revisedDate: string;
+  fields: Array<{
+    name: string;
+    oldValue?: string;
+    newValue?: string;
+  }>;
+}
+
 interface WiqlResponse {
   workItems: Array<{ id: number; url: string }>;
 }
@@ -147,6 +169,39 @@ interface WorkItemsBatchResponse {
       'System.ChangedDate'?: string;
     };
     relations?: WorkItemRelation[];
+  }>;
+}
+
+interface WorkItemUpdateRelation {
+  rel?: string;
+  url?: string;
+  attributes?: {
+    name?: string;
+    comment?: string;
+  };
+}
+
+interface WorkItemUpdateResponse {
+  count?: number;
+  value?: Array<{
+    id: number;
+    revisedBy?: { displayName?: string };
+    revisedDate?: string;
+    fields?: Record<
+      string,
+      {
+        oldValue?: unknown;
+        newValue?: unknown;
+      }
+    >;
+    relations?: {
+      added?: WorkItemUpdateRelation[];
+      removed?: WorkItemUpdateRelation[];
+      updated?: Array<{
+        oldValue?: WorkItemUpdateRelation;
+        newValue?: WorkItemUpdateRelation;
+      }>;
+    };
   }>;
 }
 
@@ -810,6 +865,37 @@ export async function getWorkItemById(params: {
   };
 }
 
+export async function getWorkItemStates(params: {
+  providerId: string;
+  projectName: string;
+  workItemType: string;
+}): Promise<AzureDevOpsWorkItemState[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(params.workItemType)}/states?api-version=7.1`,
+    {
+      headers: { Authorization: authHeader },
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(
+      `Failed to fetch states for work item type ${params.workItemType}: ${error}`,
+    );
+  }
+
+  const data = await response.json();
+  return (data.value ?? []).map(
+    (state: { name: string; color?: string; category?: string }) => ({
+      name: state.name,
+      color: state.color,
+      category: state.category,
+    }),
+  );
+}
+
 /**
  * Fetch test cases related to a work item using a WIQL link query.
  * Uses WorkItemLinks query mode with Microsoft.VSTS.Common.TestedBy-Forward
@@ -954,6 +1040,158 @@ export async function getWorkItemComments(params: {
       createdDate: c.createdDate ?? '',
     }),
   );
+}
+
+const WORK_ITEM_FIELD_LABELS: Record<string, string> = {
+  'System.AssignedTo': 'Assigned To',
+  'System.AreaPath': 'Area Path',
+  'System.CreatedBy': 'Created By',
+  'System.CreatedDate': 'Created Date',
+  'System.Description': 'Description',
+  'System.History': 'Comment',
+  'System.IterationPath': 'Iteration Path',
+  'System.Reason': 'Reason',
+  'System.State': 'State',
+  'System.Tags': 'Tags',
+  'System.Title': 'Title',
+  'System.WorkItemType': 'Work Item Type',
+  'Microsoft.VSTS.Common.AcceptanceCriteria': 'Acceptance Criteria',
+  'Microsoft.VSTS.Common.Priority': 'Priority',
+  'Microsoft.VSTS.Common.ResolvedReason': 'Resolved Reason',
+  'Microsoft.VSTS.Scheduling.Effort': 'Effort',
+  'Microsoft.VSTS.Scheduling.RemainingWork': 'Remaining Work',
+  'Microsoft.VSTS.TCM.ReproSteps': 'Repro Steps',
+};
+
+const WORK_ITEM_HISTORY_IGNORED_FIELDS = new Set([
+  'System.AuthorizedAs',
+  'System.AuthorizedDate',
+  'System.ChangedBy',
+  'System.ChangedDate',
+  'System.CommentCount',
+  'System.Id',
+  'System.PersonId',
+  'System.Rev',
+  'System.RevisedDate',
+  'System.Watermark',
+]);
+
+function formatWorkItemHistoryValue(value: unknown): string | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'object' && 'displayName' in value) {
+    const displayName = (value as { displayName?: unknown }).displayName;
+    return typeof displayName === 'string' ? displayName : undefined;
+  }
+  return JSON.stringify(value);
+}
+
+function getWorkItemFieldLabel(refName: string): string {
+  if (WORK_ITEM_FIELD_LABELS[refName]) return WORK_ITEM_FIELD_LABELS[refName];
+  return refName.split('.').at(-1) ?? refName;
+}
+
+function getWorkItemRelationLabel(relation: WorkItemUpdateRelation): string {
+  return (
+    relation.attributes?.name ??
+    relation.rel?.split('.').at(-1)?.replace(/-/g, ' ') ??
+    'Link'
+  );
+}
+
+function formatWorkItemRelation(relation: WorkItemUpdateRelation): string {
+  const label = getWorkItemRelationLabel(relation);
+  const target = relation.url?.split('/').at(-1);
+  const comment = relation.attributes?.comment;
+  return [
+    target ? `${label} #${target}` : label,
+    comment ? `(${comment})` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function mapWorkItemUpdateFields(
+  entry: NonNullable<WorkItemUpdateResponse['value']>[number],
+): WorkItemHistoryEntry['fields'] {
+  const fieldChanges = Object.entries(entry.fields ?? {})
+    .filter(([refName]) => !WORK_ITEM_HISTORY_IGNORED_FIELDS.has(refName))
+    .map(([refName, change]) => ({
+      name: getWorkItemFieldLabel(refName),
+      oldValue: formatWorkItemHistoryValue(change.oldValue),
+      newValue: formatWorkItemHistoryValue(change.newValue),
+    }));
+
+  const relationChanges: WorkItemHistoryEntry['fields'] = [
+    ...(entry.relations?.added ?? []).map((relation) => ({
+      name: 'Added Link',
+      newValue: formatWorkItemRelation(relation),
+    })),
+    ...(entry.relations?.removed ?? []).map((relation) => ({
+      name: 'Removed Link',
+      oldValue: formatWorkItemRelation(relation),
+    })),
+    ...(entry.relations?.updated ?? []).map((relation) => ({
+      name: 'Updated Link',
+      oldValue: relation.oldValue
+        ? formatWorkItemRelation(relation.oldValue)
+        : undefined,
+      newValue: relation.newValue
+        ? formatWorkItemRelation(relation.newValue)
+        : undefined,
+    })),
+  ];
+
+  return [...fieldChanges, ...relationChanges];
+}
+
+export async function getWorkItemHistory(params: {
+  providerId: string;
+  projectName: string;
+  workItemId: number;
+}): Promise<WorkItemHistoryEntry[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const updates: NonNullable<WorkItemUpdateResponse['value']> = [];
+  const pageSize = 200;
+
+  for (let skip = 0; ; skip += pageSize) {
+    const response = await fetch(
+      `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/updates?$top=${pageSize}&$skip=${skip}&api-version=7.1`,
+      {
+        headers: { Authorization: authHeader },
+      },
+    );
+
+    if (!response.ok) {
+      if (response.status === 404) return [];
+      const error = await response.text();
+      throw new Error(
+        `Failed to fetch history for work item ${params.workItemId}: ${error}`,
+      );
+    }
+
+    const data: WorkItemUpdateResponse = await response.json();
+    const page = data.value ?? [];
+    updates.push(...page);
+
+    if (page.length < pageSize) break;
+  }
+
+  return updates
+    .map((entry) => ({
+      id: entry.id,
+      revisedBy: entry.revisedBy?.displayName ?? 'Unknown',
+      revisedDate: entry.revisedDate ?? '',
+      fields: mapWorkItemUpdateFields(entry),
+    }))
+    .filter((entry) => entry.fields.length > 0)
+    .sort(
+      (a, b) =>
+        new Date(b.revisedDate).getTime() - new Date(a.revisedDate).getTime(),
+    );
 }
 
 export async function addWorkItemComment(params: {
@@ -1376,15 +1614,6 @@ export async function getCurrentUser(
     identityId = connectionData?.authenticatedUser?.id;
   }
 
-  dbg.azure('current-user:connection-identity', {
-    orgName,
-    profileId: profile.id,
-    email: maskEmail(profile.emailAddress),
-    connectionStatus: connectionResponse.status,
-    identityId: identityId ?? null,
-    body: connectionResponse.ok ? undefined : connectionBody,
-  });
-
   if (!identityId) {
     const resolvedIdentityId = await resolveIdentityIdByEmail({
       authHeader,
@@ -1613,6 +1842,7 @@ interface PullRequestResponse {
     deleteSourceBranch?: boolean;
     transitionWorkItems?: boolean;
     mergeCommitMessage?: string;
+    autoCompleteIgnoreConfigIds?: number[];
   };
   reviewers?: Array<{
     id: string;
@@ -1654,6 +1884,18 @@ interface CommitsListResponse {
   value: CommitResponse[];
 }
 
+interface PullRequestIterationResponse {
+  id: number;
+  commonRefCommit?: { commitId: string };
+  sourceRefCommit?: { commitId: string };
+  targetRefCommit?: { commitId: string };
+}
+
+interface PullRequestIterationsListResponse {
+  count: number;
+  value: PullRequestIterationResponse[];
+}
+
 // GitPullRequestChange from Azure DevOps API
 // changeType can be: None(0), Add(1), Edit(2), Encoding(4), Rename(8), Delete(16),
 // Undelete(32), Branch(64), Merge(128), Lock(256), Rollback(512), SourceRename(1024),
@@ -1681,6 +1923,33 @@ interface ChangesListResponse {
   nextTop?: number;
 }
 
+async function getLatestPullRequestIteration(params: {
+  authHeader: string;
+  orgName: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<PullRequestIterationResponse | null> {
+  const iterationsUrl = `https://dev.azure.com/${params.orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations?api-version=7.0`;
+  const iterationsResponse = await fetch(iterationsUrl, {
+    headers: { Authorization: params.authHeader },
+  });
+
+  if (!iterationsResponse.ok) {
+    const error = await iterationsResponse.text();
+    throw new Error(`Failed to get pull request iterations: ${error}`);
+  }
+
+  const iterationsData: PullRequestIterationsListResponse =
+    await iterationsResponse.json();
+
+  if (iterationsData.value.length === 0) {
+    return null;
+  }
+
+  return iterationsData.value[iterationsData.value.length - 1];
+}
+
 interface CommentResponse {
   id: number;
   parentCommentId?: number;
@@ -1693,9 +1962,38 @@ interface CommentResponse {
     uniqueName: string;
     imageUrl?: string;
   };
+  usersLiked?: Array<{
+    id?: string;
+    displayName: string;
+    uniqueName?: string;
+    imageUrl?: string;
+  }>;
   publishedDate: string;
   lastUpdatedDate: string;
   lastContentUpdatedDate?: string;
+}
+
+function mapCommentResponse(comment: CommentResponse): AzureDevOpsComment {
+  return {
+    id: comment.id,
+    parentCommentId: comment.parentCommentId,
+    content: comment.content,
+    commentType: mapCommentType(comment.commentType),
+    author: {
+      id: comment.author.id,
+      displayName: comment.author.displayName,
+      uniqueName: comment.author.uniqueName,
+      imageUrl: comment.author.imageUrl,
+    },
+    usersLiked: (comment.usersLiked ?? []).map((user) => ({
+      id: user.id,
+      displayName: user.displayName,
+      uniqueName: user.uniqueName,
+      imageUrl: user.imageUrl,
+    })),
+    publishedDate: comment.publishedDate,
+    lastUpdatedDate: comment.lastUpdatedDate,
+  };
 }
 
 interface ThreadResponse {
@@ -1913,6 +2211,8 @@ function mapPullRequestResponse(
           transitionWorkItems:
             pr.completionOptions.transitionWorkItems ?? false,
           mergeCommitMessage: pr.completionOptions.mergeCommitMessage,
+          autoCompleteIgnoreConfigIds:
+            pr.completionOptions.autoCompleteIgnoreConfigIds,
         }
       : undefined,
     reviewers: (pr.reviewers ?? []).map((r) => ({
@@ -2056,29 +2356,64 @@ export async function uploadPullRequestAttachment(params: {
   await assertCurrentUserOwnsPullRequest(params);
 
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
-  const encodedFileName = encodeURIComponent(params.fileName);
-  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/attachments/${encodedFileName}?api-version=7.1-preview.1`;
+  const data = Buffer.from(params.dataBase64, 'base64');
+  const hashSuffix = createHash('sha256')
+    .update(data)
+    .digest('hex')
+    .slice(0, 8);
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: authHeader,
-      'Content-Type': 'application/octet-stream',
-    },
-    body: Buffer.from(params.dataBase64, 'base64'),
-  });
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const fileName = getPullRequestAttachmentFileName(
+      params.fileName,
+      hashSuffix,
+      attempt,
+    );
+    const encodedFileName = encodeURIComponent(fileName);
+    const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/attachments/${encodedFileName}?api-version=7.1-preview.1`;
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to upload pull request attachment: ${error}`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/octet-stream',
+      },
+      body: data,
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      if (isDuplicateAttachmentNameError(error) && attempt < 9) {
+        continue;
+      }
+      throw new Error(`Failed to upload pull request attachment: ${error}`);
+    }
+
+    const attachment: { url?: string } = await response.json();
+    if (!attachment.url) {
+      throw new Error('Azure DevOps did not return an attachment URL');
+    }
+
+    return { url: attachment.url };
   }
 
-  const attachment: { url?: string } = await response.json();
-  if (!attachment.url) {
-    throw new Error('Azure DevOps did not return an attachment URL');
-  }
+  throw new Error('Failed to upload pull request attachment');
+}
 
-  return { url: attachment.url };
+function getPullRequestAttachmentFileName(
+  fileName: string,
+  hashSuffix: string,
+  attempt: number,
+) {
+  const suffix = attempt === 0 ? hashSuffix : `${hashSuffix}-${attempt}`;
+
+  const extensionIndex = fileName.lastIndexOf('.');
+  if (extensionIndex <= 0) return `${fileName}-${suffix}`;
+
+  return `${fileName.slice(0, extensionIndex)}-${suffix}${fileName.slice(extensionIndex)}`;
+}
+
+function isDuplicateAttachmentNameError(error: string) {
+  return /attachment with file name ['"][^'"]+['"] already exists/i.test(error);
 }
 
 export async function votePullRequest(params: {
@@ -2143,6 +2478,7 @@ export async function setPullRequestAutoComplete(params: {
     deleteSourceBranch: boolean;
     transitionWorkItems: boolean;
     mergeCommitMessage?: string;
+    autoCompleteIgnoreConfigIds?: number[];
   };
 }): Promise<AzureDevOpsPullRequestDetails> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
@@ -2262,11 +2598,27 @@ export async function getPullRequestPolicyEvaluations(params: {
     data.value.map((e) => ({
       id: e.evaluationId,
       status: e.status,
+      configurationId: e.configuration.id,
       type: e.configuration.type.displayName,
       isEnabled: e.configuration.isEnabled,
       isBlocking: e.configuration.isBlocking,
-      settings: e.configuration.settings,
-      context: e.context,
+      settings: {
+        buildDefinitionId:
+          (e.configuration.settings.buildDefinitionId as number | undefined) ??
+          null,
+        displayName:
+          (e.configuration.settings.displayName as string | undefined) ?? null,
+        minimumApproverCount:
+          (e.configuration.settings.minimumApproverCount as
+            | number
+            | undefined) ?? null,
+      },
+      context: {
+        buildId: (e.context?.buildId as number | undefined) ?? null,
+        buildDefinitionId:
+          (e.context?.buildDefinitionId as number | undefined) ?? null,
+        isExpired: (e.context?.isExpired as boolean | undefined) ?? null,
+      },
     })),
   );
 
@@ -2489,27 +2841,20 @@ export async function getPullRequestChanges(params: {
 }): Promise<AzureDevOpsFileChange[]> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
 
-  // First get the iterations to find the latest one
-  const iterationsUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations?api-version=7.0`;
-  const iterationsResponse = await fetch(iterationsUrl, {
-    headers: { Authorization: authHeader },
+  const latestIteration = await getLatestPullRequestIteration({
+    authHeader,
+    orgName,
+    projectId: params.projectId,
+    repoId: params.repoId,
+    pullRequestId: params.pullRequestId,
   });
 
-  if (!iterationsResponse.ok) {
-    const error = await iterationsResponse.text();
-    throw new Error(`Failed to get pull request iterations: ${error}`);
-  }
-
-  const iterationsData: { count: number; value: Array<{ id: number }> } =
-    await iterationsResponse.json();
-
-  if (iterationsData.count === 0) {
+  if (!latestIteration) {
     return [];
   }
 
   // Get changes from the latest iteration
-  const latestIterationId =
-    iterationsData.value[iterationsData.value.length - 1].id;
+  const latestIterationId = latestIteration.id;
   const changesUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations/${latestIterationId}/changes?api-version=7.0`;
 
   const changesResponse = await fetch(changesUrl, {
@@ -2532,6 +2877,88 @@ export async function getPullRequestChanges(params: {
     }));
 }
 
+export async function getCommitChanges(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  commitId: string;
+}): Promise<AzureDevOpsFileChange[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/commits/${params.commitId}/changes?api-version=7.0`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get commit changes: ${error}`);
+  }
+
+  const data: {
+    changeCounts: Record<string, number>;
+    changes: Array<
+      ChangeResponse & {
+        item?: ChangeResponse['item'] & { isFolder?: boolean };
+      }
+    >;
+  } = await response.json();
+
+  return data.changes
+    .filter((change) => change.item?.path && !change.item.isFolder)
+    .map((change) => ({
+      path: change.item!.path,
+      changeType: mapChangeType(change.changeType),
+      originalPath: change.sourceServerItem,
+    }));
+}
+
+export async function getFileContentAtCommit(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  commitId: string;
+  filePath: string;
+  version: 'current' | 'parent';
+}): Promise<string> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  let versionId = params.commitId;
+
+  if (params.version === 'parent') {
+    // Get parent commit ID
+    const commitUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/commits/${params.commitId}?api-version=7.0`;
+    const commitResponse = await fetch(commitUrl, {
+      headers: { Authorization: authHeader },
+    });
+    if (!commitResponse.ok) {
+      return '';
+    }
+    const commitData: { parents?: string[] } = await commitResponse.json();
+    if (!commitData.parents?.length) {
+      return ''; // Initial commit, no parent
+    }
+    versionId = commitData.parents[0];
+  }
+
+  const contentUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/items?path=${encodeURIComponent(params.filePath)}&versionDescriptor.version=${encodeURIComponent(versionId)}&versionDescriptor.versionType=commit&api-version=7.0`;
+
+  const response = await fetch(contentUrl, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return ''; // File doesn't exist at this version (new or deleted)
+    }
+    const error = await response.text();
+    throw new Error(`Failed to get file content at commit: ${error}`);
+  }
+
+  return response.text();
+}
+
 export async function getPullRequestFileContent(params: {
   providerId: string;
   projectId: string;
@@ -2542,27 +2969,29 @@ export async function getPullRequestFileContent(params: {
 }): Promise<string> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
 
-  // First get the PR to find source and target refs
-  const prUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
-  const prResponse = await fetch(prUrl, {
-    headers: { Authorization: authHeader },
+  const latestIteration = await getLatestPullRequestIteration({
+    authHeader,
+    orgName,
+    projectId: params.projectId,
+    repoId: params.repoId,
+    pullRequestId: params.pullRequestId,
   });
 
-  if (!prResponse.ok) {
-    const error = await prResponse.text();
-    throw new Error(`Failed to get pull request: ${error}`);
+  if (!latestIteration) {
+    return '';
   }
 
-  const pr: { sourceRefName: string; targetRefName: string } =
-    await prResponse.json();
-
-  // Determine which version to fetch
-  const versionDescriptor =
+  const versionCommitId =
     params.version === 'base'
-      ? pr.targetRefName.replace('refs/heads/', '')
-      : pr.sourceRefName.replace('refs/heads/', '');
+      ? (latestIteration.commonRefCommit?.commitId ??
+        latestIteration.targetRefCommit?.commitId)
+      : latestIteration.sourceRefCommit?.commitId;
 
-  const contentUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/items?path=${encodeURIComponent(params.filePath)}&versionDescriptor.version=${encodeURIComponent(versionDescriptor)}&versionDescriptor.versionType=branch&api-version=7.0`;
+  if (!versionCommitId) {
+    return '';
+  }
+
+  const contentUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/items?path=${encodeURIComponent(params.filePath)}&versionDescriptor.version=${encodeURIComponent(versionCommitId)}&versionDescriptor.versionType=commit&api-version=7.0`;
 
   const response = await fetch(contentUrl, {
     headers: { Authorization: authHeader },
@@ -2624,20 +3053,7 @@ export async function getPullRequestThreads(params: {
         comments: thread.comments
           // Filter out system comments within threads
           .filter((c) => c.commentType !== 'system')
-          .map((comment) => ({
-            id: comment.id,
-            parentCommentId: comment.parentCommentId,
-            content: comment.content,
-            commentType: mapCommentType(comment.commentType),
-            author: {
-              id: comment.author.id,
-              displayName: comment.author.displayName,
-              uniqueName: comment.author.uniqueName,
-              imageUrl: comment.author.imageUrl,
-            },
-            publishedDate: comment.publishedDate,
-            lastUpdatedDate: comment.lastUpdatedDate,
-          })),
+          .map(mapCommentResponse),
         isDeleted: thread.isDeleted,
       }))
   );
@@ -2683,20 +3099,7 @@ export async function addPullRequestComment(params: {
           rightFileEnd: thread.threadContext.rightFileEnd,
         }
       : undefined,
-    comments: thread.comments.map((comment) => ({
-      id: comment.id,
-      parentCommentId: comment.parentCommentId,
-      content: comment.content,
-      commentType: mapCommentType(comment.commentType),
-      author: {
-        id: comment.author.id,
-        displayName: comment.author.displayName,
-        uniqueName: comment.author.uniqueName,
-        imageUrl: comment.author.imageUrl,
-      },
-      publishedDate: comment.publishedDate,
-      lastUpdatedDate: comment.lastUpdatedDate,
-    })),
+    comments: thread.comments.map(mapCommentResponse),
     isDeleted: thread.isDeleted,
   };
 }
@@ -2819,6 +3222,7 @@ export async function getPullRequestActivityMetadata(params: {
   lastCommitDate: string | null;
   lastThreadActivityDate: string | null;
   activeThreadCount: number;
+  unresolvedCommentCount: number;
 }> {
   const [commits, threads] = await Promise.all([
     getPullRequestCommits(params),
@@ -2836,10 +3240,19 @@ export async function getPullRequestActivityMetadata(params: {
   // Find max lastUpdatedDate across all comments in all threads
   let lastThreadActivityDate: string | null = null;
   let activeThreadCount = 0;
+  let unresolvedCommentCount = 0;
 
   for (const thread of realThreads) {
-    if (thread.status === 'active') {
+    const isActiveThread =
+      thread.status === 'active' ||
+      thread.status === 'pending' ||
+      thread.status === 'unknown';
+
+    if (isActiveThread) {
       activeThreadCount++;
+      unresolvedCommentCount += thread.comments.filter(
+        (comment) => comment.commentType !== 'system',
+      ).length;
     }
     for (const comment of thread.comments) {
       if (
@@ -2851,7 +3264,12 @@ export async function getPullRequestActivityMetadata(params: {
     }
   }
 
-  return { lastCommitDate, lastThreadActivityDate, activeThreadCount };
+  return {
+    lastCommitDate,
+    lastThreadActivityDate,
+    activeThreadCount,
+    unresolvedCommentCount,
+  };
 }
 
 export async function addThreadReply(params: {
@@ -2886,20 +3304,56 @@ export async function addThreadReply(params: {
 
   const comment: CommentResponse = await response.json();
 
-  return {
-    id: comment.id,
-    parentCommentId: comment.parentCommentId,
-    content: comment.content,
-    commentType: mapCommentType(comment.commentType),
-    author: {
-      id: comment.author.id,
-      displayName: comment.author.displayName,
-      uniqueName: comment.author.uniqueName,
-      imageUrl: comment.author.imageUrl,
+  return mapCommentResponse(comment);
+}
+
+export async function setThreadCommentLike(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  threadId: number;
+  commentId: number;
+  liked: boolean;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/threads/${params.threadId}/comments/${params.commentId}/likes?api-version=7.1`;
+
+  const response = await fetch(url, {
+    method: params.liked ? 'POST' : 'DELETE',
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to update comment like: ${error}`);
+  }
+}
+
+export async function deleteThreadComment(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  threadId: number;
+  commentId: number;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/threads/${params.threadId}/comments/${params.commentId}?api-version=7.0`;
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: authHeader,
     },
-    publishedDate: comment.publishedDate,
-    lastUpdatedDate: comment.lastUpdatedDate,
-  };
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to delete thread comment: ${error}`);
+  }
 }
 
 export async function updateThreadComment(params: {
@@ -2931,20 +3385,7 @@ export async function updateThreadComment(params: {
 
   const comment: CommentResponse = await response.json();
 
-  return {
-    id: comment.id,
-    parentCommentId: comment.parentCommentId,
-    content: comment.content,
-    commentType: mapCommentType(comment.commentType),
-    author: {
-      id: comment.author.id,
-      displayName: comment.author.displayName,
-      uniqueName: comment.author.uniqueName,
-      imageUrl: comment.author.imageUrl,
-    },
-    publishedDate: comment.publishedDate,
-    lastUpdatedDate: comment.lastUpdatedDate,
-  };
+  return mapCommentResponse(comment);
 }
 
 const THREAD_STATUS_MAP: Record<string, number> = {
@@ -3039,20 +3480,7 @@ export async function addPullRequestFileComment(params: {
           rightFileEnd: thread.threadContext.rightFileEnd,
         }
       : undefined,
-    comments: thread.comments.map((comment) => ({
-      id: comment.id,
-      parentCommentId: comment.parentCommentId,
-      content: comment.content,
-      commentType: mapCommentType(comment.commentType),
-      author: {
-        id: comment.author.id,
-        displayName: comment.author.displayName,
-        uniqueName: comment.author.uniqueName,
-        imageUrl: comment.author.imageUrl,
-      },
-      publishedDate: comment.publishedDate,
-      lastUpdatedDate: comment.lastUpdatedDate,
-    })),
+    comments: thread.comments.map(mapCommentResponse),
     isDeleted: thread.isDeleted,
   };
 }

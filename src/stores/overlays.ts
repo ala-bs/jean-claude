@@ -13,7 +13,10 @@ export type OverlayType =
   | 'backlog'
   | 'pipelines'
   | 'running-commands'
-  | 'calendar';
+  | 'calendar'
+  | 'usage'
+  | 'work-activity'
+  | 'resources';
 
 interface OverlaysState {
   // Current active overlay (null = none open)

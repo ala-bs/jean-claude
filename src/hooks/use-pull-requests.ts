@@ -1,18 +1,36 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useValue } from '@legendapp/state/react';
+
 
 import {
   api,
-  type AzureDevOpsPullRequest,
-  type AzureDevOpsPullRequestDetails,
+  type AzureDevOpsComment,
+  type AzureDevOpsCommentThread,
   type AzureDevOpsCommit,
   type AzureDevOpsFileChange,
-  type AzureDevOpsCommentThread,
-  type AzureDevOpsComment,
   type AzureDevOpsPolicyEvaluation,
+  type AzureDevOpsPullRequest,
+  type AzureDevOpsPullRequestDetails,
   type AzureDevOpsWorkItem,
 } from '@/lib/api';
+import {
+  ingestPullRequest,
+  patchPullRequestSnapshot,
+  pullRequestResourceKey,
+  selectPullRequest,
+} from '@/cache/domains/pull-requests';
+import { cache$ } from '@/cache/cache-store';
+import type { FeedItem } from '@shared/feed-types';
+import { feedQueryKeys } from '@/lib/feed-query-keys';
+import type { NewWorkActivityEvent } from '@shared/work-activity-types';
+import { parseAzureOrgId } from '@shared/work-activity-utils';
+import type { Provider } from '@shared/types';
+import type { ReviewerVoteStatus } from '@shared/azure-devops-types';
+
+
 
 import { useProject } from './use-projects';
+import { useSetting } from './use-settings';
 
 // Helper to get repo info from project
 function useProjectRepoInfo(projectId: string) {
@@ -23,10 +41,201 @@ function useProjectRepoInfo(projectId: string) {
   }
 
   return {
+    projectName: project.name,
     providerId: project.repoProviderId,
     projectId: project.repoProjectId,
     repoId: project.repoId,
   };
+}
+
+function getCachedProviderBaseUrl(
+  queryClient: ReturnType<typeof useQueryClient>,
+  providerId: string,
+): string | null {
+  const cachedProvider = queryClient.getQueryData<Provider>([
+    'providers',
+    providerId,
+  ]);
+  if (cachedProvider?.baseUrl) {
+    return cachedProvider.baseUrl;
+  }
+
+  return (
+    queryClient
+      .getQueryData<Provider[]>(['providers'])
+      ?.find((provider) => provider.id === providerId)?.baseUrl ?? null
+  );
+}
+
+function buildPullRequestActivityEvent({
+  queryClient,
+  projectId,
+  prId,
+  repoInfo,
+  type,
+  azureOrgId,
+  workItems,
+  metadata = {},
+}: {
+  queryClient: ReturnType<typeof useQueryClient>;
+  projectId: string;
+  prId: number;
+  repoInfo: NonNullable<ReturnType<typeof useProjectRepoInfo>>;
+  type: 'pr_comment_added' | 'pr_approved';
+  azureOrgId: string | null;
+  workItems: AzureDevOpsWorkItem[];
+  metadata?: Record<string, unknown>;
+}): NewWorkActivityEvent {
+  const cachedPr = queryClient.getQueryData<AzureDevOpsPullRequestDetails>([
+    'pull-request',
+    projectId,
+    prId,
+  ]);
+  const workItemIds = workItems.map((workItem) => String(workItem.id));
+
+  return {
+    occurredAt: new Date().toISOString(),
+    type,
+    projectId,
+    projectName: repoInfo.projectName,
+    providerId: repoInfo.providerId,
+    azureOrgId,
+    azureProjectId: repoInfo.projectId,
+    repoId: repoInfo.repoId,
+    taskId: null,
+    taskTitle: null,
+    stepId: null,
+    promptSnippet: null,
+    promptLength: null,
+    workItemIds,
+    workItems: workItemIds.map((id) => ({
+      id,
+      providerId: repoInfo.providerId,
+      azureOrgId,
+      azureProjectId: repoInfo.projectId,
+    })),
+    pullRequest: {
+      providerId: repoInfo.providerId,
+      azureOrgId,
+      azureProjectId: repoInfo.projectId,
+      repoId: repoInfo.repoId,
+      pullRequestId: String(prId),
+      title: cachedPr?.title ?? null,
+      url: cachedPr?.url ?? null,
+    },
+    metadata,
+  };
+}
+
+function recordPrActivity({
+  queryClient,
+  projectId,
+  prId,
+  repoInfo,
+  type,
+  metadata,
+  workActivityEnabled,
+}: {
+  queryClient: ReturnType<typeof useQueryClient>;
+  projectId: string;
+  prId: number;
+  repoInfo: NonNullable<ReturnType<typeof useProjectRepoInfo>>;
+  type: 'pr_comment_added' | 'pr_approved';
+  metadata?: Record<string, unknown>;
+  workActivityEnabled: boolean;
+}) {
+  if (!workActivityEnabled) {
+    return;
+  }
+
+  void (async () => {
+    const workItemsQueryKey = ['pull-request-work-items', projectId, prId];
+    let azureOrgId: string | null = null;
+    let workItems: AzureDevOpsWorkItem[] = [];
+
+    try {
+      const provider = await api.providers.findById(repoInfo.providerId);
+      azureOrgId = parseAzureOrgId(provider?.baseUrl ?? null);
+    } catch (error) {
+      console.error('Failed to fetch provider for PR activity log:', error);
+      azureOrgId = parseAzureOrgId(
+        getCachedProviderBaseUrl(queryClient, repoInfo.providerId),
+      );
+    }
+
+    try {
+      workItems = await api.azureDevOps.getPullRequestWorkItems({
+        providerId: repoInfo.providerId,
+        projectId: repoInfo.projectId,
+        repoId: repoInfo.repoId,
+        pullRequestId: prId,
+      });
+    } catch (error) {
+      console.error('Failed to fetch PR work items for activity log:', error);
+      workItems =
+        queryClient.getQueryData<AzureDevOpsWorkItem[]>(workItemsQueryKey) ??
+        [];
+    }
+
+    const event = buildPullRequestActivityEvent({
+      queryClient,
+      projectId,
+      prId,
+      repoInfo,
+      type,
+      azureOrgId,
+      workItems,
+      metadata,
+    });
+
+    try {
+      await api.workActivity.record(event);
+    } catch (error) {
+      console.error('Failed to record PR activity:', error);
+    }
+  })().catch((error) => {
+    console.error('Failed to prepare PR activity log:', error);
+  });
+}
+
+function getReviewerVoteStatus(vote: number): ReviewerVoteStatus {
+  if (vote >= 10) return 'approved';
+  if (vote > 0) return 'approved-with-suggestions';
+  if (vote <= -10) return 'rejected';
+  if (vote < 0) return 'waiting';
+  return 'none';
+}
+
+function updateReviewerVote<T extends AzureDevOpsPullRequest | undefined>(
+  pullRequest: T,
+  reviewerId: string,
+  voteStatus: ReviewerVoteStatus,
+): T {
+  if (!pullRequest) return pullRequest;
+
+  return {
+    ...pullRequest,
+    reviewers: pullRequest.reviewers.map((reviewer) =>
+      reviewer.id === reviewerId ? { ...reviewer, voteStatus } : reviewer,
+    ),
+  };
+}
+
+function updateFeedPullRequest(
+  queryClient: ReturnType<typeof useQueryClient>,
+  projectId: string,
+  prId: number,
+  patch: Partial<FeedItem>,
+) {
+  queryClient.setQueryData<FeedItem[]>(feedQueryKeys.pullRequests, (old) => {
+    if (!old) return old;
+
+    return old.map((item) =>
+      item.projectId === projectId && item.pullRequestId === prId
+        ? { ...item, ...patch }
+        : item,
+    );
+  });
 }
 
 export function usePullRequests(
@@ -131,6 +340,37 @@ export function usePullRequest(projectId: string, prId: number) {
   });
 }
 
+export function useCachedPullRequest(projectId: string, prId?: number) {
+  const repoInfo = useProjectRepoInfo(projectId);
+  const resourceKey =
+    repoInfo && prId
+      ? pullRequestResourceKey({
+          providerId: repoInfo.providerId,
+          repoId: repoInfo.repoId,
+          pullRequestId: prId,
+        })
+      : null;
+  const data = useValue(() => {
+    if (!repoInfo || !prId) {
+      return undefined;
+    }
+
+    return selectPullRequest({
+      providerId: repoInfo.providerId,
+      repoId: repoInfo.repoId,
+      pullRequestId: prId,
+    });
+  });
+  const meta = useValue(() =>
+    resourceKey ? cache$.resources[resourceKey].get() : undefined,
+  );
+
+  return {
+    data,
+    isLoading: !!repoInfo && !!prId && !data && meta?.status === 'loading',
+  };
+}
+
 export function useUpdatePullRequestTitle(projectId: string, prId: number) {
   const queryClient = useQueryClient();
   const repoInfo = useProjectRepoInfo(projectId);
@@ -145,6 +385,11 @@ export function useUpdatePullRequestTitle(projectId: string, prId: number) {
         title,
       }),
     onSuccess: (updatedPr) => {
+      ingestPullRequest({
+        providerId: repoInfo!.providerId,
+        repoId: repoInfo!.repoId,
+        pullRequest: updatedPr,
+      });
       queryClient.setQueryData(['pull-request', projectId, prId], updatedPr);
       queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
       queryClient.invalidateQueries({
@@ -171,6 +416,11 @@ export function useUpdatePullRequestDescription(
         description,
       }),
     onSuccess: (updatedPr) => {
+      ingestPullRequest({
+        providerId: repoInfo!.providerId,
+        repoId: repoInfo!.repoId,
+        pullRequest: updatedPr,
+      });
       queryClient.setQueryData(['pull-request', projectId, prId], updatedPr);
       queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
       queryClient.invalidateQueries({
@@ -233,6 +483,47 @@ export function usePullRequestChanges(projectId: string, prId: number) {
       }),
     enabled: !!repoInfo && prId > 0,
     staleTime: 60_000,
+  });
+}
+
+export function useCommitChanges(projectId: string, commitId: string | null) {
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useQuery<AzureDevOpsFileChange[]>({
+    queryKey: ['commit-changes', projectId, commitId],
+    queryFn: () =>
+      api.azureDevOps.getCommitChanges({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        commitId: commitId!,
+      }),
+    enabled: !!repoInfo && !!commitId,
+    staleTime: 300_000, // 5 min — commit changes are immutable
+  });
+}
+
+export function useCommitFileContent(
+  projectId: string,
+  commitId: string | null,
+  filePath: string | null,
+  version: 'current' | 'parent',
+) {
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useQuery<string>({
+    queryKey: ['commit-file-content', projectId, commitId, filePath, version],
+    queryFn: () =>
+      api.azureDevOps.getFileContentAtCommit({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        commitId: commitId!,
+        filePath: filePath!,
+        version,
+      }),
+    enabled: !!repoInfo && !!commitId && !!filePath,
+    staleTime: 300_000,
   });
 }
 
@@ -311,6 +602,7 @@ export function useLinkWorkItemToPr(projectId: string, prId: number) {
       queryClient.invalidateQueries({
         queryKey: ['pull-request-work-items', projectId, prId],
       });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.workItems });
     },
   });
 }
@@ -332,6 +624,7 @@ export function useUnlinkWorkItemFromPr(projectId: string, prId: number) {
       queryClient.invalidateQueries({
         queryKey: ['pull-request-work-items', projectId, prId],
       });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.workItems });
     },
   });
 }
@@ -339,6 +632,7 @@ export function useUnlinkWorkItemFromPr(projectId: string, prId: number) {
 export function useAddPullRequestComment(projectId: string, prId: number) {
   const queryClient = useQueryClient();
   const repoInfo = useProjectRepoInfo(projectId);
+  const { data: workActivitySetting } = useSetting('workActivity');
 
   return useMutation({
     mutationFn: (content: string) =>
@@ -353,6 +647,16 @@ export function useAddPullRequestComment(projectId: string, prId: number) {
       queryClient.invalidateQueries({
         queryKey: ['pull-request-threads', projectId, prId],
       });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.pullRequests });
+      recordPrActivity({
+        queryClient,
+        projectId,
+        prId,
+        repoInfo: repoInfo!,
+        type: 'pr_comment_added',
+        metadata: { commentKind: 'top-level' },
+        workActivityEnabled: workActivitySetting?.enabled !== false,
+      });
     },
   });
 }
@@ -360,6 +664,7 @@ export function useAddPullRequestComment(projectId: string, prId: number) {
 export function useAddPullRequestFileComment(projectId: string, prId: number) {
   const queryClient = useQueryClient();
   const repoInfo = useProjectRepoInfo(projectId);
+  const { data: workActivitySetting } = useSetting('workActivity');
 
   return useMutation({
     mutationFn: (params: {
@@ -375,9 +680,19 @@ export function useAddPullRequestFileComment(projectId: string, prId: number) {
         pullRequestId: prId,
         ...params,
       }),
-    onSuccess: () => {
+    onSuccess: (_result, params) => {
       queryClient.invalidateQueries({
         queryKey: ['pull-request-threads', projectId, prId],
+      });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.pullRequests });
+      recordPrActivity({
+        queryClient,
+        projectId,
+        prId,
+        repoInfo: repoInfo!,
+        type: 'pr_comment_added',
+        metadata: { commentKind: 'file', filePath: params.filePath },
+        workActivityEnabled: workActivitySetting?.enabled !== false,
       });
     },
   });
@@ -386,6 +701,7 @@ export function useAddPullRequestFileComment(projectId: string, prId: number) {
 export function useAddThreadReply(projectId: string, prId: number) {
   const queryClient = useQueryClient();
   const repoInfo = useProjectRepoInfo(projectId);
+  const { data: workActivitySetting } = useSetting('workActivity');
 
   return useMutation<
     AzureDevOpsComment,
@@ -400,9 +716,19 @@ export function useAddThreadReply(projectId: string, prId: number) {
         pullRequestId: prId,
         ...params,
       }),
-    onSuccess: () => {
+    onSuccess: (_result, params) => {
       queryClient.invalidateQueries({
         queryKey: ['pull-request-threads', projectId, prId],
+      });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.pullRequests });
+      recordPrActivity({
+        queryClient,
+        projectId,
+        prId,
+        repoInfo: repoInfo!,
+        type: 'pr_comment_added',
+        metadata: { commentKind: 'reply', threadId: params.threadId },
+        workActivityEnabled: workActivitySetting?.enabled !== false,
       });
     },
   });
@@ -429,6 +755,55 @@ export function useUpdateThreadComment(projectId: string, prId: number) {
       queryClient.invalidateQueries({
         queryKey: ['pull-request-threads', projectId, prId],
       });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.pullRequests });
+    },
+  });
+}
+
+export function useDeleteThreadComment(projectId: string, prId: number) {
+  const queryClient = useQueryClient();
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useMutation<void, Error, { threadId: number; commentId: number }>({
+    mutationFn: (params) =>
+      api.azureDevOps.deleteThreadComment({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        ...params,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['pull-request-threads', projectId, prId],
+      });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.pullRequests });
+    },
+  });
+}
+
+export function useSetThreadCommentLike(projectId: string, prId: number) {
+  const queryClient = useQueryClient();
+  const repoInfo = useProjectRepoInfo(projectId);
+
+  return useMutation<
+    void,
+    Error,
+    { threadId: number; commentId: number; liked: boolean }
+  >({
+    mutationFn: (params) =>
+      api.azureDevOps.setThreadCommentLike({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        ...params,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['pull-request-threads', projectId, prId],
+      });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.pullRequests });
     },
   });
 }
@@ -450,6 +825,7 @@ export function useUpdateThreadStatus(projectId: string, prId: number) {
       queryClient.invalidateQueries({
         queryKey: ['pull-request-threads', projectId, prId],
       });
+      queryClient.invalidateQueries({ queryKey: feedQueryKeys.pullRequests });
     },
   });
 }
@@ -457,7 +833,7 @@ export function useUpdateThreadStatus(projectId: string, prId: number) {
 export function usePullRequestPolicyEvaluations(
   projectId: string,
   prId: number,
-  options?: { refetchInterval?: number | false },
+  options?: { refetchInterval?: number | false; enabled?: boolean },
 ) {
   const repoInfo = useProjectRepoInfo(projectId);
 
@@ -469,7 +845,7 @@ export function usePullRequestPolicyEvaluations(
         projectId: repoInfo!.projectId,
         pullRequestId: prId,
       }),
-    enabled: !!repoInfo && prId > 0,
+    enabled: !!repoInfo && prId > 0 && (options?.enabled ?? true),
     staleTime: 30_000,
     refetchInterval: options?.refetchInterval,
   });
@@ -508,6 +884,7 @@ export function useCurrentAzureUser(projectId: string) {
 export function useVotePullRequest(projectId: string, prId: number) {
   const queryClient = useQueryClient();
   const repoInfo = useProjectRepoInfo(projectId);
+  const { data: workActivitySetting } = useSetting('workActivity');
 
   return useMutation({
     mutationFn: (params: { reviewerId: string; vote: number }) =>
@@ -518,7 +895,50 @@ export function useVotePullRequest(projectId: string, prId: number) {
         pullRequestId: prId,
         ...params,
       }),
-    onSuccess: () => {
+    onSuccess: (_result, params) => {
+      const voteStatus = getReviewerVoteStatus(params.vote);
+      const cachedPr = selectPullRequest({
+        providerId: repoInfo!.providerId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+      });
+      const updatedCachedPr = updateReviewerVote(
+        cachedPr,
+        params.reviewerId,
+        voteStatus,
+      );
+
+      if (updatedCachedPr) {
+        patchPullRequestSnapshot({
+          providerId: repoInfo!.providerId,
+          repoId: repoInfo!.repoId,
+          pullRequestId: prId,
+          patch: { reviewers: updatedCachedPr.reviewers },
+        });
+      }
+
+      const isApprovedByMe =
+        voteStatus === 'approved' || voteStatus === 'approved-with-suggestions';
+      updateFeedPullRequest(queryClient, projectId, prId, {
+        isApprovedByMe,
+        attention: isApprovedByMe ? 'pr-approved-by-me' : 'review-requested',
+      });
+      if (isApprovedByMe) {
+        recordPrActivity({
+          queryClient,
+          projectId,
+          prId,
+          repoInfo: repoInfo!,
+          type: 'pr_approved',
+          metadata: { voteStatus },
+          workActivityEnabled: workActivitySetting?.enabled !== false,
+        });
+      }
+
+      queryClient.setQueryData<AzureDevOpsPullRequestDetails | undefined>(
+        ['pull-request', projectId, prId],
+        (old) => updateReviewerVote(old, params.reviewerId, voteStatus),
+      );
       queryClient.invalidateQueries({
         queryKey: ['pull-request', projectId, prId],
       });
@@ -539,6 +959,7 @@ export function useSetAutoComplete(projectId: string, prId: number) {
         deleteSourceBranch: boolean;
         transitionWorkItems: boolean;
         mergeCommitMessage?: string;
+        autoCompleteIgnoreConfigIds?: number[];
       };
     }) =>
       api.azureDevOps.setPullRequestAutoComplete({
@@ -549,6 +970,11 @@ export function useSetAutoComplete(projectId: string, prId: number) {
         ...params,
       }),
     onSuccess: (updatedPr) => {
+      ingestPullRequest({
+        providerId: repoInfo!.providerId,
+        repoId: repoInfo!.repoId,
+        pullRequest: updatedPr,
+      });
       queryClient.setQueryData(['pull-request', projectId, prId], updatedPr);
       queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
       queryClient.invalidateQueries({
@@ -571,11 +997,25 @@ export function usePublishPullRequest(projectId: string, prId: number) {
         pullRequestId: prId,
       }),
     onSuccess: () => {
+      patchPullRequestSnapshot({
+        providerId: repoInfo!.providerId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        patch: { isDraft: false },
+      });
+      queryClient.setQueryData<AzureDevOpsPullRequestDetails | undefined>(
+        ['pull-request', projectId, prId],
+        (old) => (old ? { ...old, isDraft: false } : old),
+      );
+      updateFeedPullRequest(queryClient, projectId, prId, { isDraft: false });
       queryClient.invalidateQueries({
         queryKey: ['pull-request', projectId, prId],
       });
       queryClient.invalidateQueries({
         queryKey: ['pull-requests', projectId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: feedQueryKeys.pullRequests,
       });
     },
   });

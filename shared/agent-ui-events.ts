@@ -3,7 +3,10 @@ import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
 } from './normalized-message-v2';
+import type { AgentResourceSnapshot } from './agent-resource-types';
 import type { TaskStatus } from './types';
+
+
 
 export type AgentUIEventPayload =
   | { type: 'entry'; entry: NormalizedEntry }
@@ -19,6 +22,7 @@ export type AgentUIEventPayload =
   | ({ type: 'permission' } & NormalizedPermissionRequest)
   | { type: 'question'; requestId: string; questions: AgentQuestion[] }
   | { type: 'name-updated'; name: string }
+  | { type: 'resource-snapshot'; snapshot: AgentResourceSnapshot }
   | { type: 'queue-update'; queuedPrompts: QueuedPrompt[] };
 
 export type AgentUIEvent = {

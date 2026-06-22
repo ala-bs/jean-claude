@@ -1,18 +1,20 @@
 import { Check, Download, ExternalLink, Loader2, Wand2 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 
-import { Button } from '@/common/ui/button';
-import { Checkbox } from '@/common/ui/checkbox';
-import { Chip } from '@/common/ui/chip';
-import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import {
   useInstallRegistrySkill,
   useRegistrySkillContent,
 } from '@/hooks/use-managed-skills';
-import { formatCompactNumber } from '@/lib/numbers';
-import { useToastStore } from '@/stores/toasts';
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import { Button } from '@/common/ui/button';
+import { Checkbox } from '@/common/ui/checkbox';
+import { Chip } from '@/common/ui/chip';
+import { formatCompactNumber } from '@/lib/numbers';
+import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import type { RegistrySkill } from '@shared/skill-types';
+import { useToastStore } from '@/stores/toasts';
+
+
 
 const SKILLS_SH_BASE = 'https://skills.sh';
 
@@ -37,6 +39,7 @@ export function RegistrySkillDetails({
   >({
     'claude-code': true,
     opencode: true,
+    codex: false,
   });
   const [justInstalled, setJustInstalled] = useState(false);
 

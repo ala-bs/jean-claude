@@ -1,17 +1,25 @@
-import clsx from 'clsx';
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
-import type { ReactNode } from 'react';
 import { useCallback, useMemo, useState } from 'react';
+import clsx from 'clsx';
+import type { ReactNode } from 'react';
 import type { ThemedToken } from 'shiki';
 
+
+
 import { computeCurrentStateLines, type DiffLine } from './diff-utils';
-import type { SearchMatch } from './use-diff-search';
 import {
   renderTokensWithHighlights,
   renderWithHighlights,
 } from './utils-search-highlight';
+import type { SearchMatch } from './use-diff-search';
 
-import type { CodeFoldingState, InlineComment, LineRange } from './index';
+
+import type {
+  CodeFoldingState,
+  CommentFormEntry,
+  InlineComment,
+  LineRange,
+} from './index';
 
 export function CurrentStateTable({
   oldString,
@@ -21,8 +29,7 @@ export function CurrentStateTable({
   onAddCommentClick,
   inlineComments,
   commentedLines,
-  commentFormLineRange,
-  commentForm,
+  commentForms,
   searchMatches,
   currentMatchIndex,
   folding,
@@ -34,8 +41,7 @@ export function CurrentStateTable({
   onAddCommentClick?: (lineRange: LineRange) => void;
   inlineComments?: InlineComment[];
   commentedLines?: Set<number>;
-  commentFormLineRange?: LineRange | null;
-  commentForm?: ReactNode;
+  commentForms?: CommentFormEntry[];
   searchMatches: SearchMatch[];
   currentMatchIndex: number;
   folding: CodeFoldingState;
@@ -118,13 +124,13 @@ export function CurrentStateTable({
 
   const isLineInCommentRange = useCallback(
     (lineNumber: number) => {
-      if (!commentFormLineRange) return false;
-      return (
-        lineNumber >= commentFormLineRange.start &&
-        lineNumber <= commentFormLineRange.end
+      if (!commentForms || commentForms.length === 0) return false;
+      return commentForms.some(
+        (cf) =>
+          lineNumber >= cf.lineRange.start && lineNumber <= cf.lineRange.end,
       );
     },
-    [commentFormLineRange],
+    [commentForms],
   );
 
   return (
@@ -188,8 +194,9 @@ export function CurrentStateTable({
             (c) => c.line === lineNumber,
           );
 
-          const showCommentForm =
-            commentFormLineRange && lineNumber === commentFormLineRange.end;
+          const formsForLine = commentForms
+            ? commentForms.filter((cf) => cf.lineRange.end === lineNumber)
+            : undefined;
 
           // Code folding state
           const isFoldable = folding.isFoldStart(lineNumber);
@@ -212,7 +219,7 @@ export function CurrentStateTable({
               onMouseDown={() => handleLineMouseDown(lineNumber)}
               onMouseUp={() => handleLineMouseUp(lineNumber)}
               inlineComments={lineComments}
-              commentForm={showCommentForm ? commentForm : undefined}
+              commentForms={formsForLine}
               isFoldable={isFoldable}
               isFoldCollapsed={isFoldCollapsed}
               foldRange={foldRange}
@@ -239,7 +246,7 @@ function CurrentStateRow({
   onMouseDown,
   onMouseUp,
   inlineComments,
-  commentForm,
+  commentForms,
   isFoldable,
   isFoldCollapsed,
   foldRange,
@@ -258,7 +265,7 @@ function CurrentStateRow({
   onMouseDown: () => void;
   onMouseUp: () => void;
   inlineComments?: InlineComment[];
-  commentForm?: ReactNode;
+  commentForms?: CommentFormEntry[];
   isFoldable?: boolean;
   isFoldCollapsed?: boolean;
   foldRange?: { startLine: number; endLine: number };
@@ -377,14 +384,16 @@ function CurrentStateRow({
         </tr>
       )}
 
-      {/* Comment form for this line */}
-      {commentForm && (
-        <tr>
-          <td colSpan={4} className="p-0">
-            {commentForm}
-          </td>
-        </tr>
-      )}
+      {/* Comment forms for this line */}
+      {commentForms &&
+        commentForms.length > 0 &&
+        commentForms.map((cf) => (
+          <tr key={`form-${cf.lineRange.start}-${cf.lineRange.end}`}>
+            <td colSpan={4} className="p-0">
+              {cf.form}
+            </td>
+          </tr>
+        ))}
     </>
   );
 }

@@ -1,50 +1,67 @@
-import clsx from 'clsx';
+import type {
+  ChangeEvent,
+  ClipboardEvent,
+  DragEvent,
+  KeyboardEvent,
+} from 'react';
 import { Edit3, Image, Loader2, Save, X } from 'lucide-react';
-import type { ChangeEvent, ClipboardEvent, DragEvent } from 'react';
-import { useCallback, useState, useMemo, useEffect, useRef } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import clsx from 'clsx';
 
-import { Button } from '@/common/ui/button';
-import type { MentionOption } from '@/common/ui/mention-textarea';
-import { Textarea } from '@/common/ui/textarea';
-import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
+
+import type {
+  AzureDevOpsCommentThread,
+  AzureDevOpsFileChange,
+  AzureDevOpsPullRequestDetails,
+} from '@/lib/api';
 import {
+  type DiffFile,
   FileDiffContent,
   normalizeAzureChangeType,
-  type DiffFile,
 } from '@/features/common/ui-file-diff';
-import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import {
+  getAllowedMergeStrategies,
   useCurrentAzureUser,
   useLinkWorkItemToPr,
   usePullRequestFileContent,
   usePullRequestPolicyEvaluations,
   usePullRequestWorkItems,
   useRequeuePolicyEvaluation,
+  useSetAutoComplete,
   useUnlinkWorkItemFromPr,
   useUpdatePullRequestDescription,
   useUploadPullRequestAttachment,
 } from '@/hooks/use-pull-requests';
-import type {
-  AzureDevOpsPullRequestDetails,
-  AzureDevOpsCommentThread,
-  AzureDevOpsFileChange,
-} from '@/lib/api';
 import {
-  normalizeMentionId,
-  type MentionDisplayNames,
-} from '@/lib/azure-devops-mentions';
+  isVideoFile,
+  VideoGifConverter,
+} from '@/features/common/ui-video-gif-converter';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
+import {
+  type MentionDisplayNames,
+  normalizeMentionId,
+} from '@/lib/azure-devops-mentions';
+import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
+import { Button } from '@/common/ui/button';
+import { formatBytes } from '@/lib/format-bytes';
+import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import { Textarea } from '@/common/ui/textarea';
+import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 
-import { PrChecks } from '../ui-pr-checks';
-import { CIInlinePanel } from '../ui-pr-ci-inline';
-import { PrComments } from '../ui-pr-comments';
+
+
 import {
   convertPrThreadsForFile,
   PrInlineCommentThread,
 } from '../ui-pr-inline-comment-thread';
+import { CIInlinePanel } from '../ui-pr-ci-inline';
+import { PrChecks } from '../ui-pr-checks';
+import { PrComments } from '../ui-pr-comments';
 import { PrMetaPanel } from '../ui-pr-meta-panel';
-import { isVideoFile, VideoGifConverter } from '../ui-video-gif-converter';
+
+
 
 type PendingDescriptionImage = PromptImagePart & {
   placeholderMarkdown: string;
@@ -169,18 +186,23 @@ export function PrOverview({
     return names;
   }, [currentUser, pr.createdBy, pr.reviewers, threads]);
 
+  // Debounce draft for preview to avoid re-rendering markdown+GIFs on every keystroke
+  const debouncedDescriptionDraft = useDebouncedValue(descriptionDraft, 300);
   const previewDescriptionDraft = useMemo(
     () =>
-      descriptionPreviewMarkdown(descriptionDraft, pendingDescriptionImages),
-    [descriptionDraft, pendingDescriptionImages],
+      descriptionPreviewMarkdown(
+        debouncedDescriptionDraft,
+        pendingDescriptionImages,
+      ),
+    [debouncedDescriptionDraft, pendingDescriptionImages],
   );
 
   useEffect(() => {
     if (!isEditingDescription) {
-      setDescriptionDraft(pr.description);
-      setDescriptionError(null);
+      startTransition(() => setDescriptionDraft(pr.description));
+      startTransition(() => setDescriptionError(null));
       pendingDescriptionImagesRef.current = [];
-      setPendingDescriptionImages([]);
+      startTransition(() => setPendingDescriptionImages([]));
     }
   }, [isEditingDescription, pr.description]);
 
@@ -221,7 +243,7 @@ export function PrOverview({
   const prevEvaluationsRef = useRef(evaluations);
   useEffect(() => {
     if (queuedIds.size === 0) return;
-    setQueuedIds((prev) => {
+    startTransition(() => setQueuedIds((prev) => {
       const next = new Set(prev);
       for (const id of prev) {
         const evaluation = evaluations.find((e) => e.evaluationId === id);
@@ -236,11 +258,12 @@ export function PrOverview({
       }
       if (next.size === prev.size) return prev;
       return next;
-    });
+    }));
     prevEvaluationsRef.current = evaluations;
   }, [evaluations, queuedIds]);
 
   const requeueMutation = useRequeuePolicyEvaluation(projectId, prId);
+  const autoCompleteMutation = useSetAutoComplete(projectId, prId);
 
   const handleRequeue = useCallback(
     (evaluationId: string) => {
@@ -284,6 +307,44 @@ export function PrOverview({
       }
     },
     [requeueMutation],
+  );
+
+  const ignoredAutoCompletePolicyIds = useMemo(
+    () => new Set(pr.completionOptions?.autoCompleteIgnoreConfigIds ?? []),
+    [pr.completionOptions?.autoCompleteIgnoreConfigIds],
+  );
+
+  const handleIgnoreOptionalPolicy = useCallback(
+    (configId: number) => {
+      if (!pr.autoCompleteSetBy) return;
+
+      autoCompleteMutation.mutate({
+        enabled: true,
+        autoCompleteSetById: pr.autoCompleteSetBy.id,
+        completionOptions: {
+          mergeStrategy:
+            pr.completionOptions?.mergeStrategy ??
+            getAllowedMergeStrategies(evaluations)[0] ??
+            'noFastForward',
+          deleteSourceBranch: pr.completionOptions?.deleteSourceBranch ?? true,
+          transitionWorkItems:
+            pr.completionOptions?.transitionWorkItems ?? false,
+          mergeCommitMessage: pr.completionOptions?.mergeCommitMessage,
+          autoCompleteIgnoreConfigIds: Array.from(
+            new Set([
+              ...(pr.completionOptions?.autoCompleteIgnoreConfigIds ?? []),
+              configId,
+            ]),
+          ),
+        },
+      });
+    },
+    [
+      autoCompleteMutation,
+      evaluations,
+      pr.autoCompleteSetBy,
+      pr.completionOptions,
+    ],
   );
 
   const handleSaveDescription = useCallback(async () => {
@@ -463,6 +524,16 @@ export function PrOverview({
     [],
   );
 
+  const handleDescriptionKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        void handleSaveDescription();
+      }
+    },
+    [handleSaveDescription],
+  );
+
   // Merge optimistic queued state with server data
   const evaluationsWithOptimistic = useMemo(
     () =>
@@ -518,6 +589,11 @@ export function PrOverview({
                   )
                 : undefined
             }
+            ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
+            onIgnoreOptionalPolicy={
+              pr.autoCompleteSetBy ? handleIgnoreOptionalPolicy : undefined
+            }
+            isIgnoringOptionalPolicy={autoCompleteMutation.isPending}
           />
 
           {/* Description */}
@@ -554,6 +630,7 @@ export function PrOverview({
                     onPaste={handleDescriptionPaste}
                     onDrop={handleDescriptionDrop}
                     onDragOver={handleDescriptionDragOver}
+                    onKeyDown={handleDescriptionKeyDown}
                     rows={10}
                     className="min-h-56 font-mono text-xs"
                     placeholder="Describe the pull request..."
@@ -579,6 +656,32 @@ export function PrOverview({
                   {descriptionError && (
                     <p className="text-xs text-red-400">{descriptionError}</p>
                   )}
+                  {pendingDescriptionImages.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {pendingDescriptionImages.map((image, index) => (
+                        <div
+                          key={`${image.filename ?? 'img'}-${index}`}
+                          className="relative"
+                        >
+                          <img
+                            src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
+                            alt={image.filename || 'Attached image'}
+                            title={
+                              image.sizeBytes
+                                ? formatBytes(image.sizeBytes)
+                                : undefined
+                            }
+                            className="h-8 w-8 rounded border border-white/10 object-cover"
+                          />
+                          {image.sizeBytes && (
+                            <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                              {formatBytes(image.sizeBytes)}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <input
                     ref={imageInputRef}
                     type="file"
@@ -603,6 +706,9 @@ export function PrOverview({
                         ? 'Uploading...'
                         : 'Add image/GIF'}
                     </Button>
+                    <span className="text-ink-4 text-[11px]">
+                      Cmd+Enter to save
+                    </span>
                     <div className="flex-1" />
                     <Button
                       type="button"

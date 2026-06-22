@@ -227,6 +227,19 @@ button {
   font-size: 0.875rem;
 }
 
+.feed-note-blocknote input[type='checkbox'] {
+  width: 0.875rem;
+  height: 0.875rem;
+  margin: 0.125rem 0.375rem 0 0;
+  vertical-align: top;
+  accent-color: var(--color-acc);
+  cursor: pointer;
+}
+
+.feed-note-blocknote input[type='checkbox']:disabled {
+  cursor: default;
+}
+
 @utility no-scrollbar {
   @apply [scrollbar-width:none] [&::-webkit-scrollbar]:hidden;
 }
@@ -941,6 +954,9 @@ button {
   background-size: 100% 14px !important;
   background-repeat: repeat-y !important;
   opacity: 0.85 !important;
+}
+
+html[data-reduce-motion='false'] .feed-running-rail {
   animation: feed-rail-flow 0.9s linear infinite;
 }
 
@@ -953,6 +969,9 @@ button {
   background-size: 100% 14px !important;
   background-repeat: repeat-y !important;
   opacity: 0.78 !important;
+}
+
+html[data-reduce-motion='false'] .feed-unread-rail {
   animation: feed-rail-flow 1.2s linear infinite;
 }
 
@@ -984,6 +1003,9 @@ button {
   ) !important;
   background-size: 200% 100% !important;
   background-repeat: repeat !important;
+}
+
+html[data-reduce-motion='false'] .feed-running-row {
   animation: feed-row-flow 6s linear infinite !important;
 }
 
@@ -1019,6 +1041,9 @@ button {
   background-size: 200% 100%;
   box-shadow: 0 0 10px
     color-mix(in oklch, var(--color-status-done) 45%, transparent);
+}
+
+html[data-reduce-motion='false'] .feed-command-running-bottom-border {
   animation: feed-row-flow 1.8s linear infinite;
 }
 
@@ -1046,6 +1071,9 @@ button {
   ) !important;
   background-size: 200% 100% !important;
   background-repeat: repeat !important;
+}
+
+html[data-reduce-motion='false'] .feed-unread-row {
   animation: feed-row-flow 8s linear infinite !important;
 }
 
@@ -1058,12 +1086,41 @@ button {
 
 .feed-running-branch {
   stroke-dasharray: 4 4;
+}
+
+html[data-reduce-motion='false'] .feed-running-branch {
   animation: feed-dash-flow 0.9s linear infinite;
 }
 
 .feed-unread-branch {
   stroke-dasharray: 4 4;
+}
+
+html[data-reduce-motion='false'] .feed-unread-branch {
   animation: feed-dash-flow 1.2s linear infinite;
+}
+
+html[data-reduce-motion='true'] .running-border,
+html[data-reduce-motion='true'] .running-border-selected,
+html[data-reduce-motion='true'] .jobs-running-border,
+html[data-reduce-motion='true'] .step-chip-running,
+html[data-reduce-motion='true'] .step-connector-running,
+html[data-reduce-motion='true'] .animate-command-running,
+html[data-reduce-motion='true'] .task-agent-running-shell::before,
+html[data-reduce-motion='true'] .task-agent-running-shell .animate-pulse,
+html[data-reduce-motion='true'] .task-agent-running-shell .animate-spin,
+html[data-reduce-motion='true'] .step-chip-running .animate-pulse,
+html[data-reduce-motion='true'] .step-chip-running .animate-spin,
+html[data-reduce-motion='true'] .rg-running-text,
+html[data-reduce-motion='true'] .rg-running-dots span,
+html[data-reduce-motion='true'] .rg-caret,
+html[data-reduce-motion='true'] .rg-pulse-glow,
+html[data-reduce-motion='true'] .rg-shimmer-sweep,
+html[data-reduce-motion='true'] .rg-pulse-ring,
+html[data-reduce-motion='true'] .feed-node-pulse-permission,
+html[data-reduce-motion='true'] .feed-node-pulse-question,
+html[data-reduce-motion='true'] .resource-status-pulse {
+  animation: none !important;
 }
 
 /* ─── Permission / Question waiting indicators ─────────────────── */

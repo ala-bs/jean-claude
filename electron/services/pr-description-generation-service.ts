@@ -1,12 +1,14 @@
 import { dbg } from '../lib/debug';
 
-import { generateText } from './ai-generation-service';
-import { resolveAiSkillSlot } from './ai-skill-slot-resolver';
 import {
   getWorktreeCommitLog,
   getWorktreeDiff,
   getWorktreeUnifiedDiff,
 } from './worktree-service';
+import { generateText } from './ai-generation-service';
+import { resolveAiSkillSlot } from './ai-skill-slot-resolver';
+
+
 
 /** Schema for PR title + description generation. */
 const PR_DESCRIPTION_SCHEMA = {
@@ -116,11 +118,13 @@ function parsePrDescriptionResult(
  */
 export async function generatePrDescriptionForTask(
   task: {
+    id?: string;
     worktreePath: string | null;
     startCommitHash: string | null;
     sourceBranch: string | null;
     branchName: string | null;
     projectId: string;
+    name?: string | null;
     prompt: string;
     workItemIds: string[] | null;
   },
@@ -218,6 +222,13 @@ export async function generatePrDescriptionForTask(
       skillName: slotConfig.skillName,
       outputSchema: PR_DESCRIPTION_SCHEMA,
       throwOnError: true,
+      usageContext: {
+        feature: 'pr-description',
+        projectId: task.projectId,
+        taskId: task.id ?? null,
+        stepId: null,
+        taskName: task.name ?? null,
+      },
     });
 
     const parsed = parsePrDescriptionResult(result);

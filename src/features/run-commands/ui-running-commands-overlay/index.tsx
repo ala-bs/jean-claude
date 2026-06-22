@@ -1,26 +1,27 @@
-import clsx from 'clsx';
 import { Loader2, Square, Terminal, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 
-import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
-import { useCommands } from '@/common/hooks/use-commands';
-import { IconButton } from '@/common/ui/icon-button';
-import { Kbd } from '@/common/ui/kbd';
-import { InteractiveLog } from '@/features/common/interactive-log';
-import { useProjects } from '@/hooks/use-projects';
-import { useTasks } from '@/hooks/use-tasks';
-import { api } from '@/lib/api';
-import { useTaskMessagesStore } from '@/stores/task-messages';
-import { useToastStore } from '@/stores/toasts';
-import {
-  getRunCommandDisplayName,
-  type CommandRunStatus,
-} from '@shared/run-command-types';
 
-/** Stable empty array to avoid unstable selector references. */
-const EMPTY_ARRAY: never[] = [];
+
+import {
+  type CommandRunStatus,
+  getRunCommandDisplayName,
+} from '@shared/run-command-types';
+import { api } from '@/lib/api';
+import { IconButton } from '@/common/ui/icon-button';
+import { InteractiveLog } from '@/features/common/interactive-log';
+import { Kbd } from '@/common/ui/kbd';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
+import { useProjects } from '@/hooks/use-projects';
+import { useTaskMessagesStore } from '@/stores/task-messages';
+import { useTasks } from '@/hooks/use-tasks';
+import { useToastStore } from '@/stores/toasts';
+
+
 
 /** Keys the overlay handles itself — don't forward to PTY. */
 const OVERLAY_IGNORED_KEYS = new Set(['Escape']);
@@ -44,6 +45,9 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [stoppingKeys, setStoppingKeys] = useState<Set<string>>(new Set());
   const addToast = useToastStore((s) => s.addToast);
+  const resetRunCommandLogs = useTaskMessagesStore(
+    (s) => s.resetRunCommandLogs,
+  );
 
   const runningCommands = useMemo(() => {
     const result: RunningCommand[] = [];
@@ -71,7 +75,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   // Auto-select first command if nothing selected or selected got removed
   useEffect(() => {
     if (runningCommands.length === 0) {
-      setSelectedKey(null);
+      startTransition(() => setSelectedKey(null));
       return;
     }
     const stillExists = selectedKey
@@ -80,9 +84,9 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         )
       : false;
     if (!stillExists) {
-      setSelectedKey(
+      startTransition(() => setSelectedKey(
         makeKey(runningCommands[0].taskId, runningCommands[0].commandStatus.id),
-      );
+      ));
     }
   }, [runningCommands, selectedKey]);
 
@@ -127,6 +131,19 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
     void handleStop(selectedCommand.taskId, selectedCommand.commandStatus.id);
   }, [selectedCommand, stoppingKeys, handleStop]);
 
+  const handleClearSelectedLogs = useCallback(() => {
+    if (!selectedCommand) return;
+    const generation = resetRunCommandLogs(
+      selectedCommand.taskId,
+      selectedCommand.commandStatus.id,
+    );
+    void api.runCommands.resetLogs({
+      taskId: selectedCommand.taskId,
+      runCommandId: selectedCommand.commandStatus.id,
+      generation,
+    });
+  }, [resetRunCommandLogs, selectedCommand]);
+
   const handleArrowNavigation = useCallback(
     (direction: 'up' | 'down') => {
       if (runningCommands.length === 0) return;
@@ -160,6 +177,12 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         label: 'Stop Selected Command',
         shortcut: 'cmd+backspace',
         handler: handleStopSelected,
+        hideInCommandPalette: true,
+      },
+      {
+        label: 'Clear Selected Command Logs',
+        shortcut: 'cmd+k',
+        handler: handleClearSelectedLogs,
         hideInCommandPalette: true,
       },
       {
@@ -324,6 +347,10 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
               <span>Stop</span>
             </div>
             <div className="text-ink-3 flex items-center gap-1.5 text-[11px]">
+              <Kbd shortcut="cmd+k" />
+              <span>Clear Logs</span>
+            </div>
+            <div className="text-ink-3 flex items-center gap-1.5 text-[11px]">
               <Kbd shortcut="escape" />
               <span>Close</span>
             </div>
@@ -348,8 +375,8 @@ function LogViewer({
   isStopping: boolean;
   onStop: () => void;
 }) {
-  const logLines = useTaskMessagesStore(
-    (s) => s.runCommandLogs[taskId]?.[runCommandId]?.lines ?? EMPTY_ARRAY,
+  const log = useTaskMessagesStore(
+    (s) => s.runCommandLogs[taskId]?.[runCommandId] ?? null,
   );
 
   return (
@@ -379,7 +406,7 @@ function LogViewer({
       </div>
 
       <InteractiveLog
-        lines={logLines}
+        log={log}
         taskId={taskId}
         runCommandId={runCommandId}
         isRunning

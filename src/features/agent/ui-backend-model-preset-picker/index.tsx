@@ -1,17 +1,24 @@
 import { useMemo } from 'react';
 
-import type { KeyboardLayer } from '@/common/context/keyboard-bindings';
-import type { BindingKey } from '@/common/context/keyboard-bindings/types';
-import { BackendPresetSelector } from '@/features/agent/ui-backend-preset-selector';
 import {
+  type BackendModelOption,
   getModelLabel,
   getModelsForBackend,
 } from '@/features/agent/ui-backend-selector';
+import type { ModelPreference, ThinkingEffort } from '@shared/types';
+import {
+  useBackendDefaultModelsSetting,
+  useBackendModelPresetsSetting,
+} from '@/hooks/use-settings';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import { BackendPresetSelector } from '@/features/agent/ui-backend-preset-selector';
+import type { BindingKey } from '@/common/context/keyboard-bindings/types';
+import { getDefaultModelForBackend } from '@/lib/default-models';
+import type { KeyboardLayer } from '@/common/context/keyboard-bindings';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
-import { useBackendModelPresetsSetting } from '@/hooks/use-settings';
-import type { AgentBackendType } from '@shared/agent-backend-types';
-import type { ModelPreference, ThinkingEffort } from '@shared/types';
+
+
 
 export function BackendModelPresetPicker({
   backend,
@@ -46,6 +53,7 @@ export function BackendModelPresetPicker({
   layer?: KeyboardLayer;
 }) {
   const { data: presets = [] } = useBackendModelPresetsSetting();
+  const { data: backendDefaultModels } = useBackendDefaultModelsSetting();
   const { data: dynamicModels, isFetched } = useBackendModels(backend);
   const validSelectedPresetId = useMemo(() => {
     if (!selectedPresetId) {
@@ -68,16 +76,17 @@ export function BackendModelPresetPicker({
   const baseModelOptions = getModelsForBackend(backend, dynamicModels);
   const modelOptions = baseModelOptions.some((option) => option.value === model)
     ? baseModelOptions
-    : [
-        {
+    : insertMissingModelOption({
+        options: baseModelOptions,
+        missingOption: {
           value: model,
           label: getModelLabel(model, backend, dynamicModels),
           description: isFetched
             ? 'Previously selected model'
             : 'Loading available models',
+          group: getOpenCodeModelGroup(model, backend),
         },
-        ...baseModelOptions,
-      ];
+      });
 
   return (
     <>
@@ -98,7 +107,10 @@ export function BackendModelPresetPicker({
 
           onChange({
             backend: selection.backend,
-            model: 'default',
+            model: getDefaultModelForBackend({
+              backend: selection.backend,
+              backendDefaultModels,
+            }),
             thinkingEffort: 'default',
             presetId: null,
           });
@@ -131,4 +143,41 @@ export function BackendModelPresetPicker({
       )}
     </>
   );
+}
+
+function getOpenCodeModelGroup(
+  model: ModelPreference,
+  backend: AgentBackendType,
+): string | undefined {
+  if (backend !== 'opencode') return undefined;
+
+  const separatorIndex = model.indexOf('/');
+  if (separatorIndex <= 0) return undefined;
+
+  return model.slice(0, separatorIndex);
+}
+
+function insertMissingModelOption({
+  options,
+  missingOption,
+}: {
+  options: BackendModelOption[];
+  missingOption: BackendModelOption;
+}): BackendModelOption[] {
+  if (!missingOption.group) {
+    return [missingOption, ...options];
+  }
+
+  const insertIndex = options.findIndex(
+    (option) => option.group === missingOption.group,
+  );
+  if (insertIndex === -1) {
+    return [...options, missingOption];
+  }
+
+  return [
+    ...options.slice(0, insertIndex),
+    missingOption,
+    ...options.slice(insertIndex),
+  ];
 }

@@ -1,8 +1,9 @@
 import { sql } from 'kysely';
 
 import type {
-  ProjectCommand,
   NewProjectCommand,
+  ProjectCommand,
+  RunCommandEnvVar,
   UpdateProjectCommand,
 } from '@shared/run-command-types';
 
@@ -16,6 +17,7 @@ function parseRow(row: {
   name: string | null;
   command: string;
   ports: string;
+  envVars?: string;
   confirmBeforeRun: number;
   confirmMessage: string | null;
   sortOrder: number;
@@ -24,6 +26,7 @@ function parseRow(row: {
   return {
     ...row,
     ports: JSON.parse(row.ports) as number[],
+    envVars: JSON.parse(row.envVars ?? '[]') as RunCommandEnvVar[],
     confirmBeforeRun: row.confirmBeforeRun === 1,
   };
 }
@@ -60,6 +63,7 @@ export const ProjectCommandRepository = {
         name: data.name ?? null,
         command: data.command,
         ports: JSON.stringify(data.ports),
+        envVars: JSON.stringify(data.envVars ?? []),
         confirmBeforeRun: data.confirmBeforeRun ? 1 : 0,
         confirmMessage: data.confirmMessage ?? null,
         sortOrder: sql<number>`(
@@ -83,6 +87,10 @@ export const ProjectCommandRepository = {
     if (data.name !== undefined) updateData.name = data.name;
     if (data.command !== undefined) updateData.command = data.command;
     if (data.ports !== undefined) updateData.ports = JSON.stringify(data.ports);
+    if (data.envVars !== undefined) {
+      const envVars = data.envVars.filter((envVar) => envVar.name.trim());
+      updateData.envVars = JSON.stringify(envVars);
+    }
     if (data.confirmBeforeRun !== undefined)
       updateData.confirmBeforeRun = data.confirmBeforeRun ? 1 : 0;
     if (data.confirmMessage !== undefined)

@@ -1,5 +1,4 @@
 import { MessageSquare, MessageSquarePlus } from 'lucide-react';
-import type { ReactNode } from 'react';
 import {
   useCallback,
   useEffect,
@@ -8,8 +7,9 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { ReactNode } from 'react';
 
-import { useReviewContext } from '@/common/context/review-context';
+
 import {
   COMMENT_ACCENT,
   InlineCommentComposer,
@@ -19,6 +19,9 @@ import {
   useReviewCommentsStore,
 } from '@/stores/review-comments';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import { useReviewContext } from '@/common/context/review-context';
+
+
 
 import { MarkdownContent } from '../../ui-markdown-content';
 
@@ -132,6 +135,7 @@ export function CommentableWrapper({
   const reviewContext = useReviewContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const [selectedCharOffset, setSelectedCharOffset] = useState<number>(-1);
   const [floatingPos, setFloatingPos] = useState<{
@@ -142,6 +146,7 @@ export function CommentableWrapper({
   const [composerSelectedText, setComposerSelectedText] = useState('');
   const [composerCharOffset, setComposerCharOffset] = useState(-1);
   const [composerPos, setComposerPos] = useState<{ top: number } | null>(null);
+  const [composerIsEmpty, setComposerIsEmpty] = useState(true);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [commentPositions, setCommentPositions] = useState<
     Record<string, { top: number; left: number }>
@@ -323,6 +328,7 @@ export function CommentableWrapper({
     setComposerSelectedText(selectedText);
     setComposerCharOffset(selectedCharOffset);
     setComposerPos({ top: floatingPos.top });
+    setComposerIsEmpty(true);
     setComposerOpen(true);
     setSelectedText(null);
     setFloatingPos(null);
@@ -346,6 +352,7 @@ export function CommentableWrapper({
       setComposerSelectedText('');
       setComposerCharOffset(-1);
       setComposerPos(null);
+      setComposerIsEmpty(true);
       setActiveCommentId(null);
       window.getSelection()?.removeAllRanges();
     },
@@ -357,9 +364,24 @@ export function CommentableWrapper({
     setComposerSelectedText('');
     setComposerCharOffset(-1);
     setComposerPos(null);
+    setComposerIsEmpty(true);
     setActiveCommentId(null);
     window.getSelection()?.removeAllRanges();
   }, []);
+
+  useEffect(() => {
+    if (!composerOpen || !composerIsEmpty) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target || composerRef.current?.contains(target)) return;
+      handleComposerCancel();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () =>
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+  }, [composerOpen, composerIsEmpty, handleComposerCancel]);
 
   const handleEditComment = useCallback(
     (commentId: string, body: string, images: PromptImagePart[]) => {
@@ -395,7 +417,7 @@ export function CommentableWrapper({
       {floatingPos && selectedText && (
         <button
           type="button"
-          className="absolute z-10 flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium shadow-lg"
+          className="absolute z-30 flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium shadow-lg"
           style={{
             top: floatingPos.top,
             left: Math.min(floatingPos.left, 200),
@@ -414,7 +436,8 @@ export function CommentableWrapper({
       {/* Floating comment composer — positioned near the selection */}
       {composerOpen && composerPos && (
         <div
-          className="absolute right-0 left-0 z-10 rounded-md px-3 py-2.5"
+          ref={composerRef}
+          className="absolute right-0 left-0 z-30 rounded-md px-3 py-2.5"
           style={{
             top: composerPos.top,
             background: 'oklch(0.18 0.02 295)',
@@ -433,6 +456,7 @@ export function CommentableWrapper({
             lineStart={0}
             onSubmit={handleComposerSubmit}
             onCancel={handleComposerCancel}
+            onEmptyChange={setComposerIsEmpty}
           />
         </div>
       )}

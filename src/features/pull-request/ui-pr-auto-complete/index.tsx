@@ -1,25 +1,28 @@
-import clsx from 'clsx';
 import { Circle, GitMerge, Loader2, Play, X } from 'lucide-react';
 import React, {
+  startTransition,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
+import clsx from 'clsx';
 
-import { Checkbox } from '@/common/ui/checkbox';
-import { Modal } from '@/common/ui/modal';
 import {
-  useSetAutoComplete,
+  getAllowedMergeStrategies,
+  MERGE_STRATEGY_LABELS,
   useCurrentAzureUser,
   usePullRequestPolicyEvaluations,
   useRequeuePolicyEvaluation,
-  getAllowedMergeStrategies,
-  MERGE_STRATEGY_LABELS,
+  useSetAutoComplete,
 } from '@/hooks/use-pull-requests';
-import type { MergeStrategy } from '@/hooks/use-pull-requests';
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
+import { Checkbox } from '@/common/ui/checkbox';
+import type { MergeStrategy } from '@/hooks/use-pull-requests';
+import { Modal } from '@/common/ui/modal';
+
+
 
 import { getCurrentIdentityId } from '../utils-pr-current-user';
 
@@ -88,6 +91,13 @@ export function PrAutoComplete({
       ),
     [evaluations],
   );
+  const optionalPolicyConfigIds = useMemo(
+    () =>
+      evaluations
+        .filter((evaluation) => !evaluation.configuration.isBlocking)
+        .map((evaluation) => evaluation.configuration.id),
+    [evaluations],
+  );
 
   const pendingCiCount = pendingCi.length;
 
@@ -109,10 +119,28 @@ export function PrAutoComplete({
   const [showCommitMessage, setShowCommitMessage] = useState(
     !!pr.completionOptions?.mergeCommitMessage,
   );
+  const [ignoreOptionalPolicies, setIgnoreOptionalPolicies] = useState(
+    !!pr.completionOptions?.autoCompleteIgnoreConfigIds?.length,
+  );
+
+  const resetForm = useCallback(() => {
+    setMergeStrategy(
+      pr.completionOptions?.mergeStrategy ??
+        allowedStrategies[0] ??
+        'noFastForward',
+    );
+    setDeleteSourceBranch(pr.completionOptions?.deleteSourceBranch ?? true);
+    setTransitionWorkItems(pr.completionOptions?.transitionWorkItems ?? false);
+    setMergeCommitMessage(pr.completionOptions?.mergeCommitMessage ?? '');
+    setShowCommitMessage(!!pr.completionOptions?.mergeCommitMessage);
+    setIgnoreOptionalPolicies(
+      !!pr.completionOptions?.autoCompleteIgnoreConfigIds?.length,
+    );
+  }, [allowedStrategies, pr.completionOptions]);
 
   useEffect(() => {
     if (!allowedStrategies.includes(mergeStrategy)) {
-      setMergeStrategy(allowedStrategies[0] ?? 'noFastForward');
+      startTransition(() => setMergeStrategy(allowedStrategies[0] ?? 'noFastForward'));
     }
   }, [allowedStrategies, mergeStrategy]);
 
@@ -130,6 +158,10 @@ export function PrAutoComplete({
             showCommitMessage && mergeCommitMessage
               ? mergeCommitMessage
               : undefined,
+          autoCompleteIgnoreConfigIds:
+            ignoreOptionalPolicies && optionalPolicyConfigIds.length > 0
+              ? optionalPolicyConfigIds
+              : undefined,
         },
       },
       { onSuccess: () => setIsModalOpen(false) },
@@ -142,6 +174,8 @@ export function PrAutoComplete({
     transitionWorkItems,
     mergeCommitMessage,
     showCommitMessage,
+    ignoreOptionalPolicies,
+    optionalPolicyConfigIds,
   ]);
 
   const handleCancel = useCallback(
@@ -179,34 +213,47 @@ export function PrAutoComplete({
     }
   }, [handleQueueCi, pendingCi, queuedIds]);
 
-  if (!currentIdentityId) return null;
-
   // When auto-complete is already set, show status chip with cancel button
   if (isAutoCompleteSet) {
+    const activeClassName =
+      variant === 'compact'
+        ? 'text-status-done bg-status-done/10 ring-status-done/20 ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1'
+        : 'flex items-center gap-1 rounded-lg bg-green-600/20 px-3 py-1.5 text-xs font-medium text-green-400';
+    const activeMutedClassName =
+      variant === 'compact' ? 'text-status-done/70' : 'text-green-400/70';
+    const cancelClassName =
+      variant === 'compact'
+        ? 'ml-0.5 rounded p-0.5 hover:bg-status-done/20'
+        : 'ml-1 rounded p-0.5 hover:bg-green-600/30';
+
     return (
-      <div className="flex items-center gap-1 rounded-lg bg-green-600/20 px-3 py-1.5 text-xs font-medium text-green-400">
+      <div className={activeClassName}>
         <GitMerge className="h-3.5 w-3.5" />
         <span>Auto-complete</span>
         {pr.completionOptions && (
-          <span className="text-green-400/70">
+          <span className={activeMutedClassName}>
             ({MERGE_STRATEGY_LABELS[pr.completionOptions.mergeStrategy]})
           </span>
         )}
-        <button
-          onClick={handleCancel}
-          className="ml-1 rounded p-0.5 hover:bg-green-600/30"
-          title="Cancel auto-complete"
-          disabled={autoCompleteMutation.isPending}
-        >
-          {autoCompleteMutation.isPending ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <X className="h-3 w-3" />
-          )}
-        </button>
+        {variant !== 'compact' && (
+          <button
+            onClick={handleCancel}
+            className={cancelClassName}
+            title="Cancel auto-complete"
+            disabled={autoCompleteMutation.isPending}
+          >
+            {autoCompleteMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <X className="h-3 w-3" />
+            )}
+          </button>
+        )}
       </div>
     );
   }
+
+  if (!currentIdentityId) return null;
 
   const triggerClassName =
     variant === 'compact'
@@ -220,6 +267,7 @@ export function PrAutoComplete({
         type="button"
         onClick={(e) => {
           e.stopPropagation();
+          resetForm();
           setIsModalOpen(true);
         }}
         className={triggerClassName}
@@ -340,6 +388,15 @@ export function PrAutoComplete({
               label="Transition work items"
               className="mb-3 text-xs"
             />
+
+            {optionalPolicyConfigIds.length > 0 && (
+              <Checkbox
+                checked={ignoreOptionalPolicies}
+                onChange={setIgnoreOptionalPolicies}
+                label="Ignore optional policies"
+                className="mb-3 text-xs"
+              />
+            )}
 
             <button
               type="button"

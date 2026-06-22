@@ -7,16 +7,6 @@
 import { BrowserWindow } from 'electron';
 import { nanoid } from 'nanoid';
 
-import type {
-  AgentBackend,
-  AgentBackendType,
-  AgentEvent,
-  NormalizedPermissionRequest,
-  NormalizedQuestion,
-  NormalizedQuestionRequest,
-  PromptImagePart,
-  PromptPart,
-} from '@shared/agent-backend-types';
 import {
   AGENT_CHANNELS,
   type AgentQuestion,
@@ -24,49 +14,77 @@ import {
   type QuestionResponse,
   type QueuedPrompt,
 } from '@shared/agent-types';
-import type { AgentUIEventPayload } from '@shared/agent-ui-events';
-import type { NormalizedEntry } from '@shared/normalized-message-v2';
-import {
-  type InteractionMode,
-  type TaskNotificationEvent,
-  type ReviewStepMeta,
-  isSkillCreationStepMeta,
-} from '@shared/types';
+import type {
+  AgentBackend,
+  AgentBackendType,
+  AgentEvent,
+  AgentSession,
+  NormalizedPermissionRequest,
+  NormalizedQuestion,
+  NormalizedQuestionRequest,
+  PromptImagePart,
+  PromptPart,
+} from '@shared/agent-backend-types';
 import {
   getDefaultInteractionModeForBackend,
   normalizeInteractionModeForBackend,
 } from '@shared/types';
-
-import type { PermissionScope } from '../../shared/permission-types';
-import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
 import {
-  TaskRepository,
-  ProjectRepository,
+  type InteractionMode,
+  isSkillCreationStepMeta,
+  type ReviewStepMeta,
+  type TaskNotificationEvent,
+  type TaskStepType,
+  type ThinkingEffort,
+} from '@shared/types';
+import type { AgentUIEventPayload } from '@shared/agent-ui-events';
+import type { AiUsageFeature } from '@shared/ai-usage-types';
+import type { NormalizedEntry } from '@shared/normalized-message-v2';
+
+
+
+import {
   AgentMessageRepository,
+  ProjectRepository,
   RawMessageRepository,
+  TaskRepository,
 } from '../database/repositories';
+import { dbg } from '../lib/debug';
+import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
+import { pathExists } from '../lib/fs';
+import type { PermissionScope } from '../../shared/permission-types';
 import { SettingsRepository } from '../database/repositories/settings';
 import { TaskStepRepository } from '../database/repositories/task-steps';
-import { dbg } from '../lib/debug';
-import { pathExists } from '../lib/fs';
 
-import { AGENT_BACKEND_CLASSES } from './agent-backends';
-import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
-import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
-import { resolveGlobalRules } from './global-permissions-service';
-import { getJcMcpServerPath } from './mcp-template-service';
-import { generateTaskName } from './name-generation-service';
-import { notificationService } from './notification-service';
+
+
+import {
+  buildAgentPromptMarkdown,
+  getPromptText,
+  textPrompt,
+} from './prompt-utils';
 import {
   buildToolPermissionConfig,
+  normalizeToolRequest,
   readSettings,
   resolveRules,
-  normalizeToolRequest,
 } from './permission-settings-service';
+import { emitStepUpsert, emitTaskUpsert } from './cache-event-service';
+import { AGENT_BACKEND_CLASSES } from './agent-backends';
+import { agentResourceMonitorService } from './agent-resource-monitor-service';
+import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { applyConfiguredPromptPreface } from './prompt-preface-service';
-import { textPrompt, getPromptText } from './prompt-utils';
-import { StepService } from './step-service';
 import { assertValidWorkspacePath } from './system-project-service';
+import { buildSessionIdStepUpdate } from './agent-session-update';
+import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
+import { generateTaskName } from './name-generation-service';
+import { getJcMcpServerPath } from './mcp-template-service';
+import { notificationService } from './notification-service';
+import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
+import { resolveGlobalRules } from './global-permissions-service';
+import { StepService } from './step-service';
+
+
 
 /** In-memory store for queued prompt parts, keyed by QueuedPrompt.id.
  *  Keeps full PromptPart[] (with image base64) out of the QueuedPrompt.content
@@ -132,16 +150,13 @@ function buildJcMcpServersConfigForCwd(
   cwd: string,
 ): Record<
   string,
-  { command: string; args: string[]; env: Record<string, string> }
+  { command: string; args: string[]; env?: Record<string, string> }
 > {
   const serverPath = getJcMcpServerPath();
   return {
     'jean-claude-mcp': {
       command: 'node',
-      args: [serverPath],
-      env: {
-        JC_MCP_WORKDIR: cwd,
-      },
+      args: [serverPath, '--workdir', cwd],
     },
   };
 }
@@ -220,9 +235,16 @@ function buildReviewPrompt({
 interface ActiveSession {
   stepId: string;
   taskId: string; // kept for worktree/project lookups
+  projectId: string;
   backendSessionId: string | null; // The session ID from the backend
+  backendStartPromise?: Promise<AgentSession>;
   sdkSessionId: string | null; // The persistent session ID for resumption
   backendType: AgentBackendType;
+  usageFeature: AiUsageFeature;
+  currentModel: string | null;
+  requestedBackendType: AgentBackendType;
+  swapModel?: string;
+  swapThinkingEffort?: ThinkingEffort;
   backend: AgentBackend;
   messageIndex: number;
   queuedPrompts: QueuedPrompt[];
@@ -237,12 +259,42 @@ interface ActiveSession {
   hasTerminalError: boolean;
 }
 
+function getUsageFeatureForStep(type: TaskStepType): AiUsageFeature {
+  switch (type) {
+    case 'skill-creation':
+      return 'skill';
+    case 'feature-map':
+      return 'feature-map';
+    case 'review':
+    case 'pr-review':
+      return 'review';
+    case 'create-pull-request':
+      return 'pr';
+    case 'agent':
+    case 'fork':
+      return 'agent';
+    default: {
+      const _exhaustive: never = type;
+      return _exhaustive;
+    }
+  }
+}
+
 class AgentService {
   private sessions: Map<string, ActiveSession> = new Map(); // key is stepId
   private startingSteps = new Set<string>();
   private mainWindow: BrowserWindow | null = null;
   private focusedTaskId: string | null = null;
   private pendingImageAttachments = new Map<string, PromptImagePart[]>();
+
+  constructor() {
+    agentResourceMonitorService.setSnapshotListener((snapshot) => {
+      this.emitEvent(snapshot.taskId, snapshot.stepId, {
+        type: 'resource-snapshot',
+        snapshot,
+      });
+    });
+  }
 
   setMainWindow(window: BrowserWindow) {
     this.mainWindow = window;
@@ -296,6 +348,10 @@ class AgentService {
 
     if (!isFocused) {
       await TaskRepository.setHasUnread(taskId, true);
+      const task = await TaskRepository.findById(taskId);
+      if (task) {
+        emitTaskUpsert(task);
+      }
     }
   }
 
@@ -359,9 +415,23 @@ class AgentService {
     prompt: string,
   ): Promise<void> {
     try {
-      const name = await generateTaskName(prompt);
+      const task = await TaskRepository.findById(taskId);
+      const name = await generateTaskName(
+        prompt,
+        null,
+        task
+          ? {
+              feature: 'task-name',
+              projectId: task.projectId,
+              taskId,
+              stepId,
+              taskName: task.name,
+            }
+          : undefined,
+      );
       if (name) {
-        await TaskRepository.update(taskId, { name });
+        const updatedTask = await TaskRepository.update(taskId, { name });
+        emitTaskUpsert(updatedTask);
         this.emitEvent(taskId, stepId, { type: 'name-updated', name });
         dbg.agent('Generated task name for %s: %s', taskId, name);
       }
@@ -494,8 +564,12 @@ class AgentService {
     const existingMessageCount =
       await AgentMessageRepository.getMessageCountByStepId(stepId);
 
-    const backendType: AgentBackendType = (step.agentBackend ??
+    const requestedBackend: AgentBackendType = (step.agentBackend ??
       'claude-code') as AgentBackendType;
+
+    const backendType = requestedBackend;
+    const swapModel: string | undefined = undefined;
+    const swapThinkingEffort: ThinkingEffort | undefined = undefined;
     const BackendClass = AGENT_BACKEND_CLASSES[backendType];
     if (!BackendClass) {
       throw new Error(`Unknown agent backend: "${backendType}"`);
@@ -523,9 +597,15 @@ class AgentService {
     const session: ActiveSession = {
       stepId,
       taskId: step.taskId,
+      projectId: task.projectId,
       backendSessionId: null,
       sdkSessionId: step.sessionId ?? null,
       backendType,
+      usageFeature: getUsageFeatureForStep(step.type),
+      currentModel: swapModel ?? step.modelPreference,
+      requestedBackendType: requestedBackend,
+      swapModel,
+      swapThinkingEffort,
       backend,
       messageIndex: existingMessageCount,
       queuedPrompts: [],
@@ -634,11 +714,18 @@ class AgentService {
         ? buildJcMcpServersConfigForCwd(workingDir)
         : undefined;
 
+    const backendChanged = session.backendType !== session.requestedBackendType;
+    const modelPreference =
+      session.swapModel ?? (backendChanged ? undefined : step?.modelPreference);
+    const thinkingEffort =
+      session.swapThinkingEffort ??
+      (backendChanged ? undefined : step?.thinkingEffort);
     const normalizedThinkingEffort = normalizeThinkingEffortForModel({
       backend: session.backendType,
-      model: step?.modelPreference ?? 'default',
-      effort: step?.thinkingEffort,
+      model: modelPreference ?? 'default',
+      effort: thinkingEffort,
     });
+    session.currentModel = modelPreference ?? null;
 
     // Start the backend
     dbg.agentSession('Starting backend for step %s', stepId);
@@ -651,7 +738,21 @@ class AgentService {
             isInitialPrompt: options?.isInitialPrompt ?? false,
           });
 
-    const agentSession = await session.backend.start(
+    if (session.backendType === 'opencode') {
+      const promptText = buildAgentPromptMarkdown(effectiveParts).trim();
+      if (promptText) {
+        await this.persistAndEmitSyntheticEntry(taskId, session, {
+          id: nanoid(),
+          date: new Date().toISOString(),
+          isSynthetic: true,
+          type: 'user-prompt',
+          value: promptText,
+          isSDKSynthetic: true,
+        });
+      }
+    }
+
+    session.backendStartPromise = session.backend.start(
       {
         type: session.backendType,
         cwd: workingDir,
@@ -663,8 +764,8 @@ class AgentService {
             })) as InteractionMode,
         }),
         model:
-          step?.modelPreference && step.modelPreference !== 'default'
-            ? step.modelPreference
+          modelPreference && modelPreference !== 'default'
+            ? modelPreference
             : undefined,
         thinkingEffort:
           normalizedThinkingEffort !== 'default'
@@ -677,17 +778,31 @@ class AgentService {
       },
       effectiveParts,
     );
+    const agentSession = await session.backendStartPromise;
 
     session.backendSessionId = agentSession.sessionId;
+    session.backendStartPromise = undefined;
 
     // Process the event stream
-    for await (const event of agentSession.events) {
-      if (session.abortController.signal.aborted) {
-        dbg.agentSession('Step %s aborted, breaking event loop', stepId);
-        break;
-      }
+    agentResourceMonitorService.start({
+      taskId,
+      stepId,
+      backend: session.backendType,
+      rootPid: agentSession.rootPid ?? null,
+    });
 
-      await this.processEvent(stepId, session, event);
+    try {
+      for await (const event of agentSession.events) {
+        if (session.abortController.signal.aborted) {
+          dbg.agentSession('Step %s aborted, breaking event loop', stepId);
+          break;
+        }
+
+        await this.processEvent(stepId, session, event);
+      }
+    } finally {
+      await agentResourceMonitorService.stop(stepId);
+      await session.backend.stop(agentSession.sessionId);
     }
   }
 
@@ -707,9 +822,17 @@ class AgentService {
         // Only persist the first session ID — once set it is immutable.
         const existing = await TaskStepRepository.findById(stepId);
         if (!existing?.sessionId) {
-          await TaskStepRepository.update(stepId, {
-            sessionId: event.sessionId,
-          });
+          const updatedStep = await TaskStepRepository.update(
+            stepId,
+            buildSessionIdStepUpdate({
+              sessionId: event.sessionId,
+              backendType: session.backendType,
+              requestedBackendType: session.requestedBackendType,
+              swapModel: session.swapModel,
+              swapThinkingEffort: session.swapThinkingEffort,
+            }),
+          );
+          emitStepUpsert(updatedStep);
           dbg.agentSession(
             'Captured session ID for step %s: %s',
             stepId,
@@ -791,7 +914,8 @@ class AgentService {
 
         // Step stays 'running' (agent session is active, just paused);
         // task-level status becomes 'waiting' for UI purposes.
-        await TaskRepository.update(taskId, { status: 'waiting' });
+        const task = await TaskRepository.update(taskId, { status: 'waiting' });
+        emitTaskUpsert(task);
         this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
         this.emitEvent(taskId, stepId, {
           type: 'permission',
@@ -820,7 +944,8 @@ class AgentService {
 
         // Step stays 'running' (agent session is active, just paused);
         // task-level status becomes 'waiting' for UI purposes.
-        await TaskRepository.update(taskId, { status: 'waiting' });
+        const task = await TaskRepository.update(taskId, { status: 'waiting' });
+        emitTaskUpsert(task);
         this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
 
         const questions: AgentQuestion[] = request.questions.map(
@@ -868,6 +993,27 @@ class AgentService {
           break;
         }
 
+        const resultEntryId = nanoid();
+
+        const resultModel = result.model ?? session.currentModel;
+
+        if (result.usage || result.cost) {
+          aiUsageTrackingService.recordUsageSafe({
+            context: {
+              feature: session.usageFeature,
+              projectId: session.projectId,
+              taskId,
+              stepId,
+            },
+            backend: session.backendType,
+            model: resultModel,
+            usage: result.usage ?? {},
+            allowEmptyUsage: !result.usage,
+            cost: result.cost,
+            sourceId: `agent-message:${resultEntryId}`,
+          });
+        }
+
         // Sync session-allowed tools back to the task
         if (
           session.backend.getSessionAllowedTools &&
@@ -895,7 +1041,10 @@ class AgentService {
                 existing[entry] = 'allow';
               }
             }
-            await TaskRepository.update(taskId, { sessionRules: existing });
+            const updatedTask = await TaskRepository.update(taskId, {
+              sessionRules: existing,
+            });
+            emitTaskUpsert(updatedTask);
           }
         }
 
@@ -924,8 +1073,9 @@ class AgentService {
         }
 
         await this.persistAndEmitSyntheticEntry(taskId, session, {
-          id: nanoid(),
+          id: resultEntryId,
           date: new Date().toISOString(),
+          model: resultModel ?? undefined,
           isSynthetic: true,
           type: 'result',
           value: result.text,
@@ -934,6 +1084,7 @@ class AgentService {
           cost: result.cost?.costUsd,
           apiCost: result.cost?.apiCostUsd,
           usage: result.usage,
+          contextUsage: result.contextUsage,
         });
 
         const status = result.isError ? 'errored' : 'completed';
@@ -1025,9 +1176,10 @@ class AgentService {
       }
 
       case 'mode-change': {
-        await TaskStepRepository.update(stepId, {
+        const updatedStep = await TaskStepRepository.update(stepId, {
           interactionMode: event.mode,
         });
+        emitStepUpsert(updatedStep);
         break;
       }
 
@@ -1057,21 +1209,64 @@ class AgentService {
 
     this.startingSteps.add(stepId);
 
+    let session: ActiveSession | null = null;
+    let runningStep: Awaited<ReturnType<typeof TaskStepRepository.findById>>;
+
     try {
-      // Resolve prompt and validate dependencies
-      const { resolvedPrompt, step } =
-        await StepService.resolveAndValidate(stepId);
+      runningStep = await TaskStepRepository.findById(stepId);
+      if (!runningStep) {
+        throw new Error(`Step ${stepId} not found`);
+      }
 
-      // Update step status to running
+      // Surface work immediately while continue-summary synthesis runs.
       await StepService.update(stepId, { status: 'running' });
-      await StepService.syncTaskStatus(step.taskId);
+      await StepService.syncTaskStatus(runningStep.taskId);
 
-      // Create session
-      const session = await this.createSession(stepId);
+      // Create session before prompt resolution so synthetic summary entries can
+      // appear in timeline while {{summary(step.*)}} resolves.
+      session = await this.createSession(stepId);
       this.emitEvent(session.taskId, stepId, {
         type: 'status',
         status: 'running',
       });
+
+      // Resolve prompt and validate dependencies
+      const promptResolutionStartedAt = Date.now();
+      dbg.agentSession('Resolving startup prompt for step %s', stepId);
+      const { resolvedPrompt, step } = await StepService.resolveAndValidate(
+        stepId,
+        {
+          onSummaryLifecycle: {
+            onStart: async (summaryStep, prompt) => {
+              if (!session) return;
+              await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+                id: nanoid(),
+                date: new Date().toISOString(),
+                isSynthetic: true,
+                type: 'user-prompt',
+                value: prompt,
+                isSDKSynthetic: true,
+              });
+            },
+            onResolved: async (summaryStep, summary) => {
+              if (!session) return;
+              await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+                id: nanoid(),
+                date: new Date().toISOString(),
+                isSynthetic: true,
+                type: 'assistant-message',
+                value: `Summary for "${summaryStep.name}":\n\n${summary}`,
+              });
+            },
+          },
+        },
+      );
+      dbg.agentSession(
+        'Resolved startup prompt for step %s in %dms (length=%d)',
+        stepId,
+        Date.now() - promptResolutionStartedAt,
+        resolvedPrompt.length,
+      );
 
       // Build prompt parts from resolved prompt + any pending image attachments
       const pendingImages = this.pendingImageAttachments.get(session.taskId);
@@ -1143,12 +1338,41 @@ class AgentService {
       } finally {
         this.sessions.delete(stepId);
       }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+
+      if (session) {
+        await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+          id: nanoid(),
+          date: new Date().toISOString(),
+          isSynthetic: true,
+          type: 'result',
+          value: errorMessage,
+          isError: true,
+        });
+        this.sessions.delete(stepId);
+      }
+
+      if (runningStep) {
+        await StepService.errorStep(stepId);
+        this.emitEvent(runningStep.taskId, stepId, {
+          type: 'status',
+          status: 'errored',
+          error: errorMessage,
+        });
+      }
+
+      throw error;
     } finally {
       this.startingSteps.delete(stepId);
     }
   }
 
-  async stop(stepId: string): Promise<void> {
+  async stop(
+    stepId: string,
+    options: { reason?: 'user' | 'shutdown' } = {},
+  ): Promise<void> {
     dbg.agentSession('Stopping step %s', stepId);
 
     const session = this.sessions.get(stepId);
@@ -1178,29 +1402,66 @@ class AgentService {
 
     session.abortController.abort();
 
-    // Stop the backend
-    if (session.backendSessionId) {
-      await session.backend.stop(session.backendSessionId);
+    // Stop the backend even if stop races with backend startup completing.
+    const backendSessionId =
+      session.backendSessionId ??
+      (await session.backendStartPromise
+        ?.then((agentSession) => agentSession.sessionId)
+        .catch((error) => {
+          dbg.agentSession(
+            'Backend startup for step %s failed while stopping: %O',
+            stepId,
+            error,
+          );
+          return null;
+        })) ??
+      null;
+    if (backendSessionId) {
+      await session.backend.stop(backendSessionId);
     }
+    await agentResourceMonitorService.stop(stepId);
 
-    // Emit a custom interruption entry
-    await this.persistAndEmitSyntheticEntry(taskId, session, {
-      id: nanoid(),
-      date: new Date().toISOString(),
-      isSynthetic: true,
-      type: 'result',
-      value: 'Task interrupted by user',
-      isError: true,
-    });
+    if (options.reason !== 'shutdown') {
+      await this.persistAndEmitSyntheticEntry(taskId, session, {
+        id: nanoid(),
+        date: new Date().toISOString(),
+        isSynthetic: true,
+        type: 'result',
+        value: 'Task interrupted by user',
+        isError: true,
+      });
+    }
 
     await StepService.interruptStep(stepId);
     this.emitEvent(taskId, stepId, {
       type: 'status',
       status: 'interrupted',
-      error: 'Stopped by user',
+      error:
+        options.reason === 'shutdown'
+          ? 'Stopped by app shutdown'
+          : 'Stopped by user',
     });
     this.sessions.delete(stepId);
     dbg.agentSession('Step %s stopped and session cleaned up', stepId);
+  }
+
+  async stopAll(options: { reason?: 'user' | 'shutdown' } = {}): Promise<void> {
+    const stepIds = [...this.sessions.keys()];
+    dbg.agentSession('Stopping all active agent sessions (%d)', stepIds.length);
+    const results = await Promise.allSettled(
+      stepIds.map((stepId) => this.stop(stepId, options)),
+    );
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) {
+      dbg.agentSession(
+        'Failed to stop %d active agent sessions during stopAll',
+        failures.length,
+      );
+      throw new Error(
+        `Failed to stop ${failures.length} active agent sessions`,
+      );
+    }
+    dbg.agentSession('All active agent sessions stopped');
   }
 
   async respond(
@@ -1289,7 +1550,8 @@ class AgentService {
     }
 
     // Resume running status (step was already 'running', update task-level)
-    await TaskRepository.update(taskId, { status: 'running' });
+    const task = await TaskRepository.update(taskId, { status: 'running' });
+    emitTaskUpsert(task);
     this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
 
     notificationService.close(`${stepId}:${request.type}`);
@@ -1567,9 +1829,10 @@ class AgentService {
       await session.backend.setMode(session.backendSessionId, normalizedMode);
       dbg.agentSession('Updated backend permission mode for active session');
     }
-    await TaskStepRepository.update(stepId, {
+    const updatedStep = await TaskStepRepository.update(stepId, {
       interactionMode: normalizedMode,
     });
+    emitStepUpsert(updatedStep);
   }
 
   isRunning(stepId: string): boolean {
@@ -1649,7 +1912,10 @@ class AgentService {
 
     for (const task of staleTasks) {
       try {
-        await TaskRepository.update(task.id, { status: 'interrupted' });
+        const updatedTask = await TaskRepository.update(task.id, {
+          status: 'interrupted',
+        });
+        emitTaskUpsert(updatedTask);
       } catch (error) {
         dbg.agent('Failed to recover stale task %s: %O', task.id, error);
       }
@@ -1684,14 +1950,20 @@ class AgentService {
           rawMessageId: null,
         });
 
-        await TaskStepRepository.update(step.id, { status: 'interrupted' });
+        const updatedStep = await TaskStepRepository.update(step.id, {
+          status: 'interrupted',
+        });
+        emitStepUpsert(updatedStep);
         await StepService.syncTaskStatus(step.taskId);
         staleStepCount++;
       } catch (error) {
         dbg.agent('Failed to recover stale step %s: %O', step.id, error);
         // Best-effort: still mark the step as interrupted
         try {
-          await TaskStepRepository.update(step.id, { status: 'interrupted' });
+          const updatedStep = await TaskStepRepository.update(step.id, {
+            status: 'interrupted',
+          });
+          emitStepUpsert(updatedStep);
           await StepService.syncTaskStatus(step.taskId);
         } catch {
           dbg.agent('Failed to update status for stale step %s', step.id);

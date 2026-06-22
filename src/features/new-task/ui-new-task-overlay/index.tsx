@@ -1,23 +1,22 @@
 import {
+  arrayMove,
+  rectSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { ChevronRight, Eye, Search } from 'lucide-react';
+import {
+  closestCenter,
   DndContext,
+  type DragEndEvent,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
-  closestCenter,
 } from '@dnd-kit/core';
-import type { DragEndEvent } from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-  sortableKeyboardCoordinates,
-  useSortable,
-} from '@dnd-kit/sortable';
-import { CSS as DndCSS } from '@dnd-kit/utilities';
-import { useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Eye, Search } from 'lucide-react';
 import React, {
+  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -25,114 +24,126 @@ import React, {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { CSS as DndCSS } from '@dnd-kit/utilities';
 import FocusLock from 'react-focus-lock';
+import { useQueryClient } from '@tanstack/react-query';
 
-import {
-  KeyboardLayerProvider,
-  useKeyboardLayer,
-} from '@/common/context/keyboard-bindings';
-import { useCommands } from '@/common/hooks/use-commands';
-import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
-import {
-  BranchOrTaskSelect,
-  type BranchOrTaskSelection,
-} from '@/common/ui/branch-or-task-select';
-import { Button } from '@/common/ui/button';
-import { Kbd } from '@/common/ui/kbd';
-import { Modal } from '@/common/ui/modal';
-import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
-import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import {
-  getModelThinkingCapabilities,
-  getModelsForBackend,
-} from '@/features/agent/ui-backend-selector';
-import { ModeSelector } from '@/features/agent/ui-mode-selector';
-import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
-import {
-  PromptTextarea,
-  type PromptTextareaRef,
-} from '@/features/common/ui-prompt-textarea';
-import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
-import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
-import { useBackendModels } from '@/hooks/use-backend-models';
-import {
-  useCreateFeedNote,
-  useCreateWorkItemVerificationNote,
-} from '@/hooks/use-feed-notes';
-import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
-import {
-  useProjects,
-  useProjectBranches,
-  useProjectFeatureMap,
-  useProjectIsGitRepository,
-  useReorderProjects,
-} from '@/hooks/use-projects';
-import {
-  useBackendModelPresetsSetting,
-  useBackendsSetting,
-  useCompletionSetting,
-  usePromptSnippetsSetting,
-  useThinkingSettingsSetting,
-} from '@/hooks/use-settings';
-import { useProjectSkills } from '@/hooks/use-skills';
-import { useCreateTaskWithWorktree, useProjectTasks } from '@/hooks/use-tasks';
-import {
-  useWorkItems,
-  useWorkItemComments,
-  useRelatedTestCasesForWorkItems,
-} from '@/hooks/use-work-items';
-import type { AzureDevOpsWorkItem } from '@/lib/api';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
-import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
-import { compressImage } from '@/lib/image-compression';
-import {
-  expandFeatureReferencesInPrompt,
-  getReferencedFeatures,
-} from '@/lib/prompt-feature-context';
-import {
-  resolveSnippetTemplate,
-  type SnippetVariableContext,
-} from '@/lib/resolve-snippet-template';
-import { useBackgroundJobsStore } from '@/stores/background-jobs';
-import {
-  useComposerFileCommentCount,
-  useComposerFileComments,
-  useComposerFileCommentsStore,
-  synthesizeFileCommentsPrompt,
-  type ComposerFileComment,
-} from '@/stores/composer-file-comments';
-import {
-  useNewTaskDraft,
-  useNewTaskDraftStore,
-  type InputMode,
-  type WorkItemsViewMode,
-} from '@/stores/new-task-draft';
-import { useUISetting, useUIStore } from '@/stores/ui';
 import type {
   AgentBackendType,
   PromptFilePart,
   PromptImagePart,
 } from '@shared/agent-backend-types';
 import {
+  BranchOrTaskSelect,
+  type BranchOrTaskSelection,
+} from '@/common/ui/branch-or-task-select';
+import {
+  type ComposerFileComment,
+  synthesizeFileCommentsPrompt,
+  useComposerFileCommentCount,
+  useComposerFileComments,
+  useComposerFileCommentsStore,
+} from '@/stores/composer-file-comments';
+import {
+  expandFeatureReferencesInPrompt,
+  getReferencedFeatures,
+} from '@/lib/prompt-feature-context';
+import {
+  getModelsForBackend,
+  getModelThinkingCapabilities,
+} from '@/features/agent/ui-backend-selector';
+import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
 import {
+  type InputMode,
+  useNewTaskDraft,
+  useNewTaskDraftStore,
+  type WorkItemsViewMode,
+} from '@/stores/new-task-draft';
+import {
+  KeyboardLayerProvider,
+  useKeyboardLayer,
+} from '@/common/context/keyboard-bindings';
+import {
   normalizeInteractionModeForBackend,
-  type ThinkingEffort,
   type Project,
   type ProjectFeatureMap,
+  type ThinkingEffort,
 } from '@shared/types';
-
-import { ComposerFileExplorer } from '../ui-composer-file-explorer';
 import {
-  PromptComposer,
+  PromptTextarea,
+  type PromptTextareaRef,
+} from '@/features/common/ui-prompt-textarea';
+import {
+  RateLimitSwapPreview,
+  resolveRateLimitSwapSelection,
+  useRateLimitSwapPreview,
+} from '@/features/agent/ui-rate-limit-swap-preview';
+import {
+  resolveSnippetTemplate,
+  type SnippetVariableContext,
+} from '@/lib/resolve-snippet-template';
+import {
+  useBackendDefaultModelsSetting,
+  useBackendModelPresetsSetting,
+  useBackendsSetting,
+  useCompletionSetting,
+  usePromptSnippetsSetting,
+  useThinkingSettingsSetting,
+} from '@/hooks/use-settings';
+import {
+  useCreateFeedNote,
+  useCreateWorkItemVerificationNote,
+} from '@/hooks/use-feed-notes';
+import { useCreateTaskWithWorktree, useProjectTasks } from '@/hooks/use-tasks';
+import {
+  useProjectBranches,
+  useProjectFeatureMap,
+  useProjectIsGitRepository,
+  useProjects,
+  useReorderProjects,
+} from '@/hooks/use-projects';
+import {
+  useRelatedTestCasesForWorkItems,
+  useWorkItemComments,
+  useWorkItems,
+} from '@/hooks/use-work-items';
+import { useUISetting, useUIStore } from '@/stores/ui';
+import type { AzureDevOpsWorkItem } from '@/lib/api';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
+import { Button } from '@/common/ui/button';
+import { compressImage } from '@/lib/image-compression';
+import { feedQueryKeys } from '@/lib/feed-query-keys';
+import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
+import { getDefaultModelForBackend } from '@/lib/default-models';
+import { Kbd } from '@/common/ui/kbd';
+import { Modal } from '@/common/ui/modal';
+import { ModeSelector } from '@/features/agent/ui-mode-selector';
+import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
+import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
+import { useBackendModels } from '@/hooks/use-backend-models';
+import { useBackgroundJobsStore } from '@/stores/background-jobs';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
+import { useProjectSkills } from '@/hooks/use-skills';
+import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
+import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
+
+
+
+import {
   buildWorkItemSnippetContext,
-  generateInitialTemplate,
-  getWorkItemCommentSelectionId,
   expandTemplate,
   extractWorkItemImageUrls,
+  generateInitialTemplate,
+  getWorkItemCommentSelectionId,
+  PromptComposer,
 } from '../ui-prompt-composer';
+import { ComposerFileExplorer } from '../ui-composer-file-explorer';
+
 
 // Check if project has work items linked
 function projectHasWorkItems(project: Project | null): boolean {
@@ -333,6 +344,7 @@ export function NewTaskOverlay({
     updateDraft,
     clearDraft,
   } = useNewTaskDraft();
+  const userTouchedSelectionRef = useRef(false);
 
   const { data: projects = [] } = useProjects();
   const reorderProjectsMutation = useReorderProjects();
@@ -341,6 +353,10 @@ export function NewTaskOverlay({
   const createVerificationNoteMutation = useCreateWorkItemVerificationNote();
   const deleteBacklogTodo = useDeleteProjectTodo();
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    userTouchedSelectionRef.current = false;
+  }, [selectedProjectId]);
   const addRunningJob = useBackgroundJobsStore((state) => state.addRunningJob);
   const markJobSucceeded = useBackgroundJobsStore(
     (state) => state.markJobSucceeded,
@@ -354,6 +370,8 @@ export function NewTaskOverlay({
   const promptInputRef = useRef<PromptTextareaRef>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const workItemImageFetchSessionRef = useRef(0);
+  const [isPromptAutocompleteOpen, setIsPromptAutocompleteOpen] =
+    useState(false);
   const [highlightedWorkItemId, setHighlightedWorkItemId] = useState<
     string | null
   >(null);
@@ -626,6 +644,8 @@ export function NewTaskOverlay({
 
   // Enabled backends from settings
   const { data: backendsSetting } = useBackendsSetting();
+  const { data: backendDefaultModelsSetting } =
+    useBackendDefaultModelsSetting();
   const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
   const { data: thinkingSettings } = useThinkingSettingsSetting();
 
@@ -676,10 +696,24 @@ export function NewTaskOverlay({
       : (draft?.backendModelPresetId ??
         findMatchingBackendModelPresetId({
           presets: backendModelPresets,
-          backend: draft?.agentBackend ?? selectedProject?.defaultAgentBackend,
+          backend:
+            draft?.agentBackend ??
+            selectedProject?.defaultAgentBackend ??
+            currentBackend,
           model:
             draft?.modelPreference ??
-            selectedProject?.defaultAgentModelPreference,
+            ((draft?.agentBackend ??
+            selectedProject?.defaultAgentBackend ??
+            currentBackend)
+              ? getDefaultModelForBackend({
+                  backend:
+                    draft?.agentBackend ??
+                    selectedProject?.defaultAgentBackend ??
+                    currentBackend,
+                  project: selectedProject,
+                  backendDefaultModels: backendDefaultModelsSetting,
+                })
+              : undefined),
         }));
   const currentBackendModelPreset = currentBackendPresetId
     ? backendModelPresets.find((preset) => preset.id === currentBackendPresetId)
@@ -687,8 +721,11 @@ export function NewTaskOverlay({
   const currentModelPreference = useMemo(() => {
     const draftModelPreference =
       draft?.modelPreference ??
-      selectedProject?.defaultAgentModelPreference ??
-      'default';
+      getDefaultModelForBackend({
+        backend: currentBackend,
+        project: selectedProject,
+        backendDefaultModels: backendDefaultModelsSetting,
+      });
 
     if (currentBackendPresetId) {
       return draftModelPreference;
@@ -698,10 +735,12 @@ export function NewTaskOverlay({
       ? draftModelPreference
       : 'default';
   }, [
-    selectedProject?.defaultAgentModelPreference,
+    backendDefaultModelsSetting,
+    currentBackend,
     currentBackendPresetId,
     draft?.modelPreference,
     availableModelPreferences,
+    selectedProject,
   ]);
   const thinkingCapabilities = getModelThinkingCapabilities(
     currentModelPreference,
@@ -734,7 +773,50 @@ export function NewTaskOverlay({
     currentModelPreference,
     thinkingCapabilities,
   ]);
+  const { data: rateLimitSuggestion } = useRateLimitSwapPreview(
+    currentBackend,
+    !isNoteMode && !draft?.agentBackend && !draft?.modelPreference,
+  );
+  useEffect(() => {
+    if (
+      isNoteMode ||
+      !rateLimitSuggestion?.swapped ||
+      userTouchedSelectionRef.current ||
+      draft?.agentBackend ||
+      draft?.modelPreference
+    ) {
+      return;
+    }
 
+    const nextBackend = rateLimitSuggestion.backend;
+    const nextModel =
+      rateLimitSuggestion.model ??
+      (nextBackend !== currentBackend ? 'default' : currentModelPreference);
+    const nextThinkingEffort =
+      rateLimitSuggestion.thinkingEffort ??
+      (nextBackend !== currentBackend ? 'default' : currentThinkingEffort);
+    updateDraft({
+      agentBackend: nextBackend,
+      modelPreference: nextModel,
+      thinkingEffort: nextThinkingEffort,
+      backendModelPresetId: null,
+      shouldAutoSelectBackendModelPreset: false,
+      interactionMode: normalizeInteractionModeForBackend({
+        backend: nextBackend,
+        mode: currentInteractionMode,
+      }),
+    });
+  }, [
+    currentBackend,
+    currentInteractionMode,
+    currentModelPreference,
+    currentThinkingEffort,
+    draft?.agentBackend,
+    draft?.modelPreference,
+    isNoteMode,
+    rateLimitSuggestion,
+    updateDraft,
+  ]);
   const currentSourceBranch = useMemo(() => {
     const draftSourceBranch = draft?.sourceBranch;
     if (draftSourceBranch && branches.includes(draftSourceBranch)) {
@@ -913,7 +995,7 @@ export function NewTaskOverlay({
       }
     } finally {
       if (workItemImageFetchSessionRef.current === fetchSessionId) {
-        setIsFetchingWorkItemImages(false);
+        startTransition(() => setIsFetchingWorkItemImages(false));
       }
     }
   }, [
@@ -1036,6 +1118,12 @@ export function NewTaskOverlay({
       finalPrompt += buildAttachedFilesXml(draftFiles);
 
       const backlogTodoIds = draft.backlogTodoIds ?? [];
+      const submitSelection = await resolveRateLimitSwapSelection({
+        backend: currentBackend,
+        model: currentModelPreference,
+        thinkingEffort: currentThinkingEffort,
+        enabled: !isNoteMode,
+      });
 
       const jobId = addRunningJob({
         type: 'task-creation',
@@ -1048,10 +1136,13 @@ export function NewTaskOverlay({
           creationInput: {
             projectId: selectedProjectId,
             prompt: finalPrompt,
-            interactionMode: currentInteractionMode,
-            agentBackend: currentBackend,
-            modelPreference: currentModelPreference,
-            thinkingEffort: currentThinkingEffort,
+            interactionMode: normalizeInteractionModeForBackend({
+              backend: submitSelection.backend,
+              mode: currentInteractionMode,
+            }),
+            agentBackend: submitSelection.backend,
+            modelPreference: submitSelection.model,
+            thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
             useWorktree: currentCreateWorktree,
             sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
             workItemIds,
@@ -1069,6 +1160,7 @@ export function NewTaskOverlay({
       setIsFetchingWorkItemImages(false);
       void triggerAnimation();
       clearDraft();
+      userTouchedSelectionRef.current = false;
       // Clear file comments for this project
       if (selectedProjectId) {
         useComposerFileCommentsStore
@@ -1090,10 +1182,13 @@ export function NewTaskOverlay({
           projectId: selectedProjectId,
           prompt: finalPrompt,
           images: draftImages,
-          interactionMode: currentInteractionMode,
-          modelPreference: currentModelPreference,
-          thinkingEffort: currentThinkingEffort,
-          agentBackend: currentBackend,
+          interactionMode: normalizeInteractionModeForBackend({
+            backend: submitSelection.backend,
+            mode: currentInteractionMode,
+          }),
+          modelPreference: submitSelection.model,
+          thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
+          agentBackend: submitSelection.backend,
           useWorktree: currentCreateWorktree,
           sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
           workItemIds,
@@ -1131,35 +1226,35 @@ export function NewTaskOverlay({
       // Keep overlay open on error (draft preserved)
     }
   }, [
+    addRunningJob,
     canStartTask,
-    draft,
-    selectedProjectId,
-    inputMode,
-    searchStep,
-    promptTemplate,
-    selectedWorkItems,
-    workItemComments,
-    snippetVariableContext,
-    testCasesByWorkItem,
-    selectedProject?.name,
-    selectedProject?.path,
-    selectedProjectFeatureMap,
+    clearDraft,
+    createTaskMutation,
     currentBackend,
+    currentCreateWorktree,
     currentInteractionMode,
     currentModelPreference,
-    currentThinkingEffort,
-    currentCreateWorktree,
-    currentUpdateWorkItemStatus,
     currentSourceBranch,
-    fileComments,
-    addRunningJob,
-    createTaskMutation,
+    currentThinkingEffort,
+    currentUpdateWorkItemStatus,
     deleteBacklogTodo,
-    clearDraft,
-    queryClient,
-    markJobSucceeded,
+    draft,
+    fileComments,
+    inputMode,
+    isNoteMode,
     markJobFailed,
+    markJobSucceeded,
+    promptTemplate,
+    queryClient,
+    searchStep,
+    selectedProject,
+    selectedProjectFeatureMap,
+    selectedProjectId,
+    selectedWorkItems,
+    snippetVariableContext,
+    testCasesByWorkItem,
     triggerAnimation,
+    workItemComments,
   ]);
 
   const handleCreateNote = useCallback(async () => {
@@ -1265,6 +1360,10 @@ export function NewTaskOverlay({
 
   // Handle Escape based on current state
   const handleEscape = useCallback(() => {
+    if (isPromptAutocompleteOpen) {
+      return false;
+    }
+
     if (inputMode === 'search' && searchStep === 'compose') {
       // In compose step, go back to select
       backToSelect();
@@ -1272,7 +1371,7 @@ export function NewTaskOverlay({
       // Otherwise close overlay
       onClose();
     }
-  }, [inputMode, searchStep, backToSelect, onClose]);
+  }, [isPromptAutocompleteOpen, inputMode, searchStep, backToSelect, onClose]);
 
   // Show search input only in select step
   const showSearchInput = inputMode === 'search' && searchStep === 'select';
@@ -1369,9 +1468,7 @@ export function NewTaskOverlay({
       {
         label: 'Close or Go Back',
         shortcut: 'escape',
-        handler: () => {
-          handleEscape();
-        },
+        handler: () => handleEscape(),
       },
       {
         label: 'Discard Draft and Close',
@@ -1556,6 +1653,7 @@ export function NewTaskOverlay({
                     onFileRemove={handleFileRemove}
                     promptSnippets={promptSnippets}
                     snippetVariableContext={snippetVariableContext}
+                    onAutocompleteOpenChange={setIsPromptAutocompleteOpen}
                     containerClassName={`px-[18px] pt-3.5 ${selectedProject ? 'pb-2' : 'pb-3.5'}`}
                     className="text-ink-1 placeholder-ink-3 border-transparent bg-transparent px-0 py-0 text-sm focus:border-transparent focus:ring-0 focus:outline-none"
                   />
@@ -1693,6 +1791,7 @@ export function NewTaskOverlay({
                     side="top"
                     layer={layer}
                     onChange={(selection) => {
+                      userTouchedSelectionRef.current = true;
                       const normalizedMode = normalizeInteractionModeForBackend(
                         {
                           backend: selection.backend,
@@ -1733,13 +1832,37 @@ export function NewTaskOverlay({
                 {!isNoteMode && (
                   <ThinkingSelector
                     value={currentThinkingEffort}
-                    onChange={(thinkingEffort) =>
-                      updateDraft({ thinkingEffort })
-                    }
+                    onChange={(thinkingEffort) => {
+                      userTouchedSelectionRef.current = true;
+                      updateDraft({ thinkingEffort });
+                    }}
                     options={thinkingOptions}
                     disabled={thinkingOptions.length <= 1}
                     side="top"
                     layer={layer}
+                  />
+                )}
+
+                {!isNoteMode && (
+                  <RateLimitSwapPreview
+                    requestedBackend={currentBackend}
+                    model={currentModelPreference}
+                    thinkingEffort={currentThinkingEffort}
+                    onApplySuggestion={(selection) => {
+                      userTouchedSelectionRef.current = true;
+                      updateDraft({
+                        agentBackend: selection.backend,
+                        backendModelPresetId: null,
+                        shouldAutoSelectBackendModelPreset: false,
+                        interactionMode: normalizeInteractionModeForBackend({
+                          backend: selection.backend,
+                          mode: currentInteractionMode,
+                        }),
+                        modelPreference: selection.model,
+                        thinkingEffort:
+                          selection.thinkingEffort as ThinkingEffort,
+                      });
+                    }}
                   />
                 )}
 
@@ -1905,7 +2028,7 @@ export function NewTaskOverlay({
                     <Kbd shortcut="cmd+right" /> project
                   </span>
                 )}
-                {!isNoteMode && canToggleMode && showSearchInput && (
+                {!isNoteMode && canToggleMode && (
                   <>
                     <div
                       className="mx-1 h-[18px] w-px"

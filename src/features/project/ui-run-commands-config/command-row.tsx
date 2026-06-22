@@ -1,17 +1,60 @@
-import { useSortable } from '@dnd-kit/sortable';
+import {
+  Check,
+  GripVertical,
+  HelpCircle,
+  Plus,
+  Settings,
+  Terminal,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { startTransition, useEffect, useState } from 'react';
 import { CSS } from '@dnd-kit/utilities';
-import { Check, GripVertical, Settings, Terminal, Trash2 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useSortable } from '@dnd-kit/sortable';
 
+
+
+import type {
+  ProjectCommand,
+  RunCommandEnvSource,
+  RunCommandEnvVar,
+  UpdateProjectCommand,
+} from '@shared/run-command-types';
 import { Checkbox } from '@/common/ui/checkbox';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
-import type {
-  ProjectCommand,
-  UpdateProjectCommand,
-} from '@shared/run-command-types';
+import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
+import { Select } from '@/common/ui/select';
+import { Tooltip } from '@/common/ui/tooltip';
+
+
 
 import { PortChipInput } from './port-chip-input';
+
+const ENV_SOURCE_OPTIONS = RUN_COMMAND_ENV_SOURCES.map((source) => ({
+  value: source.key,
+  label: source.label,
+}));
+
+function getPersistedEnvVars(envVars: RunCommandEnvVar[]) {
+  return envVars.filter((envVar) => envVar.name.trim());
+}
+
+function areEnvVarsEqual(
+  envVarsA: RunCommandEnvVar[],
+  envVarsB: RunCommandEnvVar[],
+) {
+  if (envVarsA.length !== envVarsB.length) return false;
+
+  return envVarsA.every((envVar, index) => {
+    const other = envVarsB[index];
+    return (
+      envVar.source === other.source &&
+      envVar.name === other.name &&
+      (envVar.value ?? '') === (other.value ?? '')
+    );
+  });
+}
 
 export function CommandRow({
   sortableId,
@@ -31,6 +74,9 @@ export function CommandRow({
   const [localConfirmMessage, setLocalConfirmMessage] = useState(
     command.confirmMessage ?? '',
   );
+  const [localEnvVars, setLocalEnvVars] = useState(command.envVars);
+  const [hasLocalEnvDraftRows, setHasLocalEnvDraftRows] = useState(false);
+  const [hasPendingEnvEdits, setHasPendingEnvEdits] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
@@ -50,16 +96,29 @@ export function CommandRow({
   };
 
   useEffect(() => {
-    setLocalName(command.name ?? '');
+    startTransition(() => setLocalName(command.name ?? ''));
   }, [command.name]);
 
   useEffect(() => {
-    setLocalCommand(command.command);
+    startTransition(() => setLocalCommand(command.command));
   }, [command.command]);
 
   useEffect(() => {
-    setLocalConfirmMessage(command.confirmMessage ?? '');
+    startTransition(() => setLocalConfirmMessage(command.confirmMessage ?? ''));
   }, [command.confirmMessage]);
+
+  useEffect(() => {
+    if (hasPendingEnvEdits) {
+      if (areEnvVarsEqual(command.envVars, getPersistedEnvVars(localEnvVars))) {
+        startTransition(() => setHasPendingEnvEdits(false));
+      }
+      return;
+    }
+
+    if (!hasLocalEnvDraftRows) {
+      startTransition(() => setLocalEnvVars(command.envVars));
+    }
+  }, [command.envVars, hasLocalEnvDraftRows, hasPendingEnvEdits, localEnvVars]);
 
   const filteredSuggestions = suggestions.filter(
     (s) =>
@@ -95,6 +154,51 @@ export function CommandRow({
 
   const handlePortsChange = (ports: number[]) => {
     onUpdate({ ports });
+  };
+
+  const handleEnvVarsChange = (envVars: RunCommandEnvVar[]) => {
+    setLocalEnvVars(envVars);
+    setHasLocalEnvDraftRows(envVars.some((envVar) => !envVar.name.trim()));
+    setHasPendingEnvEdits(true);
+    onUpdate({ envVars: getPersistedEnvVars(envVars) });
+  };
+
+  const handleAddEnvVar = () => {
+    const envVars: RunCommandEnvVar[] = [
+      ...localEnvVars,
+      { source: 'taskName', name: '' },
+    ];
+    setLocalEnvVars(envVars);
+    setHasLocalEnvDraftRows(true);
+  };
+
+  const handleEnvVarChange = (
+    index: number,
+    update: Partial<RunCommandEnvVar>,
+  ) => {
+    handleEnvVarsChange(
+      localEnvVars.map((envVar, currentIndex) =>
+        currentIndex === index ? { ...envVar, ...update } : envVar,
+      ),
+    );
+  };
+
+  const handleEnvSourceChange = (
+    index: number,
+    source: RunCommandEnvSource,
+  ) => {
+    const current = localEnvVars[index];
+    handleEnvVarChange(index, {
+      source,
+      name: current.name,
+      value: source === 'custom' ? (current.value ?? '') : undefined,
+    });
+  };
+
+  const handleRemoveEnvVar = (index: number) => {
+    handleEnvVarsChange(
+      localEnvVars.filter((_, currentIndex) => currentIndex !== index),
+    );
   };
 
   const handleConfirmToggle = (checked: boolean) => {
@@ -184,6 +288,11 @@ export function CommandRow({
             +{command.ports.length - 2}
           </span>
         )}
+        {!isOpen && localEnvVars.length > 0 && (
+          <span className="bg-glass-light text-ink-3 rounded px-1.5 py-0.5 font-mono text-[10px]">
+            env {localEnvVars.length}
+          </span>
+        )}
         {!isOpen && command.confirmBeforeRun && (
           <Check
             className="text-ink-3 h-3.5 w-3.5"
@@ -214,6 +323,107 @@ export function CommandRow({
               Ports to check
             </label>
             <PortChipInput ports={command.ports} onChange={handlePortsChange} />
+          </div>
+          <div className="min-w-64 flex-1">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <label className="text-ink-3 block text-xs">Env vars</label>
+                <Tooltip
+                  side="top"
+                  align="left"
+                  minWidth={260}
+                  content={
+                    <div className="space-y-1.5">
+                      <p>
+                        Add env vars for this command. Pick a Jean-Claude value,
+                        then choose target env var name.
+                      </p>
+                      <p className="text-ink-3">
+                        Example: map Task name to{' '}
+                        <span className="text-ink-1 font-mono">TASK_NAME</span>{' '}
+                        and command receives{' '}
+                        <span className="text-ink-1 font-mono">
+                          TASK_NAME=...
+                        </span>
+                        .
+                      </p>
+                      <p className="text-ink-3">
+                        Available port is only checked when an Available port
+                        row exists.
+                      </p>
+                      <p className="text-ink-3">
+                        Add multiple rows to map same source to multiple env
+                        names.
+                      </p>
+                    </div>
+                  }
+                >
+                  <button
+                    type="button"
+                    className="text-ink-4 hover:text-ink-2 rounded-sm"
+                    aria-label="Env vars help"
+                  >
+                    <HelpCircle className="h-3.5 w-3.5" />
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {localEnvVars.map((envVar, index) => {
+                return (
+                  <div key={index} className="flex items-center gap-2">
+                    <Select
+                      size="sm"
+                      value={envVar.source}
+                      options={ENV_SOURCE_OPTIONS}
+                      onChange={(value) =>
+                        handleEnvSourceChange(
+                          index,
+                          value as RunCommandEnvSource,
+                        )
+                      }
+                      className="w-36 shrink-0"
+                    />
+                    <Input
+                      size="sm"
+                      value={envVar.name}
+                      onChange={(e) =>
+                        handleEnvVarChange(index, { name: e.target.value })
+                      }
+                      placeholder="Env var name"
+                      className="font-mono"
+                    />
+                    {envVar.source === 'custom' && (
+                      <Input
+                        size="sm"
+                        value={envVar.value ?? ''}
+                        onChange={(e) =>
+                          handleEnvVarChange(index, { value: e.target.value })
+                        }
+                        placeholder="value"
+                        className="font-mono"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveEnvVar(index)}
+                      className="text-ink-4 hover:text-ink-2 shrink-0 rounded-md p-1"
+                      aria-label="Remove env var"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+              <button
+                type="button"
+                onClick={handleAddEnvVar}
+                className="text-ink-3 hover:text-ink-1 hover:bg-glass-light flex items-center gap-1 rounded-md px-2 py-1 text-xs"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add env var
+              </button>
+            </div>
           </div>
           <div className="min-w-60 pt-5">
             <Checkbox

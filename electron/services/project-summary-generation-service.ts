@@ -1,7 +1,8 @@
 import type { AiSkillSlotsSetting } from '@shared/types';
 
-import { ProjectRepository } from '../database/repositories/projects';
 import { dbg } from '../lib/debug';
+import { ProjectRepository } from '../database/repositories/projects';
+
 
 import { generateText } from './ai-generation-service';
 import { resolveAiSkillSlot } from './ai-skill-slot-resolver';
@@ -22,6 +23,7 @@ export async function generateProjectSummary({
 }: {
   project: {
     name: string;
+    id?: string;
     path: string;
     color: string;
     aiSkillSlots?: AiSkillSlotsSetting | null;
@@ -49,6 +51,12 @@ export async function generateProjectSummary({
       outputSchema: PROJECT_SUMMARY_SCHEMA,
       timeoutMs: PROJECT_SUMMARY_TIMEOUT_MS,
       prompt,
+      usageContext: {
+        feature: 'project-summary',
+        projectId: project.id ?? null,
+        taskId: null,
+        stepId: null,
+      },
     });
 
     const summary = extractProjectSummary(result);

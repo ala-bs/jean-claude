@@ -1,35 +1,41 @@
-import {
-  exec,
-  spawn,
-  type ChildProcessWithoutNullStreams,
-} from 'child_process';
-import { readFile, stat } from 'fs/promises';
 import { join, relative } from 'path';
+import { readFile, stat } from 'fs/promises';
+import { createServer } from 'net';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 
+
+
+import * as nodePty from 'node-pty';
 import { glob } from 'glob';
 
+
 import type {
-  RunStatus,
   CommandRunStatus,
-  ProjectCommand,
+  PackageScriptsResult,
   PortInUse,
   PortsInUseErrorData,
-  PackageScriptsResult,
-  WorkspacePackage,
+  ProjectCommand,
   RunCommandLogStream,
+  RunStatus,
+  WorkspacePackage,
 } from '@shared/run-command-types';
 
-import { ProjectCommandRepository } from '../database/repositories/project-commands';
 import { dbg } from '../lib/debug';
+import { ProjectCommandRepository } from '../database/repositories/project-commands';
+import { ProjectRepository } from '../database/repositories/projects';
+import { TaskRepository } from '../database/repositories/tasks';
+
 
 const execAsync = promisify(exec);
+const RUN_COMMAND_LOG_FLUSH_INTERVAL_MS = 50;
+const RUN_COMMAND_LOG_FLUSH_BYTES = 16 * 1024;
 
 type ProcessSignal = 'SIGINT' | 'SIGTERM' | 'SIGKILL';
 
 function getProcessEnvWithoutNodeEnv(): Record<string, string> {
   const { NODE_ENV: _nodeEnv, ...env } = process.env;
-  // Child process env expects string values; filter out undefined values.
+  // node-pty expects string values; filter out undefined values.
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) {
@@ -127,53 +133,11 @@ function signalProcessGroupOrProcess(pid: number, signal: ProcessSignal): void {
       process.kill(-pid, signal);
       return;
     } catch {
-      // Fall back to the shell process if the process group is already gone.
+      // Fall back to the PTY shell process if group signaling fails.
     }
   }
 
   process.kill(pid, signal);
-}
-
-/**
- * Handle terminal line-overwrite sequences within a single line.
- *
- * Many CLI tools (Metro, webpack, npm) rewrite the current line using:
- *   - `\r`        — carriage return (cursor to column 0, next text overwrites)
- *   - `\x1b[2K`   — erase entire line
- *   - `\x1b[K`    — erase to end of line
- *   - `\x1b[1G`   — cursor to column 1
- *
- * Since we're not a full terminal emulator, we take the pragmatic approach:
- * find the last "restart" point and keep only the text after it.
- */
-function applyLineOverwrites(line: string): string {
-  let result = line;
-
-  // Find the last erase-line sequence (\x1b[2K or \x1b[K) and discard everything before it
-  // eslint-disable-next-line no-control-regex
-  const eraseMatch = /\x1b\[2?K/g;
-  let lastEraseEnd = -1;
-  let match;
-  while ((match = eraseMatch.exec(result)) !== null) {
-    lastEraseEnd = match.index + match[0].length;
-  }
-  if (lastEraseEnd > 0) {
-    result = result.substring(lastEraseEnd);
-  }
-
-  // Find the last cursor-to-column-1 (\x1b[1G) and discard everything before it
-  const cursorHomeIdx = result.lastIndexOf('\x1b[1G');
-  if (cursorHomeIdx !== -1) {
-    result = result.substring(cursorHomeIdx + 4);
-  }
-
-  // Handle bare \r — take text after the last carriage return
-  const crIdx = result.lastIndexOf('\r');
-  if (crIdx !== -1) {
-    result = result.substring(crIdx + 1);
-  }
-
-  return result;
 }
 
 type StatusChangeCallback = (taskId: string, status: RunStatus) => void;
@@ -181,25 +145,41 @@ type LogCallback = (
   taskId: string,
   runCommandId: string,
   stream: RunCommandLogStream,
-  line: string,
+  text: string,
+  generation: number,
 ) => void;
 
 interface TrackedProcess {
   commandId: string;
   name: string | null;
   command: string;
-  process: ChildProcessWithoutNullStreams;
+  pty: nodePty.IPty;
   pid: number;
   status: 'running' | 'stopped' | 'errored';
-  outputBuffers: Record<RunCommandLogStream, string>;
+  pendingLogBatches: Record<RunCommandLogStream, string>;
+  logFlushTimer: ReturnType<typeof setTimeout> | null;
+  logGeneration: number;
   /** Set to true once the 'exit' event fires */
   exited: boolean;
   /** Resolves when the process exits */
-  exitPromise: Promise<{ exitCode: number; signal?: string }>;
+  exitPromise: Promise<{ exitCode: number; signal?: number }>;
+}
+
+interface RunCommandContext {
+  taskName: string;
+  projectName: string;
+  worktreePath: string;
+  projectPath: string;
+  taskBranch: string;
+  sourceBranch: string;
+  defaultBranch: string;
+  prId: string;
+  prUrl: string;
 }
 
 class RunCommandService {
   private runningProcesses = new Map<string, Map<string, TrackedProcess>>();
+  private logGenerations = new Map<string, number>();
   private commandOperationLocks = new Map<string, Promise<void>>();
   private statusChangeCallbacks: StatusChangeCallback[] = [];
   private logCallbacks: LogCallback[] = [];
@@ -212,6 +192,23 @@ class RunCommandService {
     runCommandId: string;
   }): string {
     return `${taskId}:${runCommandId}`;
+  }
+
+  private getLogGeneration(taskId: string, runCommandId: string): number {
+    return (
+      this.logGenerations.get(this.getCommandKey({ taskId, runCommandId })) ?? 0
+    );
+  }
+
+  private setLogGeneration(
+    taskId: string,
+    runCommandId: string,
+    generation: number,
+  ): void {
+    this.logGenerations.set(
+      this.getCommandKey({ taskId, runCommandId }),
+      generation,
+    );
   }
 
   private async withCommandLock<T>({
@@ -288,9 +285,12 @@ class RunCommandService {
     taskId: string,
     runCommandId: string,
     stream: RunCommandLogStream,
-    line: string,
+    text: string,
+    generation: number,
   ): void {
-    this.logCallbacks.forEach((cb) => cb(taskId, runCommandId, stream, line));
+    this.logCallbacks.forEach((cb) =>
+      cb(taskId, runCommandId, stream, text, generation),
+    );
   }
 
   private getTaskProcesses(taskId: string): Map<string, TrackedProcess> {
@@ -300,25 +300,30 @@ class RunCommandService {
     return this.runningProcesses.get(taskId)!;
   }
 
-  private flushBuffer({
+  private flushLogBatches({
     taskId,
     tracked,
-    stream,
   }: {
     taskId: string;
     tracked: TrackedProcess;
-    stream: RunCommandLogStream;
   }): void {
-    if (!tracked.outputBuffers[stream]) {
-      return;
+    if (tracked.logFlushTimer) {
+      clearTimeout(tracked.logFlushTimer);
+      tracked.logFlushTimer = null;
     }
-    this.notifyLog(
-      taskId,
-      tracked.commandId,
-      stream,
-      tracked.outputBuffers[stream],
-    );
-    tracked.outputBuffers[stream] = '';
+
+    for (const stream of ['stdout', 'stderr'] as const) {
+      const text = tracked.pendingLogBatches[stream];
+      if (!text) continue;
+      tracked.pendingLogBatches[stream] = '';
+      this.notifyLog(
+        taskId,
+        tracked.commandId,
+        stream,
+        text,
+        tracked.logGeneration,
+      );
+    }
   }
 
   private appendLogChunk({
@@ -332,26 +337,20 @@ class RunCommandService {
     stream: RunCommandLogStream;
     chunk: string;
   }): void {
-    // Normalize Windows line endings, then split on newlines
-    const normalized = chunk.replace(/\r\n/g, '\n');
-    const combined = tracked.outputBuffers[stream] + normalized;
-    const lines = combined.split('\n');
-    tracked.outputBuffers[stream] = lines.pop() ?? '';
+    tracked.pendingLogBatches[stream] += chunk;
 
-    for (const rawLine of lines) {
-      this.notifyLog(
-        taskId,
-        tracked.commandId,
-        stream,
-        applyLineOverwrites(rawLine),
-      );
+    if (
+      tracked.pendingLogBatches[stream].length >= RUN_COMMAND_LOG_FLUSH_BYTES
+    ) {
+      this.flushLogBatches({ taskId, tracked });
+      return;
     }
 
-    // Apply overwrites to the buffer itself so progressive \r updates
-    // collapse rather than accumulate
-    tracked.outputBuffers[stream] = applyLineOverwrites(
-      tracked.outputBuffers[stream],
-    );
+    if (!tracked.logFlushTimer) {
+      tracked.logFlushTimer = setTimeout(() => {
+        this.flushLogBatches({ taskId, tracked });
+      }, RUN_COMMAND_LOG_FLUSH_INTERVAL_MS);
+    }
   }
 
   private async getPortsInUse(
@@ -376,28 +375,117 @@ class RunCommandService {
     return portsInUse;
   }
 
-  private spawnTrackedCommand({
+  private async getAvailablePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const server = createServer();
+      server.unref();
+      server.on('error', reject);
+      server.listen(0, () => {
+        const address = server.address();
+        server.close(() => {
+          if (address && typeof address === 'object') {
+            resolve(address.port);
+            return;
+          }
+          reject(new Error('Failed to allocate available port'));
+        });
+      });
+    });
+  }
+
+  private async getRunCommandContext({
+    taskId,
+    projectId,
+    workingDir,
+  }: {
+    taskId: string;
+    projectId: string;
+    workingDir: string;
+  }): Promise<RunCommandContext> {
+    const [task, project] = await Promise.all([
+      TaskRepository.findById(taskId),
+      ProjectRepository.findById(projectId),
+    ]);
+
+    return {
+      taskName: task?.name?.trim() || task?.prompt.trim() || taskId,
+      projectName: project?.name ?? projectId,
+      worktreePath: workingDir,
+      projectPath: project?.path ?? '',
+      taskBranch: task?.branchName ?? '',
+      sourceBranch: task?.sourceBranch ?? '',
+      defaultBranch: project?.defaultBranch ?? '',
+      prId: task?.pullRequestId ?? '',
+      prUrl: task?.pullRequestUrl ?? '',
+    };
+  }
+
+  private async getCommandEnv({
+    command,
+    context,
+  }: {
+    command: ProjectCommand;
+    context: RunCommandContext;
+  }): Promise<Record<string, string>> {
+    const env: Record<string, string> = {};
+    const addEnv = (name: string | undefined, value: string) => {
+      const trimmed = name?.trim();
+      if (trimmed) env[trimmed] = value;
+    };
+
+    const shouldAllocateAvailablePort = command.envVars.some(
+      (envVar) => envVar.source === 'availablePort' && envVar.name.trim(),
+    );
+    const availablePort = shouldAllocateAvailablePort
+      ? String(await this.getAvailablePort())
+      : '';
+
+    for (const envVar of command.envVars) {
+      if (!envVar.name.trim()) continue;
+
+      const value =
+        envVar.source === 'custom'
+          ? (envVar.value ?? '')
+          : envVar.source === 'availablePort'
+            ? availablePort
+            : context[envVar.source];
+      addEnv(envVar.name, value);
+    }
+
+    return env;
+  }
+
+  private async spawnTrackedCommand({
     taskId,
     workingDir,
     command,
+    context,
   }: {
     taskId: string;
     workingDir: string;
     command: ProjectCommand;
-  }): void {
-    dbg.runCommand('Spawning command: %s', command.command);
+    context: RunCommandContext;
+  }): Promise<void> {
+    dbg.runCommand('Spawning command via PTY: %s', command.command);
+    const commandEnv = await this.getCommandEnv({ command, context });
 
-    const childProcess = spawn(command.command, {
+    const shell =
+      process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/sh';
+    const shellArgs =
+      process.platform === 'win32'
+        ? ['/c', command.command]
+        : ['-c', command.command];
+
+    const ptyProcess = nodePty.spawn(shell, shellArgs, {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 30,
       cwd: workingDir,
-      detached: process.platform !== 'win32',
-      env: getProcessEnvWithoutNodeEnv(),
-      shell:
-        process.platform === 'win32' ? true : process.env.SHELL || '/bin/sh',
-      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...getProcessEnvWithoutNodeEnv(), ...commandEnv },
     });
 
-    let exitResolve: (value: { exitCode: number; signal?: string }) => void;
-    const exitPromise = new Promise<{ exitCode: number; signal?: string }>(
+    let exitResolve: (value: { exitCode: number; signal?: number }) => void;
+    const exitPromise = new Promise<{ exitCode: number; signal?: number }>(
       (resolve) => {
         exitResolve = resolve;
       },
@@ -407,10 +495,12 @@ class RunCommandService {
       commandId: command.id,
       name: command.name,
       command: command.command,
-      process: childProcess,
-      pid: childProcess.pid ?? -1,
+      pty: ptyProcess,
+      pid: ptyProcess.pid,
       status: 'running',
-      outputBuffers: { stdout: '', stderr: '' },
+      pendingLogBatches: { stdout: '', stderr: '' },
+      logFlushTimer: null,
+      logGeneration: this.getLogGeneration(taskId, command.id),
       exited: false,
       exitPromise,
     };
@@ -419,15 +509,12 @@ class RunCommandService {
     taskProcesses.set(command.id, trackedProcess);
 
     dbg.runCommand(
-      'Process started with PID %d for command: %s',
+      'PTY process started with PID %d for command: %s',
       trackedProcess.pid,
       command.command,
     );
 
-    childProcess.stdout.setEncoding('utf8');
-    childProcess.stderr.setEncoding('utf8');
-
-    childProcess.stdout.on('data', (data: string) => {
+    ptyProcess.onData((data: string) => {
       this.appendLogChunk({
         taskId,
         tracked: trackedProcess,
@@ -436,44 +523,19 @@ class RunCommandService {
       });
     });
 
-    childProcess.stderr.on('data', (data: string) => {
-      this.appendLogChunk({
-        taskId,
-        tracked: trackedProcess,
-        stream: 'stderr',
-        chunk: data,
-      });
-    });
-
-    childProcess.on('error', (error) => {
+    ptyProcess.onExit(({ exitCode, signal }) => {
       if (trackedProcess.exited) return;
 
       dbg.runCommand(
-        'Process %d failed for command %s: %s',
-        trackedProcess.pid,
-        command.command,
-        error.message,
-      );
-      trackedProcess.exited = true;
-      trackedProcess.status = 'errored';
-      exitResolve!({ exitCode: 1 });
-      this.notifyStatusChange(taskId);
-    });
-
-    childProcess.on('close', (exitCode, signal) => {
-      if (trackedProcess.exited) return;
-
-      dbg.runCommand(
-        'Process %d exited with code %d signal %s',
+        'PTY process %d exited with code %d signal %d',
         trackedProcess.pid,
         exitCode,
         signal,
       );
-      this.flushBuffer({ taskId, tracked: trackedProcess, stream: 'stdout' });
-      this.flushBuffer({ taskId, tracked: trackedProcess, stream: 'stderr' });
+      this.flushLogBatches({ taskId, tracked: trackedProcess });
       trackedProcess.exited = true;
       trackedProcess.status = exitCode === 0 ? 'stopped' : 'errored';
-      exitResolve!({ exitCode: exitCode ?? 1, signal: signal ?? undefined });
+      exitResolve!({ exitCode, signal });
       this.notifyStatusChange(taskId);
     });
   }
@@ -639,7 +701,12 @@ class RunCommandService {
       };
     }
 
-    this.spawnTrackedCommand({ taskId, workingDir, command });
+    const context = await this.getRunCommandContext({
+      taskId,
+      projectId,
+      workingDir,
+    });
+    await this.spawnTrackedCommand({ taskId, workingDir, command, context });
 
     this.notifyStatusChange(taskId);
     return this.getRunStatus(taskId);
@@ -683,13 +750,21 @@ class RunCommandService {
       };
     }
 
-    await Promise.all(
-      validCommands.map((command) =>
-        this.spawnTrackedCommand({ taskId, workingDir, command }),
-      ),
-    );
+    const context = await this.getRunCommandContext({
+      taskId,
+      projectId,
+      workingDir,
+    });
 
-    this.notifyStatusChange(taskId);
+    try {
+      await Promise.all(
+        validCommands.map((command) =>
+          this.spawnTrackedCommand({ taskId, workingDir, command, context }),
+        ),
+      );
+    } finally {
+      this.notifyStatusChange(taskId);
+    }
     return this.getRunStatus(taskId);
   }
 
@@ -722,7 +797,37 @@ class RunCommandService {
     const tracked = taskProcesses.get(runCommandId);
     if (!tracked || tracked.status !== 'running') return;
 
-    tracked.process.stdin.write(input);
+    tracked.pty.write(input);
+  }
+
+  resetLogs({
+    taskId,
+    runCommandId,
+    generation,
+  }: {
+    taskId: string;
+    runCommandId: string;
+    generation: number;
+  }): number {
+    const nextGeneration = Math.max(
+      this.getLogGeneration(taskId, runCommandId) + 1,
+      generation,
+    );
+    this.setLogGeneration(taskId, runCommandId, nextGeneration);
+
+    const taskProcesses = this.runningProcesses.get(taskId);
+    if (!taskProcesses) return nextGeneration;
+
+    const tracked = taskProcesses.get(runCommandId);
+    if (!tracked) return nextGeneration;
+
+    if (tracked.logFlushTimer) {
+      clearTimeout(tracked.logFlushTimer);
+      tracked.logFlushTimer = null;
+    }
+    tracked.pendingLogBatches = { stdout: '', stderr: '' };
+    tracked.logGeneration = nextGeneration;
+    return nextGeneration;
   }
 
   private static VALID_SIGNALS = new Set(['SIGINT', 'SIGTERM']);
@@ -778,7 +883,7 @@ class RunCommandService {
 
       try {
         dbg.runCommand(
-          'Sending SIGTERM to process %d (%s)',
+          'Sending SIGTERM to PTY process %d (%s)',
           pid,
           tracked.command,
         );
@@ -787,14 +892,14 @@ class RunCommandService {
 
         if (!exited) {
           dbg.runCommand(
-            'SIGTERM timeout for process %d, sending SIGKILL',
+            'SIGTERM timeout for PTY process %d, sending SIGKILL',
             pid,
           );
           signalProcessGroupOrProcess(pid, 'SIGKILL');
           exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
         }
       } catch {
-        dbg.runCommand('Process %d may already be dead', pid);
+        dbg.runCommand('PTY process %d may already be dead', pid);
         exited = true;
       }
 

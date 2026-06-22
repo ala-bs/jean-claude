@@ -1,77 +1,91 @@
 import {
   Check,
-  FolderOpen,
-  GitBranch,
-  Bell,
   CircleAlert,
   ExternalLink,
+  FolderOpen,
+  GitBranch,
   RefreshCw,
   Search,
   Star,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { startTransition, useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
-import { Button } from '@/common/ui/button';
-import { Checkbox } from '@/common/ui/checkbox';
-import { Input } from '@/common/ui/input';
-import { Select } from '@/common/ui/select';
-import { Textarea } from '@/common/ui/textarea';
-import {
-  AVAILABLE_BACKENDS,
-  getModelThinkingCapabilities,
-  getModelsForBackend,
-} from '@/features/agent/ui-backend-selector';
-import { ModelSelector } from '@/features/agent/ui-model-selector';
-import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
-import { useBackendModels } from '@/hooks/use-backend-models';
-import {
-  useScanNonExistentProjects,
-  useCleanupClaudeProjects,
-} from '@/hooks/use-claude-projects-cleanup';
-import {
-  getEditorLabel,
-  useBackendsSetting,
-  useCalendarNotificationsSetting,
-  useEditorAutomationSetting,
-  useEditorSetting,
-  useTaskEventNotificationsSetting,
-  useSummaryModelsSetting,
-  useThinkingSettingsSetting,
-  useUpdateBackendsSetting,
-  useUpdateCalendarNotificationsSetting,
-  useUpdateEditorAutomationSetting,
-  useUpdateEditorSetting,
-  useUpdateTaskEventNotificationsSetting,
-  useUpdateSummaryModelsSetting,
-  useUpdateThinkingSettingsSetting,
-  useAvailableEditors,
-  useUsageDisplaySetting,
-  useUpdateUsageDisplaySetting,
-  usePromptPrefaceSetting,
-  useUpdatePromptPrefaceSetting,
-} from '@/hooks/use-settings';
+
 import {
   api,
   type DesktopNotificationStatus,
   type NonExistentClaudeProject,
 } from '@/lib/api';
-import type { AgentBackendType } from '@shared/agent-backend-types';
+import {
+  AVAILABLE_BACKENDS,
+  getModelsForBackend,
+  getModelThinkingCapabilities,
+} from '@/features/agent/ui-backend-selector';
+import {
+  type CalendarNotificationsSetting,
+  DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
+  DEFAULT_TASK_NOTIFICATION_MODES,
+  type ModelPreference,
+  PRESET_EDITORS,
+  type RawMessageCleanupSetting,
+  type TaskNotificationEvent,
+  type TaskNotificationMode,
+  type ThinkingEffort,
+} from '@shared/types';
+import {
+  getEditorLabel,
+  useAppearanceSetting,
+  useAvailableEditors,
+  useBackendDefaultModelsSetting,
+  useBackendsSetting,
+  useCalendarNotificationsSetting,
+  useEditorAutomationSetting,
+  useEditorSetting,
+  usePromptPrefaceSetting,
+  useRawMessageCleanupSetting,
+  useSetting,
+  useSummaryModelsSetting,
+  useTaskEventNotificationsSetting,
+  useThinkingSettingsSetting,
+  useUpdateAppearanceSetting,
+  useUpdateBackendDefaultModelsSetting,
+  useUpdateBackendsSetting,
+  useUpdateCalendarNotificationsSetting,
+  useUpdateEditorAutomationSetting,
+  useUpdateEditorSetting,
+  useUpdatePromptPrefaceSetting,
+  useUpdateRawMessageCleanupSetting,
+  useUpdateSetting,
+  useUpdateSummaryModelsSetting,
+  useUpdateTaskEventNotificationsSetting,
+  useUpdateThinkingSettingsSetting,
+  useUpdateUsageDisplaySetting,
+  useUsageDisplaySetting,
+} from '@/hooks/use-settings';
 import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
-import {
-  DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
-  DEFAULT_TASK_NOTIFICATION_MODES,
-  PRESET_EDITORS,
-  type ModelPreference,
-  type ThinkingEffort,
-  type CalendarNotificationsSetting,
-  type TaskNotificationEvent,
-  type TaskNotificationMode,
-} from '@shared/types';
 import { USAGE_PROVIDERS, type UsageProviderType } from '@shared/usage-types';
+import {
+  useCleanupClaudeProjects,
+  useScanNonExistentProjects,
+} from '@/hooks/use-claude-projects-cleanup';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import { Button } from '@/common/ui/button';
+import { Checkbox } from '@/common/ui/checkbox';
+import { Input } from '@/common/ui/input';
+import { ModelSelector } from '@/features/agent/ui-model-selector';
+import { Select } from '@/common/ui/select';
+import { Textarea } from '@/common/ui/textarea';
+import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
+import { useBackendModels } from '@/hooks/use-backend-models';
+import { useDeleteWorkActivity } from '@/hooks/use-work-activity';
+import { useToastStore } from '@/stores/toasts';
+
+
 
 const PROMPT_PREFACE_PLACEMENT_OPTIONS = [
   { value: 'before', label: 'Before user prompt' },
@@ -82,6 +96,15 @@ const PROMPT_PREFACE_FREQUENCY_OPTIONS = [
   { value: 'initial', label: 'Initial prompt only' },
   { value: 'each', label: 'Each prompt' },
 ];
+
+const MEETING_JOIN_TARGET_OPTIONS = [
+  { value: 'web', label: 'Web browser' },
+  { value: 'app', label: 'Teams app' },
+];
+
+function getUtcDateInputValue(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
 
 const TASK_NOTIFICATION_OPTIONS: Array<{
   event: TaskNotificationEvent;
@@ -132,6 +155,27 @@ const TASK_NOTIFICATION_MODES: Array<{
   },
 ];
 
+export function AppearanceSettings() {
+  const { data: appearanceSetting } = useAppearanceSetting();
+  const updateAppearance = useUpdateAppearanceSetting();
+  const reduceMotion = appearanceSetting?.reduceMotion ?? true;
+
+  return (
+    <div className="space-y-4">
+      <div className="border-line-soft bg-bg-0 rounded-lg border px-4 py-3">
+        <Checkbox
+          checked={reduceMotion}
+          onChange={(checked) =>
+            updateAppearance.mutate({ reduceMotion: checked })
+          }
+          label="Reduce motion"
+          description="Use static running and unread indicators instead of animated effects. Helps reduce Electron Helper (GPU) CPU usage."
+        />
+      </div>
+    </div>
+  );
+}
+
 export function EditorSettings() {
   const { data: editorSetting, isLoading } = useEditorSetting();
   const { data: editorAutomationSetting } = useEditorAutomationSetting();
@@ -180,12 +224,7 @@ export function EditorSettings() {
 
   return (
     <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Editor</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Choose which editor to open projects in
-      </p>
-
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         {PRESET_EDITORS.map((editor) => {
           const available = isEditorAvailable(editor.id);
           const selected = isPresetSelected(editor.id);
@@ -275,7 +314,7 @@ export function PromptPrefaceSettings() {
 
   useEffect(() => {
     if (setting) {
-      setDraftText(setting.text);
+      startTransition(() => setDraftText(setting.text));
     }
   }, [setting]);
 
@@ -285,14 +324,6 @@ export function PromptPrefaceSettings() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-ink-1 text-lg font-semibold">Prompt Preface</h2>
-        <p className="text-ink-3 mt-1 text-sm">
-          Add reusable instructions to prompts before they are sent to coding
-          agents.
-        </p>
-      </div>
-
       <Textarea
         size="md"
         value={draftText}
@@ -356,8 +387,231 @@ export { CalendarNotificationSettings as CalendarSettings };
 export function MaintenanceSettings() {
   return (
     <div className="space-y-8">
+      <RawMessageCleanupSettings />
+      <div className="border-line-soft border-t" />
       <ClaudeProjectsCleanup />
       <GlobalGitignoreSetup />
+    </div>
+  );
+}
+
+function RawMessageCleanupSettings() {
+  const { data: rawMessageCleanupSetting } = useRawMessageCleanupSetting();
+  const updateRawMessageCleanup = useUpdateRawMessageCleanupSetting();
+
+  const settings: RawMessageCleanupSetting = rawMessageCleanupSetting ?? {
+    enabled: true,
+    retentionHours: 24,
+  };
+  const [retentionInput, setRetentionInput] = useState(
+    String(settings.retentionHours),
+  );
+
+  useEffect(() => {
+    startTransition(() => setRetentionInput(String(settings.retentionHours)));
+  }, [settings.retentionHours]);
+
+  const updateSetting = (next: RawMessageCleanupSetting) => {
+    updateRawMessageCleanup.mutate(next);
+  };
+
+  const commitRetention = () => {
+    const parsed = Number.parseInt(retentionInput, 10);
+    const retentionHours = Number.isFinite(parsed)
+      ? Math.max(parsed, 1)
+      : settings.retentionHours;
+    setRetentionInput(String(retentionHours));
+    if (retentionHours !== settings.retentionHours) {
+      updateSetting({ ...settings, retentionHours });
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-start gap-3">
+        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+          <Trash2 className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-ink-1 text-lg font-semibold">
+            Raw Message Cleanup
+          </h2>
+          <p className="text-ink-3 mt-1 text-sm">
+            Save disk space by deleting raw agent messages after normalized
+            messages are safely retained.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
+          <Checkbox
+            checked={settings.enabled}
+            onChange={(enabled) => updateSetting({ ...settings, enabled })}
+            label="Clean up completed task raw messages"
+            description="Normalized messages stay available in task timelines. Raw debug payloads are removed after retention period."
+          />
+        </div>
+
+        <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
+          <label className="text-ink-2 block text-sm font-medium">
+            Keep raw messages after completion
+          </label>
+          <p className="text-ink-3 mt-1 text-xs">
+            Cleanup only touches completed tasks older than this duration.
+          </p>
+          <div className="mt-3 flex items-center gap-3">
+            <Input
+              type="number"
+              min={1}
+              step={1}
+              value={retentionInput}
+              onChange={(e) => setRetentionInput(e.target.value)}
+              onBlur={commitRetention}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  commitRetention();
+                }
+              }}
+              disabled={!settings.enabled}
+              className="w-28"
+            />
+            <span className="text-ink-3 text-sm">hours</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function WorkActivitySettings() {
+  const addToast = useToastStore((state) => state.addToast);
+  const { data: workActivitySetting } = useSetting('workActivity');
+  const updateSetting = useUpdateSetting<'workActivity'>();
+  const deleteWorkActivity = useDeleteWorkActivity();
+  const [deleteBeforeDate, setDeleteBeforeDate] = useState('');
+  const todayUtcDate = getUtcDateInputValue(new Date());
+
+  function toggleLogging(checked: boolean) {
+    updateSetting.mutate(
+      {
+        key: 'workActivity',
+        value: { enabled: checked },
+      },
+      {
+        onError: () => {
+          addToast({
+            type: 'error',
+            message: 'Failed to update activity logging',
+          });
+        },
+      },
+    );
+  }
+
+  function deleteBefore() {
+    if (!deleteBeforeDate) return;
+    if (deleteBeforeDate > todayUtcDate) {
+      addToast({
+        type: 'error',
+        message: 'Delete date cannot be in the future',
+      });
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Delete work activity before ${deleteBeforeDate}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    deleteWorkActivity.mutate(
+      { before: new Date(`${deleteBeforeDate}T00:00:00.000Z`).toISOString() },
+      {
+        onSuccess: () => {
+          addToast({ type: 'success', message: 'Work activity deleted' });
+        },
+        onError: () => {
+          addToast({
+            type: 'error',
+            message: 'Failed to delete work activity',
+          });
+        },
+      },
+    );
+  }
+
+  function deleteAll() {
+    if (!window.confirm('Delete all work activity? This cannot be undone.')) {
+      return;
+    }
+
+    deleteWorkActivity.mutate(undefined, {
+      onSuccess: () => {
+        addToast({ type: 'success', message: 'All work activity deleted' });
+      },
+      onError: () => {
+        addToast({ type: 'error', message: 'Failed to delete work activity' });
+      },
+    });
+  }
+
+  return (
+    <div>
+      <h2 className="text-ink-1 text-lg font-semibold">Work Activity</h2>
+      <p className="text-ink-3 mt-1 text-sm">
+        Control automatic activity logging and manage stored activity data.
+      </p>
+
+      <div className="mt-4 space-y-4">
+        <Checkbox
+          checked={workActivitySetting?.enabled ?? true}
+          onChange={toggleLogging}
+          disabled={updateSetting.isPending}
+          label="Log work activity"
+          description="Track task prompts, PR comments, and approvals for weekly summaries."
+        />
+
+        <div className="border-glass-border bg-bg-1/50 rounded-lg border p-4">
+          <h3 className="text-ink-1 text-sm font-medium">Retention</h3>
+          <p className="text-ink-3 mt-1 text-sm">
+            Delete old activity entries or clear all stored activity.
+          </p>
+
+          <div className="mt-4 flex flex-wrap items-end gap-3">
+            <label className="block">
+              <span className="text-ink-2 mb-1 block text-xs font-medium">
+                Delete before date
+              </span>
+              <Input
+                type="date"
+                value={deleteBeforeDate}
+                max={todayUtcDate}
+                onChange={(event) =>
+                  setDeleteBeforeDate(event.currentTarget.value)
+                }
+                className="w-44"
+              />
+            </label>
+            <Button
+              variant="secondary"
+              onClick={deleteBefore}
+              disabled={!deleteBeforeDate || deleteWorkActivity.isPending}
+            >
+              Delete Before Date
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={deleteAll}
+              disabled={deleteWorkActivity.isPending}
+            >
+              Delete All
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -370,6 +624,8 @@ export function GeneralSettings() {
       <NotificationsSettings />
       <div className="border-line-soft my-8 border-t" />
       <UsageDisplaySettings />
+      <div className="border-line-soft my-8 border-t" />
+      <WorkActivitySettings />
       <div className="border-line-soft my-8 border-t" />
       <MaintenanceSettings />
     </div>
@@ -434,7 +690,16 @@ export function BackendsSettings() {
                 checked={enabled}
                 onChange={() => handleToggle(backend.value)}
                 disabled={enabled && enabledBackends.length <= 1}
-                label={backend.label}
+                label={
+                  <span className="flex items-center gap-2">
+                    <span>{backend.label}</span>
+                    {backend.badge && (
+                      <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                        {backend.badge}
+                      </span>
+                    )}
+                  </span>
+                }
                 description={backend.description}
               />
 
@@ -460,10 +725,16 @@ export function BackendsSettings() {
 }
 
 function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
+  const { data: backendDefaultModelsSetting } =
+    useBackendDefaultModelsSetting();
+  const updateBackendDefaultModels = useUpdateBackendDefaultModelsSetting();
   const { data: thinkingSettings } = useThinkingSettingsSetting();
   const updateThinkingSettings = useUpdateThinkingSettingsSetting();
   const { data: dynamicModels } = useBackendModels(backend);
-  const [model, setModel] = useState<ModelPreference>('default');
+  const model =
+    thinkingSettings?.selectedModels?.[backend] ??
+    backendDefaultModelsSetting?.models[backend] ??
+    'default';
 
   const capabilities = getModelThinkingCapabilities(model, dynamicModels);
   const thinkingOptions = getThinkingEffortOptions({
@@ -486,7 +757,45 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
       nextModel,
       dynamicModels,
     );
-    setModel(nextModel);
+    updateThinkingSettings.mutate({
+      efforts: {
+        'claude-code': {
+          ...(thinkingSettings?.efforts['claude-code'] ?? {
+            default: 'default',
+          }),
+        },
+        opencode: {
+          ...(thinkingSettings?.efforts.opencode ?? { default: 'default' }),
+        },
+        codex: {
+          ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
+        },
+      },
+      selectedModels: {
+        'claude-code':
+          thinkingSettings?.selectedModels?.['claude-code'] ??
+          backendDefaultModelsSetting?.models['claude-code'] ??
+          'default',
+        opencode:
+          thinkingSettings?.selectedModels?.opencode ??
+          backendDefaultModelsSetting?.models.opencode ??
+          'default',
+        codex:
+          thinkingSettings?.selectedModels?.codex ??
+          backendDefaultModelsSetting?.models.codex ??
+          'default',
+        [backend]: nextModel,
+      },
+    });
+    updateBackendDefaultModels.mutate({
+      models: {
+        'claude-code':
+          backendDefaultModelsSetting?.models['claude-code'] ?? 'default',
+        opencode: backendDefaultModelsSetting?.models.opencode ?? 'default',
+        codex: backendDefaultModelsSetting?.models.codex ?? 'default',
+        [backend]: nextModel,
+      },
+    });
 
     const normalizedEffort = normalizeThinkingEffortForModel({
       backend,
@@ -523,10 +832,28 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         opencode: {
           ...(thinkingSettings?.efforts.opencode ?? { default: 'default' }),
         },
+        codex: {
+          ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
+        },
         [backend]: {
           ...backendEfforts,
           [targetModel]: normalizedEffort,
         },
+      },
+      selectedModels: {
+        'claude-code':
+          thinkingSettings?.selectedModels?.['claude-code'] ??
+          backendDefaultModelsSetting?.models['claude-code'] ??
+          'default',
+        opencode:
+          thinkingSettings?.selectedModels?.opencode ??
+          backendDefaultModelsSetting?.models.opencode ??
+          'default',
+        codex:
+          thinkingSettings?.selectedModels?.codex ??
+          backendDefaultModelsSetting?.models.codex ??
+          'default',
+        [backend]: targetModel,
       },
     });
   };
@@ -558,6 +885,7 @@ function CalendarNotificationSettings() {
       enabled: false,
       leadTimeMinutes: DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
       showStartWindow: false,
+      meetingJoinTarget: 'web',
     };
   const isSupported = api.platform === 'darwin';
   const [leadTimeInput, setLeadTimeInput] = useState(
@@ -565,7 +893,7 @@ function CalendarNotificationSettings() {
   );
 
   useEffect(() => {
-    setLeadTimeInput(String(settings.leadTimeMinutes));
+    startTransition(() => setLeadTimeInput(String(settings.leadTimeMinutes)));
   }, [settings.leadTimeMinutes]);
 
   const updateSetting = (next: CalendarNotificationsSetting) => {
@@ -585,21 +913,7 @@ function CalendarNotificationSettings() {
 
   return (
     <div>
-      <div className="flex items-start gap-3">
-        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-          <Bell className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-ink-1 text-lg font-semibold">
-            Calendar Notifications
-          </h2>
-          <p className="text-ink-3 mt-1 text-sm">
-            Notify before meetings start using your macOS Calendar data.
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
+      <div className="space-y-3">
         <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
           <Checkbox
             checked={settings.enabled}
@@ -629,6 +943,28 @@ function CalendarNotificationSettings() {
             label="Show a window when meetings start"
             description="Display an always-on-top meeting window at the scheduled start time, with a quick join action when available."
           />
+        </div>
+
+        <div className="border-glass-border bg-bg-1 rounded-lg border px-4 py-3">
+          <label className="text-ink-1 mb-1 block text-sm font-medium">
+            Open Teams meetings in
+          </label>
+          <Select
+            value={settings.meetingJoinTarget}
+            options={MEETING_JOIN_TARGET_OPTIONS}
+            onChange={(meetingJoinTarget) =>
+              updateSetting({
+                ...settings,
+                meetingJoinTarget:
+                  meetingJoinTarget as CalendarNotificationsSetting['meetingJoinTarget'],
+              })
+            }
+            disabled={!settings.enabled || !isSupported}
+            className="w-full justify-between sm:w-56"
+          />
+          <p className="text-ink-3 mt-2 text-xs">
+            Teams app uses msteams:// deep links when meeting links support it.
+          </p>
         </div>
 
         {!isSupported ? (
@@ -730,7 +1066,7 @@ function TaskNotificationSettings() {
   };
 
   useEffect(() => {
-    checkDesktopStatus();
+    startTransition(() => checkDesktopStatus());
 
     window.addEventListener('focus', checkDesktopStatus);
     return () => window.removeEventListener('focus', checkDesktopStatus);
@@ -766,21 +1102,7 @@ function TaskNotificationSettings() {
 
   return (
     <div>
-      <div className="flex items-start gap-3">
-        <div className="bg-acc/15 text-acc-ink mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-          <Bell className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-ink-1 text-lg font-semibold">
-            Task Notifications
-          </h2>
-          <p className="text-ink-3 mt-1 text-sm">
-            Choose delivery mode for each kind of task notification.
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-3">
+      <div className="space-y-3">
         {showDesktopWarning ? (
           <div className="border-status-err/50 bg-status-err/8 rounded-lg border px-4 py-3 text-sm">
             <div className="text-ink-1 flex items-center gap-2 font-medium">
@@ -879,9 +1201,26 @@ function TaskNotificationSettings() {
 }
 
 export function UsageDisplaySettings() {
+  const queryClient = useQueryClient();
   const { data: usageDisplaySetting } = useUsageDisplaySetting();
   const updateUsageDisplay = useUpdateUsageDisplaySetting();
   const enabledProviders = usageDisplaySetting?.enabledProviders ?? [];
+  const [copilotToken, setCopilotToken] = useState('');
+  const [copilotDeviceCode, setCopilotDeviceCode] = useState<string | null>(
+    null,
+  );
+  const [copilotLoginStatus, setCopilotLoginStatus] = useState<string | null>(
+    null,
+  );
+  const hasStoredCopilotToken = usageDisplaySetting?.copilotToken === 'stored';
+
+  useEffect(() => {
+    startTransition(() => setCopilotToken(
+      usageDisplaySetting?.copilotToken === 'stored'
+        ? ''
+        : (usageDisplaySetting?.copilotToken ?? ''),
+    ));
+  }, [usageDisplaySetting?.copilotToken]);
 
   const isEnabled = (id: UsageProviderType) => enabledProviders.includes(id);
 
@@ -889,17 +1228,55 @@ export function UsageDisplaySettings() {
     const next = isEnabled(id)
       ? enabledProviders.filter((p) => p !== id)
       : [...enabledProviders, id];
-    updateUsageDisplay.mutate({ enabledProviders: next });
+    updateUsageDisplay.mutate({
+      ...(usageDisplaySetting ?? { enabledProviders: [] }),
+      enabledProviders: next,
+    });
+  };
+
+  const saveCopilotToken = () => {
+    if (!copilotToken.trim()) return;
+    updateUsageDisplay.mutate({
+      ...(usageDisplaySetting ?? { enabledProviders: [] }),
+      copilotToken: copilotToken.trim(),
+    });
+  };
+
+  const clearCopilotToken = () => {
+    setCopilotToken('');
+    setCopilotDeviceCode(null);
+    setCopilotLoginStatus('Signed out.');
+    updateUsageDisplay.mutate({
+      ...(usageDisplaySetting ?? { enabledProviders: [] }),
+      copilotToken: '',
+    });
+  };
+
+  const startCopilotLogin = async () => {
+    try {
+      setCopilotLoginStatus('Opening GitHub sign-in...');
+      const deviceCode = await api.copilotAuth.requestDeviceCode();
+      setCopilotDeviceCode(deviceCode.userCode);
+      setCopilotLoginStatus('Waiting for GitHub authorization...');
+      await api.copilotAuth.completeDeviceLogin(deviceCode);
+      setCopilotToken('');
+      setCopilotDeviceCode(null);
+      setCopilotLoginStatus('Signed in.');
+      await queryClient.invalidateQueries({
+        queryKey: ['settings', 'usageDisplay'],
+      });
+      await queryClient.invalidateQueries({ queryKey: ['backend-usage'] });
+    } catch (error) {
+      setCopilotDeviceCode(null);
+      setCopilotLoginStatus(
+        error instanceof Error ? error.message : 'GitHub sign-in failed.',
+      );
+    }
   };
 
   return (
     <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Usage Display</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Show rate limit usage in the header for these providers.
-      </p>
-
-      <div className="mt-4 space-y-2">
+      <div className="space-y-2">
         {USAGE_PROVIDERS.map((provider) => {
           const enabled = isEnabled(provider.value);
 
@@ -921,6 +1298,73 @@ export function UsageDisplaySettings() {
             </div>
           );
         })}
+      </div>
+
+      <div className="mt-4">
+        <label className="text-ink-2 block text-sm font-medium">
+          GitHub Copilot token
+        </label>
+        <div className="mt-2 flex gap-2">
+          <Input
+            type="password"
+            value={copilotToken}
+            onChange={(e) => setCopilotToken(e.target.value)}
+            onBlur={saveCopilotToken}
+            onKeyDown={(e) => e.key === 'Enter' && saveCopilotToken()}
+            placeholder={
+              hasStoredCopilotToken
+                ? 'Stored token preserved unless replaced'
+                : 'Token used for Copilot usage API'
+            }
+          />
+          {hasStoredCopilotToken && (
+            <Button
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={clearCopilotToken}
+              variant="ghost"
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+        <p className="text-ink-3 mt-1 text-xs">
+          Used only when Copilot usage display is enabled.
+        </p>
+        <div className="mt-2 flex items-center gap-2">
+          <Button
+            onClick={
+              hasStoredCopilotToken ? clearCopilotToken : startCopilotLogin
+            }
+            onMouseDown={
+              hasStoredCopilotToken
+                ? (event) => event.preventDefault()
+                : undefined
+            }
+            variant={hasStoredCopilotToken ? 'ghost' : 'secondary'}
+          >
+            {hasStoredCopilotToken ? 'Sign out' : 'Sign in with GitHub'}
+          </Button>
+          {hasStoredCopilotToken && (
+            <span className="text-status-done flex items-center gap-1 text-xs">
+              <Check className="h-3 w-3" /> Signed in
+            </span>
+          )}
+          {copilotDeviceCode && (
+            <span className="text-ink-2 text-xs">
+              Enter code{' '}
+              <code className="bg-bg-2 rounded px-1 py-0.5">
+                {copilotDeviceCode}
+              </code>
+            </span>
+          )}
+        </div>
+        {copilotLoginStatus && (
+          <p className="text-ink-3 mt-1 text-xs">{copilotLoginStatus}</p>
+        )}
+        <p className="text-ink-3 mt-2 text-xs">
+          Sign in with GitHub is preferred. Manual tokens are only a fallback
+          and must belong to a GitHub account with Copilot access.
+        </p>
       </div>
     </div>
   );
@@ -958,6 +1402,11 @@ const SUMMARY_MODEL_BACKENDS: Record<
     description: 'Use a lightweight provider/model when available',
     defaultModel: 'default',
   },
+  codex: {
+    label: 'Codex',
+    description: 'Use default Codex model when available',
+    defaultModel: 'default',
+  },
 };
 
 export function SummaryModelSettings({
@@ -975,6 +1424,7 @@ export function SummaryModelSettings({
   const models = summaryModelsSetting?.models ?? {
     'claude-code': SUMMARY_MODEL_BACKENDS['claude-code'].defaultModel,
     opencode: SUMMARY_MODEL_BACKENDS.opencode.defaultModel,
+    codex: SUMMARY_MODEL_BACKENDS.codex.defaultModel,
   };
 
   const setModel = (model: string) => {

@@ -22,9 +22,17 @@ export interface CommentThread {
   status?: string;
   comments: Array<{
     id?: number;
+    authorId?: string;
     author: string;
     content: string;
+    usersLiked?: Array<{
+      id?: string;
+      displayName: string;
+      uniqueName?: string;
+      imageUrl?: string;
+    }>;
     publishedDate?: string;
+    lastUpdatedDate?: string;
     imageUrl?: string;
     uniqueName?: string;
   }>;

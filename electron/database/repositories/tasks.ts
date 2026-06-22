@@ -1,9 +1,12 @@
+import { Task, TaskStatus, TaskTodoItem, TaskType } from '@shared/types';
 import type { PermissionScope } from '@shared/permission-types';
-import { Task, TaskStatus, TaskType } from '@shared/types';
 
-import { dbg } from '../../lib/debug';
-import { db } from '../index';
+
 import { NewTaskRow, TaskRow, UpdateTaskRow } from '../schema';
+import { db } from '../index';
+import { dbg } from '../../lib/debug';
+
+
 
 // Input types for repository methods (matching shared types but with db-compatible values)
 interface CreateTaskInput {
@@ -25,6 +28,7 @@ interface CreateTaskInput {
   pullRequestId?: string | null;
   pullRequestUrl?: string | null;
   pendingMessage?: string | null;
+  todoItems?: TaskTodoItem[];
   parentTaskId?: string | null;
   createdAt?: string;
   updatedAt: string;
@@ -47,6 +51,7 @@ interface UpdateTaskInput {
   pullRequestId?: string | null;
   pullRequestUrl?: string | null;
   pendingMessage?: string | null;
+  todoItems?: TaskTodoItem[];
   parentTaskId?: string | null;
   updatedAt?: string;
 }
@@ -62,6 +67,7 @@ function toTask<T extends TaskRow>(
   | 'sessionRules'
   | 'workItemIds'
   | 'workItemUrls'
+  | 'todoItems'
 > & {
   type: TaskType;
   userCompleted: boolean;
@@ -69,6 +75,7 @@ function toTask<T extends TaskRow>(
   sessionRules: PermissionScope;
   workItemIds: string[] | null;
   workItemUrls: string[] | null;
+  todoItems: TaskTodoItem[];
 } {
   const {
     type,
@@ -77,6 +84,7 @@ function toTask<T extends TaskRow>(
     sessionRules,
     workItemIds,
     workItemUrls,
+    todoItems,
     ...rest
   } = row;
   return {
@@ -89,6 +97,7 @@ function toTask<T extends TaskRow>(
       : {},
     workItemIds: workItemIds ? JSON.parse(workItemIds) : null,
     workItemUrls: workItemUrls ? JSON.parse(workItemUrls) : null,
+    todoItems: todoItems ? (JSON.parse(todoItems) as TaskTodoItem[]) : [],
   };
 }
 
@@ -103,6 +112,7 @@ function toTaskOrUndefined<T extends TaskRow>(
       | 'sessionRules'
       | 'workItemIds'
       | 'workItemUrls'
+      | 'todoItems'
     > & {
       type: TaskType;
       userCompleted: boolean;
@@ -110,6 +120,7 @@ function toTaskOrUndefined<T extends TaskRow>(
       sessionRules: PermissionScope;
       workItemIds: string[] | null;
       workItemUrls: string[] | null;
+      todoItems: TaskTodoItem[];
     })
   | undefined {
   return row ? toTask(row) : undefined;
@@ -123,6 +134,7 @@ function toDbValues(data: CreateTaskInput): NewTaskRow {
     sessionRules,
     workItemIds,
     workItemUrls,
+    todoItems,
     ...rest
   } = data;
   return {
@@ -139,6 +151,9 @@ function toDbValues(data: CreateTaskInput): NewTaskRow {
     }),
     ...(workItemUrls !== undefined && {
       workItemUrls: workItemUrls ? JSON.stringify(workItemUrls) : null,
+    }),
+    ...(todoItems !== undefined && {
+      todoItems: JSON.stringify(todoItems),
     }),
   } as NewTaskRow;
 }
@@ -150,6 +165,7 @@ function toDbUpdateValues(data: UpdateTaskInput): Partial<UpdateTaskRow> {
     sessionRules,
     workItemIds,
     workItemUrls,
+    todoItems,
     ...rest
   } = data;
   return {
@@ -166,6 +182,9 @@ function toDbUpdateValues(data: UpdateTaskInput): Partial<UpdateTaskRow> {
     }),
     ...(workItemUrls !== undefined && {
       workItemUrls: workItemUrls ? JSON.stringify(workItemUrls) : null,
+    }),
+    ...(todoItems !== undefined && {
+      todoItems: JSON.stringify(todoItems),
     }),
   };
 }
@@ -196,6 +215,8 @@ export const TaskRepository = {
         'projects.name as projectName',
         'projects.color as projectColor',
         'projects.logoPath as projectLogoPath',
+        'projects.repoProviderId as repoProviderId',
+        'projects.repoId as repoId',
       ])
       .where('tasks.userCompleted', '=', 0)
       .where('tasks.parentTaskId', 'is', null)
@@ -214,6 +235,8 @@ export const TaskRepository = {
         'projects.name as projectName',
         'projects.color as projectColor',
         'projects.logoPath as projectLogoPath',
+        'projects.repoProviderId as repoProviderId',
+        'projects.repoId as repoId',
       ])
       .where('tasks.parentTaskId', 'in', parentTaskIds)
       .orderBy('tasks.sortOrder', 'asc')

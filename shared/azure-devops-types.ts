@@ -77,6 +77,7 @@ export interface AzureDevOpsPullRequestDetails extends AzureDevOpsPullRequest {
     deleteSourceBranch: boolean;
     transitionWorkItems: boolean;
     mergeCommitMessage?: string;
+    autoCompleteIgnoreConfigIds?: number[];
   };
 }
 
@@ -114,6 +115,12 @@ export interface AzureDevOpsComment {
     uniqueName: string;
     imageUrl?: string;
   };
+  usersLiked: Array<{
+    id?: string;
+    displayName: string;
+    uniqueName?: string;
+    imageUrl?: string;
+  }>;
   publishedDate: string;
   lastUpdatedDate: string;
 }

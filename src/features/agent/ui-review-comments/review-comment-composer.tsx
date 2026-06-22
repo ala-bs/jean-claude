@@ -1,5 +1,6 @@
-import clsx from 'clsx';
 import { useCallback, useState } from 'react';
+import clsx from 'clsx';
+
 
 import {
   COMMENT_ACCENT,
@@ -7,6 +8,8 @@ import {
 } from '@/features/common/ui-inline-comments';
 import { REVIEW_PRESETS, type ReviewPresetId } from '@/stores/review-comments';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+
+
 
 function PresetChips({
   selectedPresets,
@@ -40,6 +43,8 @@ export function ReviewCommentComposer({
   lineEnd,
   onSubmit,
   onCancel,
+  initialBody,
+  onBodyChange,
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -49,6 +54,8 @@ export function ReviewCommentComposer({
     images: PromptImagePart[],
   ) => void;
   onCancel: () => void;
+  initialBody?: string;
+  onBodyChange?: (body: string) => void;
 }) {
   const [selectedPresets, setSelectedPresets] = useState<ReviewPresetId[]>([]);
 
@@ -79,6 +86,8 @@ export function ReviewCommentComposer({
           lineEnd={lineEnd}
           onSubmit={handleSubmit}
           onCancel={onCancel}
+          initialBody={initialBody}
+          onBodyChange={onBodyChange}
           canSubmitEmpty={selectedPresets.length > 0}
           placeholder="Leave an instruction for this line..."
           renderBeforeTextarea={

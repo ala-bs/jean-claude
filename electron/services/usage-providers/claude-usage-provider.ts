@@ -1,9 +1,14 @@
 import { exec, type ExecOptions } from 'child_process';
+import os from 'os';
+import path from 'path';
 import { promisify } from 'util';
+import { readFile } from 'fs/promises';
+
+
 
 import type {
-  UsageLimitData,
   UsageDisplayData,
+  UsageLimitData,
   UsageResult,
 } from '@shared/usage-types';
 
@@ -15,15 +20,51 @@ const execAsync = promisify(exec) as (
   options?: ExecOptions,
 ) => Promise<{ stdout: string; stderr: string }>;
 
+interface ClaudeUsageProviderOptions {
+  credentialsPath?: string;
+}
+
+interface ClaudeOAuthToken {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: number | null;
+  scopes: string[] | null;
+  credentials: Record<string, unknown>;
+  source: 'keychain' | 'file';
+}
+
 export class ClaudeUsageProvider implements BackendUsageProvider {
   private cachedToken: string | null = null;
+  private cachedTokenExpiresAt: number | null = null;
+  private cachedOAuthToken: ClaudeOAuthToken | null = null;
   private tokenCacheTime: number = 0;
+  private rateLimitedUntil: Date | null = null;
+  private readonly credentialsPath: string;
   private readonly TOKEN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private readonly FALLBACK_CLAUDE_CODE_VERSION = '2.1.0';
+  private readonly KEYCHAIN_SERVICE = 'Claude Code-credentials';
+
+  constructor(options: ClaudeUsageProviderOptions = {}) {
+    this.credentialsPath =
+      options.credentialsPath ??
+      path.join(os.homedir(), '.claude', '.credentials.json');
+  }
 
   async getUsage(): Promise<UsageResult> {
     try {
-      const token = await this.getOAuthToken();
-      if (!token) {
+      if (this.rateLimitedUntil && this.rateLimitedUntil > new Date()) {
+        return {
+          data: null,
+          error: {
+            type: 'api_error',
+            message: `Claude usage API is rate limited until ${this.rateLimitedUntil.toLocaleTimeString()}`,
+            statusCode: 429,
+          },
+        };
+      }
+
+      const oauthToken = await this.getOAuthToken();
+      if (!oauthToken) {
         return {
           data: null,
           error: {
@@ -33,38 +74,18 @@ export class ClaudeUsageProvider implements BackendUsageProvider {
         };
       }
 
-      const response = await fetch(
-        'https://api.anthropic.com/api/oauth/usage',
-        {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-            'anthropic-beta': 'oauth-2025-04-20',
-          },
-        },
-      );
+      const response = await this.fetchUsage(oauthToken.accessToken);
 
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          this.cachedToken = null;
+      if (response.status === 401 || response.status === 403) {
+        this.clearTokenCache();
+        const latestToken = await this.getOAuthToken();
+        if (latestToken && latestToken.accessToken !== oauthToken.accessToken) {
+          const retryResponse = await this.fetchUsage(latestToken.accessToken);
+          return await this.handleUsageResponse(retryResponse);
         }
-        return {
-          data: null,
-          error: {
-            type: 'api_error',
-            message: `API error: ${response.statusText}`,
-            statusCode: response.status,
-          },
-        };
       }
 
-      const apiData = (await response.json()) as Record<string, unknown>;
-      return {
-        data: this.transformResponse(apiData),
-        error: null,
-      };
+      return await this.handleUsageResponse(response);
     } catch (err) {
       return {
         data: null,
@@ -77,35 +98,163 @@ export class ClaudeUsageProvider implements BackendUsageProvider {
   }
 
   dispose(): void {
-    this.cachedToken = null;
+    this.clearTokenCache();
+    this.rateLimitedUntil = null;
   }
 
-  private async getOAuthToken(): Promise<string | null> {
-    if (
-      this.cachedToken &&
-      Date.now() - this.tokenCacheTime < this.TOKEN_CACHE_TTL
-    ) {
-      return this.cachedToken;
+  private fetchUsage(token: string): Promise<Response> {
+    return fetch('https://api.anthropic.com/api/oauth/usage', {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+        'User-Agent': `claude-code/${this.FALLBACK_CLAUDE_CODE_VERSION}`,
+      },
+    });
+  }
+
+  private async handleUsageResponse(response: Response): Promise<UsageResult> {
+    if (response.status === 429) {
+      this.rateLimitedUntil = this.parseRetryAfter(
+        response.headers.get('retry-after'),
+      );
+      return {
+        data: null,
+        error: {
+          type: 'api_error',
+          message: 'Claude usage API is rate limited. Try again later.',
+          statusCode: response.status,
+        },
+      };
     }
 
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        this.clearTokenCache();
+      }
+      return {
+        data: null,
+        error: {
+          type: 'api_error',
+          message: `API error: ${response.statusText}`,
+          statusCode: response.status,
+        },
+      };
+    }
+
+    const apiData = (await response.json()) as Record<string, unknown>;
+    this.rateLimitedUntil = null;
+    return {
+      data: this.transformResponse(apiData),
+      error: null,
+    };
+  }
+
+  private async getOAuthToken(): Promise<ClaudeOAuthToken | null> {
+    if (
+      this.cachedToken &&
+      this.cachedOAuthToken &&
+      (!this.cachedTokenExpiresAt || this.cachedTokenExpiresAt > Date.now()) &&
+      Date.now() - this.tokenCacheTime < this.TOKEN_CACHE_TTL
+    ) {
+      return this.cachedOAuthToken;
+    }
+
+    const token = await this.getOAuthTokenFromKeychain();
+    if (token) {
+      this.cacheToken(token);
+      return token;
+    }
+
+    const fileToken = await this.getOAuthTokenFromFile();
+    if (fileToken) {
+      this.cacheToken(fileToken);
+      return fileToken;
+    }
+
+    return null;
+  }
+
+  private cacheToken(token: ClaudeOAuthToken): void {
+    this.cachedToken = token.accessToken;
+    this.cachedTokenExpiresAt = token.expiresAt;
+    this.cachedOAuthToken = token;
+    this.tokenCacheTime = Date.now();
+  }
+
+  private clearTokenCache(): void {
+    this.cachedToken = null;
+    this.cachedTokenExpiresAt = null;
+    this.cachedOAuthToken = null;
+  }
+
+  private async getOAuthTokenFromKeychain(): Promise<ClaudeOAuthToken | null> {
     try {
       const { stdout } = await execAsync(
-        'security find-generic-password -s "Claude Code-credentials" -w',
+        `security find-generic-password -s "${this.KEYCHAIN_SERVICE}" -w`,
         { encoding: 'utf-8' },
       );
-
-      const credentials = JSON.parse(stdout.trim());
-      const token = credentials?.claudeAiOauth?.accessToken;
-
-      if (token) {
-        this.cachedToken = token;
-        this.tokenCacheTime = Date.now();
-      }
-
-      return token || null;
+      return this.extractOAuthToken(JSON.parse(stdout.trim()), 'keychain');
     } catch {
       return null;
     }
+  }
+
+  private async getOAuthTokenFromFile(): Promise<ClaudeOAuthToken | null> {
+    try {
+      const contents = await readFile(this.credentialsPath, 'utf-8');
+      return this.extractOAuthToken(JSON.parse(contents), 'file');
+    } catch {
+      return null;
+    }
+  }
+
+  private extractOAuthToken(
+    credentials: unknown,
+    source: ClaudeOAuthToken['source'],
+  ): ClaudeOAuthToken | null {
+    if (!credentials || typeof credentials !== 'object') return null;
+    const record = credentials as Record<string, unknown>;
+    const claudeAiOauth = record.claudeAiOauth as
+      | Record<string, unknown>
+      | undefined;
+    const accessToken = claudeAiOauth?.accessToken ?? record.accessToken;
+    if (typeof accessToken !== 'string' || accessToken.length === 0) {
+      return null;
+    }
+
+    const expiresAt = claudeAiOauth?.expiresAt ?? record.expiresAt;
+    const refreshToken = claudeAiOauth?.refreshToken ?? record.refreshToken;
+    const scopes = claudeAiOauth?.scopes ?? record.scopes;
+    return {
+      accessToken,
+      refreshToken: typeof refreshToken === 'string' ? refreshToken : null,
+      expiresAt: typeof expiresAt === 'number' ? expiresAt : null,
+      scopes: Array.isArray(scopes)
+        ? scopes.filter((scope): scope is string => typeof scope === 'string')
+        : null,
+      credentials: record,
+      source,
+    };
+  }
+
+  private parseRetryAfter(value: string | null): Date {
+    const now = Date.now();
+    if (!value) return new Date(now + 5 * 60 * 1000);
+
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return new Date(now + seconds * 1000);
+    }
+
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed) && parsed > now) {
+      return new Date(parsed);
+    }
+
+    return new Date(now + 5 * 60 * 1000);
   }
 
   private transformResponse(

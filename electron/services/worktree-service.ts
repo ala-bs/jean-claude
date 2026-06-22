@@ -1,26 +1,34 @@
-import { exec, execFile, spawn, type ExecOptions } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { exec, execFile, type ExecOptions, spawn } from 'child_process';
 import { promisify } from 'util';
+
 
 import { app } from 'electron';
 import ignore from 'ignore';
 import { nanoid } from 'nanoid';
 
+
+
 import { getImageMimeType, isSvgPath } from '@shared/image-types';
-import type { WorktreeFileCopyEntry } from '@shared/permission-types';
 import type { BranchInfo } from '@shared/types';
+import type { WorktreeFileCopyEntry } from '@shared/permission-types';
 
-import { ProjectRepository } from '../database/repositories/projects';
-import { dbg } from '../lib/debug';
+
+
 import { isEnoent, pathExists } from '../lib/fs';
+import { dbg } from '../lib/debug';
+import { ProjectRepository } from '../database/repositories/projects';
 
-import { installMcpForWorktree } from './mcp-template-service';
+
+
 import {
   buildWorktreeSettings,
   readSettings,
 } from './permission-settings-service';
 import { formatCreateWorktreeError } from './utils-worktree-errors';
+import { installMcpForWorktree } from './mcp-template-service';
+
 
 const execAsync = promisify(exec) as (
   command: string,
@@ -679,31 +687,12 @@ export async function getWorktreeDiff(
           !filePath.endsWith('/') &&
           !filesMap.has(filePath)
         ) {
-          // Check if file existed at baseCommit
-          try {
-            await execAsync(
-              `git cat-file -e ${baseCommit}:"${escapeForShell(filePath)}"`,
-              {
-                cwd: worktreePath,
-                encoding: 'utf-8',
-              },
-            );
-            // File existed at baseCommit, so this is modified (shouldn't happen for ??)
-            filesMap.set(filePath, {
-              path: filePath,
-              status: 'modified',
-              additions: 0,
-              deletions: 0,
-            });
-          } catch {
-            // File didn't exist at baseCommit, so it's added
-            filesMap.set(filePath, {
-              path: filePath,
-              status: 'added',
-              additions: 0,
-              deletions: 0,
-            });
-          }
+          filesMap.set(filePath, {
+            path: filePath,
+            status: 'added',
+            additions: 0,
+            deletions: 0,
+          });
           dbg.worktree('From git status (untracked): %o', {
             filePath,
             status: filesMap.get(filePath)?.status,

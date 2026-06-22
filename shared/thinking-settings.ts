@@ -1,5 +1,6 @@
-import type { AgentBackendType } from './agent-backend-types';
 import type { ModelPreference, ThinkingEffort } from './types';
+import type { AgentBackendType } from './agent-backend-types';
+
 
 export interface ThinkingEffortOption {
   value: ThinkingEffort;
@@ -20,6 +21,7 @@ export const DEFAULT_THINKING_EFFORT_OPTION: ThinkingEffortOption = {
 
 export const THINKING_EFFORT_OPTIONS: ThinkingEffortOption[] = [
   DEFAULT_THINKING_EFFORT_OPTION,
+  { value: 'minimal', label: 'Minimal', description: 'Minimum reasoning' },
   { value: 'none', label: 'None', description: 'Disable reasoning effort' },
   { value: 'low', label: 'Low', description: 'Fastest reasoning' },
   { value: 'medium', label: 'Medium', description: 'Balanced reasoning' },
@@ -39,6 +41,15 @@ const CLAUDE_THINKING_EFFORTS: ThinkingEffort[] = [
 const OPENCODE_THINKING_EFFORTS: ThinkingEffort[] = [
   'default',
   'none',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+];
+
+const CODEX_THINKING_EFFORTS: ThinkingEffort[] = [
+  'default',
+  'minimal',
   'low',
   'medium',
   'high',
@@ -75,6 +86,23 @@ export function getThinkingEffortOptions({
     }
 
     return optionsForEfforts(OPENCODE_THINKING_EFFORTS);
+  }
+
+  if (backend === 'codex') {
+    if (capabilities?.supportsThinking === false) {
+      return [DEFAULT_THINKING_EFFORT_OPTION];
+    }
+
+    if (
+      capabilities?.supportsThinking &&
+      capabilities.thinkingEfforts?.length
+    ) {
+      return optionsForEfforts(['default', ...capabilities.thinkingEfforts]);
+    }
+
+    return model === 'default'
+      ? [DEFAULT_THINKING_EFFORT_OPTION]
+      : optionsForEfforts(CODEX_THINKING_EFFORTS);
   }
 
   void model;

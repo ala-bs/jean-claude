@@ -1,16 +1,19 @@
-import { useNavigate, useParams } from '@tanstack/react-router';
 import { ChevronDown, ListTodo } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
+import { useNavigate, useParams } from '@tanstack/react-router';
 
-import { useCommands } from '@/common/hooks/use-commands';
-import { Button } from '@/common/ui/button';
-import { SidebarContentTabs } from '@/features/project/ui-sidebar-content-tabs';
-import { PrSidebarList } from '@/features/pull-request/ui-pr-sidebar-list';
-import { TaskSummaryCard } from '@/features/task/ui-task-summary-card';
-import { useProjects } from '@/hooks/use-projects';
+
 import { useAllActiveTasks, useAllCompletedTasks } from '@/hooks/use-tasks';
 import { useCurrentVisibleProject, useSidebarTab } from '@/stores/navigation';
+import { Button } from '@/common/ui/button';
+import { PrSidebarList } from '@/features/pull-request/ui-pr-sidebar-list';
+import { SidebarContentTabs } from '@/features/project/ui-sidebar-content-tabs';
+import { TaskSummaryCard } from '@/features/task/ui-task-summary-card';
+import { useCommands } from '@/common/hooks/use-commands';
 import { useOverlaysStore } from '@/stores/overlays';
+import { useProjects } from '@/hooks/use-projects';
+
+
 
 const COMPLETED_TASKS_PAGE_SIZE = 5;
 
@@ -35,6 +38,10 @@ export function TaskList() {
   const completedTasks = useMemo(
     () => completedTasksData?.pages.flatMap((page) => page.tasks) ?? [],
     [completedTasksData],
+  );
+  const projectNameById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project.name])),
+    [projects],
   );
 
   // Filter tasks by selected project
@@ -267,7 +274,11 @@ export function TaskList() {
                   key={task.id}
                   task={task}
                   index={index}
-                  projectName={task.projectName}
+                  projectName={
+                    task.projectName ??
+                    projectNameById.get(task.projectId) ??
+                    'Unknown Project'
+                  }
                   isSelected={task.id === currentTaskId}
                 />
               ))
@@ -286,7 +297,11 @@ export function TaskList() {
                   <TaskSummaryCard
                     key={task.id}
                     task={task}
-                    projectName={task.projectName}
+                    projectName={
+                      task.projectName ??
+                      projectNameById.get(task.projectId) ??
+                      'Unknown Project'
+                    }
                     isSelected={task.id === currentTaskId}
                   />
                 ))}

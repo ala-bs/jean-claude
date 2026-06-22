@@ -1,45 +1,54 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
 import {
   AlertTriangle,
-  ExternalLink,
-  Eye,
-  FolderOpen,
-  GitPullRequest,
-  GitMerge,
-  Loader2,
-  Plus,
-  Send,
-  GitBranch,
   ArrowRight,
   Clock,
   Edit3,
+  ExternalLink,
+  Eye,
+  FolderOpen,
+  GitBranch,
+  GitMerge,
+  GitPullRequest,
+  Loader2,
+  Plus,
   Save,
+  Send,
   X,
 } from 'lucide-react';
 import type { ChangeEvent, FormEvent } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 
-import { Button } from '@/common/ui/button';
-import { Chip } from '@/common/ui/chip';
-import { Input } from '@/common/ui/input';
-import { UserAvatar } from '@/common/ui/user-avatar';
-import { useProject } from '@/hooks/use-projects';
+
+import {
+  getEditorLabel,
+  useBackendDefaultModelsSetting,
+  useBackendsSetting,
+  useEditorSetting,
+} from '@/hooks/use-settings';
+import type { ModelPreference, ThinkingEffort } from '@shared/types';
 import {
   useCurrentAzureUser,
   usePublishPullRequest,
   useUpdatePullRequestTitle,
 } from '@/hooks/use-pull-requests';
-import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
-import { invalidateFeedItems } from '@/hooks/use-tasks';
+import type { AgentBackendType } from '@shared/agent-backend-types';
 import { api } from '@/lib/api';
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
+import { Button } from '@/common/ui/button';
+import { Chip } from '@/common/ui/chip';
 import { encodeProxyUrl } from '@/lib/azure-image-proxy';
 import { formatRelativeTime } from '@/lib/time';
+import { getDefaultModelForBackend } from '@/lib/default-models';
+import { Input } from '@/common/ui/input';
+import { invalidateFeedItems } from '@/hooks/use-tasks';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useNewTaskFormStore } from '@/stores/new-task-form';
-import type { AgentBackendType } from '@shared/agent-backend-types';
-import type { ModelPreference, ThinkingEffort } from '@shared/types';
+import { useProject } from '@/hooks/use-projects';
+import { UserAvatar } from '@/common/ui/user-avatar';
+
+
 
 import { PrAutoComplete } from '../ui-pr-auto-complete';
 import { PrReviewSetupDialog } from '../ui-pr-review-setup-dialog';
@@ -51,7 +60,13 @@ function getStatusBadge(
 ) {
   if (isDraft) {
     return (
-      <Chip size="sm" color="neutral" pill icon={<GitPullRequest />}>
+      <Chip
+        size="sm"
+        color="neutral"
+        pill
+        icon={<GitPullRequest />}
+        className="!bg-amber-300 !font-semibold !text-amber-950 ring-1 ring-amber-100/70"
+      >
         Draft
       </Chip>
     );
@@ -109,6 +124,9 @@ export function PrHeader({
   const targetBranch = getBranchName(pr.targetRefName);
   const currentUserEmail = currentUser?.emailAddress.toLowerCase();
   const ownerEmail = pr.createdBy.uniqueName.toLowerCase();
+  const { data: backendsSetting } = useBackendsSetting();
+  const { data: backendDefaultModelsSetting } =
+    useBackendDefaultModelsSetting();
   const canEditTitle =
     !!currentUser &&
     (currentUser.identityId === pr.createdBy.id ||
@@ -117,18 +135,24 @@ export function PrHeader({
   const defaultReviewBackend = useMemo<AgentBackendType>(
     () =>
       (project?.defaultAgentBackend as AgentBackendType | null) ??
+      backendsSetting?.defaultBackend ??
       'claude-code',
-    [project?.defaultAgentBackend],
+    [backendsSetting?.defaultBackend, project?.defaultAgentBackend],
   );
   const defaultReviewModel = useMemo<ModelPreference>(
-    () => project?.defaultAgentModelPreference ?? 'default',
-    [project?.defaultAgentModelPreference],
+    () =>
+      getDefaultModelForBackend({
+        backend: defaultReviewBackend,
+        project,
+        backendDefaultModels: backendDefaultModelsSetting,
+      }),
+    [backendDefaultModelsSetting, defaultReviewBackend, project],
   );
 
   useEffect(() => {
     if (!isEditingTitle) {
-      setTitleDraft(pr.title);
-      setTitleError(null);
+      startTransition(() => setTitleDraft(pr.title));
+      startTransition(() => setTitleError(null));
     }
   }, [isEditingTitle, pr.title]);
 
@@ -136,7 +160,7 @@ export function PrHeader({
     if (project?.path) {
       api.shell.openInEditor(project.path);
     }
-  }, [project?.path]);
+  }, [project]);
 
   const handleReview = useCallback(
     async (selection: {

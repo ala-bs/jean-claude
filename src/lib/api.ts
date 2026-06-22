@@ -1,3 +1,9 @@
+import type {
+  AddGitHubSourceParams,
+  InstallSourceItemsParams,
+  SourceView,
+  UpdateSourceInstallParams,
+} from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
   AgentMigrationExecuteResult,
@@ -9,67 +15,69 @@ import type {
   PermissionResponse,
   QuestionResponse,
 } from '@shared/agent-types';
-import type { AgentUIEvent } from '@shared/agent-ui-events';
 import type {
-  AzureDevOpsPullRequest,
-  AzureDevOpsPullRequestDetails,
-  AzureDevOpsCommit,
-  AzureDevOpsFileChange,
-  AzureDevOpsIdentity,
-  AzureDevOpsCommentThread,
-  AzureDevOpsComment,
-  AzureDevOpsPolicyEvaluation,
-} from '@shared/azure-devops-types';
-import type { UpcomingMeeting } from '@shared/calendar-types';
-import type { DebugLogEntry } from '@shared/debug-log-types';
-import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
-import type { FoldRange } from '@shared/fold-types';
-import type {
-  GlobalPrompt,
-  GlobalPromptResponse,
-} from '@shared/global-prompt-types';
-import type {
-  McpServerTemplate,
-  McpPreset,
-  NewMcpServerTemplate,
-  UpdateMcpServerTemplate,
-  ProjectMcpOverride,
-  NewProjectMcpOverride,
-  UnifiedMcpServer,
-} from '@shared/mcp-types';
-import type {
-  NormalizedEntry,
-  NormalizedPermissionRequest,
-} from '@shared/normalized-message-v2';
+  AiUsageDashboard,
+  AiUsageDashboardParams,
+  AiUsageTaskUsage,
+} from '@shared/ai-usage-types';
 import type {
   AppNotification,
   TaskNotificationTarget,
 } from '@shared/notification-types';
 import type {
-  TrackedPipeline,
-  AzureBuildRun,
-  AzureRelease,
-  AzureBuildDetail,
-  AzureBuildTimeline,
-  AzureReleaseDetail,
-  AzureGitRef,
+  AppSettings,
+  BranchInfo,
+  DetectedProjectLogo,
+  InteractionMode,
+  NewProject,
+  NewProvider,
+  NewTask,
+  NewTaskStep,
+  NewToken,
+  Project,
+  ProjectFeatureMap,
+  ProjectLogoHistoryItem,
+  ProjectTodo,
+  Provider,
+  Task,
+  TaskStep,
+  ThinkingEffort,
+  Token,
+  UpdateProject,
+  UpdateProvider,
+  UpdateTask,
+  UpdateTaskStep,
+  UpdateToken,
+} from '@shared/types';
+import type {
   AzureBuildDefinitionDetail,
-  YamlPipelineParameter,
+  AzureBuildDetail,
+  AzureBuildRun,
+  AzureBuildTimeline,
+  AzureGitRef,
+  AzureRelease,
+  AzureReleaseDetail,
   GetYamlParametersIpcParams,
   QueueBuildIpcParams,
+  TrackedPipeline,
+  YamlPipelineParameter,
 } from '@shared/pipeline-types';
 import type {
-  ProjectCommand,
-  ProjectCommandGroup,
-  RunCommandConfigItem,
-  NewProjectCommand,
-  NewProjectCommandGroup,
-  UpdateProjectCommand,
-  UpdateProjectCommandGroup,
-  RunStatus,
-  PortsInUseErrorData,
-  PackageScriptsResult,
-} from '@shared/run-command-types';
+  AzureDevOpsComment,
+  AzureDevOpsCommentThread,
+  AzureDevOpsCommit,
+  AzureDevOpsFileChange,
+  AzureDevOpsIdentity,
+  AzureDevOpsPolicyEvaluation,
+  AzureDevOpsPullRequest,
+  AzureDevOpsPullRequestDetails,
+} from '@shared/azure-devops-types';
+import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
+import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
+import type {
+  GlobalPrompt,
+  GlobalPromptResponse,
+} from '@shared/global-prompt-types';
 import type {
   LegacySkillMigrationExecuteResult,
   LegacySkillMigrationPreviewResult,
@@ -80,38 +88,44 @@ import type {
   SkillScope,
 } from '@shared/skill-types';
 import type {
-  AddGitHubSourceParams,
-  InstallSourceItemsParams,
-  SourceView,
-  UpdateSourceInstallParams,
-} from '@shared/source-management-types';
+  McpPreset,
+  McpServerTemplate,
+  NewMcpServerTemplate,
+  NewProjectMcpOverride,
+  ProjectMcpOverride,
+  UnifiedMcpServer,
+  UpdateMcpServerTemplate,
+} from '@shared/mcp-types';
 import type {
-  Project,
-  ProjectFeatureMap,
-  NewProject,
-  UpdateProject,
-  Task,
-  NewTask,
-  UpdateTask,
-  TaskStep,
-  NewTaskStep,
-  UpdateTaskStep,
-  Provider,
-  NewProvider,
-  UpdateProvider,
-  Token,
-  NewToken,
-  UpdateToken,
-  BranchInfo,
-  InteractionMode,
-  ThinkingEffort,
-  AppSettings,
-  ProjectTodo,
-  DetectedProjectLogo,
-  ProjectLogoHistoryItem,
-} from '@shared/types';
+  NewProjectCommand,
+  NewProjectCommandGroup,
+  PackageScriptsResult,
+  PortsInUseErrorData,
+  ProjectCommand,
+  ProjectCommandGroup,
+  RunCommandConfigItem,
+  RunStatus,
+  UpdateProjectCommand,
+  UpdateProjectCommandGroup,
+} from '@shared/run-command-types';
+import type {
+  NewWorkActivityEvent,
+  WorkActivityEvent,
+  WorkActivityWeekParams,
+} from '@shared/work-activity-types';
+import type {
+  NormalizedEntry,
+  NormalizedPermissionRequest,
+} from '@shared/normalized-message-v2';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
+import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
+import type { AgentUIEvent } from '@shared/agent-ui-events';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
+import type { DebugLogEntry } from '@shared/debug-log-types';
+import type { FoldRange } from '@shared/fold-types';
+import type { UpcomingMeeting } from '@shared/calendar-types';
+
+
 
 export type {
   AzureDevOpsPullRequest,
@@ -256,12 +270,29 @@ export interface AzureDevOpsWorkItem {
   relatedTestCaseIds?: number[];
 }
 
+export interface AzureDevOpsWorkItemState {
+  name: string;
+  color?: string;
+  category?: string;
+}
+
 export interface WorkItemComment {
   id: number;
   workItemId: number;
   text: string;
   createdBy: string;
   createdDate: string;
+}
+
+export interface WorkItemHistoryEntry {
+  id: number;
+  revisedBy: string;
+  revisedDate: string;
+  fields: Array<{
+    name: string;
+    oldValue?: string;
+    newValue?: string;
+  }>;
 }
 
 export interface AzureDevOpsIteration {
@@ -325,29 +356,14 @@ export interface DeleteOldCompletedTasksResult {
   deletedCount: number;
 }
 
-export interface TaskWithProject {
-  id: string;
-  projectId: string;
-  projectName: string;
-  projectColor: string;
-  projectPriority: ProjectPriority;
-  name: string | null;
-  prompt: string;
-  status: string;
-  worktreePath: string | null;
-  startCommitHash: string | null;
-  branchName: string | null;
-  hasUnread: boolean;
-  userCompleted: boolean;
-  sessionRules: import('@shared/permission-types').PermissionScope;
-  workItemId: string | null;
-  workItemUrl: string | null;
-  pullRequestId: string | null;
-  pullRequestUrl: string | null;
-  pendingMessage: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
+export type TaskWithProject = Task & {
+  projectName?: string;
+  projectColor?: string;
+  projectPriority?: ProjectPriority;
+  projectLogoPath?: string | null;
+  workItemId?: string | null;
+  workItemUrl?: string | null;
+};
 
 export interface CompletedTasksResult {
   tasks: TaskWithProject[];
@@ -372,6 +388,15 @@ export type DesktopNotificationStatus = {
   canOpenSettings: boolean;
 };
 
+export type CopilotDeviceCode = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  expiresIn: number;
+  interval: number;
+};
+
 export interface Api {
   platform: typeof process.platform;
   windowState: {
@@ -379,6 +404,10 @@ export interface Api {
     onFullscreenChange: (
       callback: AgentEventCallback<boolean>,
     ) => UnsubscribeFn;
+  };
+  cache: {
+    setSubscriptions: (update: CacheSubscriptionUpdate) => Promise<void>;
+    onEvent: (callback: (event: CacheEvent) => void) => UnsubscribeFn;
   };
   projects: {
     findAll: () => Promise<Project[]>;
@@ -623,6 +652,11 @@ export interface Api {
       providerId: string;
       workItemId: number;
     }) => Promise<AzureDevOpsWorkItem | null>;
+    getWorkItemStates: (params: {
+      providerId: string;
+      projectName: string;
+      workItemType: string;
+    }) => Promise<AzureDevOpsWorkItemState[]>;
     updateWorkItemState: (params: {
       providerId: string;
       workItemId: number;
@@ -638,6 +672,11 @@ export interface Api {
       projectName: string;
       workItemId: number;
     }) => Promise<WorkItemComment[]>;
+    getWorkItemHistory: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => Promise<WorkItemHistoryEntry[]>;
     addWorkItemComment: (params: {
       providerId: string;
       projectName: string;
@@ -708,6 +747,20 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<AzureDevOpsFileChange[]>;
+    getCommitChanges: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+    }) => Promise<AzureDevOpsFileChange[]>;
+    getFileContentAtCommit: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      commitId: string;
+      filePath: string;
+      version: 'current' | 'parent';
+    }) => Promise<string>;
     getPullRequestFileContent: (params: {
       providerId: string;
       projectId: string;
@@ -776,6 +829,23 @@ export interface Api {
       commentId: number;
       content: string;
     }) => Promise<AzureDevOpsComment>;
+    deleteThreadComment: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      threadId: number;
+      commentId: number;
+    }) => Promise<void>;
+    setThreadCommentLike: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      threadId: number;
+      commentId: number;
+      liked: boolean;
+    }) => Promise<void>;
     updateThreadStatus: (params: {
       providerId: string;
       projectId: string;
@@ -822,6 +892,7 @@ export interface Api {
         deleteSourceBranch: boolean;
         transitionWorkItems: boolean;
         mergeCommitMessage?: string;
+        autoCompleteIgnoreConfigIds?: number[];
       };
     }) => Promise<AzureDevOpsPullRequestDetails>;
     publishPullRequest: (params: {
@@ -834,6 +905,7 @@ export interface Api {
   dialog: {
     openDirectory: () => Promise<string | null>;
     openImageFile: () => Promise<string | null>;
+    openFiles: () => Promise<string[] | null>;
     openApplication: () => Promise<{ path: string; name: string } | null>;
   };
   fs: {
@@ -841,7 +913,9 @@ export interface Api {
     readFile: (
       filePath: string,
     ) => Promise<{ content: string; language: string } | null>;
+    getFileSize: (filePath: string) => Promise<number | null>;
     readImageAsDataUrl: (filePath: string) => Promise<string | null>;
+    getImageUrl: (filePath: string) => Promise<string | null>;
     listDirectory: (
       dirPath: string,
       projectRoot: string,
@@ -945,6 +1019,7 @@ export interface Api {
   };
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) => Promise<void>;
+    openTeamsJoinUrl: (url: string) => Promise<void>;
     getAvailableEditors: () => Promise<{ id: string; available: boolean }[]>;
     setupGlobalGitignore: () => Promise<{ success: boolean; path: string }>;
   };
@@ -952,6 +1027,7 @@ export interface Api {
     listUpcomingMeetings: () => Promise<UpcomingMeeting[]>;
     listTodayMeetings: () => Promise<UpcomingMeeting[]>;
     revealMeeting: (meeting: UpcomingMeeting) => Promise<void>;
+    suppressMeetingStartPopup: (meeting: UpcomingMeeting) => Promise<void>;
     setIgnoredMeetingIds: (ids: string[]) => Promise<void>;
   };
   agent: {
@@ -973,10 +1049,11 @@ export interface Api {
       content: string,
     ) => Promise<void>;
     cancelQueuedPrompt: (stepId: string, promptId: string) => Promise<void>;
-    getBackendModels: (backend: string) => Promise<
+    getBackendModels: (backend: AgentBackendType) => Promise<
       {
         id: string;
         label: string;
+        contextWindow?: number;
         supportsThinking?: boolean;
         thinkingEfforts?: ThinkingEffort[];
       }[]
@@ -987,6 +1064,8 @@ export interface Api {
       taskId: string,
       stepId: string,
     ) => Promise<DebugMessageWithRawData[]>;
+    getResourceSnapshots: () => Promise<AgentResourceSnapshot[]>;
+    getResourceHistory: () => Promise<Record<string, AgentResourceSnapshot[]>>;
     compactRawMessages: (taskId: string) => Promise<void>;
     reprocessNormalization: (taskId: string) => Promise<number>;
     getPendingRequest: (stepId: string) => Promise<
@@ -1021,6 +1100,37 @@ export interface Api {
       since: string;
       until?: string;
     }) => Promise<UsageSnapshot[]>;
+    getDashboard: (params: AiUsageDashboardParams) => Promise<AiUsageDashboard>;
+    getTaskUsage: (taskId: string) => Promise<AiUsageTaskUsage>;
+  };
+  workActivity: {
+    record: (event: NewWorkActivityEvent) => Promise<WorkActivityEvent | null>;
+    getRange: (params: WorkActivityWeekParams) => Promise<WorkActivityEvent[]>;
+    deleteBefore: (before: string) => Promise<void>;
+    deleteAll: () => Promise<void>;
+  };
+  rateLimitSwap: {
+    getStatus: () => Promise<{
+      active: boolean;
+      swaps: Array<{ from: string; to: string }>;
+    }>;
+    resolve: (backend: AgentBackendType) => Promise<{
+      backend: AgentBackendType;
+      model?: string;
+      thinkingEffort?: ThinkingEffort;
+      swapped: boolean;
+    }>;
+  };
+  usageDisplay: {
+    saveSettings: (
+      value: AppSettings['usageDisplay'],
+    ) => Promise<AppSettings['usageDisplay']>;
+  };
+  copilotAuth: {
+    requestDeviceCode: () => Promise<CopilotDeviceCode>;
+    completeDeviceLogin: (
+      deviceCode: CopilotDeviceCode,
+    ) => Promise<AppSettings['usageDisplay']>;
   };
   projectCommands: {
     findByProjectId: (projectId: string) => Promise<ProjectCommand[]>;
@@ -1067,6 +1177,11 @@ export interface Api {
       runCommandId: string;
       input: string;
     }) => Promise<void>;
+    resetLogs: (params: {
+      taskId: string;
+      runCommandId: string;
+      generation: number;
+    }) => Promise<number>;
     sendSignal: (params: {
       taskId: string;
       runCommandId: string;
@@ -1087,7 +1202,15 @@ export interface Api {
         taskId: string,
         runCommandId: string,
         stream: 'stdout' | 'stderr',
-        line: string,
+        text: string,
+        generation: number,
+      ) => void,
+    ) => () => void;
+    onLogsReset: (
+      callback: (
+        taskId: string,
+        runCommandId: string,
+        generation: number,
       ) => void,
     ) => () => void;
   };
@@ -1410,6 +1533,7 @@ export interface Api {
   };
   system: {
     getMemoryUsage: () => Promise<{
+      logicalCpuCount: number;
       totalRssBytes: number;
       mainProcess: {
         heapUsedBytes: number;
@@ -1429,6 +1553,9 @@ export interface Api {
   codeFolding: {
     getFoldRanges: (content: string, language: string) => Promise<FoldRange[]>;
   };
+  onRateLimitSwap: (
+    callback: (data: { from: string; to: string }) => void,
+  ) => UnsubscribeFn;
 }
 
 export type ReloadPreviewProgress = {
@@ -1455,7 +1582,6 @@ declare global {
 }
 
 const hasWindowApi = typeof window !== 'undefined' && window.api;
-console.log('window.api available:', hasWindowApi, window?.api);
 
 export const api: Api = hasWindowApi
   ? window.api
@@ -1464,6 +1590,10 @@ export const api: Api = hasWindowApi
       windowState: {
         getIsFullscreen: async () => false,
         onFullscreenChange: () => () => {},
+      },
+      cache: {
+        setSubscriptions: async () => {},
+        onEvent: () => () => {},
       },
       projects: {
         findAll: async () => [],
@@ -1661,11 +1791,13 @@ export const api: Api = hasWindowApi
         },
         queryWorkItems: async () => [],
         getWorkItemById: async () => null,
+        getWorkItemStates: async () => [],
         updateWorkItemState: async () => {
           throw new Error('API not available');
         },
         getRelatedTestCases: async () => [],
         getWorkItemComments: async () => [],
+        getWorkItemHistory: async () => [],
         addWorkItemComment: async () => {
           throw new Error('API not available');
         },
@@ -1691,6 +1823,8 @@ export const api: Api = hasWindowApi
         },
         getPullRequestCommits: async () => [],
         getPullRequestChanges: async () => [],
+        getCommitChanges: async () => [],
+        getFileContentAtCommit: async () => '',
         getPullRequestFileContent: async () => '',
         getPullRequestThreads: async () => [],
         getPullRequestWorkItems: async () => [],
@@ -1706,6 +1840,12 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         updateThreadComment: async () => {
+          throw new Error('API not available');
+        },
+        deleteThreadComment: async () => {
+          throw new Error('API not available');
+        },
+        setThreadCommentLike: async () => {
           throw new Error('API not available');
         },
         updateThreadStatus: async () => {
@@ -1728,12 +1868,15 @@ export const api: Api = hasWindowApi
       dialog: {
         openDirectory: async () => null,
         openImageFile: async () => null,
+        openFiles: async () => null,
         openApplication: async () => null,
       },
       fs: {
         readPackageJson: async () => null,
         readFile: async () => null,
+        getFileSize: async () => null,
         readImageAsDataUrl: async () => null,
+        getImageUrl: async () => null,
         listDirectory: async () => null,
         listProjectFiles: async () => [],
         writeAttachmentFile: async () => '',
@@ -1783,6 +1926,7 @@ export const api: Api = hasWindowApi
       },
       shell: {
         openInEditor: async () => {},
+        openTeamsJoinUrl: async () => {},
         getAvailableEditors: async () => [],
         setupGlobalGitignore: async () => ({ success: true, path: '' }),
       },
@@ -1790,6 +1934,7 @@ export const api: Api = hasWindowApi
         listUpcomingMeetings: async () => [],
         listTodayMeetings: async () => [],
         revealMeeting: async () => {},
+        suppressMeetingStartPopup: async () => {},
         setIgnoredMeetingIds: async () => {},
       },
       agent: {
@@ -1818,6 +1963,8 @@ export const api: Api = hasWindowApi
         getMessages: async () => [],
         getMessageCount: async () => 0,
         getMessagesWithRawData: async () => [],
+        getResourceSnapshots: async () => [],
+        getResourceHistory: async () => ({}),
         compactRawMessages: async () => {},
         reprocessNormalization: async () => 0,
         getPendingRequest: async () => null,
@@ -1837,6 +1984,61 @@ export const api: Api = hasWindowApi
       usage: {
         getAll: async () => ({}),
         getHistory: async () => [],
+        getDashboard: async () => ({
+          totals: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            totalTokens: 0,
+            estimatedCostUsd: 0,
+            providerCostUsd: 0,
+            providerApiCostUsd: 0,
+            requests: 0,
+            taskCount: 0,
+          },
+          byDay: [],
+          byFeature: [],
+          byModel: [],
+          topTasks: [],
+          unknownPricing: [],
+        }),
+        getTaskUsage: async () => ({
+          events: [],
+          totals: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            totalTokens: 0,
+            estimatedCostUsd: 0,
+            providerCostUsd: 0,
+            providerApiCostUsd: 0,
+            requests: 0,
+            taskCount: 0,
+          },
+        }),
+      },
+      workActivity: {
+        record: async () => null,
+        getRange: async () => [],
+        deleteBefore: async () => {},
+        deleteAll: async () => {},
+      },
+      rateLimitSwap: {
+        getStatus: async () => ({ active: false, swaps: [] }),
+        resolve: async (backend) => ({ backend, swapped: false }),
+      },
+      usageDisplay: {
+        saveSettings: async (value) => value,
+      },
+      copilotAuth: {
+        requestDeviceCode: async () => {
+          throw new Error('API not available');
+        },
+        completeDeviceLogin: async () => {
+          throw new Error('API not available');
+        },
       },
       projectCommands: {
         findByProjectId: async () => [],
@@ -1874,6 +2076,7 @@ export const api: Api = hasWindowApi
         }),
         stopCommand: async () => {},
         sendInput: async () => {},
+        resetLogs: async () => 0,
         sendSignal: async () => {},
         getStatus: async () => ({
           isRunning: false,
@@ -1889,6 +2092,7 @@ export const api: Api = hasWindowApi
         }),
         onStatusChange: () => () => {},
         onLog: () => () => {},
+        onLogsReset: () => () => {},
       },
       globalPrompt: {
         onShow: () => () => {},
@@ -2163,6 +2367,7 @@ export const api: Api = hasWindowApi
       },
       system: {
         getMemoryUsage: async () => ({
+          logicalCpuCount: 1,
           totalRssBytes: 0,
           mainProcess: {
             heapUsedBytes: 0,
@@ -2182,4 +2387,5 @@ export const api: Api = hasWindowApi
       codeFolding: {
         getFoldRanges: async () => [],
       },
+      onRateLimitSwap: () => () => {},
     } as Api);

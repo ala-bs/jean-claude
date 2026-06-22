@@ -1,6 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
-import clsx from 'clsx';
 import {
   Ban,
   CalendarClock,
@@ -14,35 +11,43 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  type CSSProperties,
+  startTransition,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
 } from 'react';
+import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { RemoveScroll } from 'react-remove-scroll';
+import { useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 
+
+
+import {
+  type BackgroundJob,
+  useBackgroundJobsStore,
+} from '@/stores/background-jobs';
 import {
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
-import { ProjectLogo } from '@/features/project/ui-project-logo';
-import { useProjects } from '@/hooks/use-projects';
 import { api } from '@/lib/api';
+import type { AppNotification } from '@shared/notification-types';
+import type { DebugLogEntry } from '@shared/debug-log-types';
 import { formatRelativeTime } from '@/lib/time';
-import {
-  useBackgroundJobsStore,
-  type BackgroundJob,
-} from '@/stores/background-jobs';
+import type { Project } from '@shared/types';
 import { useDebugLogsStore } from '@/stores/debug-logs';
 import { useNotificationsStore } from '@/stores/notifications';
 import { useOverlaysStore } from '@/stores/overlays';
+import { useProjects } from '@/hooks/use-projects';
 import { useToastStore } from '@/stores/toasts';
-import type { DebugLogEntry } from '@shared/debug-log-types';
-import type { AppNotification } from '@shared/notification-types';
-import type { Project } from '@shared/types';
+
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,6 +91,24 @@ function matchesSearch(text: string | null | undefined, query: string) {
   if (!text) return false;
   return text.toLowerCase().includes(query);
 }
+
+const DEBUG_LEVEL_STYLES: Record<
+  DebugLogEntry['level'],
+  { badge: string; text: string }
+> = {
+  info: {
+    badge: 'border-acc/25 bg-acc/10 text-acc-ink',
+    text: 'text-ink-1',
+  },
+  warn: {
+    badge: 'border-status-run/30 bg-status-run/10 text-status-run',
+    text: 'text-status-run',
+  },
+  error: {
+    badge: 'border-status-fail/30 bg-status-fail-soft text-status-fail',
+    text: 'text-status-fail',
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -131,18 +154,16 @@ function ProjectPill({
       <button
         type="button"
         onClick={() => onOpenSettings(project.id)}
-        className="bg-glass-medium hover:bg-glass-light inline-flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] transition-colors"
+        className="bg-glass-medium hover:bg-glass-light inline-flex min-w-0 items-center rounded-full px-2 py-0.5 text-[10px] transition-colors"
         aria-label={`Open ${project.name} project settings`}
       >
-        <ProjectLogo project={project} size="xs" className="rounded-full" />
         <span className="text-ink-2 truncate">{project.name}</span>
       </button>
     );
   }
 
   return (
-    <span className="bg-glass-medium inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px]">
-      <ProjectLogo project={project} size="xs" className="rounded-full" />
+    <span className="bg-glass-medium inline-flex items-center rounded-full px-2 py-0.5 text-[10px]">
       <span className="text-ink-2 truncate">{project.name}</span>
     </span>
   );
@@ -339,26 +360,29 @@ function DebugRow({
   entry: DebugLogEntry;
   isSelected?: boolean;
 }) {
-  const levelColor =
-    entry.level === 'error'
-      ? 'text-status-fail'
-      : entry.level === 'warn'
-        ? 'text-status-run'
-        : 'text-ink-1';
+  const levelStyles = DEBUG_LEVEL_STYLES[entry.level];
 
   return (
     <div
       data-activity-row
       className={clsx(
-        'grid grid-cols-[60px_110px_1fr] gap-2 px-4 py-1 font-mono text-[11px] leading-relaxed',
+        'grid grid-cols-[60px_44px_110px_1fr] items-start gap-2 px-4 py-1 font-mono text-[11px] leading-relaxed',
         isSelected ? 'bg-glass-medium' : 'hover:bg-white/[0.03]',
       )}
     >
       <span className="text-ink-4 shrink-0">
         {formatTimestamp(entry.timestamp)}
       </span>
+      <span
+        className={clsx(
+          'inline-flex h-4 shrink-0 items-center justify-center rounded border px-1 text-[9px] font-semibold uppercase',
+          levelStyles.badge,
+        )}
+      >
+        {entry.level}
+      </span>
       <span className="text-acc-ink shrink-0 truncate">{entry.namespace}</span>
-      <span className={clsx('min-w-0 break-all', levelColor)}>
+      <span className={clsx('min-w-0 break-all', levelStyles.text)}>
         {entry.message}
       </span>
     </div>
@@ -456,7 +480,9 @@ export function ActivityCenterOverlay({
         ? debugLogs.filter(
             (l) =>
               matchesSearch(l.message, searchLower) ||
-              matchesSearch(l.namespace, searchLower),
+              matchesSearch(l.namespace, searchLower) ||
+              matchesSearch(l.level, searchLower) ||
+              matchesSearch(formatTimestamp(l.timestamp), searchLower),
           )
         : debugLogs,
     [debugLogs, searchLower],
@@ -525,13 +551,9 @@ export function ActivityCenterOverlay({
   ]);
 
   // Reset selection when tab or search changes
-  const prevTab = useRef(activeTab);
-  const prevSearch = useRef(search);
-  if (prevTab.current !== activeTab || prevSearch.current !== search) {
-    prevTab.current = activeTab;
-    prevSearch.current = search;
-    setSelectedIndex(-1);
-  }
+  useEffect(() => {
+    startTransition(() => setSelectedIndex(-1));
+  }, [activeTab, search]);
 
   const scrollToSelected = useCallback((index: number) => {
     const container = scrollRef.current;
@@ -904,7 +926,9 @@ export function ActivityCenterOverlay({
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Filter..."
+                placeholder={
+                  activeTab === 'debug' ? 'Filter debug logs...' : 'Filter...'
+                }
                 className="text-ink-1 placeholder:text-ink-4 flex-1 bg-transparent text-[12.5px] outline-none"
               />
               <span className="text-ink-4 shrink-0 text-[10px]">

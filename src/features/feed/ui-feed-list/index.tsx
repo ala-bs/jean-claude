@@ -1,5 +1,3 @@
-import { useNavigate, useParams } from '@tanstack/react-router';
-import clsx from 'clsx';
 import {
   ChevronDown,
   ChevronLeft,
@@ -14,27 +12,36 @@ import {
   Loader2,
   MessageSquare,
   Plus,
+  Save,
   Settings2,
+  Trash2,
 } from 'lucide-react';
-import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from '@tanstack/react-router';
+import clsx from 'clsx';
 import { createPortal } from 'react-dom';
+import type React from 'react';
 
-import { useCommands } from '@/common/hooks/use-commands';
+
+
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
+import type { FeedItem } from '@shared/feed-types';
 import { Modal } from '@/common/ui/modal';
 import { ProjectLogo } from '@/features/project/ui-project-logo';
-import { useFeed } from '@/hooks/use-feed';
-import { useProjects } from '@/hooks/use-projects';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
+import { useCachedPullRequest } from '@/hooks/use-pull-requests';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useFeed } from '@/hooks/use-feed';
 import { useFeedStore } from '@/stores/feed';
 import { useNavigationStore } from '@/stores/navigation';
 import { useOverlaysStore } from '@/stores/overlays';
+import { useProjects } from '@/hooks/use-projects';
 import { useUIStore } from '@/stores/ui';
-import type { FeedItem } from '@shared/feed-types';
+
 
 import { FeedItemCard } from './feed-item-card';
 import { FeedNoteCard } from './feed-note-card';
+import { useFeedItemProject } from './use-feed-item-project';
 
 type PrReviewContextMenuState = {
   item: FeedItem;
@@ -50,29 +57,107 @@ type PrProjectOrderOption = {
   prCount: number;
 };
 
+type FeedSelection = {
+  currentNoteId?: string;
+  currentPrId?: string;
+  currentProjectId?: string;
+  currentTaskId?: string;
+  currentWorkItemId?: string;
+};
+
+function isFeedItemSelected(
+  item: {
+    taskId?: string;
+    pullRequestId?: number;
+    workItemId?: number;
+    noteId?: string;
+    projectId: string;
+  },
+  selection: FeedSelection,
+) {
+  if (item.noteId && selection.currentNoteId) {
+    return item.noteId === selection.currentNoteId;
+  }
+  if (item.taskId) {
+    return item.taskId === selection.currentTaskId;
+  }
+  if (item.workItemId && selection.currentWorkItemId) {
+    return (
+      String(item.workItemId) === selection.currentWorkItemId &&
+      item.projectId === (selection.currentProjectId ?? item.projectId)
+    );
+  }
+  if (!item.pullRequestId || !selection.currentPrId) {
+    return false;
+  }
+  const prMatches = String(item.pullRequestId) === selection.currentPrId;
+  if (!prMatches) {
+    return false;
+  }
+  if (!selection.currentProjectId) {
+    return true;
+  }
+  return item.projectId === selection.currentProjectId;
+}
+
+function getSelectedSubtaskId(item: FeedItem, currentTaskId?: string) {
+  if (!currentTaskId) return null;
+  return item.children?.some((child) => child.taskId === currentTaskId)
+    ? currentTaskId
+    : null;
+}
+
+function getFocusedWorkItemId(item: FeedItem, currentWorkItemId?: string) {
+  if (!currentWorkItemId) return null;
+  if (item.workItemIds?.includes(currentWorkItemId)) return currentWorkItemId;
+  return item.children?.some((child) =>
+    child.workItemIds?.includes(currentWorkItemId),
+  )
+    ? currentWorkItemId
+    : null;
+}
+
+function getFocusedRailPrId(item: FeedItem, currentPrId?: string) {
+  return currentPrId &&
+    item.source === 'task' &&
+    item.pullRequestId &&
+    String(item.pullRequestId) === currentPrId
+    ? currentPrId
+    : null;
+}
+
+function itemSelectionKey(item: FeedItem, selection: FeedSelection) {
+  return [
+    isFeedItemSelected(item, selection) ? 'selected' : '',
+    getSelectedSubtaskId(item, selection.currentTaskId) ?? '',
+    getFocusedWorkItemId(item, selection.currentWorkItemId) ?? '',
+    getFocusedRailPrId(item, selection.currentPrId) ?? '',
+  ].join(':');
+}
+
 function MiniProjectLabel({ item }: { item: FeedItem }) {
-  if (item.projectLogoPath) {
+  const project = useFeedItemProject(item);
+
+  if (project.logoPath) {
     return (
       <span className="inline-flex min-w-0 items-center gap-1.5">
         <ProjectLogo
           project={{
-            name: item.projectName,
-            color: item.projectColor,
-            logoPath: item.projectLogoPath,
+            name: project.name,
+            color: project.color,
+            logoPath: project.logoPath,
           }}
           size="xs"
         />
         <span className="text-ink-2 truncate text-[10.5px]">
-          {item.projectName}
+          {project.name}
         </span>
       </span>
     );
   }
 
   return (
-    <span className="text-ink-2 truncate text-[10.5px]">
-      {item.projectName}
-    </span>
+    <span className="text-ink-2 truncate text-[10.5px]">{project.name}</span>
   );
 }
 
@@ -157,33 +242,109 @@ function PrReviewContextMenu({
 
 function FeedCard({
   item,
+  selection,
+  onDragStartItem,
+  onDragOverItem,
+  onDragOver,
+  onDropItem,
+  onDrop,
   ...props
 }: {
   item: FeedItem;
+  selection: FeedSelection;
   isSelected?: boolean;
+  currentTaskId?: string;
+  currentWorkItemId?: string;
+  currentPrId?: string;
   isDraggable?: boolean;
-  onDragStart?: () => void;
+  onDragStartItem?: (id: string) => void;
+  onDragOverItem?: (event: React.DragEvent, id: string) => void;
   onDragOver?: (e: React.DragEvent) => void;
   onDragLeave?: () => void;
+  onDropItem?: (event: React.DragEvent, id: string) => void;
   onDrop?: (e: React.DragEvent) => void;
   onDragEnd?: () => void;
 }) {
+  const handleDragStart = useCallback(() => {
+    onDragStartItem?.(item.id);
+  }, [item.id, onDragStartItem]);
+  const handleDragOver = useCallback(
+    (event: React.DragEvent) => {
+      if (onDragOverItem) {
+        onDragOverItem(event, item.id);
+        return;
+      }
+      onDragOver?.(event);
+    },
+    [item.id, onDragOver, onDragOverItem],
+  );
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      if (onDropItem) {
+        onDropItem(event, item.id);
+        return;
+      }
+      onDrop?.(event);
+    },
+    [item.id, onDrop, onDropItem],
+  );
+
   if (item.source === 'note') {
-    return <FeedNoteCard item={item} {...props} />;
+    return (
+      <FeedNoteCard
+        item={item}
+        {...props}
+        onDragStart={onDragStartItem ? handleDragStart : undefined}
+        onDragOver={onDragOverItem || onDragOver ? handleDragOver : undefined}
+        onDrop={onDropItem || onDrop ? handleDrop : undefined}
+      />
+    );
   }
-  return <FeedItemCard item={item} {...props} />;
+  return (
+    <FeedItemCard
+      item={item}
+      {...props}
+      currentTaskId={selection.currentTaskId}
+      currentWorkItemId={selection.currentWorkItemId}
+      currentPrId={selection.currentPrId}
+      onDragStart={onDragStartItem ? handleDragStart : undefined}
+      onDragOver={onDragOverItem || onDragOver ? handleDragOver : undefined}
+      onDrop={onDropItem || onDrop ? handleDrop : undefined}
+    />
+  );
 }
+
+const MemoFeedCard = memo(FeedCard, (prev, next) => {
+  if (
+    prev.item !== next.item ||
+    prev.isDraggable !== next.isDraggable ||
+    prev.onDragStartItem !== next.onDragStartItem ||
+    prev.onDragOverItem !== next.onDragOverItem ||
+    prev.onDragOver !== next.onDragOver ||
+    prev.onDragLeave !== next.onDragLeave ||
+    prev.onDropItem !== next.onDropItem ||
+    prev.onDrop !== next.onDrop ||
+    prev.onDragEnd !== next.onDragEnd
+  ) {
+    return false;
+  }
+
+  return (
+    itemSelectionKey(prev.item, prev.selection) ===
+    itemSelectionKey(next.item, next.selection)
+  );
+});
 
 function StackableZone({
   items,
-  isItemSelected,
+  selection,
   onDragStart,
   onDragEnd,
   sticky,
   collapsedOverlap = 28,
 }: {
   items: FeedItem[];
-  isItemSelected: (item: FeedItem) => boolean;
+  selection: FeedSelection;
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
   sticky?: boolean;
@@ -227,11 +388,12 @@ function StackableZone({
               index > 0 ? (expanded ? 6 : -collapsedOverlap) : undefined,
           }}
         >
-          <FeedCard
+          <MemoFeedCard
             item={item}
-            isSelected={isItemSelected(item)}
+            selection={selection}
+            isSelected={isFeedItemSelected(item, selection)}
             isDraggable
-            onDragStart={() => onDragStart(item.id)}
+            onDragStartItem={onDragStart}
             onDragEnd={onDragEnd}
           />
         </div>
@@ -351,14 +513,68 @@ function PrProjectOrderModal({
   );
 }
 
+function SaveFilterPresetModal({
+  onClose,
+  onSave,
+}: {
+  onClose: () => void;
+  onSave: (name: string) => void;
+}) {
+  const [name, setName] = useState('');
+
+  const handleSubmit = useCallback(
+    (event: React.FormEvent) => {
+      event.preventDefault();
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      onSave(trimmed);
+      onClose();
+    },
+    [name, onClose, onSave],
+  );
+
+  return (
+    <Modal isOpen onClose={onClose} title="Save filter preset" size="sm">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <label className="block space-y-1.5">
+          <span className="text-ink-2 text-xs font-medium">Preset name</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="e.g. Review projects"
+            className="border-line-soft bg-bg-0 text-ink-1 placeholder:text-ink-4 focus:border-acc/60 w-full rounded-md border px-3 py-2 text-sm outline-none"
+          />
+        </label>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-ink-2 hover:bg-glass-medium rounded-md px-3 py-1.5 text-sm transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!name.trim()}
+            className="bg-acc text-acc-ink hover:bg-acc/90 disabled:bg-glass-medium disabled:text-ink-3 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed"
+          >
+            Save preset
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function HorizontalPrReviewStack({
   items,
-  isItemSelected,
+  selection,
   onOpen,
   onMarkLowPriority,
 }: {
   items: FeedItem[];
-  isItemSelected: (item: FeedItem) => boolean;
+  selection: FeedSelection;
   onOpen: (item: FeedItem) => void;
   onMarkLowPriority: (item: FeedItem) => void;
 }) {
@@ -612,7 +828,7 @@ function HorizontalPrReviewStack({
 
   useEffect(() => {
     if (focusedIndex > maxIndex) {
-      setFocusedIndex(Math.max(0, maxIndex));
+      startTransition(() => setFocusedIndex(Math.max(0, maxIndex)));
     }
   }, [focusedIndex, maxIndex]);
 
@@ -633,7 +849,7 @@ function HorizontalPrReviewStack({
             key={item.id}
             item={item}
             position={index - safeIndex}
-            isSelected={isItemSelected(item)}
+            isSelected={isFeedItemSelected(item, selection)}
             onFocus={() => setFocusedIndex(index)}
             onOpen={() => onOpen(item)}
             onContextMenu={(event) => handleContextMenu(event, item, index)}
@@ -765,7 +981,16 @@ function PrReviewCarouselCard({
               : { translateX: '0%', scale: 0.7, opacity: 0, zIndex: 1 };
 
   const stateLabel = item.hasNewActivity ? 'UPDATED' : 'REVIEW';
-  const isHighPriority = item.projectPriority === 'high';
+  const project = useFeedItemProject(item);
+  const { data: cachedPr } = useCachedPullRequest(
+    item.projectId,
+    item.pullRequestId,
+  );
+  const title = cachedPr?.title ?? item.title;
+  const isDraft = cachedPr?.isDraft ?? item.isDraft ?? false;
+  const ownerName =
+    cachedPr?.createdBy.displayName ?? item.subtitle ?? item.ownerName ?? '';
+  const isHighPriority = project.priority === 'high';
   const accent = isHighPriority
     ? 'var(--color-status-fail)'
     : 'var(--color-status-pr)';
@@ -811,12 +1036,17 @@ function PrReviewCarouselCard({
             <span className="bg-status-pr h-1.5 w-1.5 rounded-full" />
             {stateLabel}
           </span>
+          {isDraft && (
+            <span className="rounded bg-amber-300 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wide text-amber-950 ring-1 ring-amber-100/70">
+              Draft
+            </span>
+          )}
           <span className="text-ink-3 ml-auto max-w-[76px] truncate font-mono text-[9.5px]">
-            {item.subtitle ?? item.ownerName ?? ''}
+            {ownerName}
           </span>
         </div>
         <div className="text-ink-0 mb-2 truncate text-[12.5px] leading-snug font-medium">
-          {item.title}
+          {title}
         </div>
         <div className="mb-2 flex items-center gap-1.5">
           <MiniProjectLabel item={item} />
@@ -828,14 +1058,14 @@ function PrReviewCarouselCard({
           <span className="text-ink-3 min-w-0 flex-1 truncate text-[10.5px]">
             {item.hasNewActivity
               ? 'New activity since last view'
-              : (item.activeThreadCount ?? 0) > 0
+              : (item.unresolvedCommentCount ?? 0) > 0
                 ? 'Threads need a look'
                 : 'Waiting for your review'}
           </span>
-          {(item.activeThreadCount ?? 0) > 0 && (
+          {(item.unresolvedCommentCount ?? 0) > 0 && (
             <span className="text-status-pr flex items-center gap-0.5 font-mono text-[9.5px]">
               <MessageSquare className="h-3 w-3" />
-              {item.activeThreadCount}
+              {item.unresolvedCommentCount}
             </span>
           )}
         </div>
@@ -888,6 +1118,10 @@ export function FeedList() {
   const toggleLowPriority = useFeedStore((s) => s.toggleLowPriority);
   const toggleProjectHidden = useFeedStore((s) => s.toggleProjectHidden);
   const clearHiddenProjects = useFeedStore((s) => s.clearHiddenProjects);
+  const filterPresets = useFeedStore((s) => s.filterPresets);
+  const saveFilterPreset = useFeedStore((s) => s.saveFilterPreset);
+  const applyFilterPreset = useFeedStore((s) => s.applyFilterPreset);
+  const deleteFilterPreset = useFeedStore((s) => s.deleteFilterPreset);
   const setLastLocation = useNavigationStore((s) => s.setLastLocation);
   const hiddenProjectIdSet = useMemo(
     () => new Set(hiddenProjectIds),
@@ -909,6 +1143,7 @@ export function FeedList() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [_dragOverId, setDragOverId] = useState<string | null>(null);
   const [dragOverPinZone, setDragOverPinZone] = useState(false);
+  const [savePresetModalOpen, setSavePresetModalOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -927,6 +1162,10 @@ export function FeedList() {
     },
     [],
   );
+
+  const handlePinnedDragLeave = useCallback(() => {
+    setDragOverId(null);
+  }, []);
 
   const handlePinnedDrop = useCallback(
     (e: React.DragEvent, targetId: string) => {
@@ -989,7 +1228,29 @@ export function FeedList() {
     setDragOverPinZone(false);
   }, []);
 
+  const handleMarkPrLowPriority = useCallback(
+    (item: FeedItem) => markLowPriority(item.id),
+    [markLowPriority],
+  );
+
   const currentNoteId = params.noteId as string | undefined;
+
+  const selection = useMemo(
+    () => ({
+      currentNoteId,
+      currentPrId,
+      currentProjectId,
+      currentTaskId,
+      currentWorkItemId,
+    }),
+    [
+      currentNoteId,
+      currentPrId,
+      currentProjectId,
+      currentTaskId,
+      currentWorkItemId,
+    ],
+  );
 
   const isItemSelected = useCallback(
     (item: {
@@ -998,38 +1259,8 @@ export function FeedList() {
       workItemId?: number;
       noteId?: string;
       projectId: string;
-    }) => {
-      if (item.noteId && currentNoteId) {
-        return item.noteId === currentNoteId;
-      }
-      if (item.taskId) {
-        return item.taskId === currentTaskId;
-      }
-      if (item.workItemId && currentWorkItemId) {
-        return (
-          String(item.workItemId) === currentWorkItemId &&
-          item.projectId === (currentProjectId ?? item.projectId)
-        );
-      }
-      if (!item.pullRequestId || !currentPrId) {
-        return false;
-      }
-      const prMatches = String(item.pullRequestId) === currentPrId;
-      if (!prMatches) {
-        return false;
-      }
-      if (!currentProjectId) {
-        return true;
-      }
-      return item.projectId === currentProjectId;
-    },
-    [
-      currentNoteId,
-      currentPrId,
-      currentProjectId,
-      currentTaskId,
-      currentWorkItemId,
-    ],
+    }) => isFeedItemSelected(item, selection),
+    [selection],
   );
 
   const navigateToItem = useCallback(
@@ -1339,6 +1570,49 @@ export function FeedList() {
                   </div>
                 </div>
                 <DropdownDivider />
+                <DropdownItem
+                  onClick={() => setSavePresetModalOpen(true)}
+                  icon={<Save />}
+                >
+                  Save current filters
+                </DropdownItem>
+                {filterPresets.length > 0 && (
+                  <>
+                    <DropdownDivider />
+                    <div className="text-ink-3 px-3 py-1 text-[10px] font-semibold tracking-wider uppercase">
+                      Presets
+                    </div>
+                    {filterPresets.map((preset) => (
+                      <div key={preset.id} className="flex items-center">
+                        <button
+                          role="menuitem"
+                          tabIndex={-1}
+                          onClick={() => applyFilterPreset(preset.id)}
+                          className="text-ink-1 hover:bg-glass-medium focus:bg-glass-medium flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors focus:outline-none"
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {preset.name}
+                          </span>
+                          <span className="text-ink-3 font-mono text-[10px]">
+                            {preset.hiddenProjectIds.length} hidden
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          tabIndex={-1}
+                          onClick={() => deleteFilterPreset(preset.id)}
+                          className="text-ink-3 hover:bg-glass-medium focus:bg-glass-medium mr-1 flex h-7 w-7 items-center justify-center rounded transition-colors hover:text-red-400 focus:text-red-400 focus:outline-none"
+                          title={`Delete ${preset.name}`}
+                          aria-label={`Delete ${preset.name}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
+                <DropdownDivider />
                 {projectOptions.map((project) => (
                   <DropdownItem
                     key={project.id}
@@ -1379,6 +1653,13 @@ export function FeedList() {
             </button>
           </div>
         </div>
+      )}
+
+      {savePresetModalOpen && (
+        <SaveFilterPresetModal
+          onClose={() => setSavePresetModalOpen(false)}
+          onSave={saveFilterPreset}
+        />
       )}
 
       {/* Initial loading state */}
@@ -1425,15 +1706,16 @@ export function FeedList() {
           )}
         >
           {pinnedItems.map((item) => (
-            <FeedCard
+            <MemoFeedCard
               key={item.id}
               item={item}
-              isSelected={isItemSelected(item)}
+              selection={selection}
+              isSelected={isFeedItemSelected(item, selection)}
               isDraggable
-              onDragStart={() => handlePinnedDragStart(item.id)}
-              onDragOver={(e) => handlePinnedDragOver(e, item.id)}
-              onDragLeave={() => setDragOverId(null)}
-              onDrop={(e) => handlePinnedDrop(e, item.id)}
+              onDragStartItem={handlePinnedDragStart}
+              onDragOverItem={handlePinnedDragOver}
+              onDragLeave={handlePinnedDragLeave}
+              onDropItem={handlePinnedDrop}
               onDragEnd={handleDragEnd}
             />
           ))}
@@ -1449,9 +1731,9 @@ export function FeedList() {
       {prReviewItems.length > 0 && (
         <HorizontalPrReviewStack
           items={prReviewItems}
-          isItemSelected={isItemSelected}
+          selection={selection}
           onOpen={navigateToFeedItem}
-          onMarkLowPriority={(item) => markLowPriority(item.id)}
+          onMarkLowPriority={handleMarkPrLowPriority}
         />
       )}
 
@@ -1495,7 +1777,7 @@ export function FeedList() {
       {actionNeededItems.length > 0 && (
         <StackableZone
           items={actionNeededItems}
-          isItemSelected={isItemSelected}
+          selection={selection}
           onDragStart={setDraggedId}
           onDragEnd={handleDragEnd}
           sticky
@@ -1507,7 +1789,7 @@ export function FeedList() {
       {activeTaskItems.length > 0 && (
         <StackableZone
           items={activeTaskItems}
-          isItemSelected={isItemSelected}
+          selection={selection}
           onDragStart={setDraggedId}
           onDragEnd={handleDragEnd}
         />
@@ -1517,12 +1799,13 @@ export function FeedList() {
       {highPriorityItems.length > 0 && (
         <div className="flex flex-col">
           {highPriorityItems.map((item) => (
-            <FeedCard
+            <MemoFeedCard
               key={item.id}
               item={item}
-              isSelected={isItemSelected(item)}
+              selection={selection}
+              isSelected={isFeedItemSelected(item, selection)}
               isDraggable
-              onDragStart={() => setDraggedId(item.id)}
+              onDragStartItem={setDraggedId}
               onDragEnd={handleDragEnd}
             />
           ))}
@@ -1538,12 +1821,13 @@ export function FeedList() {
       {/* Auto-sorted zone */}
       <div className="flex flex-col">
         {normalItems.map((item) => (
-          <FeedCard
+          <MemoFeedCard
             key={item.id}
             item={item}
-            isSelected={isItemSelected(item)}
+            selection={selection}
+            isSelected={isFeedItemSelected(item, selection)}
             isDraggable
-            onDragStart={() => setDraggedId(item.id)}
+            onDragStartItem={setDraggedId}
             onDragEnd={handleDragEnd}
           />
         ))}
@@ -1566,10 +1850,11 @@ export function FeedList() {
           {lowPriorityExpanded && (
             <div className="flex flex-col pt-1 opacity-60">
               {lowPriorityItems.map((item) => (
-                <FeedCard
+                <MemoFeedCard
                   key={item.id}
                   item={item}
-                  isSelected={isItemSelected(item)}
+                  selection={selection}
+                  isSelected={isFeedItemSelected(item, selection)}
                 />
               ))}
             </div>

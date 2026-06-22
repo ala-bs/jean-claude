@@ -1,4 +1,3 @@
-import clsx from 'clsx';
 import {
   ChevronLeft,
   ChevronRight,
@@ -8,22 +7,28 @@ import {
   Video,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import clsx from 'clsx';
 
-import { Button } from '@/common/ui/button';
-import { Kbd } from '@/common/ui/kbd';
+
 import {
   addDays,
   extractTeamsUrl,
   formatTimeHHMM,
   formatTimeRange,
+  getTeamsJoinUrl,
   isSameDay,
   layoutColumns,
   minutesBetween,
   startOfDay,
 } from '@/features/calendar/utils-calendar';
 import { api } from '@/lib/api';
-import { useToastStore } from '@/stores/toasts';
+import { Button } from '@/common/ui/button';
+import { Kbd } from '@/common/ui/kbd';
+import { OrganizerTooltip } from '@/features/calendar/ui-organizer-tooltip';
 import type { UpcomingMeeting } from '@shared/calendar-types';
+import { useCalendarNotificationsSetting } from '@/hooks/use-settings';
+import { useToastStore } from '@/stores/toasts';
+
 
 const HOUR_START = 8;
 const HOUR_END = 19;
@@ -76,6 +81,8 @@ export function WeekView({
   onRequestIgnore: (meeting: UpcomingMeeting) => void;
 }) {
   const addToast = useToastStore((s) => s.addToast);
+  const { data: calendarNotificationsSetting } =
+    useCalendarNotificationsSetting();
   const today = useMemo(() => new Date(now), [now]);
   const [weekOffset, setWeekOffset] = useState(0);
   const monday = useMemo(() => {
@@ -326,8 +333,13 @@ export function WeekView({
                 month: 'short',
                 day: 'numeric',
               })}{' '}
-              · {formatTimeRange(selected.startAt, selected.endAt)} ·{' '}
-              {selected.location || '—'}
+              · {formatTimeRange(selected.startAt, selected.endAt)}
+              {selected.organizer ? (
+                <OrganizerTooltip meeting={selected}>
+                  <span> · From {selected.organizer}</span>
+                </OrganizerTooltip>
+              ) : null}{' '}
+              · {selected.location || '-'}
             </div>
           </div>
           {teamsUrl && (
@@ -336,7 +348,22 @@ export function WeekView({
               variant="primary"
               icon={<Video />}
               onClick={() => {
-                window.open(teamsUrl, '_blank');
+                void api.shell
+                  .openTeamsJoinUrl(
+                    getTeamsJoinUrl(
+                      teamsUrl,
+                      calendarNotificationsSetting?.meetingJoinTarget,
+                    ),
+                  )
+                  .catch((error) => {
+                    addToast({
+                      message:
+                        error instanceof Error
+                          ? error.message
+                          : 'Could not open Teams',
+                      type: 'error',
+                    });
+                  });
               }}
             >
               Join

@@ -1,45 +1,47 @@
-import type { MouseEvent } from 'react';
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-} from 'react';
-
-import type {
-  AgentQuestion,
-  PermissionResponse,
-  QuestionResponse,
-  QueuedPrompt,
-} from '@shared/agent-types';
-import type {
-  NormalizedEntry,
-  NormalizedPermissionRequest,
-  NormalizedToolUse,
-} from '@shared/normalized-message-v2';
-import type { ToolUseByName } from '@shared/normalized-message-v2';
-import type { InteractionMode } from '@shared/types';
-
-import { PermissionBar } from '../ui-permission-bar';
-import { QuestionOptions } from '../ui-question-options';
-
-import { groupByPrompts, mergeSkillMessages } from './message-merger';
-import type { StreamMessage } from './message-merger';
 import {
   addBashToPermissionsItem,
   copyToClipboardItem,
   showRawMessageItem,
   useMessageContextMenu,
 } from './ui-message-context-menu';
+import type {
+  AgentQuestion,
+  PermissionResponse,
+  QuestionResponse,
+  QueuedPrompt,
+} from '@shared/agent-types';
+import { CompactingEntry, TimelineEntry } from './ui-timeline-entry';
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type {
+  MessageStreamProcessingCache,
+  StreamMessage,
+} from './message-merger';
+import type {
+  NormalizedEntry,
+  NormalizedPermissionRequest,
+  NormalizedToolUse,
+} from '@shared/normalized-message-v2';
 import type { ContextMenuItem } from './ui-message-context-menu';
+import type { InteractionMode } from '@shared/types';
+import type { MouseEvent } from 'react';
+import { PermissionBar } from '../ui-permission-bar';
+import { processMessageStream } from './message-merger';
 import { PromptGroupEntry } from './ui-prompt-group-entry';
 import { PromptSidebar } from './ui-prompt-sidebar';
+import { QuestionOptions } from '../ui-question-options';
 import { QueuedPromptEntry } from './ui-queued-prompt-entry';
 import { SkillEntry } from './ui-skill-entry';
 import { SubagentEntry } from './ui-subagent-entry';
-import { TimelineEntry, CompactingEntry } from './ui-timeline-entry';
+import type { ToolUseByName } from '@shared/normalized-message-v2';
 
 // Threshold in pixels - if user is within this distance from bottom, auto-scroll
 const SCROLL_THRESHOLD = 10;
@@ -131,44 +133,47 @@ export const MessageStream = memo(function MessageStream({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
-
-  // Merge skill messages, then group by prompts
-  const displayMessages = useMemo(
-    () => mergeSkillMessages(messages),
-    [messages],
+  const [processingCacheState, setProcessingCacheState] = useState<{
+    key: string;
+    cache: MessageStreamProcessingCache;
+  } | null>(null);
+  const processingCacheKey = `${taskId ?? ''}:${stepId ?? ''}`;
+  const previousProcessingCache =
+    processingCacheState?.key === processingCacheKey
+      ? processingCacheState.cache
+      : undefined;
+  const processedStream = useMemo(
+    () =>
+      processMessageStream(
+        messages,
+        isRunning,
+        previousProcessingCache,
+      ),
+    [messages, isRunning, previousProcessingCache],
   );
 
-  const streamMessages = useMemo(
-    () => groupByPrompts(displayMessages, isRunning),
-    [displayMessages, isRunning],
-  );
-
-  // Prompt index map for data-prompt-index attributes (used by navigator's scroll tracking)
-  // Now computed from streamMessages — prompt groups count as prompts
-  // Also track the last prompt group index so we can auto-collapse previous ones
-  const { promptIndexMap, lastPromptGroupIndex } = useMemo(() => {
-    const map = new Map<number, number>();
-    let counter = 0;
-    let lastPgIdx = -1;
-    for (let i = 0; i < streamMessages.length; i++) {
-      const sm = streamMessages[i];
-      if (sm.kind === 'prompt-group') {
-        map.set(i, counter);
-        counter++;
-        lastPgIdx = i;
-      } else if (
-        (sm.kind === 'entry' &&
-          sm.entry.type === 'user-prompt' &&
-          sm.entry.value.trim() !== '') ||
-        sm.kind === 'skill'
-      ) {
-        // Standalone prompts (before first group) — unlikely but handle gracefully
-        map.set(i, counter);
-        counter++;
-      }
+  useEffect(() => {
+    if (
+      processingCacheState?.key === processingCacheKey &&
+      processingCacheState.cache === processedStream.cache
+    ) {
+      return;
     }
-    return { promptIndexMap: map, lastPromptGroupIndex: lastPgIdx };
-  }, [streamMessages]);
+
+    startTransition(() => {
+      setProcessingCacheState({
+        key: processingCacheKey,
+        cache: processedStream.cache,
+      });
+    });
+  }, [processedStream.cache, processingCacheKey, processingCacheState]);
+
+  const {
+    streamMessages,
+    promptIndexMap,
+    promptNavigationItems,
+    lastPromptGroupIndex,
+  } = processedStream;
 
   // Check if scroll position is near bottom
   const checkIfNearBottom = useCallback(() => {
@@ -336,7 +341,8 @@ export const MessageStream = memo(function MessageStream({
     <div className="flex h-full min-h-0">
       <PromptSidebar
         scrollContainerRef={scrollContainerRef}
-        streamMessages={streamMessages}
+        prompts={promptNavigationItems}
+        taskId={taskId}
         bottomPadding={bottomPadding}
       />
       <div

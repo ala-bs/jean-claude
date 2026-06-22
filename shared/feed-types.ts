@@ -38,6 +38,8 @@ export interface FeedItem {
   children?: FeedItem[];
   pendingMessage?: string;
   pullRequestId?: number;
+  pullRequestProviderId?: string;
+  pullRequestRepoId?: string;
   pullRequestUrl?: string;
   pullRequestMergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   noteId?: string;
@@ -47,6 +49,7 @@ export interface FeedItem {
   // Work item tracking
   workItemId?: number;
   workItemIds?: string[];
+  workItemTypes?: (string | null)[];
   workItemUrls?: string[];
   workItemUrl?: string;
   workItemType?: string;
@@ -57,6 +60,7 @@ export interface FeedItem {
   // PR activity tracking (only present when source === 'pull-request')
   hasNewActivity?: boolean;
   activeThreadCount?: number;
+  unresolvedCommentCount?: number;
   approvedBy?: Array<{
     displayName: string;
     uniqueName: string;

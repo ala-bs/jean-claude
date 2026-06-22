@@ -1,11 +1,32 @@
+import { EventEmitter } from 'node:events';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantMessage, Part } from '@opencode-ai/sdk/v2';
-import { describe, expect, it, vi } from 'vitest';
+
 
 import type { AgentEvent, AgentTaskContext } from '@shared/agent-backend-types';
+
+const createOpencodeClientMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
+const spawnSyncMock = vi.hoisted(() => vi.fn());
+const settingsGetMock = vi.hoisted(() => vi.fn());
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  spawn: spawnMock,
+  spawnSync: spawnSyncMock,
+}));
+
+vi.mock('@opencode-ai/sdk/v2', () => ({
+  createOpencodeClient: createOpencodeClientMock,
+}));
 
 vi.mock('../../../database/repositories', () => ({
   RawMessageRepository: {
     compactOpenCodeRawMessagesForTask: vi.fn(),
+  },
+  SettingsRepository: {
+    get: settingsGetMock,
   },
 }));
 
@@ -16,8 +37,62 @@ vi.mock('../../../lib/debug', () => ({
   },
 }));
 
-import { OpenCodeBackend } from './opencode-backend';
 import { applyDeltaToMessageParts } from './opencode-message-delta';
+import {
+  killAllOpenCodeServersSync,
+  OpenCodeBackend,
+} from './opencode-backend';
+
+
+beforeEach(() => {
+  settingsGetMock.mockResolvedValue({ mode: 'standalone' });
+});
+
+afterEach(async () => {
+  await new OpenCodeBackend({
+    taskId: 'cleanup-task',
+    sessionStartIndex: 0,
+    persistRaw: vi.fn(async () => 'raw-cleanup'),
+  }).dispose();
+  killAllOpenCodeServersSync();
+  createOpencodeClientMock.mockReset();
+  spawnMock.mockReset();
+  spawnSyncMock.mockReset();
+  settingsGetMock.mockReset();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+function createMockProcess(pid = 1234) {
+  const proc = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    pid: number;
+    exitCode: number | null;
+    signalCode: string | null;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.pid = pid;
+  proc.exitCode = null;
+  proc.signalCode = null;
+  proc.kill = vi.fn(() => true);
+  return proc;
+}
+
+function mockOpencodeServer(client: unknown, pid = 1234) {
+  const proc = createMockProcess(pid);
+  spawnMock.mockReturnValue(proc);
+  createOpencodeClientMock.mockReturnValue(client);
+  setTimeout(() => {
+    proc.stdout.emit(
+      'data',
+      Buffer.from('opencode server listening on http://127.0.0.1:4321\n'),
+    );
+  }, 0);
+  return proc;
+}
 
 describe('applyDeltaToMessageParts', () => {
   it('appends a text delta once for a matching part', () => {
@@ -42,6 +117,356 @@ describe('applyDeltaToMessageParts', () => {
 });
 
 describe('OpenCodeBackend event stream', () => {
+  it('exposes dedicated server process PID on start', async () => {
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi.fn(async () => ({
+          data: { id: 'session-1' },
+        })),
+      },
+    };
+    const proc = mockOpencodeServer(client, 1234);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const session = await backend.start(
+      {
+        type: 'opencode',
+        cwd: '/tmp/project',
+        interactionMode: 'auto',
+      },
+      [{ type: 'text', text: 'hi' }],
+    );
+
+    expect(session.rootPid).toBe(1234);
+    expect(spawnMock).toHaveBeenCalledWith(
+      'opencode',
+      ['serve', '--hostname=127.0.0.1', '--port=0'],
+      expect.objectContaining({
+        detached: process.platform !== 'win32',
+        env: expect.objectContaining({ OPENCODE_CONFIG_CONTENT: '{}' }),
+      }),
+    );
+    expect(createOpencodeClientMock).toHaveBeenCalledWith({
+      baseUrl: 'http://127.0.0.1:4321',
+    });
+    expect(proc.stdout.listenerCount('data')).toBeGreaterThan(0);
+    expect(proc.stderr.listenerCount('data')).toBeGreaterThan(0);
+    await backend.stop(session.sessionId);
+    expect(proc.stdout.listenerCount('data')).toBe(0);
+    expect(proc.stderr.listenerCount('data')).toBe(0);
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        'taskkill',
+        ['/pid', '1234', '/T', '/F'],
+        { windowsHide: true },
+      );
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-1234, 'SIGTERM');
+    }
+    expect(proc.kill).not.toHaveBeenCalled();
+  });
+
+  it('closes dedicated server when session creation fails', async () => {
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      session: {
+        create: vi.fn(async () => {
+          throw new Error('session create failed');
+        }),
+      },
+    };
+    mockOpencodeServer(client);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    await expect(
+      backend.start(
+        {
+          type: 'opencode',
+          cwd: '/tmp/project',
+          interactionMode: 'auto',
+        },
+        [{ type: 'text', text: 'hi' }],
+      ),
+    ).rejects.toThrow('session create failed');
+
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-1234, 'SIGTERM');
+    }
+  });
+
+  it('kills tracked OpenCode servers during sync process cleanup', async () => {
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        create: vi.fn(async () => ({ data: { id: 'session-1' } })),
+      },
+    };
+    mockOpencodeServer(client, 2468);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    await backend.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'hi' }],
+    );
+
+    killAllOpenCodeServersSync();
+
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        'taskkill',
+        ['/pid', '2468', '/T', '/F'],
+        { windowsHide: true },
+      );
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-2468, 'SIGTERM');
+    }
+  });
+
+  it('reuses shared server and closes it after idle timeout', async () => {
+    settingsGetMock.mockResolvedValue({ mode: 'shared' });
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi
+          .fn()
+          .mockResolvedValueOnce({ data: { id: 'session-1' } })
+          .mockResolvedValueOnce({ data: { id: 'session-2' } }),
+      },
+    };
+    mockOpencodeServer(client, 4321);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const session1 = await backend.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'hi' }],
+    );
+    const session2 = await backend.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'again' }],
+    );
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(session1.rootPid).toBe(4321);
+    expect(session2.rootPid).toBe(4321);
+    vi.useFakeTimers();
+    await backend.stop(session1.sessionId);
+    await backend.stop(session2.sessionId);
+    expect(processKill).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-4321, 'SIGTERM');
+    }
+  });
+
+  it('keeps failed shared startup alive until idle timeout', async () => {
+    settingsGetMock.mockResolvedValue({ mode: 'shared' });
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    vi.useFakeTimers();
+    const client = {
+      session: {
+        create: vi.fn(async () => {
+          throw new Error('session create failed');
+        }),
+      },
+    };
+    mockOpencodeServer(client, 4321);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const startPromise = backend.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'hi' }],
+    );
+    const startExpectation = expect(startPromise).rejects.toThrow(
+      'session create failed',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await startExpectation;
+
+    expect(processKill).not.toHaveBeenCalled();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-4321, 'SIGTERM');
+    }
+  });
+
+  it('does not close shared server when another backend instance has active sessions', async () => {
+    settingsGetMock.mockResolvedValue({ mode: 'shared' });
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi
+          .fn()
+          .mockResolvedValueOnce({ data: { id: 'session-1' } })
+          .mockResolvedValueOnce({ data: { id: 'session-2' } }),
+      },
+    };
+    mockOpencodeServer(client, 4321);
+    const backend1 = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const backend2 = new OpenCodeBackend({
+      taskId: 'task-2',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-2'),
+    });
+
+    await backend1.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'one' }],
+    );
+    const session2 = await backend2.start(
+      { type: 'opencode', cwd: '/tmp/project', interactionMode: 'auto' },
+      [{ type: 'text', text: 'two' }],
+    );
+
+    await backend1.dispose();
+    expect(processKill).not.toHaveBeenCalled();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+
+    await backend2.stop(session2.sessionId);
+    await backend2.dispose();
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-4321, 'SIGTERM');
+    }
+  });
+
+  it('uses standalone server for runtime MCP even when shared mode is enabled', async () => {
+    settingsGetMock.mockResolvedValue({ mode: 'shared' });
+    const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi.fn(async () => ({ data: { id: 'session-1' } })),
+      },
+    };
+    mockOpencodeServer(client, 1234);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const session = await backend.start(
+      {
+        type: 'opencode',
+        cwd: '/tmp/project',
+        interactionMode: 'auto',
+        mcpServers: {
+          docs: { command: 'node', args: ['server.js'] },
+        },
+      },
+      [{ type: 'text', text: 'hi' }],
+    );
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'opencode',
+      ['serve', '--hostname=127.0.0.1', '--port=0'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            mcp: {
+              docs: {
+                type: 'local',
+                command: ['node', 'server.js'],
+                enabled: true,
+                timeout: 30 * 60 * 1000,
+              },
+            },
+          }),
+        }),
+      }),
+    );
+
+    await backend.stop(session.sessionId);
+    if (process.platform === 'win32') {
+      expect(spawnSyncMock).toHaveBeenCalledOnce();
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-1234, 'SIGTERM');
+    }
+  });
+
+  it('rejects OpenCode runtime MCP env values instead of serializing them into OPENCODE_CONFIG_CONTENT', async () => {
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    await expect(
+      backend.start(
+        {
+          type: 'opencode',
+          cwd: '/tmp/project',
+          interactionMode: 'auto',
+          mcpServers: {
+            secret: {
+              command: 'node',
+              args: ['server.js'],
+              env: { TOKEN: 'secret-token' },
+            },
+          },
+        },
+        [{ type: 'text', text: 'hi' }],
+      ),
+    ).rejects.toThrow(
+      'OpenCode runtime MCP server "secret" cannot include env values',
+    );
+
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('updates one raw row for repeated OpenCode text deltas', async () => {
     const rawIds = ['raw-1', 'raw-2'];
     const persistRaw = vi.fn<AgentTaskContext['persistRaw']>(
@@ -141,7 +566,9 @@ describe('OpenCodeBackend event stream', () => {
       cacheReadTokens: 3,
       cacheCreationTokens: 2,
     });
+    expect(state.contextUsage).toEqual(state.totalUsage);
     expect(state.normalizationCtx.totalUsage).toEqual(state.totalUsage);
+    expect(state.normalizationCtx.contextUsage).toEqual(state.contextUsage);
   });
 
   it('uses API cost when OpenCode reports subscription cost as zero', () => {
@@ -284,7 +711,255 @@ describe('OpenCodeBackend event stream', () => {
     expect(state.totalCost).toBe(0);
     expect(state.totalApiCost).toBe(0);
     expect(state.totalUsage).toBeUndefined();
+    expect(state.contextUsage).toBeUndefined();
     expect(state.normalizationCtx.totalUsage).toBeUndefined();
+    expect(state.normalizationCtx.contextUsage).toBeUndefined();
+  });
+
+  it('emits latest assistant usage instead of cumulative usage', async () => {
+    const olderInfo = {
+      id: 'msg-1',
+      sessionID: 'session-1',
+      role: 'assistant',
+      providerID: 'openai',
+      modelID: 'gpt-5.4',
+      time: { created: 1, completed: 1 },
+      cost: 0.1,
+      tokens: {
+        input: 10,
+        output: 5,
+        reasoning: 2,
+        cache: { read: 3, write: 2 },
+        total: 22,
+      },
+    } as AssistantMessage;
+    const latestInfo = {
+      id: 'msg-2',
+      sessionID: 'session-1',
+      role: 'assistant',
+      providerID: 'openai',
+      modelID: 'gpt-5.4',
+      time: { created: 2, completed: 2 },
+      cost: 0.25,
+      tokens: {
+        input: 20,
+        output: 7,
+        reasoning: 4,
+        cache: { read: 6, write: 1 },
+        total: 38,
+      },
+    } as AssistantMessage;
+
+    async function* olderMessageStream() {
+      yield {
+        type: 'message.updated',
+        properties: { info: olderInfo },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: olderMessageStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: { info: latestInfo, parts: [] } })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(state.totalUsage).toEqual({
+      inputTokens: 30,
+      outputTokens: 12,
+      cacheReadTokens: 9,
+      cacheCreationTokens: 3,
+      reasoningTokens: 6,
+      totalTokens: 60,
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: 'complete',
+      result: {
+        cost: { costUsd: 0.35 },
+        usage: {
+          inputTokens: 30,
+          outputTokens: 12,
+          cacheReadTokens: 9,
+          cacheCreationTokens: 3,
+          reasoningTokens: 6,
+          totalTokens: 60,
+        },
+        contextUsage: {
+          inputTokens: 20,
+          outputTokens: 7,
+          cacheReadTokens: 6,
+          cacheCreationTokens: 1,
+          reasoningTokens: 4,
+          totalTokens: 38,
+        },
+      },
+    });
+  });
+
+  it('uses latest assistant usage for session idle results', () => {
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState({});
+
+    mapEventForTest(backend, state, {
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg-1',
+          sessionID: 'session-1',
+          role: 'assistant',
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+          time: { created: 1, completed: 1 },
+          cost: 0.1,
+          tokens: {
+            input: 10,
+            output: 5,
+            reasoning: 0,
+            cache: { read: 3, write: 2 },
+          },
+        } as AssistantMessage,
+      },
+    });
+    mapEventForTest(backend, state, {
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg-2',
+          sessionID: 'session-1',
+          role: 'assistant',
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+          time: { created: 2, completed: 2 },
+          cost: 0.2,
+          tokens: {
+            input: 20,
+            output: 7,
+            reasoning: 0,
+            cache: { read: 6, write: 1 },
+          },
+        } as AssistantMessage,
+      },
+    });
+
+    const events = mapEventForTest(backend, state, {
+      type: 'session.idle',
+      properties: { sessionID: 'session-1' },
+    });
+
+    expect(events).toMatchObject([
+      {
+        type: 'complete',
+        result: {
+          usage: {
+            inputTokens: 30,
+            outputTokens: 12,
+            cacheReadTokens: 9,
+            cacheCreationTokens: 3,
+          },
+          contextUsage: {
+            inputTokens: 20,
+            outputTokens: 7,
+            cacheReadTokens: 6,
+            cacheCreationTokens: 1,
+          },
+        },
+      },
+    ]);
+  });
+
+  it('does not use child assistant usage for parent context usage', async () => {
+    const parentInfo = {
+      id: 'msg-1',
+      sessionID: 'session-1',
+      role: 'assistant',
+      providerID: 'openai',
+      modelID: 'gpt-5.4',
+      time: { created: 1, completed: 1 },
+      cost: 0.1,
+      tokens: {
+        input: 10,
+        output: 5,
+        reasoning: 0,
+        cache: { read: 3, write: 2 },
+      },
+    } as AssistantMessage;
+    const childInfo = {
+      id: 'child-msg-1',
+      sessionID: 'child-session',
+      role: 'assistant',
+      providerID: 'openai',
+      modelID: 'gpt-5.4',
+      time: { created: 2, completed: 2 },
+      cost: 0.2,
+      tokens: {
+        input: 100,
+        output: 50,
+        reasoning: 0,
+        cache: { read: 30, write: 20 },
+      },
+    } as AssistantMessage;
+    async function* childMessageStream() {
+      yield {
+        type: 'message.updated',
+        properties: { info: childInfo },
+      };
+    }
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: childMessageStream() })),
+      },
+      session: {
+        prompt: vi.fn(async () => ({ data: { info: parentInfo, parts: [] } })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    state.normalizationCtx.subtaskParentToolIdsBySessionId = new Map([
+      ['child-session', 'subtask-1'],
+    ]);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'complete',
+      result: {
+        usage: {
+          inputTokens: 110,
+          outputTokens: 55,
+          cacheReadTokens: 33,
+          cacheCreationTokens: 22,
+        },
+        contextUsage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 3,
+          cacheCreationTokens: 2,
+        },
+      },
+    });
   });
 
   it('emits token usage on completed OpenCode sessions', async () => {
@@ -330,6 +1005,12 @@ describe('OpenCodeBackend event stream', () => {
         isError: false,
         cost: { costUsd: 0.25 },
         usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 3,
+          cacheCreationTokens: 2,
+        },
+        contextUsage: {
           inputTokens: 10,
           outputTokens: 5,
           cacheReadTokens: 3,
@@ -628,13 +1309,7 @@ describe('OpenCodeBackend event stream', () => {
       createEventStreamForTest(backend, client, state),
     );
 
-    expect(
-      (
-        state.normalizationCtx as {
-          subtaskParentToolIdsBySessionId?: Map<string, string>;
-        }
-      ).subtaskParentToolIdsBySessionId,
-    ).toBeUndefined();
+    expect(state.normalizationCtx.subtaskParentToolIdsBySessionId.size).toBe(0);
     expect(events).toMatchObject([
       { type: 'session-id', sessionId: 'session-1' },
       { type: 'complete', result: { isError: false } },
@@ -1332,6 +2007,7 @@ function createOpenCodeState(client: unknown) {
     totalCost: 0,
     totalApiCost: 0,
     totalUsage: undefined,
+    contextUsage: undefined,
     normalizationCtx: {
       emittedEntryIds: new Set(),
       rawMessages: new Map(),
@@ -1340,6 +2016,8 @@ function createOpenCodeState(client: unknown) {
       totalCost: 0,
       totalApiCost: 0,
       totalUsage: undefined,
+      contextUsage: undefined,
+      subtaskParentToolIdsBySessionId: new Map<string, string>(),
     },
     messageIndex: 0,
     pendingSubtaskPartsByMessageId: new Map(),
@@ -1351,7 +2029,7 @@ function createOpenCodeState(client: unknown) {
       client,
       server: { url: 'http://127.0.0.1', close: vi.fn() },
     },
-    ownsServerHandle: false,
+    ownsServerHandle: true,
     serverClosed: false,
   };
 }

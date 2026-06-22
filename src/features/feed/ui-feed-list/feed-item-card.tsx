@@ -1,9 +1,8 @@
-import { useNavigate, useParams } from '@tanstack/react-router';
-import clsx from 'clsx';
 import {
   ArrowDownNarrowWide,
-  Bug,
   Bot,
+  Bug,
+  CheckCircle2,
   CircleHelp,
   ClipboardList,
   FolderOpen,
@@ -12,40 +11,59 @@ import {
   ListTodo,
   Loader2,
   MessageSquare,
+  MinusCircle,
   Pin,
+  PinOff,
   ShieldAlert,
   ShieldQuestion,
-  PinOff,
   StickyNote,
   Terminal,
-  CheckCircle2,
   XCircle,
 } from 'lucide-react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import clsx from 'clsx';
 import type React from 'react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 
+
+
+import {
+  bgJobLabel,
+  useRunningBackgroundJobsForTask,
+} from '@/stores/background-jobs';
 import {
   Dropdown,
   DropdownDivider,
   DropdownInfo,
   DropdownItem,
 } from '@/common/ui/dropdown';
-import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
-import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
-import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
-import { usePullRequest } from '@/hooks/use-pull-requests';
-import { useCompleteTask, useTask } from '@/hooks/use-tasks';
-import { formatRelativeTime } from '@/lib/time';
+import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
 import {
-  bgJobLabel,
-  useRunningBackgroundJobsForTask,
-} from '@/stores/background-jobs';
+  useCachedPullRequest,
+  usePullRequest,
+  usePullRequestPolicyEvaluations,
+} from '@/hooks/use-pull-requests';
+import { useCompleteTask, useTask } from '@/hooks/use-tasks';
+import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
+import { formatRelativeTime } from '@/lib/time';
+import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
+import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useFeedStore } from '@/stores/feed';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
-import { useOverlaysStore } from '@/stores/overlays';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
+import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
+
+
+
+import { useFeedItemProject } from './use-feed-item-project';
 
 // ─── Status color mapping ────────────────────────────────────────
 function statusColor(attention: FeedItemAttention): string {
@@ -75,20 +93,24 @@ function statusColor(attention: FeedItemAttention): string {
 }
 
 function FeedProjectLabel({ item }: { item: FeedItem }) {
+  const project = useFeedItemProject(item);
+
   return (
     <span className="min-w-0">
-      <span className="text-ink-3 text-[11px]">{item.projectName}</span>
+      <span className="text-ink-3 text-[11px]">{project.name}</span>
     </span>
   );
 }
 
 function FeedProjectBackgroundLogo({ item }: { item: FeedItem }) {
+  const project = useFeedItemProject(item);
+
   return (
     <ProjectLogoBackground
       project={{
-        name: item.projectName,
-        color: item.projectColor,
-        logoPath: item.projectLogoPath ?? null,
+        name: project.name,
+        color: project.color,
+        logoPath: project.logoPath,
       }}
       showColorFallback
       fixedHeight
@@ -201,10 +223,12 @@ function PrDiamond({ merged }: { merged: boolean }) {
 // ─── Work Item Chip (clickable) ──────────────────────────────────
 function WorkItemChip({
   label,
+  type,
   isFocused,
   onClick,
 }: {
   label: string;
+  type?: string | null;
   isFocused?: boolean;
   onClick?: (e: React.MouseEvent) => void;
 }) {
@@ -216,13 +240,27 @@ function WorkItemChip({
         'inline-flex cursor-pointer items-center gap-0.5 rounded px-1.5 py-0 font-mono text-[9.5px] ring-1 transition-colors',
         isFocused
           ? 'bg-acc/20 text-acc-ink ring-acc/50 shadow-[0_0_12px_oklch(0.72_0.20_295_/_0.4),0_0_4px_oklch(0.72_0.20_295_/_0.25)]'
-          : 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40',
+          : workItemChipColorClass(type),
       )}
     >
       <span className="opacity-70">◈</span>
       {label}
     </button>
   );
+}
+
+function workItemChipColorClass(type?: string | null): string {
+  switch (type) {
+    case 'Bug':
+      return 'bg-status-fail/10 text-status-fail ring-status-fail/25 hover:bg-status-fail/20 hover:ring-status-fail/40';
+    case 'User Story':
+    case 'Feature':
+      return 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40';
+    case 'Task':
+      return 'bg-status-run/10 text-status-run ring-status-run/25 hover:bg-status-run/20 hover:ring-status-run/40';
+    default:
+      return 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40';
+  }
 }
 
 // ─── Complete Task Button (isolated to avoid hooks in every card) ─
@@ -265,9 +303,11 @@ function CompleteTaskButton({ taskId }: { taskId: string }) {
 function RailPrAutoCompleteButton({
   projectId,
   prId,
+  canSet,
 }: {
   projectId: string;
   prId: number;
+  canSet: boolean;
 }) {
   const { data: pr, isLoading } = usePullRequest(projectId, prId);
 
@@ -280,17 +320,109 @@ function RailPrAutoCompleteButton({
     );
   }
 
-  if (!pr || pr.status !== 'active' || pr.isDraft || pr.autoCompleteSetBy) {
+  if (!pr || pr.status !== 'active' || pr.isDraft) {
+    return null;
+  }
+
+  if (!pr.autoCompleteSetBy && !canSet) {
     return null;
   }
 
   return <PrAutoComplete pr={pr} projectId={projectId} variant="compact" />;
 }
 
+function RailPrCiStatus({
+  projectId,
+  prId,
+}: {
+  projectId: string;
+  prId: number;
+}) {
+  const { data: pr } = usePullRequest(projectId, prId);
+  const isAutoCompleteSet = !!pr?.autoCompleteSetBy;
+  const [shouldPollCi, setShouldPollCi] = useState(false);
+  const { data: evaluations = [] } = usePullRequestPolicyEvaluations(
+    projectId,
+    prId,
+    {
+      enabled: isAutoCompleteSet,
+      refetchInterval: isAutoCompleteSet && shouldPollCi ? 10_000 : false,
+    },
+  );
+
+  const ciCounts = evaluations.reduce(
+    (counts, evaluation) => {
+      if (!evaluation.configuration.settings.buildDefinitionId) {
+        return counts;
+      }
+
+      if (
+        evaluation.status === 'running' ||
+        (evaluation.status === 'queued' && !!evaluation.context?.buildId)
+      ) {
+        counts.running += 1;
+      } else if (evaluation.status === 'queued') {
+        counts.pending += 1;
+      } else if (
+        evaluation.status === 'rejected' ||
+        evaluation.status === 'broken'
+      ) {
+        counts.failed += 1;
+      }
+
+      return counts;
+    },
+    { running: 0, pending: 0, failed: 0 },
+  );
+
+  useEffect(() => {
+    startTransition(() => setShouldPollCi(ciCounts.running > 0));
+  }, [ciCounts.running]);
+
+  if (!isAutoCompleteSet) {
+    return null;
+  }
+
+  if (
+    ciCounts.running === 0 &&
+    ciCounts.pending === 0 &&
+    ciCounts.failed === 0
+  ) {
+    return null;
+  }
+
+  return (
+    <span className="flex items-center gap-1">
+      {ciCounts.running > 0 && (
+        <span className="flex items-center gap-0.5 text-blue-400">
+          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          <span className="text-[9.5px]">{ciCounts.running}</span>
+        </span>
+      )}
+      {ciCounts.pending > 0 && (
+        <span className="flex items-center gap-0.5 text-yellow-400">
+          <MinusCircle className="h-2.5 w-2.5" />
+          <span className="text-[9.5px]">{ciCounts.pending}</span>
+        </span>
+      )}
+      {ciCounts.failed > 0 && (
+        <span className="text-status-fail flex items-center gap-0.5">
+          <XCircle className="h-2.5 w-2.5" />
+          <span className="text-[9.5px]">{ciCounts.failed}</span>
+        </span>
+      )}
+      <span className="text-ink-3 text-[9.5px]">CI</span>
+    </span>
+  );
+}
+
 // ─── Main FeedItemCard ───────────────────────────────────────────
 export function FeedItemCard({
   item,
   isSelected,
+  currentTaskId,
+  currentWorkItemId,
+  currentPrId,
   isSubtask,
   isDraggable,
   onDragStart,
@@ -301,6 +433,9 @@ export function FeedItemCard({
 }: {
   item: FeedItem;
   isSelected?: boolean;
+  currentTaskId?: string;
+  currentWorkItemId?: string;
+  currentPrId?: string;
   isSubtask?: boolean;
   isDraggable?: boolean;
   onDragStart?: () => void;
@@ -310,10 +445,6 @@ export function FeedItemCard({
   onDragEnd?: () => void;
 }) {
   const navigate = useNavigate();
-  const params = useParams({ strict: false });
-  const currentTaskId = (params as { taskId?: string }).taskId;
-  const currentWorkItemId = (params as { workItemId?: string }).workItemId;
-  const currentPrId = (params as { prId?: string }).prId;
   const pin = useFeedStore((s) => s.pin);
   const unpin = useFeedStore((s) => s.unpin);
   const dismiss = useFeedStore((s) => s.dismiss);
@@ -330,6 +461,10 @@ export function FeedItemCard({
   );
   const hasRunningCommand = runningCommands.length > 0;
   const runningBgJobs = useRunningBackgroundJobsForTask(item.taskId ?? null);
+  const { data: cachedPr } = useCachedPullRequest(
+    item.projectId,
+    item.pullRequestId,
+  );
   const pendingCommentCount = useOpenReviewCommentCount(item.taskId ?? '');
   const isDeleting = runningBgJobs.some((j) => j.type === 'task-deletion');
   const isCompleting = runningBgJobs.some((j) => j.type === 'task-completion');
@@ -339,25 +474,59 @@ export function FeedItemCard({
   const menuRef = useRef<{ toggle: () => void } | null>(null);
 
   const isTask = item.source === 'task';
+  const itemTitle =
+    item.source === 'pull-request'
+      ? (cachedPr?.title ?? item.title)
+      : item.title;
+  const itemTimestamp =
+    item.source === 'pull-request'
+      ? (cachedPr?.creationDate ?? item.timestamp)
+      : item.timestamp;
+  const pullRequestUrl = cachedPr?.url ?? item.pullRequestUrl;
+  const isDraft = cachedPr?.isDraft ?? item.isDraft;
+  const pullRequestMergeStatus =
+    cachedPr?.mergeStatus ?? item.pullRequestMergeStatus;
+  const approvedBy =
+    cachedPr?.reviewers
+      .filter(
+        (reviewer) =>
+          !reviewer.isContainer &&
+          (reviewer.voteStatus === 'approved' ||
+            reviewer.voteStatus === 'approved-with-suggestions'),
+      )
+      .map((reviewer) => ({
+        displayName: reviewer.displayName,
+        uniqueName: reviewer.uniqueName,
+        imageUrl: reviewer.imageUrl,
+      })) ??
+    item.approvedBy ??
+    [];
   const isRunning = item.attention === 'running';
   const hasUnread = Boolean(item.hasUnread);
   const needsPermission = item.attention === 'needs-permission';
   const hasQuestion = item.attention === 'has-question';
   const needsAttention = needsPermission || hasQuestion;
-  const hasChildren = !isSubtask && (item.children?.length ?? 0) > 0;
+  const visibleChildren = useMemo(
+    () => (item.children ?? []).filter((child) => !child.isCompleted),
+    [item.children],
+  );
+  const hasChildren = !isSubtask && visibleChildren.length > 0;
   const hasPr = isTask && !!item.pullRequestId;
-  const prMerged = item.workItemPrStatus === 'completed';
-  const prHasConflicts = item.pullRequestMergeStatus === 'conflicts';
-  const prApprovalCount = item.approvedBy?.length ?? 0;
+  const prMerged =
+    item.workItemPrStatus === 'completed' || cachedPr?.status === 'completed';
+  const prHasConflicts = pullRequestMergeStatus === 'conflicts';
+  const prApprovalCount = approvedBy.length;
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
-  const showAutoCompleteButton =
+  const canSetPrAutoComplete =
     hasPr &&
     prApprovalCount > 0 &&
     !prMerged &&
     !prHasConflicts &&
-    !item.isDraft &&
+    !isDraft &&
     !!item.pullRequestId;
+  const showRailPrAutoComplete =
+    hasPr && !prMerged && !isDraft && !!item.pullRequestId;
 
   // Complete task (for merged PRs)
   const canComplete =
@@ -378,7 +547,7 @@ export function FeedItemCard({
         e &&
         item.source === 'pull-request' &&
         isModifiedClick(e) &&
-        openExternalUrl(item.pullRequestUrl)
+        openExternalUrl(pullRequestUrl)
       ) {
         return;
       }
@@ -406,7 +575,7 @@ export function FeedItemCard({
         });
       }
     },
-    [navigate, item],
+    [navigate, item, pullRequestUrl],
   );
 
   const openMenu = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
@@ -469,7 +638,7 @@ export function FeedItemCard({
   const handlePrClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (isModifiedClick(e) && openExternalUrl(item.pullRequestUrl)) {
+      if (isModifiedClick(e) && openExternalUrl(pullRequestUrl)) {
         return;
       }
       if (item.pullRequestId) {
@@ -482,7 +651,7 @@ export function FeedItemCard({
         });
       }
     },
-    [navigate, item.projectId, item.pullRequestId, item.pullRequestUrl],
+    [navigate, item.projectId, item.pullRequestId, pullRequestUrl],
   );
 
   const handleWorkItemClick = useCallback(
@@ -628,6 +797,7 @@ export function FeedItemCard({
                     <WorkItemChip
                       key={wiId}
                       label={`#${wiId}`}
+                      type={item.workItemTypes?.[index]}
                       isFocused={currentWorkItemId === wiId}
                       onClick={(e) =>
                         handleWorkItemClick(e, wiId, item.workItemUrls?.[index])
@@ -652,7 +822,7 @@ export function FeedItemCard({
                         : 'text-ink-1 text-[12.5px]',
                   )}
                 >
-                  {item.title}
+                  {itemTitle}
                 </span>
               </div>
 
@@ -660,7 +830,7 @@ export function FeedItemCard({
               <div className="flex flex-wrap items-center gap-1.5">
                 {!isSubtask && <FeedProjectLabel item={item} />}
                 <span className="text-ink-3/80 ml-auto shrink-0 font-mono text-[9.5px]">
-                  {formatRelativeTime(item.timestamp)}
+                  {formatRelativeTime(itemTimestamp)}
                 </span>
 
                 {/* PR status badges for work items (non-task) */}
@@ -698,7 +868,7 @@ export function FeedItemCard({
                   )}
 
                 {/* Draft badge (non-task items only, task draft shown in PR rail) */}
-                {item.isDraft && item.source !== 'task' && (
+                {isDraft && item.source !== 'task' && (
                   <span className="border-glass-border text-ink-3 rounded border px-1 py-0 text-[9px]">
                     Draft
                   </span>
@@ -793,10 +963,11 @@ export function FeedItemCard({
 
           {/* ─── Sub-task rows (branch off main rail) ─── */}
           {hasChildren &&
-            item.children!.map((child) => (
+            visibleChildren.map((child) => (
               <SubtaskRow
                 key={child.id}
                 child={child}
+                currentWorkItemId={currentWorkItemId}
                 isRunning={child.attention === 'running'}
                 isSelected={child.taskId === currentTaskId}
               />
@@ -809,8 +980,8 @@ export function FeedItemCard({
                 'relative flex cursor-pointer transition-colors',
                 'hover:bg-glass-light',
                 isPrFocused
-                  ? 'border-l-2 border-l-[var(--color-acc)]'
-                  : 'border-l-2 border-l-transparent',
+                  ? 'border-l-[3px] border-l-[var(--color-acc)]'
+                  : 'border-l-[3px] border-l-transparent',
               )}
               style={{ minHeight: 30 }}
               onClick={handlePrClick}
@@ -846,7 +1017,7 @@ export function FeedItemCard({
                     #{item.pullRequestId}
                   </span>
                   <span>{prMerged ? 'merged' : 'open'}</span>
-                  {item.isDraft && (
+                  {isDraft && (
                     <span className="border-glass-border text-ink-3 rounded border px-1 py-0 text-[9px]">
                       Draft
                     </span>
@@ -854,8 +1025,8 @@ export function FeedItemCard({
                   {prApprovalCount > 0 && (
                     <span
                       className="text-status-done flex items-center gap-0.5"
-                      title={item.approvedBy
-                        ?.map((reviewer) => reviewer.displayName)
+                      title={approvedBy
+                        .map((reviewer) => reviewer.displayName)
                         .join(', ')}
                     >
                       <CheckCircle2 className="h-2.5 w-2.5" />
@@ -880,12 +1051,19 @@ export function FeedItemCard({
                       </span>
                     </span>
                   )}
+                  {!prMerged && item.pullRequestId && (
+                    <RailPrCiStatus
+                      projectId={item.projectId}
+                      prId={item.pullRequestId}
+                    />
+                  )}
                   {canComplete && <CompleteTaskButton taskId={item.taskId!} />}
                 </div>
-                {showAutoCompleteButton && item.pullRequestId && (
+                {showRailPrAutoComplete && item.pullRequestId && (
                   <RailPrAutoCompleteButton
                     projectId={item.projectId}
                     prId={item.pullRequestId}
+                    canSet={canSetPrAutoComplete}
                   />
                 )}
               </div>
@@ -948,10 +1126,12 @@ export function FeedItemCard({
 // ─── SubtaskRow (renders with branch connector from parent rail) ──
 function SubtaskRow({
   child,
+  currentWorkItemId,
   isRunning,
   isSelected,
 }: {
   child: FeedItem;
+  currentWorkItemId?: string;
   isRunning: boolean;
   isSelected?: boolean;
 }) {
@@ -1021,8 +1201,8 @@ function SubtaskRow({
           !childNeedsAttention &&
           'feed-unread-row',
         isSelected
-          ? 'border-l-2 border-l-[var(--color-acc)]'
-          : 'border-l-2 border-l-transparent',
+          ? 'border-l-[3px] border-l-[var(--color-acc)]'
+          : 'border-l-[3px] border-l-transparent',
       )}
       style={{ minHeight: 36 }}
     >
@@ -1100,6 +1280,8 @@ function SubtaskRow({
               <WorkItemChip
                 key={wiId}
                 label={`#${wiId}`}
+                type={child.workItemTypes?.[index]}
+                isFocused={currentWorkItemId === wiId}
                 onClick={(e) =>
                   handleWorkItemClick(e, wiId, child.workItemUrls?.[index])
                 }

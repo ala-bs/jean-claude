@@ -1,14 +1,17 @@
 import {
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   File,
   Folder,
   MessageCircle,
+  PenLine,
 } from 'lucide-react';
-import { useState, useMemo, useCallback } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
-import { getStatusIndicator } from './status-badge';
 import type { DiffFile, DiffFileStatus } from './types';
+import { getStatusIndicator } from './status-badge';
+
 
 interface TreeNode {
   name: string;
@@ -19,12 +22,24 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
+function collectFolderPaths(nodes: TreeNode[], folders = new Set<string>()) {
+  for (const node of nodes) {
+    if (node.type === 'folder') {
+      folders.add(node.path);
+      if (node.children) collectFolderPaths(node.children, folders);
+    }
+  }
+  return folders;
+}
+
 export function DiffFileTree({
   files,
   selectedPath,
   onSelectFile,
   filesWithAnnotations,
   commentCountByFile,
+  commentStatusCountByFile,
+  draftCountByFile,
   collapsedFolders: externalCollapsedFolders,
   onToggleFolder: externalOnToggleFolder,
 }: {
@@ -35,6 +50,13 @@ export function DiffFileTree({
   filesWithAnnotations?: Set<string>;
   /** Number of comments to show per file path */
   commentCountByFile?: Record<string, number>;
+  /** Number of active/resolved comments to show per file path */
+  commentStatusCountByFile?: Record<
+    string,
+    { active: number; resolved: number }
+  >;
+  /** Number of unsent draft comments per file path */
+  draftCountByFile?: Record<string, number>;
   /** Externally-managed set of collapsed folder paths (for persistence). When provided, takes precedence over local state. */
   collapsedFolders?: Set<string>;
   /** Callback when a folder is toggled. Required when collapsedFolders is provided. */
@@ -44,17 +66,7 @@ export function DiffFileTree({
 
   // All folder paths in the current tree
   const allFolderPaths = useMemo(() => {
-    const folders = new Set<string>();
-    const collectFolders = (nodes: TreeNode[]) => {
-      for (const node of nodes) {
-        if (node.type === 'folder') {
-          folders.add(node.path);
-          if (node.children) collectFolders(node.children);
-        }
-      }
-    };
-    collectFolders(tree);
-    return folders;
+    return collectFolderPaths(tree);
   }, [tree]);
 
   // Local state fallback when no external state is provided
@@ -105,6 +117,16 @@ export function DiffFileTree({
     [commentCountByFile],
   );
 
+  const getCommentStatusCount = useCallback(
+    (path: string) => commentStatusCountByFile?.[path],
+    [commentStatusCountByFile],
+  );
+
+  const getDraftCount = useCallback(
+    (path: string) => draftCountByFile?.[path] ?? 0,
+    [draftCountByFile],
+  );
+
   return (
     <div className="flex flex-col overflow-auto py-2">
       {tree.map((node) => (
@@ -118,6 +140,8 @@ export function DiffFileTree({
           onToggleFolder={toggleFolder}
           hasAnnotation={hasAnnotation}
           getCommentCount={getCommentCount}
+          getCommentStatusCount={getCommentStatusCount}
+          getDraftCount={getDraftCount}
         />
       ))}
     </div>
@@ -133,6 +157,8 @@ function TreeNodeRow({
   onToggleFolder,
   hasAnnotation,
   getCommentCount,
+  getCommentStatusCount,
+  getDraftCount,
 }: {
   node: TreeNode;
   depth: number;
@@ -142,6 +168,10 @@ function TreeNodeRow({
   onToggleFolder: (path: string) => void;
   hasAnnotation: (path: string) => boolean;
   getCommentCount: (path: string) => number;
+  getCommentStatusCount: (
+    path: string,
+  ) => { active: number; resolved: number } | undefined;
+  getDraftCount: (path: string) => number;
 }) {
   const isExpanded = expandedFolders.has(node.path);
   const isSelected = node.path === selectedPath;
@@ -176,6 +206,8 @@ function TreeNodeRow({
               onToggleFolder={onToggleFolder}
               hasAnnotation={hasAnnotation}
               getCommentCount={getCommentCount}
+              getCommentStatusCount={getCommentStatusCount}
+              getDraftCount={getDraftCount}
             />
           ))}
       </>
@@ -185,7 +217,12 @@ function TreeNodeRow({
   // File node
   const statusIndicator = getStatusIndicatorOrEmpty(node.status);
   const fileHasAnnotation = hasAnnotation(node.path);
+  const commentStatusCount = getCommentStatusCount(node.path);
+  const commentStatusTotal = commentStatusCount
+    ? commentStatusCount.active + commentStatusCount.resolved
+    : 0;
   const commentCount = getCommentCount(node.path);
+  const draftCount = getDraftCount(node.path);
 
   return (
     <button
@@ -212,13 +249,45 @@ function TreeNodeRow({
           aria-label="Has AI annotations"
         />
       )}
-      {commentCount > 0 && (
+      {commentStatusCount && commentStatusTotal > 0 ? (
+        <>
+          <span
+            className="bg-acc-soft text-acc-ink ml-1 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 font-mono text-[9.5px]"
+            aria-label={`${commentStatusCount.active} active review comment${commentStatusCount.active !== 1 ? 's' : ''}`}
+            title="Active comments"
+          >
+            {commentStatusCount.active > 0 && (
+              <MessageCircle className="h-2.5 w-2.5" />
+            )}
+            {commentStatusCount.active}
+          </span>
+          <span
+            className="text-ink-3 bg-glass-medium ml-1 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 font-mono text-[9.5px]"
+            aria-label={`${commentStatusCount.resolved} resolved review comment${commentStatusCount.resolved !== 1 ? 's' : ''}`}
+            title="Resolved comments"
+          >
+            {commentStatusCount.resolved > 0 && (
+              <CheckCircle2 className="h-2.5 w-2.5" />
+            )}
+            {commentStatusCount.resolved}
+          </span>
+        </>
+      ) : commentCount > 0 ? (
         <span
           className="bg-acc-soft text-acc-ink ml-1 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 font-mono text-[9.5px]"
           aria-label={`${commentCount} review comment${commentCount !== 1 ? 's' : ''}`}
         >
           <MessageCircle className="h-2.5 w-2.5" />
           {commentCount}
+        </span>
+      ) : null}
+      {draftCount > 0 && (
+        <span
+          className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-full bg-yellow-900/40 px-1.5 font-mono text-[9.5px] text-yellow-300"
+          aria-label={`${draftCount} draft comment${draftCount !== 1 ? 's' : ''}`}
+        >
+          <PenLine className="h-2.5 w-2.5" />
+          {draftCount}
         </span>
       )}
       <span className={`ml-auto shrink-0 text-xs ${statusIndicator.color}`}>
@@ -264,12 +333,6 @@ function buildTree(files: DiffFile[]): TreeNode[] {
         };
         folderMap.set(currentPath, folder);
         currentLevel.push(folder);
-        // Sort after adding to maintain order
-        currentLevel.sort((a, b) => {
-          // Folders first, then files
-          if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
       }
       currentLevel = folder.children!;
     }
@@ -283,14 +346,20 @@ function buildTree(files: DiffFile[]): TreeNode[] {
       status: file.status,
       originalPath: file.originalPath,
     });
-
-    // Sort the current level
-    currentLevel.sort((a, b) => {
-      // Folders first, then files
-      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
   }
 
+  sortTree(root);
+
   return root;
+}
+
+function sortTree(nodes: TreeNode[]) {
+  nodes.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  for (const node of nodes) {
+    if (node.children) sortTree(node.children);
+  }
 }

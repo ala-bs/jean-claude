@@ -1,4 +1,14 @@
 import {
+  type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -9,41 +19,41 @@ import {
   Paperclip,
   X,
 } from 'lucide-react';
-import {
-  type ChangeEvent,
-  type ClipboardEvent,
-  type DragEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
 import { createPortal } from 'react-dom';
 
-import { Checkbox } from '@/common/ui/checkbox';
-import { HandlebarsEditor } from '@/common/ui/handlebars-editor';
-import { Kbd } from '@/common/ui/kbd';
-import { FileEditorDialog } from '@/features/common/ui-file-editor-dialog';
+
 import type { AzureDevOpsWorkItem, WorkItemComment } from '@/lib/api';
 import {
   buildAttachedFilesXml,
-  processAttachmentFile,
   MAX_FILES,
+  processAttachmentFile,
+  processAttachmentPath,
 } from '@/lib/file-attachment-utils';
-import { processImageFile, MAX_IMAGES } from '@/lib/image-utils';
-import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import {
-  resolveSnippetTemplate,
-  type SnippetVariableContext,
-} from '@/lib/resolve-snippet-template';
-import { useToastStore } from '@/stores/toasts';
+  isVideoFile,
+  VideoGifConverter,
+} from '@/features/common/ui-video-gif-converter';
+import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
+import type { ProjectFeatureMap, PromptSnippet } from '@shared/types';
 import type {
   PromptFilePart,
   PromptImagePart,
 } from '@shared/agent-backend-types';
-import type { ProjectFeatureMap, PromptSnippet } from '@shared/types';
+import {
+  resolveSnippetTemplate,
+  type SnippetVariableContext,
+} from '@/lib/resolve-snippet-template';
+import { Checkbox } from '@/common/ui/checkbox';
+import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
+import { FileEditorDialog } from '@/features/common/ui-file-editor-dialog';
+import { formatBytes } from '@/lib/format-bytes';
+import { HandlebarsEditor } from '@/common/ui/handlebars-editor';
+import { Kbd } from '@/common/ui/kbd';
+import { useToastStore } from '@/stores/toasts';
 
+
+
+import { useLatestRef } from '@/hooks/use-latest-ref';
 export function getWorkItemCommentSelectionId(
   comment: WorkItemComment,
 ): string {
@@ -591,9 +601,9 @@ export function PromptComposer({
   ]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const nonImageFileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showFileEditor, setShowFileEditor] = useState(false);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const addToast = useToastStore((s) => s.addToast);
   const showImageError = useCallback(
     (message: string) => addToast({ message, type: 'error' }),
@@ -606,24 +616,28 @@ export function PromptComposer({
 
       const items = Array.from(e.clipboardData.items);
       const imageItems = items.filter((item) => item.type.startsWith('image/'));
+      const nextVideoFile = Array.from(e.clipboardData.files).find(isVideoFile);
 
-      if (imageItems.length > 0) {
-        const currentCount = images?.length ?? 0;
-        const allowed = MAX_IMAGES - currentCount;
-        if (allowed <= 0) return;
+      if (imageItems.length === 0 && !nextVideoFile) return;
 
-        e.preventDefault();
-        for (const item of imageItems.slice(0, allowed)) {
-          const file = item.getAsFile();
-          if (file) {
-            void processImageFile(file, onImageAttach, showImageError).catch(
-              (err) => {
-                showImageError('Failed to process image');
-                console.error('Failed to process pasted image:', err);
-              },
-            );
-          }
+      const currentCount = images?.length ?? 0;
+      const allowed = MAX_IMAGES - currentCount;
+      if (allowed <= 0) return;
+
+      e.preventDefault();
+      for (const item of imageItems.slice(0, allowed)) {
+        const file = item.getAsFile();
+        if (file) {
+          void processImageFile(file, onImageAttach, showImageError).catch(
+            (err) => {
+              showImageError('Failed to process image');
+              console.error('Failed to process pasted image:', err);
+            },
+          );
         }
+      }
+      if (nextVideoFile && allowed > imageItems.length) {
+        setVideoFile(nextVideoFile);
       }
     },
     [onImageAttach, images, showImageError],
@@ -662,6 +676,7 @@ export function PromptComposer({
           const imageFiles = droppedFiles.filter((f) =>
             f.type.startsWith('image/'),
           );
+          const nextVideoFile = droppedFiles.find(isVideoFile);
           for (const file of imageFiles.slice(0, allowed)) {
             void processImageFile(file, onImageAttach, showImageError).catch(
               (err) => {
@@ -669,6 +684,9 @@ export function PromptComposer({
                 console.error('Failed to process dropped image:', err);
               },
             );
+          }
+          if (nextVideoFile && allowed > imageFiles.length) {
+            setVideoFile(nextVideoFile);
           }
         }
       }
@@ -678,7 +696,7 @@ export function PromptComposer({
         const currentFileCount = files?.length ?? 0;
         const allowedFiles = MAX_FILES - currentFileCount;
         const nonImageFiles = droppedFiles.filter(
-          (f) => !f.type.startsWith('image/'),
+          (f) => !f.type.startsWith('image/') && !isVideoFile(f),
         );
         for (const file of nonImageFiles.slice(0, allowedFiles)) {
           void processAttachmentFile(
@@ -699,10 +717,15 @@ export function PromptComposer({
 
       const currentCount = images?.length ?? 0;
       const allowed = MAX_IMAGES - currentCount;
-      if (allowed <= 0) return;
+      if (allowed <= 0) {
+        e.target.value = '';
+        return;
+      }
 
       const files = Array.from(e.target.files);
-      for (const file of files.slice(0, allowed)) {
+      const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+      const nextVideoFile = files.find(isVideoFile);
+      for (const file of imageFiles.slice(0, allowed)) {
         void processImageFile(file, onImageAttach, showImageError).catch(
           (err) => {
             showImageError('Failed to process image');
@@ -710,31 +733,32 @@ export function PromptComposer({
           },
         );
       }
+      if (nextVideoFile && allowed > imageFiles.length) {
+        setVideoFile(nextVideoFile);
+      }
       e.target.value = '';
     },
     [onImageAttach, images, showImageError],
   );
 
-  const handleNonImageFileSelect = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      if (!onFileAttach || !projectRoot || !e.target.files) return;
-      const currentFileCount = files?.length ?? 0;
-      const allowed = MAX_FILES - currentFileCount;
-      if (allowed <= 0) return;
+  const handleOpenFilePicker = useCallback(async () => {
+    if (!onFileAttach || !projectRoot) return;
+    const currentFileCount = files?.length ?? 0;
+    const allowed = MAX_FILES - currentFileCount;
+    if (allowed <= 0) return;
 
-      const selectedFiles = Array.from(e.target.files);
-      for (const file of selectedFiles.slice(0, allowed)) {
-        void processAttachmentFile(
-          file,
-          projectRoot,
-          onFileAttach,
-          showImageError,
-        );
-      }
-      e.target.value = '';
-    },
-    [onFileAttach, files, projectRoot, showImageError],
-  );
+    const selectedPaths = await window.api.dialog.openFiles();
+    if (!selectedPaths) return;
+
+    for (const sourcePath of selectedPaths.slice(0, allowed)) {
+      void processAttachmentPath(
+        sourcePath,
+        projectRoot,
+        onFileAttach,
+        showImageError,
+      );
+    }
+  }, [onFileAttach, files, projectRoot, showImageError]);
 
   const handleFileCreate = useCallback(
     async (filename: string, content: string) => {
@@ -1012,7 +1036,7 @@ export function PromptComposer({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/*,video/*"
                   multiple
                   className="hidden"
                   onChange={handleFileSelect}
@@ -1021,7 +1045,7 @@ export function PromptComposer({
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1"
-                  title="Attach image"
+                  title="Attach image or video"
                 >
                   <ImageIcon className="h-3.5 w-3.5" />
                 </button>
@@ -1029,16 +1053,9 @@ export function PromptComposer({
             )}
             {onFileAttach && projectRoot && (
               <>
-                <input
-                  ref={nonImageFileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={handleNonImageFileSelect}
-                />
                 <button
                   type="button"
-                  onClick={() => nonImageFileInputRef.current?.click()}
+                  onClick={() => void handleOpenFilePicker()}
                   className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1"
                   title="Attach file"
                 >
@@ -1087,7 +1104,7 @@ export function PromptComposer({
           {isDragOver && (
             <div className="border-acc bg-acc-soft absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed">
               <span className="text-acc-ink text-sm">
-                {onFileAttach ? 'Drop files here' : 'Drop image here'}
+                {onFileAttach ? 'Drop files here' : 'Drop image or video here'}
               </span>
             </div>
           )}
@@ -1145,6 +1162,9 @@ export function PromptComposer({
                     onClick={() => setPreviewIndex(index)}
                     className="relative h-full w-full cursor-pointer overflow-hidden rounded focus-visible:outline-none"
                     aria-label={`Preview ${image.filename ?? `image ${index + 1}`}`}
+                    title={
+                      image.sizeBytes ? formatBytes(image.sizeBytes) : undefined
+                    }
                   >
                     <img
                       src={`data:${thumbMime};base64,${thumbData}`}
@@ -1162,6 +1182,11 @@ export function PromptComposer({
                         <Eye className="text-ink-0 h-3.5 w-3.5" />
                       </span>
                     </span>
+                    {image.sizeBytes && (
+                      <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
+                        {formatBytes(image.sizeBytes)}
+                      </span>
+                    )}
                   </button>
                   {onImageRemove && (
                     <button
@@ -1232,6 +1257,12 @@ export function PromptComposer({
           onClose={() => setShowFileEditor(false)}
         />
       )}
+
+      <VideoGifConverter
+        file={videoFile}
+        onAttach={(image) => onImageAttach?.(image)}
+        onClose={() => setVideoFile(null)}
+      />
     </div>
   );
 }
@@ -1248,8 +1279,7 @@ function ImagePreviewDialog({
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const img = images[currentIndex];
 
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const onCloseRef = useLatestRef(onClose);
 
   useEffect(() => {
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
@@ -1264,7 +1294,7 @@ function ImagePreviewDialog({
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [images.length]);
+  }, [images.length, onCloseRef]);
 
   if (!img) return null;
 

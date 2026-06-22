@@ -1,15 +1,32 @@
-import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
-import { useWindowFocused } from '@/hooks/use-window-focused';
+
+import {
+  getFeedPullRequestIdentityKey,
+  partitionFeedItems,
+} from '@/lib/feed-partition';
 import { api } from '@/lib/api';
-import { partitionFeedItems } from '@/lib/feed-partition';
+import type { CacheSubscription } from '@shared/cache-events';
+import type { FeedItem } from '@shared/feed-types';
 import { feedQueryKeys } from '@/lib/feed-query-keys';
+import type { Project } from '@shared/types';
+import { subscribeCacheResources } from '@/cache/cache-subscriptions';
 import { useFeedStore } from '@/stores/feed';
 import { useNavigationStore } from '@/stores/navigation';
+import { useProjects } from '@/hooks/use-projects';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useUIStore } from '@/stores/ui';
-import type { FeedItem } from '@shared/feed-types';
+import { useWindowFocused } from '@/hooks/use-window-focused';
+
+
+
+export const FEED_CACHE_SUBSCRIPTIONS: CacheSubscription[] = [
+  { resourceKey: 'feed:tasks' },
+  { resourceKey: 'feed:pullRequests' },
+  { resourceKey: 'feed:notes' },
+  { resourceKey: 'feed:workItems' },
+];
 
 function shouldHideReviewPr(item: FeedItem) {
   return (
@@ -18,12 +35,14 @@ function shouldHideReviewPr(item: FeedItem) {
   );
 }
 
-function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
-  const prByKey = new Map(
-    prItems
-      .filter((item) => item.pullRequestId != null)
-      .map((item) => [`${item.projectId}:${item.pullRequestId}`, item]),
-  );
+export function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
+  const prByKey = new Map<string, FeedItem>();
+  for (const item of prItems) {
+    const key = getFeedPullRequestIdentityKey(item);
+    if (key) {
+      prByKey.set(key, item);
+    }
+  }
 
   const mergeItem = (item: FeedItem): FeedItem => {
     const children = item.children?.map(mergeItem);
@@ -32,27 +51,47 @@ function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
     if (item.source !== 'task' || item.pullRequestId == null)
       return withChildren;
 
-    const pr = prByKey.get(`${item.projectId}:${item.pullRequestId}`);
+    const prKey = getFeedPullRequestIdentityKey(item);
+    const pr = prKey ? prByKey.get(prKey) : undefined;
     if (!pr) {
       return withChildren;
     }
 
     return {
       ...withChildren,
-      isDraft: pr.isDraft,
       workItemPrStatus: 'active',
-      pullRequestMergeStatus: pr.pullRequestMergeStatus,
-      approvedBy: pr.approvedBy,
       activeThreadCount: pr.activeThreadCount,
-      workItemPrUrl: pr.pullRequestUrl,
+      unresolvedCommentCount: pr.unresolvedCommentCount,
     };
   };
 
   return taskItems.map(mergeItem);
 }
 
+export function getFeedItemProjectPriority(
+  item: FeedItem,
+  projectsById: Map<string, Project>,
+): FeedItem['projectPriority'] {
+  const project = projectsById.get(item.projectId);
+
+  if (!project) {
+    return item.projectPriority;
+  }
+
+  if (item.source === 'pull-request') {
+    return project.prPriority;
+  }
+
+  if (item.source === 'work-item') {
+    return project.workItemPriority;
+  }
+
+  return item.projectPriority;
+}
+
 export function useFeed() {
   const windowFocused = useWindowFocused();
+  const { data: projects = [] } = useProjects();
   const pinned = useFeedStore((s) => s.pinned);
   const dismissed = useFeedStore((s) => s.dismissed);
   const lowPriority = useFeedStore((s) => s.lowPriority);
@@ -64,6 +103,8 @@ export function useFeed() {
     (s) => s.pendingRequestsByTaskId,
   );
   const feedRefetchInterval = windowFocused ? 3 * 60 * 1000 : false;
+
+  useEffect(() => subscribeCacheResources(FEED_CACHE_SUBSCRIPTIONS), []);
 
   const pinnedIds = useMemo(() => new Set(pinned.map((p) => p.id)), [pinned]);
   const dismissedIds = useMemo(() => new Set(dismissed), [dismissed]);
@@ -94,8 +135,14 @@ export function useFeed() {
     refetchInterval: feedRefetchInterval,
   });
 
+  const projectsById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project])),
+    [projects],
+  );
+
   const queryData = useMemo(() => {
     const prItems = prQuery.data ?? [];
+    const workItems = workItemQuery.data ?? [];
     const taskItems = mergeTaskPrInfo(taskQuery.data ?? [], prItems);
     const noteItems = (noteQuery.data ?? []).filter(
       (item) => !item.isCompleted,
@@ -103,7 +150,7 @@ export function useFeed() {
     const taskWorkItemIds = new Set(
       taskItems.flatMap((item) => (item.workItemIds ?? []).map(Number)),
     );
-    const workItemItems = (workItemQuery.data ?? []).filter(
+    const workItemItems = workItems.filter(
       (item) =>
         item.workItemId === undefined || !taskWorkItemIds.has(item.workItemId),
     );
@@ -225,24 +272,31 @@ export function useFeed() {
     [refinedItems],
   );
 
+  const getProjectPriority = useMemo(
+    () => (item: FeedItem) => getFeedItemProjectPriority(item, projectsById),
+    [projectsById],
+  );
+
   // Collect PR IDs already shown in a task's rail so we can hide the
   // standalone PR feed item (the rail already surfaces it).
-  const taskOwnedPrIds = useMemo(() => {
-    const ids = new Set<number>();
+  const taskOwnedPrKeys = useMemo(() => {
+    const keys = new Set<string>();
     for (const item of visibleFeedItems) {
-      if (item.source === 'task' && item.pullRequestId != null) {
-        ids.add(item.pullRequestId);
+      if (item.source === 'task') {
+        const key = getFeedPullRequestIdentityKey(item);
+        if (key) keys.add(key);
       }
       // Also check children (subtasks) that own PRs
       if (item.children) {
         for (const child of item.children) {
-          if (child.source === 'task' && child.pullRequestId != null) {
-            ids.add(child.pullRequestId);
+          if (child.source === 'task') {
+            const key = getFeedPullRequestIdentityKey(child);
+            if (key) keys.add(key);
           }
         }
       }
     }
-    return ids;
+    return keys;
   }, [visibleFeedItems]);
 
   const projectOptions = useMemo(() => {
@@ -258,11 +312,17 @@ export function useFeed() {
         continue;
       }
 
+      const project = projectsById.get(item.projectId);
       byProjectId.set(item.projectId, {
         id: item.projectId,
-        name: item.source === 'note' ? 'Notes' : item.projectName,
+        name:
+          item.source === 'note'
+            ? 'Notes'
+            : (project?.name ?? item.projectName),
         color:
-          item.source === 'note' ? 'var(--color-ink-3)' : item.projectColor,
+          item.source === 'note'
+            ? 'var(--color-ink-3)'
+            : (project?.color ?? item.projectColor),
         itemCount: 1,
       });
     }
@@ -270,7 +330,7 @@ export function useFeed() {
     return Array.from(byProjectId.values()).sort((a, b) =>
       a.name.localeCompare(b.name),
     );
-  }, [visibleFeedItems]);
+  }, [projectsById, visibleFeedItems]);
 
   const filteredOutCount = useMemo(
     () =>
@@ -296,18 +356,20 @@ export function useFeed() {
       pinnedIds,
       dismissedIds,
       lowPriorityIds,
-      taskOwnedPrIds,
+      taskOwnedPrKeys,
       prProjectOrder,
+      getProjectPriority,
     });
   }, [
     visibleFeedItems,
+    getProjectPriority,
     pinned,
     pinnedIds,
     dismissedIds,
     hiddenProjectIdSet,
     lowPriorityIds,
     prProjectOrder,
-    taskOwnedPrIds,
+    taskOwnedPrKeys,
   ]);
 
   const allVisibleItems = useMemo(

@@ -1,23 +1,27 @@
-import clsx from 'clsx';
 import { Calendar, Video } from 'lucide-react';
-import { type MouseEvent, useEffect, useMemo, useState } from 'react';
+import { type MouseEvent, startTransition, useEffect, useMemo, useState } from 'react';
+import clsx from 'clsx';
 
-import { Button } from '@/common/ui/button';
-import { Kbd } from '@/common/ui/kbd';
-import { CountdownRing } from '@/features/calendar/ui-countdown-ring';
+
 import {
   extractTeamsUrl,
   formatTimeHHMM,
   getMeetingState,
+  getTeamsJoinUrl,
   relativeLabel,
   sortMeetings,
 } from '@/features/calendar/utils-calendar';
-import { useCalendarNotificationsSetting } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
+import { Button } from '@/common/ui/button';
+import { CountdownRing } from '@/features/calendar/ui-countdown-ring';
+import { Kbd } from '@/common/ui/kbd';
+import type { UpcomingMeeting } from '@shared/calendar-types';
 import { useCalendarIgnoredStore } from '@/stores/calendar-ignored';
+import { useCalendarNotificationsSetting } from '@/hooks/use-settings';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useToastStore } from '@/stores/toasts';
-import type { UpcomingMeeting } from '@shared/calendar-types';
+
+
 
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -45,9 +49,11 @@ export function NextMeetingButton() {
   const { data: calendarNotificationsSetting } =
     useCalendarNotificationsSetting();
   const enabled = calendarNotificationsSetting?.enabled ?? false;
+  const meetingJoinTarget = calendarNotificationsSetting?.meetingJoinTarget;
   const canShow = enabled && api.platform === 'darwin';
   const [meetings, setMeetings] = useState<UpcomingMeeting[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const addToast = useToastStore((s) => s.addToast);
   const toggleOverlay = useOverlaysStore((s) => s.toggle);
   const ignoredIds = useCalendarIgnoredStore((s) => s.ignoredIds);
@@ -55,8 +61,8 @@ export function NextMeetingButton() {
   // Poll meetings every 60s
   useEffect(() => {
     if (!canShow) {
-      setMeetings([]);
-      setHasLoaded(false);
+      startTransition(() => setMeetings([]));
+      startTransition(() => setHasLoaded(false));
       return;
     }
     let cancelled = false;
@@ -87,8 +93,6 @@ export function NextMeetingButton() {
       window.clearInterval(id);
     };
   }, [addToast, canShow]);
-
-  const [now, setNow] = useState(() => Date.now());
 
   const ignoredSet = useMemo(() => new Set(ignoredIds), [ignoredIds]);
 
@@ -121,7 +125,18 @@ export function NextMeetingButton() {
   const handleClick = () => toggleOverlay('calendar');
   const handleJoin = (e: MouseEvent) => {
     e.stopPropagation();
-    if (teamsUrl) window.open(teamsUrl, '_blank');
+    if (teamsUrl) {
+      void api.calendar.suppressMeetingStartPopup(next).catch(() => {});
+      void api.shell
+        .openTeamsJoinUrl(getTeamsJoinUrl(teamsUrl, meetingJoinTarget))
+        .catch((error) => {
+          addToast({
+            message:
+              error instanceof Error ? error.message : 'Could not open Teams',
+            type: 'error',
+          });
+        });
+    }
   };
 
   return (

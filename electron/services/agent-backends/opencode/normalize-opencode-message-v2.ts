@@ -10,30 +10,31 @@
 // - Backend is responsible for updating context before calling this function
 
 import type {
-  Event as OcEvent,
-  Part as OcPart,
-  Message as OcMessage,
-  AssistantMessage as OcAssistantMessage,
-  UserMessage as OcUserMessage,
-  Session as OcSession,
-  PermissionRequest as OcPermission,
-  TextPart,
-  ReasoningPart,
-  ToolPart,
-  FilePart,
   CompactionPart,
+  FilePart,
+  AssistantMessage as OcAssistantMessage,
+  Event as OcEvent,
+  Message as OcMessage,
+  Part as OcPart,
+  PermissionRequest as OcPermission,
+  Session as OcSession,
+  UserMessage as OcUserMessage,
+  ReasoningPart,
+  TextPart,
+  ToolPart,
   ToolStateCompleted,
   ToolStateError,
 } from '@opencode-ai/sdk/v2';
 
-import type { TodoItem } from '@shared/agent-types';
 import type {
+  NormalizationEvent,
   NormalizedEntry,
   NormalizedToolUse,
-  NormalizationEvent,
   TokenUsage,
 } from '@shared/normalized-message-v2';
 import type { ResolvedPermissionRule } from '@shared/permission-types';
+import type { TodoItem } from '@shared/agent-types';
+
 
 import {
   evaluatePermissionWithMatch,
@@ -70,6 +71,10 @@ export type OpenCodeNormalizationContext = {
   totalApiCost?: number;
   /** Accumulated token usage — backend updates from assistant message token fields */
   totalUsage?: TokenUsage;
+  /** Latest parent-session assistant usage for context display */
+  contextUsage?: TokenUsage;
+  /** Single model used by accumulated assistant usage, when known. */
+  totalModel?: string;
   /** Permission decisions made before matching tool parts stream in. */
   pendingToolPermissionDecisions?: ToolPermissionDecision[];
   /** Permission attribution by entry id, reused when tool parts update. */
@@ -187,6 +192,7 @@ function normalizeEvent(
           result: {
             isError: false,
             durationMs: Date.now() - ctx.sessionStartTime,
+            model: ctx.totalModel,
             cost:
               ctx.totalCost > 0 || (ctx.totalApiCost ?? 0) > 0
                 ? {
@@ -197,6 +203,7 @@ function normalizeEvent(
                   }
                 : undefined,
             usage: ctx.totalUsage,
+            contextUsage: ctx.contextUsage,
           },
         },
       ];

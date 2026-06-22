@@ -1,37 +1,11 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, ListTodo } from 'lucide-react';
-import { nanoid } from 'nanoid';
-import { useEffect, useMemo, useState } from 'react';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { nanoid } from 'nanoid';
 
-import { BranchSelect } from '@/common/ui/branch-select';
-import { Button } from '@/common/ui/button';
-import { Checkbox } from '@/common/ui/checkbox';
-import { Input } from '@/common/ui/input';
-import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
-import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import { getModelThinkingCapabilities } from '@/features/agent/ui-backend-selector';
-import { ModeSelector } from '@/features/agent/ui-mode-selector';
-import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
-import { WorkItemsBrowser } from '@/features/agent/ui-work-items-browser';
-import { PromptTextarea } from '@/features/common/ui-prompt-textarea';
-import { useBackendModels } from '@/hooks/use-backend-models';
-import {
-  useProject,
-  useProjectBranches,
-  useProjectFeatureMap,
-  useProjectIsGitRepository,
-} from '@/hooks/use-projects';
-import {
-  useBackendModelPresetsSetting,
-  useBackendsSetting,
-  useCompletionSetting,
-  useThinkingSettingsSetting,
-} from '@/hooks/use-settings';
-import { useProjectSkills } from '@/hooks/use-skills';
-import { useCreateTaskWithWorktree } from '@/hooks/use-tasks';
-import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
-import { useNewTaskFormStore } from '@/stores/new-task-form';
+
+
 import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
@@ -40,6 +14,43 @@ import {
   normalizeInteractionModeForBackend,
   type ThinkingEffort,
 } from '@shared/types';
+import {
+  RateLimitSwapPreview,
+  resolveRateLimitSwapSelection,
+  useRateLimitSwapPreview,
+} from '@/features/agent/ui-rate-limit-swap-preview';
+import {
+  useBackendDefaultModelsSetting,
+  useBackendModelPresetsSetting,
+  useBackendsSetting,
+  useCompletionSetting,
+  useThinkingSettingsSetting,
+} from '@/hooks/use-settings';
+import {
+  useProject,
+  useProjectBranches,
+  useProjectFeatureMap,
+  useProjectIsGitRepository,
+} from '@/hooks/use-projects';
+import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { BranchSelect } from '@/common/ui/branch-select';
+import { Button } from '@/common/ui/button';
+import { Checkbox } from '@/common/ui/checkbox';
+import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
+import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
+import { getDefaultModelForBackend } from '@/lib/default-models';
+import { getModelThinkingCapabilities } from '@/features/agent/ui-backend-selector';
+import { Input } from '@/common/ui/input';
+import { ModeSelector } from '@/features/agent/ui-mode-selector';
+import { PromptTextarea } from '@/features/common/ui-prompt-textarea';
+import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
+import { useBackendModels } from '@/hooks/use-backend-models';
+import { useCreateTaskWithWorktree } from '@/hooks/use-tasks';
+import { useNewTaskFormStore } from '@/stores/new-task-form';
+import { useProjectSkills } from '@/hooks/use-skills';
+import { WorkItemsBrowser } from '@/features/agent/ui-work-items-browser';
+
+
 
 export const Route = createFileRoute('/projects/$projectId/tasks/new')({
   component: NewTask,
@@ -69,6 +80,12 @@ function NewTask() {
 
   const { draft, hasDraft, setDraft, clearDraft } =
     useNewTaskFormStore(projectId);
+  const userTouchedSelectionRef = useRef(hasDraft);
+  const [userTouchedSelection, setUserTouchedSelection] = useState(hasDraft);
+  const markUserTouchedSelection = useCallback(() => {
+    userTouchedSelectionRef.current = true;
+    setUserTouchedSelection(true);
+  }, []);
   const {
     name,
     prompt,
@@ -86,12 +103,17 @@ function NewTask() {
 
   // Sync draft backend with project→global default on mount
   const { data: backendsSetting } = useBackendsSetting();
+  const { data: backendDefaultModelsSetting } =
+    useBackendDefaultModelsSetting();
   const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
   const { data: thinkingSettings } = useThinkingSettingsSetting();
   const resolvedDefaultBackend =
     project?.defaultAgentBackend ?? backendsSetting?.defaultBackend;
-  const resolvedDefaultModelPreference =
-    project?.defaultAgentModelPreference ?? 'default';
+  const resolvedDefaultModelPreference = getDefaultModelForBackend({
+    backend: resolvedDefaultBackend ?? 'claude-code',
+    project,
+    backendDefaultModels: backendDefaultModelsSetting,
+  });
   const effectiveAgentBackend =
     agentBackend ??
     (resolvedDefaultBackend &&
@@ -108,8 +130,16 @@ function NewTask() {
       : (backendModelPresetId ??
         findMatchingBackendModelPresetId({
           presets: backendModelPresets,
-          backend: agentBackend ?? project?.defaultAgentBackend,
-          model: modelPreference ?? project?.defaultAgentModelPreference,
+          backend: agentBackend ?? resolvedDefaultBackend,
+          model:
+            modelPreference ??
+            (resolvedDefaultBackend
+              ? getDefaultModelForBackend({
+                  backend: resolvedDefaultBackend,
+                  project,
+                  backendDefaultModels: backendDefaultModelsSetting,
+                })
+              : undefined),
         }));
   const effectiveBackendModelPreset = effectiveBackendModelPresetId
     ? backendModelPresets.find(
@@ -139,8 +169,52 @@ function NewTask() {
         'default',
       capabilities: thinkingCapabilities,
     });
+  const { data: rateLimitSuggestion } = useRateLimitSwapPreview(
+    effectiveAgentBackend,
+    !userTouchedSelection,
+  );
   useEffect(() => {
-    if (!backendsSetting || !project || hasDraft) return;
+    if (!rateLimitSuggestion?.swapped || userTouchedSelection) return;
+
+    const nextBackend = rateLimitSuggestion.backend;
+    const nextModel =
+      rateLimitSuggestion.model ??
+      (nextBackend !== effectiveAgentBackend
+        ? 'default'
+        : effectiveModelPreference);
+    const nextThinkingEffort =
+      rateLimitSuggestion.thinkingEffort ??
+      (nextBackend !== effectiveAgentBackend
+        ? 'default'
+        : effectiveThinkingEffort);
+    setDraft({
+      agentBackend: nextBackend,
+      modelPreference: nextModel,
+      thinkingEffort: nextThinkingEffort,
+      backendModelPresetId: null,
+      shouldAutoSelectBackendModelPreset: false,
+      interactionMode: normalizeInteractionModeForBackend({
+        backend: nextBackend,
+        mode: interactionMode,
+      }),
+    });
+  }, [
+    effectiveAgentBackend,
+    effectiveModelPreference,
+    effectiveThinkingEffort,
+    interactionMode,
+    rateLimitSuggestion,
+    setDraft,
+    userTouchedSelection,
+  ]);
+  useEffect(() => {
+    if (
+      !backendsSetting ||
+      !project ||
+      hasDraft ||
+      rateLimitSuggestion?.swapped
+    )
+      return;
 
     const resolved =
       project.defaultAgentBackend ?? backendsSetting.defaultBackend;
@@ -149,7 +223,13 @@ function NewTask() {
     const presetId = findMatchingBackendModelPresetId({
       presets: backendModelPresets,
       backend: project.defaultAgentBackend,
-      model: project.defaultAgentModelPreference,
+      model: project.defaultAgentBackend
+        ? getDefaultModelForBackend({
+            backend: project.defaultAgentBackend,
+            project,
+            backendDefaultModels: backendDefaultModelsSetting,
+          })
+        : undefined,
     });
     const preset = presetId
       ? backendModelPresets.find((item) => item.id === presetId)
@@ -157,11 +237,19 @@ function NewTask() {
 
     setDraft({
       agentBackend: resolved,
-      modelPreference: project.defaultAgentModelPreference ?? 'default',
+      modelPreference: getDefaultModelForBackend({
+        backend: resolved,
+        project,
+        backendDefaultModels: backendDefaultModelsSetting,
+      }),
       thinkingEffort:
         preset?.thinkingEffort ??
         thinkingSettings?.efforts[resolved]?.[
-          project.defaultAgentModelPreference ?? 'default'
+          getDefaultModelForBackend({
+            backend: resolved,
+            project,
+            backendDefaultModels: backendDefaultModelsSetting,
+          })
         ] ??
         thinkingSettings?.efforts[resolved]?.default ??
         'default',
@@ -174,10 +262,12 @@ function NewTask() {
     });
   }, [
     backendModelPresets,
+    backendDefaultModelsSetting,
     backendsSetting,
     hasDraft,
     interactionMode,
     project,
+    rateLimitSuggestion?.swapped,
     setDraft,
     thinkingSettings,
   ]);
@@ -195,6 +285,11 @@ function NewTask() {
     // Pass null if name is empty - will trigger auto-generation when agent starts
     const taskName = name.trim() || null;
     const shouldUseWorktree = canUseWorktree && useWorktree;
+    const submitSelection = await resolveRateLimitSwapSelection({
+      backend: effectiveAgentBackend,
+      model: effectiveModelPreference,
+      thinkingEffort: effectiveThinkingEffort,
+    });
 
     const task = await createTask.mutateAsync({
       id: nanoid(),
@@ -202,10 +297,13 @@ function NewTask() {
       name: taskName,
       prompt: expandFeatureReferencesInPrompt({ text: prompt, featureMap }),
       status: 'waiting',
-      interactionMode,
-      modelPreference,
-      thinkingEffort: effectiveThinkingEffort,
-      agentBackend: effectiveAgentBackend,
+      interactionMode: normalizeInteractionModeForBackend({
+        backend: submitSelection.backend,
+        mode: interactionMode,
+      }),
+      modelPreference: submitSelection.model,
+      thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
+      agentBackend: submitSelection.backend,
       useWorktree: shouldUseWorktree,
       workItemIds,
       workItemUrls,
@@ -388,6 +486,7 @@ function NewTask() {
               model={effectiveModelPreference}
               selectedPresetId={effectiveBackendModelPresetId}
               onChange={(selection) => {
+                markUserTouchedSelection();
                 const nextThinkingCapabilities = getModelThinkingCapabilities(
                   selection.model,
                   dynamicModels,
@@ -420,10 +519,30 @@ function NewTask() {
             <ThinkingSelector
               value={effectiveThinkingEffort}
               options={thinkingOptions}
-              onChange={(nextThinkingEffort) =>
-                setDraft({ thinkingEffort: nextThinkingEffort })
-              }
+              onChange={(nextThinkingEffort) => {
+                markUserTouchedSelection();
+                setDraft({ thinkingEffort: nextThinkingEffort });
+              }}
               disabled={thinkingOptions.length <= 1}
+            />
+            <RateLimitSwapPreview
+              requestedBackend={effectiveAgentBackend}
+              model={effectiveModelPreference}
+              thinkingEffort={effectiveThinkingEffort}
+              onApplySuggestion={(selection) => {
+                markUserTouchedSelection();
+                setDraft({
+                  agentBackend: selection.backend,
+                  backendModelPresetId: null,
+                  shouldAutoSelectBackendModelPreset: false,
+                  modelPreference: selection.model,
+                  thinkingEffort: selection.thinkingEffort as ThinkingEffort,
+                  interactionMode: normalizeInteractionModeForBackend({
+                    backend: selection.backend,
+                    mode: interactionMode,
+                  }),
+                });
+              }}
             />
             <Button
               variant="secondary"

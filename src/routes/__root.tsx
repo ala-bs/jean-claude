@@ -5,39 +5,48 @@ import {
   useRouter,
   useRouterState,
 } from '@tanstack/react-router';
-import clsx from 'clsx';
-import { useCallback, useEffect, useRef } from 'react';
 import { scan, setOptions } from 'react-scan';
+import { useCallback, useEffect, useRef } from 'react';
+import clsx from 'clsx';
 
-import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
-import { useCommands } from '@/common/hooks/use-commands';
-import { Button } from '@/common/ui/button';
-import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
-import { ActivityCenterOverlay } from '@/features/activity-center/ui-activity-center-overlay';
-import { TaskMessageManager } from '@/features/agent/task-message-manager';
-import { CalendarOverlay } from '@/features/calendar/ui-calendar-overlay';
-import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
-import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-palette-overlay';
-import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
-import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
-import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
-import { ProjectOverlay } from '@/features/project/ui-project-overlay';
-import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
-import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
-import { Header } from '@/layout/ui-header';
-import { MainSidebar } from '@/layout/ui-main-sidebar';
-import { api } from '@/lib/api';
-import { resolveLastLocationRedirect } from '@/lib/navigation';
-import { useChangelogStore } from '@/stores/changelog';
+
 import {
   useCurrentVisibleProject,
   useNavigationStore,
 } from '@/stores/navigation';
-import { useNewTaskDraft } from '@/stores/new-task-draft';
-import { useOverlaysStore } from '@/stores/overlays';
+import { ActivityCenterOverlay } from '@/features/activity-center/ui-activity-center-overlay';
+import { api } from '@/lib/api';
+import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
+import { Button } from '@/common/ui/button';
+import { CalendarOverlay } from '@/features/calendar/ui-calendar-overlay';
+import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
+import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-palette-overlay';
+import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
+import { Header } from '@/layout/ui-header';
+import { MainSidebar } from '@/layout/ui-main-sidebar';
+import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
+import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
+import { ProjectOverlay } from '@/features/project/ui-project-overlay';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
+import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
+import { resolveLastLocationRedirect } from '@/lib/navigation';
+import { ResourcesOverlay } from '@/features/resources/ui-resources-overlay';
+import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
+import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
+import { TaskMessageManager } from '@/features/agent/task-message-manager';
+import { UsageOverlay } from '@/features/usage/ui-usage-overlay';
+import { useAppearanceSetting } from '@/hooks/use-settings';
+import { useChangelogStore } from '@/stores/changelog';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
+import { useNewTaskDraft } from '@/stores/new-task-draft';
+import { useOverlaysStore } from '@/stores/overlays';
+import { useToastStore } from '@/stores/toasts';
 import { useUISetting } from '@/stores/ui';
+import { WorkActivityOverlay } from '@/features/work-activity/ui-work-activity-overlay';
+
+
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -265,6 +274,46 @@ function SettingsContainer() {
   return <SettingsOverlay onClose={() => close('settings')} />;
 }
 
+function UsageContainer() {
+  const isOpen = useOverlaysStore((s) => s.activeOverlay === 'usage');
+  const close = useOverlaysStore((s) => s.close);
+
+  if (!isOpen) return null;
+  return <UsageOverlay onClose={() => close('usage')} />;
+}
+
+function WorkActivityContainer() {
+  const layer = useKeyboardLayer('global-nav');
+  const isOpen = useOverlaysStore((s) => s.activeOverlay === 'work-activity');
+  const toggle = useOverlaysStore((s) => s.toggle);
+  const close = useOverlaysStore((s) => s.close);
+
+  useCommands(
+    'work-activity-trigger',
+    [
+      {
+        label: 'Open Work Activity',
+        section: 'General',
+        handler: () => {
+          toggle('work-activity');
+        },
+      },
+    ],
+    { layer },
+  );
+
+  if (!isOpen) return null;
+  return <WorkActivityOverlay onClose={() => close('work-activity')} />;
+}
+
+function ResourcesContainer() {
+  const isOpen = useOverlaysStore((s) => s.activeOverlay === 'resources');
+  const close = useOverlaysStore((s) => s.close);
+
+  if (!isOpen) return null;
+  return <ResourcesOverlay onClose={() => close('resources')} />;
+}
+
 function BacklogContainer() {
   const layer = useKeyboardLayer('global-nav');
   const isOpen = useOverlaysStore((s) => s.activeOverlay === 'backlog');
@@ -356,6 +405,9 @@ function useCleanupNonActiveTasks() {
       // Prune task prompt drafts
       pruneOrphanedTaskPrompts(activeIds);
 
+      // Prune task review comment drafts
+      pruneOrphanedTaskReviewDrafts(activeIds);
+
       // Prune navigation task state
       // Note: clearTaskNavHistoryState also calls clearReviewCommentsForTask
       // internally, but pruneOrphanedReviewComments above already handled that.
@@ -382,7 +434,9 @@ function RootLayout() {
     >
       <ReactScanBridge />
       <NotificationTaskOpenBridge />
+      <RateLimitSwapBridge />
       <TaskMessageManager />
+      <AppearanceBridge />
       <GlobalPromptFromBackModal />
       <GlobalCommands />
       {/* <TaskCommands /> */}
@@ -398,6 +452,9 @@ function RootLayout() {
       <ActivityCenterContainer />
       <CalendarContainer />
       <SettingsContainer />
+      <UsageContainer />
+      <WorkActivityContainer />
+      <ResourcesContainer />
       <RunningCommandsContainer />
       <PipelinesOverlayContainer />
 
@@ -410,6 +467,18 @@ function RootLayout() {
       </div>
     </div>
   );
+}
+
+function AppearanceBridge() {
+  const { data: appearanceSetting } = useAppearanceSetting();
+
+  useEffect(() => {
+    document.documentElement.dataset.reduceMotion = String(
+      appearanceSetting?.reduceMotion ?? true,
+    );
+  }, [appearanceSetting?.reduceMotion]);
+
+  return null;
 }
 
 function ReactScanBridge() {
@@ -470,6 +539,21 @@ function NotificationTaskOpenBridge() {
       });
     });
   }, [navigate, pathname]);
+
+  return null;
+}
+
+function RateLimitSwapBridge() {
+  const addToast = useToastStore((s) => s.addToast);
+
+  useEffect(() => {
+    return api.onRateLimitSwap((data) => {
+      addToast({
+        message: `Rate limit approaching for ${data.from} — routing new tasks to ${data.to}`,
+        type: 'success',
+      });
+    });
+  }, [addToast]);
 
   return null;
 }
