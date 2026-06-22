@@ -1,7 +1,8 @@
-import { sql, ExpressionWrapper, SqlBool } from 'kysely';
+import { ExpressionWrapper, sql, SqlBool } from 'kysely';
 
-import { db } from '../index';
 import type { Database } from '../schema';
+import { db } from '../index';
+
 
 type TableName = keyof Database;
 
@@ -29,6 +30,7 @@ const ALL_TABLES: Record<TableName, true> = {
   ai_usage_events: true,
   ai_usage_task_totals: true,
   ai_usage_daily_totals: true,
+  work_activity_events: true,
 };
 
 const ALLOWED_TABLES = Object.keys(ALL_TABLES) as TableName[];

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   AgentBackendConfig,
@@ -124,11 +124,21 @@ describe('CodexBackend', () => {
       threadId: 'thread-1',
       input: [
         { type: 'text', text: 'Read this' },
-        { type: 'image', data: 'base64-data', mimeType: 'image/png' },
+        { type: 'image', url: 'data:image/png;base64,base64-data' },
         { type: 'text', text: 'Attached file: /tmp/file.txt' },
       ],
       model: 'gpt-5',
     });
+  });
+
+  it('exposes the Codex app-server root PID for resource tracking', async () => {
+    const { backend } = createBackend({ rootPid: 4321 });
+
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Track resources' },
+    ]);
+
+    expect(session.rootPid).toBe(4321);
   });
 
   it('yields entry events with persisted raw row ids', async () => {
@@ -214,6 +224,10 @@ describe('CodexBackend', () => {
       value: { type: 'entry-update', entry: { id: 'msg-1', value: 'Hello' } },
     });
     expect(persistRaw).toHaveBeenCalledTimes(1);
+    expect(updateRaw).not.toHaveBeenCalled();
+
+    await backend.stop(session.sessionId);
+
     expect(updateRaw).toHaveBeenCalledWith({
       rowId: 'raw-1',
       rawData: {
@@ -270,6 +284,68 @@ describe('CodexBackend', () => {
     expect(await next).toMatchObject({
       done: false,
       value: { type: 'entry', entry: { id: 'right' } },
+    });
+  });
+
+  it('accepts item notifications for registered Codex sub-agent child threads', async () => {
+    const { backend, emitNotification } = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Review with subagent' },
+    ]);
+    const iterator = session.events[Symbol.asyncIterator]();
+    await iterator.next();
+
+    emitNotification({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'call-spawn',
+          type: 'collabAgentToolCall',
+          tool: 'spawnAgent',
+          status: 'completed',
+          receiverThreadIds: ['thread-child'],
+          prompt: 'Review diff',
+          model: '',
+        },
+      },
+    });
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: {
+        type: 'entry',
+        entry: {
+          id: 'call-spawn',
+          type: 'tool-use',
+          name: 'sub-agent',
+        },
+      },
+    });
+
+    emitNotification({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-child',
+        turnId: 'turn-child',
+        item: {
+          id: 'child-message',
+          type: 'agentMessage',
+          text: 'Child finding',
+        },
+      },
+    });
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: {
+        type: 'entry',
+        entry: {
+          id: 'child-message',
+          type: 'assistant-message',
+          value: 'Child finding',
+          parentToolId: 'call-spawn',
+        },
+      },
     });
   });
 
@@ -513,6 +589,67 @@ describe('CodexBackend', () => {
     vi.useRealTimers();
   });
 
+  it('closes after idle delta flush fails without retrying cleanup flush', async () => {
+    vi.useFakeTimers();
+    const updateRaw = vi.fn<NonNullable<AgentTaskContext['updateRaw']>>(
+      async () => {
+        throw new Error('database unavailable');
+      },
+    );
+    const { backend, emitNotification, unsubscribe } = createBackend({
+      updateRaw,
+    });
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'Hello' },
+    ]);
+    const iterator = session.events[Symbol.asyncIterator]();
+    await iterator.next();
+
+    emitNotification({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { id: 'msg-1', type: 'message', role: 'assistant' },
+      },
+    });
+    await iterator.next();
+    emitNotification({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'msg-1',
+        delta: 'Hello',
+      },
+    });
+    await iterator.next();
+    emitNotification({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'msg-1',
+        delta: ' world',
+      },
+    });
+    await iterator.next();
+
+    const error = iterator.next();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(error).resolves.toMatchObject({
+      value: {
+        type: 'error',
+        error: 'Failed to flush Codex raw deltas: database unavailable',
+      },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({ done: true });
+    expect(updateRaw).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
   it('does not wait on speculative Codex agent command executions', async () => {
     vi.useFakeTimers();
     const { backend, emitNotification, unsubscribe } = createBackend();
@@ -733,6 +870,7 @@ function createBackend(
     threadResult?: unknown;
     turnResult?: unknown;
     updateRaw?: AgentTaskContext['updateRaw'];
+    rootPid?: number;
   } = {},
 ) {
   let notificationListener:
@@ -760,6 +898,7 @@ function createBackend(
   const serverDispose = vi.fn(async () => undefined);
   mocks.getOrCreateCodexAppServer.mockResolvedValue({
     client,
+    rootPid: options.rootPid,
     dispose: serverDispose,
   });
   const persistRaw =

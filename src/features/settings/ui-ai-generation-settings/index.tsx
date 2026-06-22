@@ -1,24 +1,19 @@
-import clsx from 'clsx';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, Sparkles, TextQuote } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { Button } from '@/common/ui/button';
-import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
-import { Input } from '@/common/ui/input';
+
+import type { AiSkillSlotConfig, AiSkillSlotKey } from '@shared/types';
 import {
   ListDetailLayout,
   ListGroupHeader,
   ListItemButton,
   ListPane,
 } from '@/common/ui/list-detail-layout';
-import { Switch } from '@/common/ui/switch';
 import {
   SLOT_DEFINITIONS,
   SlotDetail,
 } from '@/features/common/ui-ai-skill-slot';
-import { SummaryModelSettings } from '@/features/settings/ui-general-settings';
-import { useEnabledBackends } from '@/hooks/use-enabled-backends';
 import {
   useAiGenerationSetting,
   useAiSkillSlotsSetting,
@@ -26,7 +21,14 @@ import {
   useUpdateAiSkillSlotsSetting,
 } from '@/hooks/use-settings';
 import { api } from '@/lib/api';
-import type { AiSkillSlotConfig, AiSkillSlotKey } from '@shared/types';
+import { Button } from '@/common/ui/button';
+import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
+import { Input } from '@/common/ui/input';
+import { SummaryModelSettings } from '@/features/settings/ui-general-settings';
+import { Switch } from '@/common/ui/switch';
+import { useEnabledBackends } from '@/hooks/use-enabled-backends';
+
+
 
 const SUMMARY_MODEL_ITEMS = [
   { key: 'summary-model:claude-code', label: 'Claude Code Summary' },
@@ -145,7 +147,7 @@ function AiGenerationRail({
       title="AI Generation"
       count={SLOT_DEFINITIONS.length + SUMMARY_MODEL_ITEMS.length + 2}
       headerSupplement={
-        <p className="text-ink-3 text-[12px] leading-relaxed">
+        <p className="text-[12px] leading-relaxed text-white/45">
           Configure AI-powered content generation by feature.
         </p>
       }
@@ -162,14 +164,15 @@ function AiGenerationRail({
           renderIcon={({ isActive, isDimmed }) => (
             <Sparkles
               size={14}
-              className={clsx(
-                'shrink-0',
-                isDimmed
-                  ? 'text-ink-4 opacity-60'
+              className="shrink-0"
+              style={{
+                color: isDimmed
+                  ? 'oklch(0.4 0.01 280)'
                   : isActive
-                    ? 'text-acc'
-                    : 'text-acc-ink',
-              )}
+                    ? 'oklch(0.78 0.18 295)'
+                    : 'oklch(0.78 0.16 295)',
+                opacity: isDimmed ? 0.6 : 1,
+              }}
             />
           )}
         />
@@ -185,7 +188,10 @@ function AiGenerationRail({
         renderIcon={({ isActive }) => (
           <KeyRound
             size={14}
-            className={clsx('shrink-0', isActive ? 'text-acc' : 'text-acc-ink')}
+            className="shrink-0"
+            style={{
+              color: isActive ? 'oklch(0.78 0.18 295)' : 'oklch(0.78 0.16 295)',
+            }}
           />
         )}
       />
@@ -198,7 +204,10 @@ function AiGenerationRail({
         renderIcon={({ isActive }) => (
           <Sparkles
             size={14}
-            className={clsx('shrink-0', isActive ? 'text-acc' : 'text-acc-ink')}
+            className="shrink-0"
+            style={{
+              color: isActive ? 'oklch(0.78 0.18 295)' : 'oklch(0.78 0.16 295)',
+            }}
           />
         )}
       />
@@ -212,7 +221,12 @@ function AiGenerationRail({
           renderIcon={({ isActive }) => (
             <TextQuote
               size={14}
-              className={clsx('shrink-0', isActive ? 'text-acc' : 'text-acc-ink')}
+              className="shrink-0"
+              style={{
+                color: isActive
+                  ? 'oklch(0.78 0.18 295)'
+                  : 'oklch(0.78 0.16 295)',
+              }}
             />
           )}
         />
@@ -231,8 +245,8 @@ function OpenAiApiKeyDetail() {
   const hasChanges = !!openAiApiKey.trim();
 
   useEffect(() => {
-    setOpenAiApiKey('');
-    setSaveMessage(null);
+    startTransition(() => setOpenAiApiKey(''));
+    startTransition(() => setSaveMessage(null));
   }, [setting?.openAiApiKey]);
 
   const handleSave = async () => {
@@ -333,12 +347,18 @@ function OpenAiImageGenerationDetail() {
     openAiLogoPromptContext !== (setting?.openAiLogoPromptContext ?? '');
 
   useEffect(() => {
-    setOpenAiImageGenerationEnabled(
-      setting?.openAiImageGenerationEnabled ?? false,
+    startTransition(() =>
+      setOpenAiImageGenerationEnabled(
+        setting?.openAiImageGenerationEnabled ?? false,
+      ),
     );
-    setOpenAiImageModel(setting?.openAiImageModel ?? 'gpt-image-2');
-    setOpenAiLogoPromptContext(setting?.openAiLogoPromptContext ?? '');
-    setSaveMessage(null);
+    startTransition(() =>
+      setOpenAiImageModel(setting?.openAiImageModel ?? 'gpt-image-2'),
+    );
+    startTransition(() =>
+      setOpenAiLogoPromptContext(setting?.openAiLogoPromptContext ?? ''),
+    );
+    startTransition(() => setSaveMessage(null));
   }, [
     setting?.openAiApiKey,
     setting?.openAiImageGenerationEnabled,

@@ -19,6 +19,7 @@ import {
   Zap,
 } from 'lucide-react';
 import React, {
+  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -30,31 +31,36 @@ import FocusLock from 'react-focus-lock';
 import { RemoveScroll } from 'react-remove-scroll';
 
 import {
-  useKeyboardLayer,
-  useRegisterKeyboardBindings,
-} from '@/common/context/keyboard-bindings';
-import { Kbd } from '@/common/ui/kbd';
-import { Select, type SelectOption } from '@/common/ui/select';
+  AppearanceSettings,
+  CalendarSettings,
+  EditorSettings,
+  MaintenanceSettings,
+  NotificationsSettings,
+  PromptPrefaceSettings,
+  UsageDisplaySettings,
+  WorkActivitySettings,
+} from '@/features/settings/ui-general-settings';
+import {
+  BackendConfigSettings,
+  OpenCodeProcessModeSettings,
+} from '@/features/settings/ui-backend-config-settings';
 import {
   ProjectSettings,
   type ProjectSettingsMenuItem,
 } from '@/features/project/ui-project-settings';
+import { Select, type SelectOption } from '@/common/ui/select';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { AgentsSettings } from '@/features/settings/ui-agents-settings';
 import { AiGenerationSettings } from '@/features/settings/ui-ai-generation-settings';
+import { api } from '@/lib/api';
 import { AutocompleteSettings } from '@/features/settings/ui-autocomplete-settings';
 import { AzureDevOpsTab } from '@/features/settings/ui-azure-devops-tab';
-import { BackendConfigSettings } from '@/features/settings/ui-backend-config-settings';
 import { DebugDatabase } from '@/features/settings/ui-debug-database';
-import {
-  EditorSettings,
-  AppearanceSettings,
-  NotificationsSettings,
-  CalendarSettings,
-  UsageDisplaySettings,
-  MaintenanceSettings,
-  PromptPrefaceSettings,
-} from '@/features/settings/ui-general-settings';
 import { GlobalPermissionsSettings } from '@/features/settings/ui-global-permissions-settings';
+import { Kbd } from '@/common/ui/kbd';
 import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings';
 import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';
@@ -62,7 +68,8 @@ import { RateLimitSwapSettings } from '@/features/settings/ui-rate-limit-swap-se
 import { SkillsSettings } from '@/features/settings/ui-skills-settings';
 import { SourcesSettings } from '@/features/settings/ui-sources-settings';
 import { TokensTab } from '@/features/settings/ui-tokens-tab';
-import { api } from '@/lib/api';
+
+
 
 import { useCurrentSettingsProject } from './use-current-settings-project';
 
@@ -116,6 +123,7 @@ function getGlobalSections(): GlobalSection[] {
       ? [{ id: 'calendar', label: 'Calendar' }]
       : []),
     { id: 'usage', label: 'Usage Display' },
+    { id: 'work-activity', label: 'Work Activity' },
     { id: 'maintenance', label: 'Maintenance' },
   ];
 
@@ -136,6 +144,7 @@ function getGlobalSections(): GlobalSection[] {
       subtitle: 'Backends, thinking defaults, and model presets',
       subs: [
         { id: 'presets', label: 'Model Presets' },
+        { id: 'process-mode', label: 'Process Mode' },
         { id: 'prompt-preface', label: 'Prompt Preface' },
         { id: 'rate-limit-swap', label: 'Rate Limit Swap' },
         { id: 'claude-code', label: 'Claude Code', layout: 'fill' },
@@ -384,6 +393,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
         globalLeaf('general', 'editor', 'General'),
         globalLeaf('general', 'appearance'),
         globalLeaf('general', 'notifications'),
+        globalLeaf('general', 'work-activity', 'Work Activity'),
         ...(api.platform === 'darwin'
           ? [globalLeaf('general', 'calendar')]
           : []),
@@ -394,6 +404,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
       label: 'Agents',
       items: [
         globalLeaf('coding-agents', 'presets', 'Defaults'),
+        globalLeaf('coding-agents', 'process-mode', 'Process Mode'),
         globalLeaf('coding-agents', 'claude-code', 'Claude Code'),
         globalLeaf('coding-agents', 'opencode', 'OpenCode'),
         globalLeaf('coding-agents', 'codex', 'Codex'),
@@ -567,6 +578,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Visual effects and motion preferences.';
       case 'notifications':
         return 'How and when jean-claude lets you know about runs.';
+      case 'work-activity':
+        return 'Automatic work activity logging and retention controls.';
       case 'calendar':
         return 'Meeting reminders from your macOS Calendar.';
       case 'usage':
@@ -579,6 +592,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
     switch (subId) {
       case 'prompt-preface':
         return 'Reusable instructions injected into coding agent prompts.';
+      case 'process-mode':
+        return 'Choose how OpenCode server processes are managed for new steps.';
     }
   }
   return '';
@@ -594,6 +609,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <AppearanceSettings />;
       case 'general:notifications':
         return <NotificationsSettings />;
+      case 'general:work-activity':
+        return <WorkActivitySettings />;
       case 'general:calendar':
         return <CalendarSettings />;
       case 'general:usage':
@@ -608,6 +625,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <AgentsSettings />;
       case 'coding-agents:presets':
         return <ModelPresetsSettings />;
+      case 'coding-agents:process-mode':
+        return <OpenCodeProcessModeSettings />;
       case 'coding-agents:prompt-preface':
         return <PromptPrefaceSettings />;
       case 'coding-agents:rate-limit-swap':
@@ -730,8 +749,8 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       !hasAutoSelectedProjectTab &&
       resolvedProject
     ) {
-      setActiveTab('project');
-      setHasAutoSelectedProjectTab(true);
+      startTransition(() => setActiveTab('project'));
+      startTransition(() => setHasAutoSelectedProjectTab(true));
     }
   }, [hasAutoSelectedProjectTab, resolvedProject, shouldRestoreNavState]);
 
@@ -1301,7 +1320,7 @@ function SettingsPalette({
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    setActiveIndex(0);
+    startTransition(() => setActiveIndex(0));
   }, [query]);
 
   const trapTab = useCallback((event: React.KeyboardEvent) => {

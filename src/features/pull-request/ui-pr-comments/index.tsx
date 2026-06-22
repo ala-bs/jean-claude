@@ -1,4 +1,3 @@
-import clsx from 'clsx';
 import {
   CheckCircle2,
   ChevronDown,
@@ -9,22 +8,21 @@ import {
   ThumbsUp,
   Trash2,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { codeToTokens, type ThemedToken } from 'shiki';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import clsx from 'clsx';
 
-import { Button } from '@/common/ui/button';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { IconButton } from '@/common/ui/icon-button';
+
 import {
-  EMPTY_MENTION_OPTIONS,
   decodeMentionDisplayNames,
+  EMPTY_MENTION_OPTIONS,
   encodeMentionDisplayNames,
   type MentionOption,
 } from '@/common/ui/mention-textarea';
-import { UserAvatar } from '@/common/ui/user-avatar';
-import { getLanguageFromPath } from '@/features/agent/ui-diff-view/language-utils';
-import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
-import { InlineCommentComposer } from '@/features/common/ui-inline-comments';
+import {
+  type MentionDisplayNames,
+  replaceAzureDevOpsMentions,
+} from '@/lib/azure-devops-mentions';
 import {
   useAddThreadReply,
   useCurrentAzureUser,
@@ -35,13 +33,17 @@ import {
   useUpdateThreadStatus,
 } from '@/hooks/use-pull-requests';
 import type { AzureDevOpsCommentThread } from '@/lib/api';
-import {
-  replaceAzureDevOpsMentions,
-  type MentionDisplayNames,
-} from '@/lib/azure-devops-mentions';
+import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
+import { Button } from '@/common/ui/button';
 import { encodeProxyUrl } from '@/lib/azure-image-proxy';
 import { formatRelativeTime } from '@/lib/time';
+import { getLanguageFromPath } from '@/features/agent/ui-diff-view/language-utils';
+import { IconButton } from '@/common/ui/icon-button';
+import { InlineCommentComposer } from '@/features/common/ui-inline-comments';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import { UserAvatar } from '@/common/ui/user-avatar';
+
+
 
 import { PrCommentForm, uploadImagesIntoMarkdown } from '../ui-pr-comment-form';
 
@@ -51,45 +53,14 @@ type ThreadStatus = AzureDevOpsCommentThread['status'];
 
 const ACTIVE_STATUSES = new Set<ThreadStatus>(['active', 'pending', 'unknown']);
 
-const STATUS_CONFIG: Record<
-  string,
-  { label: string; badge: string; dot: string }
-> = {
-  active: {
-    label: 'Active',
-    badge: 'bg-acc-soft text-acc-ink',
-    dot: 'bg-acc',
-  },
-  fixed: {
-    label: 'Resolved',
-    badge: 'bg-status-done-soft text-status-done',
-    dot: 'bg-status-done',
-  },
-  wontFix: {
-    label: "Won't fix",
-    badge: 'bg-glass-medium text-ink-2',
-    dot: 'bg-ink-3',
-  },
-  closed: {
-    label: 'Closed',
-    badge: 'bg-glass-medium text-ink-2',
-    dot: 'bg-ink-4',
-  },
-  byDesign: {
-    label: 'By design',
-    badge: 'bg-acc-soft text-acc-ink',
-    dot: 'bg-acc',
-  },
-  pending: {
-    label: 'Pending',
-    badge: 'bg-status-run-soft text-status-run',
-    dot: 'bg-status-run',
-  },
-  unknown: {
-    label: 'Unknown',
-    badge: 'bg-glass-medium text-ink-2',
-    dot: 'bg-ink-3',
-  },
+const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
+  active: { label: 'Active', color: 'bg-acc/50 text-acc-ink' },
+  fixed: { label: 'Resolved', color: 'bg-status-done/50 text-status-done' },
+  wontFix: { label: "Won't fix", color: 'bg-glass-medium text-ink-2' },
+  closed: { label: 'Closed', color: 'bg-glass-medium text-ink-2' },
+  byDesign: { label: 'By design', color: 'bg-acc/50 text-acc-ink' },
+  pending: { label: 'Pending', color: 'bg-yellow-900/50 text-status-run' },
+  unknown: { label: 'Unknown', color: 'bg-glass-medium text-ink-2' },
 };
 
 const SETTABLE_STATUSES: ThreadStatus[] = [
@@ -281,7 +252,7 @@ function StatusDropdown({
         onClick={() => setIsOpen((value) => !value)}
         className={clsx(
           'flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase transition-opacity hover:opacity-80',
-          config.badge,
+          config.color,
         )}
       >
         {config.label}
@@ -298,15 +269,13 @@ function StatusDropdown({
                 onClick={() => handleSelect(settableStatus)}
                 className={clsx(
                   'hover:bg-glass-medium flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors',
-                  settableStatus === status
-                    ? 'text-ink-0 font-medium'
-                    : 'text-ink-1',
+                  settableStatus === status ? 'text-ink-0' : 'text-ink-2',
                 )}
               >
                 <span
                   className={clsx(
-                    'inline-block h-2 w-2 shrink-0 rounded-full',
-                    settableConfig.dot,
+                    'inline-block h-2 w-2 rounded-full',
+                    settableConfig.color,
                   )}
                 />
                 {settableConfig.label}
@@ -431,7 +400,6 @@ function ThreadCodePreview({
     'head',
   );
   const [tokens, setTokens] = useState<ThemedToken[][]>([]);
-  const { shikiTheme } = useColorScheme();
 
   const { snippetLines, firstLineNumber } = useMemo(() => {
     if (!fileContent) return { snippetLines: [], firstLineNumber: startLine };
@@ -449,14 +417,14 @@ function ThreadCodePreview({
   useEffect(() => {
     if (snippetLines.length === 0) return;
     const code = snippetLines.join('\n');
-    codeToTokens(code, { lang: language, theme: shikiTheme })
+    codeToTokens(code, { lang: language, theme: 'github-dark' })
       .then((result) => setTokens(result.tokens))
       .catch(() => {
-        codeToTokens(code, { lang: 'text', theme: shikiTheme }).then(
+        codeToTokens(code, { lang: 'text', theme: 'github-dark' }).then(
           (result) => setTokens(result.tokens),
         );
       });
-  }, [snippetLines, language, shikiTheme]);
+  }, [snippetLines, language]);
 
   if (!fileContent || snippetLines.length === 0) return null;
 

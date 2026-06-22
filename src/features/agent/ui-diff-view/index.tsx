@@ -1,4 +1,3 @@
-import clsx from 'clsx';
 import {
   AlignJustify,
   ChevronDown,
@@ -7,27 +6,32 @@ import {
   FileText,
   MessageSquarePlus,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { codeToTokens, type ThemedToken } from 'shiki';
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import clsx from 'clsx';
+import type { ReactNode } from 'react';
+
+
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useUISetting, useUIStore } from '@/stores/ui';
 
-import { ChangeNavigator } from './change-navigator';
-import { CurrentStateTable } from './current-state-table';
-import { DiffMinimap, type ViewportInfo } from './diff-minimap';
-import { DiffSearchBar } from './diff-search-bar';
 import { computeDiff, type DiffLine } from './diff-utils';
-import { getLanguageFromPath } from './language-utils';
-import { SideBySideDiffTable } from './side-by-side-table';
-import { useChangeNavigator } from './use-change-navigator';
-import { useCodeFolding } from './use-code-folding';
-import { useDiffSearch, type SearchMatch } from './use-diff-search';
+import { DiffMinimap, type ViewportInfo } from './diff-minimap';
 import {
   renderTokensWithHighlights,
   renderWithHighlights,
 } from './utils-search-highlight';
+import { type SearchMatch, useDiffSearch } from './use-diff-search';
+import { ChangeNavigator } from './change-navigator';
+import { CurrentStateTable } from './current-state-table';
+import { DiffSearchBar } from './diff-search-bar';
+import { getLanguageFromPath } from './language-utils';
+import { SideBySideDiffTable } from './side-by-side-table';
+import { useChangeNavigator } from './use-change-navigator';
+import { useCodeFolding } from './use-code-folding';
+
+
 
 interface DiffState {
   lines: DiffLine[];
@@ -120,7 +124,7 @@ export function DiffView({
   }, [state, scrollToLine, viewMode]);
 
   useEffect(() => {
-    setIsLoading(true);
+    startTransition(() => setIsLoading(true));
 
     // Compute diff
     const lines = computeDiff(oldString, newString);

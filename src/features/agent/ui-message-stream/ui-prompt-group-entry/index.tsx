@@ -1,30 +1,35 @@
 import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
-import type { MouseEvent } from 'react';
 import { memo, useCallback, useMemo, useState } from 'react';
+import type { MouseEvent } from 'react';
 
-import { countUnifiedPatchStats } from '@/features/agent/ui-diff-view/diff-utils';
-import { formatModelName } from '@/hooks/use-model';
-import { extractImagesFromMarkdown } from '@/lib/markdown-images';
-import { formatNumber } from '@/lib/number';
+
 import { ensureUtc, formatDuration } from '@/lib/time';
 import type {
   NormalizedEntry,
   NormalizedToolUse,
   ToolUseByName,
 } from '@shared/normalized-message-v2';
+import { countUnifiedPatchStats } from '@/features/agent/ui-diff-view/diff-utils';
+import { extractImagesFromMarkdown } from '@/lib/markdown-images';
+import { formatModelName } from '@/hooks/use-model';
+import { formatNumber } from '@/lib/number';
 
-import { MarkdownContent } from '../../ui-markdown-content';
+
+
 import type { DisplayMessage, PromptGroup } from '../message-merger';
+import {
+  getLastActivitySummary,
+  getTodoProgress,
+  getToolActivitySummary,
+} from '../ui-subagent-entry/last-activity';
 import { CommentableWrapper } from '../ui-commentable-text-entry';
+import { MarkdownContent } from '../../ui-markdown-content';
 import { RunningTimer } from '../ui-running-timer';
 import { SkillEntry } from '../ui-skill-entry';
 import { SubagentEntry } from '../ui-subagent-entry';
-import {
-  getToolActivitySummary,
-  getLastActivitySummary,
-  getTodoProgress,
-} from '../ui-subagent-entry/last-activity';
 import { TimelineEntry } from '../ui-timeline-entry';
+
+
 
 import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 
@@ -32,6 +37,7 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 
 const PROMPT_MAX_CHARS = 300;
 const RECENT_RUNNING_MESSAGE_COUNT = 5;
+const EMPTY_DISPLAY_MESSAGES: DisplayMessage[] = [];
 
 type RunningActivityMessage =
   | {
@@ -881,6 +887,161 @@ function RunningSummary({
   );
 }
 
+function getVisibleChildMessageCount(childMessages: DisplayMessage[]): number {
+  let count = 0;
+  for (const dm of childMessages) {
+    if (shouldRenderChildMessage(dm)) count++;
+  }
+  return count;
+}
+
+function getCompletedTodos(
+  childMessages: DisplayMessage[],
+): Array<{ text: string; done: boolean; current: boolean }> | null {
+  const allEntries: NormalizedEntry[] = [];
+  for (const dm of childMessages) {
+    if (dm.kind === 'entry') allEntries.push(dm.entry);
+    if (dm.kind === 'subagent') allEntries.push(...dm.childEntries);
+    if (dm.kind === 'skill') allEntries.push(...dm.childEntries);
+  }
+  const todoProgress = getTodoProgress(allEntries);
+  if (!todoProgress) return null;
+  const todos: Array<{ text: string; done: boolean; current: boolean }> = [];
+  for (let i = allEntries.length - 1; i >= 0; i--) {
+    const entry = allEntries[i];
+    if (entry.type !== 'tool-use' || entry.name !== 'todo-write') continue;
+    const todoEntry = entry as ToolUseByName<'todo-write'>;
+    const todoItems = todoEntry.result?.newTodos ?? todoEntry.input.todos;
+    if (todoItems && todoItems.length > 0) {
+      for (const t of todoItems) {
+        todos.push({
+          text: t.description ?? t.content,
+          done: t.status === 'completed',
+          current: t.status === 'in_progress',
+        });
+      }
+      break;
+    }
+  }
+  return todos.length > 0 ? todos : null;
+}
+
+type FileStats = {
+  fileCount: number;
+  added: number;
+  removed: number;
+};
+
+function isFileChangeToolEntry(entry: NormalizedEntry): boolean {
+  return (
+    entry.type === 'tool-use' &&
+    (entry.name === 'edit' || entry.name === 'write')
+  );
+}
+
+function getFileChangeToolEntries(
+  childMessages: DisplayMessage[],
+): NormalizedEntry[] {
+  const entries: NormalizedEntry[] = [];
+
+  function addEntry(entry: NormalizedEntry) {
+    if (isFileChangeToolEntry(entry)) entries.push(entry);
+  }
+
+  for (const dm of childMessages) {
+    if (dm.kind === 'entry') addEntry(dm.entry);
+    if (dm.kind === 'subagent') dm.childEntries.forEach(addEntry);
+    if (dm.kind === 'skill') dm.childEntries.forEach(addEntry);
+  }
+
+  return entries;
+}
+
+function getFileStats(fileChangeEntries: NormalizedEntry[]): FileStats | null {
+  const files = new Set<string>();
+  let added = 0;
+  let removed = 0;
+
+  function countLines(s: string): number {
+    if (!s) return 0;
+    return s.split('\n').length;
+  }
+
+  for (const entry of fileChangeEntries) {
+    if (entry.type !== 'tool-use') continue;
+    if (entry.name === 'edit') {
+      const e = entry as ToolUseByName<'edit'>;
+      const editFiles = e.input.files ?? [
+        {
+          filePath: e.input.filePath,
+          type: 'update' as const,
+          before: e.input.oldString,
+          after: e.input.newString,
+          additions: undefined,
+          deletions: undefined,
+        },
+      ];
+      for (const file of editFiles) {
+        files.add(file.filePath);
+        if (
+          typeof file.additions === 'number' ||
+          typeof file.deletions === 'number'
+        ) {
+          added += file.additions ?? 0;
+          removed += file.deletions ?? 0;
+          continue;
+        }
+        if (file.patch) {
+          const patchStats = countUnifiedPatchStats(file.patch);
+          if (patchStats) {
+            added += patchStats.additions;
+            removed += patchStats.deletions;
+            continue;
+          }
+        }
+        const oldLines = countLines(file.before ?? e.input.oldString);
+        const newLines = countLines(file.after ?? e.input.newString);
+        if (newLines > oldLines) added += newLines - oldLines;
+        else removed += oldLines - newLines;
+      }
+    } else if (entry.name === 'write') {
+      const w = entry as ToolUseByName<'write'>;
+      const writeFiles = w.input.files ?? [
+        {
+          filePath: w.input.filePath,
+          type: 'add' as const,
+          after: w.input.value,
+          additions: undefined,
+          deletions: undefined,
+        },
+      ];
+      for (const file of writeFiles) {
+        files.add(file.filePath);
+        if (
+          typeof file.additions === 'number' ||
+          typeof file.deletions === 'number'
+        ) {
+          added += file.additions ?? 0;
+          removed += file.deletions ?? 0;
+          continue;
+        }
+        if (file.patch) {
+          const patchStats = countUnifiedPatchStats(file.patch);
+          if (patchStats) {
+            added += patchStats.additions;
+            removed += patchStats.deletions;
+            continue;
+          }
+        }
+        added += countLines(file.after ?? w.input.value);
+      }
+    }
+  }
+
+  if (files.size === 0) return null;
+  return { fileCount: files.size, added, removed };
+}
+
 // ── Main component ─────────────────────────────────────────────────────
 
 /**
@@ -993,40 +1154,18 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   }, [isActiveGroup, group.childMessages]);
 
   const visibleChildMessages = useMemo(
-    () => group.childMessages.filter(shouldRenderChildMessage),
-    [group.childMessages],
+    () =>
+      detailsExpanded
+        ? group.childMessages.filter(shouldRenderChildMessage)
+        : EMPTY_DISPLAY_MESSAGES,
+    [detailsExpanded, group.childMessages],
   );
 
   // Extract todos for collapsed non-running state
   const completedTodos = useMemo(() => {
-    if (isActiveGroup) return null;
-    const allEntries: NormalizedEntry[] = [];
-    for (const dm of group.childMessages) {
-      if (dm.kind === 'entry') allEntries.push(dm.entry);
-      if (dm.kind === 'subagent') allEntries.push(...dm.childEntries);
-      if (dm.kind === 'skill') allEntries.push(...dm.childEntries);
-    }
-    const todoProgress = getTodoProgress(allEntries);
-    if (!todoProgress) return null;
-    const todos: Array<{ text: string; done: boolean; current: boolean }> = [];
-    for (let i = allEntries.length - 1; i >= 0; i--) {
-      const entry = allEntries[i];
-      if (entry.type !== 'tool-use' || entry.name !== 'todo-write') continue;
-      const todoEntry = entry as ToolUseByName<'todo-write'>;
-      const todoItems = todoEntry.result?.newTodos ?? todoEntry.input.todos;
-      if (todoItems && todoItems.length > 0) {
-        for (const t of todoItems) {
-          todos.push({
-            text: t.description ?? t.content,
-            done: t.status === 'completed',
-            current: t.status === 'in_progress',
-          });
-        }
-        break;
-      }
-    }
-    return todos.length > 0 ? todos : null;
-  }, [isActiveGroup, group.childMessages]);
+    if (isActiveGroup || detailsExpanded) return null;
+    return getCompletedTodos(group.childMessages);
+  }, [detailsExpanded, isActiveGroup, group.childMessages]);
 
   const toggleDetails = useCallback(
     () =>
@@ -1045,7 +1184,10 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   );
 
   // Compute step count for header
-  const stepCount = visibleChildMessages.length;
+  const stepCount = useMemo(
+    () => getVisibleChildMessageCount(group.childMessages),
+    [group.childMessages],
+  );
 
   const runningStartDate = useMemo(
     () =>
@@ -1058,96 +1200,8 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
 
   // Compute file edit/write stats from child messages
   const fileStats = useMemo(() => {
-    const files = new Set<string>();
-    let added = 0;
-    let removed = 0;
-
-    function countLines(s: string): number {
-      if (!s) return 0;
-      return s.split('\n').length;
-    }
-
-    function processEntries(entries: NormalizedEntry[]) {
-      for (const entry of entries) {
-        if (entry.type !== 'tool-use') continue;
-        if (entry.name === 'edit') {
-          const e = entry as ToolUseByName<'edit'>;
-          const editFiles = e.input.files ?? [
-            {
-              filePath: e.input.filePath,
-              type: 'update' as const,
-              before: e.input.oldString,
-              after: e.input.newString,
-              additions: undefined,
-              deletions: undefined,
-            },
-          ];
-          for (const file of editFiles) {
-            files.add(file.filePath);
-            if (
-              typeof file.additions === 'number' ||
-              typeof file.deletions === 'number'
-            ) {
-              added += file.additions ?? 0;
-              removed += file.deletions ?? 0;
-              continue;
-            }
-            if (file.patch) {
-              const patchStats = countUnifiedPatchStats(file.patch);
-              if (patchStats) {
-                added += patchStats.additions;
-                removed += patchStats.deletions;
-                continue;
-              }
-            }
-            const oldLines = countLines(file.before ?? e.input.oldString);
-            const newLines = countLines(file.after ?? e.input.newString);
-            if (newLines > oldLines) added += newLines - oldLines;
-            else removed += oldLines - newLines;
-          }
-        } else if (entry.name === 'write') {
-          const w = entry as ToolUseByName<'write'>;
-          const writeFiles = w.input.files ?? [
-            {
-              filePath: w.input.filePath,
-              type: 'add' as const,
-              after: w.input.value,
-              additions: undefined,
-              deletions: undefined,
-            },
-          ];
-          for (const file of writeFiles) {
-            files.add(file.filePath);
-            if (
-              typeof file.additions === 'number' ||
-              typeof file.deletions === 'number'
-            ) {
-              added += file.additions ?? 0;
-              removed += file.deletions ?? 0;
-              continue;
-            }
-            if (file.patch) {
-              const patchStats = countUnifiedPatchStats(file.patch);
-              if (patchStats) {
-                added += patchStats.additions;
-                removed += patchStats.deletions;
-                continue;
-              }
-            }
-            added += countLines(file.after ?? w.input.value);
-          }
-        }
-      }
-    }
-
-    for (const dm of group.childMessages) {
-      if (dm.kind === 'entry') processEntries([dm.entry]);
-      if (dm.kind === 'subagent') processEntries(dm.childEntries);
-      if (dm.kind === 'skill') processEntries(dm.childEntries);
-    }
-
-    if (files.size === 0) return null;
-    return { fileCount: files.size, added, removed };
+    const fileChangeEntries = getFileChangeToolEntries(group.childMessages);
+    return getFileStats(fileChangeEntries);
   }, [group.childMessages]);
 
   return (

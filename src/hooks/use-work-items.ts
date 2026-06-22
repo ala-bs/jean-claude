@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   api,
+  type AzureDevOpsIteration,
+  type AzureDevOpsUser,
   type AzureDevOpsWorkItem,
   type AzureDevOpsWorkItemState,
-  type AzureDevOpsUser,
-  type AzureDevOpsIteration,
   type WorkItemComment,
+  type WorkItemHistoryEntry,
 } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
 
@@ -125,6 +126,29 @@ export function useWorkItemComments(params: {
   });
 }
 
+export function useWorkItemHistory(params: {
+  providerId: string | null;
+  projectName: string | null;
+  workItemId: number | null;
+}) {
+  return useQuery<WorkItemHistoryEntry[]>({
+    queryKey: [
+      'work-item-history',
+      params.providerId,
+      params.projectName,
+      params.workItemId,
+    ],
+    queryFn: () =>
+      api.azureDevOps.getWorkItemHistory({
+        providerId: params.providerId!,
+        projectName: params.projectName!,
+        workItemId: params.workItemId!,
+      }),
+    enabled: !!params.providerId && !!params.projectName && !!params.workItemId,
+    staleTime: 60_000,
+  });
+}
+
 export function useAddWorkItemComment() {
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
@@ -155,6 +179,9 @@ export function useAddWorkItemComment() {
           variables.providerId,
           variables.projectName,
         ],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['work-item-history', variables.providerId],
       });
     },
     onError: () => {
@@ -288,6 +315,9 @@ export function useUpdateWorkItemState() {
     onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({
         queryKey: ['work-item', variables.providerId, variables.workItemId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['work-item-history', variables.providerId],
       });
       queryClient.invalidateQueries({
         queryKey: ['work-items'],

@@ -1,5 +1,6 @@
+import { type RefObject, useCallback } from 'react';
 import { animate } from 'framer-motion';
-import { useCallback, type RefObject } from 'react';
+
 
 import { getShrinkGhostThemeStyles } from '@/lib/shrink-ghost-theme';
 

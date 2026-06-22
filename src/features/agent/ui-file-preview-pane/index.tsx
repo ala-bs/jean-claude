@@ -1,8 +1,9 @@
-import { X, ExternalLink } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { ExternalLink, X } from 'lucide-react';
+import { startTransition, useEffect, useState } from 'react';
 import { codeToHtml } from 'shiki';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+
 import { api } from '@/lib/api';
 
 export function FilePreviewPane({
@@ -31,8 +32,8 @@ export function FilePreviewPane({
     : `${projectPath}/${filePath}`;
 
   useEffect(() => {
-    setIsLoading(true);
-    setError(null);
+    startTransition(() => setIsLoading(true));
+    startTransition(() => setError(null));
 
     api.fs
       .readFile(fullPath)

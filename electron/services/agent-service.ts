@@ -7,16 +7,6 @@
 import { BrowserWindow } from 'electron';
 import { nanoid } from 'nanoid';
 
-import type {
-  AgentBackend,
-  AgentBackendType,
-  AgentEvent,
-  NormalizedPermissionRequest,
-  NormalizedQuestion,
-  NormalizedQuestionRequest,
-  PromptImagePart,
-  PromptPart,
-} from '@shared/agent-backend-types';
 import {
   AGENT_CHANNELS,
   type AgentQuestion,
@@ -24,60 +14,77 @@ import {
   type QuestionResponse,
   type QueuedPrompt,
 } from '@shared/agent-types';
-import type { AgentUIEventPayload } from '@shared/agent-ui-events';
-import type { AiUsageFeature } from '@shared/ai-usage-types';
-import type { NormalizedEntry } from '@shared/normalized-message-v2';
-import {
-  type InteractionMode,
-  type TaskNotificationEvent,
-  type TaskStepType,
-  type ReviewStepMeta,
-  type ThinkingEffort,
-  isSkillCreationStepMeta,
-} from '@shared/types';
+import type {
+  AgentBackend,
+  AgentBackendType,
+  AgentEvent,
+  AgentSession,
+  NormalizedPermissionRequest,
+  NormalizedQuestion,
+  NormalizedQuestionRequest,
+  PromptImagePart,
+  PromptPart,
+} from '@shared/agent-backend-types';
 import {
   getDefaultInteractionModeForBackend,
   normalizeInteractionModeForBackend,
 } from '@shared/types';
-
-import type { PermissionScope } from '../../shared/permission-types';
-import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
 import {
-  TaskRepository,
-  ProjectRepository,
+  type InteractionMode,
+  isSkillCreationStepMeta,
+  type ReviewStepMeta,
+  type TaskNotificationEvent,
+  type TaskStepType,
+  type ThinkingEffort,
+} from '@shared/types';
+import type { AgentUIEventPayload } from '@shared/agent-ui-events';
+import type { AiUsageFeature } from '@shared/ai-usage-types';
+import type { NormalizedEntry } from '@shared/normalized-message-v2';
+
+
+
+import {
   AgentMessageRepository,
+  ProjectRepository,
   RawMessageRepository,
+  TaskRepository,
 } from '../database/repositories';
+import { dbg } from '../lib/debug';
+import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
+import { pathExists } from '../lib/fs';
+import type { PermissionScope } from '../../shared/permission-types';
 import { SettingsRepository } from '../database/repositories/settings';
 import { TaskStepRepository } from '../database/repositories/task-steps';
-import { dbg } from '../lib/debug';
-import { pathExists } from '../lib/fs';
 
-import { AGENT_BACKEND_CLASSES } from './agent-backends';
-import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
-import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
-import { agentResourceMonitorService } from './agent-resource-monitor-service';
-import { buildSessionIdStepUpdate } from './agent-session-update';
-import { aiUsageTrackingService } from './ai-usage-tracking-service';
-import { emitStepUpsert, emitTaskUpsert } from './cache-event-service';
-import { resolveGlobalRules } from './global-permissions-service';
-import { getJcMcpServerPath } from './mcp-template-service';
-import { generateTaskName } from './name-generation-service';
-import { notificationService } from './notification-service';
-import {
-  buildToolPermissionConfig,
-  readSettings,
-  resolveRules,
-  normalizeToolRequest,
-} from './permission-settings-service';
-import { applyConfiguredPromptPreface } from './prompt-preface-service';
+
+
 import {
   buildAgentPromptMarkdown,
-  textPrompt,
   getPromptText,
+  textPrompt,
 } from './prompt-utils';
-import { StepService } from './step-service';
+import {
+  buildToolPermissionConfig,
+  normalizeToolRequest,
+  readSettings,
+  resolveRules,
+} from './permission-settings-service';
+import { emitStepUpsert, emitTaskUpsert } from './cache-event-service';
+import { AGENT_BACKEND_CLASSES } from './agent-backends';
+import { agentResourceMonitorService } from './agent-resource-monitor-service';
+import { aiUsageTrackingService } from './ai-usage-tracking-service';
+import { applyConfiguredPromptPreface } from './prompt-preface-service';
 import { assertValidWorkspacePath } from './system-project-service';
+import { buildSessionIdStepUpdate } from './agent-session-update';
+import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
+import { generateTaskName } from './name-generation-service';
+import { getJcMcpServerPath } from './mcp-template-service';
+import { notificationService } from './notification-service';
+import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
+import { resolveGlobalRules } from './global-permissions-service';
+import { StepService } from './step-service';
+
+
 
 /** In-memory store for queued prompt parts, keyed by QueuedPrompt.id.
  *  Keeps full PromptPart[] (with image base64) out of the QueuedPrompt.content
@@ -230,6 +237,7 @@ interface ActiveSession {
   taskId: string; // kept for worktree/project lookups
   projectId: string;
   backendSessionId: string | null; // The session ID from the backend
+  backendStartPromise?: Promise<AgentSession>;
   sdkSessionId: string | null; // The persistent session ID for resumption
   backendType: AgentBackendType;
   usageFeature: AiUsageFeature;
@@ -744,7 +752,7 @@ class AgentService {
       }
     }
 
-    const agentSession = await session.backend.start(
+    session.backendStartPromise = session.backend.start(
       {
         type: session.backendType,
         cwd: workingDir,
@@ -770,8 +778,10 @@ class AgentService {
       },
       effectiveParts,
     );
+    const agentSession = await session.backendStartPromise;
 
     session.backendSessionId = agentSession.sessionId;
+    session.backendStartPromise = undefined;
 
     // Process the event stream
     agentResourceMonitorService.start({
@@ -1359,7 +1369,10 @@ class AgentService {
     }
   }
 
-  async stop(stepId: string): Promise<void> {
+  async stop(
+    stepId: string,
+    options: { reason?: 'user' | 'shutdown' } = {},
+  ): Promise<void> {
     dbg.agentSession('Stopping step %s', stepId);
 
     const session = this.sessions.get(stepId);
@@ -1389,30 +1402,66 @@ class AgentService {
 
     session.abortController.abort();
 
-    // Stop the backend
-    if (session.backendSessionId) {
-      await session.backend.stop(session.backendSessionId);
+    // Stop the backend even if stop races with backend startup completing.
+    const backendSessionId =
+      session.backendSessionId ??
+      (await session.backendStartPromise
+        ?.then((agentSession) => agentSession.sessionId)
+        .catch((error) => {
+          dbg.agentSession(
+            'Backend startup for step %s failed while stopping: %O',
+            stepId,
+            error,
+          );
+          return null;
+        })) ??
+      null;
+    if (backendSessionId) {
+      await session.backend.stop(backendSessionId);
     }
     await agentResourceMonitorService.stop(stepId);
 
-    // Emit a custom interruption entry
-    await this.persistAndEmitSyntheticEntry(taskId, session, {
-      id: nanoid(),
-      date: new Date().toISOString(),
-      isSynthetic: true,
-      type: 'result',
-      value: 'Task interrupted by user',
-      isError: true,
-    });
+    if (options.reason !== 'shutdown') {
+      await this.persistAndEmitSyntheticEntry(taskId, session, {
+        id: nanoid(),
+        date: new Date().toISOString(),
+        isSynthetic: true,
+        type: 'result',
+        value: 'Task interrupted by user',
+        isError: true,
+      });
+    }
 
     await StepService.interruptStep(stepId);
     this.emitEvent(taskId, stepId, {
       type: 'status',
       status: 'interrupted',
-      error: 'Stopped by user',
+      error:
+        options.reason === 'shutdown'
+          ? 'Stopped by app shutdown'
+          : 'Stopped by user',
     });
     this.sessions.delete(stepId);
     dbg.agentSession('Step %s stopped and session cleaned up', stepId);
+  }
+
+  async stopAll(options: { reason?: 'user' | 'shutdown' } = {}): Promise<void> {
+    const stepIds = [...this.sessions.keys()];
+    dbg.agentSession('Stopping all active agent sessions (%d)', stepIds.length);
+    const results = await Promise.allSettled(
+      stepIds.map((stepId) => this.stop(stepId, options)),
+    );
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) {
+      dbg.agentSession(
+        'Failed to stop %d active agent sessions during stopAll',
+        failures.length,
+      );
+      throw new Error(
+        `Failed to stop ${failures.length} active agent sessions`,
+      );
+    }
+    dbg.agentSession('All active agent sessions stopped');
   }
 
   async respond(

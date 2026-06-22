@@ -3,25 +3,31 @@ import { join } from 'path';
 import { app, BrowserWindow, protocol, shell } from 'electron';
 import fixPath from 'fix-path';
 
-import { migrateDatabase } from './database';
-import { registerIpcHandlers } from './ipc/handlers';
-import { dbg } from './lib/debug';
-import { agentService } from './services/agent-service';
+import {
+  closeIdleOpenCodeSharedServerNow,
+  killAllOpenCodeServersSync,
+} from './services/agent-backends/opencode/opencode-backend';
 import {
   decodeProxyUrl,
   fetchAuthenticatedImageStream,
 } from './services/azure-image-proxy-service';
-import { upsertBuiltinSkills } from './services/builtin-skills-service';
 import {
   fetchLocalImage,
   LOCAL_IMAGE_PROTOCOL,
 } from './services/local-image-protocol-service';
+import { agentService } from './services/agent-service';
+import { cleanupOrphanedWorkspaces } from './services/system-project-service';
+import { dbg } from './lib/debug';
+import { migrateDatabase } from './database';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
+import { registerIpcHandlers } from './ipc/handlers';
 import { runCommandService } from './services/run-command-service';
 import { syncBuiltinSkillSymlinks } from './services/skill-management-service';
 import { systemCalendarService } from './services/system-calendar-service';
-import { cleanupOrphanedWorkspaces } from './services/system-project-service';
+import { upsertBuiltinSkills } from './services/builtin-skills-service';
+
+
 
 // Register custom protocol scheme before app is ready
 // This must be done synchronously before the app ready event
@@ -361,19 +367,66 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('before-quit', async () => {
-  dbg.main('App quitting, stopping all commands...');
+let isQuittingAfterCleanup = false;
+const QUIT_CLEANUP_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Quit cleanup timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
+}
+
+app.on('before-quit', (event) => {
+  if (isQuittingAfterCleanup) return;
+
+  event.preventDefault();
+  isQuittingAfterCleanup = true;
+
+  void (async () => {
+    try {
+      await withTimeout(
+        (async () => {
+          dbg.main('App quitting, stopping agents and commands...');
+          await agentService.stopAll({ reason: 'shutdown' });
+          dbg.main('All agents stopped');
+          await closeIdleOpenCodeSharedServerNow();
+          dbg.main('Idle shared OpenCode server stopped');
+          await runCommandService.stopAllCommands();
+          dbg.main('All commands stopped');
+        })(),
+        QUIT_CLEANUP_TIMEOUT_MS,
+      );
+    } catch (error) {
+      dbg.main('Error during quit cleanup: %O', error);
+      runCommandService.killAllProcessGroupsSync();
+      killAllOpenCodeServersSync();
+    } finally {
+      app.quit();
+    }
+  })();
+
   systemCalendarService.stop();
   pipelineTrackingService.stop();
   rawMessageCleanupService.stop();
-  await runCommandService.stopAllCommands();
-  dbg.main('All commands stopped');
 });
 
 // Synchronous last-resort cleanup: kill all process groups when the Node.js
 // process exits (covers SIGINT, SIGTERM, uncaught exceptions — not kill -9).
 process.on('exit', () => {
   runCommandService.killAllProcessGroupsSync();
+  killAllOpenCodeServersSync();
 });
 
 app.on('window-all-closed', () => {

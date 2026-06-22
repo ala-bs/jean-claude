@@ -1,5 +1,5 @@
+import { memo, type MouseEvent, useMemo } from 'react';
 import Anser from 'anser';
-import { memo, useMemo, type MouseEvent } from 'react';
 
 import { splitLogTextLinks } from './utils-log-links';
 

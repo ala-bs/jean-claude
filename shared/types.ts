@@ -2,19 +2,20 @@
 // These are plain TypeScript types without database-specific dependencies
 
 import type { AgentBackendType, PromptImagePart } from './agent-backend-types';
-import type { ProjectPriority } from './feed-types';
 import {
   DEFAULT_OPENAI_LOGO_BASE_IMAGE_ID,
   isOpenAiLogoBaseImageId,
   type OpenAiBaseImageMode,
   type OpenAiLogoBaseImageId,
 } from './openai-logo-bases';
-import type { PermissionScope } from './permission-types';
 import {
   DEFAULT_PROMPT_PREFACE_SETTING,
   isPromptPrefaceSetting,
 } from './prompt-preface-types';
+import type { PermissionScope } from './permission-types';
+import type { ProjectPriority } from './feed-types';
 import type { UsageProviderType } from './usage-types';
+
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
 
@@ -668,6 +669,12 @@ export interface BackendDefaultModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
+export type OpenCodeProcessMode = 'standalone' | 'shared';
+
+export interface OpenCodeProcessSetting {
+  mode: OpenCodeProcessMode;
+}
+
 export interface RateLimitSwapEntry {
   backend: AgentBackendType;
   model?: ModelPreference;
@@ -893,6 +900,12 @@ function isBackendDefaultModelsSetting(
   if (!obj.models || typeof obj.models !== 'object') return false;
   const models = obj.models as Record<string, unknown>;
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+}
+
+function isOpenCodeProcessSetting(v: unknown): v is OpenCodeProcessSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return obj.mode === 'standalone' || obj.mode === 'shared';
 }
 
 function isRateLimitSwapSetting(value: unknown): value is RateLimitSwapSetting {
@@ -1144,6 +1157,16 @@ function isPromptSnippetsSetting(
   );
 }
 
+export type WorkActivitySetting = { enabled: boolean };
+
+function isWorkActivitySetting(value: unknown): value is WorkActivitySetting {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    typeof (value as Record<string, unknown>).enabled === 'boolean'
+  );
+}
+
 export const SETTINGS_DEFINITIONS = {
   editor: {
     defaultValue: { type: 'preset', id: 'vscode' } as EditorSetting,
@@ -1197,6 +1220,12 @@ export const SETTINGS_DEFINITIONS = {
       },
     } as BackendDefaultModelsSetting,
     validate: isBackendDefaultModelsSetting,
+  },
+  opencodeProcess: {
+    defaultValue: {
+      mode: 'standalone',
+    } as OpenCodeProcessSetting,
+    validate: isOpenCodeProcessSetting,
   },
   rateLimitSwap: {
     defaultValue: {
@@ -1278,6 +1307,10 @@ export const SETTINGS_DEFINITIONS = {
   promptPreface: {
     defaultValue: DEFAULT_PROMPT_PREFACE_SETTING,
     validate: isPromptPrefaceSetting,
+  },
+  workActivity: {
+    defaultValue: { enabled: true } as WorkActivitySetting,
+    validate: isWorkActivitySetting,
   },
 } satisfies Record<string, SettingDefinition<unknown>>;
 

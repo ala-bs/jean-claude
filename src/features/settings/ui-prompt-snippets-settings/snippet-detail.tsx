@@ -2,14 +2,16 @@ import clsx from 'clsx';
 import { Copy, Terminal, Trash2, X } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 
-import { HandlebarsEditor } from '@/common/ui/handlebars-editor';
-import { Switch } from '@/common/ui/switch';
-import { isBuiltinSnippet } from '@/lib/builtin-snippets';
 import {
   resolveSnippetTemplate,
   type SnippetVariableContext,
 } from '@/lib/resolve-snippet-template';
+import { HandlebarsEditor } from '@/common/ui/handlebars-editor';
+import { isBuiltinSnippet } from '@/lib/builtin-snippets';
 import type { PromptSnippet } from '@shared/types';
+import { Switch } from '@/common/ui/switch';
+
+
 
 const VARIABLE_GROUPS = [
   {

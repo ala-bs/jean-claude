@@ -1,88 +1,93 @@
-import { useQueryClient } from '@tanstack/react-query';
 import {
   Check,
-  FolderOpen,
-  GitBranch,
   Moon,
-  Bell,
   CircleAlert,
   ExternalLink,
+  FolderOpen,
+  GitBranch,
   RefreshCw,
   Search,
   Star,
   Sun,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { startTransition, useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
-import { Button } from '@/common/ui/button';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { Checkbox } from '@/common/ui/checkbox';
-import { Input } from '@/common/ui/input';
-import { Select } from '@/common/ui/select';
-import { Textarea } from '@/common/ui/textarea';
-import {
-  AVAILABLE_BACKENDS,
-  getModelThinkingCapabilities,
-  getModelsForBackend,
-} from '@/features/agent/ui-backend-selector';
-import { ModelSelector } from '@/features/agent/ui-model-selector';
-import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
-import { useBackendModels } from '@/hooks/use-backend-models';
-import {
-  useScanNonExistentProjects,
-  useCleanupClaudeProjects,
-} from '@/hooks/use-claude-projects-cleanup';
-import {
-  getEditorLabel,
-  useBackendDefaultModelsSetting,
-  useAppearanceSetting,
-  useBackendsSetting,
-  useCalendarNotificationsSetting,
-  useEditorAutomationSetting,
-  useEditorSetting,
-  useTaskEventNotificationsSetting,
-  useSummaryModelsSetting,
-  useThinkingSettingsSetting,
-  useUpdateBackendsSetting,
-  useUpdateBackendDefaultModelsSetting,
-  useUpdateAppearanceSetting,
-  useUpdateCalendarNotificationsSetting,
-  useUpdateEditorAutomationSetting,
-  useUpdateEditorSetting,
-  useUpdateTaskEventNotificationsSetting,
-  useRawMessageCleanupSetting,
-  useUpdateRawMessageCleanupSetting,
-  useUpdateSummaryModelsSetting,
-  useUpdateThinkingSettingsSetting,
-  useAvailableEditors,
-  useUsageDisplaySetting,
-  useUpdateUsageDisplaySetting,
-  usePromptPrefaceSetting,
-  useUpdatePromptPrefaceSetting,
-} from '@/hooks/use-settings';
 import {
   api,
   type DesktopNotificationStatus,
   type NonExistentClaudeProject,
 } from '@/lib/api';
-import type { AgentBackendType } from '@shared/agent-backend-types';
+import {
+  AVAILABLE_BACKENDS,
+  getModelsForBackend,
+  getModelThinkingCapabilities,
+} from '@/features/agent/ui-backend-selector';
+import {
+  type CalendarNotificationsSetting,
+  DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
+  DEFAULT_TASK_NOTIFICATION_MODES,
+  type ModelPreference,
+  PRESET_EDITORS,
+  type RawMessageCleanupSetting,
+  type TaskNotificationEvent,
+  type TaskNotificationMode,
+  type ThinkingEffort,
+} from '@shared/types';
+import {
+  getEditorLabel,
+  useAppearanceSetting,
+  useAvailableEditors,
+  useBackendDefaultModelsSetting,
+  useBackendsSetting,
+  useCalendarNotificationsSetting,
+  useEditorAutomationSetting,
+  useEditorSetting,
+  usePromptPrefaceSetting,
+  useRawMessageCleanupSetting,
+  useSetting,
+  useSummaryModelsSetting,
+  useTaskEventNotificationsSetting,
+  useThinkingSettingsSetting,
+  useUpdateAppearanceSetting,
+  useUpdateBackendDefaultModelsSetting,
+  useUpdateBackendsSetting,
+  useUpdateCalendarNotificationsSetting,
+  useUpdateEditorAutomationSetting,
+  useUpdateEditorSetting,
+  useUpdatePromptPrefaceSetting,
+  useUpdateRawMessageCleanupSetting,
+  useUpdateSetting,
+  useUpdateSummaryModelsSetting,
+  useUpdateTaskEventNotificationsSetting,
+  useUpdateThinkingSettingsSetting,
+  useUpdateUsageDisplaySetting,
+  useUsageDisplaySetting,
+} from '@/hooks/use-settings';
 import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
-import {
-  DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
-  DEFAULT_TASK_NOTIFICATION_MODES,
-  PRESET_EDITORS,
-  type ModelPreference,
-  type RawMessageCleanupSetting,
-  type ThinkingEffort,
-  type CalendarNotificationsSetting,
-  type TaskNotificationEvent,
-  type TaskNotificationMode,
-} from '@shared/types';
 import { USAGE_PROVIDERS, type UsageProviderType } from '@shared/usage-types';
+import {
+  useCleanupClaudeProjects,
+  useScanNonExistentProjects,
+} from '@/hooks/use-claude-projects-cleanup';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import { Button } from '@/common/ui/button';
+import { Checkbox } from '@/common/ui/checkbox';
+import { Input } from '@/common/ui/input';
+import { ModelSelector } from '@/features/agent/ui-model-selector';
+import { Select } from '@/common/ui/select';
+import { Textarea } from '@/common/ui/textarea';
+import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
+import { useBackendModels } from '@/hooks/use-backend-models';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useDeleteWorkActivity } from '@/hooks/use-work-activity';
+import { useToastStore } from '@/stores/toasts';
+
+
 
 const PROMPT_PREFACE_PLACEMENT_OPTIONS = [
   { value: 'before', label: 'Before user prompt' },
@@ -98,6 +103,10 @@ const MEETING_JOIN_TARGET_OPTIONS = [
   { value: 'web', label: 'Web browser' },
   { value: 'app', label: 'Teams app' },
 ];
+
+function getUtcDateInputValue(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
 
 const TASK_NOTIFICATION_OPTIONS: Array<{
   event: TaskNotificationEvent;
@@ -339,7 +348,7 @@ export function PromptPrefaceSettings() {
 
   useEffect(() => {
     if (setting) {
-      setDraftText(setting.text);
+      startTransition(() => setDraftText(setting.text));
     }
   }, [setting]);
 
@@ -433,7 +442,7 @@ function RawMessageCleanupSettings() {
   );
 
   useEffect(() => {
-    setRetentionInput(String(settings.retentionHours));
+    startTransition(() => setRetentionInput(String(settings.retentionHours)));
   }, [settings.retentionHours]);
 
   const updateSetting = (next: RawMessageCleanupSetting) => {
@@ -509,6 +518,138 @@ function RawMessageCleanupSettings() {
   );
 }
 
+export function WorkActivitySettings() {
+  const addToast = useToastStore((state) => state.addToast);
+  const { data: workActivitySetting } = useSetting('workActivity');
+  const updateSetting = useUpdateSetting<'workActivity'>();
+  const deleteWorkActivity = useDeleteWorkActivity();
+  const [deleteBeforeDate, setDeleteBeforeDate] = useState('');
+  const todayUtcDate = getUtcDateInputValue(new Date());
+
+  function toggleLogging(checked: boolean) {
+    updateSetting.mutate(
+      {
+        key: 'workActivity',
+        value: { enabled: checked },
+      },
+      {
+        onError: () => {
+          addToast({
+            type: 'error',
+            message: 'Failed to update activity logging',
+          });
+        },
+      },
+    );
+  }
+
+  function deleteBefore() {
+    if (!deleteBeforeDate) return;
+    if (deleteBeforeDate > todayUtcDate) {
+      addToast({
+        type: 'error',
+        message: 'Delete date cannot be in the future',
+      });
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Delete work activity before ${deleteBeforeDate}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    deleteWorkActivity.mutate(
+      { before: new Date(`${deleteBeforeDate}T00:00:00.000Z`).toISOString() },
+      {
+        onSuccess: () => {
+          addToast({ type: 'success', message: 'Work activity deleted' });
+        },
+        onError: () => {
+          addToast({
+            type: 'error',
+            message: 'Failed to delete work activity',
+          });
+        },
+      },
+    );
+  }
+
+  function deleteAll() {
+    if (!window.confirm('Delete all work activity? This cannot be undone.')) {
+      return;
+    }
+
+    deleteWorkActivity.mutate(undefined, {
+      onSuccess: () => {
+        addToast({ type: 'success', message: 'All work activity deleted' });
+      },
+      onError: () => {
+        addToast({ type: 'error', message: 'Failed to delete work activity' });
+      },
+    });
+  }
+
+  return (
+    <div>
+      <h2 className="text-ink-1 text-lg font-semibold">Work Activity</h2>
+      <p className="text-ink-3 mt-1 text-sm">
+        Control automatic activity logging and manage stored activity data.
+      </p>
+
+      <div className="mt-4 space-y-4">
+        <Checkbox
+          checked={workActivitySetting?.enabled ?? true}
+          onChange={toggleLogging}
+          disabled={updateSetting.isPending}
+          label="Log work activity"
+          description="Track task prompts, PR comments, and approvals for weekly summaries."
+        />
+
+        <div className="border-glass-border bg-bg-1/50 rounded-lg border p-4">
+          <h3 className="text-ink-1 text-sm font-medium">Retention</h3>
+          <p className="text-ink-3 mt-1 text-sm">
+            Delete old activity entries or clear all stored activity.
+          </p>
+
+          <div className="mt-4 flex flex-wrap items-end gap-3">
+            <label className="block">
+              <span className="text-ink-2 mb-1 block text-xs font-medium">
+                Delete before date
+              </span>
+              <Input
+                type="date"
+                value={deleteBeforeDate}
+                max={todayUtcDate}
+                onChange={(event) =>
+                  setDeleteBeforeDate(event.currentTarget.value)
+                }
+                className="w-44"
+              />
+            </label>
+            <Button
+              variant="secondary"
+              onClick={deleteBefore}
+              disabled={!deleteBeforeDate || deleteWorkActivity.isPending}
+            >
+              Delete Before Date
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={deleteAll}
+              disabled={deleteWorkActivity.isPending}
+            >
+              Delete All
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function GeneralSettings() {
   return (
     <div>
@@ -519,6 +660,8 @@ export function GeneralSettings() {
       <NotificationsSettings />
       <div className="border-line-soft my-8 border-t" />
       <UsageDisplaySettings />
+      <div className="border-line-soft my-8 border-t" />
+      <WorkActivitySettings />
       <div className="border-line-soft my-8 border-t" />
       <MaintenanceSettings />
     </div>
@@ -786,7 +929,7 @@ function CalendarNotificationSettings() {
   );
 
   useEffect(() => {
-    setLeadTimeInput(String(settings.leadTimeMinutes));
+    startTransition(() => setLeadTimeInput(String(settings.leadTimeMinutes)));
   }, [settings.leadTimeMinutes]);
 
   const updateSetting = (next: CalendarNotificationsSetting) => {
@@ -959,7 +1102,7 @@ function TaskNotificationSettings() {
   };
 
   useEffect(() => {
-    checkDesktopStatus();
+    startTransition(() => checkDesktopStatus());
 
     window.addEventListener('focus', checkDesktopStatus);
     return () => window.removeEventListener('focus', checkDesktopStatus);
@@ -1108,11 +1251,11 @@ export function UsageDisplaySettings() {
   const hasStoredCopilotToken = usageDisplaySetting?.copilotToken === 'stored';
 
   useEffect(() => {
-    setCopilotToken(
+    startTransition(() => setCopilotToken(
       usageDisplaySetting?.copilotToken === 'stored'
         ? ''
         : (usageDisplaySetting?.copilotToken ?? ''),
-    );
+    ));
   }, [usageDisplaySetting?.copilotToken]);
 
   const isEnabled = (id: UsageProviderType) => enabledProviders.includes(id);

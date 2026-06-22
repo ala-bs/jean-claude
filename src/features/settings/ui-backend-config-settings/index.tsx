@@ -1,22 +1,27 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileJson, RotateCcw, Save } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { Button } from '@/common/ui/button';
-import { Input } from '@/common/ui/input';
+
 import {
   ListDetailLayout,
   ListGroupHeader,
   ListItemButton,
   ListPane,
 } from '@/common/ui/list-detail-layout';
+import { useSetting, useUpdateSetting } from '@/hooks/use-settings';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import { api } from '@/lib/api';
+import { Button } from '@/common/ui/button';
+import { Input } from '@/common/ui/input';
+import type { OpenCodeProcessMode } from '@shared/types';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
 import { Textarea } from '@/common/ui/textarea';
-import { api } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
-import type { AgentBackendType } from '@shared/agent-backend-types';
+
+
 
 type ConfigObject = Record<string, unknown>;
 
@@ -66,6 +71,23 @@ const BACKEND_META: Record<
     userPath: '~/.codex/config.toml',
   },
 };
+
+const OPENCODE_PROCESS_OPTIONS = [
+  {
+    value: 'standalone',
+    label: 'Standalone per task step',
+    description: 'Best resource tracking; more process overhead.',
+  },
+  {
+    value: 'shared',
+    label: 'Shared app server',
+    description: 'Lower overhead; resource usage attributed less precisely.',
+  },
+] satisfies Array<{
+  value: OpenCodeProcessMode;
+  label: string;
+  description: string;
+}>;
 
 const CLAUDE_FIELDS: ConfigField[] = [
   {
@@ -1642,6 +1664,45 @@ function FieldCard({
   );
 }
 
+export function OpenCodeProcessModeSettings() {
+  const setting = useSetting('opencodeProcess');
+  const updateSetting = useUpdateSetting<'opencodeProcess'>();
+  const addToast = useToastStore((s) => s.addToast);
+  const value = setting.data?.mode ?? 'standalone';
+
+  return (
+    <div className="border-line-soft bg-bg-1/60 mt-3 rounded-lg border p-3">
+      <div className="text-ink-1 text-xs font-semibold">Process mode</div>
+      <p className="text-ink-3 mt-1 text-[11px]">
+        Applies to new OpenCode steps. Standalone enables per-step resource
+        usage tracking. Shared reduces OpenCode server overhead, but shared
+        server usage may appear under multiple OpenCode steps. Steps with
+        runtime MCP servers still use standalone.
+      </p>
+      <div className="mt-2 max-w-sm">
+        <Select
+          value={value}
+          disabled={setting.isLoading || updateSetting.isPending}
+          onChange={(mode) =>
+            updateSetting.mutate(
+              {
+                key: 'opencodeProcess',
+                value: { mode: mode as OpenCodeProcessMode },
+              },
+              {
+                onError: (error) => {
+                  addToast({ message: formatError(error), type: 'error' });
+                },
+              },
+            )
+          }
+          options={OPENCODE_PROCESS_OPTIONS}
+        />
+      </div>
+    </div>
+  );
+}
+
 function StructuredBackendConfigSettings({
   backend,
 }: {
@@ -1714,10 +1775,10 @@ function StructuredBackendConfigSettings({
       if (hasLocalEdits && currentSerialized !== serialized) return;
 
       appliedDataRef.current = dataKey;
-      setConfig(parsed);
-      setBaselineConfig(serialized);
-      setLoadError(null);
-      setTextValues(
+      startTransition(() => setConfig(parsed));
+      startTransition(() => setBaselineConfig(serialized));
+      startTransition(() => setLoadError(null));
+      startTransition(() => setTextValues(
         Object.fromEntries(
           getFields(backend)
             .filter((field) => field.kind === 'array' || field.kind === 'json')
@@ -1726,22 +1787,22 @@ function StructuredBackendConfigSettings({
               valueToText(getPathValue(parsed, field.path)),
             ]),
         ),
-      );
+      ));
     } catch (error) {
       appliedDataRef.current = dataKey;
-      setConfig(null);
-      setBaselineConfig('');
-      setLoadError(formatError(error));
+      startTransition(() => setConfig(null));
+      startTransition(() => setBaselineConfig(''));
+      startTransition(() => setLoadError(formatError(error)));
     }
   }, [backend, baselineConfig, config, query.data]);
 
   useEffect(() => {
-    setSelectedFieldPath((current) => {
+    startTransition(() => setSelectedFieldPath((current) => {
       if (current && visibleFields.some((field) => field.path === current)) {
         return current;
       }
       return visibleFields[0]?.path ?? null;
-    });
+    }));
   }, [visibleFields]);
 
   const fieldErrors = useMemo(() => {

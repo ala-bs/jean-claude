@@ -15,13 +15,15 @@ import type {
 } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
 
-import { getOrCreateCodexAppServer } from './codex-app-server';
-import type { CodexJsonRpcNotification } from './codex-json-rpc-client';
 import {
+  type CodexNormalizationContext,
   createCodexNormalizationContext,
   normalizeCodexNotification,
-  type CodexNormalizationContext,
 } from './normalize-codex-message-v2';
+import type { CodexJsonRpcNotification } from './codex-json-rpc-client';
+import { getOrCreateCodexAppServer } from './codex-app-server';
+
+
 
 const CODEX_IDLE_COMPLETION_TIMEOUT_MS = 60_000;
 
@@ -91,6 +93,7 @@ type CodexSessionState = {
     {
       rowId: string;
       notification: CodexDeltaNotification;
+      dirty: boolean;
     }
   >;
 };
@@ -135,7 +138,7 @@ export class CodexBackend implements AgentBackend {
     this.sessions.set(sessionKey, session);
 
     try {
-      const { client } = await getOrCreateCodexAppServer();
+      const { client, rootPid } = await getOrCreateCodexAppServer();
       const threadConfig = createCodexThreadConfig(config);
       const threadResult = config.sessionId
         ? await client.request('thread/resume', {
@@ -175,9 +178,10 @@ export class CodexBackend implements AgentBackend {
       return {
         sessionId: sessionKey,
         events: session.eventChannel,
+        rootPid,
       };
     } catch (error) {
-      this.cleanupSession(sessionKey, session);
+      await this.cleanupSession(sessionKey, session);
       throw error;
     }
   }
@@ -189,7 +193,7 @@ export class CodexBackend implements AgentBackend {
     try {
       await this.interruptSession(session);
     } finally {
-      this.cleanupSession(sessionId, session);
+      await this.cleanupSession(sessionId, session);
     }
   }
 
@@ -243,7 +247,7 @@ export class CodexBackend implements AgentBackend {
           type: 'error',
           error: `Failed to persist Codex raw notification: ${errorMessage(error)}`,
         });
-        this.cleanupSession(session.sessionId, session);
+        await this.cleanupSession(session.sessionId, session);
       }
       return;
     }
@@ -274,7 +278,7 @@ export class CodexBackend implements AgentBackend {
 
       if (event.type === 'complete') {
         session.turnId = null;
-        this.cleanupSession(session.sessionId, session);
+        await this.cleanupSession(session.sessionId, session);
         return;
       }
     }
@@ -308,6 +312,8 @@ export class CodexBackend implements AgentBackend {
     const mergedDeltaId = await this.persistMergedDelta(session, notification);
     if (mergedDeltaId !== null) return mergedDeltaId;
 
+    await this.flushRawDeltaRows(session);
+
     const messageIndex = session.messageIndex++;
     return this.taskContext.persistRaw({
       messageIndex,
@@ -339,6 +345,7 @@ export class CodexBackend implements AgentBackend {
       session.rawDeltaRows.set(key, {
         rowId,
         notification: cloneCodexDeltaNotification(notification),
+        dirty: false,
       });
       return rowId;
     }
@@ -350,21 +357,42 @@ export class CodexBackend implements AgentBackend {
         delta: existing.notification.params.delta + notification.params.delta,
       },
     };
-    await this.taskContext.updateRaw({
-      rowId: existing.rowId,
-      rawData: existing.notification,
-    });
+    existing.dirty = true;
     return existing.rowId;
   }
 
-  private cleanupSession(sessionId: string, session: CodexSessionState): void {
+  private async flushRawDeltaRows(session: CodexSessionState): Promise<void> {
+    if (!this.taskContext.updateRaw) return;
+
+    for (const deltaRow of session.rawDeltaRows.values()) {
+      if (!deltaRow.dirty) continue;
+
+      await this.taskContext.updateRaw({
+        rowId: deltaRow.rowId,
+        rawData: deltaRow.notification,
+      });
+      deltaRow.dirty = false;
+    }
+  }
+
+  private async cleanupSession(
+    sessionId: string,
+    session: CodexSessionState,
+    options: { flushRawDeltas?: boolean } = {},
+  ): Promise<void> {
     if (session.closed) return;
     session.closed = true;
     this.clearIdleCompletionTimer(session);
     session.unsubscribe?.();
     session.unsubscribe = null;
-    session.eventChannel.close();
-    this.sessions.delete(sessionId);
+    try {
+      if (options.flushRawDeltas !== false) {
+        await this.flushRawDeltaRows(session);
+      }
+    } finally {
+      session.eventChannel.close();
+      this.sessions.delete(sessionId);
+    }
   }
 
   private scheduleIdleCompletionIfNeeded(session: CodexSessionState): void {
@@ -388,12 +416,29 @@ export class CodexBackend implements AgentBackend {
         return;
       }
 
-      session.turnId = null;
-      session.eventChannel.push({
-        type: 'complete',
-        result: { isError: false, model: session.normalizationCtx.model },
-      });
-      this.cleanupSession(session.sessionId, session);
+      void (async () => {
+        try {
+          await this.flushRawDeltaRows(session);
+          if (session.closed || session.turnId === null) return;
+
+          session.turnId = null;
+          session.eventChannel.push({
+            type: 'complete',
+            result: { isError: false, model: session.normalizationCtx.model },
+          });
+          await this.cleanupSession(session.sessionId, session);
+        } catch (error) {
+          if (!session.closed) {
+            session.eventChannel.push({
+              type: 'error',
+              error: `Failed to flush Codex raw deltas: ${errorMessage(error)}`,
+            });
+            await this.cleanupSession(session.sessionId, session, {
+              flushRawDeltas: false,
+            });
+          }
+        }
+      })();
     }, CODEX_IDLE_COMPLETION_TIMEOUT_MS);
     session.idleCompletionTimer.unref?.();
   }
@@ -409,7 +454,9 @@ function partsToCodexInput(parts: PromptPart[]): unknown[] {
   return parts.flatMap<unknown>((part) => {
     if (part.type === 'text') return [{ type: 'text', text: part.text }];
     if (part.type === 'image') {
-      return [{ type: 'image', data: part.data, mimeType: part.mimeType }];
+      return [
+        { type: 'image', url: `data:${part.mimeType};base64,${part.data}` },
+      ];
     }
     return [{ type: 'text', text: `Attached file: ${part.filePath}` }];
   });
@@ -544,6 +591,7 @@ function threadIdFromNotification(
   const thread = record(params?.thread);
   return (
     stringOrNull(params?.threadId) ??
+    stringOrNull(params?.thread_id) ??
     stringOrNull(thread?.id) ??
     (notification.method === 'thread/started' ? stringOrNull(params?.id) : null)
   );
@@ -564,10 +612,14 @@ function notificationMatchesSession(
   const threadId = threadIdFromNotification(notification);
   const turnId = turnIdFromNotification(notification);
   let hasScope = false;
+  let isChildThread = false;
 
   if (threadId !== null) {
     if (session.threadId !== null && threadId !== session.threadId) {
-      return false;
+      isChildThread =
+        notification.method.startsWith('item/') &&
+        session.normalizationCtx.subagentToolIdsByThreadId.has(threadId);
+      if (!isChildThread) return false;
     }
     hasScope = true;
   }
@@ -576,7 +628,11 @@ function notificationMatchesSession(
     if (session.turnId === null && threadId === null) {
       return false;
     }
-    if (session.turnId !== null && turnId !== session.turnId) {
+    if (
+      session.turnId !== null &&
+      turnId !== session.turnId &&
+      !isChildThread
+    ) {
       return false;
     }
     hasScope = true;

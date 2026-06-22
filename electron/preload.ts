@@ -1,27 +1,33 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
-import { AGENT_CHANNELS } from '@shared/agent-types';
-import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
-import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
-import type { DebugLogEntry } from '@shared/debug-log-types';
-import type {
-  GlobalPrompt,
-  GlobalPromptResponse,
-} from '@shared/global-prompt-types';
-import type {
-  AppNotification,
-  TaskNotificationTarget,
-} from '@shared/notification-types';
-import type {
-  GetYamlParametersIpcParams,
-  QueueBuildIpcParams,
-} from '@shared/pipeline-types';
 import type {
   AddGitHubSourceParams,
   InstallSourceItemsParams,
   UpdateSourceInstallParams,
 } from '@shared/source-management-types';
+import type {
+  AppNotification,
+  TaskNotificationTarget,
+} from '@shared/notification-types';
+import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
+import type {
+  GetYamlParametersIpcParams,
+  QueueBuildIpcParams,
+} from '@shared/pipeline-types';
+import type {
+  GlobalPrompt,
+  GlobalPromptResponse,
+} from '@shared/global-prompt-types';
+import type {
+  NewWorkActivityEvent,
+  WorkActivityWeekParams,
+} from '@shared/work-activity-types';
+import { AGENT_CHANNELS } from '@shared/agent-types';
+import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
+import type { DebugLogEntry } from '@shared/debug-log-types';
+
+
 
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
@@ -323,6 +329,11 @@ contextBridge.exposeInMainWorld('api', {
       projectName: string;
       workItemId: number;
     }) => ipcRenderer.invoke('azureDevOps:getWorkItemComments', params),
+    getWorkItemHistory: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemHistory', params),
     addWorkItemComment: (params: {
       providerId: string;
       projectName: string;
@@ -786,6 +797,15 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('agent:usage:getDashboard', params),
     getTaskUsage: (taskId: string) =>
       ipcRenderer.invoke('agent:usage:getTaskUsage', taskId),
+  },
+  workActivity: {
+    record: (event: NewWorkActivityEvent) =>
+      ipcRenderer.invoke('workActivity:record', event),
+    getRange: (params: WorkActivityWeekParams) =>
+      ipcRenderer.invoke('workActivity:getRange', params),
+    deleteBefore: (before: string) =>
+      ipcRenderer.invoke('workActivity:deleteBefore', before),
+    deleteAll: () => ipcRenderer.invoke('workActivity:deleteAll'),
   },
   rateLimitSwap: {
     getStatus: () =>

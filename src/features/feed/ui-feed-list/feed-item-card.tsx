@@ -1,9 +1,8 @@
-import { useNavigate, useParams } from '@tanstack/react-router';
-import clsx from 'clsx';
 import {
   ArrowDownNarrowWide,
-  Bug,
   Bot,
+  Bug,
+  CheckCircle2,
   CircleHelp,
   ClipboardList,
   FolderOpen,
@@ -14,43 +13,55 @@ import {
   MessageSquare,
   MinusCircle,
   Pin,
+  PinOff,
   ShieldAlert,
   ShieldQuestion,
-  PinOff,
   StickyNote,
   Terminal,
-  CheckCircle2,
   XCircle,
 } from 'lucide-react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import clsx from 'clsx';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 
+
+
+import {
+  bgJobLabel,
+  useRunningBackgroundJobsForTask,
+} from '@/stores/background-jobs';
 import {
   Dropdown,
   DropdownDivider,
   DropdownInfo,
   DropdownItem,
 } from '@/common/ui/dropdown';
-import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
-import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
-import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
+import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
 import {
   useCachedPullRequest,
-  usePullRequestPolicyEvaluations,
   usePullRequest,
+  usePullRequestPolicyEvaluations,
 } from '@/hooks/use-pull-requests';
 import { useCompleteTask, useTask } from '@/hooks/use-tasks';
+import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
 import { formatRelativeTime } from '@/lib/time';
-import {
-  bgJobLabel,
-  useRunningBackgroundJobsForTask,
-} from '@/stores/background-jobs';
+import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
+import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useFeedStore } from '@/stores/feed';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
-import { useOverlaysStore } from '@/stores/overlays';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
+import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
+
+
 
 import { useFeedItemProject } from './use-feed-item-project';
 
@@ -365,7 +376,7 @@ function RailPrCiStatus({
   );
 
   useEffect(() => {
-    setShouldPollCi(ciCounts.running > 0);
+    startTransition(() => setShouldPollCi(ciCounts.running > 0));
   }, [ciCounts.running]);
 
   if (!isAutoCompleteSet) {
@@ -409,6 +420,9 @@ function RailPrCiStatus({
 export function FeedItemCard({
   item,
   isSelected,
+  currentTaskId,
+  currentWorkItemId,
+  currentPrId,
   isSubtask,
   isDraggable,
   onDragStart,
@@ -419,6 +433,9 @@ export function FeedItemCard({
 }: {
   item: FeedItem;
   isSelected?: boolean;
+  currentTaskId?: string;
+  currentWorkItemId?: string;
+  currentPrId?: string;
   isSubtask?: boolean;
   isDraggable?: boolean;
   onDragStart?: () => void;
@@ -428,10 +445,6 @@ export function FeedItemCard({
   onDragEnd?: () => void;
 }) {
   const navigate = useNavigate();
-  const params = useParams({ strict: false });
-  const currentTaskId = (params as { taskId?: string }).taskId;
-  const currentWorkItemId = (params as { workItemId?: string }).workItemId;
-  const currentPrId = (params as { prId?: string }).prId;
   const pin = useFeedStore((s) => s.pin);
   const unpin = useFeedStore((s) => s.unpin);
   const dismiss = useFeedStore((s) => s.dismiss);
@@ -493,7 +506,11 @@ export function FeedItemCard({
   const needsPermission = item.attention === 'needs-permission';
   const hasQuestion = item.attention === 'has-question';
   const needsAttention = needsPermission || hasQuestion;
-  const hasChildren = !isSubtask && (item.children?.length ?? 0) > 0;
+  const visibleChildren = useMemo(
+    () => (item.children ?? []).filter((child) => !child.isCompleted),
+    [item.children],
+  );
+  const hasChildren = !isSubtask && visibleChildren.length > 0;
   const hasPr = isTask && !!item.pullRequestId;
   const prMerged =
     item.workItemPrStatus === 'completed' || cachedPr?.status === 'completed';
@@ -946,7 +963,7 @@ export function FeedItemCard({
 
           {/* ─── Sub-task rows (branch off main rail) ─── */}
           {hasChildren &&
-            item.children!.map((child) => (
+            visibleChildren.map((child) => (
               <SubtaskRow
                 key={child.id}
                 child={child}

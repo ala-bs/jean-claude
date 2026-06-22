@@ -1,82 +1,83 @@
+import type {
+  AddGitHubSourceParams,
+  InstallSourceItemsParams,
+  SourceView,
+  UpdateSourceInstallParams,
+} from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
   AgentMigrationExecuteResult,
   AgentMigrationPreviewResult,
   ManagedAgent,
 } from '@shared/agent-management-types';
-import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
 import type {
   AgentQuestion,
   PermissionResponse,
   QuestionResponse,
 } from '@shared/agent-types';
-import type { AgentUIEvent } from '@shared/agent-ui-events';
 import type {
   AiUsageDashboard,
   AiUsageDashboardParams,
   AiUsageTaskUsage,
 } from '@shared/ai-usage-types';
 import type {
-  AzureDevOpsPullRequest,
-  AzureDevOpsPullRequestDetails,
-  AzureDevOpsCommit,
-  AzureDevOpsFileChange,
-  AzureDevOpsIdentity,
-  AzureDevOpsCommentThread,
-  AzureDevOpsComment,
-  AzureDevOpsPolicyEvaluation,
-} from '@shared/azure-devops-types';
-import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
-import type { UpcomingMeeting } from '@shared/calendar-types';
-import type { DebugLogEntry } from '@shared/debug-log-types';
-import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
-import type { FoldRange } from '@shared/fold-types';
-import type {
-  GlobalPrompt,
-  GlobalPromptResponse,
-} from '@shared/global-prompt-types';
-import type {
-  McpServerTemplate,
-  McpPreset,
-  NewMcpServerTemplate,
-  UpdateMcpServerTemplate,
-  ProjectMcpOverride,
-  NewProjectMcpOverride,
-  UnifiedMcpServer,
-} from '@shared/mcp-types';
-import type {
-  NormalizedEntry,
-  NormalizedPermissionRequest,
-} from '@shared/normalized-message-v2';
-import type {
   AppNotification,
   TaskNotificationTarget,
 } from '@shared/notification-types';
 import type {
-  TrackedPipeline,
-  AzureBuildRun,
-  AzureRelease,
-  AzureBuildDetail,
-  AzureBuildTimeline,
-  AzureReleaseDetail,
-  AzureGitRef,
+  AppSettings,
+  BranchInfo,
+  DetectedProjectLogo,
+  InteractionMode,
+  NewProject,
+  NewProvider,
+  NewTask,
+  NewTaskStep,
+  NewToken,
+  Project,
+  ProjectFeatureMap,
+  ProjectLogoHistoryItem,
+  ProjectTodo,
+  Provider,
+  Task,
+  TaskStep,
+  ThinkingEffort,
+  Token,
+  UpdateProject,
+  UpdateProvider,
+  UpdateTask,
+  UpdateTaskStep,
+  UpdateToken,
+} from '@shared/types';
+import type {
   AzureBuildDefinitionDetail,
-  YamlPipelineParameter,
+  AzureBuildDetail,
+  AzureBuildRun,
+  AzureBuildTimeline,
+  AzureGitRef,
+  AzureRelease,
+  AzureReleaseDetail,
   GetYamlParametersIpcParams,
   QueueBuildIpcParams,
+  TrackedPipeline,
+  YamlPipelineParameter,
 } from '@shared/pipeline-types';
 import type {
-  ProjectCommand,
-  ProjectCommandGroup,
-  RunCommandConfigItem,
-  NewProjectCommand,
-  NewProjectCommandGroup,
-  UpdateProjectCommand,
-  UpdateProjectCommandGroup,
-  RunStatus,
-  PortsInUseErrorData,
-  PackageScriptsResult,
-} from '@shared/run-command-types';
+  AzureDevOpsComment,
+  AzureDevOpsCommentThread,
+  AzureDevOpsCommit,
+  AzureDevOpsFileChange,
+  AzureDevOpsIdentity,
+  AzureDevOpsPolicyEvaluation,
+  AzureDevOpsPullRequest,
+  AzureDevOpsPullRequestDetails,
+} from '@shared/azure-devops-types';
+import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
+import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
+import type {
+  GlobalPrompt,
+  GlobalPromptResponse,
+} from '@shared/global-prompt-types';
 import type {
   LegacySkillMigrationExecuteResult,
   LegacySkillMigrationPreviewResult,
@@ -87,38 +88,44 @@ import type {
   SkillScope,
 } from '@shared/skill-types';
 import type {
-  AddGitHubSourceParams,
-  InstallSourceItemsParams,
-  SourceView,
-  UpdateSourceInstallParams,
-} from '@shared/source-management-types';
+  McpPreset,
+  McpServerTemplate,
+  NewMcpServerTemplate,
+  NewProjectMcpOverride,
+  ProjectMcpOverride,
+  UnifiedMcpServer,
+  UpdateMcpServerTemplate,
+} from '@shared/mcp-types';
 import type {
-  Project,
-  ProjectFeatureMap,
-  NewProject,
-  UpdateProject,
-  Task,
-  NewTask,
-  UpdateTask,
-  TaskStep,
-  NewTaskStep,
-  UpdateTaskStep,
-  Provider,
-  NewProvider,
-  UpdateProvider,
-  Token,
-  NewToken,
-  UpdateToken,
-  BranchInfo,
-  InteractionMode,
-  ThinkingEffort,
-  AppSettings,
-  ProjectTodo,
-  DetectedProjectLogo,
-  ProjectLogoHistoryItem,
-} from '@shared/types';
+  NewProjectCommand,
+  NewProjectCommandGroup,
+  PackageScriptsResult,
+  PortsInUseErrorData,
+  ProjectCommand,
+  ProjectCommandGroup,
+  RunCommandConfigItem,
+  RunStatus,
+  UpdateProjectCommand,
+  UpdateProjectCommandGroup,
+} from '@shared/run-command-types';
+import type {
+  NewWorkActivityEvent,
+  WorkActivityEvent,
+  WorkActivityWeekParams,
+} from '@shared/work-activity-types';
+import type {
+  NormalizedEntry,
+  NormalizedPermissionRequest,
+} from '@shared/normalized-message-v2';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
+import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
+import type { AgentUIEvent } from '@shared/agent-ui-events';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
+import type { DebugLogEntry } from '@shared/debug-log-types';
+import type { FoldRange } from '@shared/fold-types';
+import type { UpcomingMeeting } from '@shared/calendar-types';
+
+
 
 export type {
   AzureDevOpsPullRequest,
@@ -275,6 +282,17 @@ export interface WorkItemComment {
   text: string;
   createdBy: string;
   createdDate: string;
+}
+
+export interface WorkItemHistoryEntry {
+  id: number;
+  revisedBy: string;
+  revisedDate: string;
+  fields: Array<{
+    name: string;
+    oldValue?: string;
+    newValue?: string;
+  }>;
 }
 
 export interface AzureDevOpsIteration {
@@ -654,6 +672,11 @@ export interface Api {
       projectName: string;
       workItemId: number;
     }) => Promise<WorkItemComment[]>;
+    getWorkItemHistory: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => Promise<WorkItemHistoryEntry[]>;
     addWorkItemComment: (params: {
       providerId: string;
       projectName: string;
@@ -1080,6 +1103,12 @@ export interface Api {
     getDashboard: (params: AiUsageDashboardParams) => Promise<AiUsageDashboard>;
     getTaskUsage: (taskId: string) => Promise<AiUsageTaskUsage>;
   };
+  workActivity: {
+    record: (event: NewWorkActivityEvent) => Promise<WorkActivityEvent | null>;
+    getRange: (params: WorkActivityWeekParams) => Promise<WorkActivityEvent[]>;
+    deleteBefore: (before: string) => Promise<void>;
+    deleteAll: () => Promise<void>;
+  };
   rateLimitSwap: {
     getStatus: () => Promise<{
       active: boolean;
@@ -1504,6 +1533,7 @@ export interface Api {
   };
   system: {
     getMemoryUsage: () => Promise<{
+      logicalCpuCount: number;
       totalRssBytes: number;
       mainProcess: {
         heapUsedBytes: number;
@@ -1767,6 +1797,7 @@ export const api: Api = hasWindowApi
         },
         getRelatedTestCases: async () => [],
         getWorkItemComments: async () => [],
+        getWorkItemHistory: async () => [],
         addWorkItemComment: async () => {
           throw new Error('API not available');
         },
@@ -1987,6 +2018,12 @@ export const api: Api = hasWindowApi
             taskCount: 0,
           },
         }),
+      },
+      workActivity: {
+        record: async () => null,
+        getRange: async () => [],
+        deleteBefore: async () => {},
+        deleteAll: async () => {},
       },
       rateLimitSwap: {
         getStatus: async () => ({ active: false, swaps: [] }),
@@ -2330,6 +2367,7 @@ export const api: Api = hasWindowApi
       },
       system: {
         getMemoryUsage: async () => ({
+          logicalCpuCount: 1,
           totalRssBytes: 0,
           mainProcess: {
             heapUsedBytes: 0,

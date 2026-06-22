@@ -1,4 +1,3 @@
-import clsx from 'clsx';
 import {
   AlertCircle,
   Check,
@@ -9,28 +8,34 @@ import {
   Loader2,
   PackageOpen,
 } from 'lucide-react';
-import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { codeToTokens, type ThemedToken } from 'shiki';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
+import { memo, startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import clsx from 'clsx';
+
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { formatNumber } from '@/lib/number';
-import { formatDuration } from '@/lib/time';
-import type { TodoItem } from '@shared/agent-types';
 import type {
   NormalizedEntry,
   NormalizedToolUse,
   ToolUseByName,
 } from '@shared/normalized-message-v2';
+import { formatDuration } from '@/lib/time';
+import { formatNumber } from '@/lib/number';
+import type { TodoItem } from '@shared/agent-types';
+
+
 
 import {
   computeDiff,
   parseUnifiedPatchToStrings,
 } from '../../ui-diff-view/diff-utils';
+import { CommentableTextEntry } from '../ui-commentable-text-entry';
 import { getLanguageFromPath } from '../../ui-diff-view/language-utils';
 import { MarkdownContent } from '../../ui-markdown-content';
-import { CommentableTextEntry } from '../ui-commentable-text-entry';
 import { TodoListEntry } from '../ui-todo-list-entry';
+
+
 
 import { getToolSummary } from './tool-summary';
 
@@ -73,7 +78,7 @@ function LineNumberedContent({
   // Load syntax tokens asynchronously
   useEffect(() => {
     if (language === 'text') {
-      setTokens(null);
+      startTransition(() => setTokens(null));
       return;
     }
 
