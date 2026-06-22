@@ -510,7 +510,7 @@ function isFillHeightProject(sel: {
 
 function BetaBadge() {
   return (
-    <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+    <span className="border-status-run/20 bg-status-run-soft text-status-run rounded-full border px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
       Beta
     </span>
   );
@@ -537,27 +537,16 @@ function GlobalContent({ selection }: { selection: ActiveSelection }) {
         <div className="mb-5">
           {/* Breadcrumb for sub-items */}
           {subItem && (
-            <div
-              className="mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase"
-              style={{ color: 'oklch(0.55 0.01 280)' }}
-            >
+            <div className="text-ink-3 mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase">
               <span>{section.label}</span>
-              <ChevronRight size={10} style={{ opacity: 0.5 }} />
-              <span style={{ color: 'oklch(0.78 0.18 295)' }}>
-                {subItem.label}
-              </span>
+              <ChevronRight size={10} className="opacity-50" />
+              <span className="text-acc-ink">{subItem.label}</span>
             </div>
           )}
-          <div
-            className="text-[18px] font-semibold tracking-tight"
-            style={{ color: 'oklch(0.97 0.01 280)' }}
-          >
+          <div className="text-ink-0 text-[18px] font-semibold tracking-tight">
             {subItem?.label ?? section.title}
           </div>
-          <div
-            className="text-[12.5px]"
-            style={{ color: 'oklch(0.62 0.01 280)' }}
-          >
+          <div className="text-ink-2 text-[12.5px]">
             {subItem
               ? getGlobalSubtitle(selection.sectionId, selection.subId!)
               : section.subtitle}
@@ -966,8 +955,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
     <FocusLock returnFocus>
       <RemoveScroll>
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'oklch(0.08 0.01 280 / 0.7)' }}
+          className="bg-scrim-strong/70 fixed inset-0 z-50 flex items-center justify-center"
           onClick={onClose}
           tabIndex={-1}
           role="dialog"
@@ -975,48 +963,36 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
           aria-label="Settings"
         >
           <div
-            className="flex h-[85svh] w-[92svw] max-w-[1280px] flex-col overflow-hidden rounded-2xl border"
+            className="border-glass-border flex h-[85svh] w-[92svw] max-w-[1280px] flex-col overflow-hidden rounded-2xl border"
             style={{
-              background:
-                'radial-gradient(ellipse at 15% 5%, oklch(0.25 0.12 295 / 0.35), transparent 55%), radial-gradient(ellipse at 85% 95%, oklch(0.22 0.1 250 / 0.3), transparent 55%), oklch(0.14 0.015 280 / 0.92)',
+              background: `
+                radial-gradient(ellipse at 15% 5%, var(--theme-overlay-glow-1), transparent 55%),
+                radial-gradient(ellipse at 85% 95%, var(--theme-overlay-glow-2), transparent 55%),
+                var(--theme-overlay-panel)
+              `,
               backdropFilter: 'blur(40px) saturate(140%)',
-              borderColor: 'oklch(1 0 0 / 0.1)',
               boxShadow:
-                '0 30px 80px oklch(0 0 0 / 0.55), 0 0 0 1px oklch(1 0 0 / 0.04) inset',
+                '0 30px 80px var(--theme-overlay-backdrop), inset 0 0 0 1px var(--color-glass-border)',
             }}
             onClick={handlePanelClick}
           >
-            <div
-              className="relative flex h-[52px] shrink-0 items-center gap-3 overflow-hidden border-b px-4"
-              style={{
-                backgroundColor: 'oklch(1 0 0 / 0.035)',
-                borderColor: 'oklch(1 0 0 / 0.08)',
-              }}
-            >
+            <div className="border-glass-border bg-glass-subtle relative flex h-[52px] shrink-0 items-center gap-3 overflow-hidden border-b px-4">
               <div
                 className="pointer-events-none absolute inset-0"
                 style={{
                   background:
-                    'radial-gradient(ellipse 380px 120px at 14% -40%, oklch(0.78 0.18 295 / 0.18), transparent 70%)',
+                    'radial-gradient(ellipse 380px 120px at 14% -40%, var(--theme-overlay-glow-1), transparent 70%)',
                 }}
               />
               <div className="relative z-[1] flex items-center gap-2.5">
-                <Settings size={17} style={{ color: 'oklch(0.78 0.18 295)' }} />
-                <span
-                  className="text-[14.5px] font-semibold tracking-[-0.01em]"
-                  style={{ color: 'oklch(0.96 0.01 280)' }}
-                >
+                <Settings size={17} className="text-acc-ink" />
+                <span className="text-ink-0 text-[14.5px] font-semibold tracking-[-0.01em]">
                   Settings
                 </span>
               </div>
               <div className="flex-1" />
               <button
-                className="relative z-[1] flex w-[min(260px,34vw)] items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-white/[0.06]"
-                style={{
-                  backgroundColor: 'oklch(1 0 0 / 0.045)',
-                  border: '1px solid oklch(1 0 0 / 0.09)',
-                  color: 'oklch(0.58 0.01 280)',
-                }}
+                className="border-glass-border bg-glass-light text-ink-3 hover:bg-glass-medium relative z-[1] flex w-[min(260px,34vw)] items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors"
                 onClick={() => setPaletteOpen(true)}
               >
                 <Search size={14} />
@@ -1026,12 +1002,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                 <Kbd shortcut="cmd+k" />
               </button>
               <button
-                className="relative z-[1] flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-white/[0.08]"
-                style={{
-                  backgroundColor: 'oklch(1 0 0 / 0.045)',
-                  border: '1px solid oklch(1 0 0 / 0.09)',
-                  color: 'oklch(0.7 0.01 280)',
-                }}
+                className="border-glass-border bg-glass-light text-ink-2 hover:bg-glass-medium relative z-[1] flex size-8 items-center justify-center rounded-lg border transition-colors"
                 onClick={onClose}
                 aria-label="Close settings"
               >
@@ -1042,13 +1013,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             {/* Main body: sidebar + content */}
             <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               {/* Left sidebar menu */}
-              <div
-                className="flex w-[234px] shrink-0 flex-col"
-                style={{
-                  backgroundColor: 'oklch(0 0 0 / 0.2)',
-                  borderRight: '1px solid oklch(1 0 0 / 0.05)',
-                }}
-              >
+              <div className="border-glass-border bg-panel-scrim flex w-[234px] shrink-0 flex-col border-r">
                 <SettingsScopeHeader
                   activeTab={displayedActiveTab}
                   hasProjectTab={hasProjectTab}
@@ -1116,25 +1081,11 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             </div>
 
             {/* Footer */}
-            <div
-              className="flex shrink-0 items-center gap-3 font-mono text-[10.5px]"
-              style={{
-                backgroundColor: 'oklch(0 0 0 / 0.2)',
-                borderTop: '1px solid oklch(1 0 0 / 0.06)',
-                padding: '9px 16px',
-                color: 'oklch(0.55 0.01 280)',
-              }}
-            >
+            <div className="border-glass-border bg-panel-scrim text-ink-3 flex shrink-0 items-center gap-3 border-t px-4 py-2.5 font-mono text-[10.5px]">
               <span className="text-status-done flex items-center gap-1.5">
                 <Check size={12} strokeWidth={2.6} /> All changes saved
               </span>
-              <span
-                style={{
-                  width: 1,
-                  height: 12,
-                  background: 'oklch(1 0 0 / 0.08)',
-                }}
-              />
+              <span className="bg-glass-border h-3 w-px" />
               <span className="flex items-center gap-1">
                 <Kbd shortcut="cmd+k" /> search
               </span>
@@ -1191,15 +1142,10 @@ function ProjectContent({
       {!fillHeight && section && (
         <div className="mb-5">
           {subItem && (
-            <div
-              className="mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase"
-              style={{ color: 'oklch(0.55 0.01 280)' }}
-            >
+            <div className="text-ink-3 mb-3 flex items-center gap-1.5 font-mono text-[11px] tracking-wide uppercase">
               <span>{section.label}</span>
-              <ChevronRight size={10} style={{ opacity: 0.5 }} />
-              <span style={{ color: 'oklch(0.78 0.18 295)' }}>
-                {subItem.label}
-              </span>
+              <ChevronRight size={10} className="opacity-50" />
+              <span className="text-acc-ink">{subItem.label}</span>
             </div>
           )}
         </div>
@@ -1234,17 +1180,8 @@ function SettingsScopeHeader({
   onProjectChange: (projectId: string) => void;
 }) {
   return (
-    <div
-      className="border-b p-3"
-      style={{ borderColor: 'oklch(1 0 0 / 0.06)' }}
-    >
-      <div
-        className="grid grid-cols-2 gap-0.5 rounded-lg p-0.5"
-        style={{
-          backgroundColor: 'oklch(0 0 0 / 0.28)',
-          border: '1px solid oklch(1 0 0 / 0.07)',
-        }}
-      >
+    <div className="border-glass-border border-b p-3">
+      <div className="border-glass-border bg-panel-scrim-soft grid grid-cols-2 gap-0.5 rounded-lg border p-0.5">
         <button
           className="flex items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12.5px] font-medium transition-all"
           style={
@@ -1274,19 +1211,10 @@ function SettingsScopeHeader({
 
       <div className="mt-2 min-h-[38px]">
         {activeTab === 'project' && hasProjectTab && resolvedProject ? (
-          <div
-            className="flex items-center gap-2 rounded-lg px-2 py-1.5"
-            style={{
-              backgroundColor: 'oklch(1 0 0 / 0.035)',
-              border: '1px solid oklch(1 0 0 / 0.07)',
-            }}
-          >
+          <div className="border-glass-border bg-glass-subtle flex items-center gap-2 rounded-lg border px-2 py-1.5">
             <span
-              className="pointer-events-none flex size-5 shrink-0 items-center justify-center rounded text-[10px] font-bold"
-              style={{
-                backgroundColor: resolvedProject.color,
-                color: 'oklch(1 0 0)',
-              }}
+              className="text-chrome-fg pointer-events-none flex size-5 shrink-0 items-center justify-center rounded text-[10px] font-bold"
+              style={{ backgroundColor: resolvedProject.color }}
             >
               {resolvedProject.name.charAt(0).toUpperCase()}
             </span>
@@ -1300,15 +1228,8 @@ function SettingsScopeHeader({
             />
           </div>
         ) : (
-          <div
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2"
-            style={{
-              backgroundColor: 'oklch(1 0 0 / 0.025)',
-              border: '1px solid oklch(1 0 0 / 0.05)',
-              color: 'oklch(0.68 0.01 280)',
-            }}
-          >
-            <Grid3X3 size={14} style={{ color: 'oklch(0.78 0.18 295)' }} />
+          <div className="border-glass-border bg-glass-subtle text-ink-2 flex items-center gap-2 rounded-lg border px-2.5 py-2">
+            <Grid3X3 size={14} className="text-acc-ink" />
             <span className="text-[12px]">
               Applies to <b className="text-ink-1">all projects</b>
             </span>
@@ -1333,14 +1254,7 @@ function SettingsNavGroupView({
   return (
     <div className="mb-2">
       <div
-        className="sticky top-0 z-[1] -mx-2 px-4 py-1.5 font-mono text-[9.5px] font-semibold tracking-[0.1em] uppercase backdrop-blur"
-        style={{
-          backgroundColor: 'oklch(0.11 0.012 280 / 0.92)',
-          borderBottom: '1px solid oklch(1 0 0 / 0.045)',
-          color: group.danger
-            ? 'color-mix(in oklch, oklch(0.67 0.2 25) 70%, oklch(0.5 0.01 280))'
-            : 'oklch(0.5 0.01 280)',
-        }}
+        className={`bg-bg-0/92 border-glass-border sticky top-0 z-[1] -mx-2 border-b px-4 py-1.5 font-mono text-[9.5px] font-semibold tracking-[0.1em] uppercase backdrop-blur ${group.danger ? 'text-status-fail' : 'text-ink-4'}`}
       >
         {group.label}
       </div>
@@ -1416,24 +1330,17 @@ function SettingsPalette({
 
   return (
     <div
-      className="absolute inset-0 z-10 flex justify-center bg-black/40 pt-24 backdrop-blur-sm"
+      className="bg-scrim-strong/40 absolute inset-0 z-10 flex justify-center pt-24 backdrop-blur-sm"
       onMouseDown={onClose}
     >
       <div
         ref={rootRef}
-        className="h-fit max-h-[460px] w-[560px] max-w-[90%] overflow-hidden rounded-xl border shadow-2xl"
-        style={{
-          backgroundColor: 'oklch(0.14 0.015 280)',
-          borderColor: 'oklch(1 0 0 / 0.1)',
-        }}
+        className="border-glass-border bg-bg-1 h-fit max-h-[460px] w-[560px] max-w-[90%] overflow-hidden rounded-xl border shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={trapTab}
       >
-        <div
-          className="flex items-center gap-3 border-b px-4 py-3"
-          style={{ borderColor: 'oklch(1 0 0 / 0.06)' }}
-        >
-          <Search size={17} style={{ color: 'oklch(0.6 0.01 280)' }} />
+        <div className="border-glass-border flex items-center gap-3 border-b px-4 py-3">
+          <Search size={17} className="text-ink-3" />
           <input
             autoFocus
             value={query}
@@ -1456,8 +1363,7 @@ function SettingsPalette({
               }
             }}
             placeholder="Search every setting across Global and Project..."
-            className="min-w-0 flex-1 bg-transparent text-[15px] outline-none"
-            style={{ color: 'oklch(0.95 0.01 280)' }}
+            className="text-ink-0 min-w-0 flex-1 bg-transparent text-[15px] outline-none"
           />
           <Kbd shortcut="escape" />
         </div>
@@ -1473,22 +1379,13 @@ function SettingsPalette({
             return (
               <button
                 key={`${result.scope}:${result.key}`}
-                className="mb-px flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors"
-                style={{
-                  backgroundColor: active
-                    ? 'oklch(1 0 0 / 0.06)'
-                    : 'transparent',
-                }}
+                className={`mb-px flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${active ? 'bg-glass-medium' : ''}`}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => onPick(result)}
               >
                 <Icon
                   size={15}
-                  style={{
-                    color: active
-                      ? 'oklch(0.78 0.18 295)'
-                      : 'oklch(0.55 0.01 280)',
-                  }}
+                  className={active ? 'text-acc-ink' : 'text-ink-4'}
                 />
                 <span className="min-w-0 flex-1">
                   <span className="text-ink-1 block truncate text-[13px] font-medium">
@@ -1499,13 +1396,7 @@ function SettingsPalette({
                   </span>
                 </span>
                 <span
-                  className="font-mono text-[10px] tracking-wide uppercase"
-                  style={{
-                    color:
-                      result.scope === 'global'
-                        ? 'oklch(0.78 0.18 295)'
-                        : 'oklch(0.76 0.14 205)',
-                  }}
+                  className={`font-mono text-[10px] tracking-wide uppercase ${result.scope === 'global' ? 'text-acc-ink' : 'text-status-azure'}`}
                 >
                   {result.scope}
                 </span>

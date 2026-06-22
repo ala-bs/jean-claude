@@ -55,7 +55,7 @@ function RootErrorBoundary({ error }: { error: Error }) {
   return (
     <div className="aurora-app-bg text-ink-0 flex h-screen w-screen items-center justify-center">
       <div className="max-w-lg space-y-4 p-8 text-center">
-        <h1 className="text-2xl font-semibold text-red-400">
+        <h1 className="text-status-fail text-2xl font-semibold">
           Something went wrong
         </h1>
         <div className="bg-glass-light rounded-lg p-4 text-left">
@@ -392,7 +392,7 @@ function RootLayout() {
       className={clsx(
         'aurora-app-bg flex h-screen w-screen overflow-hidden',
         api.app.isDevMode &&
-          'rounded-xl border-2 border-amber-400/50 shadow-[inset_0_0_0_1px_oklch(0.8_0.18_80_/_0.22),inset_0_0_32px_oklch(0.8_0.18_80_/_0.18)]',
+          'permission-border rounded-xl',
       )}
     >
       <ReactScanBridge />

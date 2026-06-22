@@ -644,7 +644,7 @@ function AgentResourceHoverPanel({
             displayCpu,
             ...cpuSamples.map((sample) => sample.cpuPercent),
           )}
-          accentClassName="text-[oklch(0.74_0.19_295)]"
+          accentClassName="text-acc"
         />
         <div className="bg-ink-4/15 h-px" />
         <AgentResourceChart
@@ -653,7 +653,7 @@ function AgentResourceHoverPanel({
           samples={rssSamples}
           formatValue={formatResourceBytes}
           maxValue={rssMax}
-          accentClassName="text-[oklch(0.78_0.16_155)]"
+          accentClassName="text-status-done"
         />
       </div>
       <div className="border-ink-4/15 mt-3 flex gap-4 border-t pt-2.5">
@@ -819,14 +819,14 @@ function AgentResourcePill({
           className={clsx(
             'h-[5px] w-[5px] rounded-full',
             isRunning
-              ? 'resource-status-pulse animate-pulse bg-[oklch(0.74_0.19_295)] shadow-[0_0_7px_oklch(0.74_0.19_295)]'
+              ? 'resource-status-pulse bg-acc shadow-[0_0_7px_var(--color-acc)] animate-pulse'
               : 'bg-ink-4/60',
           )}
         />
         <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           <AgentResourceMicroSpark
             values={cpuValues}
-            accentClassName="text-[oklch(0.74_0.19_295)]"
+            accentClassName="text-acc"
           />
           <span className="min-w-[42px] text-right">
             {displayCpu.toFixed(1)}%
@@ -836,7 +836,7 @@ function AgentResourcePill({
         <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           <AgentResourceMicroSpark
             values={rssValues}
-            accentClassName="text-[oklch(0.78_0.16_155)]"
+            accentClassName="text-status-done"
           />
           <span className="min-w-[45px] text-right">
             {formatResourceBytes(displayRss).replace(' ', '')}

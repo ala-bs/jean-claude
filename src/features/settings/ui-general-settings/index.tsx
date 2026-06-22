@@ -152,9 +152,41 @@ export function AppearanceSettings() {
   const { data: appearanceSetting } = useAppearanceSetting();
   const updateAppearance = useUpdateAppearanceSetting();
   const reduceMotion = appearanceSetting?.reduceMotion ?? true;
+  const { colorScheme, setColorScheme } = useColorScheme();
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-ink-1 text-lg font-semibold">Appearance</h2>
+        <p className="text-ink-3 mt-1 text-sm">
+          Choose light or dark mode for the interface
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            onClick={() => setColorScheme('dark')}
+            icon={<Moon className="h-3.5 w-3.5" />}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+              colorScheme === 'dark'
+                ? 'border-acc bg-acc/20 text-acc-ink'
+                : 'border-glass-border bg-bg-1 text-ink-1 hover:border-glass-border-strong hover:bg-glass-medium'
+            }`}
+          >
+            Dark
+          </Button>
+          <Button
+            onClick={() => setColorScheme('light')}
+            icon={<Sun className="h-3.5 w-3.5" />}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+              colorScheme === 'light'
+                ? 'border-acc bg-acc/20 text-acc-ink'
+                : 'border-glass-border bg-bg-1 text-ink-1 hover:border-glass-border-strong hover:bg-glass-medium'
+            }`}
+          >
+            Light
+          </Button>
+        </div>
+      </div>
+      <div className="border-line-soft border-t" />
       <div className="border-line-soft bg-bg-0 rounded-lg border px-4 py-3">
         <Checkbox
           checked={reduceMotion}
@@ -388,43 +420,6 @@ export function MaintenanceSettings() {
   );
 }
 
-function AppearanceSettings() {
-  const { colorScheme, setColorScheme } = useColorScheme();
-
-  return (
-    <div>
-      <h2 className="text-ink-1 text-lg font-semibold">Appearance</h2>
-      <p className="text-ink-3 mt-1 text-sm">
-        Choose light or dark mode for the interface
-      </p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button
-          onClick={() => setColorScheme('dark')}
-          icon={<Moon className="h-3.5 w-3.5" />}
-          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-            colorScheme === 'dark'
-              ? 'border-acc bg-acc/20 text-acc-ink'
-              : 'border-glass-border bg-bg-1 text-ink-1 hover:border-glass-border-strong hover:bg-glass-medium'
-          }`}
-        >
-          Dark
-        </Button>
-        <Button
-          onClick={() => setColorScheme('light')}
-          icon={<Sun className="h-3.5 w-3.5" />}
-          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-            colorScheme === 'light'
-              ? 'border-acc bg-acc/20 text-acc-ink'
-              : 'border-glass-border bg-bg-1 text-ink-1 hover:border-glass-border-strong hover:bg-glass-medium'
-          }`}
-        >
-          Light
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function RawMessageCleanupSettings() {
   const { data: rawMessageCleanupSetting } = useRawMessageCleanupSetting();
   const updateRawMessageCleanup = useUpdateRawMessageCleanupSetting();
@@ -592,7 +587,7 @@ export function BackendsSettings() {
                   <span className="flex items-center gap-2">
                     <span>{backend.label}</span>
                     {backend.badge && (
-                      <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                      <span className="border-status-run/20 bg-status-run-soft text-status-run rounded-full border px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
                         {backend.badge}
                       </span>
                     )}
