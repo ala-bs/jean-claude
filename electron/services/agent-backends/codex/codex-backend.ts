@@ -16,14 +16,13 @@ import type {
 import type { InteractionMode } from '@shared/types';
 
 import {
-  type CodexNormalizationContext,
   createCodexNormalizationContext,
   normalizeCodexNotification,
 } from './normalize-codex-message-v2';
-import type { CodexJsonRpcNotification } from './codex-json-rpc-client';
 import { getOrCreateCodexAppServer } from './codex-app-server';
 
-
+import type { CodexJsonRpcNotification } from './codex-json-rpc-client';
+import type { CodexNormalizationContext } from './normalize-codex-message-v2';
 
 const CODEX_IDLE_COMPLETION_TIMEOUT_MS = 60_000;
 

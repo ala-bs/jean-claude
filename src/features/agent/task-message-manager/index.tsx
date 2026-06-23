@@ -151,6 +151,7 @@ export function TaskMessageManager() {
           flushPendingEntryUpdates(stepId);
           if (isLoaded(stepId)) {
             setPermission(stepId, event);
+            setQuestion(stepId, null);
           }
           // Always track at task level so the feed can refine attention
           // even when the step isn't loaded (task panel never opened).
@@ -165,8 +166,19 @@ export function TaskMessageManager() {
           break;
         case 'question':
           flushPendingEntryUpdates(stepId);
+          if (event.questions.length === 0) {
+            if (isLoaded(stepId)) {
+              setQuestion(stepId, null);
+            }
+            clearPendingRequestForTask(taskId);
+            queryClient.invalidateQueries({
+              queryKey: feedQueryKeys.tasks,
+            });
+            break;
+          }
           if (isLoaded(stepId)) {
             setQuestion(stepId, event);
+            setPermission(stepId, null);
           }
           // Always track at task level so the feed can refine attention
           // even when the step isn't loaded (task panel never opened).

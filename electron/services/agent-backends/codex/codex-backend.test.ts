@@ -73,6 +73,81 @@ describe('CodexBackend', () => {
     );
   });
 
+  it('does not pass runtime MCP config to the app-server or thread config', async () => {
+    const { backend, client } = createBackend();
+
+    await backend.start(
+      createConfig({
+        mcpServers: {
+          'jean-claude-mcp': {
+            command: 'node',
+            args: ['jean-claude-mcp-server.js'],
+            env: {
+              JC_MCP_BRIDGE_URL: 'http://127.0.0.1:4567',
+              JC_MCP_AUTH_TOKEN: 'token-1',
+              JC_MCP_STEP_ID: 'step-1',
+              JC_MCP_REGISTRATION_ID: 'registration-1',
+            },
+          },
+        },
+      }),
+      [{ type: 'text', text: 'Hello Codex' }],
+    );
+
+    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith();
+    expect(client.request).toHaveBeenCalledWith('thread/start', {
+      cwd: '/tmp/project',
+      model: undefined,
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+      config: {
+        sandbox_workspace_write: {
+          network_access: true,
+          writable_roots: expectedPackageManagerCacheRoots(),
+        },
+      },
+      serviceName: 'jean_claude',
+    });
+  });
+
+  it('omits runtime MCP config when resuming threads', async () => {
+    const { backend, client } = createBackend();
+
+    await backend.start(
+      createConfig({
+        sessionId: 'thread-existing',
+        mcpServers: {
+          'jean-claude-mcp': {
+            command: 'node',
+            args: ['jean-claude-mcp-server.js'],
+            env: {
+              JC_MCP_BRIDGE_URL: 'http://127.0.0.1:4567',
+              JC_MCP_AUTH_TOKEN: 'token-1',
+              JC_MCP_STEP_ID: 'step-1',
+              JC_MCP_REGISTRATION_ID: 'registration-1',
+            },
+          },
+        },
+      }),
+      [{ type: 'text', text: 'Continue' }],
+    );
+
+    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith();
+    expect(client.request).toHaveBeenCalledWith('thread/resume', {
+      threadId: 'thread-existing',
+      cwd: '/tmp/project',
+      model: undefined,
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+      config: {
+        sandbox_workspace_write: {
+          network_access: true,
+          writable_roots: expectedPackageManagerCacheRoots(),
+        },
+      },
+    });
+  });
+
   it('allows Codex to write linked worktree git metadata', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-codex-git-'));
     try {
