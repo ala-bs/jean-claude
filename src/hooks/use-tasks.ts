@@ -32,6 +32,7 @@ import type {
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { api } from '@/lib/api';
 import { feedQueryKeys } from '@/lib/feed-query-keys';
+import { markDocumentStale } from '@/cache/cache-actions';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCacheResource } from '@/cache/use-cache-resource';
 import { useTaskMessagesStore } from '@/stores/task-messages';
@@ -54,6 +55,8 @@ export function invalidateFeedItems(
 ) {
   queryClient.invalidateQueries({ queryKey: feedQueryKeys.tasks });
   queryClient.invalidateQueries({ queryKey: feedQueryKeys.workItems });
+  markDocumentStale('feed:tasks');
+  markDocumentStale('feed:workItems');
 }
 
 export function useTasks() {

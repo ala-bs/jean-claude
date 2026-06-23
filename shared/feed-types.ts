@@ -54,6 +54,7 @@ export interface FeedItem {
   workItemUrl?: string;
   workItemType?: string;
   workItemState?: string;
+  workItemPrId?: number;
   workItemPrStatus?: 'active' | 'completed' | 'abandoned';
   workItemPrUrl?: string;
 
