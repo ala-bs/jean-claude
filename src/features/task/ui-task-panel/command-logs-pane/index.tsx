@@ -1,3 +1,4 @@
+import { Loader2, RotateCw, Search, Trash2, X } from 'lucide-react';
 import {
   type MouseEvent,
   useCallback,
@@ -6,7 +7,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { RotateCw, Search, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
 
 
@@ -374,22 +374,53 @@ export function CommandLogsPane({
       {hasAnyTabs && !showNoSearchMatches ? (
         <>
           <div className="flex shrink-0 gap-1 overflow-x-auto px-2 py-2">
-            {filteredTabs.map((tab) => (
-              <Button
-                key={tab.id}
-                type="button"
-                onClick={() => onSelectCommand(tab.id)}
-                className={clsx(
-                  'max-w-64 truncate rounded px-2.5 py-1 text-xs font-medium transition-colors',
-                  activeCommandId === tab.id
-                    ? 'bg-acc text-ink-0'
-                    : 'text-ink-1 bg-bg-1 hover:bg-glass-medium',
-                )}
-                title={getRunCommandDisplayName(tab)}
-              >
-                {getRunCommandDisplayName(tab)}
-              </Button>
-            ))}
+            {filteredTabs.map((tab) => {
+              const isRunning = runningCommandIds.has(tab.id);
+              const isActive = activeCommandId === tab.id;
+              const displayName = getRunCommandDisplayName(tab);
+
+              return (
+                <Button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => onSelectCommand(tab.id)}
+                  className={clsx(
+                    'max-w-64 rounded border px-2.5 py-1 text-xs font-medium transition-colors',
+                    isActive
+                      ? 'bg-acc text-ink-0 border-transparent'
+                      : 'text-ink-1 bg-bg-1 hover:bg-glass-medium',
+                    isRunning && !isActive
+                      ? 'border-status-done/40'
+                      : 'border-transparent',
+                  )}
+                  title={`${displayName}${isRunning ? ' (running)' : ''}`}
+                  aria-label={`${displayName}${isRunning ? ', running' : ''}`}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {isRunning && (
+                      <Loader2
+                        className={clsx(
+                          'h-3 w-3 shrink-0 animate-spin',
+                          isActive ? 'text-ink-0' : 'text-status-done',
+                        )}
+                        aria-hidden
+                      />
+                    )}
+                    <span className="truncate">{displayName}</span>
+                    {isRunning && (
+                      <span
+                        className={clsx(
+                          'shrink-0 text-[10px] font-semibold uppercase',
+                          isActive ? 'text-ink-0/80' : 'text-status-done',
+                        )}
+                      >
+                        Running
+                      </span>
+                    )}
+                  </span>
+                </Button>
+              );
+            })}
           </div>
           <Separator />
 
