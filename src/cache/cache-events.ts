@@ -52,12 +52,16 @@ function markPullRequestListResourcesStale({
   providerId,
   repoId,
   projectId,
+  invalidateFeed = true,
 }: {
   providerId: string;
   repoId: string;
   projectId?: string;
+  invalidateFeed?: boolean;
 }) {
-  markResourceStale('feed:pullRequests');
+  if (invalidateFeed) {
+    markResourceStale('feed:pullRequests');
+  }
   markResourceStale('pullRequests');
   markResourceStale(repoPullRequestsResourceKey({ providerId, repoId }));
   for (const status of PULL_REQUEST_STATUSES) {
@@ -397,7 +401,10 @@ export function applyCacheEvent(event: CacheEvent) {
         repoId: event.repoId,
         pullRequest: event.pullRequest,
       });
-      markPullRequestListResourcesStale(event);
+      markPullRequestListResourcesStale({
+        ...event,
+        invalidateFeed: event.invalidateFeed !== false,
+      });
       break;
     }
     case 'pullRequest.patch': {

@@ -748,6 +748,35 @@ describe('cache store foundation', () => {
     expect(cache$.resources['pullRequests:project-1'].get()).toBeUndefined();
   });
 
+  it('hydrates pull request snapshots without staling the producing feed resource', () => {
+    setDocumentResource<FeedItem[]>('feed:pullRequests', []);
+    const feedChangeVersionBefore = getResourceChangeVersion(
+      'feed:pullRequests',
+    );
+
+    applyCacheEvent({
+      type: 'pullRequest.upsert',
+      providerId: 'github',
+      repoId: 'repo-1',
+      projectId: 'project-1',
+      invalidateFeed: false,
+      pullRequest: createPullRequest(),
+    });
+
+    const canonicalKey = pullRequestResourceKey({
+      providerId: 'github',
+      repoId: 'repo-1',
+      pullRequestId: 42,
+    });
+
+    expect(cache$.pullRequests[canonicalKey].get()?.title).toBe('Before');
+    expect(cache$.resources['feed:pullRequests'].get()?.stale).toBe(false);
+    expect(getResourceChangeVersion('feed:pullRequests')).toBe(
+      feedChangeVersionBefore,
+    );
+    expect(cache$.resources.pullRequests.get()?.stale).toBe(true);
+  });
+
   it('marks status-specific pull request list resources stale for patch events', () => {
     applyCacheEvent({
       type: 'pullRequest.patch',
