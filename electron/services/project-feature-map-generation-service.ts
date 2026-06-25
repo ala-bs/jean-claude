@@ -5,7 +5,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import type { ProjectFeatureMap } from '@shared/types';
 
-const MAX_FEATURE_DEPTH = 4;
 export const FEATURE_MAP_GIT_PATH = '.jean-claude/feature-map.yaml';
 const FEATURE_MAP_RELATIVE_PATH = path.join('.jean-claude', 'feature-map.yaml');
 const LEGACY_FEATURE_MAP_RELATIVE_PATH = path.join(
@@ -14,12 +13,14 @@ const LEGACY_FEATURE_MAP_RELATIVE_PATH = path.join(
 );
 
 const FEATURE_MAP_YAML_SCHEMA = `features:
-  - name: string, max 100 chars
+  - id: stable string id
+    name: string, max 100 chars
     summary: string, max 500 chars
     key_files:
       - relative/path/to/key-file.ts
     children:
-      - name: string, max 100 chars
+      - id: stable string id
+        name: string, max 100 chars
         summary: string, max 500 chars
         key_files:
           - relative/path/to/key-file.ts
@@ -27,10 +28,10 @@ const FEATURE_MAP_YAML_SCHEMA = `features:
 
 Rules:
 - features is required and must contain at least one item.
-- Every feature node must include name, summary, key_files, and children.
+- Every feature node must include id, name, summary, key_files, and children.
+- Preserve existing ids when updating an existing feature map.
 - key_files and children must be arrays. Use [] when empty.
-- children repeats the same node shape recursively.
-- Maximum feature depth is 4 total levels.`;
+- children repeats the same node shape recursively.`;
 
 export function getProjectFeatureMapPath(projectPath: string) {
   return path.join(projectPath, FEATURE_MAP_RELATIVE_PATH);
@@ -214,12 +215,11 @@ function normalizeFeatureMap(value: unknown): ProjectFeatureMap | null {
 function normalizeFeature(
   value: unknown,
   index: number,
-  depth = 1,
   parentId = '',
 ): ProjectFeatureMap['features'][number] | null {
-  if (depth > MAX_FEATURE_DEPTH) return null;
   if (!value || typeof value !== 'object') return null;
   const item = value as {
+    id?: unknown;
     name?: unknown;
     summary?: unknown;
     key_files?: unknown;
@@ -244,17 +244,19 @@ function normalizeFeature(
         .filter(Boolean)
     : [];
 
-  const id = name
+  const generatedId = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 80);
-  const featureId = `${parentId}${id || 'feature'}-${index + 1}`;
+  const explicitId = typeof item.id === 'string' ? item.id.trim() : '';
+  const featureId =
+    explicitId || `${parentId}${generatedId || 'feature'}-${index + 1}`;
 
   const children = Array.isArray(item.children)
     ? item.children
         .map((child, childIndex) =>
-          normalizeFeature(child, childIndex, depth + 1, `${featureId}-`),
+          normalizeFeature(child, childIndex, `${featureId}-`),
         )
         .filter((child): child is ProjectFeatureMap['features'][number] =>
           Boolean(child),
