@@ -2,12 +2,11 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-
 import { api } from '@/lib/api';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
+import { invalidateTaskFeed } from './feed-invalidations';
 
 const MESSAGE_UPDATE_FLUSH_MS = 300;
 
@@ -143,14 +142,13 @@ export function TaskMessageManager() {
           queryClient.invalidateQueries({ queryKey: ['steps', { taskId }] });
           queryClient.invalidateQueries({ queryKey: ['steps', stepId] });
           // Invalidate feed so status changes appear instantly
-          queryClient.invalidateQueries({
-            queryKey: feedQueryKeys.tasks,
-          });
+          invalidateTaskFeed(queryClient);
           break;
         case 'permission':
           flushPendingEntryUpdates(stepId);
           if (isLoaded(stepId)) {
             setPermission(stepId, event);
+            setQuestion(stepId, null);
           }
           // Always track at task level so the feed can refine attention
           // even when the step isn't loaded (task panel never opened).
@@ -159,14 +157,21 @@ export function TaskMessageManager() {
             permission: event,
           });
           // Invalidate feed so attention changes to needs-permission
-          queryClient.invalidateQueries({
-            queryKey: feedQueryKeys.tasks,
-          });
+          invalidateTaskFeed(queryClient);
           break;
         case 'question':
           flushPendingEntryUpdates(stepId);
+          if (event.questions.length === 0) {
+            if (isLoaded(stepId)) {
+              setQuestion(stepId, null);
+            }
+            clearPendingRequestForTask(taskId);
+            invalidateTaskFeed(queryClient);
+            break;
+          }
           if (isLoaded(stepId)) {
             setQuestion(stepId, event);
+            setPermission(stepId, null);
           }
           // Always track at task level so the feed can refine attention
           // even when the step isn't loaded (task panel never opened).
@@ -175,9 +180,7 @@ export function TaskMessageManager() {
             question: event,
           });
           // Invalidate feed so attention changes to has-question
-          queryClient.invalidateQueries({
-            queryKey: feedQueryKeys.tasks,
-          });
+          invalidateTaskFeed(queryClient);
           break;
         case 'name-updated':
           queryClient.invalidateQueries({ queryKey: ['tasks'] });

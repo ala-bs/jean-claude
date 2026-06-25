@@ -155,15 +155,22 @@ export type AgentEvent =
 // --- Question types (backend-only, not produced by normalizers) ---
 
 export interface NormalizedQuestionOption {
+  id?: string;
   label: string;
   description: string;
 }
 
+export type NormalizedQuestionType = 'single_choice' | 'multi_choice' | 'text';
+
 export interface NormalizedQuestion {
+  id?: string;
+  type?: NormalizedQuestionType;
   question: string;
   header: string;
   options: NormalizedQuestionOption[];
   multiSelect: boolean;
+  required?: boolean;
+  allowOther?: boolean;
 }
 
 export interface NormalizedQuestionRequest {

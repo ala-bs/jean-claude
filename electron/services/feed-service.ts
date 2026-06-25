@@ -1016,6 +1016,7 @@ async function fetchWorkItemFeedItems(
     // Pick the most relevant PR status
     let bestStatus: 'active' | 'completed' | 'abandoned' | undefined;
     let bestUrl: string | undefined;
+    let bestPrId: number | undefined;
     for (const lpr of workItemPrInfo.linkedPrs) {
       const prInfo = allPrStatuses.get(
         linkedPrIdentityKey(workItemPrInfo.providerId, lpr),
@@ -1029,10 +1030,12 @@ async function fetchWorkItemFeedItems(
       ) {
         bestStatus = prInfo.status;
         bestUrl = prInfo.url;
+        bestPrId = lpr.prId;
       }
     }
 
     if (bestStatus) {
+      item.workItemPrId = bestPrId;
       item.workItemPrStatus = bestStatus;
       item.workItemPrUrl = bestUrl;
     }

@@ -2,7 +2,6 @@ import { FileCode, FileText, GitCommit, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 
 
 
@@ -15,6 +14,7 @@ import {
   normalizeMentionId,
 } from '@/lib/azure-devops-mentions';
 import {
+  updateFeedPullRequest,
   useAddPullRequestComment,
   useAddPullRequestFileComment,
   usePullRequest,
@@ -26,8 +26,6 @@ import {
 } from '@/hooks/use-pull-requests';
 import { api } from '@/lib/api';
 import type { DiffFile } from '@/features/common/ui-file-diff';
-import type { FeedItem } from '@shared/feed-types';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PrDetailTab } from '@/stores/navigation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
@@ -74,7 +72,6 @@ export function PrDetail({
   const [searchedMentionOptions, setSearchedMentionOptions] = useState<
     MentionOption[]
   >([]);
-  const queryClient = useQueryClient();
 
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
@@ -131,14 +128,7 @@ export function PrDetail({
     if (!project?.repoProviderId || !project?.repoProjectId || !project?.repoId)
       return;
 
-    const prFeedItemId = `pr:${projectId}:${prId}`;
-
-    queryClient.setQueryData<FeedItem[]>(feedQueryKeys.pullRequests, (old) => {
-      if (!old) return old;
-      return old.map((item) =>
-        item.id === prFeedItemId ? { ...item, hasNewActivity: false } : item,
-      );
-    });
+    updateFeedPullRequest(projectId, prId, { hasNewActivity: false });
 
     recordPrViewRef.current({
       projectId,
@@ -153,7 +143,6 @@ export function PrDetail({
     project?.repoProjectId,
     project?.repoProviderId,
     projectId,
-    queryClient,
     recordPrViewRef,
   ]);
 

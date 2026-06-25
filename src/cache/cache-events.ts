@@ -1,3 +1,5 @@
+import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
+import type { TaskStatus, TaskStepStatus } from '@shared/types';
 import type { CacheEvent } from '@shared/cache-events';
 
 import {
@@ -50,12 +52,16 @@ function markPullRequestListResourcesStale({
   providerId,
   repoId,
   projectId,
+  invalidateFeed = true,
 }: {
   providerId: string;
   repoId: string;
   projectId?: string;
+  invalidateFeed?: boolean;
 }) {
-  markResourceStale('feed:pullRequests');
+  if (invalidateFeed) {
+    markResourceStale('feed:pullRequests');
+  }
   markResourceStale('pullRequests');
   markResourceStale(repoPullRequestsResourceKey({ providerId, repoId }));
   for (const status of PULL_REQUEST_STATUSES) {
@@ -80,6 +86,139 @@ function markPullRequestListResourcesStale({
 
 function markTaskFeedStale() {
   markResourceStale('feed:tasks');
+}
+
+function attentionForTaskStatus(
+  status: TaskStatus,
+): FeedItemAttention | undefined {
+  switch (status) {
+    case 'running':
+      return 'running';
+    case 'waiting':
+      return 'waiting';
+    case 'completed':
+      return 'completed';
+    case 'errored':
+      return 'errored';
+    case 'interrupted':
+      return 'interrupted';
+  }
+}
+
+function attentionForStepStatus(
+  status: TaskStepStatus,
+): FeedItemAttention | undefined {
+  switch (status) {
+    case 'running':
+      return 'running';
+    case 'errored':
+      return 'errored';
+    case 'interrupted':
+      return 'interrupted';
+    default:
+      return undefined;
+  }
+}
+
+function patchTaskFeedItem(
+  item: FeedItem,
+  taskId: string,
+  patch: Pick<Partial<FeedItem>, 'attention' | 'subtitle' | 'timestamp'>,
+): { item: FeedItem; changed: boolean } {
+  const childResults = item.children?.map((child) =>
+    patchTaskFeedItem(child, taskId, patch),
+  );
+  const childrenChanged =
+    childResults?.some((result) => result.changed) ?? false;
+  const nextChildren = childResults?.map((result) => result.item);
+  const matchesTask = item.source === 'task' && item.taskId === taskId;
+
+  if (!matchesTask && !childrenChanged) {
+    return { item, changed: false };
+  }
+
+  return {
+    item: {
+      ...item,
+      ...(matchesTask ? patch : {}),
+      ...(nextChildren ? { children: nextChildren } : {}),
+    },
+    changed: true,
+  };
+}
+
+function patchTaskFeedDocument(
+  taskId: string,
+  patch: Pick<Partial<FeedItem>, 'attention' | 'subtitle' | 'timestamp'>,
+) {
+  const items = cache$.documents['feed:tasks'].data.get() as
+    | FeedItem[]
+    | undefined;
+  if (!items) return;
+
+  const results = items.map((item) => patchTaskFeedItem(item, taskId, patch));
+  if (!results.some((result) => result.changed)) return;
+
+  cache$.documents['feed:tasks'].data.set(
+    results.map((result) => result.item),
+  );
+}
+
+function removeTaskFeedItem(
+  item: FeedItem,
+  taskId: string,
+): { item: FeedItem | null; changed: boolean } {
+  const matchesTask = item.source === 'task' && item.taskId === taskId;
+  if (matchesTask) {
+    return { item: null, changed: true };
+  }
+
+  const childResults = item.children?.map((child) =>
+    removeTaskFeedItem(child, taskId),
+  );
+  const childrenChanged =
+    childResults?.some((result) => result.changed) ?? false;
+  if (!childrenChanged) {
+    return { item, changed: false };
+  }
+
+  const children = childResults
+    ?.map((result) => result.item)
+    .filter((child): child is FeedItem => child !== null);
+
+  return {
+    item: {
+      ...item,
+      ...(children && children.length > 0
+        ? { children }
+        : { children: undefined }),
+    },
+    changed: true,
+  };
+}
+
+function removeTaskFromFeedDocument(taskId: string) {
+  const items = cache$.documents['feed:tasks'].data.get() as
+    | FeedItem[]
+    | undefined;
+  if (!items) return;
+
+  const results = items.map((item) => removeTaskFeedItem(item, taskId));
+  if (!results.some((result) => result.changed)) return;
+
+  cache$.documents['feed:tasks'].data.set(
+    results
+      .map((result) => result.item)
+      .filter((item): item is FeedItem => item !== null),
+  );
+}
+
+function compactFeedPatch(
+  patch: Pick<Partial<FeedItem>, 'attention' | 'subtitle' | 'timestamp'>,
+): Pick<Partial<FeedItem>, 'attention' | 'subtitle' | 'timestamp'> {
+  return Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== undefined),
+  );
 }
 
 function markDeletedEntityResource(resourceKey: string) {
@@ -140,6 +279,15 @@ export function applyCacheEvent(event: CacheEvent) {
       const cachedProjectId = cache$.tasks[event.task.id].get()?.projectId;
       markResourceChanged(taskResourceKey(event.task.id));
       ingestTask(event.task);
+      const attention = attentionForTaskStatus(event.task.status);
+      if (event.task.userCompleted) {
+        removeTaskFromFeedDocument(event.task.id);
+      } else if (attention) {
+        patchTaskFeedDocument(event.task.id, compactFeedPatch({
+          attention,
+          timestamp: event.task.updatedAt,
+        }));
+      }
       const projectIds = new Set(
         [event.previousProjectId, cachedProjectId, event.task.projectId].filter(
           (id) => id !== undefined,
@@ -161,6 +309,18 @@ export function applyCacheEvent(event: CacheEvent) {
         markResourceChanged(resourceKey);
       } else {
         markResourceStale(resourceKey);
+      }
+      const attention =
+        event.patch.status === undefined
+          ? undefined
+          : attentionForTaskStatus(event.patch.status);
+      if (event.patch.userCompleted === true) {
+        removeTaskFromFeedDocument(event.taskId);
+      } else if (attention) {
+        patchTaskFeedDocument(event.taskId, compactFeedPatch({
+          attention,
+          timestamp: event.patch.updatedAt,
+        }));
       }
       const projectIds = new Set(
         [event.projectId, event.patch.projectId].filter(
@@ -209,6 +369,14 @@ export function applyCacheEvent(event: CacheEvent) {
       const cachedTaskId = cache$.steps[event.step.id].get()?.taskId;
       markResourceChanged(stepResourceKey(event.step.id));
       ingestStep(event.step);
+      const attention = attentionForStepStatus(event.step.status);
+      if (attention) {
+        patchTaskFeedDocument(event.step.taskId, compactFeedPatch({
+          attention,
+          subtitle: event.step.name,
+          timestamp: event.step.updatedAt,
+        }));
+      }
       const taskIds = new Set(
         [event.previousTaskId, cachedTaskId, event.step.taskId].filter(
           (id) => id !== undefined,
@@ -232,6 +400,16 @@ export function applyCacheEvent(event: CacheEvent) {
         markResourceChanged(resourceKey);
       } else {
         markResourceStale(resourceKey);
+      }
+      const attention =
+        event.patch.status === undefined
+          ? undefined
+          : attentionForStepStatus(event.patch.status);
+      if (attention && newTaskId) {
+        patchTaskFeedDocument(newTaskId, compactFeedPatch({
+          attention,
+          timestamp: event.patch.updatedAt,
+        }));
       }
       const taskIds = new Set(
         [oldTaskId, event.taskId, newTaskId].filter((id) => id !== undefined),
@@ -276,7 +454,10 @@ export function applyCacheEvent(event: CacheEvent) {
         repoId: event.repoId,
         pullRequest: event.pullRequest,
       });
-      markPullRequestListResourcesStale(event);
+      markPullRequestListResourcesStale({
+        ...event,
+        invalidateFeed: event.invalidateFeed !== false,
+      });
       break;
     }
     case 'pullRequest.patch': {

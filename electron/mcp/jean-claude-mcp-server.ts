@@ -14,6 +14,10 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
+import {
+  ASK_QUESTION_TOOL_SCHEMA,
+  askQuestionViaBridge,
+} from './ask-question-bridge';
 
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { ThinkingEffort } from '@shared/types';
@@ -403,6 +407,40 @@ async function main(): Promise<void> {
             {
               type: 'text' as const,
               text: `Error running review: ${errorMessage}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // --- Tool: ask_question ---
+  server.tool(
+    'ask_question',
+    'Ask the user one or more questions through the Jean-Claude task UI and return their answers as plain text. stepId is optional when Jean-Claude can infer a single active route.',
+    ASK_QUESTION_TOOL_SCHEMA,
+    async (input) => {
+      try {
+        console.error(
+          `[jean-claude-mcp] ask_question: questions=${input.questions.length}`,
+        );
+        const summary = await askQuestionViaBridge({ input });
+        console.error('[jean-claude-mcp] ask_question completed');
+
+        return {
+          content: [{ type: 'text' as const, text: summary }],
+        };
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.error(`[jean-claude-mcp] ask_question error: ${errorMessage}`);
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error asking question: ${errorMessage}`,
             },
           ],
           isError: true,

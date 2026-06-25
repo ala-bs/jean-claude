@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Project, Task, TaskStep } from '@shared/types';
 import type { AzureDevOpsPullRequestDetails } from '@shared/azure-devops-types';
-
+import type { FeedItem } from '@shared/feed-types';
 
 import {
   allProjectsPullRequestsResourceKey,
@@ -137,6 +137,22 @@ function createStep(overrides: Partial<TaskStep> = {}): TaskStep {
     sortOrder: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function createFeedItem(overrides: Partial<FeedItem> = {}): FeedItem {
+  return {
+    id: 'task:task-1',
+    source: 'task',
+    attention: 'waiting',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    projectId: 'project-1',
+    projectName: 'Project 1',
+    projectColor: '#000000',
+    projectPriority: 'normal',
+    title: 'Task 1',
+    taskId: 'task-1',
     ...overrides,
   };
 }
@@ -366,6 +382,136 @@ describe('cache store foundation', () => {
     });
   });
 
+  it('optimistically updates task feed attention from task status events', () => {
+    setDocumentResource('feed:tasks', [
+      createFeedItem({
+        attention: 'waiting',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      }),
+    ]);
+
+    applyCacheEvent({
+      type: 'task.patch',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      patch: {
+        status: 'running',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+      },
+    });
+
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      {
+        taskId: 'task-1',
+        attention: 'running',
+        timestamp: '2026-01-01T00:01:00.000Z',
+      },
+    ]);
+    expect(cache$.resources['feed:tasks'].get()?.stale).toBe(true);
+  });
+
+  it('optimistically removes completed parent tasks from the feed', () => {
+    setDocumentResource('feed:tasks', [
+      createFeedItem({ id: 'task:task-1', taskId: 'task-1' }),
+      createFeedItem({ id: 'task:task-2', taskId: 'task-2' }),
+    ]);
+
+    applyCacheEvent({
+      type: 'task.upsert',
+      task: createTask({ id: 'task-1', userCompleted: true }),
+    });
+
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      {
+        id: 'task:task-2',
+        taskId: 'task-2',
+      },
+    ]);
+    expect(cache$.resources['feed:tasks'].get()?.stale).toBe(true);
+  });
+
+  it('optimistically removes completed child tasks from the feed', () => {
+    setDocumentResource('feed:tasks', [
+      createFeedItem({
+        id: 'task:parent',
+        taskId: 'parent',
+        children: [
+          createFeedItem({ id: 'task:task-1', taskId: 'task-1' }),
+          createFeedItem({ id: 'task:task-2', taskId: 'task-2' }),
+        ],
+      }),
+    ]);
+
+    applyCacheEvent({
+      type: 'task.upsert',
+      task: createTask({
+        id: 'task-1',
+        parentTaskId: 'parent',
+        userCompleted: true,
+      }),
+    });
+
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      {
+        id: 'task:parent',
+        taskId: 'parent',
+        children: [
+          {
+            id: 'task:task-2',
+            taskId: 'task-2',
+          },
+        ],
+      },
+    ]);
+    expect(cache$.resources['feed:tasks'].get()?.stale).toBe(true);
+  });
+
+  it('optimistically removes completed tasks from task patch events', () => {
+    setDocumentResource('feed:tasks', [
+      createFeedItem({ id: 'task:task-1', taskId: 'task-1' }),
+      createFeedItem({ id: 'task:task-2', taskId: 'task-2' }),
+    ]);
+
+    applyCacheEvent({
+      type: 'task.patch',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      patch: { userCompleted: true },
+    });
+
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      {
+        id: 'task:task-2',
+        taskId: 'task-2',
+      },
+    ]);
+    expect(cache$.resources['feed:tasks'].get()?.stale).toBe(true);
+  });
+
+  it('preserves task feed timestamp when task status patch omits updatedAt', () => {
+    setDocumentResource('feed:tasks', [
+      createFeedItem({
+        attention: 'waiting',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      }),
+    ]);
+
+    applyCacheEvent({
+      type: 'task.patch',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      patch: { status: 'running' },
+    });
+
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      {
+        taskId: 'task-1',
+        attention: 'running',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+  });
+
   it('stales source and destination project task lists when an absent task patch moves projects', () => {
     applyCacheEvent({
       type: 'task.patch',
@@ -518,6 +664,48 @@ describe('cache store foundation', () => {
     );
   });
 
+  it('optimistically updates nested task feed attention from running step events', () => {
+    setDocumentResource('feed:tasks', [
+      createFeedItem({
+        id: 'task:parent',
+        taskId: 'parent',
+        children: [
+          createFeedItem({
+            id: 'task:task-1',
+            taskId: 'task-1',
+            attention: 'waiting',
+            subtitle: 'Queued',
+          }),
+        ],
+      }),
+    ]);
+
+    applyCacheEvent({
+      type: 'step.upsert',
+      step: createStep({
+        status: 'running',
+        name: 'Follow-up',
+        updatedAt: '2026-01-01T00:02:00.000Z',
+      }),
+    });
+
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      {
+        taskId: 'parent',
+        attention: 'waiting',
+        children: [
+          {
+            taskId: 'task-1',
+            attention: 'running',
+            subtitle: 'Follow-up',
+            timestamp: '2026-01-01T00:02:00.000Z',
+          },
+        ],
+      },
+    ]);
+    expect(cache$.resources['feed:tasks'].get()?.stale).toBe(true);
+  });
+
   it('stales source and destination task step lists when a step patch moves tasks', () => {
     applyCacheEvent({
       type: 'step.upsert',
@@ -636,6 +824,35 @@ describe('cache store foundation', () => {
       ).toBe(true);
     }
     expect(cache$.resources['pullRequests:project-1'].get()).toBeUndefined();
+  });
+
+  it('hydrates pull request snapshots without staling the producing feed resource', () => {
+    setDocumentResource<FeedItem[]>('feed:pullRequests', []);
+    const feedChangeVersionBefore = getResourceChangeVersion(
+      'feed:pullRequests',
+    );
+
+    applyCacheEvent({
+      type: 'pullRequest.upsert',
+      providerId: 'github',
+      repoId: 'repo-1',
+      projectId: 'project-1',
+      invalidateFeed: false,
+      pullRequest: createPullRequest(),
+    });
+
+    const canonicalKey = pullRequestResourceKey({
+      providerId: 'github',
+      repoId: 'repo-1',
+      pullRequestId: 42,
+    });
+
+    expect(cache$.pullRequests[canonicalKey].get()?.title).toBe('Before');
+    expect(cache$.resources['feed:pullRequests'].get()?.stale).toBe(false);
+    expect(getResourceChangeVersion('feed:pullRequests')).toBe(
+      feedChangeVersionBefore,
+    );
+    expect(cache$.resources.pullRequests.get()?.stale).toBe(true);
   });
 
   it('marks status-specific pull request list resources stale for patch events', () => {
