@@ -638,50 +638,6 @@ export function PrOverview({
                       updateDescription.isPending || uploadAttachment.isPending
                     }
                   />
-                  {previewDescriptionDraft.trim() && (
-                    <div className="border-glass-border/60 bg-bg-2/60 rounded-md border p-3">
-                      <div className="text-ink-4 mb-2 text-[10px] font-medium tracking-wide uppercase">
-                        Preview
-                      </div>
-                      <AzureMarkdownContent
-                        markdown={previewDescriptionDraft}
-                        providerId={providerId}
-                        className="text-ink-1 text-sm"
-                        imageClassName="max-h-[360px] object-contain"
-                        enableImageModal
-                        mentionDisplayNames={mentionDisplayNames}
-                      />
-                    </div>
-                  )}
-                  {descriptionError && (
-                    <p className="text-xs text-red-400">{descriptionError}</p>
-                  )}
-                  {pendingDescriptionImages.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {pendingDescriptionImages.map((image, index) => (
-                        <div
-                          key={`${image.filename ?? 'img'}-${index}`}
-                          className="relative"
-                        >
-                          <img
-                            src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
-                            alt={image.filename || 'Attached image'}
-                            title={
-                              image.sizeBytes
-                                ? formatBytes(image.sizeBytes)
-                                : undefined
-                            }
-                            className="h-8 w-8 rounded border border-white/10 object-cover"
-                          />
-                          {image.sizeBytes && (
-                            <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
-                              {formatBytes(image.sizeBytes)}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
                   <input
                     ref={imageInputRef}
                     type="file"
@@ -747,6 +703,50 @@ export function PrOverview({
                       Save
                     </Button>
                   </div>
+                  {previewDescriptionDraft.trim() && (
+                    <div className="border-glass-border/60 bg-bg-2/60 rounded-md border p-3">
+                      <div className="text-ink-4 mb-2 text-[10px] font-medium tracking-wide uppercase">
+                        Preview
+                      </div>
+                      <AzureMarkdownContent
+                        markdown={previewDescriptionDraft}
+                        providerId={providerId}
+                        className="text-ink-1 text-sm"
+                        imageClassName="max-h-[360px] object-contain"
+                        enableImageModal
+                        mentionDisplayNames={mentionDisplayNames}
+                      />
+                    </div>
+                  )}
+                  {descriptionError && (
+                    <p className="text-xs text-red-400">{descriptionError}</p>
+                  )}
+                  {pendingDescriptionImages.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {pendingDescriptionImages.map((image, index) => (
+                        <div
+                          key={`${image.filename ?? 'img'}-${index}`}
+                          className="relative"
+                        >
+                          <img
+                            src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
+                            alt={image.filename || 'Attached image'}
+                            title={
+                              image.sizeBytes
+                                ? formatBytes(image.sizeBytes)
+                                : undefined
+                            }
+                            className="h-8 w-8 rounded border border-white/10 object-cover"
+                          />
+                          {image.sizeBytes && (
+                            <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+                              {formatBytes(image.sizeBytes)}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : pr.description.trim() ? (
                 <AzureMarkdownContent
