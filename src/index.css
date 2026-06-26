@@ -141,6 +141,10 @@ button {
   cursor: pointer;
 }
 
+.diff-line-range-selected > td {
+  background-color: oklch(0.62 0.2 250 / 0.3) !important;
+}
+
 .jc-markdown-ul > .jc-markdown-li {
   padding-left: 1.25rem;
 }

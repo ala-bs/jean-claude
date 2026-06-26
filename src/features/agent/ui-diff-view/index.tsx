@@ -7,7 +7,15 @@ import {
   MessageSquarePlus,
 } from 'lucide-react';
 import { codeToTokens, type ThemedToken } from 'shiki';
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
@@ -28,6 +36,7 @@ import { DiffSearchBar } from './diff-search-bar';
 import { getLanguageFromPath } from './language-utils';
 import { SideBySideDiffTable } from './side-by-side-table';
 import { useCodeFolding } from './use-code-folding';
+import { useLineRangeSelection } from './use-line-range-selection';
 
 
 
@@ -36,6 +45,8 @@ interface DiffState {
   oldTokens: ThemedToken[][];
   newTokens: ThemedToken[][];
 }
+
+const EMPTY_SEARCH_MATCHES: SearchMatch[] = [];
 
 export interface InlineComment {
   line: number;
@@ -360,55 +371,46 @@ function InlineDiffTable({
   currentMatchIndex: number;
   folding: CodeFoldingState;
 }) {
-  const [selectionStart, setSelectionStart] = useState<number | null>(null);
-  const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
+  const lineRangeSelection = useLineRangeSelection({ onAddCommentClick });
 
-  const handleLineMouseDown = useCallback(
-    (lineNumber: number) => {
-      if (!onAddCommentClick) return;
-      setSelectionStart(lineNumber);
-      setSelectionEnd(lineNumber);
-    },
-    [onAddCommentClick],
-  );
-
-  const handleLineMouseUp = useCallback(
-    (lineNumber: number) => {
-      if (!onAddCommentClick || selectionStart === null) return;
-
-      const start = Math.min(selectionStart, lineNumber);
-      const end = Math.max(selectionStart, lineNumber);
-      onAddCommentClick({ start, end });
-      setSelectionStart(null);
-      setSelectionEnd(null);
-    },
-    [onAddCommentClick, selectionStart],
-  );
-
-  const handleLineMouseEnter = useCallback(
-    (lineNumber: number) => {
-      if (selectionStart !== null) {
-        setSelectionEnd(lineNumber);
+  const inlineCommentsByLine = useMemo(() => {
+    const map = new Map<number, InlineComment[]>();
+    for (const comment of inlineComments ?? []) {
+      const comments = map.get(comment.line);
+      if (comments) {
+        comments.push(comment);
+      } else {
+        map.set(comment.line, [comment]);
       }
-    },
-    [selectionStart],
-  );
+    }
+    return map;
+  }, [inlineComments]);
 
-  const handleMouseLeaveTable = useCallback(() => {
-    setSelectionStart(null);
-    setSelectionEnd(null);
-  }, []);
+  const commentFormsByEndLine = useMemo(() => {
+    const map = new Map<number, CommentFormEntry[]>();
+    for (const form of commentForms ?? []) {
+      const forms = map.get(form.lineRange.end);
+      if (forms) {
+        forms.push(form);
+      } else {
+        map.set(form.lineRange.end, [form]);
+      }
+    }
+    return map;
+  }, [commentForms]);
 
-  // Check if a line is in the selection range
-  const isLineInSelection = useCallback(
-    (lineNumber: number) => {
-      if (selectionStart === null || selectionEnd === null) return false;
-      const start = Math.min(selectionStart, selectionEnd);
-      const end = Math.max(selectionStart, selectionEnd);
-      return lineNumber >= start && lineNumber <= end;
-    },
-    [selectionStart, selectionEnd],
-  );
+  const searchMatchesByLineIndex = useMemo(() => {
+    const map = new Map<number, SearchMatch[]>();
+    for (const match of searchMatches) {
+      const matches = map.get(match.lineIndex);
+      if (matches) {
+        matches.push(match);
+      } else {
+        map.set(match.lineIndex, [match]);
+      }
+    }
+    return map;
+  }, [searchMatches]);
 
   // Check if a line is in any comment form range
   const isLineInCommentRange = useCallback(
@@ -428,7 +430,10 @@ function InlineDiffTable({
   return (
     <table
       className="w-full border-collapse"
-      onMouseLeave={handleMouseLeaveTable}
+      onMouseDown={lineRangeSelection.onMouseDown}
+      onMouseOver={lineRangeSelection.onMouseOver}
+      onMouseUp={lineRangeSelection.onMouseUp}
+      onMouseLeave={lineRangeSelection.onMouseLeave}
     >
       <tbody>
         {lines.map((line, i) => {
@@ -463,21 +468,21 @@ function InlineDiffTable({
 
           const lineComments =
             shouldRenderExtras && lineNumber
-              ? inlineComments?.filter((c) => c.line === lineNumber)
+              ? inlineCommentsByLine.get(lineNumber)
               : undefined;
 
           const formsForLine =
-            shouldRenderExtras && lineNumber && commentForms
-              ? commentForms.filter((cf) => cf.lineRange.end === lineNumber)
+            shouldRenderExtras && lineNumber
+              ? commentFormsByEndLine.get(lineNumber)
               : undefined;
 
-          const isSelected = lineNumber ? isLineInSelection(lineNumber) : false;
           const isInCommentRange = lineNumber
             ? isLineInCommentRange(lineNumber)
             : false;
 
           // Find search matches for this line
-          const lineMatches = searchMatches.filter((m) => m.lineIndex === i);
+          const lineMatches =
+            searchMatchesByLineIndex.get(i) ?? EMPTY_SEARCH_MATCHES;
           const isCurrentMatchLine =
             searchMatches[currentMatchIndex]?.lineIndex === i;
           const currentMatchInLine = isCurrentMatchLine
@@ -503,16 +508,8 @@ function InlineDiffTable({
               oldTokens={oldTokens}
               newTokens={newTokens}
               canComment={!!onAddCommentClick && lineNumber !== undefined}
-              isSelected={isSelected}
               isInCommentRange={isInCommentRange}
               hasComment={!!lineNumber && !!commentedLines?.has(lineNumber)}
-              onMouseEnter={() => lineNumber && handleLineMouseEnter(lineNumber)}
-              onMouseDown={() => lineNumber && handleLineMouseDown(lineNumber)}
-              onMouseUp={() =>
-                lineNumber
-                  ? handleLineMouseUp(lineNumber)
-                  : handleMouseLeaveTable()
-              }
               inlineComments={lineComments}
               commentForms={formsForLine}
               searchMatches={lineMatches}
@@ -520,9 +517,7 @@ function InlineDiffTable({
               isFoldable={isFoldable}
               isFoldCollapsed={isCollapsed}
               foldRange={foldRange}
-              onToggleFold={
-                lineNumber ? () => folding.toggleFold(lineNumber) : undefined
-              }
+              onToggleFold={lineNumber ? folding.toggleFold : undefined}
             />
           );
         })}
@@ -531,18 +526,14 @@ function InlineDiffTable({
   );
 }
 
-function DiffLineRow({
+const DiffLineRow = memo(function DiffLineRow({
   lineIndex,
   line,
   oldTokens,
   newTokens,
   canComment,
-  isSelected,
   isInCommentRange,
   hasComment,
-  onMouseEnter,
-  onMouseDown,
-  onMouseUp,
   inlineComments,
   commentForms,
   searchMatches,
@@ -557,12 +548,8 @@ function DiffLineRow({
   oldTokens: ThemedToken[][];
   newTokens: ThemedToken[][];
   canComment: boolean;
-  isSelected: boolean;
   isInCommentRange: boolean;
   hasComment: boolean;
-  onMouseEnter: () => void;
-  onMouseDown: () => void;
-  onMouseUp: () => void;
   inlineComments?: InlineComment[];
   commentForms?: CommentFormEntry[];
   searchMatches: SearchMatch[];
@@ -570,7 +557,7 @@ function DiffLineRow({
   isFoldable?: boolean;
   isFoldCollapsed?: boolean;
   foldRange?: { startLine: number; endLine: number };
-  onToggleFold?: () => void;
+  onToggleFold?: (lineNumber: number) => void;
 }) {
   // Get tokens for this line based on type
   // For deletions, use old tokens; for additions, use new tokens; for context, prefer new
@@ -609,19 +596,15 @@ function DiffLineRow({
         data-line-index={lineIndex}
         data-new-line={line.newLineNumber ?? undefined}
         className={clsx('group', {
-          'bg-blue-500/30': isSelected,
-          'bg-blue-500/10': !isSelected && isInCommentRange,
+          'bg-blue-500/10': isInCommentRange,
           'bg-green-500/20':
-            !isSelected && !isInCommentRange && line.type === 'addition',
+            !isInCommentRange && line.type === 'addition',
           'bg-red-500/20':
-            !isSelected && !isInCommentRange && line.type === 'deletion',
+            !isInCommentRange && line.type === 'deletion',
         })}
-        onMouseEnter={onMouseEnter}
-        onMouseDown={canComment ? onMouseDown : undefined}
-        onMouseUp={onMouseUp}
         style={{
           cursor: canComment ? 'pointer' : undefined,
-          ...(hasComment && !isSelected && !isInCommentRange
+          ...(hasComment && !isInCommentRange
             ? {
                 background:
                   'color-mix(in oklch, oklch(0.78 0.18 295) 8%, transparent)',
@@ -638,7 +621,7 @@ function DiffLineRow({
               onMouseUp={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleFold?.();
+                onToggleFold?.(line.newLineNumber!);
               }}
               aria-label={isFoldCollapsed ? 'Expand scope' : 'Collapse scope'}
               aria-expanded={!isFoldCollapsed}
@@ -655,14 +638,14 @@ function DiffLineRow({
         <td
           className={clsx(
             'relative w-8 pr-1 text-right align-top select-none',
-            hasComment && !isSelected && !isInCommentRange
+            hasComment && !isInCommentRange
               ? 'text-acc-ink'
               : line.type === 'deletion'
                 ? 'text-status-fail'
                 : 'text-ink-4',
           )}
           style={
-            hasComment && !isSelected && !isInCommentRange
+            hasComment && !isInCommentRange
               ? { borderLeft: '2px solid oklch(0.78 0.18 295 / 0.5)' }
               : undefined
           }
@@ -711,7 +694,7 @@ function DiffLineRow({
               className="text-ink-4 bg-bg-2 ml-2 inline-block cursor-pointer rounded px-1.5 py-0 text-[10px] leading-4"
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleFold?.();
+                onToggleFold?.(line.newLineNumber!);
               }}
             >
               {foldRange.endLine - foldRange.startLine} lines
@@ -745,4 +728,4 @@ function DiffLineRow({
         ))}
     </>
   );
-}
+});
