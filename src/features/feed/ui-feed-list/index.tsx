@@ -1531,12 +1531,12 @@ export function FeedList() {
       className="flex h-full flex-col overflow-y-auto overscroll-contain"
       style={{
         maskImage:
-          'linear-gradient(to bottom, transparent 0px, black 8px, black calc(100% - 8px), transparent 100%)',
+          'linear-gradient(to bottom, black 0, black calc(100% - 8px), transparent 100%)',
       }}
     >
       {/* Section header with + button */}
       {(totalCount > 0 || projectOptions.length > 0) && (
-        <div className="flex items-center justify-between px-3 pb-1">
+        <div className="bg-bg-0 border-glass-border sticky top-0 z-20 flex items-center justify-between border-b px-3 pb-1">
           <span className="text-ink-3 text-[10px] font-semibold tracking-wider uppercase">
             {pinnedItems.length > 0 ? 'Pinned' : 'Feed'}
           </span>
