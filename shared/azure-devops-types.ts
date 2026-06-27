@@ -137,8 +137,11 @@ export interface AzureDevOpsCommentThread {
     | 'unknown';
   threadContext?: {
     filePath: string;
+    leftFileStart?: { line: number };
+    leftFileEnd?: { line: number };
     rightFileStart?: { line: number };
     rightFileEnd?: { line: number };
+    originalCommitId?: string;
   };
   comments: AzureDevOpsComment[];
   isDeleted: boolean;

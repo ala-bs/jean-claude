@@ -1981,6 +1981,29 @@ async function getLatestPullRequestIteration(params: {
   return iterationsData.value[iterationsData.value.length - 1];
 }
 
+async function getPullRequestIterations(params: {
+  authHeader: string;
+  orgName: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<PullRequestIterationResponse[]> {
+  const iterationsUrl = `https://dev.azure.com/${params.orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations?api-version=7.0`;
+  const iterationsResponse = await fetch(iterationsUrl, {
+    headers: { Authorization: params.authHeader },
+  });
+
+  if (!iterationsResponse.ok) {
+    const error = await iterationsResponse.text();
+    throw new Error(`Failed to get pull request iterations: ${error}`);
+  }
+
+  const iterationsData: PullRequestIterationsListResponse =
+    await iterationsResponse.json();
+
+  return iterationsData.value;
+}
+
 interface CommentResponse {
   id: number;
   parentCommentId?: number;
@@ -3059,6 +3082,39 @@ export async function getPullRequestThreads(params: {
   }
 
   const data: ThreadsListResponse = await response.json();
+  const iterationIds = new Set(
+    data.value
+      .map(
+        (thread) =>
+          thread.pullRequestThreadContext?.iterationContext
+            ?.secondComparingIteration,
+      )
+      .filter((id): id is number => id !== undefined),
+  );
+  const sourceCommitByIteration = new Map<number, string>();
+
+  if (iterationIds.size > 0) {
+    try {
+      const iterations = await getPullRequestIterations({
+        authHeader,
+        orgName,
+        projectId: params.projectId,
+        repoId: params.repoId,
+        pullRequestId: params.pullRequestId,
+      });
+
+      for (const iteration of iterations) {
+        if (iteration.sourceRefCommit?.commitId) {
+          sourceCommitByIteration.set(
+            iteration.id,
+            iteration.sourceRefCommit.commitId,
+          );
+        }
+      }
+    } catch {
+      // Original comment preview is optional; don't hide comments if iterations fail.
+    }
+  }
 
   return (
     data.value
@@ -3076,8 +3132,15 @@ export async function getPullRequestThreads(params: {
         threadContext: thread.threadContext
           ? {
               filePath: thread.threadContext.filePath,
+              leftFileStart: thread.threadContext.leftFileStart,
+              leftFileEnd: thread.threadContext.leftFileEnd,
               rightFileStart: thread.threadContext.rightFileStart,
               rightFileEnd: thread.threadContext.rightFileEnd,
+              originalCommitId:
+                sourceCommitByIteration.get(
+                  thread.pullRequestThreadContext?.iterationContext
+                    ?.secondComparingIteration ?? -1,
+                ),
             }
           : undefined,
         comments: thread.comments
@@ -3125,6 +3188,8 @@ export async function addPullRequestComment(params: {
     threadContext: thread.threadContext
       ? {
           filePath: thread.threadContext.filePath,
+          leftFileStart: thread.threadContext.leftFileStart,
+          leftFileEnd: thread.threadContext.leftFileEnd,
           rightFileStart: thread.threadContext.rightFileStart,
           rightFileEnd: thread.threadContext.rightFileEnd,
         }
@@ -3506,6 +3571,8 @@ export async function addPullRequestFileComment(params: {
     threadContext: thread.threadContext
       ? {
           filePath: thread.threadContext.filePath,
+          leftFileStart: thread.threadContext.leftFileStart,
+          leftFileEnd: thread.threadContext.leftFileEnd,
           rightFileStart: thread.threadContext.rightFileStart,
           rightFileEnd: thread.threadContext.rightFileEnd,
         }
