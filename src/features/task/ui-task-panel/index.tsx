@@ -301,6 +301,22 @@ function getContinueReferenceStep({
   return null;
 }
 
+function getInterruptedContinueStep({
+  steps,
+  activeStep,
+}: {
+  steps: TaskStep[];
+  activeStep?: TaskStep | null;
+}): TaskStep | null {
+  if (activeStep?.status === 'interrupted') return activeStep;
+
+  return steps.reduce<TaskStep | null>((latest, step) => {
+    if (step.status !== 'interrupted') return latest;
+    if (!latest || step.updatedAt > latest.updatedAt) return step;
+    return latest;
+  }, null);
+}
+
 function getLastAssistantMessage(messages: NormalizedEntry[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -1218,7 +1234,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     // If the currently selected step still exists, keep it
     if (activeStepId && steps.some((s) => s.id === activeStepId)) return;
 
-    // Priority: first running → first ready → last completed → first step
+    // Priority: first running → first ready → last terminal → first step
     const running = steps.find((s) => s.status === 'running');
     if (running) {
       setActiveStepId(running.id);
@@ -1229,9 +1245,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       setActiveStepId(ready.id);
       return;
     }
-    const completedSteps = steps.filter((s) => s.status === 'completed');
-    if (completedSteps.length > 0) {
-      setActiveStepId(completedSteps[completedSteps.length - 1]!.id);
+    const terminalSteps = steps.filter(
+      (s) =>
+        s.status === 'completed' ||
+        s.status === 'interrupted' ||
+        s.status === 'errored',
+    );
+    if (terminalSteps.length > 0) {
+      setActiveStepId(terminalSteps[terminalSteps.length - 1]!.id);
       return;
     }
     setActiveStepId(steps[0]!.id);
@@ -1508,11 +1529,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       start: boolean;
       includedReviewCommentIds: string[];
       reviewers?: import('@shared/types').ReviewerConfig[];
+      preferredStepId?: string | null;
     }) => {
       const stepList = steps ?? [];
       const preferredStepId = addStepAtEnd
         ? (stepList[stepList.length - 1]?.id ?? null)
-        : addStepAfterStepId;
+        : (data.preferredStepId ?? addStepAfterStepId);
       const referenceStep =
         data.presetType === 'continue'
           ? getContinueReferenceStep({
@@ -1624,6 +1646,30 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         });
         return false;
       }
+  };
+
+  const handleContinueInterruptedStep = async () => {
+    const interruptedStep = getInterruptedContinueStep({
+      steps: steps ?? [],
+      activeStep,
+    });
+    if (!interruptedStep) return;
+
+    await handleAddStep({
+      promptTemplate: 'continue',
+      hasUserPrompt: false,
+      presetType: 'continue',
+      interactionMode: getDefaultInteractionModeForBackend({
+        backend: defaultAddStepBackend,
+      }),
+      agentBackend: defaultAddStepBackend,
+      modelPreference: defaultAddStepModel,
+      thinkingEffort: interruptedStep.thinkingEffort ?? 'default',
+      images: [],
+      start: true,
+      includedReviewCommentIds: [],
+      preferredStepId: interruptedStep.id,
+    });
   };
 
   const handleStartStep = useCallback(async () => {
@@ -1979,6 +2025,15 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const hasMessages = agentMeta.hasMessages;
   const activeStepError = agentMeta.error ?? 'No error details available.';
   const canSendMessage = !isAgentBusy && hasMessages && !!activeStep?.sessionId;
+  const interruptedStep = getInterruptedContinueStep({
+    steps: steps ?? [],
+    activeStep,
+  });
+  const canContinueInterruptedStep =
+    !isAgentBusy &&
+    !isSkillCreationTask &&
+    task.status === 'interrupted' &&
+    !!interruptedStep;
   const hasRepoLink =
     !!project.repoProviderId && !!project.repoProjectId && !!project.repoId;
   const hasWorkItemsLink =
@@ -2421,6 +2476,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onAllowGlobally={handleAllowGlobally}
                   onSetMode={handleSetMode}
                   worktreePath={task.worktreePath}
+                  afterLastPromptGroup={
+                    canContinueInterruptedStep ? (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        icon={<Play />}
+                        onClick={handleContinueInterruptedStep}
+                        title="Continue interrupted step"
+                      >
+                        Continue
+                      </Button>
+                    ) : null
+                  }
                 />
               )}
             </div>
@@ -2623,6 +2691,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onAllowGlobally,
   onSetMode,
   worktreePath,
+  afterLastPromptGroup,
 }: {
   taskId: string;
   stepId: string | null;
@@ -2667,6 +2736,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onAllowGlobally?: (toolName: string, input: Record<string, unknown>) => void;
   onSetMode?: (mode: InteractionMode) => void;
   worktreePath?: string | null;
+  afterLastPromptGroup?: ReactNode;
 }) {
   const agentState = useAgentStream({ taskId, stepId });
   const hasMessages = agentState.messages.length > 0;
@@ -2724,6 +2794,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
             rootPath={rootPath}
             taskId={taskId}
             stepId={stepId}
+            afterLastPromptGroup={afterLastPromptGroup}
           />
         </div>
       </div>
