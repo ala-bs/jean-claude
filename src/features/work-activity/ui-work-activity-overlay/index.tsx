@@ -433,11 +433,11 @@ function Percentage({
   className?: string;
 }) {
   return (
-    <div className={clsx('flex items-baseline gap-0.5', className)}>
-      <span className="text-ink-0 text-2xl leading-none font-semibold tabular-nums tracking-[-0.03em]">
+    <div className={clsx('flex shrink-0 items-baseline gap-px', className)}>
+      <span className="text-ink-0 text-base leading-none font-semibold tabular-nums tracking-[-0.02em]">
         {value}
       </span>
-      <span className="text-ink-3 text-xs font-medium">%</span>
+      <span className="text-ink-3 text-[10px] font-medium">%</span>
     </div>
   );
 }
@@ -445,10 +445,10 @@ function Percentage({
 function WorkItemPercentage({ value }: { value: number }) {
   return (
     <div className="flex shrink-0 items-baseline gap-px">
-      <span className="text-ink-0 text-[17px] leading-none font-semibold tabular-nums tracking-[-0.02em]">
+      <span className="text-ink-0 text-sm leading-none font-semibold tabular-nums tracking-[-0.02em]">
         {value}
       </span>
-      <span className="text-ink-3 text-[10px]">%</span>
+      <span className="text-ink-3 text-[9px]">%</span>
     </div>
   );
 }
@@ -657,7 +657,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
           role="dialog"
           aria-modal="true"
           aria-labelledby="work-activity-title"
-          className="border-glass-border text-ink-1 relative flex h-[min(720px,calc(100vh-48px))] w-full max-w-[1080px] flex-col overflow-hidden rounded-[20px] border bg-[linear-gradient(180deg,oklch(0.175_0.014_275),oklch(0.135_0.012_275))] shadow-[0_50px_120px_-36px_oklch(0_0_0/0.85),0_0_0_1px_oklch(0_0_0/0.4)]"
+          className="border-glass-border text-ink-1 relative flex h-[min(720px,calc(100vh-48px))] w-full max-w-[1350px] flex-col overflow-hidden rounded-[20px] border bg-[linear-gradient(180deg,oklch(0.175_0.014_275),oklch(0.135_0.012_275))] shadow-[0_50px_120px_-36px_oklch(0_0_0/0.85),0_0_0_1px_oklch(0_0_0/0.4)]"
           onClick={(event) => event.stopPropagation()}
         >
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_80%_at_100%_0%,oklch(0.78_0.16_205/0.07),transparent_55%)]" />
@@ -733,7 +733,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
             />
           </header>
 
-          <div className="relative grid min-h-0 flex-1 grid-cols-1 sm:grid-cols-[1fr_340px]">
+          <div className="relative grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[330px_360px_minmax(360px,1fr)] lg:overflow-hidden">
             {isLoading || isError || events.length === 0 ? (
               <div className="col-span-full flex min-h-0 items-center justify-center p-6">
                 <StatePanel
@@ -749,8 +749,8 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
               </div>
             ) : (
               <>
-                <div className="border-line-soft flex min-w-0 flex-col border-b p-5 sm:border-r sm:border-b-0 sm:p-6">
-              <div className="grid min-h-[340px] flex-1 grid-cols-7 gap-2.5">
+                <div className="border-line-soft flex min-w-0 flex-col border-b p-4 lg:border-r lg:border-b-0">
+              <div className="grid min-h-[230px] flex-1 grid-cols-7 gap-1">
                 {daySummaries.map((summary) => {
                   const selected = summary.day === selectedSummary?.day;
                   return (
@@ -764,7 +764,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                         setDayCopied(false);
                       }}
                       className={clsx(
-                        'group flex min-w-0 flex-col items-center gap-2.5 rounded-[13px] border px-1.5 py-3 transition-colors',
+                        'group flex min-w-0 flex-col items-center gap-1.5 rounded-[12px] border px-0.5 py-2 transition-colors',
                         selected
                           ? 'border-line bg-white/[0.055]'
                           : 'border-transparent hover:bg-white/[0.025]',
@@ -772,7 +772,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                     >
                       <div
                         className={clsx(
-                          'font-mono text-[11px]',
+                          'font-mono text-[10px]',
                           summary.total
                             ? selected
                               ? 'text-ink-0'
@@ -784,7 +784,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                       </div>
                       <div
                         className={clsx(
-                          'border-line-soft flex min-h-0 w-full max-w-16 flex-1 flex-col justify-end overflow-hidden rounded-lg border bg-white/[0.035]',
+                          'border-line-soft flex min-h-0 w-full max-w-8 flex-1 flex-col justify-end overflow-hidden rounded-lg border bg-white/[0.035]',
                           selected &&
                             'border-status-azure/40 shadow-[0_0_0_1px_color-mix(in_oklch,var(--color-status-azure)_22%,transparent),0_10px_30px_-12px_var(--color-status-azure)]',
                         )}
@@ -807,7 +807,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                                 title={`${row.name} ${row.pct}%`}
                               >
                                 {row.pct >= 22 ? (
-                                  <span className="text-bg-0 text-[10px] font-bold">
+                                  <span className="text-bg-0 text-[9px] font-bold">
                                     {row.pct}%
                                   </span>
                                 ) : null}
@@ -819,7 +819,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                       <div className="flex items-baseline gap-1">
                         <span
                           className={clsx(
-                            'text-xs font-semibold',
+                            'text-[11px] font-semibold',
                             summary.total
                               ? selected
                                 ? 'text-ink-0'
@@ -829,7 +829,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                         >
                           {formatShortDay(summary.day)}
                         </span>
-                        <span className="text-ink-4 text-[11px]">
+                        <span className="text-ink-4 text-[10px]">
                           {formatDayNumber(summary.day)}
                         </span>
                       </div>
@@ -838,23 +838,23 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                 })}
               </div>
 
-              <div className="border-line-soft mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t pt-4">
+              <div className="border-line-soft mt-3 flex flex-wrap gap-x-2.5 gap-y-1 border-t pt-3">
                 {weekProjects.length === 0 ? (
                   <span className="text-ink-4 text-xs">No project activity</span>
                 ) : (
                   weekProjects.map((project) => (
                     <div
                       key={project.id}
-                      className="flex min-w-0 items-center gap-2"
+                      className="flex min-w-0 items-center gap-1.5"
                     >
                       <Dot color={getProjectColor(project.id)} />
-                      <span className="text-ink-2 max-w-36 truncate text-xs">
+                      <span className="text-ink-2 max-w-28 truncate text-[11px]">
                         {project.name}
                       </span>
-                      <span className="text-ink-4 text-[11px] tabular-nums">
+                      <span className="text-ink-4 text-[10px] tabular-nums">
                         {project.pct}%
                       </span>
-                      <span className="text-ink-4 text-[11px] tabular-nums">
+                      <span className="text-ink-4 text-[10px] tabular-nums">
                         {project.count} ev
                       </span>
                     </div>
@@ -863,7 +863,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
               </div>
                 </div>
 
-                <aside className="min-h-0 overflow-y-auto bg-black/10 p-4 sm:p-5">
+                <aside className="border-line-soft min-h-0 overflow-y-auto border-b bg-black/10 p-4 lg:border-r lg:border-b-0">
               <div className="border-line-soft border-b pb-4">
                 <div className="text-status-azure text-[11px] font-bold tracking-[0.11em] uppercase">
                   {selectedSummary?.day === weekDays.at(-1)
@@ -903,17 +903,17 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                     {selectedSummary.rows.map((row) => (
                       <div
                         key={row.id}
-                        className="border-line-soft flex items-center justify-between gap-3 border-b py-3"
-                      >
-                        <div className="flex min-w-0 items-center gap-2.5">
-                          <Dot color={getProjectColor(row.id)} glow />
-                          <div className="min-w-0">
-                            <div className="text-ink-0 truncate text-sm font-semibold">
-                              {row.name}
-                            </div>
-                            <div className="text-ink-4 text-[11px]">
-                              {row.count} event{row.count === 1 ? '' : 's'}
-                            </div>
+                            className="border-line-soft flex items-center justify-between gap-2 border-b py-2"
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              <Dot color={getProjectColor(row.id)} glow />
+                              <div className="min-w-0">
+                                <div className="text-ink-0 truncate text-[13px] leading-tight font-semibold">
+                                  {row.name}
+                                </div>
+                                <div className="text-ink-4 text-[10px] leading-tight">
+                                  {row.count} event{row.count === 1 ? '' : 's'}
+                                </div>
                           </div>
                         </div>
                         <Percentage value={row.pct} />
@@ -921,7 +921,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                     ))}
                   </div>
 
-                  <div className="text-ink-3 mt-5 mb-2 text-[10px] font-semibold tracking-[0.09em] uppercase">
+                  <div className="text-ink-3 mt-4 mb-1.5 text-[10px] font-semibold tracking-[0.09em] uppercase">
                     Work items · Azure DevOps
                   </div>
                   {selectedWorkItemRows.length > 0 ? (
@@ -952,24 +952,24 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                                 ? `Open work item ${getWorkItemLabel(workItem.id)}`
                                 : `Work item ${getWorkItemLabel(workItem.id)}`
                             }
-                            className="border-line-soft hover:bg-white/[0.025] flex w-full items-start gap-2.5 border-b px-1 py-2.5 text-left transition-colors last:border-b-0 disabled:cursor-default disabled:hover:bg-transparent"
+                            className="border-line-soft hover:bg-white/[0.025] flex w-full items-start gap-2 border-b px-1 py-1.5 text-left transition-colors last:border-b-0 disabled:cursor-default disabled:hover:bg-transparent"
                           >
-                            <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
+                            <span className="mt-px flex h-3.5 w-3.5 shrink-0 items-center justify-center">
                               <WorkItemTypeIcon
                                 type={previewedType ?? workItem.type ?? ''}
                                 size="md"
                               />
                             </span>
                             <div className="min-w-0 flex-1">
-                              <div className="flex min-w-0 items-baseline gap-1.5">
-                                <span className="text-ink-3 shrink-0 font-mono text-[11px] tabular-nums">
+                              <div className="flex min-w-0 items-baseline gap-1">
+                                <span className="text-ink-3 shrink-0 font-mono text-[10px] tabular-nums">
                                   {getWorkItemLabel(workItem.id)}
                                 </span>
-                                <span className="text-ink-0 truncate text-[13px] font-semibold">
+                                <span className="text-ink-0 truncate text-xs font-semibold">
                                   {previewedTitle ?? workItem.summary}
                                 </span>
                               </div>
-                              <div className="text-ink-4 mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] whitespace-nowrap">
+                              <div className="text-ink-4 mt-px flex min-w-0 items-center gap-1 text-[10px] whitespace-nowrap">
                                 <Dot
                                   color={getProjectColor(workItem.projectId)}
                                 />
@@ -993,18 +993,25 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                     </div>
                   )}
 
-                  <div className="text-ink-3 mt-5 mb-2 text-[10px] font-semibold tracking-[0.09em] uppercase">
-                    Activity timeline
-                  </div>
-                  <ActivityTimeline
-                    events={selectedSummary.events}
-                    getProjectColor={getProjectColor}
-                  />
                 </div>
               ) : (
                 <StatePanel label="Nothing tracked on this day." />
               )}
                 </aside>
+
+                <section className="flex min-h-0 flex-col overflow-hidden bg-black/10 p-4">
+                  <div className="text-ink-3 mb-2 text-[10px] font-semibold tracking-[0.09em] uppercase">
+                    Activity timeline
+                  </div>
+                  {selectedSummary && selectedSummary.total > 0 ? (
+                    <ActivityTimeline
+                      events={selectedSummary.events}
+                      getProjectColor={getProjectColor}
+                    />
+                  ) : (
+                    <StatePanel label="Nothing tracked on this day." />
+                  )}
+                </section>
               </>
             )}
           </div>
@@ -1093,7 +1100,7 @@ function ActivityTimeline({
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const timeline = useMemo(() => {
     if (events.length === 0) {
-      return { start: 0, span: 60, hours: [0], lanes: [] };
+      return { start: 0, span: 60, hours: [0], lanes: [], columns: [] };
     }
 
     const lanes = new Map<
@@ -1134,19 +1141,43 @@ function ActivityTimeline({
       (_, index) => start + index * 60,
     ).filter((minute) => minute <= end);
 
+    const sortedLanes = [...lanes.values()]
+      .map((lane) => {
+        const laneEvents = [...lane.events].sort((left, right) =>
+          left.occurredAt.localeCompare(right.occurredAt),
+        );
+        const laneStart = Math.min(...laneEvents.map(eventMinute));
+        const laneEnd = Math.max(...laneEvents.map(eventMinute));
+
+        return {
+          ...lane,
+          events: laneEvents,
+          start: laneStart,
+          end: laneEnd,
+        };
+      })
+      .sort(
+        (left, right) =>
+          left.start - right.start || left.end - right.end || right.events.length - left.events.length,
+      );
+
+    const columns: { end: number; lanes: typeof sortedLanes }[] = [];
+    for (const lane of sortedLanes) {
+      const column = columns.find((candidate) => candidate.end + 12 <= lane.start);
+      if (column) {
+        column.lanes.push(lane);
+        column.end = lane.end;
+      } else {
+        columns.push({ end: lane.end, lanes: [lane] });
+      }
+    }
+
     return {
       start,
       span,
       hours,
-      lanes: [...lanes.values()]
-        .map((lane) => ({
-          ...lane,
-          events: [...lane.events].sort((left, right) =>
-            left.occurredAt.localeCompare(right.occurredAt),
-          ),
-        }))
-        .sort((left, right) => right.events.length - left.events.length)
-        .slice(0, 5),
+      lanes: sortedLanes,
+      columns,
     };
   }, [events]);
 
@@ -1208,67 +1239,80 @@ function ActivityTimeline({
   }
 
   return (
-    <div className="border-line-soft overflow-hidden rounded-xl border bg-black/15">
+    <div className="border-line-soft flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-black/15">
       <div
         ref={chartRef}
-        className="relative h-[30rem] overflow-y-auto"
+        className="relative min-h-0 flex-1 overflow-auto"
+        onScroll={() => {
+          if (!activeEventId) return;
+          setActiveEventId(null);
+          setTooltipPosition(null);
+        }}
       >
-        <div className="relative h-[44rem] px-4 pt-8 pb-16">
+        <div
+          className="relative h-full min-h-[34rem] px-3 pt-7 pb-12"
+          style={{ width: `max(100%, ${timeline.columns.length * 40 + 68}px)` }}
+        >
+          <div className="border-line-soft pointer-events-none sticky left-0 z-40 h-full w-14 border-r bg-bg-1" />
           {timeline.hours.map((hour) => (
             <div
               key={hour}
-              className="border-line-soft pointer-events-none absolute right-4 left-16 border-t"
+              className="border-line-soft pointer-events-none absolute right-3 left-14 border-t"
               style={{
-                top: `calc(2rem + (100% - 6rem) * ${
+                top: `calc(1.75rem + (100% - 4.75rem) * ${
                   (hour - timeline.start) / timeline.span
                 })`,
               }}
             >
-              <span className="text-ink-4 absolute -top-2 -left-12 w-10 text-right font-mono text-[9px]">
+              <span className="text-ink-4 bg-bg-1 sticky left-2 z-50 -ml-12 inline-block w-10 -translate-y-1/2 rounded pr-1 text-right font-mono text-[9px]">
                 {formatHour(hour)}
               </span>
             </div>
           ))}
 
-          <div className="absolute top-8 right-4 bottom-16 left-16 flex gap-3">
-            {timeline.lanes.map((lane) => {
+          <div className="absolute top-7 right-3 bottom-12 left-[4.25rem] flex gap-1">
+            {timeline.columns.map((column, columnIndex) => (
+              <div key={columnIndex} className="relative min-w-0 flex-1">
+                {column.lanes.map((lane) => {
             const color = getProjectColor(lane.projectId);
             const laneActive = lane.key === activeLane?.key;
-            const laneStart = Math.min(...lane.events.map(eventMinute));
-            const laneEnd = Math.max(...lane.events.map(eventMinute));
             const top = clampTimelinePct(
-              ((laneStart - timeline.start) / timeline.span) * 100,
+              ((lane.start - timeline.start) / timeline.span) * 100,
             );
             const bottom = clampTimelinePct(
-              ((laneEnd - timeline.start) / timeline.span) * 100,
+              ((lane.end - timeline.start) / timeline.span) * 100,
             );
-            const height = Math.min(Math.max(2, bottom - top), 98 - top);
+            const height = Math.min(Math.max(3, bottom - top), 98 - top);
 
             return (
-              <div key={lane.key} className="relative min-w-0 flex-1">
+              <div key={lane.key} className="group/lane absolute inset-y-0 right-0 left-0">
                 <div
                   className={clsx(
-                    'absolute inset-y-0 left-0 right-0 rounded-lg transition-colors',
+                    'absolute inset-y-0 left-0 right-0 rounded-lg transition-colors group-hover/lane:bg-white/[0.035]',
                     laneActive && 'bg-white/[0.045]',
                   )}
+                  style={{ top: `${top}%`, height: `${height}%` }}
                 />
                 <div
-                  className="absolute left-1/2 w-0.5 -translate-x-1/2 rounded-full opacity-35"
+                  className="absolute left-1/2 w-px -translate-x-1/2 rounded-full opacity-35 transition-[opacity,width,box-shadow] group-hover/lane:w-0.5 group-hover/lane:opacity-85 group-hover/lane:shadow-[0_0_10px_var(--lane-color)]"
                   style={{
                     top: `${top}%`,
                     height: `${height}%`,
                     background: color,
-                  }}
+                    '--lane-color': color,
+                  } as CSSProperties}
                 />
-                <div
-                  className="absolute inset-y-0 left-0 right-0 z-20 cursor-pointer rounded-lg"
+                <button
+                  type="button"
+                  className="absolute right-0 left-0 z-20 cursor-pointer rounded-lg border-0 bg-transparent p-0 text-left"
+                  style={{ top: `${top}%`, height: `${height}%` }}
                   onClick={(event) => {
                     const rect = event.currentTarget.getBoundingClientRect();
                     const pct = Math.min(
                       1,
                       Math.max(0, (event.clientY - rect.top) / rect.height),
                     );
-                    const targetMinute = timeline.start + pct * timeline.span;
+                    const targetMinute = lane.start + pct * Math.max(1, lane.end - lane.start);
                     selectLaneEvent(lane.events, targetMinute);
                   }}
                   onKeyDown={(event) => {
@@ -1283,12 +1327,11 @@ function ActivityTimeline({
                 {lane.events.map((event) => {
                   const active = activeEvent?.id === event.id;
                   return (
-                    <button
+                    <span
                       key={event.id}
-                      type="button"
-                      aria-label={`${timeFormatter.format(new Date(event.occurredAt))} ${formatEventType(event.type)}`}
+                      aria-hidden="true"
                       className={clsx(
-                        'pointer-events-none absolute left-1/2 z-30 h-3 w-3 -translate-x-1/2 -translate-y-1/2 border border-bg-1 transition-[box-shadow,transform] hover:scale-150 focus-visible:scale-150 focus-visible:outline-none',
+                        'pointer-events-none absolute left-1/2 z-30 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 border border-bg-1 transition-[box-shadow,transform] hover:scale-150 focus-visible:scale-150 focus-visible:outline-none',
                         getEventShape(event.type),
                         active && 'scale-150 shadow-[0_0_18px_var(--event-color)]',
                       )}
@@ -1302,24 +1345,21 @@ function ActivityTimeline({
                     />
                   );
                 })}
-                <div className="absolute right-0 -bottom-9 left-0 text-center">
-                  <div className="text-ink-4 truncate text-[9px]">
-                    {getTimelineLaneLabel(lane)}
-                  </div>
-                </div>
               </div>
             );
-            })}
+                })}
+              </div>
+            ))}
           </div>
 
           {activeLane && activeEvent ? (
             <>
               <div
-                className="pointer-events-none absolute right-4 left-16 z-20 h-px bg-[linear-gradient(90deg,transparent,oklch(1_0_0/0.2),transparent)]"
-                style={{
-                  top: `calc(2rem + (100% - 6rem) * ${clampTimelinePct(activeEventTop) / 100})`,
-                }}
-              />
+                  className="pointer-events-none absolute right-3 left-[4.25rem] z-20 h-px bg-[linear-gradient(90deg,transparent,oklch(1_0_0/0.2),transparent)]"
+                  style={{
+                    top: `calc(1.75rem + (100% - 4.75rem) * ${clampTimelinePct(activeEventTop) / 100})`,
+                  }}
+                />
             </>
           ) : null}
         </div>
