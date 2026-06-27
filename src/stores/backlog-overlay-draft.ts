@@ -47,6 +47,13 @@ export const useBacklogSelectedProjectId = () =>
 export const useSetBacklogSelectedProjectId = () =>
   useStore((state) => state.setSelectedProjectId);
 
+export const getBacklogOverlayDraft = (projectId: string) =>
+  useStore.getState().drafts[projectId] ?? '';
+
+export const clearBacklogOverlayDraft = (projectId: string) => {
+  useStore.getState().clearDraft(projectId);
+};
+
 export function useBacklogOverlayDraftStore(projectId: string) {
   const draft = useStore((state) => state.drafts[projectId] ?? '');
   const setDraftAction = useStore((state) => state.setDraft);

@@ -3,14 +3,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
-  ExternalLink,
-  GitPullRequest,
   Loader2,
-  MessageSquareText,
   Sparkles,
   X,
 } from 'lucide-react';
-import { type CSSProperties, useMemo, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
@@ -292,6 +289,67 @@ function getWorkItemRecap(events: WorkActivityEvent[]) {
     summary: row.title ?? (row.events[0] ? getEventLabel(row.events[0]) : 'Activity'),
     eventSummary: formatWorkItemEventSummary(row.events),
   }));
+}
+
+function getTimelineWorkItemEntries(event: WorkActivityEvent) {
+  const entries = getEventWorkItemEntries(event);
+  if (entries.length > 0) return entries;
+
+  const taskKey = event.taskId ? `task:${event.taskId}` : 'no-work-item';
+
+  return [
+    {
+      key: `${eventProjectId(event)}:${taskKey}`,
+      id: taskKey,
+      providerId: event.providerId,
+      title: event.taskTitle ?? event.promptSnippet ?? null,
+      type: null,
+      projectId: eventProjectId(event),
+      projectName: eventProjectName(event),
+    },
+  ];
+}
+
+function getTimelineLaneLabel(lane: { id: string; title: string; projectName: string }) {
+  if (lane.id === 'no-work-item') return lane.projectName;
+  if (lane.id.startsWith('task:')) return lane.title;
+  return getWorkItemLabel(lane.id);
+}
+
+function getTimelineLaneKind(laneId: string) {
+  if (laneId.startsWith('task:')) return 'Task';
+  if (laneId === 'no-work-item') return 'Project';
+  return getWorkItemLabel(laneId);
+}
+
+function eventMinute(event: WorkActivityEvent) {
+  const date = new Date(event.occurredAt);
+  return date.getUTCHours() * 60 + date.getUTCMinutes();
+}
+
+function formatHour(minute: number) {
+  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:00`;
+}
+
+function getEventShape(type: WorkActivityEvent['type']) {
+  if (type === 'pr_approved') return 'rounded-[5px]';
+  if (type === 'pr_comment_added') return 'rounded-[3px] rotate-45';
+  return 'rounded-full';
+}
+
+function clampTimelinePct(value: number) {
+  return Math.min(96, Math.max(2, value));
+}
+
+function nearestEvent(
+  laneEvents: WorkActivityEvent[],
+  targetMinute: number,
+) {
+  return laneEvents.reduce((nearest, event) => {
+    const nearestDistance = Math.abs(eventMinute(nearest) - targetMinute);
+    const eventDistance = Math.abs(eventMinute(event) - targetMinute);
+    return eventDistance < nearestDistance ? event : nearest;
+  });
 }
 
 function getAzureProjectNameFromWorkItemUrl(url: string | null | undefined) {
@@ -936,17 +994,12 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                   )}
 
                   <div className="text-ink-3 mt-5 mb-2 text-[10px] font-semibold tracking-[0.09em] uppercase">
-                    Activity
+                    Activity timeline
                   </div>
-                  <div className="space-y-2">
-                    {selectedSummary.events.map((event) => (
-                      <EventRow
-                        key={event.id}
-                        event={event}
-                        color={getProjectColor(eventProjectId(event))}
-                      />
-                    ))}
-                  </div>
+                  <ActivityTimeline
+                    events={selectedSummary.events}
+                    getProjectColor={getProjectColor}
+                  />
                 </div>
               ) : (
                 <StatePanel label="Nothing tracked on this day." />
@@ -1024,45 +1077,309 @@ function StatePanel({
   );
 }
 
-function EventRow({
-  event,
-  color,
+function ActivityTimeline({
+  events,
+  getProjectColor,
 }: {
-  event: WorkActivityEvent;
-  color: string;
+  events: WorkActivityEvent[];
+  getProjectColor: (projectId: string) => string;
 }) {
-  const style = { '--event-color': color } as CSSProperties;
+  const [activeEventId, setActiveEventId] = useState<string | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const timeline = useMemo(() => {
+    if (events.length === 0) {
+      return { start: 0, span: 60, hours: [0], lanes: [] };
+    }
+
+    const lanes = new Map<
+      string,
+      {
+        key: string;
+        id: string;
+        title: string;
+        type: string | null;
+        projectId: string;
+        projectName: string;
+        events: WorkActivityEvent[];
+      }
+    >();
+
+    for (const event of events) {
+      for (const entry of getTimelineWorkItemEntries(event)) {
+        const lane = lanes.get(entry.key) ?? {
+          key: entry.key,
+          id: entry.id,
+          title: entry.title ?? getEventLabel(event),
+          type: entry.type,
+          projectId: entry.projectId,
+          projectName: entry.projectName,
+          events: [],
+        };
+        lane.events.push(event);
+        lanes.set(entry.key, lane);
+      }
+    }
+
+    const minutes = events.map(eventMinute);
+    const start = Math.max(0, Math.floor((Math.min(...minutes) - 30) / 60) * 60);
+    const end = Math.min(24 * 60, Math.ceil((Math.max(...minutes) + 30) / 60) * 60);
+    const span = Math.max(60, end - start);
+    const hours = Array.from(
+      { length: Math.floor((end - start) / 60) + 1 },
+      (_, index) => start + index * 60,
+    ).filter((minute) => minute <= end);
+
+    return {
+      start,
+      span,
+      hours,
+      lanes: [...lanes.values()]
+        .map((lane) => ({
+          ...lane,
+          events: [...lane.events].sort((left, right) =>
+            left.occurredAt.localeCompare(right.occurredAt),
+          ),
+        }))
+        .sort((left, right) => right.events.length - left.events.length)
+        .slice(0, 5),
+    };
+  }, [events]);
+
+  const activeLane = timeline.lanes.find((lane) =>
+    lane.events.some((event) => event.id === activeEventId),
+  );
+  const activeEvent = activeLane?.events.find(
+    (event) => event.id === activeEventId,
+  );
+  const activeEventTop = activeEvent
+    ? ((eventMinute(activeEvent) - timeline.start) / timeline.span) * 100
+    : 0;
+  const tooltipWidth = 224;
+
+  function setTooltipForMinute(minute: number) {
+    const rect = chartRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const pct = (minute - timeline.start) / timeline.span;
+    const scrollTop = chartRef.current?.scrollTop ?? 0;
+    const scrollHeight = chartRef.current?.scrollHeight ?? rect.height;
+    setTooltipPosition({
+      left: Math.min(
+        window.innerWidth - tooltipWidth - 12,
+        Math.max(12, rect.left - tooltipWidth - 12),
+      ),
+      top: Math.min(
+        window.innerHeight - 96,
+        Math.max(96, rect.top + 32 - scrollTop + (scrollHeight - 96) * pct),
+      ),
+    });
+  }
+
+  useEffect(() => {
+    if (!activeEventId) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (chartRef.current?.contains(target)) return;
+      if (tooltipRef.current?.contains(target)) return;
+
+      setActiveEventId(null);
+      setTooltipPosition(null);
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [activeEventId]);
+
+  function selectLaneEvent(laneEvents: WorkActivityEvent[], targetMinute: number) {
+    const nearest = nearestEvent(laneEvents, targetMinute);
+    setActiveEventId(nearest.id);
+    setTooltipForMinute(eventMinute(nearest));
+  }
+
+  if (events.length === 0) {
+    return <StatePanel label="No activity events." />;
+  }
 
   return (
-    <div className="flex gap-2.5" style={style}>
-      <span className="mt-0.5 h-auto w-0.5 shrink-0 rounded-full bg-[var(--event-color)]" />
-      <div className="min-w-0 flex-1">
-        <div className="text-ink-4 flex items-center gap-2 text-[10.5px]">
-          <span className="font-mono tabular-nums">
-            {timeFormatter.format(new Date(event.occurredAt))}
-          </span>
-          {event.type === 'task_prompted' ? (
-            <MessageSquareText className="h-3 w-3 text-[var(--event-color)]" />
-          ) : (
-            <GitPullRequest className="h-3 w-3 text-[var(--event-color)]" />
-          )}
-          <span>{formatEventType(event.type)}</span>
-          {event.pullRequest?.url ? (
-            <a
-              className="text-ink-3 hover:text-ink-0 ml-auto"
-              href={event.pullRequest.url}
-              target="_blank"
-              rel="noreferrer"
-              title="Open PR"
+    <div className="border-line-soft overflow-hidden rounded-xl border bg-black/15">
+      <div
+        ref={chartRef}
+        className="relative h-[30rem] overflow-y-auto"
+      >
+        <div className="relative h-[44rem] px-4 pt-8 pb-16">
+          {timeline.hours.map((hour) => (
+            <div
+              key={hour}
+              className="border-line-soft pointer-events-none absolute right-4 left-16 border-t"
+              style={{
+                top: `calc(2rem + (100% - 6rem) * ${
+                  (hour - timeline.start) / timeline.span
+                })`,
+              }}
             >
-              <ExternalLink className="h-3 w-3" />
-            </a>
+              <span className="text-ink-4 absolute -top-2 -left-12 w-10 text-right font-mono text-[9px]">
+                {formatHour(hour)}
+              </span>
+            </div>
+          ))}
+
+          <div className="absolute top-8 right-4 bottom-16 left-16 flex gap-3">
+            {timeline.lanes.map((lane) => {
+            const color = getProjectColor(lane.projectId);
+            const laneActive = lane.key === activeLane?.key;
+            const laneStart = Math.min(...lane.events.map(eventMinute));
+            const laneEnd = Math.max(...lane.events.map(eventMinute));
+            const top = clampTimelinePct(
+              ((laneStart - timeline.start) / timeline.span) * 100,
+            );
+            const bottom = clampTimelinePct(
+              ((laneEnd - timeline.start) / timeline.span) * 100,
+            );
+            const height = Math.min(Math.max(2, bottom - top), 98 - top);
+
+            return (
+              <div key={lane.key} className="relative min-w-0 flex-1">
+                <div
+                  className={clsx(
+                    'absolute inset-y-0 left-0 right-0 rounded-lg transition-colors',
+                    laneActive && 'bg-white/[0.045]',
+                  )}
+                />
+                <div
+                  className="absolute left-1/2 w-0.5 -translate-x-1/2 rounded-full opacity-35"
+                  style={{
+                    top: `${top}%`,
+                    height: `${height}%`,
+                    background: color,
+                  }}
+                />
+                <div
+                  className="absolute inset-y-0 left-0 right-0 z-20 cursor-pointer rounded-lg"
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const pct = Math.min(
+                      1,
+                      Math.max(0, (event.clientY - rect.top) / rect.height),
+                    );
+                    const targetMinute = timeline.start + pct * timeline.span;
+                    selectLaneEvent(lane.events, targetMinute);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    const firstEvent = lane.events[0];
+                    if (firstEvent) selectLaneEvent(lane.events, eventMinute(firstEvent));
+                  }}
+                  tabIndex={0}
+                  aria-label={`Show ${getTimelineLaneLabel(lane)} activity`}
+                />
+                {lane.events.map((event) => {
+                  const active = activeEvent?.id === event.id;
+                  return (
+                    <button
+                      key={event.id}
+                      type="button"
+                      aria-label={`${timeFormatter.format(new Date(event.occurredAt))} ${formatEventType(event.type)}`}
+                      className={clsx(
+                        'pointer-events-none absolute left-1/2 z-30 h-3 w-3 -translate-x-1/2 -translate-y-1/2 border border-bg-1 transition-[box-shadow,transform] hover:scale-150 focus-visible:scale-150 focus-visible:outline-none',
+                        getEventShape(event.type),
+                        active && 'scale-150 shadow-[0_0_18px_var(--event-color)]',
+                      )}
+                      style={
+                        {
+                          top: `${clampTimelinePct(((eventMinute(event) - timeline.start) / timeline.span) * 100)}%`,
+                          background: color,
+                          '--event-color': color,
+                        } as CSSProperties
+                      }
+                    />
+                  );
+                })}
+                <div className="absolute right-0 -bottom-9 left-0 text-center">
+                  <div className="text-ink-4 truncate text-[9px]">
+                    {getTimelineLaneLabel(lane)}
+                  </div>
+                </div>
+              </div>
+            );
+            })}
+          </div>
+
+          {activeLane && activeEvent ? (
+            <>
+              <div
+                className="pointer-events-none absolute right-4 left-16 z-20 h-px bg-[linear-gradient(90deg,transparent,oklch(1_0_0/0.2),transparent)]"
+                style={{
+                  top: `calc(2rem + (100% - 6rem) * ${clampTimelinePct(activeEventTop) / 100})`,
+                }}
+              />
+            </>
           ) : null}
         </div>
-        <div className="text-ink-1 mt-1 line-clamp-2 text-xs leading-snug">
-          {getEventLabel(event)}
-        </div>
       </div>
+      {activeLane && activeEvent && tooltipPosition
+        ? createPortal(
+            <div
+              ref={tooltipRef}
+              className="border-line bg-bg-1/95 fixed z-[10001] max-h-[min(360px,calc(100vh-96px))] w-56 overflow-y-auto rounded-[13px] border p-3 shadow-[0_18px_44px_-14px_oklch(0_0_0/0.82)] backdrop-blur-sm"
+              style={{
+                left: tooltipPosition.left,
+                top: tooltipPosition.top,
+                transform: 'translateY(-50%)',
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-ink-3 shrink-0 font-mono text-[11px] tabular-nums">
+                  {getTimelineLaneKind(activeLane.id)}
+                </span>
+                <span className="text-ink-4 ml-auto font-mono text-[10px]">
+                  {activeLane.events.length} ev
+                </span>
+              </div>
+              <div className="text-ink-0 mt-2 line-clamp-2 text-xs leading-tight font-semibold">
+                {activeLane.title}
+              </div>
+              <div className="border-line-soft mt-2 space-y-0.5 border-t pt-2">
+                {activeLane.events.map((event) => {
+                  const active = event.id === activeEvent.id;
+                  return (
+                    <div
+                      key={event.id}
+                      className={clsx(
+                        'flex items-baseline gap-2 rounded-md px-1.5 py-1',
+                        active && 'bg-white/[0.06]',
+                      )}
+                    >
+                      <span className="text-ink-4 w-10 shrink-0 font-mono text-[10px] tabular-nums">
+                        {timeFormatter.format(new Date(event.occurredAt))}
+                      </span>
+                      <span
+                        className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full"
+                        style={{ background: getProjectColor(eventProjectId(event)) }}
+                      />
+                      <span
+                        className={clsx(
+                          'line-clamp-1 text-[11px] leading-snug',
+                          active ? 'text-ink-0' : 'text-ink-2',
+                        )}
+                      >
+                        {formatEventType(event.type)} · {getEventLabel(event)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

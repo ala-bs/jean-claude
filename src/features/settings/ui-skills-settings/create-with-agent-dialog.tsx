@@ -8,12 +8,15 @@ import {
   AGENT_BACKENDS,
   BackendSelector,
 } from '@/features/agent/ui-backend-selector';
+import {
+  useKeyboardLayer,
+  useRegisterKeyboardBindings,
+} from '@/common/context/keyboard-bindings';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCreateSkillDraftStore } from '@/stores/create-skill-draft';
 import { useCreateSkillWithAgent } from '@/hooks/use-managed-skills';
-import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 
 
@@ -24,6 +27,7 @@ export function CreateWithAgentDialog({ onClose }: { onClose: () => void }) {
 
   const panelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const layer = useKeyboardLayer('dialog', { exclusive: true });
 
   const createMutation = useCreateSkillWithAgent();
   const addRunningJob = useBackgroundJobsStore((s) => s.addRunningJob);
@@ -41,13 +45,13 @@ export function CreateWithAgentDialog({ onClose }: { onClose: () => void }) {
   const agentBackend = draft?.agentBackend ?? 'claude-code';
   const canSubmit = prompt.trim().length > 0;
 
-  // Close on Escape key (registered after settings overlay → LIFO priority wins)
+  // Close on Escape key without falling through to the settings overlay.
   useRegisterKeyboardBindings('create-with-agent-dialog', {
     escape: () => {
       onClose();
       return true;
     },
-  });
+  }, { layer });
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit || !draft) return;
@@ -124,12 +128,12 @@ export function CreateWithAgentDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]"
       onClick={onClose}
     >
       <div
         ref={panelRef}
-        className="border-glass-border bg-bg-1 flex w-[520px] flex-col overflow-hidden rounded-lg border shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5),0_0_100px_-20px_rgba(0,0,0,0.6)]"
+        className="border-glass-border flex w-[520px] flex-col overflow-hidden rounded-lg border bg-[var(--color-bg-1)] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5),0_0_100px_-20px_rgba(0,0,0,0.6)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Prompt input */}

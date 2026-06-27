@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import clsx from 'clsx';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { ThemedToken } from 'shiki';
@@ -18,6 +18,7 @@ import {
 } from './utils-search-highlight';
 import type { SearchMatch } from './use-diff-search';
 import { useDividerResize } from './use-divider-resize';
+import { useLineRangeSelection } from './use-line-range-selection';
 
 
 import type {
@@ -26,6 +27,8 @@ import type {
   InlineComment,
   LineRange,
 } from './index';
+
+const EMPTY_SEARCH_MATCHES: SearchMatch[] = [];
 
 export function SideBySideDiffTable({
   oldString,
@@ -52,8 +55,7 @@ export function SideBySideDiffTable({
   currentMatchIndex: number;
   folding: CodeFoldingState;
 }) {
-  const [selectionStart, setSelectionStart] = useState<number | null>(null);
-  const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
+  const lineRangeSelection = useLineRangeSelection({ onAddCommentClick });
 
   // Compute both the flat lines (for mapping search matches) and side-by-side rows
   const { rows, lineToRowMapping } = useMemo(() => {
@@ -125,59 +127,38 @@ export function SideBySideDiffTable({
 
   const currentMatch = searchMatches[currentMatchIndex] ?? null;
 
+  const inlineCommentsByLine = useMemo(() => {
+    const map = new Map<number, InlineComment[]>();
+    for (const comment of inlineComments ?? []) {
+      const comments = map.get(comment.line);
+      if (comments) {
+        comments.push(comment);
+      } else {
+        map.set(comment.line, [comment]);
+      }
+    }
+    return map;
+  }, [inlineComments]);
+
+  const commentFormsByEndLine = useMemo(() => {
+    const map = new Map<number, CommentFormEntry[]>();
+    for (const form of commentForms ?? []) {
+      const forms = map.get(form.lineRange.end);
+      if (forms) {
+        forms.push(form);
+      } else {
+        map.set(form.lineRange.end, [form]);
+      }
+    }
+    return map;
+  }, [commentForms]);
+
   const { tableRef, leftFraction, isDragging, handleDividerMouseDown } =
     useDividerResize();
 
   // Calculate percentage widths for left and right content columns
   const leftPct = `${leftFraction * 100}%`;
   const rightPct = `${(1 - leftFraction) * 100}%`;
-
-  // Comment selection handlers
-  const handleLineMouseDown = useCallback(
-    (lineNumber: number) => {
-      if (!onAddCommentClick) return;
-      setSelectionStart(lineNumber);
-      setSelectionEnd(lineNumber);
-    },
-    [onAddCommentClick],
-  );
-
-  const handleLineMouseUp = useCallback(
-    (lineNumber: number) => {
-      if (!onAddCommentClick || selectionStart === null) return;
-
-      const start = Math.min(selectionStart, lineNumber);
-      const end = Math.max(selectionStart, lineNumber);
-      onAddCommentClick({ start, end });
-      setSelectionStart(null);
-      setSelectionEnd(null);
-    },
-    [onAddCommentClick, selectionStart],
-  );
-
-  const handleLineMouseEnter = useCallback(
-    (lineNumber: number) => {
-      if (selectionStart !== null) {
-        setSelectionEnd(lineNumber);
-      }
-    },
-    [selectionStart],
-  );
-
-  const handleMouseLeaveTable = useCallback(() => {
-    setSelectionStart(null);
-    setSelectionEnd(null);
-  }, []);
-
-  const isLineInSelection = useCallback(
-    (lineNumber: number) => {
-      if (selectionStart === null || selectionEnd === null) return false;
-      const start = Math.min(selectionStart, selectionEnd);
-      const end = Math.max(selectionStart, selectionEnd);
-      return lineNumber >= start && lineNumber <= end;
-    },
-    [selectionStart, selectionEnd],
-  );
 
   const isLineInCommentRange = useCallback(
     (lineNumber: number) => {
@@ -197,7 +178,10 @@ export function SideBySideDiffTable({
     <table
       ref={tableRef}
       className={`w-full border-collapse ${isDragging ? 'select-none' : ''}`}
-      onMouseLeave={handleMouseLeaveTable}
+      onMouseDown={lineRangeSelection.onMouseDown}
+      onMouseOver={lineRangeSelection.onMouseOver}
+      onMouseUp={lineRangeSelection.onMouseUp}
+      onMouseLeave={lineRangeSelection.onMouseLeave}
     >
       <colgroup>
         {/* Fold gutter */}
@@ -215,12 +199,7 @@ export function SideBySideDiffTable({
       </colgroup>
       <tbody>
         {rows.map((row, rowIndex) => {
-          // Prefer new line anchors; fall back to old lines so deleted rows can
-          // still receive review comments.
-          const newLineNumber =
-            row.right?.newLineNumber ??
-            row.left?.newLineNumber ??
-            row.left?.oldLineNumber;
+          const newLineNumber = row.right?.newLineNumber ?? row.left?.newLineNumber;
 
           // Check if this line is hidden by a collapsed fold
           if (newLineNumber && folding.isLineHidden(newLineNumber)) {
@@ -236,17 +215,14 @@ export function SideBySideDiffTable({
 
           const lineComments =
             shouldRenderExtras && newLineNumber
-              ? inlineComments?.filter((c) => c.line === newLineNumber)
+              ? inlineCommentsByLine.get(newLineNumber)
               : undefined;
 
           const formsForLine =
-            shouldRenderExtras && newLineNumber && commentForms
-              ? commentForms.filter((cf) => cf.lineRange.end === newLineNumber)
+            shouldRenderExtras && newLineNumber
+              ? commentFormsByEndLine.get(newLineNumber)
               : undefined;
 
-          const isSelected = newLineNumber
-            ? isLineInSelection(newLineNumber)
-            : false;
           const isInCommentRange = newLineNumber
             ? isLineInCommentRange(newLineNumber)
             : false;
@@ -271,27 +247,21 @@ export function SideBySideDiffTable({
               rowIndex={rowIndex}
               oldTokens={oldTokens}
               newTokens={newTokens}
-              leftMatches={matchesByRowAndSide.get(`${rowIndex}-left`) ?? []}
-              rightMatches={matchesByRowAndSide.get(`${rowIndex}-right`) ?? []}
+              leftMatches={
+                matchesByRowAndSide.get(`${rowIndex}-left`) ??
+                EMPTY_SEARCH_MATCHES
+              }
+              rightMatches={
+                matchesByRowAndSide.get(`${rowIndex}-right`) ??
+                EMPTY_SEARCH_MATCHES
+              }
               currentMatch={currentMatch}
               onDividerMouseDown={handleDividerMouseDown}
               isDragging={isDragging}
               canComment={canComment}
-              isSelected={isSelected}
               isInCommentRange={isInCommentRange}
               hasComment={
                 !!newLineNumber && !!commentedLines?.has(newLineNumber)
-              }
-              onMouseEnter={() =>
-                newLineNumber !== undefined &&
-                handleLineMouseEnter(newLineNumber)
-              }
-              onMouseDown={() =>
-                newLineNumber !== undefined &&
-                handleLineMouseDown(newLineNumber)
-              }
-              onMouseUp={() =>
-                newLineNumber !== undefined && handleLineMouseUp(newLineNumber)
               }
               inlineComments={lineComments}
               commentForms={formsForLine}
@@ -299,11 +269,7 @@ export function SideBySideDiffTable({
               isFoldable={isFoldable}
               isFoldCollapsed={isFoldCollapsed}
               foldRange={foldRange}
-              onToggleFold={
-                newLineNumber
-                  ? () => folding.toggleFold(newLineNumber)
-                  : undefined
-              }
+              onToggleFold={newLineNumber ? folding.toggleFold : undefined}
             />
           );
         })}
@@ -312,7 +278,7 @@ export function SideBySideDiffTable({
   );
 }
 
-function SideBySideRowComponent({
+const SideBySideRowComponent = memo(function SideBySideRowComponent({
   row,
   rowIndex,
   oldTokens,
@@ -323,12 +289,8 @@ function SideBySideRowComponent({
   onDividerMouseDown,
   isDragging,
   canComment,
-  isSelected,
   isInCommentRange,
   hasComment,
-  onMouseEnter,
-  onMouseDown,
-  onMouseUp,
   inlineComments,
   commentForms,
   newLineNumber,
@@ -347,19 +309,15 @@ function SideBySideRowComponent({
   onDividerMouseDown: (e: ReactMouseEvent) => void;
   isDragging: boolean;
   canComment: boolean;
-  isSelected: boolean;
   isInCommentRange: boolean;
   hasComment: boolean;
-  onMouseEnter: () => void;
-  onMouseDown: () => void;
-  onMouseUp: () => void;
   inlineComments?: InlineComment[];
   commentForms?: CommentFormEntry[];
   newLineNumber?: number;
   isFoldable?: boolean;
   isFoldCollapsed?: boolean;
   foldRange?: { startLine: number; endLine: number };
-  onToggleFold?: () => void;
+  onToggleFold?: (lineNumber: number) => void;
 }) {
   return (
     <>
@@ -367,15 +325,11 @@ function SideBySideRowComponent({
         data-line-index={rowIndex}
         data-new-line={newLineNumber}
         className={clsx('group', {
-          'bg-blue-500/30': isSelected,
-          'bg-blue-500/10': !isSelected && isInCommentRange,
+          'bg-blue-500/10': isInCommentRange,
         })}
-        onMouseEnter={onMouseEnter}
-        onMouseDown={canComment ? onMouseDown : undefined}
-        onMouseUp={canComment ? onMouseUp : undefined}
         style={{
           cursor: canComment ? 'pointer' : undefined,
-          ...(hasComment && !isSelected && !isInCommentRange
+          ...(hasComment && !isInCommentRange
             ? {
                 background:
                   'color-mix(in oklch, oklch(0.78 0.18 295) 8%, transparent)',
@@ -392,7 +346,7 @@ function SideBySideRowComponent({
               onMouseUp={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleFold?.();
+                onToggleFold?.(newLineNumber!);
               }}
               aria-label={isFoldCollapsed ? 'Expand scope' : 'Collapse scope'}
               aria-expanded={!isFoldCollapsed}
@@ -413,14 +367,16 @@ function SideBySideRowComponent({
           searchMatches={leftMatches}
           currentMatch={currentMatch}
           canComment={canComment}
-          isSelected={isSelected}
           isInCommentRange={isInCommentRange}
           hasComment={hasComment}
         />
         {/* Divider / drag handle */}
         <td
           className="group relative cursor-col-resize select-none"
-          onMouseDown={onDividerMouseDown}
+          onMouseDown={(event) => {
+            event.stopPropagation();
+            onDividerMouseDown(event);
+          }}
         >
           {/* Visible divider line */}
           <div
@@ -441,7 +397,6 @@ function SideBySideRowComponent({
           searchMatches={rightMatches}
           currentMatch={currentMatch}
           canComment={canComment}
-          isSelected={isSelected}
           isInCommentRange={isInCommentRange}
           hasComment={hasComment}
           isFoldCollapsed={isFoldCollapsed}
@@ -475,16 +430,15 @@ function SideBySideRowComponent({
         ))}
     </>
   );
-}
+});
 
-function SideBySideCell({
+const SideBySideCell = memo(function SideBySideCell({
   line,
   tokens,
   side,
   searchMatches,
   currentMatch,
   canComment,
-  isSelected,
   isInCommentRange,
   hasComment,
   isFoldCollapsed,
@@ -497,12 +451,11 @@ function SideBySideCell({
   searchMatches: SearchMatch[];
   currentMatch: SearchMatch | null;
   canComment: boolean;
-  isSelected: boolean;
   isInCommentRange: boolean;
   hasComment: boolean;
   isFoldCollapsed?: boolean;
   foldRange?: { startLine: number; endLine: number };
-  onToggleFold?: () => void;
+  onToggleFold?: (lineNumber: number) => void;
 }) {
   // Gap cell (no line on this side)
   if (!line) {
@@ -515,9 +468,7 @@ function SideBySideCell({
   }
 
   // Determine background and text colors based on line type and selection state
-  const bgClass = isSelected
-    ? '' // Row-level selection handles bg
-    : isInCommentRange
+  const bgClass = isInCommentRange
       ? '' // Row-level comment range handles bg
       : line.type === 'deletion'
         ? 'bg-red-500/20'
@@ -526,7 +477,7 @@ function SideBySideCell({
           : '';
 
   const lineNumClass =
-    hasComment && !isSelected && !isInCommentRange
+    hasComment && !isInCommentRange
       ? 'text-acc-ink'
       : line.type === 'deletion'
         ? 'text-status-fail'
@@ -573,7 +524,7 @@ function SideBySideCell({
           bgClass,
         )}
         style={
-          hasComment && !isSelected && !isInCommentRange && side === 'left'
+          hasComment && !isInCommentRange && side === 'left'
             ? { borderLeft: '2px solid oklch(0.78 0.18 295 / 0.5)' }
             : undefined
         }
@@ -599,7 +550,7 @@ function SideBySideCell({
             className="text-ink-4 bg-bg-2 ml-2 inline-block cursor-pointer rounded px-1.5 py-0 text-[10px] leading-4"
             onClick={(e) => {
               e.stopPropagation();
-              onToggleFold?.();
+              onToggleFold?.(line.newLineNumber!);
             }}
           >
             {foldRange.endLine - foldRange.startLine} lines
@@ -608,4 +559,4 @@ function SideBySideCell({
       </td>
     </>
   );
-}
+});

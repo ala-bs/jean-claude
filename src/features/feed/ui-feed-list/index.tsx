@@ -1541,6 +1541,12 @@ export function FeedList() {
             {pinnedItems.length > 0 ? 'Pinned' : 'Feed'}
           </span>
           <div className="flex items-center gap-1">
+            {isLoading && totalCount > 0 && (
+              <Loader2
+                className="text-ink-3 h-3 w-3 animate-spin"
+                aria-label="Loading remaining feed items"
+              />
+            )}
             {projectOptions.length > 0 && (
               <Dropdown
                 align="left"

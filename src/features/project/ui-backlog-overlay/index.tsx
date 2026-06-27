@@ -6,6 +6,14 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
+import {
+  clearBacklogOverlayDraft,
+  getBacklogOverlayDraft,
+  useBacklogOverlayDraftStore,
+  useBacklogSelectedProjectId,
+  useSetBacklogSelectedProjectId,
+} from '@/stores/backlog-overlay-draft';
+import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import React, {
   useCallback,
   useEffect,
@@ -13,18 +21,6 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import clsx from 'clsx';
-import { createPortal } from 'react-dom';
-import FocusLock from 'react-focus-lock';
-
-
-
-import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
-import {
-  useBacklogOverlayDraftStore,
-  useBacklogSelectedProjectId,
-  useSetBacklogSelectedProjectId,
-} from '@/stores/backlog-overlay-draft';
 import {
   useCreateProjectTodo,
   useDeleteProjectTodo,
@@ -36,6 +32,9 @@ import {
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
+import clsx from 'clsx';
+import { createPortal } from 'react-dom';
+import FocusLock from 'react-focus-lock';
 import { Kbd } from '@/common/ui/kbd';
 import type { ProjectTodo } from '@shared/types';
 import { Select } from '@/common/ui/select';
@@ -195,6 +194,81 @@ function BacklogTodoRow({
   );
 }
 
+const BacklogQuickAddInput = React.forwardRef<
+  HTMLTextAreaElement,
+  {
+    projectId: string;
+    todoCount: number;
+    selectedIndex: number;
+    lastSelectedIndexRef: React.RefObject<number>;
+    clearSelection: () => void;
+    selectSingle: (index: number) => void;
+  }
+>(function BacklogQuickAddInput(
+  {
+    projectId,
+    todoCount,
+    selectedIndex,
+    lastSelectedIndexRef,
+    clearSelection,
+    selectSingle,
+  },
+  ref,
+) {
+  const { draft: inputValue, setDraft: setInputValue } =
+    useBacklogOverlayDraftStore(projectId);
+  const innerRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const setRefs = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      innerRef.current = node;
+      if (typeof ref === 'function') {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    },
+    [ref],
+  );
+
+  useEffect(() => {
+    if (!innerRef.current) return;
+    innerRef.current.style.height = 'auto';
+    innerRef.current.style.height = `${innerRef.current.scrollHeight}px`;
+  }, [inputValue]);
+
+  return (
+    <textarea
+      ref={setRefs}
+      placeholder="Add a todo..."
+      autoFocus
+      rows={1}
+      value={inputValue}
+      disabled={!projectId}
+      onKeyDown={(e) => {
+        if (e.key !== 'ArrowDown') return;
+        if (inputValue.trim()) return;
+        if (todoCount === 0) return;
+
+        e.preventDefault();
+        selectSingle(0);
+        innerRef.current?.blur();
+      }}
+      onFocus={() => {
+        if (selectedIndex < 0) return;
+        lastSelectedIndexRef.current = selectedIndex;
+        clearSelection();
+      }}
+      onChange={(e) => {
+        setInputValue(e.target.value);
+        e.target.style.height = 'auto';
+        e.target.style.height = `${e.target.scrollHeight}px`;
+      }}
+      className="placeholder:text-muted-foreground max-h-32 flex-1 resize-none bg-transparent text-sm outline-none"
+    />
+  );
+});
+
 /** Build a range set from `from` to `to` inclusive. */
 function rangeSet(from: number, to: number): Set<number> {
   const min = Math.min(from, to);
@@ -247,11 +321,6 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
   const updateTodo = useUpdateProjectTodo();
   const deleteTodo = useDeleteProjectTodo();
   const reorderTodos = useReorderProjectTodos();
-  const {
-    draft: inputValue,
-    setDraft: setInputValue,
-    clearDraft: clearInputValue,
-  } = useBacklogOverlayDraftStore(projectId);
   const modal = useModal();
   const openOverlay = useOverlaysStore((s) => s.open);
   const setDraft = useNewTaskDraftStore((s) => s.setDraft);
@@ -309,12 +378,6 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
-
-  useEffect(() => {
-    if (!inputRef.current) return;
-    inputRef.current.style.height = 'auto';
-    inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
-  }, [inputValue]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -412,7 +475,7 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
             return;
           }
 
-          if (inputValue.trim()) {
+          if (getBacklogOverlayDraft(projectId).trim()) {
             handleAdd();
             return;
           }
@@ -434,7 +497,7 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
       up: {
         handler: () => {
           if (selectedIndex <= 0) {
-            if (!inputValue.trim()) {
+            if (!getBacklogOverlayDraft(projectId).trim()) {
               lastSelectedIndexRef.current = 0;
               selectSingle(-1);
               inputRef.current?.focus();
@@ -537,12 +600,12 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
 
   // Add todo
   const handleAdd = useCallback(() => {
-    const content = inputValue.trim();
+    const content = getBacklogOverlayDraft(projectId).trim();
     if (!content || !projectId) return;
     createTodo.mutate({ projectId, content });
-    clearInputValue();
+    clearBacklogOverlayDraft(projectId);
     inputRef.current?.focus();
-  }, [clearInputValue, createTodo, inputValue, projectId]);
+  }, [createTodo, projectId]);
 
   // Start inline edit
   const startEdit = useCallback((todo: ProjectTodo) => {
@@ -741,33 +804,14 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
 
           {/* Quick-add input */}
           <div className="border-glass-border flex items-center border-b px-4 py-3">
-            <textarea
+            <BacklogQuickAddInput
               ref={inputRef}
-              placeholder="Add a todo..."
-              autoFocus
-              rows={1}
-              value={inputValue}
-              disabled={!projectId}
-              onKeyDown={(e) => {
-                if (e.key !== 'ArrowDown') return;
-                if (inputValue.trim()) return;
-                if (todos.length === 0) return;
-
-                e.preventDefault();
-                selectSingle(0);
-                inputRef.current?.blur();
-              }}
-              onFocus={() => {
-                if (selectedIndex < 0) return;
-                lastSelectedIndexRef.current = selectedIndex;
-                clearSelection();
-              }}
-              onChange={(e) => {
-                setInputValue(e.target.value);
-                e.target.style.height = 'auto';
-                e.target.style.height = `${e.target.scrollHeight}px`;
-              }}
-              className="placeholder:text-muted-foreground max-h-32 flex-1 resize-none bg-transparent text-sm outline-none"
+              projectId={projectId}
+              todoCount={todos.length}
+              selectedIndex={selectedIndex}
+              lastSelectedIndexRef={lastSelectedIndexRef}
+              clearSelection={clearSelection}
+              selectSingle={selectSingle}
             />
           </div>
 
