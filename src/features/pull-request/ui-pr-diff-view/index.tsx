@@ -8,6 +8,7 @@ import {
   FileDiffContent,
   normalizeAzureChangeType,
 } from '@/features/common/ui-file-diff';
+import type { ReviewComment, ReviewPresetId } from '@/stores/review-comments';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import type { LineRange } from '@/features/agent/ui-diff-view';
 import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
@@ -40,6 +41,15 @@ export function PrDiffView({
   mentionOptions = [],
   onSearchMentions,
   readOnly = false,
+  submitLabel,
+  reviewComments,
+  onAddReviewComment,
+  onDeleteReviewComment,
+  onEditReviewComment,
+  onResolveReviewComment,
+  defaultReviewCommentFormLineRanges,
+  getReviewCommentDraftBody,
+  onReviewCommentDraftBodyChange,
 }: {
   file: AzureDevOpsFileChange;
   baseContent: string;
@@ -61,6 +71,31 @@ export function PrDiffView({
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   readOnly?: boolean;
+  submitLabel?: string;
+  reviewComments?: ReviewComment[];
+  onAddReviewComment?: (params: {
+    filePath: string;
+    lineStart: number;
+    lineEnd?: number;
+    selectedText?: string;
+    body: string;
+    presets: ReviewPresetId[];
+    images?: PromptImagePart[];
+  }) => void;
+  onDeleteReviewComment?: (commentId: string) => void;
+  onEditReviewComment?: (
+    commentId: string,
+    newBody: string,
+    newImages: PromptImagePart[],
+  ) => void;
+  onResolveReviewComment?: (commentId: string) => void;
+  defaultReviewCommentFormLineRanges?: LineRange[];
+  getReviewCommentDraftBody?: (lineStart: number, lineEnd?: number) => string;
+  onReviewCommentDraftBodyChange?: (
+    body: string,
+    lineStart: number,
+    lineEnd?: number,
+  ) => void;
 }) {
   const { setDraft, clearDraft, getBody, getAllDrafts } = usePrFileDraftActions(
     prId,
@@ -148,6 +183,7 @@ export function PrDiffView({
           onBodyChange={(body) =>
             handleBodyChange(body, props.lineStart, lineEnd)
           }
+          submitLabel={submitLabel}
         />
       );
     },
@@ -157,6 +193,7 @@ export function PrDiffView({
       mentionOptions,
       onSearchMentions,
       onUploadImage,
+      submitLabel,
     ],
   );
 
@@ -191,17 +228,34 @@ export function PrDiffView({
         />
       )}
       defaultCommentFormLineRanges={
-        !readOnly && onAddFileComment ? defaultCommentFormLineRanges : undefined
+        !readOnly && onAddFileComment && !onAddReviewComment
+          ? defaultCommentFormLineRanges
+          : (defaultReviewCommentFormLineRanges ?? undefined)
       }
       onCommentFormClose={
-        !readOnly && onAddFileComment ? handleCommentFormClose : undefined
+        !readOnly && onAddFileComment && !onAddReviewComment
+          ? handleCommentFormClose
+          : undefined
       }
       shouldKeepCommentFormRangeOnOpen={
-        !readOnly && onAddFileComment ? shouldKeepCommentFormRangeOnOpen : undefined
+        !readOnly && onAddFileComment && !onAddReviewComment
+          ? shouldKeepCommentFormRangeOnOpen
+          : undefined
       }
       onAddComment={!readOnly && onAddFileComment ? handleAddFileComment : undefined}
       isAddingComment={isAddingComment}
-      renderCommentForm={!readOnly && onAddFileComment ? renderCommentForm : undefined}
+      renderCommentForm={
+        !readOnly && onAddFileComment && !onAddReviewComment
+          ? renderCommentForm
+          : undefined
+      }
+      reviewComments={reviewComments}
+      onAddReviewComment={!readOnly ? onAddReviewComment : undefined}
+      onDeleteReviewComment={onDeleteReviewComment}
+      onEditReviewComment={onEditReviewComment}
+      onResolveReviewComment={onResolveReviewComment}
+      getReviewCommentDraftBody={getReviewCommentDraftBody}
+      onReviewCommentDraftBodyChange={onReviewCommentDraftBodyChange}
     />
   );
 }

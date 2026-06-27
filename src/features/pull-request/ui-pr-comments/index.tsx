@@ -88,6 +88,7 @@ export function PrComments({
   onSearchMentions,
   readOnly = false,
   repoInfo,
+  submitLabel,
 }: {
   threads: AzureDevOpsCommentThread[];
   providerId?: string;
@@ -106,6 +107,7 @@ export function PrComments({
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   readOnly?: boolean;
   repoInfo?: PullRequestRepoInfo;
+  submitLabel?: string;
 }) {
   const [expandedResolved, setExpandedResolved] = useState<
     Record<number, boolean>
@@ -175,6 +177,7 @@ export function PrComments({
             placeholder="Start a new comment thread..."
             mentionOptions={mentionOptions}
             onSearchMentions={onSearchMentions}
+            submitLabel={submitLabel}
           />
         </div>
       )}
