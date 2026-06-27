@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { getOrCreateServerMock, recordUsageSafeMock } = vi.hoisted(() => ({
-  getOrCreateServerMock: vi.fn(),
-  recordUsageSafeMock: vi.fn(),
-}));
+const { getOrCreateServerMock, queryMock, recordUsageSafeMock } = vi.hoisted(
+  () => ({
+    getOrCreateServerMock: vi.fn(),
+    queryMock: vi.fn(),
+    recordUsageSafeMock: vi.fn(),
+  }),
+);
 
 vi.mock('./agent-backends/opencode/opencode-backend', () => ({
   getOrCreateServer: getOrCreateServerMock,
+}));
+
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  query: queryMock,
 }));
 
 vi.mock('./rate-limit-swap-service', () => ({
@@ -35,6 +42,112 @@ function createMockClient(response: unknown) {
     },
   };
 }
+
+async function* createClaudeQueryResponse(message: unknown) {
+  yield message;
+}
+
+describe('generateText claude-code structured output', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('dispatches structured generation through Claude query and records usage', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+      },
+    };
+    const structured = { title: 'fix: provider generation' };
+    queryMock.mockReturnValue(
+      createClaudeQueryResponse({
+        type: 'result',
+        structured_output: structured,
+        result: 'ignored text fallback',
+        modelUsage: { 'claude-sonnet-4': {} },
+        usage: {
+          input_tokens: 12,
+          output_tokens: 7,
+          cache_read_input_tokens: 3,
+          cache_creation_input_tokens: 2,
+        },
+      }),
+    );
+
+    const result = await generateText({
+      backend: 'claude-code',
+      model: 'claude-sonnet-4',
+      prompt: 'Generate a title',
+      thinkingEffort: 'high',
+      outputSchema: schema,
+      cwd: '/repo/project',
+      allowedTools: ['Read', 'Grep'],
+      usageContext: {
+        feature: 'task-name',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        stepId: null,
+      },
+    });
+
+    expect(result).toEqual(structured);
+    expect(queryMock).toHaveBeenCalledWith({
+      prompt: 'Generate a title',
+      options: expect.objectContaining({
+        allowedTools: ['Read', 'Grep'],
+        model: 'claude-sonnet-4',
+        effort: 'high',
+        cwd: '/repo/project',
+        outputFormat: {
+          type: 'json_schema',
+          schema,
+        },
+        persistSession: false,
+        abortController: expect.any(AbortController),
+      }),
+    });
+    expect(recordUsageSafeMock).toHaveBeenCalledWith({
+      context: {
+        feature: 'task-name',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        stepId: null,
+      },
+      backend: 'claude-code',
+      model: 'claude-sonnet-4',
+      usage: {
+        inputTokens: 12,
+        outputTokens: 7,
+        cacheReadTokens: 3,
+        cacheCreationTokens: 2,
+      },
+      allowEmptyUsage: true,
+    });
+  });
+
+  it('returns falsy structured output from Claude instead of text fallback', async () => {
+    const schema = {
+      type: 'boolean',
+    };
+    queryMock.mockReturnValue(
+      createClaudeQueryResponse({
+        type: 'result',
+        structured_output: false,
+        result: 'incorrect text fallback',
+      }),
+    );
+
+    const result = await generateText({
+      backend: 'claude-code',
+      model: 'default',
+      prompt: 'Return false',
+      outputSchema: schema,
+    });
+
+    expect(result).toBe(false);
+  });
+});
 
 describe('generateText opencode structured output', () => {
   beforeEach(() => {
@@ -155,5 +268,32 @@ describe('generateText opencode structured output', () => {
         },
       }),
     );
+  });
+});
+
+describe('generateText unsupported backends', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns null for unsupported Codex generation when throwOnError is false', async () => {
+    await expect(
+      generateText({
+        backend: 'codex',
+        model: 'default',
+        prompt: 'Generate task name',
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('throws for unsupported Codex generation when throwOnError is true', async () => {
+    await expect(
+      generateText({
+        backend: 'codex',
+        model: 'default',
+        prompt: 'Generate task name',
+        throwOnError: true,
+      }),
+    ).rejects.toThrow(/AI generation failed:/);
   });
 });

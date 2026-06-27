@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { AgentEvent, PromptPart } from '@shared/agent-backend-types';
+import type { AgentRunHandle } from '@shared/agent-backend-provider-types';
 
 import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
 import { buildSessionIdStepUpdate } from './agent-session-update';
@@ -13,6 +16,601 @@ const QUESTIONS = [
     options: [{ label: 'Small' }, { label: 'Large' }],
   },
 ];
+
+const {
+  agentMessageRepositoryMock,
+  applyConfiguredPromptPrefaceMock,
+  browserWindowGetAllWindowsMock,
+  buildToolPermissionConfigMock,
+  claudeCompactRawMessagesForTaskMock,
+  emitStepUpsertMock,
+  emitTaskUpsertMock,
+  getProviderMock,
+  legacyBackendConstructorMock,
+  normalizeToolRequestMock,
+  openCodeCompactRawMessagesForTaskMock,
+  pathExistsMock,
+  projectRepositoryMock,
+  providerCalls,
+  providerState,
+  rawMessageRepositoryMock,
+  readSettingsMock,
+  resetProviderState,
+  resolveGlobalRulesMock,
+  resolveRulesMock,
+  settingsRepositoryMock,
+  stepServiceMock,
+  taskRepositoryMock,
+  taskStepRepositoryMock,
+  notificationServiceMock,
+  resourceMonitorMock,
+  usageTrackingServiceMock,
+  webContentsSendMock,
+} = vi.hoisted(() => {
+  const providerCalls = {
+    runStarts: [] as unknown[],
+    permissions: [] as unknown[],
+    questions: [] as unknown[],
+    modes: [] as unknown[],
+    sessionAllowedTools: [] as unknown[],
+    stops: [] as string[],
+  };
+
+  const providerState = {
+    permissionsSupported: true,
+    questionsSupported: true,
+    runtimeModeSwitchSupported: true,
+    sessionAllowedToolsSupported: true,
+    permissionResponseError: null as Error | null,
+    questionResponseError: null as Error | null,
+    runStartImplementation: null as
+      | ((input: unknown) => Promise<AgentRunHandle>)
+      | null,
+    sessionAllowedTools: [] as string[],
+  };
+
+  const unsupported = (reason: string) => ({ supported: false, reason });
+  const supported = (implementation: unknown) => ({
+    supported: true,
+    implementation,
+  });
+
+  function createProvider() {
+    return {
+      id: 'claude-code',
+      label: 'Claude Code',
+      capabilities: {
+        agent: {
+          run: supported({
+            start: async (input: unknown) => {
+              providerCalls.runStarts.push(input);
+              if (!providerState.runStartImplementation) {
+                throw new Error('runStartImplementation not configured');
+              }
+              return providerState.runStartImplementation(input);
+            },
+          }),
+          permissions: providerState.permissionsSupported
+            ? supported({
+                respond: async (input: unknown) => {
+                  if (providerState.permissionResponseError) {
+                    throw providerState.permissionResponseError;
+                  }
+                  providerCalls.permissions.push(input);
+                },
+              })
+            : unsupported('permissions unsupported'),
+          questions: providerState.questionsSupported
+            ? supported({
+                respond: async (input: unknown) => {
+                  if (providerState.questionResponseError) {
+                    throw providerState.questionResponseError;
+                  }
+                  providerCalls.questions.push(input);
+                },
+              })
+            : unsupported('questions unsupported'),
+          runtimeModeSwitch: providerState.runtimeModeSwitchSupported
+            ? supported({
+                setMode: async (input: unknown) => {
+                  providerCalls.modes.push(input);
+                },
+              })
+            : unsupported('mode switching unsupported'),
+          sessionAllowedTools: providerState.sessionAllowedToolsSupported
+            ? supported({
+                list: (input: unknown) => {
+                  providerCalls.sessionAllowedTools.push(input);
+                  return providerState.sessionAllowedTools;
+                },
+              })
+            : unsupported('session tools unsupported'),
+          resourceTracking: supported({
+            getRootPid: ({ handle }: { handle: AgentRunHandle }) =>
+              handle.rootPid ?? null,
+          }),
+        },
+      },
+    };
+  }
+
+  function resetProviderState() {
+    providerCalls.runStarts.length = 0;
+    providerCalls.permissions.length = 0;
+    providerCalls.questions.length = 0;
+    providerCalls.modes.length = 0;
+    providerCalls.sessionAllowedTools.length = 0;
+    providerCalls.stops.length = 0;
+    providerState.permissionsSupported = true;
+    providerState.questionsSupported = true;
+    providerState.runtimeModeSwitchSupported = true;
+    providerState.sessionAllowedToolsSupported = true;
+    providerState.permissionResponseError = null;
+    providerState.questionResponseError = null;
+    providerState.runStartImplementation = null;
+    providerState.sessionAllowedTools = [];
+  }
+
+  return {
+    agentMessageRepositoryMock: {
+      getMessageCountByStepId: vi.fn(),
+      create: vi.fn(),
+      updateEntry: vi.fn(),
+      updateToolResult: vi.fn(),
+      findByStepId: vi.fn(),
+      findWithRawDataByTaskId: vi.fn(),
+      reprocessNormalization: vi.fn(),
+    },
+    applyConfiguredPromptPrefaceMock: vi.fn(),
+    browserWindowGetAllWindowsMock: vi.fn(() => []),
+    buildToolPermissionConfigMock: vi.fn(),
+    claudeCompactRawMessagesForTaskMock: vi.fn(),
+    emitStepUpsertMock: vi.fn(),
+    emitTaskUpsertMock: vi.fn(),
+    getProviderMock: vi.fn(() => createProvider()),
+    legacyBackendConstructorMock: vi.fn(() => {
+      throw new Error('legacy backend class should not be constructed');
+    }),
+    normalizeToolRequestMock: vi.fn(),
+    openCodeCompactRawMessagesForTaskMock: vi.fn(),
+    notificationServiceMock: {
+      close: vi.fn(),
+      notify: vi.fn(),
+    },
+    pathExistsMock: vi.fn(),
+    projectRepositoryMock: {
+      findById: vi.fn(),
+    },
+    providerCalls,
+    providerState,
+    rawMessageRepositoryMock: {
+      create: vi.fn(),
+      updateRawData: vi.fn(),
+    },
+    readSettingsMock: vi.fn(),
+    resetProviderState,
+    resolveGlobalRulesMock: vi.fn(),
+    resolveRulesMock: vi.fn(),
+    settingsRepositoryMock: {
+      get: vi.fn(),
+    },
+    stepServiceMock: {
+      update: vi.fn(),
+      syncTaskStatus: vi.fn(),
+      resolveAndValidate: vi.fn(),
+      completeStep: vi.fn(),
+      errorStep: vi.fn(),
+      interruptStep: vi.fn(),
+    },
+    taskRepositoryMock: {
+      findById: vi.fn(),
+      update: vi.fn(),
+      setHasUnread: vi.fn(),
+      findByStatuses: vi.fn(),
+    },
+    taskStepRepositoryMock: {
+      findById: vi.fn(),
+      update: vi.fn(),
+      findByTaskId: vi.fn(),
+      findByStatus: vi.fn(),
+    },
+    resourceMonitorMock: {
+      setSnapshotListener: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+    },
+    usageTrackingServiceMock: {
+      recordUsageSafe: vi.fn(),
+    },
+    webContentsSendMock: vi.fn(),
+  };
+});
+
+vi.mock('electron', () => ({
+  app: {
+    isPackaged: false,
+    getAppPath: vi.fn(() => '/app'),
+  },
+  BrowserWindow: {
+    getAllWindows: browserWindowGetAllWindowsMock,
+  },
+}));
+
+vi.mock('../database/repositories', () => ({
+  AgentMessageRepository: agentMessageRepositoryMock,
+  ProjectRepository: projectRepositoryMock,
+  RawMessageRepository: rawMessageRepositoryMock,
+  TaskRepository: taskRepositoryMock,
+}));
+
+vi.mock('../database/repositories/settings', () => ({
+  SettingsRepository: settingsRepositoryMock,
+}));
+
+vi.mock('../database/repositories/task-steps', () => ({
+  TaskStepRepository: taskStepRepositoryMock,
+}));
+
+vi.mock('../lib/debug', () => ({
+  dbg: new Proxy(
+    {},
+    {
+      get: () => vi.fn(),
+    },
+  ),
+}));
+
+vi.mock('../lib/fs', () => ({
+  pathExists: pathExistsMock,
+}));
+
+vi.mock('./agent-backends', () => ({
+  AGENT_BACKEND_CLASSES: {
+    'claude-code': legacyBackendConstructorMock,
+    opencode: legacyBackendConstructorMock,
+    codex: legacyBackendConstructorMock,
+  },
+}));
+
+vi.mock('./agent-backends/claude/claude-code-backend', () => ({
+  ClaudeCodeBackend: {
+    compactRawMessagesForTask: claudeCompactRawMessagesForTaskMock,
+  },
+}));
+
+vi.mock('./agent-backends/opencode/opencode-backend', () => ({
+  OpenCodeBackend: {
+    compactRawMessagesForTask: openCodeCompactRawMessagesForTaskMock,
+  },
+}));
+
+vi.mock('./agent-backends/providers', () => ({
+  getAgentBackendProvider: getProviderMock,
+}));
+
+vi.mock('./agent-resource-monitor-service', () => ({
+  agentResourceMonitorService: resourceMonitorMock,
+}));
+
+vi.mock('./ai-usage-tracking-service', () => ({
+  aiUsageTrackingService: usageTrackingServiceMock,
+}));
+
+vi.mock('./cache-event-service', () => ({
+  emitStepUpsert: emitStepUpsertMock,
+  emitTaskUpsert: emitTaskUpsertMock,
+}));
+
+vi.mock('./global-permissions-service', () => ({
+  resolveGlobalRules: resolveGlobalRulesMock,
+}));
+
+vi.mock('./mcp-template-service', () => ({
+  getJcMcpServerPath: vi.fn(() => '/tmp/jc-mcp.js'),
+}));
+
+vi.mock('./name-generation-service', () => ({
+  generateTaskName: vi.fn(),
+}));
+
+vi.mock('./notification-service', () => ({
+  notificationService: notificationServiceMock,
+}));
+
+vi.mock('./permission-settings-service', () => ({
+  buildToolPermissionConfig: buildToolPermissionConfigMock,
+  normalizeToolRequest: normalizeToolRequestMock,
+  readSettings: readSettingsMock,
+  resolveRules: resolveRulesMock,
+}));
+
+vi.mock('./prompt-preface-service', () => ({
+  applyConfiguredPromptPreface: applyConfiguredPromptPrefaceMock,
+}));
+
+vi.mock('./step-service', () => ({
+  StepService: stepServiceMock,
+}));
+
+vi.mock('./system-project-service', () => ({
+  assertValidWorkspacePath: vi.fn(),
+}));
+
+import { agentService } from './agent-service';
+
+const defaultStep = {
+  id: 'step-1',
+  taskId: 'task-1',
+  name: 'Step 1',
+  type: 'agent',
+  dependsOn: [],
+  promptTemplate: 'Original prompt',
+  resolvedPrompt: null,
+  status: 'ready',
+  sessionId: null,
+  interactionMode: 'ask',
+  modelPreference: 'default',
+  thinkingEffort: 'default',
+  agentBackend: 'claude-code',
+  output: null,
+  images: null,
+  meta: {},
+  autoStart: false,
+  sortOrder: 0,
+  createdAt: '2026-06-21T00:00:00.000Z',
+  updatedAt: '2026-06-21T00:00:00.000Z',
+};
+
+const defaultTask = {
+  id: 'task-1',
+  projectId: 'project-1',
+  type: 'agent',
+  name: 'Task 1',
+  prompt: 'Task prompt',
+  status: 'ready',
+  worktreePath: '/repo/worktree',
+  startCommitHash: null,
+  sourceBranch: null,
+  branchName: null,
+  hasUnread: false,
+  userCompleted: false,
+  sessionRules: {},
+  workItemIds: null,
+  workItemUrls: null,
+  pullRequestId: null,
+  pullRequestUrl: null,
+  pendingMessage: null,
+  todoItems: [],
+  parentTaskId: null,
+  createdAt: '2026-06-21T00:00:00.000Z',
+  updatedAt: '2026-06-21T00:00:00.000Z',
+};
+
+const defaultProject = {
+  id: 'project-1',
+  name: 'Project 1',
+  path: '/repo/project',
+};
+
+function createHandle({
+  events = [],
+  runId = 'provider-run-1',
+  rootPid = 123,
+}: {
+  events?: AgentEvent[];
+  runId?: string;
+  rootPid?: number;
+} = {}): AgentRunHandle {
+  const handle: AgentRunHandle = {
+    runId,
+    events: (async function* () {
+      for (const event of events) {
+        yield event;
+      }
+    })(),
+    rootPid,
+    stop: vi.fn(async () => {
+      providerCalls.stops.push(runId);
+    }),
+    dispose: vi.fn(),
+  };
+  return handle;
+}
+
+function createWaitingHandle(firstEvent: AgentEvent): {
+  handle: AgentRunHandle;
+  release: () => void;
+} {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const handle: AgentRunHandle = {
+    runId: 'provider-run-1',
+    events: (async function* () {
+      yield firstEvent;
+      await released;
+    })(),
+    rootPid: 123,
+    stop: vi.fn(async () => {
+      providerCalls.stops.push('provider-run-1');
+      release();
+    }),
+    dispose: vi.fn(),
+  };
+
+  return { handle, release };
+}
+
+function createIdleHandle(runId = 'provider-run-1'): {
+  handle: AgentRunHandle;
+  release: () => void;
+} {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const handle: AgentRunHandle = {
+    runId,
+    events: {
+      [Symbol.asyncIterator]() {
+        let completed = false;
+        return {
+          async next() {
+            if (!completed) {
+              completed = true;
+              await released;
+            }
+            return {
+              done: true,
+              value: undefined as unknown as AgentEvent,
+            };
+          },
+        };
+      },
+    },
+    rootPid: 123,
+    stop: vi.fn(async () => {
+      providerCalls.stops.push(runId);
+      release();
+    }),
+    dispose: vi.fn(),
+  };
+
+  return { handle, release };
+}
+
+function createCompleteThenWaitHandle({
+  runId,
+  waitBeforeComplete,
+}: {
+  runId: string;
+  waitBeforeComplete: Promise<void>;
+}): AgentRunHandle {
+  const handle: AgentRunHandle = {
+    runId,
+    events: (async function* () {
+      await waitBeforeComplete;
+      yield completeEvent();
+    })(),
+    rootPid: 123,
+    stop: vi.fn(async () => {
+      providerCalls.stops.push(runId);
+    }),
+    dispose: vi.fn(),
+  };
+
+  return handle;
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitForAssertion(assertion: () => void): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  throw lastError;
+}
+
+function completeEvent(isError = false): AgentEvent {
+  return {
+    type: 'complete',
+    result: {
+      isError,
+      text: isError ? 'failed' : 'done',
+    },
+  };
+}
+
+function setDefaultMocks(): void {
+  browserWindowGetAllWindowsMock.mockReturnValue([]);
+
+  taskStepRepositoryMock.findById.mockResolvedValue(defaultStep);
+  taskStepRepositoryMock.update.mockImplementation(async (_id, update) => ({
+    ...defaultStep,
+    ...update,
+  }));
+  taskStepRepositoryMock.findByTaskId.mockResolvedValue([defaultStep]);
+  taskStepRepositoryMock.findByStatus.mockResolvedValue([]);
+
+  taskRepositoryMock.findById.mockResolvedValue(defaultTask);
+  taskRepositoryMock.update.mockImplementation(async (_id, update) => ({
+    ...defaultTask,
+    ...update,
+  }));
+  taskRepositoryMock.setHasUnread.mockResolvedValue(undefined);
+  taskRepositoryMock.findByStatuses.mockResolvedValue([]);
+
+  projectRepositoryMock.findById.mockResolvedValue(defaultProject);
+  rawMessageRepositoryMock.create.mockResolvedValue({ id: 'raw-1' });
+  rawMessageRepositoryMock.updateRawData.mockResolvedValue(undefined);
+  agentMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
+  agentMessageRepositoryMock.create.mockResolvedValue({ id: 'message-1' });
+  agentMessageRepositoryMock.updateEntry.mockResolvedValue(undefined);
+  agentMessageRepositoryMock.updateToolResult.mockResolvedValue(undefined);
+  agentMessageRepositoryMock.findByStepId.mockResolvedValue([]);
+  agentMessageRepositoryMock.findWithRawDataByTaskId.mockResolvedValue([]);
+  agentMessageRepositoryMock.reprocessNormalization.mockResolvedValue(0);
+
+  settingsRepositoryMock.get.mockResolvedValue({
+    modes: {
+      completed: 'disabled',
+      'permission-required': 'disabled',
+      question: 'disabled',
+      errored: 'disabled',
+    },
+  });
+
+  stepServiceMock.update.mockResolvedValue(defaultStep);
+  stepServiceMock.syncTaskStatus.mockResolvedValue(undefined);
+  stepServiceMock.resolveAndValidate.mockResolvedValue({
+    resolvedPrompt: 'Resolved prompt',
+    step: defaultStep,
+    warnings: [],
+  });
+  stepServiceMock.completeStep.mockResolvedValue([]);
+  stepServiceMock.errorStep.mockResolvedValue(undefined);
+  stepServiceMock.interruptStep.mockResolvedValue(undefined);
+
+  readSettingsMock.mockResolvedValue({ version: 1, permissions: { project: {} } });
+  resolveGlobalRulesMock.mockResolvedValue([]);
+  resolveRulesMock.mockReturnValue([]);
+  pathExistsMock.mockResolvedValue(true);
+  applyConfiguredPromptPrefaceMock.mockImplementation(
+    async ({ parts }: { parts: PromptPart[] }) => parts,
+  );
+  normalizeToolRequestMock.mockReturnValue({
+    tool: 'bash',
+    matchValue: 'npm test',
+  });
+  buildToolPermissionConfigMock.mockImplementation(
+    ({ existing, matchValue }) => ({
+      ...(typeof existing === 'object' && existing !== null ? existing : {}),
+      [matchValue]: 'allow',
+    }),
+  );
+}
 
 describe('buildSessionIdStepUpdate', () => {
   it('does not overwrite model settings when backend stays the same', () => {
@@ -471,3 +1069,547 @@ async function withTimeout<T>(
     if (timeout) clearTimeout(timeout);
   }
 }
+describe('agentService provider runtime', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetProviderState();
+    setDefaultMocks();
+  });
+
+  afterEach(async () => {
+    await agentService.stopAll({ reason: 'shutdown' }).catch(() => {});
+  });
+
+  it('starts active runs through the provider without constructing legacy backend classes', async () => {
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+
+    expect(getProviderMock).toHaveBeenCalledWith('claude-code');
+    expect(legacyBackendConstructorMock).not.toHaveBeenCalled();
+    expect(providerCalls.runStarts).toHaveLength(1);
+    expect(providerCalls.runStarts[0]).toMatchObject({
+      context: {
+        taskId: 'task-1',
+        sessionStartIndex: 0,
+      },
+      config: {
+        type: 'claude-code',
+        cwd: '/repo/worktree',
+        interactionMode: 'ask',
+        persistedSessionRules: {},
+        permissionRules: [],
+      },
+      parts: [{ type: 'text', text: 'Resolved prompt' }],
+    });
+    expect(resourceMonitorMock.start).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      backend: 'claude-code',
+      rootPid: 123,
+    });
+    expect(handle.stop).toHaveBeenCalled();
+    expect(handle.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the provider run handle when stop races with startup', async () => {
+    const startDeferred = createDeferred<AgentRunHandle>();
+    const handle = createHandle();
+    providerState.runStartImplementation = async () => startDeferred.promise;
+
+    const startPromise = agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    const stopPromise = agentService.stop('step-1');
+    startDeferred.resolve(handle);
+
+    await stopPromise;
+    await startPromise;
+
+    expect(handle.stop).toHaveBeenCalledTimes(1);
+    expect(handle.dispose).toHaveBeenCalledTimes(1);
+    expect(providerCalls.stops).toContain('provider-run-1');
+  });
+
+  it('shares one stop workflow for concurrent stop calls', async () => {
+    const { handle } = createIdleHandle();
+    providerState.runStartImplementation = async () => handle;
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send: webContentsSendMock,
+        },
+      },
+    ] as never);
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    const stopOne = agentService.stop('step-1');
+    const stopTwo = agentService.stop('step-1');
+
+    await Promise.all([stopOne, stopTwo]);
+    await startPromise;
+
+    const interruptionEntries = agentMessageRepositoryMock.create.mock.calls
+      .map(([entry]) => entry)
+      .filter(
+        (entry) => entry.entry?.value === 'Task interrupted by user',
+      );
+    const interruptedStatusEvents = webContentsSendMock.mock.calls.filter(
+      ([, payload]) => payload?.type === 'status' && payload.status === 'interrupted',
+    );
+
+    expect(interruptionEntries).toHaveLength(1);
+    expect(stepServiceMock.interruptStep).toHaveBeenCalledTimes(1);
+    expect(interruptedStatusEvents).toHaveLength(1);
+    expect(handle.stop).toHaveBeenCalledTimes(1);
+    expect(handle.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops queued run handles independently when runBackend is nested', async () => {
+    const outerComplete = createDeferred<void>();
+    const outerHandle = createCompleteThenWaitHandle({
+      runId: 'outer-run',
+      waitBeforeComplete: outerComplete.promise,
+    });
+    const nestedHandle = createHandle({
+      runId: 'nested-run',
+      events: [completeEvent()],
+    });
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(outerHandle)
+      .mockResolvedValueOnce(nestedHandle);
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    agentService.queuePrompt('step-1', [{ type: 'text', text: 'follow up' }]);
+    outerComplete.resolve();
+
+    await startPromise;
+
+    expect(providerCalls.runStarts).toHaveLength(2);
+    expect(outerHandle.stop).toHaveBeenCalledTimes(1);
+    expect(nestedHandle.stop).toHaveBeenCalledTimes(1);
+    expect(outerHandle.dispose).toHaveBeenCalledTimes(1);
+    expect(nestedHandle.dispose).toHaveBeenCalledTimes(1);
+    expect(providerCalls.stops).toEqual(['nested-run', 'outer-run']);
+  });
+
+  it('stops a queued run handle when stop races with nested startup', async () => {
+    const outerComplete = createDeferred<void>();
+    const nestedStart = createDeferred<AgentRunHandle>();
+    const outerHandle = createCompleteThenWaitHandle({
+      runId: 'outer-run',
+      waitBeforeComplete: outerComplete.promise,
+    });
+    const nested = createIdleHandle('nested-run');
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(outerHandle)
+      .mockReturnValueOnce(nestedStart.promise);
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    agentService.queuePrompt('step-1', [{ type: 'text', text: 'follow up' }]);
+    outerComplete.resolve();
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(2);
+    });
+
+    let stopSettled = false;
+    const stopPromise = agentService.stop('step-1').then(() => {
+      stopSettled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(stopSettled).toBe(false);
+
+    nestedStart.resolve(nested.handle);
+
+    await stopPromise;
+    await startPromise;
+
+    expect(outerHandle.stop).toHaveBeenCalledTimes(1);
+    expect(nested.handle.stop).toHaveBeenCalledTimes(1);
+    expect(outerHandle.dispose).toHaveBeenCalledTimes(1);
+    expect(nested.handle.dispose).toHaveBeenCalledTimes(1);
+    expect(providerCalls.stops.sort()).toEqual(['nested-run', 'outer-run']);
+  });
+
+  it('routes permission responses through the provider permission capability', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(taskRepositoryMock.update).toHaveBeenCalledWith('task-1', {
+        status: 'waiting',
+      });
+    });
+
+    await agentService.respond('step-1', 'permission-1', {
+      behavior: 'allow',
+      allowMode: 'session',
+    });
+
+    expect(providerCalls.permissions).toEqual([
+      {
+        handle,
+        requestId: 'permission-1',
+        response: {
+          behavior: 'allow',
+          allowMode: 'session',
+          toolsToAllow: ['bash:npm test'],
+        },
+      },
+    ]);
+    expect(notificationServiceMock.close).toHaveBeenCalledWith(
+      'task-1:permission',
+    );
+
+    release();
+    await startPromise;
+  });
+
+  it('preserves pending permission requests when the capability is unsupported', async () => {
+    providerState.permissionsSupported = false;
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'permission',
+        data: { requestId: 'permission-1' },
+      });
+    });
+
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+      }),
+    ).rejects.toThrow('Unsupported backend capability');
+
+    expect(agentService.getPendingRequest('step-1')).toMatchObject({
+      type: 'permission',
+      data: { requestId: 'permission-1' },
+    });
+
+    waiting.release();
+    await startPromise;
+  });
+
+  it('preserves and retries pending permission requests when provider response rejects', async () => {
+    providerState.permissionResponseError = new Error('permission failed');
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'permission',
+        data: { requestId: 'permission-1' },
+      });
+    });
+
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+      }),
+    ).rejects.toThrow('permission failed');
+
+    expect(agentService.getPendingRequest('step-1')).toMatchObject({
+      type: 'permission',
+      data: { requestId: 'permission-1' },
+    });
+
+    providerState.permissionResponseError = null;
+    await agentService.respond('step-1', 'permission-1', {
+      behavior: 'allow',
+    });
+
+    expect(providerCalls.permissions).toEqual([
+      {
+        handle,
+        requestId: 'permission-1',
+        response: {
+          behavior: 'allow',
+          toolsToAllow: ['bash:npm test'],
+        },
+      },
+    ]);
+    expect(agentService.getPendingRequest('step-1')).toBeNull();
+
+    release();
+    await startPromise;
+  });
+
+  it('routes question responses through the provider question capability', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-1',
+        questions: [
+          {
+            question: 'Which option?',
+            header: 'Choice',
+            multiSelect: false,
+            options: [{ label: 'A', description: 'Pick A' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(taskRepositoryMock.update).toHaveBeenCalledWith('task-1', {
+        status: 'waiting',
+      });
+    });
+
+    await agentService.respond('step-1', 'question-1', {
+      answers: { 'Which option?': 'A' },
+    });
+
+    expect(providerCalls.questions).toEqual([
+      {
+        handle,
+        requestId: 'question-1',
+        answer: { 'Which option?': 'A' },
+      },
+    ]);
+    expect(notificationServiceMock.close).toHaveBeenCalledWith(
+      'task-1:question',
+    );
+
+    release();
+    await startPromise;
+  });
+
+  it('preserves pending question requests when the capability is unsupported', async () => {
+    providerState.questionsSupported = false;
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-1',
+        questions: [
+          {
+            question: 'Which option?',
+            header: 'Choice',
+            multiSelect: false,
+            options: [{ label: 'A', description: 'Pick A' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-1' },
+      });
+    });
+
+    await expect(
+      agentService.respond('step-1', 'question-1', {
+        answers: { 'Which option?': 'A' },
+      }),
+    ).rejects.toThrow('Unsupported backend capability');
+
+    expect(agentService.getPendingRequest('step-1')).toMatchObject({
+      type: 'question',
+      data: { requestId: 'question-1' },
+    });
+
+    release();
+    await startPromise;
+  });
+
+  it('preserves and retries pending question requests when provider response rejects', async () => {
+    providerState.questionResponseError = new Error('question failed');
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-1',
+        questions: [
+          {
+            question: 'Which option?',
+            header: 'Choice',
+            multiSelect: false,
+            options: [{ label: 'A', description: 'Pick A' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-1' },
+      });
+    });
+
+    await expect(
+      agentService.respond('step-1', 'question-1', {
+        answers: { 'Which option?': 'A' },
+      }),
+    ).rejects.toThrow('question failed');
+
+    expect(agentService.getPendingRequest('step-1')).toMatchObject({
+      type: 'question',
+      data: { requestId: 'question-1' },
+    });
+
+    providerState.questionResponseError = null;
+    await agentService.respond('step-1', 'question-1', {
+      answers: { 'Which option?': 'A' },
+    });
+
+    expect(providerCalls.questions).toEqual([
+      {
+        handle,
+        requestId: 'question-1',
+        answer: { 'Which option?': 'A' },
+      },
+    ]);
+    expect(agentService.getPendingRequest('step-1')).toBeNull();
+
+    release();
+    await startPromise;
+  });
+
+  it('routes active mode changes through the provider only when supported', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'rate-limit',
+      message: 'waiting',
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    await agentService.setMode('step-1', 'auto');
+
+    expect(providerCalls.modes).toEqual([{ handle, mode: 'auto' }]);
+
+    release();
+    await startPromise;
+
+    vi.clearAllMocks();
+    resetProviderState();
+    setDefaultMocks();
+    providerState.runtimeModeSwitchSupported = false;
+    const unsupported = createWaitingHandle({
+      type: 'rate-limit',
+      message: 'waiting',
+    });
+    providerState.runStartImplementation = async () => unsupported.handle;
+
+    const unsupportedStartPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    await agentService.setMode('step-1', 'plan');
+
+    expect(providerCalls.modes).toEqual([]);
+    expect(taskStepRepositoryMock.update).toHaveBeenCalledWith('step-1', {
+      interactionMode: 'plan',
+    });
+
+    unsupported.release();
+    await unsupportedStartPromise;
+  });
+
+  it('syncs session allowed tools through the provider only when supported', async () => {
+    providerState.sessionAllowedTools = ['bash:npm test', 'read'];
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+
+    expect(providerCalls.sessionAllowedTools).toEqual([{ handle }]);
+    expect(taskRepositoryMock.update).toHaveBeenCalledWith('task-1', {
+      sessionRules: {
+        bash: { 'npm test': 'allow' },
+        read: 'allow',
+      },
+    });
+
+    vi.clearAllMocks();
+    resetProviderState();
+    setDefaultMocks();
+    providerState.sessionAllowedToolsSupported = false;
+    providerState.sessionAllowedTools = ['bash:npm test'];
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.start('step-1');
+
+    expect(providerCalls.sessionAllowedTools).toEqual([]);
+    expect(taskRepositoryMock.update).not.toHaveBeenCalledWith('task-1', {
+      sessionRules: expect.anything(),
+    });
+  });
+
+  it('does not route Codex raw-message compaction through Claude', async () => {
+    taskStepRepositoryMock.findByTaskId.mockResolvedValue([
+      { ...defaultStep, id: 'step-claude', agentBackend: 'claude-code' },
+      { ...defaultStep, id: 'step-opencode', agentBackend: 'opencode' },
+      { ...defaultStep, id: 'step-codex', agentBackend: 'codex' },
+    ]);
+
+    await agentService.compactRawMessages('task-1');
+
+    expect(claudeCompactRawMessagesForTaskMock).toHaveBeenCalledTimes(1);
+    expect(claudeCompactRawMessagesForTaskMock).toHaveBeenCalledWith('task-1');
+    expect(openCodeCompactRawMessagesForTaskMock).toHaveBeenCalledTimes(1);
+    expect(openCodeCompactRawMessagesForTaskMock).toHaveBeenCalledWith(
+      'task-1',
+    );
+  });
+});
