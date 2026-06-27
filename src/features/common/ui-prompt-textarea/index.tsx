@@ -159,6 +159,41 @@ function getActiveFeatureToken({
   };
 }
 
+export function getActiveSlashToken({
+  text,
+  cursorPosition,
+}: {
+  text: string;
+  cursorPosition: number;
+}): MentionToken | null {
+  if (cursorPosition < 0 || cursorPosition > text.length) return null;
+
+  const beforeCursor = text.slice(0, cursorPosition);
+  const slashStart = beforeCursor.lastIndexOf('/');
+  if (slashStart < 0) return null;
+
+  let slashEnd = text.length;
+  for (let index = slashStart + 1; index < text.length; index++) {
+    if (/\s/.test(text[index])) {
+      slashEnd = index;
+      break;
+    }
+  }
+
+  if (cursorPosition < slashStart + 1 || cursorPosition > slashEnd) {
+    return null;
+  }
+
+  const query = text.slice(slashStart + 1, cursorPosition);
+  if (/[\s/]/.test(query)) return null;
+
+  return {
+    start: slashStart,
+    end: slashEnd,
+    query,
+  };
+}
+
 type DropdownItem =
   | { type: 'command'; command: string; description: string }
   | { type: 'skill'; skill: Skill }
@@ -366,12 +401,16 @@ export const PromptTextarea = forwardRef<
         : null,
     [featureMap, value, cursorPosition],
   );
+  const activeSlashToken = useMemo(
+    () => getActiveSlashToken({ text: value, cursorPosition }),
+    [value, cursorPosition],
+  );
 
   const showMentionDropdown = !!activeMentionToken && !dropdownDismissed;
   const showFeatureDropdown =
     !!activeFeatureToken && !showMentionDropdown && !dropdownDismissed;
   const showSlashDropdown =
-    value.startsWith('/') &&
+    !!activeSlashToken &&
     !showMentionDropdown &&
     !showFeatureDropdown &&
     !dropdownDismissed;
@@ -404,7 +443,7 @@ export const PromptTextarea = forwardRef<
     align: 'left',
     preferredMaxHeight: 440,
   });
-  const searchText = value.slice(1).toLowerCase();
+  const searchText = activeSlashToken?.query.toLowerCase() ?? '';
   const featureSearchText = activeFeatureToken?.query ?? '';
 
   const { filePaths, isLoading: isLoadingFilePaths } = useProjectFilePaths({
@@ -659,7 +698,7 @@ export const PromptTextarea = forwardRef<
   const prevValueRef = useRef(value);
   useEffect(() => {
     const hasDropdownTrigger =
-      !!activeMentionToken || !!activeFeatureToken || value.startsWith('/');
+      !!activeMentionToken || !!activeFeatureToken || !!activeSlashToken;
 
     if (dropdownDismissed && hasDropdownTrigger) {
       // Re-show dropdown when user deletes characters (backspace)
@@ -671,7 +710,13 @@ export const PromptTextarea = forwardRef<
       startTransition(() => setDropdownDismissed(false));
     }
     prevValueRef.current = value;
-  }, [value, dropdownDismissed, activeMentionToken, activeFeatureToken]);
+  }, [
+    value,
+    dropdownDismissed,
+    activeMentionToken,
+    activeFeatureToken,
+    activeSlashToken,
+  ]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -732,6 +777,8 @@ export const PromptTextarea = forwardRef<
           textareaRef.current.selectionEnd = nextCursorPosition;
         });
       } else if (item.type === 'snippet') {
+        if (!activeSlashToken) return;
+
         const { output } = resolvePromptSnippet(item.snippet, {
           ...(snippetVariableContext ?? {}),
         });
@@ -739,11 +786,31 @@ export const PromptTextarea = forwardRef<
           output,
           snippetVariableContext,
         );
-        onChange(resolvedOutput);
+        const before = value.slice(0, activeSlashToken.start);
+        const after = value.slice(activeSlashToken.end);
+        onChange(`${before}${resolvedOutput}${after}`);
+        const nextCursorPosition = before.length + resolvedOutput.length;
+        setCursorPosition(nextCursorPosition);
+        requestAnimationFrame(() => {
+          if (!textareaRef.current) return;
+          textareaRef.current.selectionStart = nextCursorPosition;
+          textareaRef.current.selectionEnd = nextCursorPosition;
+        });
       } else {
+        if (!activeSlashToken) return;
+
         const command =
           item.type === 'command' ? item.command : `/${item.skill.name}`;
-        onChange(command);
+        const before = value.slice(0, activeSlashToken.start);
+        const after = value.slice(activeSlashToken.end);
+        onChange(`${before}${command}${after}`);
+        const nextCursorPosition = before.length + command.length;
+        setCursorPosition(nextCursorPosition);
+        requestAnimationFrame(() => {
+          if (!textareaRef.current) return;
+          textareaRef.current.selectionStart = nextCursorPosition;
+          textareaRef.current.selectionEnd = nextCursorPosition;
+        });
       }
 
       setDropdownDismissed(true);
@@ -752,6 +819,7 @@ export const PromptTextarea = forwardRef<
     [
       activeMentionToken,
       activeFeatureToken,
+      activeSlashToken,
       flatFeatures,
       onChange,
       value,
