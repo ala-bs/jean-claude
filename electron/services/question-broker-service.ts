@@ -24,12 +24,10 @@ export type QuestionSpec =
   | (BaseQuestionSpec & {
       type: 'single_choice';
       options?: QuestionOptionSpec[];
-      allowOther?: boolean;
     })
   | (BaseQuestionSpec & {
       type: 'multi_choice';
       options?: QuestionOptionSpec[];
-      allowOther?: boolean;
     })
   | (BaseQuestionSpec & {
       type: 'text';
@@ -123,12 +121,6 @@ export function validateQuestionSpecs(questions: QuestionSpec[]): void {
     }
 
     const options = validateOptionsArray(question);
-    if (options.length === 0 && !question.allowOther) {
-      throw new QuestionValidationError(
-        `Question ${question.id} requires options or allowOther`,
-      );
-    }
-
     for (const option of options) {
       if (!isQuestionOptionSpec(option)) {
         throw new QuestionValidationError(
@@ -211,18 +203,8 @@ export function validateAnswers({
       continue;
     }
 
-    if (question.type === 'text' || question.allowOther) {
+    if (question.type === 'text') {
       continue;
-    }
-
-    const options = validateOptionsArray(question);
-    const optionLabels = new Set(options.map((option) => option.label));
-    for (const value of answer.normalizedValues) {
-      if (!optionLabels.has(value)) {
-        throw new QuestionValidationError(
-          `Question ${question.id} answer must match an available option`,
-        );
-      }
     }
   }
 }
@@ -323,7 +305,6 @@ function toNormalizedQuestion(question: QuestionSpec): NormalizedQuestion {
           })),
     multiSelect: question.type === 'multi_choice',
     required: question.required ?? true,
-    allowOther: question.type === 'text' ? false : question.allowOther ?? false,
   };
 }
 
@@ -442,22 +423,6 @@ function validateQuestionMetadata(question: QuestionSpec): void {
   ) {
     throw new QuestionValidationError(
       `Question ${question.id} required must be boolean`,
-    );
-  }
-
-  if (!Object.hasOwn(question, 'allowOther')) {
-    return;
-  }
-
-  if (question.type === 'text') {
-    throw new QuestionValidationError(
-      `Question ${question.id} allowOther is not supported for text questions`,
-    );
-  }
-
-  if (typeof question.allowOther !== 'boolean') {
-    throw new QuestionValidationError(
-      `Question ${question.id} allowOther must be boolean`,
     );
   }
 }

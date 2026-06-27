@@ -986,7 +986,6 @@ class AgentService {
       })),
       multiSelect: q.multiSelect,
       ...(q.required !== undefined ? { required: q.required } : {}),
-      ...(q.allowOther !== undefined ? { allowOther: q.allowOther } : {}),
     }));
   }
 
