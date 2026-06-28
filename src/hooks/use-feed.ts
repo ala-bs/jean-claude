@@ -1,5 +1,4 @@
 import { useEffect, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
 
 
 import {
@@ -9,9 +8,9 @@ import {
 import { api } from '@/lib/api';
 import type { CacheSubscription } from '@shared/cache-events';
 import type { FeedItem } from '@shared/feed-types';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
 import type { Project } from '@shared/types';
-import { subscribeCacheResources } from '@/cache/cache-subscriptions';
+import { setDocumentResource } from '@/cache/cache-actions';
+import { useCacheResource } from '@/cache/use-cache-resource';
 import { useFeedStore } from '@/stores/feed';
 import { useNavigationStore } from '@/stores/navigation';
 import { useProjects } from '@/hooks/use-projects';
@@ -27,6 +26,10 @@ export const FEED_CACHE_SUBSCRIPTIONS: CacheSubscription[] = [
   { resourceKey: 'feed:notes' },
   { resourceKey: 'feed:workItems' },
 ];
+
+function ingestFeedItems(key: string, items: FeedItem[]) {
+  setDocumentResource(key, items);
+}
 
 function shouldHideReviewPr(item: FeedItem) {
   return (
@@ -104,8 +107,6 @@ export function useFeed() {
   );
   const feedRefetchInterval = windowFocused ? 3 * 60 * 1000 : false;
 
-  useEffect(() => subscribeCacheResources(FEED_CACHE_SUBSCRIPTIONS), []);
-
   const pinnedIds = useMemo(() => new Set(pinned.map((p) => p.id)), [pinned]);
   const dismissedIds = useMemo(() => new Set(dismissed), [dismissed]);
   const lowPriorityIds = useMemo(() => new Set(lowPriority), [lowPriority]);
@@ -114,26 +115,53 @@ export function useFeed() {
     [hiddenProjectIds],
   );
 
-  const taskQuery = useQuery({
-    queryKey: feedQueryKeys.tasks,
-    queryFn: async () => api.feed.getTaskItems(),
-    refetchInterval: feedRefetchInterval,
+  const taskQuery = useCacheResource({
+    key: 'feed:tasks',
+    load: async () => api.feed.getTaskItems(),
+    ingest: (items) => ingestFeedItems('feed:tasks', items),
+    staleTime: feedRefetchInterval === false ? Infinity : feedRefetchInterval,
   });
-  const prQuery = useQuery({
-    queryKey: feedQueryKeys.pullRequests,
-    queryFn: async () => api.feed.getPullRequestItems(),
-    refetchInterval: feedRefetchInterval,
+  const prQuery = useCacheResource({
+    key: 'feed:pullRequests',
+    load: async () => api.feed.getPullRequestItems(),
+    ingest: (items) => ingestFeedItems('feed:pullRequests', items),
+    staleTime: feedRefetchInterval === false ? Infinity : feedRefetchInterval,
   });
-  const noteQuery = useQuery({
-    queryKey: feedQueryKeys.notes,
-    queryFn: async () => api.feed.getNoteItems(),
-    refetchInterval: feedRefetchInterval,
+  const noteQuery = useCacheResource({
+    key: 'feed:notes',
+    load: async () => api.feed.getNoteItems(),
+    ingest: (items) => ingestFeedItems('feed:notes', items),
+    staleTime: feedRefetchInterval === false ? Infinity : feedRefetchInterval,
   });
-  const workItemQuery = useQuery({
-    queryKey: feedQueryKeys.workItems,
-    queryFn: async () => api.feed.getWorkItemItems(),
-    refetchInterval: feedRefetchInterval,
+  const workItemQuery = useCacheResource({
+    key: 'feed:workItems',
+    load: async () => api.feed.getWorkItemItems(),
+    ingest: (items) => ingestFeedItems('feed:workItems', items),
+    staleTime: feedRefetchInterval === false ? Infinity : feedRefetchInterval,
   });
+  const taskRefetch = taskQuery.refetch;
+  const prRefetch = prQuery.refetch;
+  const noteRefetch = noteQuery.refetch;
+  const workItemRefetch = workItemQuery.refetch;
+
+  useEffect(() => {
+    if (feedRefetchInterval === false) return;
+
+    const intervalId = window.setInterval(() => {
+      void taskRefetch();
+      void prRefetch();
+      void noteRefetch();
+      void workItemRefetch();
+    }, feedRefetchInterval);
+
+    return () => window.clearInterval(intervalId);
+  }, [
+    feedRefetchInterval,
+    noteRefetch,
+    prRefetch,
+    taskRefetch,
+    workItemRefetch,
+  ]);
 
   const projectsById = useMemo(
     () => new Map(projects.map((project) => [project.id, project])),

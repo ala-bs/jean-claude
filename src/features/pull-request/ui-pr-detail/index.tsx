@@ -2,7 +2,6 @@ import { FileCode, FileText, GitCommit, Loader2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 
 
 
@@ -15,6 +14,7 @@ import {
   normalizeMentionId,
 } from '@/lib/azure-devops-mentions';
 import {
+  updateFeedPullRequest,
   useAddPullRequestComment,
   useAddPullRequestFileComment,
   usePullRequest,
@@ -26,11 +26,10 @@ import {
 } from '@/hooks/use-pull-requests';
 import { api } from '@/lib/api';
 import type { DiffFile } from '@/features/common/ui-file-diff';
-import type { FeedItem } from '@shared/feed-types';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PrDetailTab } from '@/stores/navigation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { usePrDetailState } from '@/stores/navigation';
@@ -55,11 +54,18 @@ export function PrDetail({
   projectId,
   prId,
   bottomPadding = 0,
+  repoInfo,
+  readOnly = false,
 }: {
   projectId: string;
   prId: number;
   bottomPadding?: number;
+  repoInfo?: PullRequestRepoInfo;
+  readOnly?: boolean;
 }) {
+  const stateProjectId = repoInfo
+    ? `${projectId}:${repoInfo.providerId}:${repoInfo.projectId}:${repoInfo.repoId}`
+    : projectId;
   const {
     selectedFile,
     activeTab,
@@ -69,12 +75,11 @@ export function PrDetail({
     setActiveTab,
     setSelectedCommit,
     setSelectedCommitFile,
-  } = usePrDetailState(projectId, prId);
+  } = usePrDetailState(stateProjectId, prId);
   const [fileTreeWidth, setFileTreeWidth] = useState(250);
   const [searchedMentionOptions, setSearchedMentionOptions] = useState<
     MentionOption[]
   >([]);
-  const queryClient = useQueryClient();
 
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
@@ -128,17 +133,11 @@ export function PrDetail({
 
   // Record PR view for activity tracking.
   useEffect(() => {
+    if (repoInfo) return;
     if (!project?.repoProviderId || !project?.repoProjectId || !project?.repoId)
       return;
 
-    const prFeedItemId = `pr:${projectId}:${prId}`;
-
-    queryClient.setQueryData<FeedItem[]>(feedQueryKeys.pullRequests, (old) => {
-      if (!old) return old;
-      return old.map((item) =>
-        item.id === prFeedItemId ? { ...item, hasNewActivity: false } : item,
-      );
-    });
+    updateFeedPullRequest(projectId, prId, { hasNewActivity: false });
 
     recordPrViewRef.current({
       projectId,
@@ -153,31 +152,48 @@ export function PrDetail({
     project?.repoProjectId,
     project?.repoProviderId,
     projectId,
-    queryClient,
     recordPrViewRef,
+    repoInfo,
   ]);
 
-  const { data: pr, isLoading: isPrLoading } = usePullRequest(projectId, prId);
+  const { data: pr, isLoading: isPrLoading } = usePullRequest(
+    projectId,
+    prId,
+    repoInfo,
+  );
 
   const { data: commits = [], isLoading: isCommitsLoading } =
-    usePullRequestCommits(projectId, prId);
+    usePullRequestCommits(projectId, prId, repoInfo);
   const { data: files = [], isLoading: isFilesLoading } = usePullRequestChanges(
     projectId,
     prId,
+    repoInfo,
   );
-  const { data: threads = [] } = usePullRequestThreads(projectId, prId);
+  const { data: threads = [] } = usePullRequestThreads(projectId, prId, repoInfo);
 
   // File content for selected file
   const selectedFileData = files.find((f) => f.path === selectedFile);
   const { data: baseContent = '', isLoading: isBaseLoading } =
-    usePullRequestFileContent(projectId, prId, selectedFile ?? '', 'base');
+    usePullRequestFileContent(
+      projectId,
+      prId,
+      selectedFile ?? '',
+      'base',
+      repoInfo,
+    );
   const { data: headContent = '', isLoading: isHeadLoading } =
-    usePullRequestFileContent(projectId, prId, selectedFile ?? '', 'head');
+    usePullRequestFileContent(
+      projectId,
+      prId,
+      selectedFile ?? '',
+      'head',
+      repoInfo,
+    );
 
   // Mutations
-  const addComment = useAddPullRequestComment(projectId, prId);
-  const addFileComment = useAddPullRequestFileComment(projectId, prId);
-  const uploadAttachment = useUploadPullRequestAttachment(projectId, prId);
+  const addComment = useAddPullRequestComment(projectId, prId, repoInfo);
+  const addFileComment = useAddPullRequestFileComment(projectId, prId, repoInfo);
+  const uploadAttachment = useUploadPullRequestAttachment(projectId, prId, repoInfo);
 
   const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
     initialWidth: fileTreeWidth,
@@ -269,9 +285,10 @@ export function PrDetail({
 
   const handleSearchMentions = useCallback(
     async (query: string) => {
-      if (!project?.repoProviderId) return [];
+      const providerId = repoInfo?.providerId ?? project?.repoProviderId;
+      if (!providerId) return [];
       const options = await api.azureDevOps.searchIdentities({
-        providerId: project.repoProviderId,
+        providerId,
         query,
       });
       setSearchedMentionOptions((current) => {
@@ -282,7 +299,7 @@ export function PrDetail({
       });
       return options;
     },
-    [project],
+    [project?.repoProviderId, repoInfo?.providerId],
   );
 
   if (isPrLoading) {
@@ -304,7 +321,12 @@ export function PrDetail({
   return (
     <div className="flex h-full w-full flex-col overflow-hidden text-xs">
       {/* Header */}
-      <PrHeader pr={pr} projectId={projectId} />
+      <PrHeader
+        pr={pr}
+        projectId={projectId}
+        providerId={repoInfo?.providerId}
+        readOnly={readOnly}
+      />
 
       {/* Tab bar */}
       <div className="border-glass-border/50 flex items-center border-b px-5">
@@ -339,14 +361,18 @@ export function PrDetail({
             pr={pr}
             projectId={projectId}
             prId={prId}
-            providerId={project?.repoProviderId ?? undefined}
-            azureProjectId={project?.repoProjectId ?? undefined}
-            repoId={project?.repoId ?? undefined}
+            providerId={repoInfo?.providerId ?? project?.repoProviderId ?? undefined}
+            azureProjectId={
+              repoInfo?.projectId ?? project?.repoProjectId ?? undefined
+            }
+            repoId={repoInfo?.repoId ?? project?.repoId ?? undefined}
             azureProjectName={project?.repoProjectName ?? undefined}
+            repoInfo={repoInfo}
+            readOnly={readOnly}
             threads={threads}
-            onAddComment={handleAddComment}
-            isAddingComment={addComment.isPending}
-            onUploadImage={handleUploadImage}
+            onAddComment={readOnly ? undefined : handleAddComment}
+            isAddingComment={readOnly ? false : addComment.isPending}
+            onUploadImage={readOnly ? undefined : handleUploadImage}
             bottomPadding={bottomPadding}
             fileCount={files.length}
             files={files}
@@ -402,13 +428,16 @@ export function PrDetail({
                   threads={threads}
                   projectId={projectId}
                   prId={prId}
-                  providerId={project?.repoProviderId ?? undefined}
-                  onAddFileComment={handleAddFileComment}
-                  onUploadImage={handleUploadImage}
-                  isAddingComment={addFileComment.isPending}
+                  providerId={
+                    repoInfo?.providerId ?? project?.repoProviderId ?? undefined
+                  }
+                  onAddFileComment={readOnly ? undefined : handleAddFileComment}
+                  onUploadImage={readOnly ? undefined : handleUploadImage}
+                  isAddingComment={readOnly ? false : addFileComment.isPending}
                   mentionDisplayNames={mentionDisplayNames}
                   mentionOptions={mentionOptions}
                   onSearchMentions={handleSearchMentions}
+                  readOnly={readOnly}
                 />
               ) : (
                 <div className="text-ink-3 flex h-full items-center justify-center">
@@ -455,6 +484,7 @@ export function PrDetail({
                     selectedFile={selectedCommitFile}
                     onSelectFile={setSelectedCommitFile}
                     bottomPadding={bottomPadding}
+                    repoInfo={repoInfo}
                   />
                 </div>
               )}

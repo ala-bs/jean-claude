@@ -1,3 +1,4 @@
+import { Loader2, RotateCw, Search, Trash2, X } from 'lucide-react';
 import {
   type MouseEvent,
   useCallback,
@@ -5,8 +6,8 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
-import { RotateCw, Search, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
 
 
@@ -38,9 +39,107 @@ import { useRunCommands } from '@/hooks/use-run-commands';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
 
 const EMPTY_RUN_COMMAND_LOGS: RunCommandLogs = {};
+const RUN_COMMAND_LOG_RENDER_THROTTLE_MS = 500;
 
 function hasLogContent(log: RunCommandLogState | null | undefined): boolean {
   return getRunCommandLogLineCount(log) > 0;
+}
+
+function shouldFlushRunCommandLogsImmediately({
+  previous,
+  next,
+}: {
+  previous: RunCommandLogs;
+  next: RunCommandLogs;
+}): boolean {
+  const previousIds = Object.keys(previous);
+  const nextIds = new Set(Object.keys(next));
+
+  for (const commandId of previousIds) {
+    const previousLog = previous[commandId];
+    const nextLog = next[commandId];
+
+    if (!nextIds.has(commandId)) return true;
+    if (getRunCommandLogLineCount(nextLog) < getRunCommandLogLineCount(previousLog)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function useThrottledRunCommandLogs(taskId: string): RunCommandLogs {
+  const getSnapshot = useCallback(
+    () =>
+      useTaskMessagesStore.getState().runCommandLogs[taskId] ??
+      EMPTY_RUN_COMMAND_LOGS,
+    [taskId],
+  );
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      let lastFlushAt = 0;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+
+      const flush = () => {
+        timeout = null;
+        lastFlushAt = Date.now();
+        onStoreChange();
+      };
+
+      const unsubscribe = useTaskMessagesStore.subscribe(
+        (state, previousState) => {
+          if (state.runCommandLogs === previousState.runCommandLogs) return;
+
+          const previousLogs =
+            previousState.runCommandLogs[taskId] ?? EMPTY_RUN_COMMAND_LOGS;
+          const nextLogs = state.runCommandLogs[taskId] ?? EMPTY_RUN_COMMAND_LOGS;
+          if (nextLogs === previousLogs) return;
+
+          if (
+            shouldFlushRunCommandLogsImmediately({
+              previous: previousLogs,
+              next: nextLogs,
+            })
+          ) {
+            if (timeout) {
+              clearTimeout(timeout);
+              timeout = null;
+            }
+            flush();
+            return;
+          }
+
+          const elapsed = Date.now() - lastFlushAt;
+          if (elapsed >= RUN_COMMAND_LOG_RENDER_THROTTLE_MS) {
+            if (timeout) {
+              clearTimeout(timeout);
+              timeout = null;
+            }
+            flush();
+            return;
+          }
+
+          if (!timeout) {
+            timeout = setTimeout(
+              flush,
+              RUN_COMMAND_LOG_RENDER_THROTTLE_MS - elapsed,
+            );
+          }
+        },
+      );
+
+      return () => {
+        unsubscribe();
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+      };
+    },
+    [taskId],
+  );
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 function logIncludesQuery(
@@ -126,9 +225,7 @@ export function CommandLogsPane({
     confirmKillPorts,
     dismissPortsError,
   } = useRunCommands({ taskId, projectId, workingDir });
-  const runCommandLogs =
-    useTaskMessagesStore((state) => state.runCommandLogs[taskId]) ??
-    EMPTY_RUN_COMMAND_LOGS;
+  const runCommandLogs = useThrottledRunCommandLogs(taskId);
   const resetRunCommandLogs = useTaskMessagesStore(
     (state) => state.resetRunCommandLogs,
   );
@@ -374,20 +471,53 @@ export function CommandLogsPane({
       {hasAnyTabs && !showNoSearchMatches ? (
         <>
           <div className="flex shrink-0 gap-1 overflow-x-auto px-2 py-2">
-            {filteredTabs.map((tab) => (
-              <Button
-                key={tab.id}
-                type="button"
-                variant="tab"
-                size="xs"
-                active={activeCommandId === tab.id}
-                onClick={() => onSelectCommand(tab.id)}
-                className="max-w-64 truncate px-2.5"
-                title={getRunCommandDisplayName(tab)}
-              >
-                {getRunCommandDisplayName(tab)}
-              </Button>
-            ))}
+            {filteredTabs.map((tab) => {
+              const isRunning = runningCommandIds.has(tab.id);
+              const isActive = activeCommandId === tab.id;
+              const displayName = getRunCommandDisplayName(tab);
+
+              return (
+                <Button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => onSelectCommand(tab.id)}
+                  className={clsx(
+                    'max-w-64 rounded border px-2.5 py-1 text-xs font-medium transition-colors',
+                    isActive
+                      ? 'bg-acc text-ink-0 border-transparent'
+                      : 'text-ink-1 bg-bg-1 hover:bg-glass-medium',
+                    isRunning && !isActive
+                      ? 'border-status-done/40'
+                      : 'border-transparent',
+                  )}
+                  title={`${displayName}${isRunning ? ' (running)' : ''}`}
+                  aria-label={`${displayName}${isRunning ? ', running' : ''}`}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {isRunning && (
+                      <Loader2
+                        className={clsx(
+                          'h-3 w-3 shrink-0 animate-spin',
+                          isActive ? 'text-ink-0' : 'text-status-done',
+                        )}
+                        aria-hidden
+                      />
+                    )}
+                    <span className="truncate">{displayName}</span>
+                    {isRunning && (
+                      <span
+                        className={clsx(
+                          'shrink-0 text-[10px] font-semibold uppercase',
+                          isActive ? 'text-ink-0/80' : 'text-status-done',
+                        )}
+                      >
+                        Running
+                      </span>
+                    )}
+                  </span>
+                </Button>
+              );
+            })}
           </div>
           <Separator />
 

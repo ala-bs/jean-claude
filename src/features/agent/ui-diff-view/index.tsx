@@ -7,7 +7,15 @@ import {
   MessageSquarePlus,
 } from 'lucide-react';
 import { codeToTokens, type ThemedToken } from 'shiki';
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
@@ -17,19 +25,19 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useUISetting, useUIStore } from '@/stores/ui';
 
 import { computeDiff, type DiffLine } from './diff-utils';
-import { DiffMinimap, type ViewportInfo } from './diff-minimap';
 import {
   renderTokensWithHighlights,
   renderWithHighlights,
 } from './utils-search-highlight';
 import { type SearchMatch, useDiffSearch } from './use-diff-search';
-import { ChangeNavigator } from './change-navigator';
+import { ChangeNavigatorOverlay } from './change-navigator';
 import { CurrentStateTable } from './current-state-table';
+import { DiffMinimapOverlay } from './diff-minimap';
 import { DiffSearchBar } from './diff-search-bar';
 import { getLanguageFromPath } from './language-utils';
 import { SideBySideDiffTable } from './side-by-side-table';
-import { useChangeNavigator } from './use-change-navigator';
 import { useCodeFolding } from './use-code-folding';
+import { useLineRangeSelection } from './use-line-range-selection';
 
 
 
@@ -38,6 +46,8 @@ interface DiffState {
   oldTokens: ThemedToken[][];
   newTokens: ThemedToken[][];
 }
+
+const EMPTY_SEARCH_MATCHES: SearchMatch[] = [];
 
 export interface InlineComment {
   line: number;
@@ -86,29 +96,9 @@ export function DiffView({
   const { shikiTheme } = useColorScheme();
   const viewMode = useUISetting('diffViewMode');
   const setSetting = useUIStore((s) => s.setSetting);
-  const [viewport, setViewport] = useState<ViewportInfo | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const language = getLanguageFromPath(filePath);
-
-  // Update viewport info on scroll
-  const handleScroll = useCallback(() => {
-    const container = scrollContainerRef.current;
-    if (container) {
-      setViewport({
-        scrollTop: container.scrollTop,
-        scrollHeight: container.scrollHeight,
-        clientHeight: container.clientHeight,
-      });
-    }
-  }, []);
-
-  // Initialize viewport info after content loads
-  useEffect(() => {
-    if (state && scrollContainerRef.current) {
-      handleScroll();
-    }
-  }, [state, handleScroll]);
 
   useEffect(() => {
     if (!state || !scrollToLine || !scrollContainerRef.current) return;
@@ -179,22 +169,9 @@ export function DiffView({
     scrollContainerRef,
   });
 
-  const {
-    totalHunks,
-    currentHunkIndex,
-    goToNextHunk,
-    goToPreviousHunk,
-    isScrollable,
-  } = useChangeNavigator({
-    lines: state?.lines ?? [],
-    scrollContainerRef,
-    viewMode,
-    oldString,
-    newString,
-  });
-
   // Code folding based on new file content (tree-sitter in main process)
   const folding = useCodeFolding(newString, language, filePath);
+  const hasChanges = state?.lines.some((line) => line.type !== 'context') ?? false;
 
   if (isLoading || !state) {
     return (
@@ -272,10 +249,9 @@ export function DiffView({
 
       <div
         ref={scrollContainerRef}
-        onScroll={handleScroll}
         className={clsx(
           'h-full flex-1 overflow-auto bg-code-bg pb-2 font-mono text-xs',
-          isScrollable && totalHunks > 0 ? 'pt-12' : 'pt-2',
+          hasChanges ? 'pt-12' : 'pt-2',
           {
             'no-scrollbar': !!withMinimap,
           },
@@ -325,20 +301,19 @@ export function DiffView({
         )}
       </div>
       {!!withMinimap && (
-        <DiffMinimap
+        <DiffMinimapOverlay
           lines={state.lines}
-          viewport={viewport}
+          scrollContainerRef={scrollContainerRef}
           commentedLines={commentedLines}
         />
       )}
-      {isScrollable && totalHunks > 0 && (
-        <ChangeNavigator
-          currentHunk={currentHunkIndex + 1}
-          totalHunks={totalHunks}
-          onNext={goToNextHunk}
-          onPrevious={goToPreviousHunk}
-        />
-      )}
+      <ChangeNavigatorOverlay
+        lines={state.lines}
+        scrollContainerRef={scrollContainerRef}
+        viewMode={viewMode}
+        oldString={oldString}
+        newString={newString}
+      />
     </div>
   );
 }
@@ -398,44 +373,46 @@ function InlineDiffTable({
   currentMatchIndex: number;
   folding: CodeFoldingState;
 }) {
-  const [selectionStart, setSelectionStart] = useState<number | null>(null);
-  const [hoveredLine, setHoveredLine] = useState<number | null>(null);
+  const lineRangeSelection = useLineRangeSelection({ onAddCommentClick });
 
-  const handleLineMouseDown = useCallback(
-    (lineNumber: number) => {
-      if (!onAddCommentClick) return;
-      setSelectionStart(lineNumber);
-    },
-    [onAddCommentClick],
-  );
+  const inlineCommentsByLine = useMemo(() => {
+    const map = new Map<number, InlineComment[]>();
+    for (const comment of inlineComments ?? []) {
+      const comments = map.get(comment.line);
+      if (comments) {
+        comments.push(comment);
+      } else {
+        map.set(comment.line, [comment]);
+      }
+    }
+    return map;
+  }, [inlineComments]);
 
-  const handleLineMouseUp = useCallback(
-    (lineNumber: number) => {
-      if (!onAddCommentClick || selectionStart === null) return;
+  const commentFormsByEndLine = useMemo(() => {
+    const map = new Map<number, CommentFormEntry[]>();
+    for (const form of commentForms ?? []) {
+      const forms = map.get(form.lineRange.end);
+      if (forms) {
+        forms.push(form);
+      } else {
+        map.set(form.lineRange.end, [form]);
+      }
+    }
+    return map;
+  }, [commentForms]);
 
-      const start = Math.min(selectionStart, lineNumber);
-      const end = Math.max(selectionStart, lineNumber);
-      onAddCommentClick({ start, end });
-      setSelectionStart(null);
-    },
-    [onAddCommentClick, selectionStart],
-  );
-
-  const handleMouseLeaveTable = useCallback(() => {
-    setSelectionStart(null);
-    setHoveredLine(null);
-  }, []);
-
-  // Check if a line is in the selection range
-  const isLineInSelection = useCallback(
-    (lineNumber: number) => {
-      if (selectionStart === null || hoveredLine === null) return false;
-      const start = Math.min(selectionStart, hoveredLine);
-      const end = Math.max(selectionStart, hoveredLine);
-      return lineNumber >= start && lineNumber <= end;
-    },
-    [selectionStart, hoveredLine],
-  );
+  const searchMatchesByLineIndex = useMemo(() => {
+    const map = new Map<number, SearchMatch[]>();
+    for (const match of searchMatches) {
+      const matches = map.get(match.lineIndex);
+      if (matches) {
+        matches.push(match);
+      } else {
+        map.set(match.lineIndex, [match]);
+      }
+    }
+    return map;
+  }, [searchMatches]);
 
   // Check if a line is in any comment form range
   const isLineInCommentRange = useCallback(
@@ -455,13 +432,14 @@ function InlineDiffTable({
   return (
     <table
       className="w-full border-collapse"
-      onMouseLeave={handleMouseLeaveTable}
+      onMouseDown={lineRangeSelection.onMouseDown}
+      onMouseOver={lineRangeSelection.onMouseOver}
+      onMouseUp={lineRangeSelection.onMouseUp}
+      onMouseLeave={lineRangeSelection.onMouseLeave}
     >
       <tbody>
         {lines.map((line, i) => {
-          // Prefer new line anchors; fall back to old lines so deleted rows can
-          // still receive review comments.
-          const lineNumber = line.newLineNumber ?? line.oldLineNumber;
+          const lineNumber = line.newLineNumber;
 
           // Check if this line is hidden by a collapsed fold.
           // For deletion lines (no newLineNumber), check if the surrounding
@@ -492,21 +470,21 @@ function InlineDiffTable({
 
           const lineComments =
             shouldRenderExtras && lineNumber
-              ? inlineComments?.filter((c) => c.line === lineNumber)
+              ? inlineCommentsByLine.get(lineNumber)
               : undefined;
 
           const formsForLine =
-            shouldRenderExtras && lineNumber && commentForms
-              ? commentForms.filter((cf) => cf.lineRange.end === lineNumber)
+            shouldRenderExtras && lineNumber
+              ? commentFormsByEndLine.get(lineNumber)
               : undefined;
 
-          const isSelected = lineNumber ? isLineInSelection(lineNumber) : false;
           const isInCommentRange = lineNumber
             ? isLineInCommentRange(lineNumber)
             : false;
 
           // Find search matches for this line
-          const lineMatches = searchMatches.filter((m) => m.lineIndex === i);
+          const lineMatches =
+            searchMatchesByLineIndex.get(i) ?? EMPTY_SEARCH_MATCHES;
           const isCurrentMatchLine =
             searchMatches[currentMatchIndex]?.lineIndex === i;
           const currentMatchInLine = isCurrentMatchLine
@@ -532,13 +510,8 @@ function InlineDiffTable({
               oldTokens={oldTokens}
               newTokens={newTokens}
               canComment={!!onAddCommentClick && lineNumber !== undefined}
-              isHovered={hoveredLine === lineNumber}
-              isSelected={isSelected}
               isInCommentRange={isInCommentRange}
               hasComment={!!lineNumber && !!commentedLines?.has(lineNumber)}
-              onMouseEnter={() => lineNumber && setHoveredLine(lineNumber)}
-              onMouseDown={() => lineNumber && handleLineMouseDown(lineNumber)}
-              onMouseUp={() => lineNumber && handleLineMouseUp(lineNumber)}
               inlineComments={lineComments}
               commentForms={formsForLine}
               searchMatches={lineMatches}
@@ -546,9 +519,7 @@ function InlineDiffTable({
               isFoldable={isFoldable}
               isFoldCollapsed={isCollapsed}
               foldRange={foldRange}
-              onToggleFold={
-                lineNumber ? () => folding.toggleFold(lineNumber) : undefined
-              }
+              onToggleFold={lineNumber ? folding.toggleFold : undefined}
             />
           );
         })}
@@ -557,19 +528,14 @@ function InlineDiffTable({
   );
 }
 
-function DiffLineRow({
+const DiffLineRow = memo(function DiffLineRow({
   lineIndex,
   line,
   oldTokens,
   newTokens,
   canComment,
-  isHovered,
-  isSelected,
   isInCommentRange,
   hasComment,
-  onMouseEnter,
-  onMouseDown,
-  onMouseUp,
   inlineComments,
   commentForms,
   searchMatches,
@@ -584,13 +550,8 @@ function DiffLineRow({
   oldTokens: ThemedToken[][];
   newTokens: ThemedToken[][];
   canComment: boolean;
-  isHovered: boolean;
-  isSelected: boolean;
   isInCommentRange: boolean;
   hasComment: boolean;
-  onMouseEnter: () => void;
-  onMouseDown: () => void;
-  onMouseUp: () => void;
   inlineComments?: InlineComment[];
   commentForms?: CommentFormEntry[];
   searchMatches: SearchMatch[];
@@ -598,7 +559,7 @@ function DiffLineRow({
   isFoldable?: boolean;
   isFoldCollapsed?: boolean;
   foldRange?: { startLine: number; endLine: number };
-  onToggleFold?: () => void;
+  onToggleFold?: (lineNumber: number) => void;
 }) {
   // Get tokens for this line based on type
   // For deletions, use old tokens; for additions, use new tokens; for context, prefer new
@@ -636,20 +597,16 @@ function DiffLineRow({
       <tr
         data-line-index={lineIndex}
         data-new-line={line.newLineNumber ?? undefined}
-        className={clsx({
-          'bg-blue-500/30': isSelected,
-          'bg-blue-500/10': !isSelected && isInCommentRange,
+        className={clsx('group', {
+          'bg-blue-500/10': isInCommentRange,
           'bg-green-500/20':
-            !isSelected && !isInCommentRange && line.type === 'addition',
+            !isInCommentRange && line.type === 'addition',
           'bg-red-500/20':
-            !isSelected && !isInCommentRange && line.type === 'deletion',
+            !isInCommentRange && line.type === 'deletion',
         })}
-        onMouseEnter={onMouseEnter}
-        onMouseDown={canComment ? onMouseDown : undefined}
-        onMouseUp={canComment ? onMouseUp : undefined}
         style={{
           cursor: canComment ? 'pointer' : undefined,
-          ...(hasComment && !isSelected && !isInCommentRange
+          ...(hasComment && !isInCommentRange
             ? {
                 background:
                   'color-mix(in oklch, var(--color-acc) 8%, transparent)',
@@ -666,7 +623,7 @@ function DiffLineRow({
               onMouseUp={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleFold?.();
+                onToggleFold?.(line.newLineNumber!);
               }}
               aria-label={isFoldCollapsed ? 'Expand scope' : 'Collapse scope'}
               aria-expanded={!isFoldCollapsed}
@@ -683,23 +640,23 @@ function DiffLineRow({
         <td
           className={clsx(
             'relative w-8 pr-1 text-right align-top select-none',
-            hasComment && !isSelected && !isInCommentRange
+            hasComment && !isInCommentRange
               ? 'text-acc-ink'
               : line.type === 'deletion'
                 ? 'text-status-fail'
                 : 'text-ink-4',
           )}
           style={
-            hasComment && !isSelected && !isInCommentRange
+            hasComment && !isInCommentRange
               ? { borderLeft: '2px solid color-mix(in srgb, var(--color-acc) 50%, transparent)' }
               : undefined
           }
         >
-          <span className={clsx(canComment && isHovered && 'invisible')}>
+          <span className={clsx(canComment && 'group-hover:invisible')}>
             {line.oldLineNumber ?? ''}
           </span>
-          {canComment && isHovered && (
-            <span className="text-acc-ink absolute inset-0 flex items-center justify-center">
+          {canComment && (
+            <span className="text-acc-ink absolute inset-0 hidden items-center justify-center group-hover:flex">
               <MessageSquarePlus className="h-3 w-3" aria-hidden />
             </span>
           )}
@@ -739,7 +696,7 @@ function DiffLineRow({
               className="text-ink-4 bg-bg-2 ml-2 inline-block cursor-pointer rounded px-1.5 py-0 text-[10px] leading-4"
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleFold?.();
+                onToggleFold?.(line.newLineNumber!);
               }}
             >
               {foldRange.endLine - foldRange.startLine} lines
@@ -773,4 +730,4 @@ function DiffLineRow({
         ))}
     </>
   );
-}
+});

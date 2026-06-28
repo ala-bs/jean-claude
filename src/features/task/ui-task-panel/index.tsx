@@ -3046,10 +3046,29 @@ const TaskInputFooter = memo(function TaskInputFooter({
 
   const handleQueuePrompt = useCallback(
     (parts: PromptPart[]) => {
+      let finalParts = parts;
+      if (openReviewComments.length > 0) {
+        const reviewParts = synthesizeReviewPrompt(openReviewComments);
+        if (reviewParts) {
+          finalParts = [...parts, ...reviewParts];
+        }
+        for (const comment of openReviewComments) {
+          resolveComment(taskId, comment.id);
+        }
+        clearResolvedComments(taskId);
+      }
+
       clearPromptDraft();
-      onQueue(parts);
+      onQueue(finalParts);
     },
-    [clearPromptDraft, onQueue],
+    [
+      taskId,
+      clearPromptDraft,
+      onQueue,
+      openReviewComments,
+      resolveComment,
+      clearResolvedComments,
+    ],
   );
 
   const handleStop = useCallback(async () => {

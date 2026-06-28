@@ -1,46 +1,47 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
+import { useMutation } from '@tanstack/react-query';
 
 
 
+import { markDocumentStale, setDocumentResource } from '@/cache/cache-actions';
 import { api } from '@/lib/api';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { FeedItem } from '@shared/feed-types';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
+import { useCacheResource } from '@/cache/use-cache-resource';
+
+
+function ingestFeedNotes(items: FeedItem[]) {
+  setDocumentResource('feed:notes', items);
+}
+
+function markFeedNotesStale() {
+  markDocumentStale('feed:notes');
+}
 
 
 export function useCreateFeedNote() {
-  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (params: { content: string }) => api.feed.createNote(params),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: feedQueryKeys.notes });
-    },
+    onSuccess: markFeedNotesStale,
   });
 }
 
 export function useCreateWorkItemVerificationNote() {
-  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (params: CreateWorkItemVerificationNoteParams) =>
       api.feed.createWorkItemVerificationNote(params),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: feedQueryKeys.notes });
-    },
+    onSuccess: markFeedNotesStale,
   });
 }
 
 export function useUpdateFeedNote() {
-  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (params: {
       id: string;
       content?: string;
       completedAt?: string | null;
     }) => api.feed.updateNote(params),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: feedQueryKeys.notes });
-    },
+    onSuccess: markFeedNotesStale,
   });
 }
 
@@ -48,9 +49,10 @@ export function useUpdateFeedNote() {
  * Returns a single feed note item by noteId, derived from the feed items query.
  */
 export function useFeedNoteById(noteId: string) {
-  const { data: items, isLoading } = useQuery({
-    queryKey: feedQueryKeys.notes,
-    queryFn: async () => api.feed.getNoteItems(),
+  const { data: items, isLoading } = useCacheResource({
+    key: 'feed:notes',
+    load: async () => api.feed.getNoteItems(),
+    ingest: ingestFeedNotes,
   });
 
   const note = useMemo(
@@ -66,11 +68,8 @@ export function useFeedNoteById(noteId: string) {
 }
 
 export function useDeleteFeedNote() {
-  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (params: { id: string }) => api.feed.deleteNote(params),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: feedQueryKeys.notes });
-    },
+    onSuccess: markFeedNotesStale,
   });
 }

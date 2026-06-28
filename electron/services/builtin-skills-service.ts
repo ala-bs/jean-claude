@@ -107,18 +107,25 @@ Rules:
 - Include key source files only, relative to repository root.
 - Exclude generated files, dependencies, lockfiles, build output, and vendored code.
 - Keep summaries concise, factual, and useful for future implementation tasks.
-- Every node must include name, summary, key_files, and children.
+- Every node must include id, name, summary, key_files, and children.
+- Preserve existing ids when expanding or updating existing nodes. Use stable ids for new nodes.
 - Leaf nodes must use an empty children array.
 - Write valid YAML only to requested output file. Do not write markdown around YAML.
 - If existing feature map context is available, improve it rather than starting from scratch. Follow the iteration workflow below.
 
 Iteration workflow (when existing feature map provided):
 - Read the existing feature map YAML first. Understand current tree structure and depth.
-- Determine iteration intent from user prompt:
-  - "go deeper" / "expand" / "improve" with no target → scan entire tree for shallow nodes (leaves or single-child nodes whose key_files suggest more children exist). Expand those.
-  - "expand X" / "go deeper on X" → locate node X in tree, spawn focused subagent to explore only that subtree deeper.
-  - "find missing" / "audit" / "what's missing" → run coverage checklist against existing tree, report gaps, then fill them.
-  - "update" / "refresh" → diff current codebase against existing map. Find new routes/components/features not in map. Add them without disturbing existing accurate nodes.
+- First look for new features. Diff current codebase against existing map using routes, navigation, screens, overlays, commands, settings, backend workflows, and major UI components. Add missing user-facing features before deepening existing nodes.
+- Then run up to 5 improvement loops:
+  - Loop 1: scan the whole tree for shallow nodes and newly added nodes that need children.
+  - Loops 2-5: deepen each flagged feature/subfeature by reading its key_files and nearby files, adding concrete children for variants, states, actions, tabs, menus, badges, controls, and workflow branches.
+  - Stop early when a full pass finds no new missing features and no shallow nodes worth expanding.
+  - Keep a brief private checklist of what changed each loop; do not write the checklist to the output file.
+- User-targeted requests still narrow scope:
+  - "go deeper" / "expand" / "improve" with no target → run the full loop across the tree.
+  - "expand X" / "go deeper on X" → locate node X, then run the same loop only inside that subtree.
+  - "find missing" / "audit" / "what's missing" → prioritize new-feature coverage first, then loop through shallow gaps.
+  - "update" / "refresh" → prioritize newly added code/features first, then loop to deepen new and shallow existing nodes.
 - Shallow node detection: A node is "shallow" when it has 0-1 children BUT its key_files reference components/routes/stores that contain multiple user-facing concepts. Flag these for expansion.
 - Preserve existing accurate nodes. Only modify nodes that need deeper children, updated key_files, or corrected summaries.
 - When expanding a node, read its key_files to discover concrete children before guessing. Code is ground truth.
@@ -126,10 +133,10 @@ Iteration workflow (when existing feature map provided):
 - Output the complete updated YAML, not just the changed subtree.
 
 Subagent prompt pattern (fresh mapping):
-- "Map only <root feature>. Return exhaustive user-facing subtree with name, summary, key_files, children. Search routes/components/stores/hooks/services tied to this feature. Include variants, states, actions, rails, menus, tabs, badges, and workflow branches. Avoid implementation-only nodes."
+- "Map only <root feature>. Return exhaustive user-facing subtree with id, name, summary, key_files, children. Search routes/components/stores/hooks/services tied to this feature. Include variants, states, actions, rails, menus, tabs, badges, and workflow branches. Avoid implementation-only nodes. Use stable ids."
 
 Subagent prompt pattern (expanding existing node):
-- "Here is the current subtree for <node name>: <paste YAML>. Expand it deeper. Read the key_files to find concrete children this node is missing. Add variants, states, actions, tabs, menus, badges, and workflow branches found in code. Preserve existing accurate children. Return updated subtree YAML."
+- "Here is the current subtree for <node name>: <paste YAML>. Expand it deeper. Read the key_files to find concrete children this node is missing. Add variants, states, actions, tabs, menus, badges, and workflow branches found in code. Preserve existing ids and accurate children. Return updated subtree YAML with id, name, summary, key_files, children."
 
 Coverage checklist:
 - Routes and navigation destinations.

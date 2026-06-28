@@ -52,6 +52,9 @@ export function useAgentControls({
   const clearPendingRequestForTask = useTaskMessagesStore(
     (s) => s.clearPendingRequestForTask,
   );
+  const setPendingRequestForTask = useTaskMessagesStore(
+    (s) => s.setPendingRequestForTask,
+  );
   const addToast = useToastStore((s) => s.addToast);
 
   const start = useCallback(async () => {
@@ -91,6 +94,25 @@ export function useAgentControls({
       if (!stepId) return;
       try {
         await api.agent.respond(stepId, requestId, response);
+        const pendingRequest = await api.agent.getPendingRequest(stepId);
+        if (pendingRequest?.type === 'permission') {
+          setPermission(stepId, pendingRequest.data);
+          setQuestion(stepId, null);
+          setPendingRequestForTask(taskId, {
+            type: 'permission',
+            permission: pendingRequest.data,
+          });
+        } else if (pendingRequest?.type === 'question') {
+          setQuestion(stepId, pendingRequest.data);
+          setPermission(stepId, null);
+          setPendingRequestForTask(taskId, {
+            type: 'question',
+            question: pendingRequest.data,
+          });
+        } else {
+          setPermission(stepId, null);
+          clearPendingRequestForTask(taskId);
+        }
       } catch (error) {
         addToast({
           type: 'error',
@@ -100,10 +122,16 @@ export function useAgentControls({
               : 'Failed to respond to permission request',
         });
       }
-      setPermission(stepId, null);
-      clearPendingRequestForTask(taskId);
     },
-    [stepId, taskId, setPermission, clearPendingRequestForTask, addToast],
+    [
+      stepId,
+      taskId,
+      setPermission,
+      setQuestion,
+      clearPendingRequestForTask,
+      setPendingRequestForTask,
+      addToast,
+    ],
   );
 
   const respondToQuestion = useCallback(
@@ -111,6 +139,25 @@ export function useAgentControls({
       if (!stepId) return;
       try {
         await api.agent.respond(stepId, requestId, response);
+        const pendingRequest = await api.agent.getPendingRequest(stepId);
+        if (pendingRequest?.type === 'question') {
+          setQuestion(stepId, pendingRequest.data);
+          setPermission(stepId, null);
+          setPendingRequestForTask(taskId, {
+            type: 'question',
+            question: pendingRequest.data,
+          });
+        } else if (pendingRequest?.type === 'permission') {
+          setPermission(stepId, pendingRequest.data);
+          setQuestion(stepId, null);
+          setPendingRequestForTask(taskId, {
+            type: 'permission',
+            permission: pendingRequest.data,
+          });
+        } else {
+          setQuestion(stepId, null);
+          clearPendingRequestForTask(taskId);
+        }
       } catch (error) {
         addToast({
           type: 'error',
@@ -120,10 +167,16 @@ export function useAgentControls({
               : 'Failed to respond to question',
         });
       }
-      setQuestion(stepId, null);
-      clearPendingRequestForTask(taskId);
     },
-    [stepId, taskId, setQuestion, clearPendingRequestForTask, addToast],
+    [
+      stepId,
+      taskId,
+      setQuestion,
+      setPermission,
+      clearPendingRequestForTask,
+      setPendingRequestForTask,
+      addToast,
+    ],
   );
 
   const sendMessage = useCallback(

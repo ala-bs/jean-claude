@@ -29,6 +29,8 @@ import type { DebugLogEntry } from '@shared/debug-log-types';
 
 
 
+const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
+
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
   windowState: {
@@ -311,6 +313,10 @@ contextBridge.exposeInMainWorld('api', {
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
     getWorkItemById: (params: { providerId: string; workItemId: number }) =>
       ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    getPullRequestStatuses: (params: {
+      providerId: string;
+      linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
+    }) => ipcRenderer.invoke('azureDevOps:getPullRequestStatuses', params),
     getWorkItemStates: (params: {
       providerId: string;
       projectName: string;
@@ -1295,6 +1301,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   app: {
     isDevMode: !!process.env.ELECTRON_RENDERER_URL,
+    devBadgeLabel,
     getIsPreviewMode: () =>
       ipcRenderer.invoke('app:getIsPreviewMode') as Promise<boolean>,
     getReloadUpdateInfo: (params: { builtCommitHash: string }) =>

@@ -27,6 +27,8 @@
     "dev:tmp": "JC_DISABLE_USAGE_TRACKING=1 JC_SKIP_INSTANCE_LOCK=1 ./scripts/dev-tmp.sh",
     "dev:tmp:reuse": "JC_DISABLE_USAGE_TRACKING=1 JC_SKIP_INSTANCE_LOCK=1 ./scripts/dev-tmp.sh --auto-reuse-db",
     "dev:tmp:override": "JC_DISABLE_USAGE_TRACKING=1 JC_SKIP_INSTANCE_LOCK=1 ./scripts/dev-tmp.sh --auto-override-db",
+    "dev:symlink": "JC_DISABLE_USAGE_TRACKING=1 JC_SKIP_INSTANCE_LOCK=1 ./scripts/dev-symlink.sh",
+    "dev:symlink:update": "JC_DISABLE_USAGE_TRACKING=1 JC_SKIP_INSTANCE_LOCK=1 ./scripts/dev-symlink-update.sh",
     "build": "electron-vite build",
     "preview": "JC_PREVIEW=1 electron-vite preview",
     "preview:skip-build": "JC_PREVIEW=1 electron-vite preview --skipBuild",
@@ -159,7 +161,7 @@
     "oxlint": "^1.70.0",
     "react-devtools": "^7.0.1",
     "tailwindcss": "^4.1.18",
-    "typescript": "^5.9.3",
+    "typescript": "7.0.1-rc",
     "vite": "^6.4.1",
     "vite-plugin-svgr": "^4.5.0",
     "vitest": "^3.2.4"

@@ -1,10 +1,4 @@
 import {
-  useInfiniteQuery,
-  useMutation,
-  useQueryClient,
-} from '@tanstack/react-query';
-
-import {
   ACTIVE_TASKS_INDEX_KEY,
   appendTaskToKnownIndexes,
   ingestActiveTasks,
@@ -29,9 +23,18 @@ import type {
   ThinkingEffort,
   UpdateTask,
 } from '@shared/types';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
+
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { api } from '@/lib/api';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
+import { cache$ } from '@/cache/cache-store';
+import type { FeedItem } from '@shared/feed-types';
+import { invalidateFeedResources } from '@/cache/feed-cache';
+import { setDocumentResource } from '@/cache/cache-actions';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCacheResource } from '@/cache/use-cache-resource';
 import { useTaskMessagesStore } from '@/stores/task-messages';
@@ -52,8 +55,36 @@ type CreateTaskPayload = NewTask & {
 export function invalidateFeedItems(
   queryClient: ReturnType<typeof useQueryClient>,
 ) {
-  queryClient.invalidateQueries({ queryKey: feedQueryKeys.tasks });
-  queryClient.invalidateQueries({ queryKey: feedQueryKeys.workItems });
+  invalidateFeedResources(queryClient, ['tasks', 'workItems']);
+}
+
+export function updateFeedTaskPendingMessage(
+  taskId: string,
+  pendingMessage: string | null,
+) {
+  const key = 'feed:tasks';
+  const current = cache$.documents[key].data.get() as FeedItem[] | undefined;
+  if (!current) return;
+
+  const updateItem = (item: FeedItem): FeedItem => {
+    const children = item.children?.map(updateItem);
+    const withChildren = children ? { ...item, children } : item;
+
+    if (item.source !== 'task' || item.taskId !== taskId) {
+      return withChildren;
+    }
+
+    return {
+      ...withChildren,
+      pendingMessage: pendingMessage ?? undefined,
+    };
+  };
+
+  setDocumentResource(
+    key,
+    current.map(updateItem),
+    cache$.resources[key].lastFetchedAt.get() ?? Date.now(),
+  );
 }
 
 export function useTasks() {
@@ -159,6 +190,7 @@ export function useUpdateTask() {
       api.tasks.update(id, data),
     onSuccess: (task, { id }) => {
       ingestTask(task);
+      updateFeedTaskPendingMessage(id, task.pendingMessage);
       markTaskListsStale(task.projectId);
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['tasks', id] });
@@ -182,6 +214,7 @@ export function useUpdateTaskPendingMessage() {
     }) => api.tasks.updatePendingMessage(id, pendingMessage),
     onSuccess: (task, { id }) => {
       ingestTask(task);
+      updateFeedTaskPendingMessage(id, task.pendingMessage);
       markTaskListsStale(task.projectId);
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['tasks', id] });

@@ -49,4 +49,22 @@ describe('builtin skills installation', () => {
       'name: task-name-generation',
     );
   });
+
+  it('installs project feature mapping loop instructions', async () => {
+    await upsertBuiltinSkills({ skillsDir: testDir });
+
+    const content = await fs.readFile(
+      path.join(testDir, 'project-feature-mapping', 'SKILL.md'),
+      'utf-8',
+    );
+
+    expect(content).toContain('First look for new features');
+    expect(content).toContain('Then run up to 5 improvement loops');
+    expect(content).toContain('Loops 2-5: deepen each flagged feature/subfeature');
+    expect(content).toContain('Every node must include id');
+    expect(content).toContain('Preserve existing ids');
+    expect(content).toContain(
+      'Stop early when a full pass finds no new missing features',
+    );
+  });
 });

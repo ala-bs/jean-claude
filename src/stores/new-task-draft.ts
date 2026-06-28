@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useCallback } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 
 import type {
@@ -135,11 +136,91 @@ const useStore = create<NewTaskDraftState>()(
 // Direct store access for non-React contexts
 export const useNewTaskDraftStore = useStore;
 
+type NewTaskDraftMetadata = Partial<Omit<NewTaskDraft, 'prompt'>>;
+
+function selectDraftMetadata(
+  draft: Partial<NewTaskDraft> | undefined,
+): NewTaskDraftMetadata | undefined {
+  if (!draft) return undefined;
+
+  return {
+    inputMode: draft.inputMode,
+    interactionMode: draft.interactionMode,
+    modelPreference: draft.modelPreference,
+    thinkingEffort: draft.thinkingEffort,
+    backendModelPresetId: draft.backendModelPresetId,
+    shouldAutoSelectBackendModelPreset:
+      draft.shouldAutoSelectBackendModelPreset,
+    agentBackend: draft.agentBackend,
+    workItemIds: draft.workItemIds,
+    updateWorkItemStatus: draft.updateWorkItemStatus,
+    workItemsFilter: draft.workItemsFilter,
+    workItemsIterationFilter: draft.workItemsIterationFilter,
+    searchStep: draft.searchStep,
+    workItemsViewMode: draft.workItemsViewMode,
+    selectedCommentIds: draft.selectedCommentIds,
+    images: draft.images,
+    files: draft.files,
+    createWorktree: draft.createWorktree,
+    sourceBranch: draft.sourceBranch,
+    showFileExplorer: draft.showFileExplorer,
+    backlogTodoIds: draft.backlogTodoIds,
+    parentTaskId: draft.parentTaskId,
+  };
+}
+
 // Hook for managing the new task draft
 export function useNewTaskDraft() {
   const selectedProjectId = useStore((state) => state.selectedProjectId);
   const key = selectedProjectId ?? 'all';
   const draft = useStore((state) => state.drafts[key]);
+  const setSelectedProjectIdAction = useStore(
+    (state) => state.setSelectedProjectId,
+  );
+  const setDraftAction = useStore((state) => state.setDraft);
+  const clearDraftAction = useStore((state) => state.clearDraft);
+  const clearAllDraftsAction = useStore((state) => state.clearAllDrafts);
+
+  const setSelectedProjectId = useCallback(
+    (projectId: string | null) => setSelectedProjectIdAction(projectId),
+    [setSelectedProjectIdAction],
+  );
+
+  const updateDraft = useCallback(
+    (
+      update:
+        | Partial<NewTaskDraft>
+        | ((prev: Partial<NewTaskDraft> | undefined) => Partial<NewTaskDraft>),
+    ) => setDraftAction(key, update),
+    [key, setDraftAction],
+  );
+
+  const clearDraft = useCallback(
+    () => clearDraftAction(key),
+    [key, clearDraftAction],
+  );
+
+  const discardDraft = useCallback(
+    () => clearAllDraftsAction(),
+    [clearAllDraftsAction],
+  );
+
+  return {
+    selectedProjectId,
+    draft,
+    setSelectedProjectId,
+    updateDraft,
+    clearDraft,
+    discardDraft,
+  };
+}
+
+export function useNewTaskDraftMetadata() {
+  const selectedProjectId = useStore((state) => state.selectedProjectId);
+  const key = selectedProjectId ?? 'all';
+  const draft = useStore(
+    useShallow((state) => selectDraftMetadata(state.drafts[key])),
+  );
   const setSelectedProjectIdAction = useStore(
     (state) => state.setSelectedProjectId,
   );
