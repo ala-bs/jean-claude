@@ -349,15 +349,13 @@ export async function generateCommitMessageForTask(
     name?: string | null;
   },
   project: {
+    path: string;
     aiSkillSlots: Parameters<typeof resolveAiSkillSlot>[1];
   },
   stageAll: boolean,
 ): Promise<string | undefined> {
-  if (!task.worktreePath) {
-    return undefined;
-  }
-
   try {
+    const gitRootPath = task.worktreePath ?? project.path;
     const slotConfig = await resolveAiSkillSlot(
       'commit-message',
       project.aiSkillSlots ?? null,
@@ -369,12 +367,12 @@ export async function generateCommitMessageForTask(
 
     // If stageAll, get all changes (staged + unstaged) vs HEAD; otherwise just staged
     let diff = stageAll
-      ? await getAllChangesDiff(task.worktreePath)
-      : await getStagedDiff(task.worktreePath);
+      ? await getAllChangesDiff(gitRootPath)
+      : await getStagedDiff(gitRootPath);
 
     // If stageAll but diff is empty, try staged-only as fallback
     if (!diff && stageAll) {
-      diff = await getStagedDiff(task.worktreePath);
+      diff = await getStagedDiff(gitRootPath);
     }
 
     // Truncate diff
@@ -385,7 +383,7 @@ export async function generateCommitMessageForTask(
 
     const prompt = buildCommitPrompt({ stagedDiff: diff });
 
-    dbg.agent('Generating commit message for task in %s', task.worktreePath);
+    dbg.agent('Generating commit message for task in %s', gitRootPath);
 
     const result = await generateText({
       backend: slotConfig.backend,

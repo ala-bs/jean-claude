@@ -2568,10 +2568,17 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('tasks:worktree:getStatus', async (_, taskId: string) => {
     const task = await TaskRepository.findById(taskId);
-    if (!task?.worktreePath) {
-      throw new Error(`Task ${taskId} does not have a worktree`);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
     }
-    return getWorktreeStatus(task.worktreePath);
+    const project = task.worktreePath
+      ? null
+      : await ProjectRepository.findById(task.projectId);
+    const gitRootPath = task.worktreePath ?? project?.path;
+    if (!gitRootPath) {
+      throw new Error(`Task ${taskId} does not have a git root`);
+    }
+    return getWorktreeStatus(gitRootPath);
   });
 
   ipcMain.handle(
@@ -2582,13 +2589,25 @@ export function registerIpcHandlers() {
       params: { message?: string; stageAll: boolean },
     ) => {
       const task = await TaskRepository.findById(taskId);
-      if (!task?.worktreePath) {
-        throw new Error(`Task ${taskId} does not have a worktree`);
+      if (!task) {
+        throw new Error(`Task ${taskId} not found`);
       }
 
       const project = await ProjectRepository.findById(task.projectId);
       if (!project) {
         throw new Error(`Project ${task.projectId} not found`);
+      }
+
+      const gitRootPath = task.worktreePath ?? project.path;
+      const currentBranch = await getCurrentBranch(gitRootPath);
+      if (
+        project.protectedBranches?.some(
+          (branch) => branch.toLowerCase() === currentBranch.toLowerCase(),
+        )
+      ) {
+        throw new Error(
+          `Branch "${currentBranch}" is protected. Direct commits are not allowed.`,
+        );
       }
 
       let { message } = params;
@@ -2609,7 +2628,7 @@ export function registerIpcHandlers() {
       }
 
       return commitWorktreeChanges({
-        worktreePath: task.worktreePath,
+        worktreePath: gitRootPath,
         projectPath: project.path,
         message,
         stageAll: params.stageAll,
@@ -2622,8 +2641,8 @@ export function registerIpcHandlers() {
     'tasks:worktree:generateCommitMessage',
     async (_, taskId: string, params: { stageAll: boolean }) => {
       const task = await TaskRepository.findById(taskId);
-      if (!task?.worktreePath) {
-        throw new Error(`Task ${taskId} does not have a worktree`);
+      if (!task) {
+        throw new Error(`Task ${taskId} not found`);
       }
       const project = await ProjectRepository.findById(task.projectId);
       if (!project) {

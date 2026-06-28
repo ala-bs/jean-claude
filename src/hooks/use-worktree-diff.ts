@@ -143,6 +143,7 @@ export function useWorktreeStatus(taskId: string | null) {
           hasStagedChanges: false,
           hasUnstagedChanges: false,
           hasUnpushedCommits: false,
+          currentBranch: null,
         };
       }
       return api.tasks.worktree.getStatus(taskId);
