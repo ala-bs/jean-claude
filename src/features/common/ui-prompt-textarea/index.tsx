@@ -49,6 +49,8 @@ import {
   MAX_FILES,
   processAttachmentFile,
   processAttachmentPath,
+  processPastedPromptAttachment,
+  shouldAttachPastedPromptContent,
 } from '@/lib/file-attachment-utils';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import type { ProjectFeatureMap, PromptSnippet } from '@shared/types';
@@ -1021,6 +1023,27 @@ export const PromptTextarea = forwardRef<
       const pastedText = e.clipboardData.getData('text/plain');
       if (!pastedText) return;
 
+      if (
+        shouldAttachPastedPromptContent(pastedText) &&
+        onFileAttach &&
+        projectRoot
+      ) {
+        e.preventDefault();
+        const currentFileCount = files?.length ?? 0;
+        if (currentFileCount >= MAX_FILES) {
+          showImageError('Remove a file before attaching pasted content');
+          return;
+        }
+
+        void processPastedPromptAttachment(
+          pastedText,
+          projectRoot,
+          onFileAttach,
+          showImageError,
+        );
+        return;
+      }
+
       const target = e.currentTarget;
       const selectionStart = target.selectionStart;
       const selectionEnd = target.selectionEnd;
@@ -1046,7 +1069,17 @@ export const PromptTextarea = forwardRef<
         adjustHeight();
       });
     },
-    [onImageAttach, images, showImageError, value, onChange, adjustHeight],
+    [
+      onImageAttach,
+      images,
+      showImageError,
+      onFileAttach,
+      projectRoot,
+      files,
+      value,
+      onChange,
+      adjustHeight,
+    ],
   );
 
   const handleDragOver = useCallback(
