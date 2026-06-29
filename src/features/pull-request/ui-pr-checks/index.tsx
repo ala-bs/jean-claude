@@ -35,8 +35,13 @@ function isPending(evaluation: EvaluationWithOptimistic) {
   return (
     evaluation.status === 'queued' &&
     !evaluation.context?.buildId &&
+    !isExpired(evaluation) &&
     !evaluation._optimisticQueued
   );
+}
+
+function isExpired(evaluation: EvaluationWithOptimistic) {
+  return !!evaluation.context?.isExpired && !evaluation._optimisticQueued;
 }
 
 /** User just clicked Queue — optimistic state before server confirms */
@@ -52,6 +57,9 @@ function getStatusIcon(evaluation: EvaluationWithOptimistic) {
   }
   if (isPending(evaluation)) {
     return <Circle className={clsx(cls, 'text-ink-3')} />;
+  }
+  if (isExpired(evaluation)) {
+    return <AlertTriangle className={clsx(cls, 'text-orange-400')} />;
   }
   switch (evaluation.status) {
     case 'approved':
@@ -71,6 +79,7 @@ function getStatusIcon(evaluation: EvaluationWithOptimistic) {
 
 function getStatusLabel(evaluation: EvaluationWithOptimistic) {
   if (isOptimisticQueued(evaluation)) return 'Queued';
+  if (isExpired(evaluation)) return 'Expired';
   if (isPending(evaluation)) return 'Pending';
   switch (evaluation.status) {
     case 'approved':
@@ -90,6 +99,7 @@ function getStatusLabel(evaluation: EvaluationWithOptimistic) {
 
 function getStatusColor(evaluation: EvaluationWithOptimistic) {
   if (isOptimisticQueued(evaluation)) return 'text-yellow-400';
+  if (isExpired(evaluation)) return 'text-orange-400';
   if (isPending(evaluation)) return 'text-ink-3';
   switch (evaluation.status) {
     case 'approved':
@@ -116,6 +126,7 @@ function isBuildPolicy(evaluation: EvaluationWithOptimistic) {
 function canQueue(evaluation: EvaluationWithOptimistic) {
   if (!isBuildPolicy(evaluation)) return false;
   if (isOptimisticQueued(evaluation)) return false;
+  if (isExpired(evaluation)) return true;
   if (isPending(evaluation)) return true;
   if (evaluation.status === 'rejected' || evaluation.status === 'broken')
     return true;
@@ -125,6 +136,7 @@ function canQueue(evaluation: EvaluationWithOptimistic) {
 }
 
 function getQueueLabel(evaluation: EvaluationWithOptimistic) {
+  if (isExpired(evaluation)) return 'Re-queue';
   if (isPending(evaluation)) return 'Queue';
   if (evaluation.status === 'rejected' || evaluation.status === 'broken')
     return 'Retry';
@@ -168,8 +180,11 @@ function isRequiredCheck(evaluation: EvaluationWithOptimistic) {
 
 function getSummary(evaluations: EvaluationWithOptimistic[]) {
   const required = evaluations.filter(isRequiredCheck);
-  const passed = required.filter((e) => e.status === 'approved').length;
+  const passed = required.filter(
+    (e) => e.status === 'approved' && !isExpired(e),
+  ).length;
   const failed = required.filter((e) => e.status === 'rejected').length;
+  const expired = required.filter(isExpired).length;
   const running = required.filter(
     (e) =>
       e.status === 'running' ||
@@ -177,7 +192,7 @@ function getSummary(evaluations: EvaluationWithOptimistic[]) {
       e._optimisticQueued,
   ).length;
 
-  return { total: required.length, passed, failed, running };
+  return { total: required.length, passed, failed: failed + expired, running };
 }
 
 export function PrChecks({
@@ -262,7 +277,7 @@ export function PrChecks({
     const a: typeof sorted = [];
     const p: typeof sorted = [];
     for (const e of sorted) {
-      if (e.status === 'approved' && !e._optimisticQueued) {
+      if (e.status === 'approved' && !e._optimisticQueued && !isExpired(e)) {
         p.push(e);
       } else {
         a.push(e);

@@ -492,6 +492,7 @@ export const MessageStream = memo(function MessageStream({
           {pendingQuestion && (
             <div className="my-2 mr-3 ml-2 overflow-hidden rounded-lg">
               <QuestionOptions
+                key={pendingQuestion.request.requestId}
                 request={pendingQuestion.request}
                 onRespond={pendingQuestion.onRespond}
               />

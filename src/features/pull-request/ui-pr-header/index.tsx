@@ -29,7 +29,6 @@ import {
 } from '@/hooks/use-settings';
 import type { ModelPreference, ThinkingEffort } from '@shared/types';
 import {
-  useCurrentAzureUser,
   usePublishPullRequest,
   useUpdatePullRequestTitle,
 } from '@/hooks/use-pull-requests';
@@ -100,9 +99,13 @@ function getBranchName(refName: string) {
 export function PrHeader({
   pr,
   projectId,
+  providerId,
+  readOnly = false,
 }: {
   pr: AzureDevOpsPullRequestDetails;
   projectId: string;
+  providerId?: string;
+  readOnly?: boolean;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -114,7 +117,6 @@ export function PrHeader({
   const { data: editorSetting } = useEditorSetting();
   const publishMutation = usePublishPullRequest(projectId, pr.id);
   const updateTitle = useUpdatePullRequestTitle(projectId, pr.id);
-  const { data: currentUser } = useCurrentAzureUser(projectId);
   const [isCreating, setIsCreating] = useState(false);
   const [isReviewSetupOpen, setIsReviewSetupOpen] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -122,16 +124,10 @@ export function PrHeader({
   const [titleError, setTitleError] = useState<string | null>(null);
   const sourceBranch = getBranchName(pr.sourceRefName);
   const targetBranch = getBranchName(pr.targetRefName);
-  const currentUserEmail = currentUser?.emailAddress.toLowerCase();
-  const ownerEmail = pr.createdBy.uniqueName.toLowerCase();
+  const avatarProviderId = providerId ?? project?.repoProviderId;
   const { data: backendsSetting } = useBackendsSetting();
   const { data: backendDefaultModelsSetting } =
     useBackendDefaultModelsSetting();
-  const canEditTitle =
-    !!currentUser &&
-    (currentUser.identityId === pr.createdBy.id ||
-      currentUser.id === pr.createdBy.id ||
-      currentUserEmail === ownerEmail);
   const defaultReviewBackend = useMemo<AgentBackendType>(
     () =>
       (project?.defaultAgentBackend as AgentBackendType | null) ??
@@ -298,14 +294,16 @@ export function PrHeader({
         <div className="flex-1" />
 
         {/* Actions */}
-        <button
-          onClick={handleCreateTaskFromPrBranch}
-          className="bg-acc/15 text-acc-ink border-acc/30 hover:bg-acc/25 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New Task
-        </button>
-        {pr.status === 'active' && (
+        {!readOnly && (
+          <button
+            onClick={handleCreateTaskFromPrBranch}
+            className="bg-acc/15 text-acc-ink border-acc/30 hover:bg-acc/25 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New Task
+          </button>
+        )}
+        {!readOnly && pr.status === 'active' && (
           <button
             onClick={() => setIsReviewSetupOpen(true)}
             disabled={isCreating}
@@ -411,7 +409,7 @@ export function PrHeader({
                 <h1 className="text-ink-0 min-w-0 font-mono text-xl leading-tight font-semibold tracking-tight break-words">
                   {pr.title}
                 </h1>
-                {canEditTitle && (
+                {!readOnly && (
                   <Button
                     type="button"
                     variant="ghost"
@@ -433,9 +431,9 @@ export function PrHeader({
                 <UserAvatar
                   name={pr.createdBy.displayName}
                   imageUrl={
-                    pr.createdBy.imageUrl && project?.repoProviderId
+                    pr.createdBy.imageUrl && avatarProviderId
                       ? encodeProxyUrl(
-                          project.repoProviderId,
+                          avatarProviderId,
                           pr.createdBy.imageUrl,
                         )
                       : pr.createdBy.imageUrl
@@ -466,7 +464,7 @@ export function PrHeader({
               </div>
 
               {/* Vote/autocomplete controls */}
-              {pr.status === 'active' && !pr.isDraft && (
+              {!readOnly && pr.status === 'active' && !pr.isDraft && (
                 <>
                   <div className="flex-1" />
                   <PrVoteDropdown pr={pr} projectId={projectId} />
@@ -475,7 +473,7 @@ export function PrHeader({
               )}
 
               {/* Publish button for drafts */}
-              {pr.isDraft && pr.status === 'active' && (
+              {!readOnly && pr.isDraft && pr.status === 'active' && (
                 <>
                   <div className="flex-1" />
                   <button

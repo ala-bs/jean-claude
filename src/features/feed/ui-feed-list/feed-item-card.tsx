@@ -60,6 +60,7 @@ import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
+import { WorkItemChip } from '@/common/ui/work-item-chip';
 
 
 
@@ -123,6 +124,18 @@ const RAIL_W = 32; // rail column width in px
 const NODE_X = 16; // center X of main node
 const FEED_RAIL_COLOR = 'var(--color-ink-4)';
 
+function getPrStateColor({
+  isDraft,
+  isCompleted,
+}: {
+  isDraft: boolean | undefined;
+  isCompleted: boolean;
+}) {
+  if (isCompleted) return 'var(--color-status-done)';
+  if (isDraft) return 'var(--color-ink-3)';
+  return 'var(--color-status-azure)';
+}
+
 function isModifiedClick(e: React.MouseEvent): boolean {
   return e.metaKey || e.ctrlKey;
 }
@@ -136,12 +149,14 @@ function openExternalUrl(url: string | undefined): boolean {
 // ─── Graph Node (circle or attention icon) ──────────────────────
 function GraphNode({
   attention,
+  color = FEED_RAIL_COLOR,
   isSubtask,
 }: {
   attention: FeedItemAttention;
+  color?: string;
   isSubtask?: boolean;
 }) {
-  const color = statusColor(attention);
+  const attentionColor = statusColor(attention);
   const needsPermission = attention === 'needs-permission';
   const hasQuestion = attention === 'has-question';
   const needsAttention = needsPermission || hasQuestion;
@@ -166,7 +181,7 @@ function GraphNode({
           width: iconSize,
           height: iconSize,
           zIndex: 2,
-          color,
+          color: attentionColor,
           borderRadius: 3,
         }}
       >
@@ -192,7 +207,7 @@ function GraphNode({
         height: size,
         borderRadius: '50%',
         background: 'var(--color-bg-0)',
-        border: `2px solid ${FEED_RAIL_COLOR}`,
+        border: `2px solid ${color}`,
         zIndex: 2,
       }}
     />
@@ -200,8 +215,7 @@ function GraphNode({
 }
 
 // ─── PR Diamond (merge node) ─────────────────────────────────────
-function PrDiamond({ merged }: { merged: boolean }) {
-  const color = merged ? 'var(--color-status-done)' : 'var(--color-status-pr)';
+function PrDiamond({ color }: { color: string }) {
   return (
     <div
       style={{
@@ -218,49 +232,6 @@ function PrDiamond({ merged }: { merged: boolean }) {
       }}
     />
   );
-}
-
-// ─── Work Item Chip (clickable) ──────────────────────────────────
-function WorkItemChip({
-  label,
-  type,
-  isFocused,
-  onClick,
-}: {
-  label: string;
-  type?: string | null;
-  isFocused?: boolean;
-  onClick?: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={clsx(
-        'inline-flex cursor-pointer items-center gap-0.5 rounded px-1.5 py-0 font-mono text-[9.5px] ring-1 transition-colors',
-        isFocused
-          ? 'bg-acc/20 text-acc-ink ring-acc/50 shadow-[0_0_12px_oklch(0.72_0.20_295_/_0.4),0_0_4px_oklch(0.72_0.20_295_/_0.25)]'
-          : workItemChipColorClass(type),
-      )}
-    >
-      <span className="opacity-70">◈</span>
-      {label}
-    </button>
-  );
-}
-
-function workItemChipColorClass(type?: string | null): string {
-  switch (type) {
-    case 'Bug':
-      return 'bg-status-fail/10 text-status-fail ring-status-fail/25 hover:bg-status-fail/20 hover:ring-status-fail/40';
-    case 'User Story':
-    case 'Feature':
-      return 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40';
-    case 'Task':
-      return 'bg-status-run/10 text-status-run ring-status-run/25 hover:bg-status-run/20 hover:ring-status-run/40';
-    default:
-      return 'bg-status-azure/10 text-status-azure ring-status-azure/25 hover:bg-status-azure/20 hover:ring-status-azure/40';
-  }
 }
 
 // ─── Complete Task Button (isolated to avoid hooks in every card) ─
@@ -516,6 +487,11 @@ export function FeedItemCard({
     item.workItemPrStatus === 'completed' || cachedPr?.status === 'completed';
   const prHasConflicts = pullRequestMergeStatus === 'conflicts';
   const prApprovalCount = approvedBy.length;
+  const prStateColor = getPrStateColor({
+    isDraft,
+    isCompleted: prMerged,
+  });
+  const railColor = hasPr ? prStateColor : FEED_RAIL_COLOR;
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
   const canSetPrAutoComplete =
@@ -751,13 +727,15 @@ export function FeedItemCard({
                       top: 0,
                       bottom: 0,
                       width: 1.5,
-                      background: FEED_RAIL_COLOR,
+                      background: railColor,
                       opacity: 0.45,
                     }}
                   />
                 )}
                 {/* Main node */}
-                {showRail && <GraphNode attention={item.attention} />}
+                {showRail && (
+                  <GraphNode attention={item.attention} color={railColor} />
+                )}
               </div>
             )}
 
@@ -995,11 +973,11 @@ export function FeedItemCard({
                     top: 0,
                     bottom: 14,
                     width: 1.5,
-                    background: FEED_RAIL_COLOR,
+                    background: prStateColor,
                     opacity: 0.45,
                   }}
                 />
-                <PrDiamond merged={prMerged} />
+                <PrDiamond color={prStateColor} />
               </div>
               <div className="flex flex-1 flex-col gap-1 py-1.5 pr-3.5">
                 <div className="text-ink-3 flex items-center gap-1.5 text-[10.5px]">

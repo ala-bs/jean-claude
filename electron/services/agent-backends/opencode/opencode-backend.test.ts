@@ -41,8 +41,8 @@ import { applyDeltaToMessageParts } from './opencode-message-delta';
 import {
   killAllOpenCodeServersSync,
   OpenCodeBackend,
+  toOpenCodeQuestionAnswer,
 } from './opencode-backend';
-
 
 beforeEach(() => {
   settingsGetMock.mockResolvedValue({ mode: 'standalone' });
@@ -113,6 +113,19 @@ describe('applyDeltaToMessageParts', () => {
     });
 
     expect(parts[0]).toMatchObject({ text: 'Hello world' });
+  });
+});
+
+describe('toOpenCodeQuestionAnswer', () => {
+  it('expands JSON-array multi-choice answers', () => {
+    expect(toOpenCodeQuestionAnswer(JSON.stringify(['Fast', 'Safe']))).toEqual([
+      'Fast',
+      'Safe',
+    ]);
+  });
+
+  it('keeps legacy single-value answers as one selected value', () => {
+    expect(toOpenCodeQuestionAnswer('Fast')).toEqual(['Fast']);
   });
 });
 

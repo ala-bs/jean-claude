@@ -156,15 +156,22 @@ export interface PermissionRequest {
 
 // Question from agent (AskUserQuestion tool)
 export interface QuestionOption {
+  id?: string;
   label: string;
   description: string;
 }
 
+export type AgentQuestionType = 'single_choice' | 'multi_choice' | 'text';
+
 export interface AgentQuestion {
+  id?: string;
+  type?: AgentQuestionType;
   question: string;
   header: string;
   options: QuestionOption[];
   multiSelect: boolean;
+  required?: boolean;
+  allowOther?: boolean;
 }
 
 export interface QuestionRequest {

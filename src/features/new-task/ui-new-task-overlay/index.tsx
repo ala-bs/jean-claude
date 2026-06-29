@@ -58,7 +58,7 @@ import {
 } from '@shared/thinking-settings';
 import {
   type InputMode,
-  useNewTaskDraft,
+  useNewTaskDraftMetadata,
   useNewTaskDraftStore,
   type WorkItemsViewMode,
 } from '@/stores/new-task-draft';
@@ -74,6 +74,7 @@ import {
 } from '@shared/types';
 import {
   PromptTextarea,
+  type PromptTextareaProps,
   type PromptTextareaRef,
 } from '@/features/common/ui-prompt-textarea';
 import {
@@ -116,7 +117,6 @@ import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-pres
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
 import { Button } from '@/common/ui/button';
 import { compressImage } from '@/lib/image-compression';
-import { feedQueryKeys } from '@/lib/feed-query-keys';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
 import { getDefaultModelForBackend } from '@/lib/default-models';
 import { Kbd } from '@/common/ui/kbd';
@@ -318,6 +318,114 @@ function getImageIdentity(image: PromptImagePart): string {
   return `${image.filename ?? ''}:${image.storageData ?? image.data}`;
 }
 
+function NewTaskPromptInput({
+  draftKey,
+  inputMode,
+  isNoteMode,
+  selectedProject,
+  projectSkills,
+  completionEnabled,
+  selectedProjectFeatureMap,
+  images,
+  files,
+  promptSnippets,
+  snippetVariableContext,
+  fileComments,
+  promptInputRef,
+  onKeyDown,
+  onImageAttach,
+  onImageRemove,
+  onFileAttach,
+  onFileRemove,
+  onAutocompleteOpenChange,
+  hasCreateTaskError,
+  resetCreateTaskError,
+}: {
+  draftKey: string;
+  inputMode: InputMode;
+  isNoteMode: boolean;
+  selectedProject: Project | null;
+  projectSkills: PromptTextareaProps['skills'];
+  completionEnabled: boolean;
+  selectedProjectFeatureMap: ProjectFeatureMap | null;
+  images: PromptImagePart[] | undefined;
+  files: PromptFilePart[] | undefined;
+  promptSnippets: PromptTextareaProps['promptSnippets'];
+  snippetVariableContext: SnippetVariableContext;
+  fileComments: ComposerFileComment[];
+  promptInputRef: React.RefObject<PromptTextareaRef | null>;
+  onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
+  onImageAttach: (image: PromptImagePart) => void;
+  onImageRemove: (index: number) => void;
+  onFileAttach: (file: PromptFilePart) => void;
+  onFileRemove: (index: number) => void;
+  onAutocompleteOpenChange: (isOpen: boolean) => void;
+  hasCreateTaskError: boolean;
+  resetCreateTaskError: () => void;
+}) {
+  const prompt = useNewTaskDraftStore(
+    (state) => state.drafts[draftKey]?.prompt ?? '',
+  );
+  const setDraft = useNewTaskDraftStore((state) => state.setDraft);
+
+  const handlePromptChange = useCallback(
+    (nextPrompt: string) => {
+      if (hasCreateTaskError) {
+        resetCreateTaskError();
+      }
+      setDraft(draftKey, { prompt: nextPrompt });
+    },
+    [draftKey, hasCreateTaskError, resetCreateTaskError, setDraft],
+  );
+
+  return (
+    <div className="flex shrink-0 flex-col">
+      <div className="flex flex-1 flex-col">
+        <PromptTextarea
+          ref={promptInputRef}
+          value={prompt}
+          onChange={handlePromptChange}
+          onKeyDown={onKeyDown}
+          placeholder={getPlaceholder({
+            mode: inputMode,
+            isNoteMode,
+          })}
+          skills={projectSkills}
+          showCommands={false}
+          maxHeight={320}
+          projectRoot={selectedProject?.path ?? null}
+          enableFilePathAutocomplete
+          enableCompletion={completionEnabled}
+          projectId={selectedProject?.id}
+          featureMap={selectedProjectFeatureMap}
+          images={images}
+          onImageAttach={onImageAttach}
+          onImageRemove={onImageRemove}
+          files={files}
+          onFileAttach={onFileAttach}
+          onFileRemove={onFileRemove}
+          promptSnippets={promptSnippets}
+          snippetVariableContext={snippetVariableContext}
+          onAutocompleteOpenChange={onAutocompleteOpenChange}
+          containerClassName={`px-[18px] pt-3.5 ${selectedProject ? 'pb-2' : 'pb-3.5'}`}
+          className="text-ink-1 placeholder-ink-3 border-transparent bg-transparent px-0 py-0 text-sm focus:border-transparent focus:ring-0 focus:outline-none"
+        />
+        {!isNoteMode && selectedProject && (
+          <div className="px-[18px] pb-3.5">
+            <FinalPromptPreviewButton
+              prompt={prompt}
+              projectRoot={selectedProject.path}
+              featureMap={selectedProjectFeatureMap}
+              fileComments={fileComments}
+              files={files ?? []}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function getProjectGridColumns(): number {
   if (typeof window === 'undefined') return 8;
   if (window.innerWidth >= 1024) return 10;
@@ -343,7 +451,8 @@ export function NewTaskOverlay({
     setSelectedProjectId,
     updateDraft,
     clearDraft,
-  } = useNewTaskDraft();
+  } = useNewTaskDraftMetadata();
+  const draftKey = selectedProjectId ?? 'all';
   const userTouchedSelectionRef = useRef(false);
 
   const { data: projects = [] } = useProjects();
@@ -556,36 +665,6 @@ export function NewTaskOverlay({
     if (searchStep !== 'select') return false;
     return (draft?.workItemIds ?? []).length > 0;
   }, [inputMode, searchStep, draft?.workItemIds]);
-
-  // Check if we can start a task
-  const canStartTask = useMemo(() => {
-    if (!draft) return false;
-    if (selectedProjectId && isWorktreeDataFetching) return false;
-
-    // In search mode compose step, need the expanded prompt
-    if (inputMode === 'search' && searchStep === 'compose') {
-      const expanded = expandTemplate(promptTemplate, selectedWorkItems);
-      return !!expanded.trim() && !!selectedProjectId;
-    }
-
-    // In prompt mode, need text (or file comments) and a project
-    if (inputMode === 'prompt') {
-      const hasPrompt = !!(draft.prompt ?? '').trim();
-      const hasFileComments = fileCommentCount > 0;
-      return (hasPrompt || hasFileComments) && !!selectedProjectId;
-    }
-
-    return false;
-  }, [
-    draft,
-    inputMode,
-    searchStep,
-    promptTemplate,
-    selectedWorkItems,
-    selectedProjectId,
-    isWorktreeDataFetching,
-    fileCommentCount,
-  ]);
 
   // Navigate project tabs
   const navigateTab = useCallback(
@@ -898,8 +977,7 @@ export function NewTaskOverlay({
 
     const urlsToFetch = imageUrls.slice(0, slotsAvailable);
     const fetchSessionId = ++workItemImageFetchSessionRef.current;
-    const draftKey = selectedProjectId ?? 'all';
-
+    const imageDraftKey = selectedProjectId ?? 'all';
     setIsFetchingWorkItemImages(true);
     try {
       const fetchedImages = await Promise.all(
@@ -958,7 +1036,7 @@ export function NewTaskOverlay({
         }
 
         const state = useNewTaskDraftStore.getState();
-        const latestDraft = state.drafts[draftKey];
+        const latestDraft = state.drafts[imageDraftKey];
 
         if (!latestDraft || latestDraft.searchStep !== 'compose') {
           return;
@@ -988,7 +1066,7 @@ export function NewTaskOverlay({
         }
 
         if (imagesToAppend.length > 0) {
-          state.setDraft(draftKey, {
+          state.setDraft(imageDraftKey, {
             images: [...latestImages, ...imagesToAppend],
           });
         }
@@ -1041,7 +1119,21 @@ export function NewTaskOverlay({
 
   // Start task handler
   const handleStartTask = useCallback(async () => {
-    if (!canStartTask || !draft || !selectedProjectId) return;
+    if (!selectedProjectId) return;
+
+    const latestDraft = useNewTaskDraftStore.getState().drafts[draftKey];
+    const submissionDraft = { ...(draft ?? {}), ...(latestDraft ?? {}) };
+
+    if (isWorktreeDataFetching) return;
+    if (inputMode === 'search' && searchStep === 'compose') {
+      const expanded = expandTemplate(promptTemplate, selectedWorkItems);
+      if (!expanded.trim()) return;
+    } else if (inputMode === 'prompt') {
+      const hasPrompt = !!(submissionDraft.prompt ?? '').trim();
+      if (!hasPrompt && fileCommentCount === 0) return;
+    } else {
+      return;
+    }
 
     try {
       // Determine the final prompt
@@ -1054,7 +1146,7 @@ export function NewTaskOverlay({
         // Use Handlebars if template contains `{{`, otherwise use old {#id} regex
         if (promptTemplate.includes('{{')) {
           const selectedComments = workItemComments.filter((c) =>
-            (draft.selectedCommentIds ?? []).includes(
+            (submissionDraft.selectedCommentIds ?? []).includes(
               getWorkItemCommentSelectionId(c),
             ),
           );
@@ -1070,7 +1162,7 @@ export function NewTaskOverlay({
           finalPrompt = result.output;
         } else {
           const selectedComments = workItemComments.filter((c) =>
-            (draft.selectedCommentIds ?? []).includes(
+            (submissionDraft.selectedCommentIds ?? []).includes(
               getWorkItemCommentSelectionId(c),
             ),
           );
@@ -1080,15 +1172,17 @@ export function NewTaskOverlay({
             selectedComments,
           );
         }
-        workItemIds = draft.workItemIds ?? null;
+        workItemIds = submissionDraft.workItemIds ?? null;
         workItemUrls = selectedWorkItems.map((wi) => wi.url);
       } else {
-        finalPrompt = draft.prompt ?? '';
+        finalPrompt = submissionDraft.prompt ?? '';
       }
 
       let draftImages: PromptImagePart[] | undefined =
-        draft.images && draft.images.length > 0 ? draft.images : undefined;
-      const draftFiles = draft?.files ?? [];
+        submissionDraft.images && submissionDraft.images.length > 0
+          ? submissionDraft.images
+          : undefined;
+      const draftFiles = submissionDraft.files ?? [];
 
       // Append synthesized file comments to prompt
       const fileContextParts = synthesizeFileCommentsPrompt(
@@ -1117,7 +1211,7 @@ export function NewTaskOverlay({
       });
       finalPrompt += buildAttachedFilesXml(draftFiles);
 
-      const backlogTodoIds = draft.backlogTodoIds ?? [];
+      const backlogTodoIds = submissionDraft.backlogTodoIds ?? [];
       const submitSelection = await resolveRateLimitSwapSelection({
         backend: currentBackend,
         model: currentModelPreference,
@@ -1194,7 +1288,7 @@ export function NewTaskOverlay({
           workItemIds,
           workItemUrls,
           updateWorkItemStatus: currentUpdateWorkItemStatus,
-          parentTaskId: draft?.parentTaskId ?? null,
+          parentTaskId: submissionDraft.parentTaskId ?? null,
           updatedAt: new Date().toISOString(),
           autoStart: true,
         })
@@ -1227,7 +1321,6 @@ export function NewTaskOverlay({
     }
   }, [
     addRunningJob,
-    canStartTask,
     clearDraft,
     createTaskMutation,
     currentBackend,
@@ -1239,8 +1332,11 @@ export function NewTaskOverlay({
     currentUpdateWorkItemStatus,
     deleteBacklogTodo,
     draft,
+    draftKey,
+    fileCommentCount,
     fileComments,
     inputMode,
+    isWorktreeDataFetching,
     isNoteMode,
     markJobFailed,
     markJobSucceeded,
@@ -1258,7 +1354,9 @@ export function NewTaskOverlay({
   ]);
 
   const handleCreateNote = useCallback(async () => {
-    const content = (draft?.prompt ?? '').trim();
+    const content = (
+      useNewTaskDraftStore.getState().drafts[draftKey]?.prompt ?? ''
+    ).trim();
     if (!content) return;
 
     try {
@@ -1270,7 +1368,7 @@ export function NewTaskOverlay({
     } catch (error) {
       console.error('Failed to create note:', error);
     }
-  }, [draft?.prompt, createNoteMutation, clearDraft]);
+  }, [draftKey, createNoteMutation, clearDraft]);
 
   const handleCreateVerificationNote = useCallback(async () => {
     if (selectedWorkItems.length === 0) return;
@@ -1309,8 +1407,6 @@ export function NewTaskOverlay({
       .mutateAsync(creationInput)
       .then((note) => {
         markJobSucceeded(jobId, { noteId: note.id });
-        queryClient.invalidateQueries({ queryKey: feedQueryKeys.tasks });
-        queryClient.invalidateQueries({ queryKey: feedQueryKeys.workItems });
       })
       .catch((error: unknown) => {
         const message =
@@ -1331,7 +1427,6 @@ export function NewTaskOverlay({
     onClose,
     triggerAnimation,
     markJobSucceeded,
-    queryClient,
     markJobFailed,
   ]);
 
@@ -1402,16 +1497,6 @@ export function NewTaskOverlay({
     [inputMode, updateDraft, createTaskMutation],
   );
 
-  const handlePromptChange = useCallback(
-    (nextPrompt: string) => {
-      if (createTaskMutation.isError) {
-        createTaskMutation.reset();
-      }
-      updateDraft({ prompt: nextPrompt });
-    },
-    [createTaskMutation, updateDraft],
-  );
-
   const handleImageAttach = useCallback(
     (image: PromptImagePart) => {
       updateDraft((prev) => ({
@@ -1448,11 +1533,7 @@ export function NewTaskOverlay({
     [updateDraft],
   );
 
-  // Get current input value
-  const inputValue =
-    inputMode === 'search'
-      ? (draft?.workItemsFilter ?? '')
-      : (draft?.prompt ?? '');
+  const searchInputValue = draft?.workItemsFilter ?? '';
 
   // Register keyboard shortcuts
   useCommands(
@@ -1613,7 +1694,7 @@ export function NewTaskOverlay({
                 />
                 <textarea
                   ref={searchInputRef}
-                  value={inputValue}
+                  value={searchInputValue}
                   onChange={handleInputChange}
                   onKeyDown={handleKeyDown}
                   placeholder={getPlaceholder({ mode: inputMode, isNoteMode })}
@@ -1626,50 +1707,29 @@ export function NewTaskOverlay({
               </div>
             )}
             {showPromptInput && (
-              <div className="flex shrink-0 flex-col">
-                <div className="flex flex-1 flex-col">
-                  <PromptTextarea
-                    ref={promptInputRef}
-                    value={inputValue}
-                    onChange={handlePromptChange}
-                    onKeyDown={handleKeyDown}
-                    placeholder={getPlaceholder({
-                      mode: inputMode,
-                      isNoteMode,
-                    })}
-                    skills={projectSkills}
-                    showCommands={false}
-                    maxHeight={320}
-                    projectRoot={selectedProject?.path ?? null}
-                    enableFilePathAutocomplete
-                    enableCompletion={completionSetting?.enabled ?? false}
-                    projectId={selectedProject?.id}
-                    featureMap={selectedProjectFeatureMap}
-                    images={draft?.images}
-                    onImageAttach={handleImageAttach}
-                    onImageRemove={handleImageRemove}
-                    files={draft?.files}
-                    onFileAttach={handleFileAttach}
-                    onFileRemove={handleFileRemove}
-                    promptSnippets={promptSnippets}
-                    snippetVariableContext={snippetVariableContext}
-                    onAutocompleteOpenChange={setIsPromptAutocompleteOpen}
-                    containerClassName={`px-[18px] pt-3.5 ${selectedProject ? 'pb-2' : 'pb-3.5'}`}
-                    className="text-ink-1 placeholder-ink-3 border-transparent bg-transparent px-0 py-0 text-sm focus:border-transparent focus:ring-0 focus:outline-none"
-                  />
-                  {!isNoteMode && selectedProject && (
-                    <div className="px-[18px] pb-3.5">
-                      <FinalPromptPreviewButton
-                        prompt={inputValue}
-                        projectRoot={selectedProject.path}
-                        featureMap={selectedProjectFeatureMap}
-                        fileComments={fileComments}
-                        files={draft?.files ?? []}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
+              <NewTaskPromptInput
+                draftKey={draftKey}
+                inputMode={inputMode}
+                isNoteMode={isNoteMode}
+                selectedProject={selectedProject}
+                projectSkills={projectSkills}
+                completionEnabled={completionSetting?.enabled ?? false}
+                selectedProjectFeatureMap={selectedProjectFeatureMap}
+                images={draft?.images}
+                files={draft?.files}
+                promptSnippets={promptSnippets}
+                snippetVariableContext={snippetVariableContext}
+                fileComments={fileComments}
+                promptInputRef={promptInputRef}
+                onKeyDown={handleKeyDown}
+                onImageAttach={handleImageAttach}
+                onImageRemove={handleImageRemove}
+                onFileAttach={handleFileAttach}
+                onFileRemove={handleFileRemove}
+                onAutocompleteOpenChange={setIsPromptAutocompleteOpen}
+                hasCreateTaskError={createTaskMutation.isError}
+                resetCreateTaskError={createTaskMutation.reset}
+              />
             )}
 
             {/* Project grid - only show in select or prompt mode */}

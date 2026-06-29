@@ -16,6 +16,7 @@ import {
 } from '@shared/agent-types';
 import type {
   AgentBackend,
+  AgentBackendConfig,
   AgentBackendType,
   AgentEvent,
   AgentSession,
@@ -75,12 +76,14 @@ import { agentResourceMonitorService } from './agent-resource-monitor-service';
 import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { applyConfiguredPromptPreface } from './prompt-preface-service';
 import { assertValidWorkspacePath } from './system-project-service';
+import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
 import { buildSessionIdStepUpdate } from './agent-session-update';
 import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
 import { generateTaskName } from './name-generation-service';
-import { getJcMcpServerPath } from './mcp-template-service';
+import { JcMcpBridgeService } from './jc-mcp-bridge-service';
 import { notificationService } from './notification-service';
 import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
+import { QuestionBrokerService } from './question-broker-service';
 import { resolveGlobalRules } from './global-permissions-service';
 import { StepService } from './step-service';
 
@@ -141,25 +144,6 @@ const TASK_NOTIFICATION_TITLE_PREFIX: Record<TaskNotificationEvent, string> = {
   question: '❓',
   errored: '❌',
 };
-
-/**
- * Build the runtime MCP servers config for the Jean-Claude Agent Tools server.
- * Returns a config object that can be passed directly to the agent backend.
- */
-function buildJcMcpServersConfigForCwd(
-  cwd: string,
-): Record<
-  string,
-  { command: string; args: string[]; env?: Record<string, string> }
-> {
-  const serverPath = getJcMcpServerPath();
-  return {
-    'jean-claude-mcp': {
-      command: 'node',
-      args: [serverPath, '--workdir', cwd],
-    },
-  };
-}
 
 /**
  * Build a review prompt that instructs the agent to use `run_review` MCP
@@ -255,6 +239,7 @@ interface ActiveSession {
     type: 'permission' | 'question';
     permissionRequest?: NormalizedPermissionRequest;
     questionRequest?: NormalizedQuestionRequest;
+    source?: 'backend' | 'jc-mcp';
   }>;
   hasTerminalError: boolean;
 }
@@ -286,6 +271,10 @@ class AgentService {
   private mainWindow: BrowserWindow | null = null;
   private focusedTaskId: string | null = null;
   private pendingImageAttachments = new Map<string, PromptImagePart[]>();
+  private readonly questionBroker = new QuestionBrokerService();
+  private readonly jcMcpBridgeService = new JcMcpBridgeService(
+    this.questionBroker,
+  );
 
   constructor() {
     agentResourceMonitorService.setSnapshotListener((snapshot) => {
@@ -708,12 +697,6 @@ class AgentService {
     const settings = await readSettings(project.path);
     const rules = resolveRules(settings, isWorktree, globalRules, workingDir);
 
-    // For review steps, provide the Jean-Claude MCP server at runtime
-    const mcpServers =
-      step?.type === 'review'
-        ? buildJcMcpServersConfigForCwd(workingDir)
-        : undefined;
-
     const backendChanged = session.backendType !== session.requestedBackendType;
     const modelPreference =
       session.swapModel ?? (backendChanged ? undefined : step?.modelPreference);
@@ -727,71 +710,102 @@ class AgentService {
     });
     session.currentModel = modelPreference ?? null;
 
-    // Start the backend
-    dbg.agentSession('Starting backend for step %s', stepId);
-    const effectiveParts =
-      step?.type === 'feature-map'
-        ? parts
-        : await applyConfiguredPromptPreface({
-            parts,
-            projectPath: project.path,
-            isInitialPrompt: options?.isInitialPrompt ?? false,
-          });
-
-    if (session.backendType === 'opencode') {
-      const promptText = buildAgentPromptMarkdown(effectiveParts).trim();
-      if (promptText) {
-        await this.persistAndEmitSyntheticEntry(taskId, session, {
-          id: nanoid(),
-          date: new Date().toISOString(),
-          isSynthetic: true,
-          type: 'user-prompt',
-          value: promptText,
-          isSDKSynthetic: true,
+    let jcMcpRegistrationId: string | null = null;
+    try {
+      let mcpServers: AgentBackendConfig['mcpServers'];
+      if (session.backendType !== 'codex') {
+        const questionBridge = await this.jcMcpBridgeService.registerStep({
+          taskId,
+          stepId,
+          onQuestionRequest: async (request) => {
+            await this.enqueueQuestionRequest(
+              stepId,
+              session,
+              request,
+              'jc-mcp',
+            );
+          },
+          onQuestionCancelled: async (requestId) => {
+            await this.cancelPendingQuestionRequest(
+              stepId,
+              session,
+              requestId,
+            );
+          },
+        });
+        jcMcpRegistrationId = questionBridge.registrationId;
+        mcpServers = buildJcMcpServersConfigForCwd({
+          cwd: workingDir,
+          questionBridge,
+          enableReviewTool: step?.type === 'review',
+          environmentMode: session.backendType === 'opencode' ? 'argv' : 'env',
         });
       }
-    }
 
-    session.backendStartPromise = session.backend.start(
-      {
-        type: session.backendType,
-        cwd: workingDir,
-        interactionMode: normalizeInteractionModeForBackend({
-          backend: session.backendType,
-          mode: (step?.interactionMode ??
-            getDefaultInteractionModeForBackend({
-              backend: session.backendType,
-            })) as InteractionMode,
-        }),
-        model:
-          modelPreference && modelPreference !== 'default'
-            ? modelPreference
-            : undefined,
-        thinkingEffort:
-          normalizedThinkingEffort !== 'default'
-            ? normalizedThinkingEffort
-            : undefined,
-        sessionId: session.sdkSessionId ?? undefined,
-        persistedSessionRules: task.sessionRules ?? {},
-        permissionRules: rules,
-        mcpServers,
-      },
-      effectiveParts,
-    );
-    const agentSession = await session.backendStartPromise;
+      // Start the backend
+      dbg.agentSession('Starting backend for step %s', stepId);
+      const effectiveParts =
+        step?.type === 'feature-map'
+          ? parts
+          : await applyConfiguredPromptPreface({
+              parts,
+              projectPath: project.path,
+              isInitialPrompt: options?.isInitialPrompt ?? false,
+            });
 
-    session.backendSessionId = agentSession.sessionId;
-    session.backendStartPromise = undefined;
+      if (session.backendType === 'opencode') {
+        const promptText = buildAgentPromptMarkdown(effectiveParts).trim();
+        if (promptText) {
+          await this.persistAndEmitSyntheticEntry(taskId, session, {
+            id: nanoid(),
+            date: new Date().toISOString(),
+            isSynthetic: true,
+            type: 'user-prompt',
+            value: promptText,
+            isSDKSynthetic: true,
+          });
+        }
+      }
 
-    // Process the event stream
-    agentResourceMonitorService.start({
-      taskId,
-      stepId,
-      backend: session.backendType,
-      rootPid: agentSession.rootPid ?? null,
-    });
+      session.backendStartPromise = session.backend.start(
+        {
+          type: session.backendType,
+          cwd: workingDir,
+          interactionMode: normalizeInteractionModeForBackend({
+            backend: session.backendType,
+            mode: (step?.interactionMode ??
+              getDefaultInteractionModeForBackend({
+                backend: session.backendType,
+              })) as InteractionMode,
+          }),
+          model:
+            modelPreference && modelPreference !== 'default'
+              ? modelPreference
+              : undefined,
+          thinkingEffort:
+            normalizedThinkingEffort !== 'default'
+              ? normalizedThinkingEffort
+              : undefined,
+          sessionId: session.sdkSessionId ?? undefined,
+          persistedSessionRules: task.sessionRules ?? {},
+          permissionRules: rules,
+          mcpServers,
+        },
+        effectiveParts,
+      );
+      const agentSession = await session.backendStartPromise;
 
-    try {
+      session.backendSessionId = agentSession.sessionId;
+      session.backendStartPromise = undefined;
+
+      // Process the event stream
+      agentResourceMonitorService.start({
+        taskId,
+        stepId,
+        backend: session.backendType,
+        rootPid: agentSession.rootPid ?? null,
+      });
+
       for await (const event of agentSession.events) {
         if (session.abortController.signal.aborted) {
           dbg.agentSession('Step %s aborted, breaking event loop', stepId);
@@ -801,8 +815,119 @@ class AgentService {
         await this.processEvent(stepId, session, event);
       }
     } finally {
+      if (jcMcpRegistrationId) {
+        await this.jcMcpBridgeService.unregisterStep(stepId, jcMcpRegistrationId);
+      }
       await agentResourceMonitorService.stop(stepId);
-      await session.backend.stop(agentSession.sessionId);
+      if (session.backendSessionId) {
+        await session.backend.stop(session.backendSessionId);
+      }
+    }
+  }
+
+  /**
+   * Queue a normalized question request and emit it through the existing inline UI path.
+   */
+  private async enqueueQuestionRequest(
+    stepId: string,
+    session: ActiveSession,
+    request: NormalizedQuestionRequest,
+    source: 'backend' | 'jc-mcp',
+  ): Promise<void> {
+    const { taskId } = session;
+
+    session.pendingRequests.push({
+      requestId: request.requestId,
+      type: 'question',
+      questionRequest: request,
+      source,
+    });
+
+    // Step stays 'running' (agent session is active, just paused);
+    // task-level status becomes 'waiting' for UI purposes.
+    const task = await TaskRepository.update(taskId, { status: 'waiting' });
+    emitTaskUpsert(task);
+    this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
+
+    if (session.pendingRequests.length === 1) {
+      this.emitQuestionRequest(taskId, stepId, request);
+    }
+
+    await this.notifyTaskEvent({
+      taskId,
+      stepId,
+      event: 'question',
+      notificationId: `${taskId}:question`,
+      title: 'Question from Agent',
+      body: 'Task "{taskName}" has a question',
+    });
+  }
+
+  private emitQuestionRequest(
+    taskId: string,
+    stepId: string,
+    request: NormalizedQuestionRequest,
+  ): void {
+    this.emitEvent(taskId, stepId, {
+      type: 'question',
+      requestId: request.requestId,
+      questions: this.toAgentQuestions(request.questions),
+    });
+  }
+
+  private toAgentQuestions(questions: NormalizedQuestion[]): AgentQuestion[] {
+    return questions.map((q) => ({
+      ...(q.id !== undefined ? { id: q.id } : {}),
+      ...(q.type !== undefined ? { type: q.type } : {}),
+      question: q.question,
+      header: q.header,
+      options: q.options.map((o) => ({
+        ...(o.id !== undefined ? { id: o.id } : {}),
+        label: o.label,
+        description: o.description,
+      })),
+      multiSelect: q.multiSelect,
+      ...(q.required !== undefined ? { required: q.required } : {}),
+      ...(q.allowOther !== undefined ? { allowOther: q.allowOther } : {}),
+    }));
+  }
+
+  private async cancelPendingQuestionRequest(
+    stepId: string,
+    session: ActiveSession,
+    requestId: string,
+  ): Promise<void> {
+    const requestIndex = session.pendingRequests.findIndex(
+      (request) => request.requestId === requestId,
+    );
+    if (requestIndex === -1) return;
+
+    const [request] = session.pendingRequests.splice(requestIndex, 1);
+    if (request.type !== 'question') return;
+
+    this.emitEvent(session.taskId, stepId, {
+      type: 'question',
+      requestId,
+      questions: [],
+    });
+
+    if (session.pendingRequests.length === 0) {
+      const task = await TaskRepository.update(session.taskId, {
+        status: 'running',
+      });
+      emitTaskUpsert(task);
+      this.emitEvent(session.taskId, stepId, { type: 'status', status: 'running' });
+      return;
+    }
+
+    const next = session.pendingRequests[0];
+    if (next.type === 'question' && next.questionRequest) {
+      this.emitQuestionRequest(session.taskId, stepId, next.questionRequest);
+    } else if (next.type === 'permission' && next.permissionRequest) {
+      this.emitEvent(session.taskId, stepId, {
+        type: 'permission',
+        ...next.permissionRequest,
+      });
     }
   }
 
@@ -934,45 +1059,12 @@ class AgentService {
       }
 
       case 'question': {
-        const request = event.request;
-        // Track the pending request
-        session.pendingRequests.push({
-          requestId: request.requestId,
-          type: 'question',
-          questionRequest: request,
-        });
-
-        // Step stays 'running' (agent session is active, just paused);
-        // task-level status becomes 'waiting' for UI purposes.
-        const task = await TaskRepository.update(taskId, { status: 'waiting' });
-        emitTaskUpsert(task);
-        this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
-
-        const questions: AgentQuestion[] = request.questions.map(
-          (q: NormalizedQuestion) => ({
-            question: q.question,
-            header: q.header,
-            options: q.options.map((o) => ({
-              label: o.label,
-              description: o.description,
-            })),
-            multiSelect: q.multiSelect,
-          }),
-        );
-        this.emitEvent(taskId, stepId, {
-          type: 'question',
-          requestId: request.requestId,
-          questions,
-        });
-
-        await this.notifyTaskEvent({
-          taskId,
+        await this.enqueueQuestionRequest(
           stepId,
-          event: 'question',
-          notificationId: `${taskId}:question`,
-          title: 'Question from Agent',
-          body: 'Task "{taskName}" has a question',
-        });
+          session,
+          event.request,
+          'backend',
+        );
         break;
       }
 
@@ -1397,6 +1489,9 @@ class AgentService {
     notificationService.close(`${taskId}:permission`);
     notificationService.close(`${taskId}:question`);
 
+    this.questionBroker.cancelSession(stepId, 'Agent session stopped');
+    await this.jcMcpBridgeService.unregisterStep(stepId);
+
     // Clear pending requests
     session.pendingRequests = [];
 
@@ -1503,7 +1598,13 @@ class AgentService {
       throw new Error(`No pending request with ID ${requestId}`);
     }
 
-    const [request] = session.pendingRequests.splice(requestIndex, 1);
+    const request = session.pendingRequests[requestIndex];
+    const questionResponse = response as QuestionResponse;
+    if (request.type === 'question' && request.source === 'jc-mcp') {
+      this.questionBroker.answerRequest(requestId, questionResponse.answers);
+    }
+
+    session.pendingRequests.splice(requestIndex, 1);
     dbg.agentPermission(
       'Resolved %s request (remaining pending: %d)',
       request.type,
@@ -1541,48 +1642,39 @@ class AgentService {
         },
       );
     } else {
-      const questionResponse = response as QuestionResponse;
-      await session.backend.respondToQuestion(
-        session.backendSessionId!,
-        requestId,
-        questionResponse.answers,
-      );
+      if (request.source !== 'jc-mcp') {
+        await session.backend.respondToQuestion(
+          session.backendSessionId!,
+          requestId,
+          questionResponse.answers,
+        );
+      }
     }
-
-    // Resume running status (step was already 'running', update task-level)
-    const task = await TaskRepository.update(taskId, { status: 'running' });
-    emitTaskUpsert(task);
-    this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
 
     notificationService.close(`${stepId}:${request.type}`);
 
     // If there are more pending requests, emit the next one
     if (session.pendingRequests.length > 0) {
+      const task = await TaskRepository.update(taskId, { status: 'waiting' });
+      emitTaskUpsert(task);
+      this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
+
       const next = session.pendingRequests[0];
       if (next.type === 'question' && next.questionRequest) {
-        const questions: AgentQuestion[] = next.questionRequest.questions.map(
-          (q: NormalizedQuestion) => ({
-            question: q.question,
-            header: q.header,
-            options: q.options.map((o) => ({
-              label: o.label,
-              description: o.description,
-            })),
-            multiSelect: q.multiSelect,
-          }),
-        );
-        this.emitEvent(taskId, stepId, {
-          type: 'question',
-          requestId: next.requestId,
-          questions,
-        });
+        this.emitQuestionRequest(taskId, stepId, next.questionRequest);
       } else if (next.type === 'permission' && next.permissionRequest) {
         this.emitEvent(taskId, stepId, {
           type: 'permission',
           ...next.permissionRequest,
         });
       }
+      return;
     }
+
+    // Resume running status (step was already 'running', update task-level)
+    const task = await TaskRepository.update(taskId, { status: 'running' });
+    emitTaskUpsert(task);
+    this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
   }
 
   async sendMessage(stepId: string, parts: PromptPart[]): Promise<void> {
@@ -1783,17 +1875,7 @@ class AgentService {
           taskId,
           stepId,
           requestId: request.requestId,
-          questions: request.questionRequest.questions.map(
-            (q: NormalizedQuestion) => ({
-              question: q.question,
-              header: q.header,
-              options: q.options.map((o) => ({
-                label: o.label,
-                description: o.description,
-              })),
-              multiSelect: q.multiSelect,
-            }),
-          ),
+          questions: this.toAgentQuestions(request.questionRequest.questions),
         },
       };
     }

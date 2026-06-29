@@ -1,7 +1,6 @@
 import { ChevronDown, ChevronRight, MessageSquarePlus } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import clsx from 'clsx';
-import type { ReactNode } from 'react';
 import type { ThemedToken } from 'shiki';
 
 
@@ -12,6 +11,7 @@ import {
   renderWithHighlights,
 } from './utils-search-highlight';
 import type { SearchMatch } from './use-diff-search';
+import { useLineRangeSelection } from './use-line-range-selection';
 
 
 import type {
@@ -20,6 +20,8 @@ import type {
   InlineComment,
   LineRange,
 } from './index';
+
+const EMPTY_SEARCH_MATCHES: SearchMatch[] = [];
 
 export function CurrentStateTable({
   oldString,
@@ -46,8 +48,7 @@ export function CurrentStateTable({
   currentMatchIndex: number;
   folding: CodeFoldingState;
 }) {
-  const [selectionStart, setSelectionStart] = useState<number | null>(null);
-  const [hoveredLine, setHoveredLine] = useState<number | null>(null);
+  const lineRangeSelection = useLineRangeSelection({ onAddCommentClick });
 
   const lines = useMemo(
     () => computeCurrentStateLines(oldString, newString),
@@ -86,41 +87,31 @@ export function CurrentStateTable({
 
   const currentMatch = searchMatches[currentMatchIndex] ?? null;
 
-  // Comment selection handlers
-  const handleLineMouseDown = useCallback(
-    (lineNumber: number) => {
-      if (!onAddCommentClick) return;
-      setSelectionStart(lineNumber);
-    },
-    [onAddCommentClick],
-  );
+  const inlineCommentsByLine = useMemo(() => {
+    const map = new Map<number, InlineComment[]>();
+    for (const comment of inlineComments ?? []) {
+      const comments = map.get(comment.line);
+      if (comments) {
+        comments.push(comment);
+      } else {
+        map.set(comment.line, [comment]);
+      }
+    }
+    return map;
+  }, [inlineComments]);
 
-  const handleLineMouseUp = useCallback(
-    (lineNumber: number) => {
-      if (!onAddCommentClick || selectionStart === null) return;
-
-      const start = Math.min(selectionStart, lineNumber);
-      const end = Math.max(selectionStart, lineNumber);
-      onAddCommentClick({ start, end });
-      setSelectionStart(null);
-    },
-    [onAddCommentClick, selectionStart],
-  );
-
-  const handleMouseLeaveTable = useCallback(() => {
-    setSelectionStart(null);
-    setHoveredLine(null);
-  }, []);
-
-  const isLineInSelection = useCallback(
-    (lineNumber: number) => {
-      if (selectionStart === null || hoveredLine === null) return false;
-      const start = Math.min(selectionStart, hoveredLine);
-      const end = Math.max(selectionStart, hoveredLine);
-      return lineNumber >= start && lineNumber <= end;
-    },
-    [selectionStart, hoveredLine],
-  );
+  const commentFormsByEndLine = useMemo(() => {
+    const map = new Map<number, CommentFormEntry[]>();
+    for (const form of commentForms ?? []) {
+      const forms = map.get(form.lineRange.end);
+      if (forms) {
+        forms.push(form);
+      } else {
+        map.set(form.lineRange.end, [form]);
+      }
+    }
+    return map;
+  }, [commentForms]);
 
   const isLineInCommentRange = useCallback(
     (lineNumber: number) => {
@@ -136,7 +127,10 @@ export function CurrentStateTable({
   return (
     <table
       className="w-full border-collapse"
-      onMouseLeave={handleMouseLeaveTable}
+      onMouseDown={lineRangeSelection.onMouseDown}
+      onMouseOver={lineRangeSelection.onMouseOver}
+      onMouseUp={lineRangeSelection.onMouseUp}
+      onMouseLeave={lineRangeSelection.onMouseLeave}
     >
       <tbody>
         {lines.map((line, i) => {
@@ -153,50 +147,23 @@ export function CurrentStateTable({
           // Map search matches: find DiffLine indices for this newLineNumber,
           // then collect all search matches referencing those DiffLine indices
           const diffIndices = newLineToMatchIndices.get(line.lineNumber) ?? [];
-          const lineMatches: SearchMatch[] = [];
+          let lineMatches: SearchMatch[] = EMPTY_SEARCH_MATCHES;
           for (const diffIdx of diffIndices) {
             const matches = matchesByDiffLineIndex.get(diffIdx);
             if (matches) {
-              lineMatches.push(...matches);
+              lineMatches =
+                lineMatches === EMPTY_SEARCH_MATCHES
+                  ? matches
+                  : [...lineMatches, ...matches];
             }
           }
 
-          const renderedContent =
-            tokens.length > 0 ? (
-              renderTokensWithHighlights({
-                tokens,
-                content: line.content,
-                searchMatches: lineMatches,
-                currentMatch:
-                  currentMatch && lineMatches.includes(currentMatch)
-                    ? currentMatch
-                    : null,
-              })
-            ) : lineMatches.length > 0 ? (
-              renderWithHighlights({
-                text: line.content,
-                searchMatches: lineMatches,
-                currentMatch:
-                  currentMatch && lineMatches.includes(currentMatch)
-                    ? currentMatch
-                    : null,
-              })
-            ) : (
-              <span className="text-ink-1">{line.content}</span>
-            );
-
           const canComment = !!onAddCommentClick;
-          const isSelected = isLineInSelection(lineNumber);
           const isInCommentRange = isLineInCommentRange(lineNumber);
-          const isHovered = hoveredLine === lineNumber;
 
-          const lineComments = inlineComments?.filter(
-            (c) => c.line === lineNumber,
-          );
+          const lineComments = inlineCommentsByLine.get(lineNumber);
 
-          const formsForLine = commentForms
-            ? commentForms.filter((cf) => cf.lineRange.end === lineNumber)
-            : undefined;
+          const formsForLine = commentFormsByEndLine.get(lineNumber);
 
           // Code folding state
           const isFoldable = folding.isFoldStart(lineNumber);
@@ -208,22 +175,24 @@ export function CurrentStateTable({
               key={i}
               lineIndex={i}
               lineNumber={lineNumber}
+              content={line.content}
+              tokens={tokens}
+              searchMatches={lineMatches}
+              currentMatch={
+                currentMatch && lineMatches.includes(currentMatch)
+                  ? currentMatch
+                  : null
+              }
               isChanged={line.isChanged}
-              renderedContent={renderedContent}
               canComment={canComment}
-              isHovered={isHovered}
-              isSelected={isSelected}
               isInCommentRange={isInCommentRange}
               hasComment={!!commentedLines?.has(lineNumber)}
-              onMouseEnter={() => setHoveredLine(lineNumber)}
-              onMouseDown={() => handleLineMouseDown(lineNumber)}
-              onMouseUp={() => handleLineMouseUp(lineNumber)}
               inlineComments={lineComments}
               commentForms={formsForLine}
               isFoldable={isFoldable}
               isFoldCollapsed={isFoldCollapsed}
               foldRange={foldRange}
-              onToggleFold={() => folding.toggleFold(lineNumber)}
+              onToggleFold={folding.toggleFold}
             />
           );
         })}
@@ -232,19 +201,17 @@ export function CurrentStateTable({
   );
 }
 
-function CurrentStateRow({
+const CurrentStateRow = memo(function CurrentStateRow({
   lineIndex,
   lineNumber,
+  content,
+  tokens,
+  searchMatches,
+  currentMatch,
   isChanged,
-  renderedContent,
   canComment,
-  isHovered,
-  isSelected,
   isInCommentRange,
   hasComment,
-  onMouseEnter,
-  onMouseDown,
-  onMouseUp,
   inlineComments,
   commentForms,
   isFoldable,
@@ -254,39 +221,51 @@ function CurrentStateRow({
 }: {
   lineIndex: number;
   lineNumber: number;
+  content: string;
+  tokens: ThemedToken[];
+  searchMatches: SearchMatch[];
+  currentMatch: SearchMatch | null;
   isChanged: boolean;
-  renderedContent: ReactNode;
   canComment: boolean;
-  isHovered: boolean;
-  isSelected: boolean;
   isInCommentRange: boolean;
   hasComment: boolean;
-  onMouseEnter: () => void;
-  onMouseDown: () => void;
-  onMouseUp: () => void;
   inlineComments?: InlineComment[];
   commentForms?: CommentFormEntry[];
   isFoldable?: boolean;
   isFoldCollapsed?: boolean;
   foldRange?: { startLine: number; endLine: number };
-  onToggleFold?: () => void;
+  onToggleFold?: (lineNumber: number) => void;
 }) {
+  const renderedContent =
+    tokens.length > 0 ? (
+      renderTokensWithHighlights({
+        tokens,
+        content,
+        searchMatches,
+        currentMatch,
+      })
+    ) : searchMatches.length > 0 ? (
+      renderWithHighlights({
+        text: content,
+        searchMatches,
+        currentMatch,
+      })
+    ) : (
+      <span className="text-ink-1">{content}</span>
+    );
+
   return (
     <>
       <tr
         data-line-index={lineIndex}
         data-new-line={lineNumber}
-        className={clsx({
-          'bg-blue-500/30': isSelected,
-          'bg-blue-500/10': !isSelected && isInCommentRange,
-          'bg-green-500/15': !isSelected && !isInCommentRange && isChanged,
+        className={clsx('group', {
+          'bg-blue-500/10': isInCommentRange,
+          'bg-green-500/15': !isInCommentRange && isChanged,
         })}
-        onMouseEnter={onMouseEnter}
-        onMouseDown={canComment ? onMouseDown : undefined}
-        onMouseUp={canComment ? onMouseUp : undefined}
         style={{
           cursor: canComment ? 'pointer' : undefined,
-          ...(hasComment && !isSelected && !isInCommentRange
+          ...(hasComment && !isInCommentRange
             ? {
                 background:
                   'color-mix(in oklch, oklch(0.78 0.18 295) 8%, transparent)',
@@ -303,7 +282,7 @@ function CurrentStateRow({
               onMouseUp={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleFold?.();
+                onToggleFold?.(lineNumber);
               }}
               aria-label={isFoldCollapsed ? 'Expand scope' : 'Collapse scope'}
               aria-expanded={!isFoldCollapsed}
@@ -320,23 +299,23 @@ function CurrentStateRow({
         <td
           className={clsx(
             'relative w-8 pr-1 text-right align-top select-none',
-            hasComment && !isSelected && !isInCommentRange
+            hasComment && !isInCommentRange
               ? 'text-acc-ink'
               : isChanged
                 ? 'text-status-done'
                 : 'text-ink-4',
           )}
           style={
-            hasComment && !isSelected && !isInCommentRange
+            hasComment && !isInCommentRange
               ? { borderLeft: '2px solid oklch(0.78 0.18 295 / 0.5)' }
               : undefined
           }
         >
-          <span className={clsx(canComment && isHovered && 'invisible')}>
+          <span className={clsx(canComment && 'group-hover:invisible')}>
             {lineNumber}
           </span>
-          {canComment && isHovered && (
-            <span className="text-acc-ink absolute inset-0 flex items-center justify-center">
+          {canComment && (
+            <span className="text-acc-ink absolute inset-0 hidden items-center justify-center group-hover:flex">
               <MessageSquarePlus className="h-3 w-3" aria-hidden />
             </span>
           )}
@@ -362,7 +341,7 @@ function CurrentStateRow({
               className="text-ink-4 bg-bg-2 ml-2 inline-block cursor-pointer rounded px-1.5 py-0 text-[10px] leading-4"
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleFold?.();
+                onToggleFold?.(lineNumber);
               }}
             >
               {foldRange.endLine - foldRange.startLine} lines
@@ -396,4 +375,4 @@ function CurrentStateRow({
         ))}
     </>
   );
-}
+});

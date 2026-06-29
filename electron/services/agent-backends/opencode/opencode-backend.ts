@@ -680,7 +680,7 @@ export class OpenCodeBackend implements AgentBackend {
 
     // Map Record<string, string> answers to Array<QuestionAnswer>
     // QuestionAnswer = Array<string> — each answer is the selected option(s)
-    const answers = Object.values(answer).map((value) => [value]);
+    const answers = Object.values(answer).map(toOpenCodeQuestionAnswer);
 
     state.serverHandle.client.question
       .reply({
@@ -2019,4 +2019,23 @@ function cloneDeltaEvent(event: OpenCodeDeltaEvent): OpenCodeDeltaEvent {
 
 function cloneOpenCodePart(part: OcPart): OcPart {
   return structuredClone(part) as OcPart;
+}
+
+export function toOpenCodeQuestionAnswer(value: string): string[] {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // Fall through to legacy single-value handling.
+    }
+  }
+
+  return [value];
 }

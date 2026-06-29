@@ -194,10 +194,12 @@ import {
 import {
   buildProjectFeatureMapPrompt,
   cleanupFeatureMapTempDir,
+  copyExistingProjectFeatureMapToTemp,
   FEATURE_MAP_GIT_PATH,
   getExistingProjectFeatureMapPath,
   getFeatureMapTempPaths,
   getProjectFeatureMap,
+  getProjectFeatureMapDraftDiff,
   saveProjectFeatureMapFromTemp,
 } from '../services/project-feature-map-generation-service';
 import {
@@ -996,12 +998,18 @@ export function registerIpcHandlers() {
           'project-feature-map',
           project.aiSkillSlots,
         );
+        const existingFeatureMapPath = await getExistingProjectFeatureMapPath(
+          project.path,
+        );
+        const existingFeatureMapCopyPath =
+          await copyExistingProjectFeatureMapToTemp({
+            existingFeatureMapPath,
+            tempDir: paths.tempDir,
+          });
         const prompt = buildProjectFeatureMapPrompt({
           project,
           tempFilePath: paths.tempFilePath,
-          existingFeatureMapPath: await getExistingProjectFeatureMapPath(
-            project.path,
-          ),
+          existingFeatureMapPath: existingFeatureMapCopyPath,
           skillName: slotConfig?.skillName,
         });
         const meta: FeatureMapStepMeta = {
@@ -1084,6 +1092,32 @@ export function registerIpcHandlers() {
       const updatedTask = await TaskRepository.markUserCompleted(step.taskId);
       emitTaskUpsert(updatedTask);
       return featureMap;
+    },
+  );
+  ipcMain.handle(
+    'projects:getFeatureMapDraftDiff',
+    async (_, stepId: string) => {
+      dbg.ipc('projects:getFeatureMapDraftDiff %s', stepId);
+      const step = await TaskStepRepository.findById(stepId);
+      if (!step || step.type !== 'feature-map') {
+        throw new Error('Invalid stepId: must reference a feature-map step');
+      }
+      if (!isFeatureMapStepMeta(step.meta)) {
+        throw new Error(
+          'Invalid step: missing or malformed feature-map metadata',
+        );
+      }
+      const meta = step.meta;
+
+      const project = await ProjectRepository.findById(meta.projectId);
+      if (!project || project.path !== meta.projectPath) {
+        throw new Error('Feature map project metadata is stale');
+      }
+
+      return getProjectFeatureMapDraftDiff({
+        projectPath: project.path,
+        tempFilePath: meta.tempFilePath,
+      });
     },
   );
   ipcMain.handle('projects:detectLogos', (_, projectPath: string) => {
@@ -2857,6 +2891,25 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:getPullRequestStatuses',
+    async (
+      _event,
+      params: {
+        providerId: string;
+        linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
+      },
+    ) => {
+      const { getPullRequestStatuses } =
+        await import('../services/azure-devops-service');
+      const statuses = await getPullRequestStatuses(params);
+      return Array.from(statuses.entries()).map(([key, status]) => ({
+        key,
+        ...status,
+      }));
+    },
+  );
+
+  ipcMain.handle(
     'azureDevOps:updateWorkItemState',
     async (
       _event,
@@ -4027,9 +4080,10 @@ export function registerIpcHandlers() {
       return writeBackendUserConfig({ backend, content });
     },
   );
-  ipcMain.handle('projectPromptPreface:get', async (_, projectPath: string) =>
-    readProjectPromptPreface(projectPath),
-  );
+  ipcMain.handle('projectPromptPreface:get', async (_, projectPath: string) => {
+    const globalEntries = await SettingsRepository.get('promptPreface');
+    return readProjectPromptPreface(projectPath, globalEntries);
+  });
   ipcMain.handle(
     'projectPromptPreface:set',
     async (

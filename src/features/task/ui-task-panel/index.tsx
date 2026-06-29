@@ -154,6 +154,8 @@ import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useTaskPrompt } from '@/stores/task-prompts';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 import { useToastStore } from '@/stores/toasts';
+import { useWorkItemById } from '@/hooks/use-work-items';
+import { WorkItemChip } from '@/common/ui/work-item-chip';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
 
@@ -888,6 +890,39 @@ function useStepModel(stepId: string | null): string | undefined {
     }
     return undefined;
   });
+}
+
+function TaskHeaderWorkItemChip({
+  providerId,
+  workItemId,
+  workItemUrl,
+}: {
+  providerId: string | null;
+  workItemId: string;
+  workItemUrl?: string;
+}) {
+  const numericWorkItemId = Number(workItemId);
+  const { data: workItem } = useWorkItemById({
+    providerId,
+    workItemId: Number.isFinite(numericWorkItemId) ? numericWorkItemId : null,
+  });
+
+  return (
+    <WorkItemChip
+      label={`#${workItemId}`}
+      type={workItem?.fields.workItemType}
+      size="sm"
+      onClick={
+        workItemUrl ? () => window.open(workItemUrl, '_blank') : undefined
+      }
+      disabled={!workItemUrl}
+      title={
+        workItemUrl
+          ? `Open work item #${workItemId} in browser`
+          : `Work item #${workItemId}`
+      }
+    />
+  );
 }
 
 export function TaskPanel({ taskId }: { taskId: string }) {
@@ -2037,24 +2072,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 task.workItemIds.map((workItemId, index) => {
                   const workItemUrl = task.workItemUrls?.[index];
                   return (
-                    <Chip
+                    <TaskHeaderWorkItemChip
                       key={workItemId}
-                      size="sm"
-                      color="blue"
-                      onClick={
-                        workItemUrl
-                          ? () => window.open(workItemUrl, '_blank')
-                          : undefined
-                      }
-                      disabled={!workItemUrl}
-                      title={
-                        workItemUrl
-                          ? `Open work item #${workItemId} in browser`
-                          : `Work item #${workItemId}`
-                      }
-                    >
-                      #{workItemId}
-                    </Chip>
+                      providerId={project.workItemProviderId}
+                      workItemId={workItemId}
+                      workItemUrl={workItemUrl}
+                    />
                   );
                 })}
             </div>
@@ -3023,10 +3046,29 @@ const TaskInputFooter = memo(function TaskInputFooter({
 
   const handleQueuePrompt = useCallback(
     (parts: PromptPart[]) => {
+      let finalParts = parts;
+      if (openReviewComments.length > 0) {
+        const reviewParts = synthesizeReviewPrompt(openReviewComments);
+        if (reviewParts) {
+          finalParts = [...parts, ...reviewParts];
+        }
+        for (const comment of openReviewComments) {
+          resolveComment(taskId, comment.id);
+        }
+        clearResolvedComments(taskId);
+      }
+
       clearPromptDraft();
-      onQueue(parts);
+      onQueue(finalParts);
     },
-    [clearPromptDraft, onQueue],
+    [
+      taskId,
+      clearPromptDraft,
+      onQueue,
+      openReviewComments,
+      resolveComment,
+      clearResolvedComments,
+    ],
   );
 
   const handleStop = useCallback(async () => {

@@ -1,11 +1,10 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import type { ProjectFeatureMap } from '@shared/types';
 
-const MAX_FEATURE_DEPTH = 4;
 export const FEATURE_MAP_GIT_PATH = '.jean-claude/feature-map.yaml';
 const FEATURE_MAP_RELATIVE_PATH = path.join('.jean-claude', 'feature-map.yaml');
 const LEGACY_FEATURE_MAP_RELATIVE_PATH = path.join(
@@ -14,12 +13,14 @@ const LEGACY_FEATURE_MAP_RELATIVE_PATH = path.join(
 );
 
 const FEATURE_MAP_YAML_SCHEMA = `features:
-  - name: string, max 100 chars
+  - id: stable string id
+    name: string, max 100 chars
     summary: string, max 500 chars
     key_files:
       - relative/path/to/key-file.ts
     children:
-      - name: string, max 100 chars
+      - id: stable string id
+        name: string, max 100 chars
         summary: string, max 500 chars
         key_files:
           - relative/path/to/key-file.ts
@@ -27,10 +28,10 @@ const FEATURE_MAP_YAML_SCHEMA = `features:
 
 Rules:
 - features is required and must contain at least one item.
-- Every feature node must include name, summary, key_files, and children.
+- Every feature node must include id, name, summary, key_files, and children.
+- Preserve existing ids when updating an existing feature map.
 - key_files and children must be arrays. Use [] when empty.
-- children repeats the same node shape recursively.
-- Maximum feature depth is 4 total levels.`;
+- children repeats the same node shape recursively.`;
 
 export function getProjectFeatureMapPath(projectPath: string) {
   return path.join(projectPath, FEATURE_MAP_RELATIVE_PATH);
@@ -65,6 +66,25 @@ export async function getExistingProjectFeatureMapPath(
   return null;
 }
 
+export async function copyExistingProjectFeatureMapToTemp({
+  existingFeatureMapPath,
+  tempDir,
+}: {
+  existingFeatureMapPath: string | null;
+  tempDir: string;
+}): Promise<string | null> {
+  if (!existingFeatureMapPath) return null;
+
+  await mkdir(tempDir, { recursive: true });
+  const ext = path.extname(existingFeatureMapPath).toLowerCase();
+  const tempPath = path.join(
+    tempDir,
+    `existing-feature-map${ext === '.json' ? '.json' : '.yaml'}`,
+  );
+  await copyFile(existingFeatureMapPath, tempPath);
+  return tempPath;
+}
+
 export async function saveProjectFeatureMapFromTemp({
   tempFilePath,
   savedFilePath,
@@ -80,6 +100,25 @@ export async function saveProjectFeatureMapFromTemp({
   await mkdir(path.dirname(yamlPath), { recursive: true });
   await writeFile(yamlPath, stringifyFeatureMap(featureMap));
   return featureMap;
+}
+
+export async function getProjectFeatureMapDraftDiff({
+  projectPath,
+  tempFilePath,
+}: {
+  projectPath: string;
+  tempFilePath: string;
+}) {
+  const newContent = await readFile(tempFilePath, 'utf8');
+  const existingPath = await getExistingProjectFeatureMapPath(projectPath);
+  const oldContent = existingPath ? await readFile(existingPath, 'utf8') : '';
+
+  return {
+    path: FEATURE_MAP_GIT_PATH,
+    status: existingPath ? ('modified' as const) : ('added' as const),
+    oldContent,
+    newContent,
+  };
 }
 
 export async function cleanupFeatureMapTempDir(tempDir: string): Promise<void> {
@@ -125,17 +164,30 @@ export function buildProjectFeatureMapPrompt({
 Repository path: ${project.path}
 Output file: ${tempFilePath}${
     existingFeatureMapPath
-      ? `\nExisting feature map: ${existingFeatureMapPath}`
+      ? `\nExisting feature map copy: ${existingFeatureMapPath}`
       : ''
   }`;
   const skillInstruction = skillName
-    ? `Use the "${skillName}" skill to create the feature map.\n\n`
+    ? `Use the "${skillName}" skill to ${
+        existingFeatureMapPath ? 'update' : 'create'
+      } the feature map.\n\n`
     : '';
   const schemaBlock = `<feature_map_yaml_schema>
 ${FEATURE_MAP_YAML_SCHEMA}
 </feature_map_yaml_schema>`;
+  const iterationInstructions = existingFeatureMapPath
+    ? `
+Update mode:
+- Read the existing feature map copy first.
+- Iterate on the existing feature map; do not fully rewrite it from scratch.
+- Preserve accurate existing nodes, names, summaries, and structure.
+- Explore code to find missing, newly added, or shallowly documented user-facing features.
+- Add or refine only the parts needed to close gaps.
+- Output the complete updated YAML, not a partial patch.`
+    : '';
 
   return `${skillInstruction}${projectDetails}
+${iterationInstructions}
 
 Write the feature map YAML to the output file.
 The YAML must match this schema:
@@ -183,12 +235,11 @@ function normalizeFeatureMap(value: unknown): ProjectFeatureMap | null {
 function normalizeFeature(
   value: unknown,
   index: number,
-  depth = 1,
   parentId = '',
 ): ProjectFeatureMap['features'][number] | null {
-  if (depth > MAX_FEATURE_DEPTH) return null;
   if (!value || typeof value !== 'object') return null;
   const item = value as {
+    id?: unknown;
     name?: unknown;
     summary?: unknown;
     key_files?: unknown;
@@ -213,17 +264,19 @@ function normalizeFeature(
         .filter(Boolean)
     : [];
 
-  const id = name
+  const generatedId = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 80);
-  const featureId = `${parentId}${id || 'feature'}-${index + 1}`;
+  const explicitId = typeof item.id === 'string' ? item.id.trim() : '';
+  const featureId =
+    explicitId || `${parentId}${generatedId || 'feature'}-${index + 1}`;
 
   const children = Array.isArray(item.children)
     ? item.children
         .map((child, childIndex) =>
-          normalizeFeature(child, childIndex, depth + 1, `${featureId}-`),
+          normalizeFeature(child, childIndex, `${featureId}-`),
         )
         .filter((child): child is ProjectFeatureMap['features'][number] =>
           Boolean(child),
