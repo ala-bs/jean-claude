@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { replaceAzureDevOpsMentions } from '@/lib/azure-devops-mentions';
+import {
+  containsAzureDevOpsMention,
+  replaceAzureDevOpsMentions,
+} from '@/lib/azure-devops-mentions';
 
 describe('replaceAzureDevOpsMentions', () => {
   it('replaces Azure DevOps mention ids with display names', () => {
@@ -58,5 +61,23 @@ describe('replaceAzureDevOpsMentions', () => {
     ).toBe(
       '[@Patrick Lin](azure-devops-mention:09c05d5e-5817-4b65-b3f2-07f1c8047f52) hello',
     );
+  });
+});
+
+describe('containsAzureDevOpsMention', () => {
+  it('detects raw Azure DevOps mention tokens', () => {
+    expect(
+      containsAzureDevOpsMention(
+        '@<09C05D5E-5817-4B65-B3F2-07F1C8047F52> hello',
+      ),
+    ).toBe(true);
+  });
+
+  it('detects HTML-escaped Azure DevOps mention tokens', () => {
+    expect(
+      containsAzureDevOpsMention(
+        '@&lt;09C05D5E-5817-4B65-B3F2-07F1C8047F52&gt; hello',
+      ),
+    ).toBe(true);
   });
 });
