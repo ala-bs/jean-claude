@@ -459,6 +459,7 @@ export function PrDetail({
         pr={pr}
         projectId={projectId}
         providerId={repoInfo?.providerId}
+        repoInfo={repoInfo}
         readOnly={readOnly}
       />
 
@@ -611,6 +612,7 @@ export function PrDetail({
                   providerId={
                     repoInfo?.providerId ?? project?.repoProviderId ?? undefined
                   }
+                  repoInfo={repoInfo}
                   onAddFileComment={
                     readOnly
                       ? undefined

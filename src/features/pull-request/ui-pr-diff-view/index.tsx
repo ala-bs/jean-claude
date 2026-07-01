@@ -13,6 +13,7 @@ import type { DiffFile } from '@/features/common/ui-file-diff';
 import type { LineRange } from '@/features/agent/ui-diff-view';
 import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
 import type { MentionOption } from '@/common/ui/mention-textarea';
+import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import { usePrFileDraftActions } from '@/stores/pr-comment-drafts';
 
@@ -34,6 +35,7 @@ export function PrDiffView({
   projectId,
   prId,
   providerId,
+  repoInfo,
   onAddFileComment,
   onUploadImage,
   isAddingComment,
@@ -59,6 +61,7 @@ export function PrDiffView({
   projectId: string;
   prId: number;
   providerId?: string;
+  repoInfo?: PullRequestRepoInfo;
   onAddFileComment?: (params: {
     filePath: string;
     line: number;
@@ -220,6 +223,7 @@ export function PrDiffView({
           projectId={projectId}
           prId={prId}
           providerId={providerId}
+          repoInfo={repoInfo}
           mentionDisplayNames={mentionDisplayNames}
           mentionOptions={mentionOptions}
           onSearchMentions={onSearchMentions}

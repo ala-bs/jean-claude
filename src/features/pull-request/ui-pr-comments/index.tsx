@@ -223,15 +223,17 @@ function StatusDropdown({
   threadId,
   projectId,
   prId,
+  repoInfo,
 }: {
   status: ThreadStatus;
   threadId: number;
   projectId: string;
   prId: number;
+  repoInfo?: PullRequestRepoInfo;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const updateStatus = useUpdateThreadStatus(projectId, prId);
+  const updateStatus = useUpdateThreadStatus(projectId, prId, repoInfo);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -303,6 +305,7 @@ function ThreadReplyForm({
   threadId,
   projectId,
   prId,
+  repoInfo,
   canResolve,
   mentionOptions = EMPTY_MENTION_OPTIONS,
   onSearchMentions,
@@ -311,14 +314,15 @@ function ThreadReplyForm({
   threadId: number;
   projectId: string;
   prId: number;
+  repoInfo?: PullRequestRepoInfo;
   canResolve: boolean;
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const addReply = useAddThreadReply(projectId, prId);
-  const updateStatus = useUpdateThreadStatus(projectId, prId);
+  const addReply = useAddThreadReply(projectId, prId, repoInfo);
+  const updateStatus = useUpdateThreadStatus(projectId, prId, repoInfo);
 
   const handleResolve = useCallback(() => {
     updateStatus.mutate({ threadId, status: 'fixed' });
@@ -696,7 +700,7 @@ function ExpandedThread({
   repoInfo?: PullRequestRepoInfo;
 }) {
   const resolved = !isActiveThread(thread);
-  const updateStatus = useUpdateThreadStatus(projectId, prId);
+  const updateStatus = useUpdateThreadStatus(projectId, prId, repoInfo);
   const fileStart = thread.threadContext?.rightFileStart?.line;
   const fileEnd = thread.threadContext?.rightFileEnd?.line ?? fileStart;
   const lastComment = thread.comments[thread.comments.length - 1];
@@ -794,6 +798,7 @@ function ExpandedThread({
               onSearchMentions={onSearchMentions}
               onUploadImage={onUploadImage}
               readOnly={readOnly}
+              repoInfo={repoInfo}
             />
           ))}
         </div>
@@ -803,6 +808,7 @@ function ExpandedThread({
             threadId={thread.id}
             projectId={projectId}
             prId={prId}
+            repoInfo={repoInfo}
             canResolve={!resolved}
             mentionOptions={mentionOptions}
             onSearchMentions={onSearchMentions}
@@ -817,6 +823,7 @@ function ExpandedThread({
               threadId={thread.id}
               projectId={projectId}
               prId={prId}
+              repoInfo={repoInfo}
             />
           </div>
         )}
@@ -833,6 +840,7 @@ function ThreadComment({
   threadId,
   projectId,
   prId,
+  repoInfo,
   mentionOptions = EMPTY_MENTION_OPTIONS,
   onSearchMentions,
   onUploadImage,
@@ -845,6 +853,7 @@ function ThreadComment({
   threadId: number;
   projectId: string;
   prId: number;
+  repoInfo?: PullRequestRepoInfo;
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
@@ -858,10 +867,10 @@ function ThreadComment({
     () => decodeMentionDisplayNames(comment.content, mentionOptions),
     [comment.content, mentionOptions],
   );
-  const { data: currentUser } = useCurrentAzureUser(projectId);
-  const updateComment = useUpdateThreadComment(projectId, prId);
-  const deleteComment = useDeleteThreadComment(projectId, prId);
-  const setCommentLike = useSetThreadCommentLike(projectId, prId);
+  const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
+  const updateComment = useUpdateThreadComment(projectId, prId, repoInfo);
+  const deleteComment = useDeleteThreadComment(projectId, prId, repoInfo);
+  const setCommentLike = useSetThreadCommentLike(projectId, prId, repoInfo);
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(decodedCommentContent);
   const [editError, setEditError] = useState<string | null>(null);
@@ -1062,6 +1071,7 @@ export function PrInlineCommentTimeline({
   threadId,
   projectId,
   prId,
+  repoInfo,
   canResolve = false,
   threadStatus,
   mentionDisplayNames,
@@ -1075,6 +1085,7 @@ export function PrInlineCommentTimeline({
   threadId?: number;
   projectId?: string;
   prId?: number;
+  repoInfo?: PullRequestRepoInfo;
   canResolve?: boolean;
   threadStatus?: string;
   mentionDisplayNames?: MentionDisplayNames;
@@ -1111,6 +1122,7 @@ export function PrInlineCommentTimeline({
               threadId={threadId}
               projectId={projectId}
               prId={prId}
+              repoInfo={repoInfo}
             />
           )}
         </div>
@@ -1127,6 +1139,7 @@ export function PrInlineCommentTimeline({
               threadId={threadId}
               projectId={projectId}
               prId={prId}
+              repoInfo={repoInfo}
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
               onUploadImage={onUploadImage}
@@ -1195,6 +1208,7 @@ export function PrInlineCommentTimeline({
               threadId={threadId}
               projectId={projectId}
               prId={prId}
+              repoInfo={repoInfo}
               canResolve={canResolve}
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
@@ -1210,12 +1224,14 @@ function InlineThreadReopenButton({
   threadId,
   projectId,
   prId,
+  repoInfo,
 }: {
   threadId: number;
   projectId: string;
   prId: number;
+  repoInfo?: PullRequestRepoInfo;
 }) {
-  const updateStatus = useUpdateThreadStatus(projectId, prId);
+  const updateStatus = useUpdateThreadStatus(projectId, prId, repoInfo);
 
   const handleReopen = useCallback(() => {
     updateStatus.mutate({ threadId, status: 'active' });

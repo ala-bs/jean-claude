@@ -978,6 +978,7 @@ function PrFilePreviewPane({
               mentionDisplayNames={mentionDisplayNames}
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
+              repoInfo={repoInfo}
               readOnly={readOnly}
             />
           )}

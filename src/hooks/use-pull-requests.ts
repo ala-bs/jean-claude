@@ -114,8 +114,7 @@ function buildPullRequestActivityEvent({
 }): NewWorkActivityEvent {
   const cachedPr = queryClient.getQueryData<AzureDevOpsPullRequestDetails>([
     'pull-request',
-    projectId,
-    prId,
+    ...getPrQueryKey(projectId, prId, repoInfo),
   ]);
   const workItemIds = workItems.map((workItem) => String(workItem.id));
 
@@ -175,7 +174,10 @@ function recordPrActivity({
   }
 
   void (async () => {
-    const workItemsQueryKey = ['pull-request-work-items', projectId, prId];
+    const workItemsQueryKey = [
+      'pull-request-work-items',
+      ...getPrQueryKey(projectId, prId, repoInfo),
+    ];
     let azureOrgId: string | null = null;
     let workItems: AzureDevOpsWorkItem[] = [];
 
@@ -485,9 +487,14 @@ export function useCachedPullRequest(projectId: string, prId?: number) {
   };
 }
 
-export function useUpdatePullRequestTitle(projectId: string, prId: number) {
+export function useUpdatePullRequestTitle(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
   const queryClient = useQueryClient();
-  const repoInfo = useProjectRepoInfo(projectId);
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+  const queryKey = ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)];
 
   return useMutation({
     mutationFn: (title: string) =>
@@ -504,9 +511,11 @@ export function useUpdatePullRequestTitle(projectId: string, prId: number) {
         repoId: repoInfo!.repoId,
         pullRequest: updatedPr,
       });
-      queryClient.setQueryData(['pull-request', projectId, prId], updatedPr);
-      updateFeedItemsForPullRequest(projectId, updatedPr);
-      queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
+      queryClient.setQueryData(queryKey, updatedPr);
+      if (!repoInfoOverride) {
+        updateFeedItemsForPullRequest(projectId, updatedPr);
+        queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
+      }
       queryClient.invalidateQueries({
         queryKey: ['all-projects-pull-requests'],
       });
@@ -541,10 +550,10 @@ export function useUpdatePullRequestDescription(
       queryClient.setQueryData(queryKey, updatedPr);
       if (!repoInfoOverride) {
         queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
-        queryClient.invalidateQueries({
-          queryKey: ['all-projects-pull-requests'],
-        });
       }
+      queryClient.invalidateQueries({
+        queryKey: ['all-projects-pull-requests'],
+      });
     },
   });
 }
@@ -807,17 +816,15 @@ export function useAddPullRequestComment(
         queryKey: ['pull-request-threads', ...getPrQueryKey(projectId, prId, repoInfo)],
       });
       markFeedPullRequestsStale();
-      if (!repoInfoOverride) {
-        recordPrActivity({
-          queryClient,
-          projectId,
-          prId,
-          repoInfo: repoInfo!,
-          type: 'pr_comment_added',
-          metadata: { commentKind: 'top-level' },
-          workActivityEnabled: workActivitySetting?.enabled !== false,
-        });
-      }
+      recordPrActivity({
+        queryClient,
+        projectId,
+        prId,
+        repoInfo: repoInfo!,
+        type: 'pr_comment_added',
+        metadata: { commentKind: 'top-level' },
+        workActivityEnabled: workActivitySetting?.enabled !== false,
+      });
     },
   });
 }
@@ -850,24 +857,26 @@ export function useAddPullRequestFileComment(
         queryKey: ['pull-request-threads', ...getPrQueryKey(projectId, prId, repoInfo)],
       });
       markFeedPullRequestsStale();
-      if (!repoInfoOverride) {
-        recordPrActivity({
-          queryClient,
-          projectId,
-          prId,
-          repoInfo: repoInfo!,
-          type: 'pr_comment_added',
-          metadata: { commentKind: 'file', filePath: params.filePath },
-          workActivityEnabled: workActivitySetting?.enabled !== false,
-        });
-      }
+      recordPrActivity({
+        queryClient,
+        projectId,
+        prId,
+        repoInfo: repoInfo!,
+        type: 'pr_comment_added',
+        metadata: { commentKind: 'file', filePath: params.filePath },
+        workActivityEnabled: workActivitySetting?.enabled !== false,
+      });
     },
   });
 }
 
-export function useAddThreadReply(projectId: string, prId: number) {
+export function useAddThreadReply(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
   const queryClient = useQueryClient();
-  const repoInfo = useProjectRepoInfo(projectId);
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
   const { data: workActivitySetting } = useSetting('workActivity');
 
   return useMutation<
@@ -885,7 +894,7 @@ export function useAddThreadReply(projectId: string, prId: number) {
       }),
     onSuccess: (_result, params) => {
       queryClient.invalidateQueries({
-        queryKey: ['pull-request-threads', projectId, prId],
+        queryKey: ['pull-request-threads', ...getPrQueryKey(projectId, prId, repoInfo)],
       });
       markFeedPullRequestsStale();
       recordPrActivity({
@@ -901,9 +910,13 @@ export function useAddThreadReply(projectId: string, prId: number) {
   });
 }
 
-export function useUpdateThreadComment(projectId: string, prId: number) {
+export function useUpdateThreadComment(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
   const queryClient = useQueryClient();
-  const repoInfo = useProjectRepoInfo(projectId);
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
 
   return useMutation<
     AzureDevOpsComment,
@@ -920,16 +933,20 @@ export function useUpdateThreadComment(projectId: string, prId: number) {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ['pull-request-threads', projectId, prId],
+        queryKey: ['pull-request-threads', ...getPrQueryKey(projectId, prId, repoInfo)],
       });
       markFeedPullRequestsStale();
     },
   });
 }
 
-export function useDeleteThreadComment(projectId: string, prId: number) {
+export function useDeleteThreadComment(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
   const queryClient = useQueryClient();
-  const repoInfo = useProjectRepoInfo(projectId);
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
 
   return useMutation<void, Error, { threadId: number; commentId: number }>({
     mutationFn: (params) =>
@@ -942,16 +959,20 @@ export function useDeleteThreadComment(projectId: string, prId: number) {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ['pull-request-threads', projectId, prId],
+        queryKey: ['pull-request-threads', ...getPrQueryKey(projectId, prId, repoInfo)],
       });
       markFeedPullRequestsStale();
     },
   });
 }
 
-export function useSetThreadCommentLike(projectId: string, prId: number) {
+export function useSetThreadCommentLike(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
   const queryClient = useQueryClient();
-  const repoInfo = useProjectRepoInfo(projectId);
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
 
   return useMutation<
     void,
@@ -968,16 +989,20 @@ export function useSetThreadCommentLike(projectId: string, prId: number) {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ['pull-request-threads', projectId, prId],
+        queryKey: ['pull-request-threads', ...getPrQueryKey(projectId, prId, repoInfo)],
       });
       markFeedPullRequestsStale();
     },
   });
 }
 
-export function useUpdateThreadStatus(projectId: string, prId: number) {
+export function useUpdateThreadStatus(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
   const queryClient = useQueryClient();
-  const repoInfo = useProjectRepoInfo(projectId);
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
 
   return useMutation<void, Error, { threadId: number; status: string }>({
     mutationFn: (params) =>
@@ -990,7 +1015,7 @@ export function useUpdateThreadStatus(projectId: string, prId: number) {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: ['pull-request-threads', projectId, prId],
+        queryKey: ['pull-request-threads', ...getPrQueryKey(projectId, prId, repoInfo)],
       });
       markFeedPullRequestsStale();
     },
@@ -1062,10 +1087,15 @@ export function useCurrentAzureUser(
   });
 }
 
-export function useVotePullRequest(projectId: string, prId: number) {
+export function useVotePullRequest(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
   const queryClient = useQueryClient();
-  const repoInfo = useProjectRepoInfo(projectId);
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
   const { data: workActivitySetting } = useSetting('workActivity');
+  const queryKey = ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)];
 
   return useMutation({
     mutationFn: (params: { reviewerId: string; vote: number }) =>
@@ -1100,10 +1130,12 @@ export function useVotePullRequest(projectId: string, prId: number) {
 
       const isApprovedByMe =
         voteStatus === 'approved' || voteStatus === 'approved-with-suggestions';
-      updateFeedPullRequest(projectId, prId, {
-        isApprovedByMe,
-        attention: isApprovedByMe ? 'pr-approved-by-me' : 'review-requested',
-      });
+      if (!repoInfoOverride) {
+        updateFeedPullRequest(projectId, prId, {
+          isApprovedByMe,
+          attention: isApprovedByMe ? 'pr-approved-by-me' : 'review-requested',
+        });
+      }
       if (isApprovedByMe) {
         recordPrActivity({
           queryClient,
@@ -1117,11 +1149,17 @@ export function useVotePullRequest(projectId: string, prId: number) {
       }
 
       queryClient.setQueryData<AzureDevOpsPullRequestDetails | undefined>(
-        ['pull-request', projectId, prId],
+        queryKey,
         (old) => updateReviewerVote(old, params.reviewerId, voteStatus),
       );
       queryClient.invalidateQueries({
-        queryKey: ['pull-request', projectId, prId],
+        queryKey,
+      });
+      if (!repoInfoOverride) {
+        queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ['all-projects-pull-requests'],
       });
     },
   });
@@ -1164,17 +1202,22 @@ export function useSetAutoComplete(
       queryClient.setQueryData(queryKey, updatedPr);
       if (!repoInfoOverride) {
         queryClient.invalidateQueries({ queryKey: ['pull-requests', projectId] });
-        queryClient.invalidateQueries({
-          queryKey: ['all-projects-pull-requests'],
-        });
       }
+      queryClient.invalidateQueries({
+        queryKey: ['all-projects-pull-requests'],
+      });
     },
   });
 }
 
-export function usePublishPullRequest(projectId: string, prId: number) {
+export function usePublishPullRequest(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
   const queryClient = useQueryClient();
-  const repoInfo = useProjectRepoInfo(projectId);
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+  const queryKey = ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)];
 
   return useMutation({
     mutationFn: () =>
@@ -1192,15 +1235,22 @@ export function usePublishPullRequest(projectId: string, prId: number) {
         patch: { isDraft: false },
       });
       queryClient.setQueryData<AzureDevOpsPullRequestDetails | undefined>(
-        ['pull-request', projectId, prId],
+        queryKey,
         (old) => (old ? { ...old, isDraft: false } : old),
       );
-      updateFeedPullRequest(projectId, prId, { isDraft: false });
+      if (!repoInfoOverride) {
+        updateFeedPullRequest(projectId, prId, { isDraft: false });
+      }
       queryClient.invalidateQueries({
-        queryKey: ['pull-request', projectId, prId],
+        queryKey,
       });
+      if (!repoInfoOverride) {
+        queryClient.invalidateQueries({
+          queryKey: ['pull-requests', projectId],
+        });
+      }
       queryClient.invalidateQueries({
-        queryKey: ['pull-requests', projectId],
+        queryKey: ['all-projects-pull-requests'],
       });
       markFeedPullRequestsStale();
     },
