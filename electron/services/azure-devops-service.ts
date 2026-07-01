@@ -26,6 +26,7 @@ import type {
   AzureDevOpsIdentity,
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsPullRequestTag,
   ReviewerVoteStatus,
 } from '@shared/azure-devops-types';
 
@@ -50,6 +51,7 @@ export type {
   AzureDevOpsCommentThread,
   AzureDevOpsComment,
   AzureDevOpsIdentity,
+  AzureDevOpsPullRequestTag,
 };
 
 export interface AzureDevOpsOrganization {
@@ -2013,6 +2015,11 @@ interface PullRequestsListResponse {
   value: PullRequestResponse[];
 }
 
+interface PullRequestLabelsResponse {
+  count: number;
+  value: Array<{ id?: string; name?: string }>;
+}
+
 // GitUserDate from Azure DevOps API
 interface GitUserDate {
   date: string;
@@ -2517,6 +2524,90 @@ export async function updatePullRequestDescription(params: {
   const webUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_git/${params.repoId}/pullrequest/${pr.pullRequestId}`;
 
   return mapPullRequestResponse(pr, webUrl);
+}
+
+export async function getPullRequestTags(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<AzureDevOpsPullRequestTag[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/labels?api-version=7.1-preview.1`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get pull request tags: ${error}`);
+  }
+
+  const labels: PullRequestLabelsResponse = await response.json();
+  return labels.value
+    .filter((label) => !!label.name)
+    .map((label) => ({ id: label.id, name: label.name! }));
+}
+
+export async function addPullRequestTag(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  name: string;
+}): Promise<AzureDevOpsPullRequestTag> {
+  const name = params.name.trim();
+  if (!name) {
+    throw new Error('Pull request tag is required');
+  }
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/labels?api-version=7.1`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to add pull request tag: ${error}`);
+  }
+
+  const label: { id?: string; name?: string } = await response.json();
+  return { id: label.id, name: label.name ?? name };
+}
+
+export async function removePullRequestTag(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  name: string;
+}): Promise<void> {
+  const name = params.name.trim();
+  if (!name) {
+    throw new Error('Pull request tag is required');
+  }
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const encodedName = encodeURIComponent(name);
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/labels/${encodedName}?api-version=7.1`;
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to remove pull request tag: ${error}`);
+  }
 }
 
 export async function uploadPullRequestAttachment(params: {

@@ -71,6 +71,7 @@ import type {
   AzureDevOpsPolicyEvaluation,
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsPullRequestTag,
 } from '@shared/azure-devops-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
 import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
@@ -139,6 +140,7 @@ export type {
   AzureDevOpsCommentThread,
   AzureDevOpsComment,
   AzureDevOpsPolicyEvaluation,
+  AzureDevOpsPullRequestTag,
 };
 
 export interface PackageJson {
@@ -771,6 +773,26 @@ export interface Api {
       pullRequestId: number;
       description: string;
     }) => Promise<AzureDevOpsPullRequestDetails>;
+    getPullRequestTags: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+    }) => Promise<AzureDevOpsPullRequestTag[]>;
+    addPullRequestTag: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      name: string;
+    }) => Promise<AzureDevOpsPullRequestTag>;
+    removePullRequestTag: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      name: string;
+    }) => Promise<void>;
     uploadPullRequestAttachment: (params: {
       providerId: string;
       projectId: string;
@@ -1873,6 +1895,13 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         updatePullRequestDescription: async () => {
+          throw new Error('API not available');
+        },
+        getPullRequestTags: async () => [],
+        addPullRequestTag: async () => {
+          throw new Error('API not available');
+        },
+        removePullRequestTag: async () => {
           throw new Error('API not available');
         },
         uploadPullRequestAttachment: async () => {

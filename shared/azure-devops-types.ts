@@ -81,6 +81,11 @@ export interface AzureDevOpsPullRequestDetails extends AzureDevOpsPullRequest {
   };
 }
 
+export interface AzureDevOpsPullRequestTag {
+  id?: string;
+  name: string;
+}
+
 export interface AzureDevOpsCommit {
   commitId: string;
   author: {

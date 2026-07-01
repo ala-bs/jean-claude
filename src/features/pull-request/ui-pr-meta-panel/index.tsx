@@ -7,6 +7,8 @@ import type { ReactNode } from 'react';
 import type { AzureDevOpsPullRequestDetails } from '@shared/azure-devops-types';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { encodeProxyUrl } from '@/lib/azure-image-proxy';
+import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
+import { PrTags } from '@/features/pull-request/ui-pr-tags';
 import { PrWorkItems } from '@/features/pull-request/ui-pr-work-items';
 import { UserAvatar } from '@/common/ui/user-avatar';
 
@@ -53,8 +55,10 @@ function MetaCard({
 
 export function PrMetaPanel({
   pr,
+  projectId,
   fileCount = 0,
   providerId,
+  repoInfo,
   workItems = [],
   isWorkItemsLoading = false,
   azureProjectId,
@@ -66,8 +70,10 @@ export function PrMetaPanel({
   readOnly = false,
 }: {
   pr: AzureDevOpsPullRequestDetails;
+  projectId: string;
   fileCount?: number;
   providerId?: string;
+  repoInfo?: PullRequestRepoInfo;
   workItems?: AzureDevOpsWorkItem[];
   isWorkItemsLoading?: boolean;
   azureProjectId?: string;
@@ -132,6 +138,15 @@ export function PrMetaPanel({
           </span>
         </MetaCard>
       )}
+
+      {/* Tags */}
+      <PrTags
+        projectId={projectId}
+        prId={pr.id}
+        repoInfo={repoInfo}
+        isActive={pr.status === 'active'}
+        readOnly={readOnly}
+      />
 
       {/* Work Items */}
       <PrWorkItems

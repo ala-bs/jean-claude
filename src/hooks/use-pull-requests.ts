@@ -11,6 +11,7 @@ import {
   type AzureDevOpsPolicyEvaluation,
   type AzureDevOpsPullRequest,
   type AzureDevOpsPullRequestDetails,
+  type AzureDevOpsPullRequestTag,
   type AzureDevOpsWorkItem,
 } from '@/lib/api';
 import {
@@ -578,6 +579,77 @@ export function useUploadPullRequestAttachment(
         pullRequestId: prId,
         ...params,
       }),
+  });
+}
+
+export function usePullRequestTags(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+
+  return useQuery<AzureDevOpsPullRequestTag[]>({
+    queryKey: ['pull-request-tags', ...getPrQueryKey(projectId, prId, repoInfo)],
+    queryFn: () =>
+      api.azureDevOps.getPullRequestTags({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+      }),
+    enabled: !!repoInfo && prId > 0,
+    staleTime: 60_000,
+  });
+}
+
+export function useAddPullRequestTag(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
+  const queryClient = useQueryClient();
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+
+  return useMutation({
+    mutationFn: (name: string) =>
+      api.azureDevOps.addPullRequestTag({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        name,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['pull-request-tags', ...getPrQueryKey(projectId, prId, repoInfo)],
+      });
+    },
+  });
+}
+
+export function useRemovePullRequestTag(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
+  const queryClient = useQueryClient();
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+
+  return useMutation({
+    mutationFn: (name: string) =>
+      api.azureDevOps.removePullRequestTag({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        name,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['pull-request-tags', ...getPrQueryKey(projectId, prId, repoInfo)],
+      });
+    },
   });
 }
 

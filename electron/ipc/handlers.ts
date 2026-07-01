@@ -96,6 +96,7 @@ import {
   activateWorkItem,
   addPullRequestComment,
   addPullRequestFileComment,
+  addPullRequestTag,
   addThreadReply,
   cancelBuild,
   cloneRepository,
@@ -119,6 +120,7 @@ import {
   getPullRequestCommits,
   getPullRequestFileContent,
   getPullRequestPolicyEvaluations,
+  getPullRequestTags,
   getPullRequestThreads,
   getPullRequestWorkItems,
   getRelease,
@@ -132,6 +134,7 @@ import {
   publishPullRequest,
   queryWorkItems,
   queueBuild,
+  removePullRequestTag,
   requeuePolicyEvaluation,
   searchIdentities,
   setPullRequestAutoComplete,
@@ -3120,6 +3123,47 @@ export function registerIpcHandlers() {
         description: string;
       },
     ) => updatePullRequestDescription(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getPullRequestTags',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+      },
+    ) => getPullRequestTags(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:addPullRequestTag',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        name: string;
+      },
+    ) => addPullRequestTag(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:removePullRequestTag',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        name: string;
+      },
+    ) => removePullRequestTag(params),
   );
 
   ipcMain.handle(

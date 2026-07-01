@@ -854,8 +854,10 @@ export function PrOverview({
             ) : (
               <PrMetaPanel
                 pr={pr}
+                projectId={projectId}
                 fileCount={fileCount}
                 providerId={providerId}
+                repoInfo={repoInfo}
                 workItems={workItems}
                 isWorkItemsLoading={isWorkItemsLoading}
                 azureProjectId={azureProjectId}
