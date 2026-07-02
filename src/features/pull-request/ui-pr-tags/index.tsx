@@ -1,16 +1,16 @@
-import { Loader2, Plus, Tag, X } from 'lucide-react';
 import type { ChangeEvent, FormEvent } from 'react';
+import { Loader2, Plus, Tag, X } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
 
-import { Button } from '@/common/ui/button';
-import { Input } from '@/common/ui/input';
 import {
   type PullRequestRepoInfo,
   useAddPullRequestTag,
   usePullRequestTags,
   useRemovePullRequestTag,
 } from '@/hooks/use-pull-requests';
+import { Button } from '@/common/ui/button';
+import { Input } from '@/common/ui/input';
 
 
 export function PrTags({

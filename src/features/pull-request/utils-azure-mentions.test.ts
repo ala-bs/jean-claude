@@ -62,6 +62,28 @@ describe('replaceAzureDevOpsMentions', () => {
       '[@Patrick Lin](azure-devops-mention:09c05d5e-5817-4b65-b3f2-07f1c8047f52) hello',
     );
   });
+
+  it('replaces Azure DevOps HTML mention anchors with display text', () => {
+    const content =
+      '<a href="#" data-vss-mention="version:2.0,user-id">@Patrick Lin</a> please check';
+
+    expect(replaceAzureDevOpsMentions(content)).toBe(
+      '@Patrick Lin please check',
+    );
+  });
+
+  it('can render HTML mention anchors as markdown links', () => {
+    const content =
+      '<a href="#" data-vss-mention="version:2.0,user-id">@Pat [Admin]</a> please check';
+
+    expect(
+      replaceAzureDevOpsMentions(content, undefined, {
+        renderMarkdownLinks: true,
+      }),
+    ).toBe(
+      '[@Pat \\[Admin\\]](azure-devops-mention:html) please check',
+    );
+  });
 });
 
 describe('containsAzureDevOpsMention', () => {
@@ -77,6 +99,14 @@ describe('containsAzureDevOpsMention', () => {
     expect(
       containsAzureDevOpsMention(
         '@&lt;09C05D5E-5817-4B65-B3F2-07F1C8047F52&gt; hello',
+      ),
+    ).toBe(true);
+  });
+
+  it('detects Azure DevOps HTML mention anchors', () => {
+    expect(
+      containsAzureDevOpsMention(
+        '<a href="#" data-vss-mention="version:2.0,user-id">@Patrick Lin</a> hello',
       ),
     ).toBe(true);
   });
