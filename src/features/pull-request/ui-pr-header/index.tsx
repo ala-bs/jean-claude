@@ -29,6 +29,7 @@ import {
 } from '@/hooks/use-settings';
 import type { ModelPreference, ThinkingEffort } from '@shared/types';
 import {
+  type PullRequestRepoInfo,
   usePublishPullRequest,
   useUpdatePullRequestTitle,
 } from '@/hooks/use-pull-requests';
@@ -100,11 +101,13 @@ export function PrHeader({
   pr,
   projectId,
   providerId,
+  repoInfo,
   readOnly = false,
 }: {
   pr: AzureDevOpsPullRequestDetails;
   projectId: string;
   providerId?: string;
+  repoInfo?: PullRequestRepoInfo;
   readOnly?: boolean;
 }) {
   const navigate = useNavigate();
@@ -115,8 +118,8 @@ export function PrHeader({
   const markJobFailed = useBackgroundJobsStore((s) => s.markJobFailed);
   const { setDraft: setNewTaskDraft } = useNewTaskFormStore(projectId);
   const { data: editorSetting } = useEditorSetting();
-  const publishMutation = usePublishPullRequest(projectId, pr.id);
-  const updateTitle = useUpdatePullRequestTitle(projectId, pr.id);
+  const publishMutation = usePublishPullRequest(projectId, pr.id, repoInfo);
+  const updateTitle = useUpdatePullRequestTitle(projectId, pr.id, repoInfo);
   const [isCreating, setIsCreating] = useState(false);
   const [isReviewSetupOpen, setIsReviewSetupOpen] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -467,8 +470,8 @@ export function PrHeader({
               {!readOnly && pr.status === 'active' && !pr.isDraft && (
                 <>
                   <div className="flex-1" />
-                  <PrVoteDropdown pr={pr} projectId={projectId} />
-                  <PrAutoComplete pr={pr} projectId={projectId} />
+                  <PrVoteDropdown pr={pr} projectId={projectId} repoInfo={repoInfo} />
+                  <PrAutoComplete pr={pr} projectId={projectId} repoInfo={repoInfo} />
                 </>
               )}
 

@@ -36,6 +36,7 @@ import {
   EditorSettings,
   MaintenanceSettings,
   NotificationsSettings,
+  PreferenceMemorySettings,
   PromptPrefaceSettings,
   UsageDisplaySettings,
   WorkActivitySettings,
@@ -124,6 +125,7 @@ function getGlobalSections(): GlobalSection[] {
       : []),
     { id: 'usage', label: 'Usage Display' },
     { id: 'work-activity', label: 'Work Activity' },
+    { id: 'agent-memory', label: 'Agent Memory', beta: true },
     { id: 'maintenance', label: 'Maintenance' },
   ];
 
@@ -584,6 +586,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Meeting reminders from your macOS Calendar.';
       case 'usage':
         return 'Rate-limit pills shown in the title bar.';
+      case 'agent-memory':
+        return 'Opt in to beta preference evidence capture.';
       case 'maintenance':
         return 'Cleanup, gitignore, and housekeeping tools.';
     }
@@ -615,6 +619,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <CalendarSettings />;
       case 'general:usage':
         return <UsageDisplaySettings />;
+      case 'general:agent-memory':
+        return <PreferenceMemorySettings />;
       case 'general:maintenance':
         return <MaintenanceSettings />;
       case 'skills-agents:skills':
@@ -777,14 +783,17 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const hasProjectTab = projects.length > 0;
   const displayedActiveTab =
     activeTab === 'project' && !hasProjectTab ? 'global' : activeTab;
-  const projectOptions = useMemo<SelectOption<string>[]>(
-    () =>
-      projects.map((project) => ({
-        value: project.id,
-        label: project.name,
-      })),
-    [projects],
-  );
+  const projectOptions = useMemo<SelectOption<string>[]>(() => {
+    const activeProjects = projects.filter((project) => !project.archivedAt);
+    const archivedProjects = projects.filter((project) => project.archivedAt);
+
+    return [...activeProjects, ...archivedProjects].map((project) => ({
+      value: project.id,
+      label: project.name,
+      group: project.archivedAt ? 'Archived' : 'Active',
+      badge: project.archivedAt ? 'Archived' : undefined,
+    }));
+  }, [projects]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
   const globalNavGroups = useMemo(() => getGlobalNavGroups(), []);

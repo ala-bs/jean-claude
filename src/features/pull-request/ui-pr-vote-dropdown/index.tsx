@@ -5,6 +5,7 @@ import clsx from 'clsx';
 
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 import {
+  type PullRequestRepoInfo,
   useCurrentAzureUser,
   useVotePullRequest,
 } from '@/hooks/use-pull-requests';
@@ -54,12 +55,14 @@ const APPROVE_VOTE = 10;
 export function PrVoteDropdown({
   pr,
   projectId,
+  repoInfo,
 }: {
   pr: AzureDevOpsPullRequestDetails;
   projectId: string;
+  repoInfo?: PullRequestRepoInfo;
 }) {
-  const { data: currentUser } = useCurrentAzureUser(projectId);
-  const voteMutation = useVotePullRequest(projectId, pr.id);
+  const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
+  const voteMutation = useVotePullRequest(projectId, pr.id, repoInfo);
 
   const currentReviewer = useMemo(() => {
     return findCurrentReviewer({ reviewers: pr.reviewers, currentUser });

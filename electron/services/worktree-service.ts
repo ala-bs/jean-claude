@@ -1056,6 +1056,7 @@ export interface WorktreeStatus {
   hasStagedChanges: boolean;
   hasUnstagedChanges: boolean;
   hasUnpushedCommits: boolean;
+  currentBranch: string | null;
   worktreeDeleted?: boolean;
 }
 
@@ -1085,6 +1086,7 @@ export async function getWorktreeStatus(
       },
     );
     const hasUnstagedChanges = unstagedOutput.trim().length > 0;
+    const currentBranch = await getCurrentBranch(worktreePath);
 
     // Check for unpushed commits (commits ahead of upstream)
     let hasUnpushedCommits = false;
@@ -1113,6 +1115,7 @@ export async function getWorktreeStatus(
       hasStagedChanges,
       hasUnstagedChanges,
       hasUnpushedCommits,
+      currentBranch,
     };
   } catch (error) {
     // If we get ENOENT, the worktree was likely deleted
@@ -1122,6 +1125,7 @@ export async function getWorktreeStatus(
         hasStagedChanges: false,
         hasUnstagedChanges: false,
         hasUnpushedCommits: false,
+        currentBranch: null,
         worktreeDeleted: true,
       };
     }

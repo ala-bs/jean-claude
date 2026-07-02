@@ -70,6 +70,7 @@ import type {
   UpdateProjectCommand,
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
+import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
@@ -95,6 +96,7 @@ import {
   activateWorkItem,
   addPullRequestComment,
   addPullRequestFileComment,
+  addPullRequestTag,
   addThreadReply,
   cancelBuild,
   cloneRepository,
@@ -102,6 +104,7 @@ import {
   createRelease as createAzureRelease,
   createPullRequest,
   deleteThreadComment,
+  getBoardColumns,
   getBuild,
   getBuildDefinitionDetail,
   getBuildLog,
@@ -117,6 +120,7 @@ import {
   getPullRequestCommits,
   getPullRequestFileContent,
   getPullRequestPolicyEvaluations,
+  getPullRequestTags,
   getPullRequestThreads,
   getPullRequestWorkItems,
   getRelease,
@@ -130,6 +134,7 @@ import {
   publishPullRequest,
   queryWorkItems,
   queueBuild,
+  removePullRequestTag,
   requeuePolicyEvaluation,
   searchIdentities,
   setPullRequestAutoComplete,
@@ -291,6 +296,7 @@ import {
   emitTaskUpsert,
   setCacheSubscriptions,
 } from '../services/cache-event-service';
+import { recordPreferenceEvidence } from '../services/preference-memory-service';
 import {
   fetchRegistrySkillContent,
   installFromRegistry,
@@ -460,6 +466,14 @@ async function ensureFeatureMapFileInDiff(
 async function createTaskAndEmit(
   data: Parameters<typeof TaskRepository.create>[0],
 ) {
+  const project = await ProjectRepository.findById(data.projectId);
+  if (!project) {
+    throw new Error('Project not found');
+  }
+  if (project.archivedAt) {
+    throw new Error('Cannot create tasks for archived projects');
+  }
+
   const task = await TaskRepository.create(data);
   emitTaskUpsert(task);
   return task;
@@ -888,6 +902,7 @@ export function registerIpcHandlers() {
       dbg.ipc('projects:update %s %o', id, data);
       const result = await ProjectRepository.update(id, data);
       if (
+        data.archivedAt !== undefined ||
         data.showWorkItemsInFeed !== undefined ||
         data.workItemProviderId !== undefined ||
         data.workItemProjectId !== undefined ||
@@ -896,6 +911,7 @@ export function registerIpcHandlers() {
         invalidateWorkItemCache();
       }
       if (
+        data.archivedAt !== undefined ||
         data.showPrsInFeed !== undefined ||
         data.repoProviderId !== undefined ||
         data.repoProjectId !== undefined ||
@@ -1228,6 +1244,12 @@ export function registerIpcHandlers() {
         skillPath,
       }));
   });
+
+  ipcMain.handle(
+    'preferenceMemory:recordEvidence',
+    async (_, params: RecordPreferenceEvidenceParams) =>
+      recordPreferenceEvidence(params),
+  );
 
   // Tasks
   ipcMain.handle('tasks:findAll', () => TaskRepository.findAll());
@@ -2549,10 +2571,17 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('tasks:worktree:getStatus', async (_, taskId: string) => {
     const task = await TaskRepository.findById(taskId);
-    if (!task?.worktreePath) {
-      throw new Error(`Task ${taskId} does not have a worktree`);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
     }
-    return getWorktreeStatus(task.worktreePath);
+    const project = task.worktreePath
+      ? null
+      : await ProjectRepository.findById(task.projectId);
+    const gitRootPath = task.worktreePath ?? project?.path;
+    if (!gitRootPath) {
+      throw new Error(`Task ${taskId} does not have a git root`);
+    }
+    return getWorktreeStatus(gitRootPath);
   });
 
   ipcMain.handle(
@@ -2563,13 +2592,25 @@ export function registerIpcHandlers() {
       params: { message?: string; stageAll: boolean },
     ) => {
       const task = await TaskRepository.findById(taskId);
-      if (!task?.worktreePath) {
-        throw new Error(`Task ${taskId} does not have a worktree`);
+      if (!task) {
+        throw new Error(`Task ${taskId} not found`);
       }
 
       const project = await ProjectRepository.findById(task.projectId);
       if (!project) {
         throw new Error(`Project ${task.projectId} not found`);
+      }
+
+      const gitRootPath = task.worktreePath ?? project.path;
+      const currentBranch = await getCurrentBranch(gitRootPath);
+      if (
+        project.protectedBranches?.some(
+          (branch) => branch.toLowerCase() === currentBranch.toLowerCase(),
+        )
+      ) {
+        throw new Error(
+          `Branch "${currentBranch}" is protected. Direct commits are not allowed.`,
+        );
       }
 
       let { message } = params;
@@ -2590,7 +2631,7 @@ export function registerIpcHandlers() {
       }
 
       return commitWorktreeChanges({
-        worktreePath: task.worktreePath,
+        worktreePath: gitRootPath,
         projectPath: project.path,
         message,
         stageAll: params.stageAll,
@@ -2603,8 +2644,8 @@ export function registerIpcHandlers() {
     'tasks:worktree:generateCommitMessage',
     async (_, taskId: string, params: { stageAll: boolean }) => {
       const task = await TaskRepository.findById(taskId);
-      if (!task?.worktreePath) {
-        throw new Error(`Task ${taskId} does not have a worktree`);
+      if (!task) {
+        throw new Error(`Task ${taskId} not found`);
       }
       const project = await ProjectRepository.findById(task.projectId);
       if (!project) {
@@ -2934,6 +2975,14 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:getBoardColumns',
+    (
+      _,
+      params: { providerId: string; projectId: string; projectName: string },
+    ) => getBoardColumns(params),
+  );
+
+  ipcMain.handle(
     'azureDevOps:getRelatedTestCases',
     async (
       _event,
@@ -3074,6 +3123,47 @@ export function registerIpcHandlers() {
         description: string;
       },
     ) => updatePullRequestDescription(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getPullRequestTags',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+      },
+    ) => getPullRequestTags(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:addPullRequestTag',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        name: string;
+      },
+    ) => addPullRequestTag(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:removePullRequestTag',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+        name: string;
+      },
+    ) => removePullRequestTag(params),
   );
 
   ipcMain.handle(

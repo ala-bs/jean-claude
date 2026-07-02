@@ -95,6 +95,7 @@ export function PrCommentForm({
   onSearchMentions,
   initialBody,
   onBodyChange,
+  submitLabel,
 }: {
   onSubmit: (content: string) => void;
   onCancel?: () => void;
@@ -109,6 +110,7 @@ export function PrCommentForm({
   initialBody?: string;
   /** Called when body text changes for draft persistence. */
   onBodyChange?: (body: string) => void;
+  submitLabel?: string;
 }) {
   const [content, setContent] = useState('');
   const [isUploadingImages, setIsUploadingImages] = useState(false);
@@ -206,7 +208,7 @@ export function PrCommentForm({
           icon={<Send />}
           className="self-end"
         >
-          {isBusy ? 'Sending...' : 'Send'}
+          {isBusy ? 'Sending...' : (submitLabel ?? 'Send')}
         </Button>
       </form>
     );
@@ -229,7 +231,7 @@ export function PrCommentForm({
           onSubmit={(body, images) => void submitWithImages(body, images)}
           onCancel={handleCancel}
           placeholder={placeholder}
-          submitLabel={isBusy ? 'Sending...' : 'Add comment'}
+          submitLabel={isBusy ? 'Sending...' : (submitLabel ?? 'Add comment')}
           allowImages={!!uploadImage}
           insertImagesInBody={!!uploadImage}
           isSubmitting={isBusy}

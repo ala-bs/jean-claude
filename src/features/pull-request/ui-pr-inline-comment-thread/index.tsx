@@ -2,6 +2,7 @@ import type { AzureDevOpsCommentThread } from '@/lib/api';
 import type { CommentThread } from '@/features/common/ui-file-diff';
 import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
 import type { MentionOption } from '@/common/ui/mention-textarea';
+import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
 
@@ -16,6 +17,7 @@ export function PrInlineCommentThread({
   mentionOptions,
   onSearchMentions,
   onUploadImage,
+  repoInfo,
   readOnly = false,
 }: {
   thread: CommentThread;
@@ -26,6 +28,7 @@ export function PrInlineCommentThread({
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
+  repoInfo?: PullRequestRepoInfo;
   readOnly?: boolean;
 }) {
   return (
@@ -57,6 +60,7 @@ export function PrInlineCommentThread({
       mentionOptions={mentionOptions}
       onSearchMentions={onSearchMentions}
       onUploadImage={onUploadImage}
+      repoInfo={repoInfo}
       readOnly={readOnly}
     />
   );

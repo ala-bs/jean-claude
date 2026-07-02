@@ -15,17 +15,23 @@ import {
   type QueuedPrompt,
 } from '@shared/agent-types';
 import type {
-  AgentBackend,
   AgentBackendConfig,
   AgentBackendType,
   AgentEvent,
-  AgentSession,
+  AgentTaskContext,
   NormalizedPermissionRequest,
   NormalizedQuestion,
   NormalizedQuestionRequest,
   PromptImagePart,
   PromptPart,
 } from '@shared/agent-backend-types';
+import {
+  type AgentBackendProvider,
+  type AgentRunHandle,
+  type Capability,
+  requireCapability,
+  type RunAgentCapability,
+} from '@shared/agent-backend-provider-types';
 import {
   getDefaultInteractionModeForBackend,
   normalizeInteractionModeForBackend,
@@ -50,15 +56,6 @@ import {
   RawMessageRepository,
   TaskRepository,
 } from '../database/repositories';
-import { dbg } from '../lib/debug';
-import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
-import { pathExists } from '../lib/fs';
-import type { PermissionScope } from '../../shared/permission-types';
-import { SettingsRepository } from '../database/repositories/settings';
-import { TaskStepRepository } from '../database/repositories/task-steps';
-
-
-
 import {
   buildAgentPromptMarkdown,
   getPromptText,
@@ -71,7 +68,6 @@ import {
   resolveRules,
 } from './permission-settings-service';
 import { emitStepUpsert, emitTaskUpsert } from './cache-event-service';
-import { AGENT_BACKEND_CLASSES } from './agent-backends';
 import { agentResourceMonitorService } from './agent-resource-monitor-service';
 import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { applyConfiguredPromptPreface } from './prompt-preface-service';
@@ -79,13 +75,20 @@ import { assertValidWorkspacePath } from './system-project-service';
 import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
 import { buildSessionIdStepUpdate } from './agent-session-update';
 import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
+import { dbg } from '../lib/debug';
 import { generateTaskName } from './name-generation-service';
+import { getAgentBackendProvider } from './agent-backends/providers';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
+import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
 import { notificationService } from './notification-service';
 import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
+import { pathExists } from '../lib/fs';
+import type { PermissionScope } from '../../shared/permission-types';
 import { QuestionBrokerService } from './question-broker-service';
 import { resolveGlobalRules } from './global-permissions-service';
+import { SettingsRepository } from '../database/repositories/settings';
 import { StepService } from './step-service';
+import { TaskStepRepository } from '../database/repositories/task-steps';
 
 
 
@@ -220,8 +223,8 @@ interface ActiveSession {
   stepId: string;
   taskId: string; // kept for worktree/project lookups
   projectId: string;
-  backendSessionId: string | null; // The session ID from the backend
-  backendStartPromise?: Promise<AgentSession>;
+  runStartPromise?: Promise<AgentRunHandle>;
+  runHandle: AgentRunHandle | null;
   sdkSessionId: string | null; // The persistent session ID for resumption
   backendType: AgentBackendType;
   usageFeature: AiUsageFeature;
@@ -229,7 +232,8 @@ interface ActiveSession {
   requestedBackendType: AgentBackendType;
   swapModel?: string;
   swapThinkingEffort?: ThinkingEffort;
-  backend: AgentBackend;
+  provider: AgentBackendProvider;
+  agentTaskContext: AgentTaskContext;
   messageIndex: number;
   queuedPrompts: QueuedPrompt[];
   abortController: AbortController;
@@ -267,6 +271,10 @@ function getUsageFeatureForStep(type: TaskStepType): AiUsageFeature {
 
 class AgentService {
   private sessions: Map<string, ActiveSession> = new Map(); // key is stepId
+  private stepStopPromises = new Map<string, Promise<void>>();
+  private runStopPromises = new WeakMap<AgentRunHandle, Promise<void>>();
+  private runDisposePromises = new WeakMap<AgentRunHandle, Promise<void>>();
+  private runCleanupPromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private startingSteps = new Set<string>();
   private mainWindow: BrowserWindow | null = null;
   private focusedTaskId: string | null = null;
@@ -559,12 +567,12 @@ class AgentService {
     const backendType = requestedBackend;
     const swapModel: string | undefined = undefined;
     const swapThinkingEffort: ThinkingEffort | undefined = undefined;
-    const BackendClass = AGENT_BACKEND_CLASSES[backendType];
-    if (!BackendClass) {
+    const provider = getAgentBackendProvider(backendType);
+    if (!provider) {
       throw new Error(`Unknown agent backend: "${backendType}"`);
     }
 
-    const backend = new BackendClass({
+    const agentTaskContext: AgentTaskContext = {
       taskId: step.taskId,
       sessionStartIndex: existingMessageCount,
       persistRaw: async (params) => {
@@ -581,13 +589,13 @@ class AgentService {
       updateRaw: async (params) => {
         await RawMessageRepository.updateRawData(params.rowId, params.rawData);
       },
-    });
+    };
 
     const session: ActiveSession = {
       stepId,
       taskId: step.taskId,
       projectId: task.projectId,
-      backendSessionId: null,
+      runHandle: null,
       sdkSessionId: step.sessionId ?? null,
       backendType,
       usageFeature: getUsageFeatureForStep(step.type),
@@ -595,7 +603,8 @@ class AgentService {
       requestedBackendType: requestedBackend,
       swapModel,
       swapThinkingEffort,
-      backend,
+      provider,
+      agentTaskContext,
       messageIndex: existingMessageCount,
       queuedPrompts: [],
       abortController: new AbortController(),
@@ -613,6 +622,86 @@ class AgentService {
       existingMessageCount,
     );
     return session;
+  }
+
+  private async stopRunHandle(runHandle: AgentRunHandle): Promise<void> {
+    const existingStop = this.runStopPromises.get(runHandle);
+    if (existingStop) {
+      await existingStop;
+      return;
+    }
+
+    const stopPromise = runHandle.stop();
+    this.runStopPromises.set(runHandle, stopPromise);
+    await stopPromise;
+  }
+
+  private async disposeRunHandle(runHandle: AgentRunHandle): Promise<void> {
+    const existingDispose = this.runDisposePromises.get(runHandle);
+    if (existingDispose) {
+      await existingDispose;
+      return;
+    }
+
+    const disposePromise = runHandle.dispose();
+    this.runDisposePromises.set(runHandle, disposePromise);
+    await disposePromise;
+  }
+
+  private async cleanupRunHandle(runHandle: AgentRunHandle): Promise<void> {
+    const existingCleanup = this.runCleanupPromises.get(runHandle);
+    if (existingCleanup) {
+      await existingCleanup;
+      return;
+    }
+
+    const cleanupPromise = (async () => {
+      try {
+        await this.stopRunHandle(runHandle);
+      } finally {
+        await this.disposeRunHandle(runHandle);
+      }
+    })();
+    this.runCleanupPromises.set(runHandle, cleanupPromise);
+    await cleanupPromise;
+  }
+
+  private async stopCurrentRunHandle(
+    stepId: string,
+    session: ActiveSession,
+  ): Promise<void> {
+    const runHandles: AgentRunHandle[] = [];
+    const activeRunHandle = session.runHandle;
+    const startingRun = session.runStartPromise;
+
+    if (activeRunHandle) {
+      runHandles.push(activeRunHandle);
+    }
+
+    const startedRunHandle =
+      (await startingRun?.catch((error) => {
+        dbg.agentSession(
+          'Backend startup for step %s failed while stopping: %O',
+          stepId,
+          error,
+        );
+        return null;
+      })) ??
+      null;
+
+    if (startedRunHandle) {
+      runHandles.push(startedRunHandle);
+    }
+
+    if (runHandles.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      [...new Set(runHandles)].map((runHandle) =>
+        this.cleanupRunHandle(runHandle),
+      ),
+    );
   }
 
   // --- Main event loop ---
@@ -711,6 +800,7 @@ class AgentService {
     session.currentModel = modelPreference ?? null;
 
     let jcMcpRegistrationId: string | null = null;
+    let runHandle: AgentRunHandle | null = null;
     try {
       let mcpServers: AgentBackendConfig['mcpServers'];
       if (session.backendType !== 'codex') {
@@ -767,46 +857,54 @@ class AgentService {
         }
       }
 
-      session.backendStartPromise = session.backend.start(
-        {
-          type: session.backendType,
-          cwd: workingDir,
-          interactionMode: normalizeInteractionModeForBackend({
-            backend: session.backendType,
-            mode: (step?.interactionMode ??
-              getDefaultInteractionModeForBackend({
-                backend: session.backendType,
-              })) as InteractionMode,
-          }),
-          model:
-            modelPreference && modelPreference !== 'default'
-              ? modelPreference
-              : undefined,
-          thinkingEffort:
-            normalizedThinkingEffort !== 'default'
-              ? normalizedThinkingEffort
-              : undefined,
-          sessionId: session.sdkSessionId ?? undefined,
-          persistedSessionRules: task.sessionRules ?? {},
-          permissionRules: rules,
-          mcpServers,
-        },
-        effectiveParts,
+      const config = {
+        type: session.backendType,
+        cwd: workingDir,
+        interactionMode: normalizeInteractionModeForBackend({
+          backend: session.backendType,
+          mode: (step?.interactionMode ??
+            getDefaultInteractionModeForBackend({
+              backend: session.backendType,
+            })) as InteractionMode,
+        }),
+        model:
+          modelPreference && modelPreference !== 'default'
+            ? modelPreference
+            : undefined,
+        thinkingEffort:
+          normalizedThinkingEffort !== 'default'
+            ? normalizedThinkingEffort
+            : undefined,
+        sessionId: session.sdkSessionId ?? undefined,
+        persistedSessionRules: task.sessionRules ?? {},
+        permissionRules: rules,
+        mcpServers,
+      };
+
+      const runCapability = requireCapability(
+        session.provider.id,
+        'agent.run',
+        session.provider.capabilities.agent
+          .run as Capability<RunAgentCapability>,
       );
-      const agentSession = await session.backendStartPromise;
+      session.runStartPromise = runCapability.start({
+        context: session.agentTaskContext,
+        config,
+        parts: effectiveParts,
+      });
+      runHandle = await session.runStartPromise;
 
-      session.backendSessionId = agentSession.sessionId;
-      session.backendStartPromise = undefined;
+      session.runHandle = runHandle;
+      session.runStartPromise = undefined;
 
-      // Process the event stream
       agentResourceMonitorService.start({
         taskId,
         stepId,
         backend: session.backendType,
-        rootPid: agentSession.rootPid ?? null,
+        rootPid: runHandle.rootPid ?? null,
       });
 
-      for await (const event of agentSession.events) {
+      for await (const event of runHandle.events) {
         if (session.abortController.signal.aborted) {
           dbg.agentSession('Step %s aborted, breaking event loop', stepId);
           break;
@@ -819,8 +917,8 @@ class AgentService {
         await this.jcMcpBridgeService.unregisterStep(stepId, jcMcpRegistrationId);
       }
       await agentResourceMonitorService.stop(stepId);
-      if (session.backendSessionId) {
-        await session.backend.stop(session.backendSessionId);
+      if (runHandle) {
+        await this.cleanupRunHandle(runHandle);
       }
     }
   }
@@ -888,7 +986,6 @@ class AgentService {
       })),
       multiSelect: q.multiSelect,
       ...(q.required !== undefined ? { required: q.required } : {}),
-      ...(q.allowOther !== undefined ? { allowOther: q.allowOther } : {}),
     }));
   }
 
@@ -1107,13 +1204,12 @@ class AgentService {
         }
 
         // Sync session-allowed tools back to the task
-        if (
-          session.backend.getSessionAllowedTools &&
-          session.backendSessionId
-        ) {
-          const tools = session.backend.getSessionAllowedTools(
-            session.backendSessionId,
-          );
+        const sessionAllowedToolsCapability =
+          session.provider.capabilities.agent.sessionAllowedTools;
+        if (sessionAllowedToolsCapability.supported && session.runHandle) {
+          const tools = sessionAllowedToolsCapability.implementation.list({
+            handle: session.runHandle,
+          });
           if (tools.length > 0) {
             const currentTask = await TaskRepository.findById(taskId);
             const existing: PermissionScope = {
@@ -1465,6 +1561,23 @@ class AgentService {
     stepId: string,
     options: { reason?: 'user' | 'shutdown' } = {},
   ): Promise<void> {
+    const existingStop = this.stepStopPromises.get(stepId);
+    if (existingStop) {
+      await existingStop;
+      return;
+    }
+
+    const stopPromise = this.performStop(stepId, options).finally(() => {
+      this.stepStopPromises.delete(stepId);
+    });
+    this.stepStopPromises.set(stepId, stopPromise);
+    await stopPromise;
+  }
+
+  private async performStop(
+    stepId: string,
+    options: { reason?: 'user' | 'shutdown' },
+  ): Promise<void> {
     dbg.agentSession('Stopping step %s', stepId);
 
     const session = this.sessions.get(stepId);
@@ -1497,23 +1610,8 @@ class AgentService {
 
     session.abortController.abort();
 
-    // Stop the backend even if stop races with backend startup completing.
-    const backendSessionId =
-      session.backendSessionId ??
-      (await session.backendStartPromise
-        ?.then((agentSession) => agentSession.sessionId)
-        .catch((error) => {
-          dbg.agentSession(
-            'Backend startup for step %s failed while stopping: %O',
-            stepId,
-            error,
-          );
-          return null;
-        })) ??
-      null;
-    if (backendSessionId) {
-      await session.backend.stop(backendSessionId);
-    }
+    // Stop the provider run even if stop races with backend startup completing.
+    await this.stopCurrentRunHandle(stepId, session);
     await agentResourceMonitorService.stop(stepId);
 
     if (options.reason !== 'shutdown') {
@@ -1590,7 +1688,8 @@ class AgentService {
 
     const { taskId } = session;
 
-    // Find and remove the pending request
+    // Find the pending request. Keep it in place until provider response
+    // succeeds so unsupported capabilities or transient failures can be retried.
     const requestIndex = session.pendingRequests.findIndex(
       (r) => r.requestId === requestId,
     );
@@ -1599,17 +1698,6 @@ class AgentService {
     }
 
     const request = session.pendingRequests[requestIndex];
-    const questionResponse = response as QuestionResponse;
-    if (request.type === 'question' && request.source === 'jc-mcp') {
-      this.questionBroker.answerRequest(requestId, questionResponse.answers);
-    }
-
-    session.pendingRequests.splice(requestIndex, 1);
-    dbg.agentPermission(
-      'Resolved %s request (remaining pending: %d)',
-      request.type,
-      session.pendingRequests.length,
-    );
 
     // Forward to the backend
     if (request.type === 'permission') {
@@ -1630,28 +1718,58 @@ class AgentService {
         }
       }
 
-      await session.backend.respondToPermission(
-        session.backendSessionId!,
+      if (!session.runHandle) {
+        throw new Error(`No active run handle for step ${stepId}`);
+      }
+      const permissionCapability = requireCapability(
+        session.provider.id,
+        'agent.permissions',
+        session.provider.capabilities.agent.permissions,
+      );
+      await permissionCapability.respond({
+        handle: session.runHandle,
         requestId,
-        {
+        response: {
           behavior: permResponse.behavior,
           updatedInput: permResponse.updatedInput,
           message: permResponse.message,
           allowMode: permResponse.allowMode,
           toolsToAllow,
         },
-      );
+      });
     } else {
-      if (request.source !== 'jc-mcp') {
-        await session.backend.respondToQuestion(
-          session.backendSessionId!,
-          requestId,
-          questionResponse.answers,
+      const questionResponse = response as QuestionResponse;
+      if (request.source === 'jc-mcp') {
+        this.questionBroker.answerRequest(requestId, questionResponse.answers);
+      } else {
+        if (!session.runHandle) {
+          throw new Error(`No active run handle for step ${stepId}`);
+        }
+        const questionCapability = requireCapability(
+          session.provider.id,
+          'agent.questions',
+          session.provider.capabilities.agent.questions,
         );
+        await questionCapability.respond({
+          handle: session.runHandle,
+          requestId,
+          answer: questionResponse.answers,
+        });
       }
     }
 
-    notificationService.close(`${stepId}:${request.type}`);
+    const resolvedRequestIndex = session.pendingRequests.findIndex(
+      (pendingRequest) => pendingRequest.requestId === requestId,
+    );
+    if (resolvedRequestIndex !== -1) {
+      session.pendingRequests.splice(resolvedRequestIndex, 1);
+    }
+    dbg.agentPermission(
+      'Resolved %s request (remaining pending: %d)',
+      request.type,
+      session.pendingRequests.length,
+    );
+    notificationService.close(`${taskId}:${request.type}`);
 
     // If there are more pending requests, emit the next one
     if (session.pendingRequests.length > 0) {
@@ -1907,9 +2025,16 @@ class AgentService {
 
     dbg.agentSession('Setting mode for step %s to %s', stepId, normalizedMode);
 
-    if (session?.backendSessionId) {
-      await session.backend.setMode(session.backendSessionId, normalizedMode);
-      dbg.agentSession('Updated backend permission mode for active session');
+    if (session?.runHandle) {
+      const modeCapability =
+        session.provider.capabilities.agent.runtimeModeSwitch;
+      if (modeCapability.supported) {
+        await modeCapability.implementation.setMode({
+          handle: session.runHandle,
+          mode: normalizedMode,
+        });
+        dbg.agentSession('Updated backend permission mode for active session');
+      }
     }
     const updatedStep = await TaskStepRepository.update(stepId, {
       interactionMode: normalizedMode,
@@ -1938,10 +2063,23 @@ class AgentService {
       );
 
       for (const backendType of backends) {
-        if (backendType === 'opencode') {
-          await OpenCodeBackend.compactRawMessagesForTask(taskId);
-        } else {
-          await ClaudeCodeBackend.compactRawMessagesForTask(taskId);
+        switch (backendType) {
+          case 'claude-code':
+            await ClaudeCodeBackend.compactRawMessagesForTask(taskId);
+            break;
+          case 'opencode':
+            await OpenCodeBackend.compactRawMessagesForTask(taskId);
+            break;
+          case 'codex':
+            dbg.agent(
+              'Skipping raw message compaction for unsupported backend %s',
+              backendType,
+            );
+            break;
+          default: {
+            const _exhaustive: never = backendType;
+            throw new Error(`Unknown agent backend: "${_exhaustive}"`);
+          }
         }
       }
     } catch (error) {

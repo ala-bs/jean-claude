@@ -130,6 +130,17 @@ function normalizeItemStarted(
   const itemId = itemIdFromItem(item, params);
   if (itemId === undefined) return [];
 
+  if (str(item.type) === 'contextCompaction') {
+    const entry: NormalizedEntry = {
+      id: itemId,
+      date: dateFromParams(params) ?? dateFromItem(item),
+      type: 'system-status',
+      status: 'compacting',
+    };
+    ctx.itemEntries.set(itemId, entry);
+    return [{ type: 'entry', entry }];
+  }
+
   if (isAssistantMessageItem(item)) {
     const text = textFromItem(item) ?? '';
     const entry = withParentToolId(
@@ -718,6 +729,11 @@ function dateFromItem(item: Record<string, unknown>): string {
     str(item.time) ??
     new Date().toISOString()
   );
+}
+
+function dateFromParams(params: Record<string, unknown>): string | undefined {
+  const ms = num(params.startedAtMs) ?? num(params.started_at_ms);
+  return ms === undefined ? undefined : new Date(ms).toISOString();
 }
 
 function usageFromUnknown(value: unknown): TokenUsage | undefined {

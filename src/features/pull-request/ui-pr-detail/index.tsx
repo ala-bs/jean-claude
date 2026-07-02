@@ -14,9 +14,11 @@ import {
   normalizeMentionId,
 } from '@/lib/azure-devops-mentions';
 import {
+  type PullRequestRepoInfo,
   updateFeedPullRequest,
   useAddPullRequestComment,
   useAddPullRequestFileComment,
+  useCurrentAzureUser,
   usePullRequest,
   usePullRequestChanges,
   usePullRequestCommits,
@@ -24,18 +26,29 @@ import {
   usePullRequestThreads,
   useUploadPullRequestAttachment,
 } from '@/hooks/use-pull-requests';
+import {
+  type ReviewPresetId,
+  useReviewCommentsByFile,
+  useReviewCommentsForFile,
+  useReviewCommentsStore,
+} from '@/stores/review-comments';
+import {
+  useTaskReviewDraftCountByFile,
+  useTaskReviewFileDrafts,
+} from '@/stores/task-review-comment-drafts';
 import { api } from '@/lib/api';
+import { useCommands } from '@/common/hooks/use-commands';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
+import { useLatestRef } from '@/hooks/use-latest-ref';
+import { usePrDetailState } from '@/stores/navigation';
+import { usePrDraftCountByFile } from '@/stores/pr-comment-drafts';
+import { useProject } from '@/hooks/use-projects';
+import { useProjectTasks } from '@/hooks/use-tasks';
+import { useRecordPrView } from '@/hooks/use-pr-view-snapshot';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PrDetailTab } from '@/stores/navigation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
-import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
-import { useCommands } from '@/common/hooks/use-commands';
-import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
-import { usePrDetailState } from '@/stores/navigation';
-import { usePrDraftCountByFile } from '@/stores/pr-comment-drafts';
-import { useProject } from '@/hooks/use-projects';
-import { useRecordPrView } from '@/hooks/use-pr-view-snapshot';
 
 
 
@@ -47,8 +60,9 @@ import { PrHeader } from '../ui-pr-header';
 import { PrOverview } from '../ui-pr-overview';
 
 
-import { useLatestRef } from '@/hooks/use-latest-ref';
 const PR_DETAIL_TABS: PrDetailTab[] = ['overview', 'files', 'commits'];
+
+type CommentMode = 'pr' | 'task';
 
 export function PrDetail({
   projectId,
@@ -80,6 +94,7 @@ export function PrDetail({
   const [searchedMentionOptions, setSearchedMentionOptions] = useState<
     MentionOption[]
   >([]);
+  const [commentMode, setCommentMode] = useState<CommentMode>('pr');
 
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
@@ -127,6 +142,18 @@ export function PrDetail({
   ]);
 
   const { data: project } = useProject(projectId);
+  const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
+  const { data: projectTasks = [] } = useProjectTasks(projectId);
+  const addReviewComment = useReviewCommentsStore((state) => state.addComment);
+  const removeReviewComment = useReviewCommentsStore(
+    (state) => state.removeComment,
+  );
+  const updateReviewComment = useReviewCommentsStore(
+    (state) => state.updateComment,
+  );
+  const resolveReviewComment = useReviewCommentsStore(
+    (state) => state.resolveComment,
+  );
 
   const { mutate: recordPrView } = useRecordPrView();
   const recordPrViewRef = useLatestRef(recordPrView);
@@ -170,6 +197,45 @@ export function PrDetail({
     repoInfo,
   );
   const { data: threads = [] } = usePullRequestThreads(projectId, prId, repoInfo);
+
+  const associatedTask = useMemo(
+    () =>
+      projectTasks.find(
+        (task) => task.pullRequestId === String(prId) && task.type === 'agent',
+      ) ?? null,
+    [projectTasks, prId],
+  );
+  const associatedTaskId = associatedTask?.id ?? '';
+
+  const isPrAuthor = useMemo(() => {
+    if (!pr || !currentUser) return false;
+    const currentUserEmail = currentUser.emailAddress?.toLowerCase();
+    const ownerEmail = pr.createdBy.uniqueName?.toLowerCase();
+    return (
+      currentUser.identityId === pr.createdBy.id ||
+      currentUser.id === pr.createdBy.id ||
+      (!!currentUserEmail && currentUserEmail === ownerEmail)
+    );
+  }, [currentUser, pr]);
+  const canCreateTaskComment = !readOnly && isPrAuthor && !!associatedTask;
+  const activeCommentMode = canCreateTaskComment ? commentMode : 'pr';
+  const taskReviewCommentCountByFile = useReviewCommentsByFile(associatedTaskId);
+  const taskReviewDraftCountByFile = useTaskReviewDraftCountByFile({
+    taskId: associatedTaskId,
+  });
+  const selectedFileReviewComments = useReviewCommentsForFile(
+    associatedTaskId,
+    selectedFile ?? '',
+  );
+  const {
+    setDraft: setTaskReviewDraft,
+    clearDraft: clearTaskReviewDraft,
+    getBody: getTaskReviewDraftBody,
+    defaultCommentFormLineRanges: defaultTaskReviewCommentFormLineRanges,
+  } = useTaskReviewFileDrafts({
+    taskId: associatedTaskId,
+    filePath: selectedFile ?? '',
+  });
 
   // File content for selected file
   const selectedFileData = files.find((f) => f.path === selectedFile);
@@ -219,6 +285,74 @@ export function PrDetail({
       addFileComment.mutate(params);
     },
     [addFileComment],
+  );
+
+  const handleAddTaskReviewComment = useCallback(
+    (params: {
+      filePath: string;
+      lineStart: number;
+      lineEnd?: number;
+      selectedText?: string;
+      body: string;
+      presets: ReviewPresetId[];
+      images?: PromptImagePart[];
+    }) => {
+      if (!associatedTask) return;
+      clearTaskReviewDraft(params.lineStart, params.lineEnd);
+      addReviewComment(associatedTask.id, {
+        commentKind: 'diff',
+        anchor: {
+          filePath: params.filePath,
+          lineStart: params.lineStart,
+          lineEnd: params.lineEnd,
+          selectedText: params.selectedText,
+        },
+        body: params.body,
+        images: params.images,
+        presets: params.presets,
+        status: 'open',
+        resolved: false,
+      });
+    },
+    [addReviewComment, associatedTask, clearTaskReviewDraft],
+  );
+
+  const handleDeleteTaskReviewComment = useCallback(
+    (commentId: string) => {
+      if (!associatedTask) return;
+      removeReviewComment(associatedTask.id, commentId);
+    },
+    [associatedTask, removeReviewComment],
+  );
+
+  const handleEditTaskReviewComment = useCallback(
+    (commentId: string, body: string, images: PromptImagePart[]) => {
+      if (!associatedTask) return;
+      updateReviewComment(associatedTask.id, commentId, {
+        body,
+        images: images.length > 0 ? images : undefined,
+      });
+    },
+    [associatedTask, updateReviewComment],
+  );
+
+  const handleResolveTaskReviewComment = useCallback(
+    (commentId: string) => {
+      if (!associatedTask) return;
+      resolveReviewComment(associatedTask.id, commentId);
+    },
+    [associatedTask, resolveReviewComment],
+  );
+
+  const handleTaskReviewDraftBodyChange = useCallback(
+    (body: string, lineStart: number, lineEnd?: number) => {
+      if (body.trim()) {
+        setTaskReviewDraft({ body, lineStart, lineEnd });
+      } else {
+        clearTaskReviewDraft(lineStart, lineEnd);
+      }
+    },
+    [clearTaskReviewDraft, setTaskReviewDraft],
   );
 
   const handleUploadImage = useCallback(
@@ -325,6 +459,7 @@ export function PrDetail({
         pr={pr}
         projectId={projectId}
         providerId={repoInfo?.providerId}
+        repoInfo={repoInfo}
         readOnly={readOnly}
       />
 
@@ -352,6 +487,22 @@ export function PrDetail({
             count={commits.length}
           />
         </div>
+        {canCreateTaskComment && (
+          <div className="ml-auto flex items-center gap-1 rounded-md border border-glass-border/60 bg-bg-1/70 p-0.5">
+            <ModeButton
+              active={activeCommentMode === 'pr'}
+              onClick={() => setCommentMode('pr')}
+            >
+              Comment PR
+            </ModeButton>
+            <ModeButton
+              active={activeCommentMode === 'task'}
+              onClick={() => setCommentMode('task')}
+            >
+              Task comment
+            </ModeButton>
+          </div>
+        )}
       </div>
 
       {/* Tab content */}
@@ -370,14 +521,31 @@ export function PrDetail({
             repoInfo={repoInfo}
             readOnly={readOnly}
             threads={threads}
-            onAddComment={readOnly ? undefined : handleAddComment}
-            isAddingComment={readOnly ? false : addComment.isPending}
-            onUploadImage={readOnly ? undefined : handleUploadImage}
+            onAddComment={
+              readOnly
+                ? undefined
+                : activeCommentMode === 'task'
+                  ? undefined
+                  : handleAddComment
+            }
+            isAddingComment={
+              readOnly
+                ? false
+                : activeCommentMode === 'task'
+                  ? false
+                  : addComment.isPending
+            }
+            onUploadImage={
+              readOnly || activeCommentMode === 'task'
+                ? undefined
+                : handleUploadImage
+            }
             bottomPadding={bottomPadding}
             fileCount={files.length}
             files={files}
             mentionOptions={mentionOptions}
             onSearchMentions={handleSearchMentions}
+            commentSubmitLabel={undefined}
           />
         )}
 
@@ -403,8 +571,21 @@ export function PrDetail({
                   files={diffFiles}
                   selectedPath={selectedFile}
                   onSelectFile={setSelectedFile}
-                  commentStatusCountByFile={commentStatusCountByFile}
-                  draftCountByFile={draftCountByFile}
+                  commentStatusCountByFile={
+                    activeCommentMode === 'task'
+                      ? undefined
+                      : commentStatusCountByFile
+                  }
+                  commentCountByFile={
+                    activeCommentMode === 'task'
+                      ? taskReviewCommentCountByFile
+                      : undefined
+                  }
+                  draftCountByFile={
+                    activeCommentMode === 'task'
+                      ? taskReviewDraftCountByFile
+                      : draftCountByFile
+                  }
                 />
               )}
               {/* Resize handle */}
@@ -431,13 +612,52 @@ export function PrDetail({
                   providerId={
                     repoInfo?.providerId ?? project?.repoProviderId ?? undefined
                   }
-                  onAddFileComment={readOnly ? undefined : handleAddFileComment}
-                  onUploadImage={readOnly ? undefined : handleUploadImage}
-                  isAddingComment={readOnly ? false : addFileComment.isPending}
+                  repoInfo={repoInfo}
+                  onAddFileComment={
+                    readOnly
+                      ? undefined
+                      : activeCommentMode === 'task'
+                        ? undefined
+                        : handleAddFileComment
+                  }
+                  onUploadImage={
+                    readOnly || activeCommentMode === 'task'
+                      ? undefined
+                      : handleUploadImage
+                  }
+                  isAddingComment={
+                    readOnly
+                      ? false
+                      : activeCommentMode === 'task'
+                        ? false
+                        : addFileComment.isPending
+                  }
                   mentionDisplayNames={mentionDisplayNames}
                   mentionOptions={mentionOptions}
                   onSearchMentions={handleSearchMentions}
                   readOnly={readOnly}
+                  reviewComments={
+                    activeCommentMode === 'task'
+                      ? selectedFileReviewComments
+                      : undefined
+                  }
+                  onAddReviewComment={
+                    activeCommentMode === 'task'
+                      ? handleAddTaskReviewComment
+                      : undefined
+                  }
+                  onDeleteReviewComment={handleDeleteTaskReviewComment}
+                  onEditReviewComment={handleEditTaskReviewComment}
+                  onResolveReviewComment={handleResolveTaskReviewComment}
+                  defaultReviewCommentFormLineRanges={
+                    activeCommentMode === 'task'
+                      ? defaultTaskReviewCommentFormLineRanges
+                      : undefined
+                  }
+                  getReviewCommentDraftBody={getTaskReviewDraftBody}
+                  onReviewCommentDraftBodyChange={
+                    handleTaskReviewDraftBodyChange
+                  }
                 />
               ) : (
                 <div className="text-ink-3 flex h-full items-center justify-center">
@@ -492,6 +712,29 @@ export function PrDetail({
           ))}
       </div>
     </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={clsx(
+        'rounded px-2.5 py-1 text-[11.5px] font-medium transition-colors',
+        active ? 'bg-acc text-acc-ink' : 'text-ink-3 hover:text-ink-1',
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

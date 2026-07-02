@@ -26,6 +26,7 @@ import type {
   AzureDevOpsIdentity,
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsPullRequestTag,
   ReviewerVoteStatus,
 } from '@shared/azure-devops-types';
 
@@ -50,6 +51,7 @@ export type {
   AzureDevOpsCommentThread,
   AzureDevOpsComment,
   AzureDevOpsIdentity,
+  AzureDevOpsPullRequestTag,
 };
 
 export interface AzureDevOpsOrganization {
@@ -108,6 +110,8 @@ export interface AzureDevOpsWorkItem {
     description?: string;
     reproSteps?: string;
     changedDate?: string;
+    boardColumn?: string;
+    boardColumnDone?: boolean;
   };
   testSteps?: TestStep[];
   parentId?: number;
@@ -130,6 +134,13 @@ export interface AzureDevOpsWorkItemState {
   name: string;
   color?: string;
   category?: string;
+}
+
+export interface AzureDevOpsBoardColumn {
+  id: string;
+  name: string;
+  columnType?: string;
+  stateMappings: Record<string, string>;
 }
 
 export interface WorkItemHistoryEntry {
@@ -171,9 +182,29 @@ interface WorkItemsBatchResponse {
       'Microsoft.VSTS.TCM.ReproSteps'?: string;
       'Microsoft.VSTS.TCM.Steps'?: string;
       'System.ChangedDate'?: string;
+      'System.BoardColumn'?: string;
+      'System.BoardColumnDone'?: boolean;
     };
     relations?: WorkItemRelation[];
   }>;
+}
+
+interface AzureDevOpsTeamResponse {
+  value?: Array<{ id: string; name: string }>;
+}
+
+interface AzureDevOpsBoardsResponse {
+  value?: Array<{
+    id: string;
+    name: string;
+    columns?: AzureDevOpsBoardColumn[];
+  }>;
+}
+
+interface AzureDevOpsBoardResponse {
+  id: string;
+  name: string;
+  columns?: AzureDevOpsBoardColumn[];
 }
 
 interface WorkItemUpdateRelation {
@@ -772,6 +803,8 @@ export async function queryWorkItems(params: {
       description: wi.fields['System.Description'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
+      boardColumn: wi.fields['System.BoardColumn'],
+      boardColumnDone: wi.fields['System.BoardColumnDone'],
     },
     parentId: extractParentId(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
@@ -844,6 +877,8 @@ export async function queryAssignedWorkItems(params: {
       description: wi.fields['System.Description'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
+      boardColumn: wi.fields['System.BoardColumn'],
+      boardColumnDone: wi.fields['System.BoardColumnDone'],
     },
     parentId: extractParentId(wi.relations),
     linkedPrs: extractLinkedPrs(wi.relations),
@@ -886,6 +921,8 @@ export async function getWorkItemById(params: {
       description: wi.fields['System.Description'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
+      boardColumn: wi.fields['System.BoardColumn'],
+      boardColumnDone: wi.fields['System.BoardColumnDone'],
     },
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
@@ -924,6 +961,94 @@ export async function getWorkItemStates(params: {
       category: state.category,
     }),
   );
+}
+
+export async function getBoardColumns(params: {
+  providerId: string;
+  projectId: string;
+  projectName: string;
+}): Promise<AzureDevOpsBoardColumn[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const projectPath = encodeURIComponent(params.projectName);
+
+  const teamsResponse = await fetch(
+    `https://dev.azure.com/${orgName}/_apis/projects/${encodeURIComponent(params.projectId)}/teams?api-version=7.1`,
+    { headers: { Authorization: authHeader } },
+  );
+
+  if (!teamsResponse.ok) {
+    const error = await teamsResponse.text();
+    throw new Error(`Failed to fetch Azure DevOps teams: ${error}`);
+  }
+
+  const teamsData: AzureDevOpsTeamResponse = await teamsResponse.json();
+  const teams = (teamsData.value ?? []).sort((a, b) => {
+    const defaultName = `${params.projectName} Team`;
+    if (a.name === defaultName) return -1;
+    if (b.name === defaultName) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  let bestColumns: AzureDevOpsBoardColumn[] = [];
+  let bestScore = 0;
+
+  for (const team of teams) {
+    const teamPath = encodeURIComponent(team.name);
+    const boardsResponse = await fetch(
+      `https://dev.azure.com/${orgName}/${projectPath}/${teamPath}/_apis/work/boards?api-version=7.1`,
+      { headers: { Authorization: authHeader } },
+    );
+    if (!boardsResponse.ok) continue;
+
+    const boardsData: AzureDevOpsBoardsResponse = await boardsResponse.json();
+    for (const board of boardsData.value ?? []) {
+      const columns = board.columns ?? (await fetchBoardColumns({
+        authHeader,
+        orgName,
+        projectPath,
+        teamPath,
+        boardId: board.id,
+      }));
+      const mappedColumns = columns.filter(
+        (column) => Object.keys(column.stateMappings ?? {}).length > 0,
+      );
+      if (mappedColumns.length === 0) continue;
+      const score = getTaskBoardScore(mappedColumns);
+      if (score > bestScore) {
+        bestColumns = mappedColumns;
+        bestScore = score;
+      }
+      if (score >= TASK_BOARD_TYPES.length) return mappedColumns;
+    }
+  }
+
+  return bestColumns;
+}
+
+const TASK_BOARD_TYPES = ['Bug', 'Task', 'User Story', 'Product Backlog Item'];
+
+function getTaskBoardScore(columns: AzureDevOpsBoardColumn[]): number {
+  const mappedTypes = new Set(
+    columns.flatMap((column) => Object.keys(column.stateMappings ?? {})),
+  );
+  return TASK_BOARD_TYPES.filter((type) => mappedTypes.has(type)).length;
+}
+
+async function fetchBoardColumns(params: {
+  authHeader: string;
+  orgName: string;
+  projectPath: string;
+  teamPath: string;
+  boardId: string;
+}): Promise<AzureDevOpsBoardColumn[]> {
+  const response = await fetch(
+    `https://dev.azure.com/${params.orgName}/${params.projectPath}/${params.teamPath}/_apis/work/boards/${encodeURIComponent(params.boardId)}?api-version=7.1`,
+    { headers: { Authorization: params.authHeader } },
+  );
+  if (!response.ok) return [];
+
+  const board: AzureDevOpsBoardResponse = await response.json();
+  return board.columns ?? [];
 }
 
 /**
@@ -1890,6 +2015,11 @@ interface PullRequestsListResponse {
   value: PullRequestResponse[];
 }
 
+interface PullRequestLabelsResponse {
+  count: number;
+  value: Array<{ id?: string; name?: string }>;
+}
+
 // GitUserDate from Azure DevOps API
 interface GitUserDate {
   date: string;
@@ -1979,6 +2109,29 @@ async function getLatestPullRequestIteration(params: {
   }
 
   return iterationsData.value[iterationsData.value.length - 1];
+}
+
+async function getPullRequestIterations(params: {
+  authHeader: string;
+  orgName: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<PullRequestIterationResponse[]> {
+  const iterationsUrl = `https://dev.azure.com/${params.orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations?api-version=7.0`;
+  const iterationsResponse = await fetch(iterationsUrl, {
+    headers: { Authorization: params.authHeader },
+  });
+
+  if (!iterationsResponse.ok) {
+    const error = await iterationsResponse.text();
+    throw new Error(`Failed to get pull request iterations: ${error}`);
+  }
+
+  const iterationsData: PullRequestIterationsListResponse =
+    await iterationsResponse.json();
+
+  return iterationsData.value;
 }
 
 interface CommentResponse {
@@ -2371,6 +2524,90 @@ export async function updatePullRequestDescription(params: {
   const webUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_git/${params.repoId}/pullrequest/${pr.pullRequestId}`;
 
   return mapPullRequestResponse(pr, webUrl);
+}
+
+export async function getPullRequestTags(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<AzureDevOpsPullRequestTag[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/labels?api-version=7.1-preview.1`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to get pull request tags: ${error}`);
+  }
+
+  const labels: PullRequestLabelsResponse = await response.json();
+  return labels.value
+    .filter((label) => !!label.name)
+    .map((label) => ({ id: label.id, name: label.name! }));
+}
+
+export async function addPullRequestTag(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  name: string;
+}): Promise<AzureDevOpsPullRequestTag> {
+  const name = params.name.trim();
+  if (!name) {
+    throw new Error('Pull request tag is required');
+  }
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/labels?api-version=7.1`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to add pull request tag: ${error}`);
+  }
+
+  const label: { id?: string; name?: string } = await response.json();
+  return { id: label.id, name: label.name ?? name };
+}
+
+export async function removePullRequestTag(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+  name: string;
+}): Promise<void> {
+  const name = params.name.trim();
+  if (!name) {
+    throw new Error('Pull request tag is required');
+  }
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const encodedName = encodeURIComponent(name);
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullRequests/${params.pullRequestId}/labels/${encodedName}?api-version=7.1`;
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: authHeader },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to remove pull request tag: ${error}`);
+  }
 }
 
 export async function uploadPullRequestAttachment(params: {
@@ -3059,6 +3296,39 @@ export async function getPullRequestThreads(params: {
   }
 
   const data: ThreadsListResponse = await response.json();
+  const iterationIds = new Set(
+    data.value
+      .map(
+        (thread) =>
+          thread.pullRequestThreadContext?.iterationContext
+            ?.secondComparingIteration,
+      )
+      .filter((id): id is number => id !== undefined),
+  );
+  const sourceCommitByIteration = new Map<number, string>();
+
+  if (iterationIds.size > 0) {
+    try {
+      const iterations = await getPullRequestIterations({
+        authHeader,
+        orgName,
+        projectId: params.projectId,
+        repoId: params.repoId,
+        pullRequestId: params.pullRequestId,
+      });
+
+      for (const iteration of iterations) {
+        if (iteration.sourceRefCommit?.commitId) {
+          sourceCommitByIteration.set(
+            iteration.id,
+            iteration.sourceRefCommit.commitId,
+          );
+        }
+      }
+    } catch {
+      // Original comment preview is optional; don't hide comments if iterations fail.
+    }
+  }
 
   return (
     data.value
@@ -3076,8 +3346,15 @@ export async function getPullRequestThreads(params: {
         threadContext: thread.threadContext
           ? {
               filePath: thread.threadContext.filePath,
+              leftFileStart: thread.threadContext.leftFileStart,
+              leftFileEnd: thread.threadContext.leftFileEnd,
               rightFileStart: thread.threadContext.rightFileStart,
               rightFileEnd: thread.threadContext.rightFileEnd,
+              originalCommitId:
+                sourceCommitByIteration.get(
+                  thread.pullRequestThreadContext?.iterationContext
+                    ?.secondComparingIteration ?? -1,
+                ),
             }
           : undefined,
         comments: thread.comments
@@ -3125,6 +3402,8 @@ export async function addPullRequestComment(params: {
     threadContext: thread.threadContext
       ? {
           filePath: thread.threadContext.filePath,
+          leftFileStart: thread.threadContext.leftFileStart,
+          leftFileEnd: thread.threadContext.leftFileEnd,
           rightFileStart: thread.threadContext.rightFileStart,
           rightFileEnd: thread.threadContext.rightFileEnd,
         }
@@ -3506,6 +3785,8 @@ export async function addPullRequestFileComment(params: {
     threadContext: thread.threadContext
       ? {
           filePath: thread.threadContext.filePath,
+          leftFileStart: thread.threadContext.leftFileStart,
+          leftFileEnd: thread.threadContext.leftFileEnd,
           rightFileStart: thread.threadContext.rightFileStart,
           rightFileEnd: thread.threadContext.rightFileEnd,
         }

@@ -26,6 +26,7 @@ import {
 import {
   type PullRequestRepoInfo,
   useAddThreadReply,
+  useCommitFileContent,
   useCurrentAzureUser,
   useDeleteThreadComment,
   usePullRequestFileContent,
@@ -87,6 +88,7 @@ export function PrComments({
   onSearchMentions,
   readOnly = false,
   repoInfo,
+  submitLabel,
 }: {
   threads: AzureDevOpsCommentThread[];
   providerId?: string;
@@ -105,6 +107,7 @@ export function PrComments({
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   readOnly?: boolean;
   repoInfo?: PullRequestRepoInfo;
+  submitLabel?: string;
 }) {
   const [expandedResolved, setExpandedResolved] = useState<
     Record<number, boolean>
@@ -174,6 +177,7 @@ export function PrComments({
             placeholder="Start a new comment thread..."
             mentionOptions={mentionOptions}
             onSearchMentions={onSearchMentions}
+            submitLabel={submitLabel}
           />
         </div>
       )}
@@ -219,15 +223,17 @@ function StatusDropdown({
   threadId,
   projectId,
   prId,
+  repoInfo,
 }: {
   status: ThreadStatus;
   threadId: number;
   projectId: string;
   prId: number;
+  repoInfo?: PullRequestRepoInfo;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const updateStatus = useUpdateThreadStatus(projectId, prId);
+  const updateStatus = useUpdateThreadStatus(projectId, prId, repoInfo);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -299,6 +305,7 @@ function ThreadReplyForm({
   threadId,
   projectId,
   prId,
+  repoInfo,
   canResolve,
   mentionOptions = EMPTY_MENTION_OPTIONS,
   onSearchMentions,
@@ -307,14 +314,15 @@ function ThreadReplyForm({
   threadId: number;
   projectId: string;
   prId: number;
+  repoInfo?: PullRequestRepoInfo;
   canResolve: boolean;
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const addReply = useAddThreadReply(projectId, prId);
-  const updateStatus = useUpdateThreadStatus(projectId, prId);
+  const addReply = useAddThreadReply(projectId, prId, repoInfo);
+  const updateStatus = useUpdateThreadStatus(projectId, prId, repoInfo);
 
   const handleResolve = useCallback(() => {
     updateStatus.mutate({ threadId, status: 'fixed' });
@@ -381,10 +389,22 @@ function ThreadReplyForm({
 
 const CONTEXT_LINES = 2;
 
+function getSelectedLines(
+  content: string | undefined,
+  startLine: number,
+  endLine: number,
+) {
+  if (!content) return [];
+  return content.split('\n').slice(startLine - 1, endLine);
+}
+
 function ThreadCodePreview({
   filePath,
   startLine,
   endLine,
+  originalStartLine,
+  originalEndLine,
+  originalCommitId,
   projectId,
   prId,
   onOpenFilePreview,
@@ -393,6 +413,9 @@ function ThreadCodePreview({
   filePath: string;
   startLine: number;
   endLine: number;
+  originalStartLine?: number;
+  originalEndLine?: number;
+  originalCommitId?: string;
   projectId: string;
   prId: number;
   onOpenFilePreview?: (params: {
@@ -402,25 +425,66 @@ function ThreadCodePreview({
   }) => void;
   repoInfo?: PullRequestRepoInfo;
 }) {
-  const { data: fileContent } = usePullRequestFileContent(
+  const [version, setVersion] = useState<'current' | 'original'>('current');
+  const { data: currentContent } = usePullRequestFileContent(
     projectId,
     prId,
     filePath,
     'head',
     repoInfo,
   );
+  const { data: originalContent } = useCommitFileContent(
+    projectId,
+    originalCommitId ?? null,
+    filePath,
+    'current',
+    repoInfo,
+  );
   const [tokens, setTokens] = useState<ThemedToken[][]>([]);
 
+  const currentSelectedLines = useMemo(
+    () => getSelectedLines(currentContent, startLine, endLine),
+    [currentContent, startLine, endLine],
+  );
+  const effectiveOriginalStartLine = originalStartLine ?? startLine;
+  const effectiveOriginalEndLine =
+    originalEndLine ?? effectiveOriginalStartLine + (endLine - startLine);
+  const originalSelectedLines = useMemo(
+    () =>
+      getSelectedLines(
+        originalContent,
+        effectiveOriginalStartLine,
+        effectiveOriginalEndLine,
+      ),
+    [originalContent, effectiveOriginalStartLine, effectiveOriginalEndLine],
+  );
+  const showOriginalToggle =
+    !!originalCommitId &&
+    originalSelectedLines.length > 0 &&
+    currentSelectedLines.join('\n') !== originalSelectedLines.join('\n');
+
+  const activeContent =
+    version === 'original' && showOriginalToggle ? originalContent : currentContent;
+  const activeStartLine =
+    version === 'original' && showOriginalToggle
+      ? effectiveOriginalStartLine
+      : startLine;
+  const activeEndLine =
+    version === 'original' && showOriginalToggle
+      ? effectiveOriginalEndLine
+      : endLine;
+
   const { snippetLines, firstLineNumber } = useMemo(() => {
-    if (!fileContent) return { snippetLines: [], firstLineNumber: startLine };
-    const allLines = fileContent.split('\n');
-    const from = Math.max(0, startLine - 1 - CONTEXT_LINES);
-    const to = Math.min(allLines.length, endLine + CONTEXT_LINES);
+    if (!activeContent)
+      return { snippetLines: [], firstLineNumber: activeStartLine };
+    const allLines = activeContent.split('\n');
+    const from = Math.max(0, activeStartLine - 1 - CONTEXT_LINES);
+    const to = Math.min(allLines.length, activeEndLine + CONTEXT_LINES);
     return {
       snippetLines: allLines.slice(from, to),
       firstLineNumber: from + 1,
     };
-  }, [fileContent, startLine, endLine]);
+  }, [activeContent, activeStartLine, activeEndLine]);
 
   const language = useMemo(() => getLanguageFromPath(filePath), [filePath]);
 
@@ -436,17 +500,40 @@ function ThreadCodePreview({
       });
   }, [snippetLines, language]);
 
-  if (!fileContent || snippetLines.length === 0) return null;
+  if (!activeContent || snippetLines.length === 0) return null;
 
   const preview = (
     <div className="border-glass-border overflow-hidden rounded-md border">
+      {showOriginalToggle && (
+        <div className="border-glass-border/60 bg-bg-1 flex items-center gap-1 border-b px-2 py-1">
+          {(['current', 'original'] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setVersion(item);
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+              className={clsx(
+                'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                version === item
+                  ? 'bg-acc/20 text-acc-ink'
+                  : 'text-ink-3 hover:bg-glass-light hover:text-ink-1',
+              )}
+            >
+              {item === 'current' ? 'Current' : 'Original'}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="bg-bg-0/30 overflow-x-auto font-mono text-xs">
         <table className="w-full border-collapse">
           <tbody>
             {snippetLines.map((line, index) => {
               const lineNumber = firstLineNumber + index;
               const isHighlighted =
-                lineNumber >= startLine && lineNumber <= endLine;
+                lineNumber >= activeStartLine && lineNumber <= activeEndLine;
               const lineTokens = tokens[index] ?? [];
 
               return (
@@ -485,18 +572,25 @@ function ThreadCodePreview({
   if (!onOpenFilePreview) return <div className="mb-3">{preview}</div>;
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() =>
         onOpenFilePreview({ filePath, lineStart: startLine, lineEnd: endLine })
       }
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpenFilePreview({ filePath, lineStart: startLine, lineEnd: endLine });
+        }
+      }}
       className="group mb-3 block w-full cursor-pointer text-left"
       title="Open file preview"
     >
       <div className="ring-acc/0 group-hover:ring-acc/45 rounded-md transition-shadow group-hover:ring-1">
         {preview}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -606,7 +700,7 @@ function ExpandedThread({
   repoInfo?: PullRequestRepoInfo;
 }) {
   const resolved = !isActiveThread(thread);
-  const updateStatus = useUpdateThreadStatus(projectId, prId);
+  const updateStatus = useUpdateThreadStatus(projectId, prId, repoInfo);
   const fileStart = thread.threadContext?.rightFileStart?.line;
   const fileEnd = thread.threadContext?.rightFileEnd?.line ?? fileStart;
   const lastComment = thread.comments[thread.comments.length - 1];
@@ -681,6 +775,9 @@ function ExpandedThread({
               projectId={projectId}
               prId={prId}
               repoInfo={repoInfo}
+              originalStartLine={thread.threadContext.leftFileStart?.line}
+              originalEndLine={thread.threadContext.leftFileEnd?.line}
+              originalCommitId={thread.threadContext.originalCommitId}
               onOpenFilePreview={onOpenFilePreview}
             />
           </div>
@@ -701,6 +798,7 @@ function ExpandedThread({
               onSearchMentions={onSearchMentions}
               onUploadImage={onUploadImage}
               readOnly={readOnly}
+              repoInfo={repoInfo}
             />
           ))}
         </div>
@@ -710,6 +808,7 @@ function ExpandedThread({
             threadId={thread.id}
             projectId={projectId}
             prId={prId}
+            repoInfo={repoInfo}
             canResolve={!resolved}
             mentionOptions={mentionOptions}
             onSearchMentions={onSearchMentions}
@@ -724,6 +823,7 @@ function ExpandedThread({
               threadId={thread.id}
               projectId={projectId}
               prId={prId}
+              repoInfo={repoInfo}
             />
           </div>
         )}
@@ -740,6 +840,7 @@ function ThreadComment({
   threadId,
   projectId,
   prId,
+  repoInfo,
   mentionOptions = EMPTY_MENTION_OPTIONS,
   onSearchMentions,
   onUploadImage,
@@ -752,6 +853,7 @@ function ThreadComment({
   threadId: number;
   projectId: string;
   prId: number;
+  repoInfo?: PullRequestRepoInfo;
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
@@ -765,10 +867,10 @@ function ThreadComment({
     () => decodeMentionDisplayNames(comment.content, mentionOptions),
     [comment.content, mentionOptions],
   );
-  const { data: currentUser } = useCurrentAzureUser(projectId);
-  const updateComment = useUpdateThreadComment(projectId, prId);
-  const deleteComment = useDeleteThreadComment(projectId, prId);
-  const setCommentLike = useSetThreadCommentLike(projectId, prId);
+  const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
+  const updateComment = useUpdateThreadComment(projectId, prId, repoInfo);
+  const deleteComment = useDeleteThreadComment(projectId, prId, repoInfo);
+  const setCommentLike = useSetThreadCommentLike(projectId, prId, repoInfo);
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(decodedCommentContent);
   const [editError, setEditError] = useState<string | null>(null);
@@ -969,6 +1071,7 @@ export function PrInlineCommentTimeline({
   threadId,
   projectId,
   prId,
+  repoInfo,
   canResolve = false,
   threadStatus,
   mentionDisplayNames,
@@ -982,6 +1085,7 @@ export function PrInlineCommentTimeline({
   threadId?: number;
   projectId?: string;
   prId?: number;
+  repoInfo?: PullRequestRepoInfo;
   canResolve?: boolean;
   threadStatus?: string;
   mentionDisplayNames?: MentionDisplayNames;
@@ -1018,6 +1122,7 @@ export function PrInlineCommentTimeline({
               threadId={threadId}
               projectId={projectId}
               prId={prId}
+              repoInfo={repoInfo}
             />
           )}
         </div>
@@ -1034,6 +1139,7 @@ export function PrInlineCommentTimeline({
               threadId={threadId}
               projectId={projectId}
               prId={prId}
+              repoInfo={repoInfo}
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
               onUploadImage={onUploadImage}
@@ -1102,6 +1208,7 @@ export function PrInlineCommentTimeline({
               threadId={threadId}
               projectId={projectId}
               prId={prId}
+              repoInfo={repoInfo}
               canResolve={canResolve}
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
@@ -1117,12 +1224,14 @@ function InlineThreadReopenButton({
   threadId,
   projectId,
   prId,
+  repoInfo,
 }: {
   threadId: number;
   projectId: string;
   prId: number;
+  repoInfo?: PullRequestRepoInfo;
 }) {
-  const updateStatus = useUpdateThreadStatus(projectId, prId);
+  const updateStatus = useUpdateThreadStatus(projectId, prId, repoInfo);
 
   const handleReopen = useCallback(() => {
     updateStatus.mutate({ threadId, status: 'active' });

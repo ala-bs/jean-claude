@@ -30,6 +30,7 @@ import {
 } from '@/common/ui/dropdown';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
+import { useActiveProjects } from '@/hooks/use-projects';
 import { useBacklogSelectedProjectId } from '@/stores/backlog-overlay-draft';
 import { useChangelogStore } from '@/stores/changelog';
 import { useCommands } from '@/common/hooks/use-commands';
@@ -37,7 +38,6 @@ import { useCurrentVisibleProject } from '@/stores/navigation';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useModal } from '@/common/context/modal';
 import { useOverlaysStore } from '@/stores/overlays';
-import { useProjects } from '@/hooks/use-projects';
 import { useProjectTodoCount } from '@/hooks/use-project-todos';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
@@ -402,7 +402,7 @@ export function Header() {
   );
   const [reloadStartedAt, setReloadStartedAt] = useState(() => Date.now());
   const { projectId } = useCurrentVisibleProject();
-  const { data: projects = [] } = useProjects();
+  const { data: projects = [] } = useActiveProjects();
   const openOverlay = useOverlaysStore((state) => state.open);
   const openChangelog = useChangelogStore((state) => state.open);
   const persistedBacklogProjectId = useBacklogSelectedProjectId();
@@ -658,9 +658,35 @@ export function Header() {
           className="px-2"
         />
         <NextMeetingButton />
+      </div>
+
+      {/* CENTER — Activity (absolutely centered) */}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div
+          ref={activityButtonRef}
+          className="pointer-events-auto"
+          style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+        >
+          <ActivityButton />
+        </div>
+      </div>
+
+      {/* Spacer to push telemetry right */}
+      <div className="flex-1" />
+
+      {/* RIGHT — telemetry */}
+      <div
+        className="flex min-w-0 items-center justify-end gap-1 px-4"
+        style={
+          {
+            WebkitAppRegion: 'no-drag',
+            maxWidth: `max(0px, calc(50vw - ${activityReservePx}px))`,
+          } as CSSProperties
+        }
+      >
         {api.app.isDevMode && (
           <div
-            className="border-status-run/50 bg-status-run-soft text-status-run group relative ml-2 flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] shadow-[0_0_16px_color-mix(in_srgb,var(--color-status-run)_22%,transparent)]"
+            className="border-status-run/50 bg-status-run-soft text-status-run group relative mr-1 flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-[0.18em] shadow-[0_0_16px_color-mix(in_srgb,var(--color-status-run)_22%,transparent)]"
             aria-label="Development mode"
             aria-describedby="dev-mode-tooltip"
             title={devBadgeLabel}
@@ -681,32 +707,6 @@ export function Header() {
             </span>
           </div>
         )}
-      </div>
-
-      {/* CENTER — Activity (absolutely centered) */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div
-          ref={activityButtonRef}
-          className="pointer-events-auto"
-          style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
-        >
-          <ActivityButton />
-        </div>
-      </div>
-
-      {/* Spacer to push telemetry right */}
-      <div className="flex-1" />
-
-      {/* RIGHT — telemetry */}
-      <div
-        className="flex min-w-0 items-center justify-end gap-1 overflow-hidden px-4"
-        style={
-          {
-            WebkitAppRegion: 'no-drag',
-            maxWidth: `max(0px, calc(50vw - ${activityReservePx}px))`,
-          } as CSSProperties
-        }
-      >
         <RamUsageDisplay />
         <CompletionCostDisplay />
         <ThemeToggle />

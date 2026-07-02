@@ -13,6 +13,8 @@ import type {
 import { CompactingEntry, TimelineEntry } from './ui-timeline-entry';
 import {
   memo,
+  type MouseEvent,
+  type ReactNode,
   startTransition,
   useCallback,
   useEffect,
@@ -32,7 +34,6 @@ import type {
 } from '@shared/normalized-message-v2';
 import type { ContextMenuItem } from './ui-message-context-menu';
 import type { InteractionMode } from '@shared/types';
-import type { MouseEvent } from 'react';
 import { PermissionBar } from '../ui-permission-bar';
 import { processMessageStream } from './message-merger';
 import { PromptGroupEntry } from './ui-prompt-group-entry';
@@ -97,6 +98,7 @@ export const MessageStream = memo(function MessageStream({
   rootPath,
   taskId,
   stepId,
+  afterLastPromptGroup,
 }: {
   messages: NormalizedEntry[];
   isRunning?: boolean;
@@ -129,6 +131,8 @@ export const MessageStream = memo(function MessageStream({
   taskId?: string;
   /** Active step ID so task/step switches can reset scroll position */
   stepId?: string | null;
+  /** Optional action rendered directly below the last prompt group */
+  afterLastPromptGroup?: ReactNode;
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -400,6 +404,11 @@ export const MessageStream = memo(function MessageStream({
                     rootPath={rootPath}
                     taskId={taskId}
                   />
+                  {index === lastPromptGroupIndex && afterLastPromptGroup && (
+                    <div className="mx-4 -mt-2 mb-5 flex justify-start">
+                      {afterLastPromptGroup}
+                    </div>
+                  )}
                 </div>
               );
             }

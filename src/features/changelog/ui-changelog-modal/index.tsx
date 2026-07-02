@@ -235,6 +235,14 @@ export function ChangelogModal() {
     return () => container.removeEventListener('scroll', handleScroll);
   }, [isOpen, visibleDays]);
 
+  useEffect(() => {
+    if (!isOpen || !activeDate) return;
+    document.getElementById(`changelog-release-${activeDate}`)?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    });
+  }, [activeDate, isOpen]);
+
   const handleClose = () => {
     close();
     markSeen(changelogHash);
@@ -304,6 +312,7 @@ export function ChangelogModal() {
               return (
                 <button
                   key={day.date}
+                  id={`changelog-release-${day.date}`}
                   type="button"
                   onClick={() => {
                     if (index >= daysShown) {

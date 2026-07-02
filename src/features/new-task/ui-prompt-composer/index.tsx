@@ -28,6 +28,8 @@ import {
   MAX_FILES,
   processAttachmentFile,
   processAttachmentPath,
+  processPastedPromptAttachment,
+  shouldAttachPastedPromptContent,
 } from '@/lib/file-attachment-utils';
 import {
   isVideoFile,
@@ -612,35 +614,59 @@ export function PromptComposer({
 
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLElement>) => {
-      if (!onImageAttach) return;
-
       const items = Array.from(e.clipboardData.items);
       const imageItems = items.filter((item) => item.type.startsWith('image/'));
       const nextVideoFile = Array.from(e.clipboardData.files).find(isVideoFile);
 
-      if (imageItems.length === 0 && !nextVideoFile) return;
+      if (imageItems.length > 0 || nextVideoFile) {
+        if (!onImageAttach) return;
 
-      const currentCount = images?.length ?? 0;
-      const allowed = MAX_IMAGES - currentCount;
-      if (allowed <= 0) return;
+        const currentCount = images?.length ?? 0;
+        const allowed = MAX_IMAGES - currentCount;
+        if (allowed <= 0) return;
 
-      e.preventDefault();
-      for (const item of imageItems.slice(0, allowed)) {
-        const file = item.getAsFile();
-        if (file) {
-          void processImageFile(file, onImageAttach, showImageError).catch(
-            (err) => {
-              showImageError('Failed to process image');
-              console.error('Failed to process pasted image:', err);
-            },
-          );
+        e.preventDefault();
+        for (const item of imageItems.slice(0, allowed)) {
+          const file = item.getAsFile();
+          if (file) {
+            void processImageFile(file, onImageAttach, showImageError).catch(
+              (err) => {
+                showImageError('Failed to process image');
+                console.error('Failed to process pasted image:', err);
+              },
+            );
+          }
         }
+        if (nextVideoFile && allowed > imageItems.length) {
+          setVideoFile(nextVideoFile);
+        }
+        return;
       }
-      if (nextVideoFile && allowed > imageItems.length) {
-        setVideoFile(nextVideoFile);
+
+      const pastedText = e.clipboardData.getData('text/plain');
+      if (
+        pastedText &&
+        shouldAttachPastedPromptContent(pastedText) &&
+        onFileAttach &&
+        projectRoot
+      ) {
+        e.preventDefault();
+        const currentFileCount = files?.length ?? 0;
+        if (currentFileCount >= MAX_FILES) {
+          showImageError('Remove a file before attaching pasted content');
+          return;
+        }
+
+        void processPastedPromptAttachment(
+          pastedText,
+          projectRoot,
+          onFileAttach,
+          showImageError,
+        );
+        return;
       }
     },
-    [onImageAttach, images, showImageError],
+    [onImageAttach, onFileAttach, images, files, projectRoot, showImageError],
   );
 
   const handleDragOver = useCallback(

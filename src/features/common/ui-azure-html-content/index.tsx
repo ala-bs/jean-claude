@@ -99,6 +99,7 @@ turndown.addRule('tables', {
 export function AzureHtmlContent({
   html,
   providerId,
+  mentionDisplayNames,
   className,
   imageClassName,
   enableImageModal,
@@ -107,6 +108,8 @@ export function AzureHtmlContent({
   html: string;
   /** The provider ID for authenticating image requests */
   providerId?: string;
+  /** Azure DevOps identity IDs to display names for @<guid> mention tokens */
+  mentionDisplayNames?: MentionDisplayNames;
   /** Optional className for the wrapper */
   className?: string;
   /** Optional className for rendered markdown images */
@@ -128,8 +131,12 @@ export function AzureHtmlContent({
       ? rewriteAzureImageUrls(lowered, providerId)
       : lowered;
 
-    return turndown.turndown(processedHtml);
-  }, [html, providerId]);
+    return replaceAzureDevOpsMentions(
+      turndown.turndown(processedHtml),
+      mentionDisplayNames,
+      { renderMarkdownLinks: true },
+    );
+  }, [html, providerId, mentionDisplayNames]);
 
   if (!markdown.trim()) {
     return null;
