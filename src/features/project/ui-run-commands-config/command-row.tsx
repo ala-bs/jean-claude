@@ -217,7 +217,7 @@ export function CommandRow({
     <div
       ref={setNodeRef}
       style={style}
-      className={`border-glass-border bg-glass-subtle overflow-visible rounded-lg border ${isDragging ? 'z-50 opacity-50' : ''}`}
+      className={`border-glass-border bg-glass-subtle relative overflow-visible rounded-lg border ${showSuggestions && filteredSuggestions.length > 0 ? 'z-40' : ''} ${isDragging ? 'z-50 opacity-50' : ''}`}
     >
       <div className="flex items-center gap-2 px-2 py-2">
         <button
@@ -256,7 +256,7 @@ export function CommandRow({
               className="border-0 bg-transparent px-0 font-mono"
             />
             {showSuggestions && filteredSuggestions.length > 0 && (
-              <div className="border-glass-border bg-bg-1 absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-md border py-1 shadow-lg">
+              <div className="border-glass-border bg-bg-2 absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-md border py-1 shadow-[0_18px_44px_rgba(0,0,0,0.55)]">
                 {filteredSuggestions.map((suggestion) => (
                   <button
                     key={suggestion}

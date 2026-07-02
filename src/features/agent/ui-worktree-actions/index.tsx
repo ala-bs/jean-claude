@@ -47,6 +47,7 @@ export function WorktreeActions({
   pullRequestUrl,
   onMergeStarted,
   onOpenPrView,
+  showBranchActions = true,
 }: {
   taskId: string;
   projectId: string;
@@ -58,6 +59,7 @@ export function WorktreeActions({
   pullRequestUrl: string | null;
   onMergeStarted: () => void;
   onOpenPrView: () => void;
+  showBranchActions?: boolean;
 }) {
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
   const [isPushConfirmOpen, setIsPushConfirmOpen] = useState(false);
@@ -115,6 +117,7 @@ export function WorktreeActions({
   const hasUnpushedCommits = status?.hasUnpushedCommits ?? false;
   const hasUncommittedChanges = status?.hasUncommittedChanges ?? false;
   const canPush =
+    showBranchActions &&
     (hasUnpushedCommits || hasUncommittedChanges) &&
     !isStatusLoading &&
     !hasRunningCommitJob;
@@ -143,14 +146,27 @@ export function WorktreeActions({
     pushChanges();
   };
 
+  const isCommitBranchProtected = protectedBranches.some(
+    (branch) =>
+      branch.toLowerCase() === (status?.currentBranch ?? '').toLowerCase(),
+  );
   const canCommit =
-    (status?.hasUncommittedChanges ?? false) && !hasRunningCommitJob;
+    (status?.hasUncommittedChanges ?? false) &&
+    !hasRunningCommitJob &&
+    !isCommitBranchProtected;
   const isSelectedBranchProtected = protectedBranches.includes(selectedBranch);
-  const canMerge = canMergeWorktree({
-    isStatusLoading,
-    isSelectedBranchProtected,
-  });
-  const canCreatePr = !isStatusLoading;
+  const canMerge =
+    showBranchActions &&
+    canMergeWorktree({
+      isStatusLoading,
+      isSelectedBranchProtected,
+    });
+  const canCreatePr = showBranchActions && !isStatusLoading;
+  const commitButtonTitle = isCommitBranchProtected
+    ? `Branch "${status?.currentBranch}" is protected`
+    : canCommit
+      ? 'Commit changes'
+      : 'No changes to commit';
 
   // Set default branch when branches load
   // Priority: sourceBranch > defaultBranch > main > master > first branch
@@ -273,26 +289,30 @@ export function WorktreeActions({
         }
       },
     },
-    {
-      label: 'Merge Worktree',
-      shortcut: 'cmd+shift+m',
-      section: 'Task',
-      handler: () => {
-        if (canMerge) {
-          setIsMergeConfirmOpen(true);
-        }
-      },
-    },
-    {
-      label: 'Create Pull Request',
-      shortcut: 'cmd+shift+p',
-      section: 'Task',
-      handler: () => {
-        if (hasRepoLink && !pullRequestUrl && canCreatePr) {
-          onOpenPrView();
-        }
-      },
-    },
+    ...(showBranchActions
+      ? [
+          {
+            label: 'Merge Worktree',
+            shortcut: 'cmd+shift+m' as const,
+            section: 'Task' as const,
+            handler: () => {
+              if (canMerge) {
+                setIsMergeConfirmOpen(true);
+              }
+            },
+          },
+          {
+            label: 'Create Pull Request',
+            shortcut: 'cmd+shift+p' as const,
+            section: 'Task' as const,
+            handler: () => {
+              if (hasRepoLink && !pullRequestUrl && canCreatePr) {
+                onOpenPrView();
+              }
+            },
+          },
+        ]
+      : []),
   ]);
 
   return (
@@ -306,51 +326,53 @@ export function WorktreeActions({
         size="md"
         icon={<GitCommit />}
         className="w-full"
-        title={canCommit ? 'Commit changes' : 'No changes to commit'}
+        title={commitButtonTitle}
       >
         Commit
         <Kbd shortcut="cmd+shift+k" className="text-[9px]" />
       </Button>
 
-      {/* Merge section */}
-      <div className="flex flex-col gap-2">
-        <label className="text-ink-2 text-xs font-medium">Merge into</label>
-        <BranchSelect
-          branches={branchInfos ?? []}
-          branchesLoading={isBranchesLoading}
-          favoriteBranches={project?.favoriteBranches}
-          defaultBranch={defaultBranch}
-          protectedBranches={protectedBranches}
-          value={selectedBranch || undefined}
-          onChange={setSelectedBranch}
-          disabled={isBranchesLoading || !branchInfos?.length}
-          className="w-full justify-between"
-          placeholder="Select branch..."
-        />
-        {isSelectedBranchProtected ? (
-          <div className="flex items-center gap-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 px-2 py-1.5 text-xs text-amber-300">
-            <Shield className="h-3.5 w-3.5 shrink-0" />
-            <span>This branch is protected. Direct merges are blocked.</span>
-          </div>
-        ) : (
-          <Button
-            onClick={() => setIsMergeConfirmOpen(true)}
-            disabled={!canMerge}
-            loading={mergeMutation.isPending}
-            variant="primary"
-            size="md"
-            icon={<GitMerge />}
-            className="w-full"
-            title={canMerge ? 'Merge worktree' : 'Merge unavailable'}
-          >
-            Merge
-            <Kbd shortcut="cmd+shift+m" className="text-[9px]" />
-          </Button>
-        )}
-      </div>
+      {showBranchActions && (
+        <div className="flex flex-col gap-2">
+          <label className="text-ink-2 text-xs font-medium">Merge into</label>
+          <BranchSelect
+            branches={branchInfos ?? []}
+            branchesLoading={isBranchesLoading}
+            favoriteBranches={project?.favoriteBranches}
+            defaultBranch={defaultBranch}
+            protectedBranches={protectedBranches}
+            value={selectedBranch || undefined}
+            onChange={setSelectedBranch}
+            disabled={isBranchesLoading || !branchInfos?.length}
+            className="w-full justify-between"
+            placeholder="Select branch..."
+          />
+          {isSelectedBranchProtected ? (
+            <div className="flex items-center gap-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 px-2 py-1.5 text-xs text-amber-300">
+              <Shield className="h-3.5 w-3.5 shrink-0" />
+              <span>This branch is protected. Direct merges are blocked.</span>
+            </div>
+          ) : (
+            <Button
+              onClick={() => setIsMergeConfirmOpen(true)}
+              disabled={!canMerge}
+              loading={mergeMutation.isPending}
+              variant="primary"
+              size="md"
+              icon={<GitMerge />}
+              className="w-full"
+              title={canMerge ? 'Merge worktree' : 'Merge unavailable'}
+            >
+              Merge
+              <Kbd shortcut="cmd+shift+m" className="text-[9px]" />
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Create PR / See PR + Push */}
-      {hasRepoLink &&
+      {showBranchActions &&
+        hasRepoLink &&
         (pullRequestUrl ? (
           <div className="flex gap-2">
             {(hasUnpushedCommits || hasUncommittedChanges) && (

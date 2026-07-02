@@ -483,7 +483,7 @@ export function WorktreeReviewView({
                 collapsedFolders={collapsedFolders}
                 onToggleFolder={onToggleFolder}
               />
-              {showWorktreeActions && (
+              {gitReviewEnabled && (
                 <WorktreeActions
                   taskId={taskId}
                   projectId={projectId}
@@ -495,6 +495,7 @@ export function WorktreeReviewView({
                   pullRequestUrl={pullRequestUrl}
                   onMergeStarted={onMergeStarted}
                   onOpenPrView={onOpenPrView}
+                  showBranchActions={showWorktreeActions}
                 />
               )}
             </>

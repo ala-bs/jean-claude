@@ -51,12 +51,21 @@ function getQuestionKey(question: AgentQuestion) {
   return question.id ?? question.question;
 }
 
-function allowsOther(question: AgentQuestion) {
-  return question.allowOther !== false;
+function combineAnswerParts(parts: Array<string | undefined>) {
+  return parts.map((part) => part?.trim()).filter(Boolean).join(', ');
 }
 
-function isQuestionAnswered(question: AgentQuestion, value: string | undefined) {
+function isQuestionAnswered({
+  question,
+  value,
+  other,
+}: {
+  question: AgentQuestion;
+  value: string | undefined;
+  other: string | undefined;
+}) {
   if (question.required === false) return true;
+  if (other?.trim()) return true;
   if (value === undefined) return false;
   if (getQuestionInputMode(question) === 'multi-choice') {
     return getSelectedLabels(value).length > 0;
@@ -68,18 +77,21 @@ function QuestionInput({
   question,
   questionIndex,
   value,
-  isOtherOpen,
+  otherValue,
+  notesValue,
   isActive,
   activeOptionIndex,
   onActivate,
   onSelectOption,
   onTextChange,
   onOtherChange,
+  onNotesChange,
 }: {
   question: AgentQuestion;
   questionIndex: number;
   value: string;
-  isOtherOpen: boolean;
+  otherValue: string;
+  notesValue: string;
   isActive: boolean;
   activeOptionIndex: number;
   onActivate: (params: { questionIndex: number; optionIndex: number }) => void;
@@ -89,40 +101,53 @@ function QuestionInput({
   }) => void;
   onTextChange: (params: { questionIndex: number; value: string }) => void;
   onOtherChange: (params: { questionIndex: number; value: string }) => void;
+  onNotesChange: (params: { questionIndex: number; value: string }) => void;
 }) {
   const mode = getQuestionInputMode(question);
   const selectedLabels = getSelectedLabels(value);
-  const canAnswerOther = allowsOther(question);
-  const optionCount =
-    question.options.length +
-    (mode === 'single-choice' && canAnswerOther ? 1 : 0) +
-    (mode === 'multi-choice' && question.allowOther ? 1 : 0);
+  const otherPlaceholder =
+    mode === 'text' ? 'Add another answer...' : 'Add other answer...';
 
   if (mode === 'text') {
     return (
-      <Textarea
-        value={value}
-        onFocus={() => {
-          onActivate({ questionIndex, optionIndex: 0 });
-        }}
-        onChange={(e) =>
-          onTextChange({ questionIndex, value: e.currentTarget.value })
-        }
-        placeholder="Enter your answer..."
-        size="sm"
-        rows={3}
-      />
+      <div className="space-y-2">
+        <Textarea
+          value={value}
+          onFocus={() => {
+            onActivate({ questionIndex, optionIndex: 0 });
+          }}
+          onChange={(e) =>
+            onTextChange({ questionIndex, value: e.currentTarget.value })
+          }
+          placeholder="Enter your answer..."
+          size="sm"
+          rows={3}
+        />
+        <Textarea
+          value={otherValue}
+          aria-label={`${question.question} other answer`}
+          onChange={(e) =>
+            onOtherChange({ questionIndex, value: e.currentTarget.value })
+          }
+          placeholder={otherPlaceholder}
+          size="sm"
+          rows={2}
+        />
+        <Textarea
+          value={notesValue}
+          aria-label={`${question.question} notes`}
+          onChange={(e) =>
+            onNotesChange({ questionIndex, value: e.currentTarget.value })
+          }
+          placeholder="Notes..."
+          size="sm"
+          rows={2}
+        />
+      </div>
     );
   }
 
   if (mode === 'multi-choice') {
-    const otherValue = selectedLabels
-      .find(
-        (label) => !question.options.some((option) => option.label === label),
-      )
-      ?? '';
-    const otherIndex = question.options.length;
-
     return (
       <div className="space-y-2">
         <div className="flex flex-wrap gap-2">
@@ -163,52 +188,27 @@ function QuestionInput({
               </Button>
             );
           })}
-          {question.allowOther ? (
-            <Button
-              variant="unstyled"
-              aria-pressed={isOtherOpen}
-              onFocus={() => {
-                onActivate({ questionIndex, optionIndex: otherIndex });
-              }}
-              onClick={() => {
-                onActivate({ questionIndex, optionIndex: otherIndex });
-                onSelectOption({ questionIndex, optionIndex: otherIndex });
-              }}
-              className={`focus-visible:ring-acc rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none ${
-                isOtherOpen
-                  ? 'border-teal-400/80 bg-teal-500/25 text-teal-50 ring-1 ring-teal-400/60'
-                  : isActive && activeOptionIndex === otherIndex
-                    ? 'border-acc bg-acc/20 text-ink-0 ring-acc ring-2'
-                    : 'border-glass-border bg-glass-medium text-ink-1 hover:bg-bg-3'
-              }`}
-            >
-              <div className="flex flex-col items-start gap-0.5">
-                <div className="flex items-center gap-1.5 font-medium">
-                  {isOtherOpen ? <Check className="h-3.5 w-3.5" /> : null}
-                  Other
-                </div>
-                <div className="text-xs leading-tight text-current/80">
-                  Enter a custom answer
-                </div>
-              </div>
-            </Button>
-          ) : null}
         </div>
-        {question.allowOther && isOtherOpen ? (
-          <Textarea
-            value={otherValue}
-            onFocus={() => {
-              onActivate({ questionIndex, optionIndex: otherIndex });
-            }}
-            onChange={(e) =>
-              onOtherChange({ questionIndex, value: e.currentTarget.value })
-            }
-            placeholder="Enter your answer..."
-            size="sm"
-            rows={3}
-            autoFocus
-          />
-        ) : null}
+        <Textarea
+          value={otherValue}
+          aria-label={`${question.question} other answer`}
+          onChange={(e) =>
+            onOtherChange({ questionIndex, value: e.currentTarget.value })
+          }
+          placeholder={otherPlaceholder}
+          size="sm"
+          rows={2}
+        />
+        <Textarea
+          value={notesValue}
+          aria-label={`${question.question} notes`}
+          onChange={(e) =>
+            onNotesChange({ questionIndex, value: e.currentTarget.value })
+          }
+          placeholder="Notes..."
+          size="sm"
+          rows={2}
+        />
       </div>
     );
   }
@@ -220,7 +220,7 @@ function QuestionInput({
           <Button
             key={option.label}
             variant="unstyled"
-            aria-pressed={value === option.label && !isOtherOpen}
+            aria-pressed={value === option.label}
             onFocus={() => {
               onActivate({ questionIndex, optionIndex: index });
             }}
@@ -229,7 +229,7 @@ function QuestionInput({
               onSelectOption({ questionIndex, optionIndex: index });
             }}
             className={`focus-visible:ring-acc rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none ${
-              value === option.label && !isOtherOpen
+              value === option.label
                 ? 'border-teal-400/80 bg-teal-500/25 text-teal-50 ring-1 ring-teal-400/60'
                 : isActive && activeOptionIndex === index
                   ? 'border-acc bg-acc/20 text-ink-0 ring-acc ring-2'
@@ -239,7 +239,7 @@ function QuestionInput({
           >
             <div className="flex flex-col items-start gap-0.5">
               <div className="flex items-center gap-1.5 font-medium">
-                {value === option.label && !isOtherOpen ? (
+                {value === option.label ? (
                   <Check className="h-3.5 w-3.5" />
                 ) : null}
                 {option.label}
@@ -252,52 +252,27 @@ function QuestionInput({
             </div>
           </Button>
         ))}
-        {canAnswerOther ? (
-          <Button
-            variant="unstyled"
-            aria-pressed={isOtherOpen}
-            onFocus={() => {
-              onActivate({ questionIndex, optionIndex: optionCount - 1 });
-            }}
-            onClick={() => {
-              onActivate({ questionIndex, optionIndex: optionCount - 1 });
-              onSelectOption({ questionIndex, optionIndex: optionCount - 1 });
-            }}
-            className={`focus-visible:ring-acc rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none ${
-              isOtherOpen
-                ? 'border-teal-400/80 bg-teal-500/25 text-teal-50 ring-1 ring-teal-400/60'
-                : isActive && activeOptionIndex === optionCount - 1
-                  ? 'border-acc bg-acc/20 text-ink-0 ring-acc ring-2'
-                  : 'border-glass-border bg-glass-medium text-ink-1 hover:bg-bg-3'
-            }`}
-          >
-            <div className="flex flex-col items-start gap-0.5">
-              <div className="flex items-center gap-1.5 font-medium">
-                {isOtherOpen ? <Check className="h-3.5 w-3.5" /> : null}
-                Other
-              </div>
-              <div className="text-xs leading-tight text-current/80">
-                Enter a custom answer
-              </div>
-            </div>
-          </Button>
-        ) : null}
       </div>
-      {canAnswerOther && isOtherOpen ? (
-        <Textarea
-          value={value}
-          onFocus={() => {
-            onActivate({ questionIndex, optionIndex: optionCount - 1 });
-          }}
-          onChange={(e) =>
-            onOtherChange({ questionIndex, value: e.currentTarget.value })
-          }
-          placeholder="Enter your answer..."
-          size="sm"
-          rows={3}
-          autoFocus
-        />
-      ) : null}
+      <Textarea
+        value={otherValue}
+        aria-label={`${question.question} other answer`}
+        onChange={(e) =>
+          onOtherChange({ questionIndex, value: e.currentTarget.value })
+        }
+        placeholder={otherPlaceholder}
+        size="sm"
+        rows={2}
+      />
+      <Textarea
+        value={notesValue}
+        aria-label={`${question.question} notes`}
+        onChange={(e) =>
+          onNotesChange({ questionIndex, value: e.currentTarget.value })
+        }
+        placeholder="Notes..."
+        size="sm"
+        rows={2}
+      />
     </div>
   );
 }
@@ -317,11 +292,10 @@ export function QuestionOptions({
   ) => void | Promise<void>;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [otherAnswers, setOtherAnswers] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
   const [activeOptionIndex, setActiveOptionIndex] = useState(0);
-  const [otherOpenByQuestion, setOtherOpenByQuestion] = useState<
-    Record<string, boolean>
-  >({});
 
   useEffect(() => {
     if (request.questions.length === 0) {
@@ -341,11 +315,7 @@ export function QuestionOptions({
   const getOptionCount = useCallback((question: AgentQuestion) => {
     const mode = getQuestionInputMode(question);
     if (mode === 'text') return 0;
-    return (
-      question.options.length +
-      (mode === 'single-choice' && allowsOther(question) ? 1 : 0) +
-      (mode === 'multi-choice' && question.allowOther ? 1 : 0)
-    );
+    return question.options.length;
   }, []);
 
   useEffect(() => {
@@ -392,31 +362,6 @@ export function QuestionOptions({
       }
 
       if (mode === 'multi-choice') {
-        const isOther =
-          question.allowOther && optionIndex === question.options.length;
-        if (isOther) {
-          setOtherOpenByQuestion((prev) => ({
-            ...prev,
-            [questionKey]: !(prev[questionKey] ?? false),
-          }));
-          setAnswers((prev) => {
-            if (!(otherOpenByQuestion[questionKey] ?? false)) {
-              return prev;
-            }
-
-            const selectedOptionLabels = getSelectedLabels(
-              prev[questionKey] ?? '',
-            ).filter((label) =>
-              question.options.some((option) => option.label === label),
-            );
-            return {
-              ...prev,
-              [questionKey]: JSON.stringify(selectedOptionLabels),
-            };
-          });
-          return true;
-        }
-
         const label = question.options[optionIndex]?.label;
         if (!label) return false;
         const current = answers[questionKey] ?? '';
@@ -431,33 +376,12 @@ export function QuestionOptions({
         return true;
       }
 
-      const isOther = optionIndex === question.options.length;
-      if (isOther && !allowsOther(question)) {
-        return false;
-      }
-
-      setOtherOpenByQuestion((prev) => ({
-        ...prev,
-        [questionKey]: isOther,
-      }));
-
-      if (isOther) {
-        const current = answers[questionKey] ?? '';
-        const matchesOption = question.options.some(
-          (option) => option.label === current,
-        );
-        if (matchesOption) {
-          setAnswers((prev) => ({ ...prev, [questionKey]: '' }));
-        }
-        return true;
-      }
-
       const label = question.options[optionIndex]?.label;
       if (!label) return false;
       setAnswers((prev) => ({ ...prev, [questionKey]: label }));
       return true;
     },
-    [answers, otherOpenByQuestion, request.questions],
+    [answers, request.questions],
   );
 
   const updateTextAnswer = useCallback(
@@ -474,26 +398,16 @@ export function QuestionOptions({
       const question = request.questions[questionIndex];
       if (!question) return;
       const questionKey = getQuestionKey(question);
-      const mode = getQuestionInputMode(question);
-      setAnswers((prev) => {
-        if (mode !== 'multi-choice') {
-          return { ...prev, [questionKey]: value };
-        }
+      setOtherAnswers((prev) => ({ ...prev, [questionKey]: value }));
+    },
+    [request.questions],
+  );
 
-        const selectedOptionLabels = getSelectedLabels(
-          prev[questionKey] ?? '',
-        ).filter((label) =>
-          question.options.some((option) => option.label === label),
-        );
-        const nextLabels = value.trim()
-          ? [...selectedOptionLabels, value]
-          : selectedOptionLabels;
-        return { ...prev, [questionKey]: JSON.stringify(nextLabels) };
-      });
-      setOtherOpenByQuestion((prev) => ({
-        ...prev,
-        [questionKey]: true,
-      }));
+  const updateNotes = useCallback(
+    ({ questionIndex, value }: { questionIndex: number; value: string }) => {
+      const question = request.questions[questionIndex];
+      if (!question) return;
+      setNotes((prev) => ({ ...prev, [getQuestionKey(question)]: value }));
     },
     [request.questions],
   );
@@ -520,23 +434,39 @@ export function QuestionOptions({
     });
   }, [activeOptionIndex, activeQuestionIndex, selectOption]);
 
-  const allAnswered = request.questions.every((question) =>
-    isQuestionAnswered(question, answers[getQuestionKey(question)]),
-  );
+  const allAnswered = request.questions.every((question) => {
+    const key = getQuestionKey(question);
+    return isQuestionAnswered({
+      question,
+      value: answers[key],
+      other: otherAnswers[key],
+    });
+  });
 
   const buildResponseAnswers = useCallback((): Record<string, string> => {
     const responseAnswers: Record<string, string> = {};
     for (const question of request.questions) {
       const key = getQuestionKey(question);
       const value = answers[key];
-      if (value === undefined) continue;
-      responseAnswers[key] =
-        question.type === 'multi_choice'
-          ? JSON.stringify(getSelectedLabels(value))
-          : value;
+      const note = notes[key]?.trim() ? `Notes: ${notes[key].trim()}` : '';
+      if (getQuestionInputMode(question) === 'multi-choice') {
+        const selected = value === undefined ? [] : getSelectedLabels(value);
+        const combined = [...selected, otherAnswers[key], note]
+          .map((part) => part?.trim())
+          .filter((part): part is string => Boolean(part));
+        if (combined.length > 0) {
+          responseAnswers[key] = JSON.stringify(combined);
+        }
+        continue;
+      }
+
+      const combined = combineAnswerParts([value, otherAnswers[key], note]);
+      if (combined) {
+        responseAnswers[key] = combined;
+      }
     }
     return responseAnswers;
-  }, [answers, request.questions]);
+  }, [answers, notes, otherAnswers, request.questions]);
 
   const submitAnswers = useCallback(() => {
     if (!allAnswered) return;
@@ -599,7 +529,8 @@ export function QuestionOptions({
                   question={question}
                   questionIndex={index}
                   value={answers[questionKey] || ''}
-                  isOtherOpen={otherOpenByQuestion[questionKey] ?? false}
+                  otherValue={otherAnswers[questionKey] || ''}
+                  notesValue={notes[questionKey] || ''}
                   isActive={activeQuestionIndex === index}
                   activeOptionIndex={
                     activeQuestionIndex === index ? activeOptionIndex : 0
@@ -608,6 +539,7 @@ export function QuestionOptions({
                   onSelectOption={selectOption}
                   onTextChange={updateTextAnswer}
                   onOtherChange={updateOtherAnswer}
+                  onNotesChange={updateNotes}
                 />
               </div>
             </div>

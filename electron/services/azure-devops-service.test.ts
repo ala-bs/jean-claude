@@ -19,6 +19,7 @@ vi.mock('../database/repositories/tokens', () => ({
 
 import {
   getPullRequestFileContent,
+  getPullRequestThreads,
   setPullRequestAutoComplete,
   updatePullRequestTitle,
   uploadPullRequestAttachment,
@@ -458,5 +459,172 @@ describe('getPullRequestFileContent', () => {
     expect(urls).toContain(
       'https://dev.azure.com/org/project/_apis/git/repositories/repo/items?path=%2Fsrc%2Ffile.ts&versionDescriptor.version=target-commit&versionDescriptor.versionType=commit&api-version=7.0',
     );
+  });
+});
+
+describe('getPullRequestThreads', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('maps thread iteration source commit for original comment code', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes('/pullrequests/123/threads?')) {
+        return jsonResponse(
+          {
+            count: 1,
+            value: [
+              {
+                id: 9,
+                status: 'active',
+                isDeleted: false,
+                threadContext: {
+                  filePath: '/src/file.ts',
+                  rightFileStart: { line: 12 },
+                  rightFileEnd: { line: 14 },
+                },
+                pullRequestThreadContext: {
+                  iterationContext: {
+                    firstComparingIteration: 1,
+                    secondComparingIteration: 2,
+                  },
+                },
+                comments: [
+                  {
+                    id: 1,
+                    content: 'Please update this.',
+                    commentType: 'text',
+                    author: {
+                      id: 'user-1',
+                      displayName: 'Reviewer',
+                      uniqueName: 'reviewer@example.com',
+                    },
+                    publishedDate: '2026-01-01T00:00:00Z',
+                    lastUpdatedDate: '2026-01-01T00:00:00Z',
+                  },
+                ],
+              },
+            ],
+          },
+          { ok: true },
+        );
+      }
+
+      if (url.includes('/pullrequests/123/iterations?')) {
+        return jsonResponse(
+          {
+            count: 2,
+            value: [
+              { id: 1, sourceRefCommit: { commitId: 'source-1' } },
+              { id: 2, sourceRefCommit: { commitId: 'source-2' } },
+            ],
+          },
+          { ok: true },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(
+      getPullRequestThreads({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+      }),
+    ).resolves.toMatchObject([
+      {
+        threadContext: {
+          filePath: '/src/file.ts',
+          rightFileStart: { line: 12 },
+          rightFileEnd: { line: 14 },
+          originalCommitId: 'source-2',
+        },
+      },
+    ]);
+  });
+
+  it('keeps threads when original iteration lookup fails', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes('/pullrequests/123/threads?')) {
+        return jsonResponse(
+          {
+            count: 1,
+            value: [
+              {
+                id: 9,
+                status: 'active',
+                isDeleted: false,
+                threadContext: {
+                  filePath: '/src/file.ts',
+                  rightFileStart: { line: 12 },
+                  rightFileEnd: { line: 14 },
+                },
+                pullRequestThreadContext: {
+                  iterationContext: {
+                    firstComparingIteration: 1,
+                    secondComparingIteration: 2,
+                  },
+                },
+                comments: [
+                  {
+                    id: 1,
+                    content: 'Please update this.',
+                    commentType: 'text',
+                    author: {
+                      id: 'user-1',
+                      displayName: 'Reviewer',
+                      uniqueName: 'reviewer@example.com',
+                    },
+                    publishedDate: '2026-01-01T00:00:00Z',
+                    lastUpdatedDate: '2026-01-01T00:00:00Z',
+                  },
+                ],
+              },
+            ],
+          },
+          { ok: true },
+        );
+      }
+
+      if (url.includes('/pullrequests/123/iterations?')) {
+        return jsonResponse({ message: 'nope' }, { ok: false, status: 500 });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(
+      getPullRequestThreads({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+      }),
+    ).resolves.toMatchObject([
+      {
+        id: 9,
+        threadContext: {
+          filePath: '/src/file.ts',
+          rightFileStart: { line: 12 },
+          rightFileEnd: { line: 14 },
+        },
+      },
+    ]);
   });
 });

@@ -113,6 +113,7 @@ export function PrOverview({
   onSearchMentions,
   repoInfo,
   readOnly = false,
+  commentSubmitLabel,
 }: {
   pr: AzureDevOpsPullRequestDetails;
   projectId: string;
@@ -132,6 +133,7 @@ export function PrOverview({
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   repoInfo?: PullRequestRepoInfo;
   readOnly?: boolean;
+  commentSubmitLabel?: string;
 }) {
   const [filePreview, setFilePreview] = useState<{
     filePath: string;
@@ -804,6 +806,7 @@ export function PrOverview({
             onSearchMentions={onSearchMentions}
             readOnly={readOnly}
             repoInfo={repoInfo}
+            submitLabel={commentSubmitLabel}
           />
         </div>
 
@@ -851,8 +854,10 @@ export function PrOverview({
             ) : (
               <PrMetaPanel
                 pr={pr}
+                projectId={projectId}
                 fileCount={fileCount}
                 providerId={providerId}
+                repoInfo={repoInfo}
                 workItems={workItems}
                 isWorkItemsLoading={isWorkItemsLoading}
                 azureProjectId={azureProjectId}
@@ -975,6 +980,7 @@ function PrFilePreviewPane({
               mentionDisplayNames={mentionDisplayNames}
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
+              repoInfo={repoInfo}
               readOnly={readOnly}
             />
           )}

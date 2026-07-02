@@ -171,7 +171,6 @@ export interface AgentQuestion {
   options: QuestionOption[];
   multiSelect: boolean;
   required?: boolean;
-  allowOther?: boolean;
 }
 
 export interface QuestionRequest {

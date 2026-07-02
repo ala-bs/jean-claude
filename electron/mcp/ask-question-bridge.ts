@@ -33,15 +33,8 @@ const CHOICE_QUESTION_SCHEMA = z
     ...QUESTION_BASE_SCHEMA,
     type: z.enum(['single_choice', 'multi_choice']),
     options: z.array(QUESTION_OPTION_SCHEMA).optional(),
-    allowOther: z.boolean().optional(),
   })
-  .strict()
-  .refine(
-    (question) => (question.options?.length ?? 0) > 0 || question.allowOther,
-    {
-      message: 'Choice questions require options or allowOther',
-    },
-  );
+  .strict();
 
 const TEXT_QUESTION_SCHEMA = z
   .object({

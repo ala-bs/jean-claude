@@ -170,7 +170,6 @@ export interface NormalizedQuestion {
   options: NormalizedQuestionOption[];
   multiSelect: boolean;
   required?: boolean;
-  allowOther?: boolean;
 }
 
 export interface NormalizedQuestionRequest {

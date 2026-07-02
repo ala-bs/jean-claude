@@ -81,6 +81,11 @@ export interface AzureDevOpsPullRequestDetails extends AzureDevOpsPullRequest {
   };
 }
 
+export interface AzureDevOpsPullRequestTag {
+  id?: string;
+  name: string;
+}
+
 export interface AzureDevOpsCommit {
   commitId: string;
   author: {
@@ -137,8 +142,11 @@ export interface AzureDevOpsCommentThread {
     | 'unknown';
   threadContext?: {
     filePath: string;
+    leftFileStart?: { line: number };
+    leftFileEnd?: { line: number };
     rightFileStart?: { line: number };
     rightFileEnd?: { line: number };
+    originalCommitId?: string;
   };
   comments: AzureDevOpsComment[];
   isDeleted: boolean;

@@ -82,24 +82,13 @@ describe('question-broker-service', () => {
       );
     });
 
-    it('requires choice options unless allowOther is enabled', () => {
+    it('allows choice questions without options', () => {
       expect(() =>
         validateQuestionSpecs([
           {
             id: 'choice',
             type: 'single_choice',
             label: 'Pick one',
-          },
-        ]),
-      ).toThrow('Question choice requires options or allowOther');
-
-      expect(() =>
-        validateQuestionSpecs([
-          {
-            id: 'choice',
-            type: 'single_choice',
-            label: 'Pick one',
-            allowOther: true,
           },
         ]),
       ).not.toThrow();
@@ -117,33 +106,6 @@ describe('question-broker-service', () => {
           } as unknown as QuestionSpec,
         ]),
       ).toThrow('Question choice required must be boolean');
-    });
-
-    it('rejects malformed allowOther metadata on choice questions', () => {
-      expect(() =>
-        validateQuestionSpecs([
-          {
-            id: 'choice',
-            type: 'single_choice',
-            label: 'Pick one',
-            options: [{ label: 'A' }],
-            allowOther: 'yes',
-          } as unknown as QuestionSpec,
-        ]),
-      ).toThrow('Question choice allowOther must be boolean');
-    });
-
-    it('rejects allowOther metadata on text questions', () => {
-      expect(() =>
-        validateQuestionSpecs([
-          {
-            id: 'text',
-            type: 'text',
-            label: 'Free text',
-            allowOther: true,
-          } as unknown as QuestionSpec,
-        ]),
-      ).toThrow('Question text allowOther is not supported for text questions');
     });
 
     it('rejects malformed non-array options', () => {
@@ -223,7 +185,6 @@ describe('question-broker-service', () => {
           ],
           multiSelect: false,
           required: true,
-          allowOther: false,
         },
         {
           id: 'constraints',
@@ -236,7 +197,6 @@ describe('question-broker-service', () => {
           ],
           multiSelect: true,
           required: true,
-          allowOther: false,
         },
         {
           id: 'notes',
@@ -246,7 +206,6 @@ describe('question-broker-service', () => {
           options: [],
           multiSelect: false,
           required: false,
-          allowOther: false,
         },
       ],
     });
@@ -378,7 +337,7 @@ describe('question-broker-service', () => {
       ).toThrow('Question approach requires an answer');
     });
 
-    it('requires single-choice answers to match available options unless other is allowed', () => {
+    it('allows custom single-choice answers', () => {
       expect(() =>
         validateAnswers({
           questions,
@@ -387,27 +346,10 @@ describe('question-broker-service', () => {
             constraints: 'Fast',
           },
         }),
-      ).toThrow('Question approach answer must match an available option');
-
-      expect(() =>
-        validateAnswers({
-          questions: [
-            {
-              id: 'approach',
-              type: 'single_choice',
-              label: 'Which approach?',
-              options: [{ label: 'Small change' }],
-              allowOther: true,
-            },
-          ],
-          answers: {
-            approach: 'Something else',
-          },
-        }),
       ).not.toThrow();
     });
 
-    it('requires each comma-separated multi-choice value to match available options', () => {
+    it('allows custom multi-choice answers', () => {
       expect(() =>
         validateAnswers({
           questions,
@@ -416,7 +358,7 @@ describe('question-broker-service', () => {
             constraints: 'Fast, Unexpected',
           },
         }),
-      ).toThrow('Question constraints answer must match an available option');
+      ).not.toThrow();
     });
 
     it('allows optional empty text answers to be omitted', () => {
@@ -491,10 +433,10 @@ describe('question-broker-service', () => {
 
     expect(() =>
       broker.answerRequest(created.request.requestId, {
-        approach: 'Invalid',
+        approach: '',
         constraints: 'Fast',
       }),
-    ).toThrow('Question approach answer must match an available option');
+    ).toThrow('Question approach requires an answer');
     expect(broker.getRequest(created.request.requestId)).toBe(created.request);
 
     broker.cancelRequest(created.request.requestId, 'test cleanup');

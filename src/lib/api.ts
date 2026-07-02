@@ -71,6 +71,7 @@ import type {
   AzureDevOpsPolicyEvaluation,
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsPullRequestTag,
 } from '@shared/azure-devops-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
 import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
@@ -78,15 +79,6 @@ import type {
   GlobalPrompt,
   GlobalPromptResponse,
 } from '@shared/global-prompt-types';
-import type {
-  LegacySkillMigrationExecuteResult,
-  LegacySkillMigrationPreviewResult,
-  ManagedSkill,
-  RegistrySearchResult,
-  RegistrySkillContent,
-  Skill,
-  SkillScope,
-} from '@shared/skill-types';
 import type {
   McpPreset,
   McpServerTemplate,
@@ -96,6 +88,14 @@ import type {
   UnifiedMcpServer,
   UpdateMcpServerTemplate,
 } from '@shared/mcp-types';
+import type {
+  NormalizedEntry,
+  NormalizedPermissionRequest,
+} from '@shared/normalized-message-v2';
+import type {
+  RecordPreferenceEvidenceParams,
+  RecordPreferenceEvidenceResult,
+} from '@shared/preference-memory-types';
 import type {
   NewProjectCommand,
   NewProjectCommandGroup,
@@ -109,14 +109,19 @@ import type {
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
 import type {
+  LegacySkillMigrationExecuteResult,
+  LegacySkillMigrationPreviewResult,
+  ManagedSkill,
+  RegistrySearchResult,
+  RegistrySkillContent,
+  Skill,
+  SkillScope,
+} from '@shared/skill-types';
+import type {
   NewWorkActivityEvent,
   WorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
-import type {
-  NormalizedEntry,
-  NormalizedPermissionRequest,
-} from '@shared/normalized-message-v2';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
 import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
 import type { AgentUIEvent } from '@shared/agent-ui-events';
@@ -135,6 +140,7 @@ export type {
   AzureDevOpsCommentThread,
   AzureDevOpsComment,
   AzureDevOpsPolicyEvaluation,
+  AzureDevOpsPullRequestTag,
 };
 
 export interface PackageJson {
@@ -264,6 +270,8 @@ export interface AzureDevOpsWorkItem {
     description?: string;
     reproSteps?: string;
     changedDate?: string;
+    boardColumn?: string;
+    boardColumnDone?: boolean;
   };
   testSteps?: TestStep[];
   parentId?: number;
@@ -285,6 +293,13 @@ export interface AzureDevOpsWorkItemState {
   name: string;
   color?: string;
   category?: string;
+}
+
+export interface AzureDevOpsBoardColumn {
+  id: string;
+  name: string;
+  columnType?: string;
+  stateMappings: Record<string, string>;
 }
 
 export interface WorkItemComment {
@@ -332,6 +347,7 @@ export interface WorktreeStatus {
   hasStagedChanges: boolean;
   hasUnstagedChanges: boolean;
   hasUnpushedCommits: boolean;
+  currentBranch: string | null;
   worktreeDeleted?: boolean;
 }
 
@@ -460,6 +476,11 @@ export interface Api {
     getDetected: () => Promise<DetectedProject[]>;
     detectLogos: (projectPath: string) => Promise<DetectedProjectLogo[]>;
     getSkills: (projectId: string) => Promise<Skill[]>;
+  };
+  preferenceMemory: {
+    recordEvidence: (
+      params: RecordPreferenceEvidenceParams,
+    ) => Promise<RecordPreferenceEvidenceResult>;
   };
   tasks: {
     focused: (taskId: string) => void;
@@ -678,6 +699,11 @@ export interface Api {
       projectName: string;
       workItemType: string;
     }) => Promise<AzureDevOpsWorkItemState[]>;
+    getBoardColumns: (params: {
+      providerId: string;
+      projectId: string;
+      projectName: string;
+    }) => Promise<AzureDevOpsBoardColumn[]>;
     updateWorkItemState: (params: {
       providerId: string;
       workItemId: number;
@@ -747,6 +773,26 @@ export interface Api {
       pullRequestId: number;
       description: string;
     }) => Promise<AzureDevOpsPullRequestDetails>;
+    getPullRequestTags: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+    }) => Promise<AzureDevOpsPullRequestTag[]>;
+    addPullRequestTag: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      name: string;
+    }) => Promise<AzureDevOpsPullRequestTag>;
+    removePullRequestTag: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+      name: string;
+    }) => Promise<void>;
     uploadPullRequestAttachment: (params: {
       providerId: string;
       projectId: string;
@@ -1667,6 +1713,11 @@ export const api: Api = hasWindowApi
         detectLogos: async () => [],
         getSkills: async () => [],
       },
+      preferenceMemory: {
+        recordEvidence: async () => {
+          throw new Error('API not available');
+        },
+      },
       tasks: {
         focused: () => {},
         findAll: async () => [],
@@ -1731,6 +1782,7 @@ export const api: Api = hasWindowApi
             hasStagedChanges: false,
             hasUnstagedChanges: false,
             hasUnpushedCommits: false,
+            currentBranch: null,
           }),
           commit: async () => {},
           generateCommitMessage: async () => undefined,
@@ -1818,6 +1870,7 @@ export const api: Api = hasWindowApi
         getWorkItemById: async () => null,
         getPullRequestStatuses: async () => [],
         getWorkItemStates: async () => [],
+        getBoardColumns: async () => [],
         updateWorkItemState: async () => {
           throw new Error('API not available');
         },
@@ -1842,6 +1895,13 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         updatePullRequestDescription: async () => {
+          throw new Error('API not available');
+        },
+        getPullRequestTags: async () => [],
+        addPullRequestTag: async () => {
+          throw new Error('API not available');
+        },
+        removePullRequestTag: async () => {
           throw new Error('API not available');
         },
         uploadPullRequestAttachment: async () => {

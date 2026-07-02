@@ -1,11 +1,23 @@
 import { MessageSquare, MessagesSquare, Send } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
+import {
+  containsAzureDevOpsMention,
+  type MentionDisplayNames,
+  normalizeMentionId,
+} from '@/lib/azure-devops-mentions';
+import {
+  EMPTY_MENTION_OPTIONS,
+  encodeMentionDisplayNames,
+  MENTION_TEXTAREA_MD_CLASS,
+  type MentionOption,
+  MentionTextarea,
+} from '@/common/ui/mention-textarea';
+import { api } from '@/lib/api';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { Button } from '@/common/ui/button';
-import { Textarea } from '@/common/ui/textarea';
 import type { WorkItemComment } from '@/lib/api';
-
 
 function formatCommentDate(value: string) {
   if (!value) return 'Unknown date';
@@ -25,12 +37,14 @@ function CommentsContent({
   error,
   providerId,
   emptyMessage,
+  mentionDisplayNames,
 }: {
   comments: WorkItemComment[];
   isLoading: boolean;
   error?: string | null;
   providerId?: string;
   emptyMessage: string;
+  mentionDisplayNames?: MentionDisplayNames;
 }) {
   if (isLoading) {
     return <div className="text-ink-3 py-6 text-sm">Loading comments...</div>;
@@ -75,6 +89,7 @@ function CommentsContent({
           <AzureHtmlContent
             html={comment.text}
             providerId={providerId}
+            mentionDisplayNames={mentionDisplayNames}
             className="text-ink-2 text-xs"
             imageClassName="max-h-72 w-auto object-contain"
             enableImageModal
@@ -107,12 +122,71 @@ export function WorkItemComments({
   isAddingComment?: boolean;
 }) {
   const [draft, setDraft] = useState('');
+  const [searchedMentions, setSearchedMentions] = useState<{
+    providerId?: string;
+    options: MentionOption[];
+  }>({ options: [] });
   const trimmedDraft = draft.trim();
+  const shouldLoadMentionNames = comments.some((comment) =>
+    containsAzureDevOpsMention(comment.text),
+  );
+  const { data: initialMentionOptions = EMPTY_MENTION_OPTIONS } = useQuery({
+    queryKey: ['azure-identities', providerId, 'work-item-comments'],
+    queryFn: () =>
+      api.azureDevOps.searchIdentities({ providerId: providerId!, query: '' }),
+    enabled: !!providerId && shouldLoadMentionNames,
+    staleTime: 5 * 60_000,
+  });
+  const mentionOptions = useMemo(() => {
+    const byId = new Map<string, MentionOption>();
+    for (const option of initialMentionOptions) {
+      byId.set(normalizeMentionId(option.id), option);
+    }
+    if (searchedMentions.providerId === providerId) {
+      for (const option of searchedMentions.options) {
+        byId.set(normalizeMentionId(option.id), option);
+      }
+    }
+    return [...byId.values()].sort((a, b) =>
+      a.displayName.localeCompare(b.displayName),
+    );
+  }, [initialMentionOptions, providerId, searchedMentions]);
+  const mentionDisplayNames = useMemo(() => {
+    const names: MentionDisplayNames = {};
+    for (const option of mentionOptions) {
+      names[normalizeMentionId(option.id)] = option.displayName;
+    }
+    return names;
+  }, [mentionOptions]);
+
+  const handleSearchMentions = useCallback(
+    async (query: string) => {
+      if (!providerId) return [];
+      const options = await api.azureDevOps.searchIdentities({
+        providerId,
+        query,
+      });
+      setSearchedMentions((current) => {
+        const byId = new Map<string, MentionOption>();
+        if (current.providerId === providerId) {
+          for (const option of current.options) {
+            byId.set(normalizeMentionId(option.id), option);
+          }
+        }
+        for (const option of options) {
+          byId.set(normalizeMentionId(option.id), option);
+        }
+        return { providerId, options: [...byId.values()] };
+      });
+      return options;
+    },
+    [providerId],
+  );
 
   async function handleSubmit() {
     if (!trimmedDraft || !onAddComment) return;
     try {
-      await onAddComment(trimmedDraft);
+      await onAddComment(encodeMentionDisplayNames(trimmedDraft, mentionOptions));
       setDraft('');
     } catch {
       // Mutation hook handles user-facing error toast. Keep draft for retry.
@@ -121,11 +195,14 @@ export function WorkItemComments({
 
   const editor = onAddComment ? (
     <div className="border-glass-border/50 bg-bg-1/70 sticky bottom-0 -mx-5 mt-3 border-t px-5 pt-3 pb-1 backdrop-blur">
-      <Textarea
+      <MentionTextarea
         value={draft}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={setDraft}
+        mentionOptions={mentionOptions}
+        onSearchMentions={providerId ? handleSearchMentions : undefined}
         placeholder="Write a comment..."
-        rows={3}
+        className={MENTION_TEXTAREA_MD_CLASS}
+        minHeight={76}
         disabled={isAddingComment}
         onKeyDown={(event) => {
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -161,6 +238,7 @@ export function WorkItemComments({
             error={error}
             providerId={providerId}
             emptyMessage={emptyMessage}
+            mentionDisplayNames={mentionDisplayNames}
           />
         </div>
         {editor}
@@ -191,6 +269,7 @@ export function WorkItemComments({
           error={error}
           providerId={providerId}
           emptyMessage={emptyMessage}
+          mentionDisplayNames={mentionDisplayNames}
         />
       </div>
       {editor}

@@ -12,6 +12,7 @@ import {
 } from '@/stores/navigation';
 import type {
   AgentBackendType,
+  PromptFilePart,
   PromptImagePart,
 } from '@shared/agent-backend-types';
 import {
@@ -63,6 +64,7 @@ import {
 } from '@/hooks/use-settings';
 import { useProject, useProjectFeatureMap } from '@/hooks/use-projects';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
+import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
@@ -168,11 +170,14 @@ function AddStepPromptSection({
   projectId,
   featureMap,
   images,
+  files,
   promptSnippets,
   snippetVariableContext,
   onEnterKey,
   onImageAttach,
   onImageRemove,
+  onFileAttach,
+  onFileRemove,
   onAutocompleteOpenChange,
 }: {
   taskId: string;
@@ -183,11 +188,14 @@ function AddStepPromptSection({
   projectId?: string;
   featureMap: ReturnType<typeof useProjectFeatureMap>['data'];
   images: PromptImagePart[];
+  files: PromptFilePart[];
   promptSnippets: ReturnType<typeof usePromptSnippetsSetting>['data'];
   snippetVariableContext: SnippetVariableContext;
   onEnterKey: (e: KeyboardEvent<HTMLTextAreaElement>) => true | undefined;
   onImageAttach: (image: PromptImagePart) => void;
   onImageRemove: (index: number) => void;
+  onFileAttach: (file: PromptFilePart) => void;
+  onFileRemove: (index: number) => void;
   onAutocompleteOpenChange: (isOpen: boolean) => void;
 }) {
   const { draft, setDraft } = useAddStepDialogDraft(taskId);
@@ -248,6 +256,9 @@ function AddStepPromptSection({
         images={images}
         onImageAttach={onImageAttach}
         onImageRemove={onImageRemove}
+        files={files}
+        onFileAttach={onFileAttach}
+        onFileRemove={onFileRemove}
         promptSnippets={promptSnippets}
         snippetVariableContext={snippetVariableContext}
         onAutocompleteOpenChange={onAutocompleteOpenChange}
@@ -260,12 +271,14 @@ function AddStepSubmitButton({
   taskId,
   presetType,
   hasReviewComments,
+  hasFiles,
   reviewersValid,
   onSubmit,
 }: {
   taskId: string;
   presetType: AddStepPresetType;
   hasReviewComments: boolean;
+  hasFiles: boolean;
   reviewersValid: boolean;
   onSubmit: () => void;
 }) {
@@ -275,7 +288,7 @@ function AddStepSubmitButton({
   const canSubmit =
     presetType === 'review-changes'
       ? reviewersValid
-      : promptTemplate.trim().length > 0 || hasReviewComments;
+      : promptTemplate.trim().length > 0 || hasReviewComments || hasFiles;
 
   return (
     <Button
@@ -294,6 +307,7 @@ function AddStepDialogFooter({
   taskId,
   presetType,
   hasReviewComments,
+  hasFiles,
   reviewersValid,
   autoStart,
   onAutoStartChange,
@@ -303,6 +317,7 @@ function AddStepDialogFooter({
   taskId: string;
   presetType: AddStepPresetType;
   hasReviewComments: boolean;
+  hasFiles: boolean;
   reviewersValid: boolean;
   autoStart: boolean;
   onAutoStartChange: (enabled: boolean) => void;
@@ -328,6 +343,7 @@ function AddStepDialogFooter({
           taskId={taskId}
           presetType={presetType}
           hasReviewComments={hasReviewComments}
+          hasFiles={hasFiles}
           reviewersValid={reviewersValid}
           onSubmit={onSubmit}
         />
@@ -403,6 +419,7 @@ export function AddStepDialog({
     string | null
   >(null);
   const [images, setImages] = useState<PromptImagePart[]>([]);
+  const [files, setFiles] = useState<PromptFilePart[]>([]);
   const [autoStart, setAutoStart] = useState(true);
   const [includeReviewComments, setIncludeReviewComments] = useState(true);
   const [showReviewPreview, setShowReviewPreview] = useState(false);
@@ -510,6 +527,7 @@ export function AddStepDialog({
       startTransition(() => setThinkingEffort(defaultThinkingEffort ?? 'default'));
       startTransition(() => setBackendModelPresetId(null));
       startTransition(() => setImages([]));
+      startTransition(() => setFiles([]));
       startTransition(() => setAutoStart(true));
       startTransition(() => setIncludeReviewComments(true));
       startTransition(() => setShowReviewPreview(false));
@@ -574,7 +592,8 @@ export function AddStepDialog({
       submitPresetType === 'review-changes'
         ? reviewersValid
         : promptTemplate.trim().length > 0 ||
-          (includeReviewComments && openReviewComments.length > 0);
+          (includeReviewComments && openReviewComments.length > 0) ||
+          files.length > 0;
     if (!canSubmit) return;
     const submitSelection = await resolveRateLimitSwapSelection({
       backend,
@@ -587,6 +606,7 @@ export function AddStepDialog({
       text: promptTemplate.trim(),
       featureMap,
     });
+    const promptWithFiles = `${expandedPrompt}${buildAttachedFilesXml(files)}`;
     const shouldIncludeReviewComments =
       includeReviewComments && openReviewComments.length > 0;
     const reviewParts = shouldIncludeReviewComments ? reviewPromptParts : null;
@@ -604,7 +624,7 @@ export function AddStepDialog({
       ) ?? [];
 
     const didConfirm = await onConfirm({
-      promptTemplate: [expandedPrompt, reviewText]
+      promptTemplate: [promptWithFiles, reviewText]
         .filter((part) => part.trim().length > 0)
         .join('\n\n'),
       hasUserPrompt: expandedPrompt.trim().length > 0,
@@ -639,6 +659,7 @@ export function AddStepDialog({
     model,
     normalizedThinkingEffort,
     images,
+    files,
     autoStart,
     reviewers,
     reviewersValid,
@@ -665,6 +686,14 @@ export function AddStepDialog({
 
   const handleImageRemove = useCallback((index: number) => {
     setImages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleFileAttach = useCallback((file: PromptFilePart) => {
+    setFiles((prev) => [...prev, file]);
+  }, []);
+
+  const handleFileRemove = useCallback((index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
   useCommands(
@@ -714,11 +743,14 @@ export function AddStepDialog({
             projectId={projectId}
             featureMap={featureMap}
             images={images}
+            files={files}
             promptSnippets={promptSnippets}
             snippetVariableContext={snippetVariableContext}
             onEnterKey={handleEnterKey}
             onImageAttach={handleImageAttach}
             onImageRemove={handleImageRemove}
+            onFileAttach={handleFileAttach}
+            onFileRemove={handleFileRemove}
             onAutocompleteOpenChange={setIsAutocompleteOpen}
           />
           {openReviewComments.length > 0 && (
@@ -932,6 +964,7 @@ export function AddStepDialog({
             hasReviewComments={
               includeReviewComments && openReviewComments.length > 0
             }
+            hasFiles={files.length > 0}
             reviewersValid={reviewersValid}
             autoStart={autoStart}
             onAutoStartChange={setAutoStart}

@@ -12,6 +12,7 @@ import clsx from 'clsx';
 import {
   getAllowedMergeStrategies,
   MERGE_STRATEGY_LABELS,
+  type PullRequestRepoInfo,
   useCurrentAzureUser,
   usePullRequestPolicyEvaluations,
   useRequeuePolicyEvaluation,
@@ -29,21 +30,24 @@ import { getCurrentIdentityId } from '../utils-pr-current-user';
 export function PrAutoComplete({
   pr,
   projectId,
+  repoInfo,
   variant = 'default',
 }: {
   pr: AzureDevOpsPullRequestDetails;
   projectId: string;
+  repoInfo?: PullRequestRepoInfo;
   variant?: 'default' | 'compact';
 }) {
-  const { data: currentUser } = useCurrentAzureUser(projectId);
-  const autoCompleteMutation = useSetAutoComplete(projectId, pr.id);
-  const requeueMutation = useRequeuePolicyEvaluation(projectId, pr.id);
+  const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
+  const autoCompleteMutation = useSetAutoComplete(projectId, pr.id, repoInfo);
+  const requeueMutation = useRequeuePolicyEvaluation(projectId, pr.id, repoInfo);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [queuedIds, setQueuedIds] = useState<Set<string>>(() => new Set());
   const { data: evaluations = [] } = usePullRequestPolicyEvaluations(
     projectId,
     pr.id,
     { refetchInterval: isModalOpen && queuedIds.size > 0 ? 3_000 : false },
+    repoInfo,
   );
   const previousEvaluationsRef = useRef(evaluations);
 

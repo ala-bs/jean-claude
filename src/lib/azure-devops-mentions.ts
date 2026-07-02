@@ -2,10 +2,16 @@ export type MentionDisplayNames = Record<string, string>;
 
 const AZURE_MENTION_PATTERN =
   /@<([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})>/g;
+const AZURE_MENTION_DETECTION_PATTERN =
+  /@(?:<|&lt;)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:>|&gt;)/;
 const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+.!|>-])/g;
 
 export function normalizeMentionId(id: string) {
   return id.toLowerCase();
+}
+
+export function containsAzureDevOpsMention(content: string) {
+  return AZURE_MENTION_DETECTION_PATTERN.test(content);
 }
 
 export function replaceAzureDevOpsMentions(

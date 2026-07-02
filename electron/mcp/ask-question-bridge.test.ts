@@ -24,7 +24,6 @@ const input = {
       id: 'constraints',
       type: 'multi_choice',
       label: 'Which constraints matter?',
-      allowOther: true,
     },
     {
       id: 'notes',
@@ -180,13 +179,7 @@ describe('askQuestionViaBridge', () => {
     await expect(
       askQuestionViaBridge({
         input: {
-          questions: [
-            {
-              id: 'choice',
-              type: 'single_choice',
-              label: 'Pick one',
-            },
-          ],
+          questions: [],
         },
         env,
         fetchImpl,
@@ -233,8 +226,9 @@ describe('askQuestionViaBridge', () => {
     ).rejects.toThrow('Invalid ask_question input');
   });
 
-  it('rejects allowOther on text questions', async () => {
+  it('rejects allowOther metadata', async () => {
     const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi.fn();
 
     await expect(
       askQuestionViaBridge({
@@ -249,9 +243,10 @@ describe('askQuestionViaBridge', () => {
           ],
         },
         env,
-        fetchImpl: vi.fn(),
+        fetchImpl,
       }),
     ).rejects.toThrow('Invalid ask_question input');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('turns bridge non-2xx responses into tool errors', async () => {

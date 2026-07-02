@@ -88,6 +88,36 @@ describe('normalizeCodexNotification', () => {
     ]);
   });
 
+  it('maps Codex context compaction start to compacting system status', () => {
+    const ctx = createCodexNormalizationContext();
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/started',
+          params: {
+            item: {
+              type: 'contextCompaction',
+              id: 'd7fd0a73-ca64-4286-915a-d9d37508d01c',
+            },
+            startedAtMs: 1782557385824,
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: {
+          id: 'd7fd0a73-ca64-4286-915a-d9d37508d01c',
+          date: '2026-06-27T10:49:45.824Z',
+          type: 'system-status',
+          status: 'compacting',
+        },
+      },
+    ]);
+  });
+
   it('updates repeated Codex userMessage completion instead of duplicating prompt', () => {
     const ctx = createCodexNormalizationContext();
     const notification = {

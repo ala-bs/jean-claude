@@ -301,6 +301,22 @@ function getContinueReferenceStep({
   return null;
 }
 
+function getInterruptedContinueStep({
+  steps,
+  activeStep,
+}: {
+  steps: TaskStep[];
+  activeStep?: TaskStep | null;
+}): TaskStep | null {
+  if (activeStep?.status === 'interrupted') return activeStep;
+
+  return steps.reduce<TaskStep | null>((latest, step) => {
+    if (step.status !== 'interrupted') return latest;
+    if (!latest || step.updatedAt > latest.updatedAt) return step;
+    return latest;
+  }, null);
+}
+
 function getLastAssistantMessage(messages: NormalizedEntry[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -696,11 +712,15 @@ function AgentResourceHoverPanel({
 }
 
 function AgentResourceTooltip({
+  ariaLabel,
   children,
   content,
+  onActivate,
 }: {
+  ariaLabel?: string;
   children: ReactNode;
   content: ReactNode;
+  onActivate?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState<{
@@ -736,14 +756,30 @@ function AgentResourceTooltip({
     closeTimerRef.current = setTimeout(() => setIsOpen(false), 120);
   }, [clearCloseTimer]);
 
+  const activate = useCallback(() => {
+    if (!onActivate) return;
+    setIsOpen(false);
+    onActivate();
+  }, [onActivate]);
+
   useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
 
   return (
     <>
       <div
         ref={triggerRef}
+        aria-label={ariaLabel}
+        role={onActivate ? 'button' : undefined}
         onFocus={open}
         onBlur={scheduleClose}
+        onClick={activate}
+        onKeyDown={(event) => {
+          if (!onActivate) return;
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            activate();
+          }
+        }}
         onMouseEnter={open}
         onMouseLeave={scheduleClose}
         tabIndex={0}
@@ -776,6 +812,7 @@ function AgentResourcePill({
   stepId: string;
   isRunning: boolean;
 }) {
+  const openOverlay = useOverlaysStore((state) => state.open);
   const { data, historyByStepId } = useAgentResourceSnapshots();
   const snapshot = data?.find((item) => item.stepId === stepId);
   const history = historyByStepId[stepId] ?? [];
@@ -811,6 +848,7 @@ function AgentResourcePill({
 
   return (
     <AgentResourceTooltip
+      ariaLabel="Open resource metrics"
       content={
         <AgentResourceHoverPanel
           backendLabel={backendLabel}
@@ -822,8 +860,9 @@ function AgentResourcePill({
           rssSamples={samples}
         />
       }
+      onActivate={() => openOverlay('resources')}
     >
-      <div className="border-glass-border bg-bg-0/25 text-ink-1 hover:border-accent-1/40 hover:bg-bg-2 flex h-7 w-[196px] cursor-default items-center gap-1.5 rounded-[7px] border px-2 font-mono text-[11.5px] font-semibold tabular-nums transition-colors">
+      <div className="border-glass-border bg-bg-0/25 text-ink-1 hover:border-accent-1/40 hover:bg-bg-2 flex h-7 w-[196px] cursor-pointer items-center gap-1.5 rounded-[7px] border px-2 font-mono text-[11.5px] font-semibold tabular-nums transition-colors">
         <span
           className={clsx(
             'h-[5px] w-[5px] rounded-full',
@@ -1099,6 +1138,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const [startingStepIds, setStartingStepIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [continuingInterruptedStepId, setContinuingInterruptedStepId] =
+    useState<string | null>(null);
   const stepStartJobIdsRef = useRef<Map<string, string>>(new Map());
   const [showWorkItemsEditor, setShowWorkItemsEditor] = useState(false);
   const [workItemsFilter, setWorkItemsFilter] = useState('');
@@ -1218,7 +1259,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     // If the currently selected step still exists, keep it
     if (activeStepId && steps.some((s) => s.id === activeStepId)) return;
 
-    // Priority: first running → first ready → last completed → first step
+    // Priority: first running → first ready → last terminal → first step
     const running = steps.find((s) => s.status === 'running');
     if (running) {
       setActiveStepId(running.id);
@@ -1229,9 +1270,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       setActiveStepId(ready.id);
       return;
     }
-    const completedSteps = steps.filter((s) => s.status === 'completed');
-    if (completedSteps.length > 0) {
-      setActiveStepId(completedSteps[completedSteps.length - 1]!.id);
+    const terminalSteps = steps.filter(
+      (s) =>
+        s.status === 'completed' ||
+        s.status === 'interrupted' ||
+        s.status === 'errored',
+    );
+    if (terminalSteps.length > 0) {
+      setActiveStepId(terminalSteps[terminalSteps.length - 1]!.id);
       return;
     }
     setActiveStepId(steps[0]!.id);
@@ -1508,11 +1554,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       start: boolean;
       includedReviewCommentIds: string[];
       reviewers?: import('@shared/types').ReviewerConfig[];
+      preferredStepId?: string | null;
     }) => {
       const stepList = steps ?? [];
       const preferredStepId = addStepAtEnd
         ? (stepList[stepList.length - 1]?.id ?? null)
-        : addStepAfterStepId;
+        : (data.preferredStepId ?? addStepAfterStepId);
       const referenceStep =
         data.presetType === 'continue'
           ? getContinueReferenceStep({
@@ -1624,6 +1671,34 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         });
         return false;
       }
+  };
+
+  const handleContinueInterruptedStep = async () => {
+    const interruptedStep = getInterruptedContinueStep({
+      steps: steps ?? [],
+      activeStep,
+    });
+    if (!interruptedStep) return;
+    if (continuingInterruptedStepId === interruptedStep.id) return;
+
+    setContinuingInterruptedStepId(interruptedStep.id);
+    setActiveStepId(interruptedStep.id);
+
+    try {
+      await api.agent.sendMessage(interruptedStep.id, [
+        { type: 'text', text: 'continue' },
+      ]);
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to continue interrupted step',
+      });
+    } finally {
+      setContinuingInterruptedStepId(null);
+    }
   };
 
   const handleStartStep = useCallback(async () => {
@@ -1979,6 +2054,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const hasMessages = agentMeta.hasMessages;
   const activeStepError = agentMeta.error ?? 'No error details available.';
   const canSendMessage = !isAgentBusy && hasMessages && !!activeStep?.sessionId;
+  const interruptedStep = getInterruptedContinueStep({
+    steps: steps ?? [],
+    activeStep,
+  });
+  const canContinueInterruptedStep =
+    !isAgentBusy &&
+    !isSkillCreationTask &&
+    task.status === 'interrupted' &&
+    !!interruptedStep &&
+    continuingInterruptedStepId === null;
   const hasRepoLink =
     !!project.repoProviderId && !!project.repoProjectId && !!project.repoId;
   const hasWorkItemsLink =
@@ -2421,6 +2506,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onAllowGlobally={handleAllowGlobally}
                   onSetMode={handleSetMode}
                   worktreePath={task.worktreePath}
+                  afterLastPromptGroup={
+                    canContinueInterruptedStep ? (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        icon={<Play />}
+                        onClick={handleContinueInterruptedStep}
+                        title="Continue interrupted step"
+                      >
+                        Continue
+                      </Button>
+                    ) : null
+                  }
                 />
               )}
             </div>
@@ -2623,6 +2721,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onAllowGlobally,
   onSetMode,
   worktreePath,
+  afterLastPromptGroup,
 }: {
   taskId: string;
   stepId: string | null;
@@ -2667,6 +2766,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onAllowGlobally?: (toolName: string, input: Record<string, unknown>) => void;
   onSetMode?: (mode: InteractionMode) => void;
   worktreePath?: string | null;
+  afterLastPromptGroup?: ReactNode;
 }) {
   const agentState = useAgentStream({ taskId, stepId });
   const hasMessages = agentState.messages.length > 0;
@@ -2681,23 +2781,53 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
 
   if (hasMessages) {
     return (
-      <MessageStream
-        messages={agentState.messages}
-        isRunning={isAgentBusy}
-        queuedPrompts={agentState.queuedPrompts}
-        onFilePathClick={onFilePathClick}
-        onToolDiffClick={onToolDiffClick}
-        onCancelQueuedPrompt={onCancelQueuedPrompt}
-        onUpdateQueuedPrompt={onUpdateQueuedPrompt}
-        onShowRawMessage={onShowRawMessage}
-        bottomPadding={bottomPadding}
-        pendingPermission={pendingPermission}
-        pendingQuestion={pendingQuestion}
-        onAddBashToPermissions={onAddBashToPermissions}
-        rootPath={rootPath}
-        taskId={taskId}
-        stepId={stepId}
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        {activeStep?.status === 'errored' && !activeStep.sessionId && (
+          <div className="shrink-0 px-4 pt-4">
+            <div className="border-status-fail/30 bg-bg-0/95 flex items-center justify-between gap-3 rounded-lg border p-3 shadow-lg backdrop-blur">
+              <div className="min-w-0">
+                <p className="text-status-fail text-sm font-medium">
+                  Step failed to start
+                </p>
+                <p className="text-ink-2 truncate text-xs">
+                  {activeStepError}
+                </p>
+              </div>
+              <Button
+                onClick={onStartStep}
+                disabled={isStepStarting}
+                loading={isStepStarting}
+                variant="secondary"
+                size="sm"
+                icon={<RefreshCw />}
+                className="shrink-0"
+              >
+                {isStepStarting ? 'Retrying...' : 'Retry'}
+              </Button>
+            </div>
+          </div>
+        )}
+        <div className="min-h-0 flex-1">
+          <MessageStream
+            messages={agentState.messages}
+            isRunning={isAgentBusy}
+            queuedPrompts={agentState.queuedPrompts}
+            onFilePathClick={onFilePathClick}
+            onToolDiffClick={onToolDiffClick}
+            onCancelQueuedPrompt={onCancelQueuedPrompt}
+            onUpdateQueuedPrompt={onUpdateQueuedPrompt}
+            onShowRawMessage={onShowRawMessage}
+            bottomPadding={bottomPadding}
+            pendingPermission={pendingPermission}
+            pendingQuestion={pendingQuestion}
+            onAddBashToPermissions={onAddBashToPermissions}
+            rootPath={rootPath}
+            taskId={taskId}
+            stepId={stepId}
+            afterLastPromptGroup={afterLastPromptGroup}
+          />
+        </div>
+      </div>
     );
   }
 
@@ -3022,6 +3152,25 @@ const TaskInputFooter = memo(function TaskInputFooter({
         if (reviewParts) {
           finalParts = [...parts, ...reviewParts];
         }
+        void api.preferenceMemory
+          .recordEvidence({
+            source: 'task-review-comment',
+            taskId,
+            comments: openReviewComments.map((comment) => ({
+              body: comment.body,
+              filePath: comment.anchor.filePath,
+              lineStart: comment.anchor.lineStart,
+              lineEnd: comment.anchor.lineEnd,
+              presets: comment.presets,
+              selectedText: comment.anchor.selectedText,
+            })),
+            context: {
+              targetStepId: activeStepId,
+            },
+          })
+          .catch((error: unknown) => {
+            console.warn('Failed to record preference evidence', error);
+          });
         // Resolve and clear all open comments after send
         for (const comment of openReviewComments) {
           resolveComment(taskId, comment.id);
@@ -3041,6 +3190,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
       openReviewComments,
       resolveComment,
       clearResolvedComments,
+      activeStepId,
     ],
   );
 
