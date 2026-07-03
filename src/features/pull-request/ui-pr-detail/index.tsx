@@ -37,6 +37,10 @@ import {
   useTaskReviewFileDrafts,
 } from '@/stores/task-review-comment-drafts';
 import { api } from '@/lib/api';
+import type { DiffFile } from '@/features/common/ui-file-diff';
+import type { MentionOption } from '@/common/ui/mention-textarea';
+import type { PrDetailTab } from '@/stores/navigation';
+import type { PromptImagePart } from '@shared/agent-backend-types';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useLatestRef } from '@/hooks/use-latest-ref';
@@ -45,10 +49,6 @@ import { usePrDraftCountByFile } from '@/stores/pr-comment-drafts';
 import { useProject } from '@/hooks/use-projects';
 import { useProjectTasks } from '@/hooks/use-tasks';
 import { useRecordPrView } from '@/hooks/use-pr-view-snapshot';
-import type { DiffFile } from '@/features/common/ui-file-diff';
-import type { MentionOption } from '@/common/ui/mention-textarea';
-import type { PrDetailTab } from '@/stores/navigation';
-import type { PromptImagePart } from '@shared/agent-backend-types';
 
 
 

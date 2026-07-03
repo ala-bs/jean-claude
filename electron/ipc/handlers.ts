@@ -70,7 +70,6 @@ import type {
   UpdateProjectCommand,
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
-import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
@@ -79,6 +78,7 @@ import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-ver
 import { getImageMimeType } from '@shared/image-types';
 import type { GlobalPromptResponse } from '@shared/global-prompt-types';
 import { isValidTeamsJoinUrl } from '@shared/teams-url';
+import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 import type { UsageProviderType } from '@shared/usage-types';
 
 
@@ -296,7 +296,6 @@ import {
   emitTaskUpsert,
   setCacheSubscriptions,
 } from '../services/cache-event-service';
-import { recordPreferenceEvidence } from '../services/preference-memory-service';
 import {
   fetchRegistrySkillContent,
   installFromRegistry,
@@ -349,6 +348,7 @@ import { ProjectCommandRepository } from '../database/repositories/project-comma
 import { projectFileIndexService } from '../services/project-file-index-service';
 import { ProjectMcpOverrideRepository } from '../database/repositories/project-mcp-overrides';
 import { ProjectRunConfigRepository } from '../database/repositories/project-run-config';
+import { recordPreferenceEvidence } from '../services/preference-memory-service';
 import { regenerateProjectSummary } from '../services/project-summary-generation-service';
 import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import { runCommandService } from '../services/run-command-service';
