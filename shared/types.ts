@@ -664,6 +664,7 @@ export interface CompletionSetting {
 export interface UsageDisplaySetting {
   enabledProviders: UsageProviderType[];
   copilotToken?: string;
+  useCodexBar?: boolean;
 }
 
 export interface AppearanceSetting {
@@ -900,6 +901,7 @@ const VALID_USAGE_PROVIDERS: UsageProviderType[] = [
   'codex',
   'gemini',
   'copilot',
+  'opencode',
 ];
 
 function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
@@ -913,6 +915,8 @@ function isUsageDisplaySetting(v: unknown): v is UsageDisplaySetting {
   )
     return false;
   if (obj.copilotToken !== undefined && typeof obj.copilotToken !== 'string')
+    return false;
+  if (obj.useCodexBar !== undefined && typeof obj.useCodexBar !== 'boolean')
     return false;
   return true;
 }
@@ -1257,6 +1261,7 @@ export const SETTINGS_DEFINITIONS = {
     defaultValue: {
       enabledProviders: [],
       copilotToken: '',
+      useCodexBar: false,
     } as UsageDisplaySetting,
     validate: isUsageDisplaySetting,
   },

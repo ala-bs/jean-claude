@@ -1206,6 +1206,14 @@ export interface Api {
       value: AppSettings['usageDisplay'],
     ) => Promise<AppSettings['usageDisplay']>;
   };
+  codexbar: {
+    getStatus: () => Promise<{
+      installed: boolean;
+      version?: string;
+      error?: string;
+    }>;
+    openInstallPage: () => Promise<void>;
+  };
   copilotAuth: {
     requestDeviceCode: () => Promise<CopilotDeviceCode>;
     completeDeviceLogin: (
@@ -2133,6 +2141,13 @@ export const api: Api = hasWindowApi
       },
       usageDisplay: {
         saveSettings: async (value) => value,
+      },
+      codexbar: {
+        getStatus: async () => ({
+          installed: false,
+          error: 'API not available',
+        }),
+        openInstallPage: async () => {},
       },
       copilotAuth: {
         requestDeviceCode: async () => {

@@ -870,6 +870,10 @@ contextBridge.exposeInMainWorld('api', {
     saveSettings: (value: import('@shared/types').UsageDisplaySetting) =>
       ipcRenderer.invoke('usageDisplay:saveSettings', value),
   },
+  codexbar: {
+    getStatus: () => ipcRenderer.invoke('codexbar:getStatus'),
+    openInstallPage: () => ipcRenderer.invoke('codexbar:openInstallPage'),
+  },
   copilotAuth: {
     requestDeviceCode: () =>
       ipcRenderer.invoke('copilotAuth:requestDeviceCode'),

@@ -30,7 +30,7 @@ function makeUsage(utilization: number) {
           label: 'Primary',
           isPrimary: true,
           range: {
-            utilization,
+            utilization: utilization * 100,
             resetsAt: new Date(),
             timeUntilReset: '10m',
             windowDurationMs: 300000,
@@ -229,13 +229,36 @@ describe('RateLimitSwapService (chain model)', () => {
         { backend: 'opencode', model: 'fallback' },
       ],
     });
-    // claude-code over, opencode also over
+    // claude-code over, opencode has no data -> optimistic -> pick it
     vi.mocked(agentUsageService.getUsage)
       .mockResolvedValueOnce({ 'claude-code': makeUsage(0.85) })
-      .mockResolvedValueOnce({}); // opencode has no usage provider -> null -> optimistic -> pick it
+      .mockResolvedValueOnce({});
     const result = await service.resolveBackend('claude-code');
     expect(result.backend).toBe('opencode');
     expect(result.model).toBeUndefined();
+  });
+
+  it('queries usage for supported backend providers', async () => {
+    vi.mocked(SettingsRepository.get).mockResolvedValue({
+      enabled: true,
+      chain: [
+        { backend: 'codex', threshold: 0.8 },
+        { backend: 'opencode', threshold: 0.8 },
+        { backend: 'copilot', threshold: 0.8 },
+        { backend: 'claude-code' },
+      ],
+    });
+    vi.mocked(agentUsageService.getUsage)
+      .mockResolvedValueOnce({ codex: makeUsage(0.9) })
+      .mockResolvedValueOnce({ opencode: makeUsage(0.9) })
+      .mockResolvedValueOnce({ copilot: makeUsage(0.9) });
+
+    const result = await service.resolveBackend('codex');
+
+    expect(agentUsageService.getUsage).toHaveBeenNthCalledWith(1, ['codex']);
+    expect(agentUsageService.getUsage).toHaveBeenNthCalledWith(2, ['opencode']);
+    expect(agentUsageService.getUsage).toHaveBeenNthCalledWith(3, ['copilot']);
+    expect(result.backend).toBe('claude-code');
   });
 
   it('reset clears notification state', async () => {

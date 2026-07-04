@@ -1426,6 +1426,12 @@ export function UsageDisplaySettings() {
   const { data: usageDisplaySetting } = useUsageDisplaySetting();
   const updateUsageDisplay = useUpdateUsageDisplaySetting();
   const enabledProviders = usageDisplaySetting?.enabledProviders ?? [];
+  const useCodexBar = usageDisplaySetting?.useCodexBar ?? false;
+  const [codexBarStatus, setCodexBarStatus] = useState<{
+    installed: boolean;
+    version?: string;
+    error?: string;
+  } | null>(null);
   const [copilotToken, setCopilotToken] = useState('');
   const [copilotDeviceCode, setCopilotDeviceCode] = useState<string | null>(
     null,
@@ -1443,6 +1449,16 @@ export function UsageDisplaySettings() {
     ));
   }, [usageDisplaySetting?.copilotToken]);
 
+  useEffect(() => {
+    let cancelled = false;
+    api.codexbar.getStatus().then((status) => {
+      if (!cancelled) setCodexBarStatus(status);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const isEnabled = (id: UsageProviderType) => enabledProviders.includes(id);
 
   const handleToggle = (id: UsageProviderType) => {
@@ -1453,6 +1469,22 @@ export function UsageDisplaySettings() {
       ...(usageDisplaySetting ?? { enabledProviders: [] }),
       enabledProviders: next,
     });
+  };
+
+  const toggleCodexBar = (enabled: boolean) => {
+    updateUsageDisplay.mutate({
+      ...(usageDisplaySetting ?? { enabledProviders: [] }),
+      useCodexBar: enabled,
+    });
+    queryClient.invalidateQueries({ queryKey: ['backend-usage'] });
+  };
+
+  const refreshCodexBarStatus = async () => {
+    setCodexBarStatus(await api.codexbar.getStatus());
+  };
+
+  const openCodexBarInstall = async () => {
+    await api.codexbar.openInstallPage();
   };
 
   const saveCopilotToken = () => {
@@ -1497,6 +1529,45 @@ export function UsageDisplaySettings() {
 
   return (
     <div>
+      <div className="border-line-soft bg-bg-0 mb-4 rounded-lg border px-4 py-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-ink-1 text-sm font-medium">CodexBar source</h3>
+            <p className="text-ink-3 mt-1 text-xs">
+              Use CodexBar CLI for rate-limit data across Claude Code, Codex,
+              OpenCode, Gemini, and Copilot.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              {codexBarStatus?.installed ? (
+                <span className="text-status-done flex items-center gap-1">
+                  <Check className="h-3 w-3" /> Installed
+                  {codexBarStatus.version ? ` (${codexBarStatus.version})` : ''}
+                </span>
+              ) : (
+                <span className="text-status-warning flex items-center gap-1">
+                  <CircleAlert className="h-3 w-3" /> CLI not found
+                </span>
+              )}
+              <Button
+                onClick={refreshCodexBarStatus}
+                variant="ghost"
+                size="xs"
+              >
+                Refresh
+              </Button>
+              <Button onClick={openCodexBarInstall} variant="secondary" size="xs">
+                Install CodexBar
+                <ExternalLink className="ml-1 h-3 w-3" />
+              </Button>
+            </div>
+            {codexBarStatus?.error && !codexBarStatus.installed && (
+              <p className="text-ink-3 mt-1 text-xs">{codexBarStatus.error}</p>
+            )}
+          </div>
+          <Switch checked={useCodexBar} onChange={toggleCodexBar} />
+        </div>
+      </div>
+
       <div className="space-y-2">
         {USAGE_PROVIDERS.map((provider) => {
           const enabled = isEnabled(provider.value);

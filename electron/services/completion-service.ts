@@ -95,18 +95,14 @@ export async function complete({
     });
 
     if (result.usage) {
-      // JC_DISABLE_USAGE_TRACKING belongs to external rate-limit/usage polling.
-      // Keep the local AI usage ledger active even in temp/dev instances.
-      if (!process.env.JC_DISABLE_USAGE_TRACKING) {
-        const today = new Date().toISOString().slice(0, 10);
-        CompletionUsageRepository.recordUsage({
-          date: today,
-          promptTokens: result.usage.promptTokens ?? 0,
-          completionTokens: result.usage.completionTokens ?? 0,
-        }).catch((err) => {
-          dbg.completion('Failed to record usage: %O', err);
-        });
-      }
+      const today = new Date().toISOString().slice(0, 10);
+      CompletionUsageRepository.recordUsage({
+        date: today,
+        promptTokens: result.usage.promptTokens ?? 0,
+        completionTokens: result.usage.completionTokens ?? 0,
+      }).catch((err) => {
+        dbg.completion('Failed to record usage: %O', err);
+      });
 
       aiUsageTrackingService.recordAutocompleteUsageBatched({
         backend: 'mistral',

@@ -4138,7 +4138,7 @@ export function registerIpcHandlers() {
           encrypt: (value) => encryptionService.encrypt(value),
         }),
       );
-      agentUsageService.invalidate('copilot');
+      agentUsageService.invalidate();
       return redactUsageDisplaySetting(
         await SettingsRepository.get('usageDisplay'),
       );
@@ -4170,6 +4170,16 @@ export function registerIpcHandlers() {
       );
     },
   );
+  ipcMain.handle('codexbar:getStatus', async () => {
+    const { getCodexBarStatus } = await import('../services/codexbar-service');
+    return getCodexBarStatus();
+  });
+  ipcMain.handle('codexbar:openInstallPage', async () => {
+    const { openCodexBarInstallPage } = await import(
+      '../services/codexbar-service'
+    );
+    await openCodexBarInstallPage();
+  });
   ipcMain.handle(
     'backendConfig:getUserConfig',
     (_: unknown, backend: unknown) => {
@@ -4366,8 +4376,11 @@ export function registerIpcHandlers() {
   });
 
   // Usage
-  ipcMain.handle('agent:usage:getAll', (_, providers: string[]) => {
-    if (process.env.JC_DISABLE_USAGE_TRACKING) return {};
+  ipcMain.handle('agent:usage:getAll', async (_, providers: string[]) => {
+    if (process.env.JC_DISABLE_NATIVE_USAGE_TRACKING) {
+      const usageSettings = await SettingsRepository.get('usageDisplay');
+      if (!usageSettings.useCodexBar) return {};
+    }
     return agentUsageService.getUsage(providers as UsageProviderType[]);
   });
 
@@ -5151,16 +5164,6 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle('completion:getDailyUsage', async () => {
-    if (process.env.JC_DISABLE_USAGE_TRACKING) {
-      return {
-        promptTokens: 0,
-        completionTokens: 0,
-        requests: 0,
-        costUsd: 0,
-        inputCostUsd: 0,
-        outputCostUsd: 0,
-      };
-    }
     dbg.ipc('completion:getDailyUsage');
     return getCompletionDailyUsage();
   });

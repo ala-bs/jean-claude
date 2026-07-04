@@ -65,7 +65,7 @@ export const aiUsageTrackingService = {
     sourceId,
     incrementExisting,
   }: RecordUsageParams): Promise<void> {
-    // JC_DISABLE_USAGE_TRACKING only disables external rate-limit/usage polling.
+    // JC_DISABLE_NATIVE_USAGE_TRACKING only disables external rate-limit/usage polling.
     // This local ledger should still record app activity in temp/dev instances.
 
     const normalizedUsage = {
