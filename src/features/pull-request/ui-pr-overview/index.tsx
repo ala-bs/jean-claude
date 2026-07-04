@@ -44,6 +44,7 @@ import {
 import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
 import { Button } from '@/common/ui/button';
 import { formatBytes } from '@/lib/format-bytes';
+import { Kbd } from '@/common/ui/kbd';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
@@ -685,9 +686,6 @@ export function PrOverview({
                         ? 'Uploading...'
                         : 'Add image/GIF'}
                     </Button>
-                    <span className="text-ink-4 text-[11px]">
-                      Cmd+Enter to save
-                    </span>
                     <div className="flex-1" />
                     <Button
                       type="button"
@@ -723,7 +721,7 @@ export function PrOverview({
                         uploadAttachment.isPending
                       }
                     >
-                      Save
+                      Save <Kbd shortcut="cmd+enter" />
                     </Button>
                   </div>
                   {previewDescriptionDraft.trim() && (
