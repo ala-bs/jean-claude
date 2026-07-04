@@ -1,6 +1,7 @@
 import {
   Activity,
   BarChart3,
+  BookOpen,
   ClipboardList,
   History,
   Menu,
@@ -594,6 +595,12 @@ export function Header() {
           </DropdownItem>
           <DropdownItem icon={<History />} onClick={openChangelog}>
             Changelog
+          </DropdownItem>
+          <DropdownItem
+            icon={<BookOpen />}
+            onClick={() => openOverlay('learning-center')}
+          >
+            Learning Center
           </DropdownItem>
           <DropdownItem
             icon={<Terminal />}

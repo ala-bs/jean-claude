@@ -11,13 +11,15 @@ export function getDefaultModelForBackend({
   project,
   backendDefaultModels,
 }: {
-  backend: AgentBackendType;
+  backend: AgentBackendType | null;
   project?: Pick<
     Project,
     'defaultAgentBackend' | 'defaultAgentModelPreference'
   > | null;
   backendDefaultModels?: BackendDefaultModelsSetting | null;
 }): ModelPreference {
+  if (!backend) return 'default';
+
   if (
     project?.defaultAgentBackend === backend &&
     project.defaultAgentModelPreference

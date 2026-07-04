@@ -78,6 +78,7 @@ import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-ver
 import { getImageMimeType } from '@shared/image-types';
 import type { GlobalPromptResponse } from '@shared/global-prompt-types';
 import { isValidTeamsJoinUrl } from '@shared/teams-url';
+import { parseAzureRemoteUrl } from '@shared/azure-remote-utils';
 import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 import type { UsageProviderType } from '@shared/usage-types';
 
@@ -896,6 +897,19 @@ export function registerIpcHandlers() {
     emitProjectUpsert(project);
     return project;
   });
+  ipcMain.handle('projects:detectAzureRemote', async (_, projectPath: string) => {
+    if (!projectPath) return null;
+    try {
+      const remoteUrl = await runGit(
+        ['remote', 'get-url', 'origin'],
+        projectPath,
+        { timeoutMs: 5000 },
+      );
+      return parseAzureRemoteUrl(remoteUrl);
+    } catch {
+      return null;
+    }
+  });
   ipcMain.handle(
     'projects:update',
     async (_, id: string, data: UpdateProject) => {
@@ -1187,6 +1201,12 @@ export function registerIpcHandlers() {
     }
     return getProjectBranches(project.path);
   });
+  ipcMain.handle(
+    'projects:getBranchesForPath',
+    async (_, projectPath: string) => {
+      return getProjectBranches(projectPath);
+    },
+  );
   ipcMain.handle('projects:getCurrentBranch', async (_, projectId: string) => {
     const project = await ProjectRepository.findById(projectId);
     if (!project) {
@@ -4192,6 +4212,30 @@ export function registerIpcHandlers() {
       })),
     );
     return results;
+  });
+
+  ipcMain.handle('shell:getAgentCliStatus', async () => {
+    const cliCommands: Array<{ backend: AgentBackendType; command: string }> = [
+      { backend: 'claude-code', command: 'claude' },
+      { backend: 'opencode', command: 'opencode' },
+      { backend: 'codex', command: 'codex' },
+    ];
+
+    return Promise.all(
+      cliCommands.map(async ({ backend, command }) => {
+        try {
+          const { stdout } = await execAsync(`which ${command}`);
+          return {
+            backend,
+            command,
+            installed: true,
+            path: stdout.trim() || null,
+          };
+        } catch {
+          return { backend, command, installed: false, path: null };
+        }
+      }),
+    );
   });
 
   ipcMain.handle('shell:openTeamsJoinUrl', async (_, url: string) => {

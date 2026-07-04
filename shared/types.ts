@@ -140,9 +140,11 @@ export function normalizeInteractionModeForBackend({
   backend,
   mode,
 }: {
-  backend: AgentBackendType;
+  backend: AgentBackendType | null;
   mode: InteractionMode;
 }): InteractionMode {
+  if (!backend) return mode;
+
   if (isInteractionModeSupportedByBackend({ backend, mode })) {
     return mode;
   }
@@ -644,7 +646,7 @@ export type EditorSetting =
 // Backend settings
 export interface BackendsSetting {
   enabledBackends: AgentBackendType[];
-  defaultBackend: AgentBackendType;
+  defaultBackend: AgentBackendType | null;
 }
 
 // Completion settings (Mistral FIM autocomplete)
@@ -873,9 +875,13 @@ function isBackendsSetting(v: unknown): v is BackendsSetting {
     )
   )
     return false;
-  if (obj.enabledBackends.length === 0) return false;
-  if (typeof obj.defaultBackend !== 'string') return false;
-  if (!VALID_BACKENDS.includes(obj.defaultBackend as AgentBackendType))
+  if (obj.defaultBackend !== null) {
+    if (typeof obj.defaultBackend !== 'string') return false;
+    if (!VALID_BACKENDS.includes(obj.defaultBackend as AgentBackendType))
+      return false;
+    if (!obj.enabledBackends.includes(obj.defaultBackend)) return false;
+  }
+  if (obj.enabledBackends.length > 0 && obj.defaultBackend === null)
     return false;
   return true;
 }
@@ -1219,8 +1225,8 @@ export const SETTINGS_DEFINITIONS = {
   },
   backends: {
     defaultValue: {
-      enabledBackends: ['claude-code'],
-      defaultBackend: 'claude-code',
+      enabledBackends: [],
+      defaultBackend: null,
     } as BackendsSetting,
     validate: isBackendsSetting,
   },

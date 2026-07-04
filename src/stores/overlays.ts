@@ -16,7 +16,8 @@ export type OverlayType =
   | 'calendar'
   | 'usage'
   | 'work-activity'
-  | 'resources';
+  | 'resources'
+  | 'learning-center';
 
 interface OverlaysState {
   // Current active overlay (null = none open)

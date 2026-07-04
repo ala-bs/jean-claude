@@ -61,10 +61,14 @@ export function getThinkingEffortOptions({
   model,
   capabilities,
 }: {
-  backend: AgentBackendType;
+  backend: AgentBackendType | null;
   model: ModelPreference;
   capabilities?: ThinkingModelCapabilities | null;
 }): ThinkingEffortOption[] {
+  if (!backend) {
+    return [DEFAULT_THINKING_EFFORT_OPTION];
+  }
+
   if (backend === 'claude-code') {
     return optionsForEfforts(
       capabilities?.thinkingEfforts
@@ -115,7 +119,7 @@ export function normalizeThinkingEffortForModel({
   effort,
   capabilities,
 }: {
-  backend: AgentBackendType;
+  backend: AgentBackendType | null;
   model: ModelPreference;
   effort: ThinkingEffort | null | undefined;
   capabilities?: ThinkingModelCapabilities | null;

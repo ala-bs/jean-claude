@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AllIndexRouteImport } from './routes/all/index'
 import { Route as ProjectsNewRouteImport } from './routes/projects/new'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects/$projectId'
+import { Route as OnboardingSetupRouteImport } from './routes/onboarding/setup'
 import { Route as AllTaskIdRouteImport } from './routes/all/$taskId'
 import { Route as ProjectsProjectIdIndexRouteImport } from './routes/projects/$projectId/index'
 import { Route as AllNotesNoteIdRouteImport } from './routes/all/notes/$noteId'
@@ -42,6 +43,11 @@ const ProjectsNewRoute = ProjectsNewRouteImport.update({
 const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   id: '/projects/$projectId',
   path: '/projects/$projectId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingSetupRoute = OnboardingSetupRouteImport.update({
+  id: '/onboarding/setup',
+  path: '/onboarding/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AllTaskIdRoute = AllTaskIdRouteImport.update({
@@ -103,6 +109,7 @@ const AllPrsProjectIdPrIdRoute = AllPrsProjectIdPrIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/all/$taskId': typeof AllTaskIdRoute
+  '/onboarding/setup': typeof OnboardingSetupRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
   '/all/': typeof AllIndexRoute
@@ -119,6 +126,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/all/$taskId': typeof AllTaskIdRoute
+  '/onboarding/setup': typeof OnboardingSetupRoute
   '/projects/new': typeof ProjectsNewRoute
   '/all': typeof AllIndexRoute
   '/all/notes/$noteId': typeof AllNotesNoteIdRoute
@@ -135,6 +143,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/all/$taskId': typeof AllTaskIdRoute
+  '/onboarding/setup': typeof OnboardingSetupRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
   '/all/': typeof AllIndexRoute
@@ -153,6 +162,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/all/$taskId'
+    | '/onboarding/setup'
     | '/projects/$projectId'
     | '/projects/new'
     | '/all/'
@@ -169,6 +179,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/all/$taskId'
+    | '/onboarding/setup'
     | '/projects/new'
     | '/all'
     | '/all/notes/$noteId'
@@ -184,6 +195,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/all/$taskId'
+    | '/onboarding/setup'
     | '/projects/$projectId'
     | '/projects/new'
     | '/all/'
@@ -201,6 +213,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AllTaskIdRoute: typeof AllTaskIdRoute
+  OnboardingSetupRoute: typeof OnboardingSetupRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRouteWithChildren
   ProjectsNewRoute: typeof ProjectsNewRoute
   AllIndexRoute: typeof AllIndexRoute
@@ -238,6 +251,13 @@ declare module '@tanstack/react-router' {
       path: '/projects/$projectId'
       fullPath: '/projects/$projectId'
       preLoaderRoute: typeof ProjectsProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding/setup': {
+      id: '/onboarding/setup'
+      path: '/onboarding/setup'
+      fullPath: '/onboarding/setup'
+      preLoaderRoute: typeof OnboardingSetupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/all/$taskId': {
@@ -335,6 +355,7 @@ const ProjectsProjectIdRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AllTaskIdRoute: AllTaskIdRoute,
+  OnboardingSetupRoute: OnboardingSetupRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRouteWithChildren,
   ProjectsNewRoute: ProjectsNewRoute,
   AllIndexRoute: AllIndexRoute,

@@ -108,9 +108,13 @@ function getModelProviderGroup(
  * Falls back to static list for Claude Code.
  */
 export function getModelsForBackend(
-  backend: AgentBackendType,
+  backend: AgentBackendType | null,
   dynamicModels?: BackendModel[],
 ): BackendModelOption[] {
+  if (!backend) {
+    return [DEFAULT_OPTION];
+  }
+
   if (dynamicModels && dynamicModels.length > 0) {
     return toModelOptions(dynamicModels, backend);
   }
