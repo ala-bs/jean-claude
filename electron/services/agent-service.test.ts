@@ -999,6 +999,90 @@ describe('JcMcpBridgeService', () => {
     expect(response.status).toBe(200);
   });
 
+  it('returns a question request id before the user answers', async () => {
+    const broker = new QuestionBrokerService();
+    bridge = new JcMcpBridgeService(broker);
+    let requestId: string | null = null;
+    const config = await bridge.registerStep({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      onQuestionRequest: vi.fn(async (request) => {
+        requestId = request.requestId;
+      }),
+    });
+
+    const response = await submitQuestion({ config, stepId: 'step-1' });
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toEqual({ requestId });
+    expect(requestId).not.toBeNull();
+    const pendingResponse = await getQuestionResult({ config, requestId: requestId! });
+    expect(pendingResponse.status).toBe(202);
+    await expect(pendingResponse.json()).resolves.toEqual({ status: 'pending' });
+  });
+
+  it('returns a completed question result once and then forgets it', async () => {
+    const broker = new QuestionBrokerService();
+    bridge = new JcMcpBridgeService(broker);
+    let requestId: string | null = null;
+    const config = await bridge.registerStep({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      onQuestionRequest: vi.fn(async (request) => {
+        requestId = request.requestId;
+      }),
+    });
+
+    const response = await submitQuestion({ config, stepId: 'step-1' });
+    expect(response.status).toBe(202);
+    broker.answerRequest(requestId!, { approach: 'Small' });
+
+    const resultResponse = await getQuestionResult({
+      config,
+      requestId: requestId!,
+    });
+    expect(resultResponse.status).toBe(200);
+    await expect(resultResponse.json()).resolves.toEqual({
+      summary: 'Which approach?: Small',
+    });
+
+    const secondResultResponse = await getQuestionResult({
+      config,
+      requestId: requestId!,
+    });
+    expect(secondResultResponse.status).toBe(404);
+  });
+
+  it('returns cancelled question results after a step unregisters', async () => {
+    const broker = new QuestionBrokerService();
+    bridge = new JcMcpBridgeService(broker);
+    let requestId: string | null = null;
+    const onQuestionCancelled = vi.fn();
+    const config = await bridge.registerStep({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      onQuestionRequest: vi.fn(async (request) => {
+        requestId = request.requestId;
+      }),
+      onQuestionCancelled,
+    });
+
+    const response = await submitQuestion({ config, stepId: 'step-1' });
+    expect(response.status).toBe(202);
+
+    await bridge.unregisterStep('step-1', config.registrationId);
+
+    const resultResponse = await getQuestionResult({
+      config,
+      requestId: requestId!,
+    });
+    expect(resultResponse.status).toBe(409);
+    await expect(resultResponse.json()).resolves.toEqual({
+      error: 'Agent session ended',
+    });
+    expect(onQuestionCancelled).toHaveBeenCalledWith(requestId);
+  });
+
   it('closes while a shared bridge request is still notifying the agent service', async () => {
     const broker = new QuestionBrokerService();
     bridge = new JcMcpBridgeService(broker);
@@ -1039,6 +1123,31 @@ async function askQuestion({
   config: { serverUrl: string; token: string; registrationId?: string };
   stepId?: string;
 }): Promise<Response> {
+  const response = await submitQuestion({ config, stepId });
+  if (response.status !== 202) {
+    return response;
+  }
+
+  const body = (await response.json()) as { requestId: string };
+  while (true) {
+    const resultResponse = await getQuestionResult({
+      config,
+      requestId: body.requestId,
+    });
+    if (resultResponse.status !== 202) {
+      return resultResponse;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+async function submitQuestion({
+  config,
+  stepId,
+}: {
+  config: { serverUrl: string; token: string; registrationId?: string };
+  stepId?: string;
+}): Promise<Response> {
   return fetch(`${config.serverUrl}/ask-question`, {
     method: 'POST',
     headers: {
@@ -1052,6 +1161,23 @@ async function askQuestion({
         : {}),
       questions: QUESTIONS,
     }),
+  });
+}
+
+async function getQuestionResult({
+  config,
+  requestId,
+}: {
+  config: { serverUrl: string; token: string };
+  requestId: string;
+}): Promise<Response> {
+  return fetch(`${config.serverUrl}/question-result`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${config.token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ requestId }),
   });
 }
 

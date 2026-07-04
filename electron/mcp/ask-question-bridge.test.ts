@@ -64,6 +64,42 @@ describe('askQuestionViaBridge', () => {
     });
   });
 
+  it('polls question results after the bridge accepts a request', async () => {
+    const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ requestId: 'request-1' }), { status: 202 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: 'pending' }), { status: 202 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ summary: 'Which approach?: Small change' }), {
+          status: 200,
+        }),
+      );
+
+    const result = await askQuestionViaBridge({
+      input,
+      env,
+      fetchImpl,
+      pollIntervalMs: 0,
+    });
+
+    expect(result).toBe('Which approach?: Small change');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(String(fetchImpl.mock.calls[0][0])).toBe(
+      'http://127.0.0.1:4321/session-bridge/ask-question',
+    );
+    expect(String(fetchImpl.mock.calls[1][0])).toBe(
+      'http://127.0.0.1:4321/session-bridge/question-result',
+    );
+    expect(JSON.parse(String(fetchImpl.mock.calls[1][1]?.body))).toEqual({
+      requestId: 'request-1',
+    });
+  });
+
   it('posts stepId to the app-scoped HTTP bridge when no session id is configured', async () => {
     const env = createQuestionBridgeEnv({
       serverUrl: 'http://127.0.0.1:4321/app-bridge',
