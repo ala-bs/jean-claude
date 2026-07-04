@@ -336,6 +336,13 @@ type SettingsNavLeaf = {
   selection: ActiveSelection;
 };
 
+type SettingsSearchResult = SettingsNavLeaf & {
+  group: string;
+  path: string;
+  scope: SettingsTab;
+  searchText: string;
+};
+
 type SettingsNavGroup = {
   label: string;
   danger?: boolean;
@@ -415,6 +422,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
         globalLeaf('general', 'appearance'),
         globalLeaf('general', 'notifications'),
         globalLeaf('general', 'work-activity', 'Work Activity'),
+        globalLeaf('general', 'agent-memory'),
         ...(api.platform === 'darwin'
           ? [globalLeaf('general', 'calendar')]
           : []),
@@ -506,6 +514,105 @@ function getProjectNavGroups(): SettingsNavGroup[] {
 
 function sameSelection(a: ActiveSelection, b: ActiveSelection): boolean {
   return a.sectionId === b.sectionId && a.subId === b.subId;
+}
+
+const SETTINGS_SEARCH_ALIASES: Record<string, string> = {
+  'global:general:editor': 'open editor terminal launch behavior cwd shell',
+  'global:general:appearance': 'theme animation motion visual reduced motion',
+  'global:general:notifications': 'alerts runs completion errors notify',
+  'global:general:work-activity': 'activity logging retention history',
+  'global:general:calendar': 'meetings reminders macos events',
+  'global:general:usage': 'rate limit status title bar tokens usage',
+  'global:general:agent-memory': 'preference memory evidence learning beta',
+  'global:general:maintenance': 'cleanup gitignore housekeeping cache',
+  'global:coding-agents:presets': 'models defaults thinking effort agent model presets',
+  'global:coding-agents:process-mode': 'opencode server managed process lifecycle',
+  'global:coding-agents:prompt-preface': 'instructions system prompt preface custom prompt',
+  'global:coding-agents:rate-limit-swap': 'fallback model swap rate limit',
+  'global:coding-agents:claude-code': 'anthropic claude backend sdk auth',
+  'global:coding-agents:opencode': 'sst opencode backend sdk auth',
+  'global:coding-agents:codex': 'openai codex backend auth',
+  'global:coding-agents:copilot': 'github copilot backend auth',
+  'global:ai-generation': 'summaries names titles mistral ai generated content',
+  'global:permissions': 'tools commands allow deny approvals safety',
+  'global:skills-agents:skills': 'skills install enable disable manage',
+  'global:skills-agents:sources': 'skill sources repositories registries',
+  'global:skills-agents:agents': 'subagents custom agents backend agents',
+  'global:prompt-snippets': 'snippets templates variables reusable prompts',
+  'global:mcp-servers': 'model context protocol servers templates',
+  'global:tokens': 'providers api keys auth credentials token',
+  'global:azure-devops': 'ado work items organization pat pipelines repos',
+  'global:autocomplete': 'completion inline fim code suggestions',
+  'global:debug': 'database diagnostics sqlite debug',
+  'project:project-general:details': 'name color branch repository path',
+  'project:project-general:commit-ignore': 'git commit ignore files exclude',
+  'project:project-general:worktree': 'worktree branch directory base path',
+  'project:project-general:feature-map': 'features map audit documentation',
+  'project:project-general:prompt-preface': 'project instructions system prompt preface',
+  'project:project-general:autocomplete': 'completion inline fim project suggestions',
+  'project:permissions': 'tools commands allow deny approvals safety',
+  'project:project-integrations:integrations': 'repo repository github azure devops work items',
+  'project:project-integrations:pipelines': 'builds ci azure devops pipelines',
+  'project:run-commands': 'commands scripts terminal run',
+  'project:skills': 'skills enable disable project scoped',
+  'project:mcp-overrides': 'mcp server overrides environment',
+  'project:ai-generation': 'summaries names titles ai generated content',
+  'project:danger-zone': 'delete archive destructive remove',
+};
+
+function getGlobalSearchText(leaf: SettingsNavLeaf, group: string): string {
+  const section = getGlobalSections().find(
+    (item) => item.id === leaf.selection.sectionId,
+  );
+  const subItem = section?.subs?.find((item) => item.id === leaf.selection.subId);
+  const key = `global:${leaf.key}`;
+  return [
+    leaf.label,
+    group,
+    'global',
+    section?.label,
+    section?.title,
+    section?.subtitle,
+    subItem?.label,
+    leaf.selection.sectionId,
+    leaf.selection.subId,
+    leaf.selection.subId
+      ? getGlobalSubtitle(leaf.selection.sectionId, leaf.selection.subId)
+      : undefined,
+    SETTINGS_SEARCH_ALIASES[key],
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function getProjectSearchText(leaf: SettingsNavLeaf, group: string): string {
+  const section = PROJECT_SECTIONS.find(
+    (item) => item.id === leaf.selection.sectionId,
+  );
+  const subItem = section?.subs?.find((item) => item.id === leaf.selection.subId);
+  const key = `project:${leaf.key}`;
+  return [
+    leaf.label,
+    group,
+    'project',
+    section?.label,
+    subItem?.label,
+    leaf.selection.sectionId,
+    leaf.selection.subId,
+    SETTINGS_SEARCH_ALIASES[key],
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function getSearchScore(item: SettingsSearchResult, query: string): number {
+  const label = item.label.toLowerCase();
+  if (label === query) return 0;
+  if (label.startsWith(query)) return 1;
+  if (item.path.toLowerCase().includes(query)) return 2;
+  return 3;
 }
 
 /* ── Content rendering ── */
@@ -831,36 +938,55 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const [paletteQuery, setPaletteQuery] = useState('');
   const globalNavGroups = useMemo(() => getGlobalNavGroups(), []);
   const projectNavGroups = useMemo(() => getProjectNavGroups(), []);
-  const searchResults = useMemo(() => {
+  const searchResults = useMemo<SettingsSearchResult[]>(() => {
     const query = paletteQuery.trim().toLowerCase();
-    const items = [
+    if (!query) return [];
+
+    const items: SettingsSearchResult[] = [
       ...globalNavGroups.flatMap((group) =>
-        group.items.map((item) => ({
-          ...item,
-          group: group.label,
-          scope: 'global' as const,
-        })),
+        group.items.map((item) => {
+          const section = getGlobalSections().find(
+            (sectionItem) => sectionItem.id === item.selection.sectionId,
+          );
+          return {
+            ...item,
+            group: group.label,
+            path: ['Global', group.label, section?.label, item.label]
+              .filter(Boolean)
+              .join(' / '),
+            scope: 'global' as const,
+            searchText: getGlobalSearchText(item, group.label),
+          };
+        }),
       ),
       ...(hasProjectTab
         ? projectNavGroups.flatMap((group) =>
-            group.items.map((item) => ({
-              ...item,
-              group: group.label,
-              scope: 'project' as const,
-            })),
+            group.items.map((item) => {
+              const section = PROJECT_SECTIONS.find(
+                (sectionItem) => sectionItem.id === item.selection.sectionId,
+              );
+              return {
+                ...item,
+                group: group.label,
+                path: ['Project', group.label, section?.label, item.label]
+                  .filter(Boolean)
+                  .join(' / '),
+                scope: 'project' as const,
+                searchText: getProjectSearchText(item, group.label),
+              };
+            }),
           )
         : []),
     ];
 
-    if (!query) return items;
     const terms = query.split(/\s+/);
-    return items.filter((item) =>
-      terms.every((term) =>
-        `${item.label} ${item.group} ${item.scope}`
-          .toLowerCase()
-          .includes(term),
-      ),
-    );
+    return items
+      .filter((item) => terms.every((term) => item.searchText.includes(term)))
+      .sort(
+        (a, b) =>
+          getSearchScore(a, query) - getSearchScore(b, query) ||
+          a.path.localeCompare(b.path),
+      );
   }, [globalNavGroups, hasProjectTab, paletteQuery, projectNavGroups]);
 
   const handleProjectChange = useCallback((projectId: string) => {
@@ -1203,6 +1329,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
               <SettingsPalette
                 query={paletteQuery}
                 results={searchResults}
+                searchStarted={paletteQuery.trim().length > 0}
                 onQueryChange={setPaletteQuery}
                 onClose={() => setPaletteOpen(false)}
                 onPick={(result) => {
@@ -1421,17 +1548,17 @@ function SettingsNavGroupView({
 function SettingsPalette({
   query,
   results,
+  searchStarted,
   onQueryChange,
   onClose,
   onPick,
 }: {
   query: string;
-  results: Array<SettingsNavLeaf & { group: string; scope: SettingsTab }>;
+  results: SettingsSearchResult[];
+  searchStarted: boolean;
   onQueryChange: (value: string) => void;
   onClose: () => void;
-  onPick: (
-    result: SettingsNavLeaf & { group: string; scope: SettingsTab },
-  ) => void;
+  onPick: (result: SettingsSearchResult) => void;
 }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -1439,6 +1566,12 @@ function SettingsPalette({
   useEffect(() => {
     startTransition(() => setActiveIndex(0));
   }, [query]);
+
+  useEffect(() => {
+    if (activeIndex >= results.length) {
+      startTransition(() => setActiveIndex(Math.max(results.length - 1, 0)));
+    }
+  }, [activeIndex, results.length]);
 
   const trapTab = useCallback((event: React.KeyboardEvent) => {
     if (event.key !== 'Tab') return;
@@ -1493,7 +1626,7 @@ function SettingsPalette({
               if (event.key === 'ArrowDown') {
                 event.preventDefault();
                 setActiveIndex((index) =>
-                  Math.min(index + 1, results.length - 1),
+                  Math.min(index + 1, Math.max(results.length - 1, 0)),
                 );
               }
               if (event.key === 'ArrowUp') {
@@ -1512,9 +1645,19 @@ function SettingsPalette({
           <Kbd shortcut="escape" />
         </div>
         <div className="max-h-[390px] overflow-auto p-1.5">
-          {results.length === 0 && (
+          {!searchStarted && (
+            <div className="px-4 py-8 text-center text-sm text-ink-3">
+              Type to search settings by label, section, scope, or keyword.
+            </div>
+          )}
+          {searchStarted && results.length === 0 && (
             <div className="text-ink-3 px-4 py-8 text-center text-sm">
               No settings match "{query}".
+            </div>
+          )}
+          {searchStarted && results.length > 0 && (
+            <div className="px-3 pb-1 pt-0.5 font-mono text-[10px] tracking-wide text-ink-3 uppercase">
+              {results.length} match{results.length === 1 ? '' : 'es'}
             </div>
           )}
           {results.map((result, index) => {
@@ -1545,7 +1688,7 @@ function SettingsPalette({
                     {result.label}
                   </span>
                   <span className="text-ink-3 block truncate text-[11.5px]">
-                    {result.group}
+                    {result.path}
                   </span>
                 </span>
                 <span
