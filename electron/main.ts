@@ -57,6 +57,8 @@ dbg.main(
 );
 dbg.main('Platform: %s, Arch: %s', process.platform, process.arch);
 
+let canCreateMainWindow = false;
+
 // Prevent multiple instances — a second launch would run recoverStaleTasks()
 // and mark currently-running tasks as interrupted.
 // Skip when JC_SKIP_INSTANCE_LOCK is set (dev:tmp / dev:tmp:reuse) so we
@@ -83,6 +85,8 @@ if (!process.env.TERM) {
 }
 
 function createWindow() {
+  showDockIcon();
+
   const isDev = !!process.env.ELECTRON_RENDERER_URL;
   dbg.main('Creating main window (isDev: %s)', isDev);
 
@@ -125,6 +129,38 @@ function createWindow() {
     dbg.main('Loading production HTML: %s', htmlPath);
     mainWindow.loadFile(htmlPath);
   }
+}
+
+function showDockIcon() {
+  if (process.platform !== 'darwin') return;
+
+  app.setActivationPolicy('regular');
+  void app.dock.show().catch((error) => {
+    dbg.main('Failed to show Dock icon: %O', error);
+  });
+}
+
+function restoreOrCreateWindow() {
+  showDockIcon();
+
+  const mainWindow = BrowserWindow.getAllWindows().find(
+    (w) => !w.isDestroyed(),
+  );
+
+  if (!mainWindow) {
+    if (!canCreateMainWindow) {
+      dbg.main('No windows open, main window creation is not ready yet');
+      return;
+    }
+
+    dbg.main('No windows open, creating new window');
+    createWindow();
+    return;
+  }
+
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 function loadMigrationWindowContent({
@@ -251,17 +287,12 @@ function createMigrationWindow() {
 
 // When a second instance is launched, focus the existing window instead
 app.on('second-instance', () => {
-  const mainWindow = BrowserWindow.getAllWindows().find(
-    (w) => !w.isDestroyed(),
-  );
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
+  restoreOrCreateWindow();
 });
 
 app.whenReady().then(async () => {
   dbg.main('App ready, initializing...');
+  showDockIcon();
 
   // Register azure-image-proxy protocol handler
   dbg.main('Registering azure-image-proxy protocol handler...');
@@ -357,15 +388,13 @@ app.whenReady().then(async () => {
     dbg.main('Failed to cleanup orphaned workspaces: %O', err);
   });
 
+  canCreateMainWindow = true;
   createWindow();
   dbg.main('Main window created, app ready');
 
   app.on('activate', () => {
     dbg.main('App activated');
-    if (BrowserWindow.getAllWindows().length === 0) {
-      dbg.main('No windows open, creating new window');
-      createWindow();
-    }
+    restoreOrCreateWindow();
   });
 });
 
@@ -434,6 +463,7 @@ process.on('exit', () => {
 
 app.on('window-all-closed', () => {
   dbg.main('All windows closed');
+  showDockIcon();
   if (process.platform !== 'darwin') {
     dbg.main('Non-macOS platform, quitting app');
     app.quit();
