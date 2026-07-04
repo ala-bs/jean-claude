@@ -9,7 +9,6 @@ import type {
   AppNotification,
   TaskNotificationTarget,
 } from '@shared/notification-types';
-import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
 import type {
   GetYamlParametersIpcParams,
@@ -27,6 +26,7 @@ import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { DebugLogEntry } from '@shared/debug-log-types';
+import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 
 
 

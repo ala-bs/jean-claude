@@ -2,6 +2,13 @@ import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
+import {
+  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_BACKEND,
+  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL,
+  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT,
+  type ModelPreference,
+  type ThinkingEffort,
+} from '@shared/types';
 import type {
   PreferenceEvidenceCommentInput,
   PreferenceEvidenceFileSnapshot,
@@ -10,13 +17,6 @@ import type {
   RecordPreferenceEvidenceParams,
   RecordPreferenceEvidenceResult,
 } from '@shared/preference-memory-types';
-import {
-  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_BACKEND,
-  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL,
-  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT,
-  type ModelPreference,
-  type ThinkingEffort,
-} from '@shared/types';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 
 import {
