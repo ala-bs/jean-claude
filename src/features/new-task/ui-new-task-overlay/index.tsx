@@ -1030,6 +1030,8 @@ export function NewTaskOverlay({
               data: compressed.agent.data,
               mimeType: compressed.agent.mimeType,
               filename: fileName,
+              width: compressed.width,
+              height: compressed.height,
               storageData: compressed.storage.data,
               storageMimeType: compressed.storage.mimeType,
             };

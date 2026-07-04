@@ -41,6 +41,10 @@ export type PromptImagePart = {
   filename?: string;
   /** Original byte size when known */
   sizeBytes?: number;
+  /** Image width after any client-side resizing */
+  width?: number;
+  /** Image height after any client-side resizing */
+  height?: number;
   /** AVIF-compressed base64 for storage (set by UI before IPC) */
   storageData?: string;
   /** MIME type of the storage version */

@@ -27,12 +27,14 @@ export async function processImageFile(
     );
     return;
   }
-  const { agent, storage } = await compressImage(file);
+  const { agent, storage, width, height } = await compressImage(file);
   onAttach({
     type: 'image',
     data: agent.data,
     mimeType: agent.mimeType,
     filename: file.name,
+    width,
+    height,
     storageData: storage.data,
     storageMimeType: storage.mimeType,
   });
