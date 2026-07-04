@@ -81,6 +81,7 @@ function QuestionInput({
   notesValue,
   isActive,
   activeOptionIndex,
+  isOtherOpen,
   onActivate,
   onSelectOption,
   onTextChange,
@@ -94,6 +95,7 @@ function QuestionInput({
   notesValue: string;
   isActive: boolean;
   activeOptionIndex: number;
+  isOtherOpen: boolean;
   onActivate: (params: { questionIndex: number; optionIndex: number }) => void;
   onSelectOption: (params: {
     questionIndex: number;
@@ -107,6 +109,10 @@ function QuestionInput({
   const selectedLabels = getSelectedLabels(value);
   const otherPlaceholder =
     mode === 'text' ? 'Add another answer...' : 'Add other answer...';
+  const allowsFreeform = question.allowFreeform ?? true;
+  const isFreeformOpen = allowsFreeform && isOtherOpen;
+  const optionCount =
+    question.options.length + (question.multiSelect || !allowsFreeform ? 0 : 1);
 
   if (mode === 'text') {
     return (
@@ -220,7 +226,7 @@ function QuestionInput({
           <Button
             key={option.label}
             variant="unstyled"
-            aria-pressed={value === option.label}
+            aria-pressed={value === option.label && !isFreeformOpen}
             onFocus={() => {
               onActivate({ questionIndex, optionIndex: index });
             }}
@@ -229,7 +235,7 @@ function QuestionInput({
               onSelectOption({ questionIndex, optionIndex: index });
             }}
             className={`focus-visible:ring-acc rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none ${
-              value === option.label
+              value === option.label && !isFreeformOpen
                 ? 'border-teal-400/80 bg-teal-500/25 text-teal-50 ring-1 ring-teal-400/60'
                 : isActive && activeOptionIndex === index
                   ? 'border-acc bg-acc/20 text-ink-0 ring-acc ring-2'
@@ -239,7 +245,7 @@ function QuestionInput({
           >
             <div className="flex flex-col items-start gap-0.5">
               <div className="flex items-center gap-1.5 font-medium">
-                {value === option.label ? (
+                {value === option.label && !isFreeformOpen ? (
                   <Check className="h-3.5 w-3.5" />
                 ) : null}
                 {option.label}
@@ -252,17 +258,50 @@ function QuestionInput({
             </div>
           </Button>
         ))}
+        {allowsFreeform ? (
+          <Button
+            variant="unstyled"
+            aria-pressed={isOtherOpen}
+            onFocus={() => {
+              onActivate({ questionIndex, optionIndex: optionCount - 1 });
+            }}
+            onClick={() => {
+              onActivate({ questionIndex, optionIndex: optionCount - 1 });
+              onSelectOption({ questionIndex, optionIndex: optionCount - 1 });
+            }}
+            className={`focus-visible:ring-acc rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+              isOtherOpen
+                ? 'border-teal-400/80 bg-teal-500/25 text-teal-50 ring-1 ring-teal-400/60'
+                : isActive && activeOptionIndex === optionCount - 1
+                  ? 'border-acc bg-acc/20 text-ink-0 ring-acc ring-2'
+                  : 'border-glass-border bg-glass-medium text-ink-1 hover:bg-bg-3'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 font-medium">
+              {isOtherOpen ? <Check className="h-3.5 w-3.5" /> : null}
+              Other
+            </div>
+            <div className="mt-0.5 text-xs leading-tight text-current/80">
+              Enter a custom answer
+            </div>
+          </Button>
+        ) : null}
       </div>
-      <Textarea
-        value={otherValue}
-        aria-label={`${question.question} other answer`}
-        onChange={(e) =>
-          onOtherChange({ questionIndex, value: e.currentTarget.value })
-        }
-        placeholder={otherPlaceholder}
-        size="sm"
-        rows={2}
-      />
+      {isFreeformOpen && (
+        <Textarea
+          value={value}
+          onFocus={() => {
+            onActivate({ questionIndex, optionIndex: optionCount - 1 });
+          }}
+          onChange={(e) =>
+            onOtherChange({ questionIndex, value: e.currentTarget.value })
+          }
+          placeholder="Enter your answer..."
+          size="sm"
+          rows={3}
+          autoFocus
+        />
+      )}
       <Textarea
         value={notesValue}
         aria-label={`${question.question} notes`}
@@ -296,6 +335,29 @@ export function QuestionOptions({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
   const [activeOptionIndex, setActiveOptionIndex] = useState(0);
+  const [otherOpenByQuestion, setOtherOpenByQuestion] = useState<
+    Record<string, boolean>
+  >({});
+  const [wasFreeformByQuestion, setWasFreeformByQuestion] = useState<
+    Record<string, boolean>
+  >({});
+  const questionIdentity = request.questions
+    .map(
+      (question) =>
+        `${question.question}:${question.allowFreeform === false ? 'fixed' : 'free'}`,
+    )
+    .join('|');
+
+  useEffect(() => {
+    startTransition(() => {
+      setAnswers({});
+      setOtherAnswers({});
+      setOtherOpenByQuestion({});
+      setWasFreeformByQuestion({});
+      setActiveQuestionIndex(0);
+      setActiveOptionIndex(0);
+    });
+  }, [request.requestId, questionIdentity]);
 
   useEffect(() => {
     if (request.questions.length === 0) {
@@ -315,7 +377,10 @@ export function QuestionOptions({
   const getOptionCount = useCallback((question: AgentQuestion) => {
     const mode = getQuestionInputMode(question);
     if (mode === 'text') return 0;
-    return question.options.length;
+    return (
+      question.options.length +
+      (question.multiSelect || question.allowFreeform === false ? 0 : 1)
+    );
   }, []);
 
   useEffect(() => {
@@ -373,12 +438,43 @@ export function QuestionOptions({
           ...prev,
           [questionKey]: JSON.stringify(next),
         }));
+        setWasFreeformByQuestion((prev) => ({
+          ...prev,
+          [question.question]: false,
+        }));
+        return true;
+      }
+
+      const isOther =
+        question.allowFreeform !== false &&
+        optionIndex === question.options.length;
+      setOtherOpenByQuestion((prev) => ({
+        ...prev,
+        [questionKey]: isOther,
+      }));
+
+      if (isOther) {
+        setWasFreeformByQuestion((prev) => ({
+          ...prev,
+          [questionKey]: true,
+        }));
+        const current = answers[questionKey] ?? '';
+        const matchesOption = question.options.some(
+          (option) => option.label === current,
+        );
+        if (matchesOption) {
+          setAnswers((prev) => ({ ...prev, [questionKey]: '' }));
+        }
         return true;
       }
 
       const label = question.options[optionIndex]?.label;
       if (!label) return false;
       setAnswers((prev) => ({ ...prev, [questionKey]: label }));
+      setWasFreeformByQuestion((prev) => ({
+        ...prev,
+        [questionKey]: false,
+      }));
       return true;
     },
     [answers, request.questions],
@@ -396,9 +492,22 @@ export function QuestionOptions({
   const updateOtherAnswer = useCallback(
     ({ questionIndex, value }: { questionIndex: number; value: string }) => {
       const question = request.questions[questionIndex];
-      if (!question) return;
+      if (!question || question.allowFreeform === false) return;
       const questionKey = getQuestionKey(question);
-      setOtherAnswers((prev) => ({ ...prev, [questionKey]: value }));
+      if (getQuestionInputMode(question) === 'text') {
+        setOtherAnswers((prev) => ({ ...prev, [questionKey]: value }));
+        return;
+      }
+
+      setAnswers((prev) => ({ ...prev, [questionKey]: value }));
+      setWasFreeformByQuestion((prev) => ({
+        ...prev,
+        [questionKey]: true,
+      }));
+      setOtherOpenByQuestion((prev) => ({
+        ...prev,
+        [questionKey]: true,
+      }));
     },
     [request.questions],
   );
@@ -470,8 +579,18 @@ export function QuestionOptions({
 
   const submitAnswers = useCallback(() => {
     if (!allAnswered) return;
-    return onRespond(request.requestId, { answers: buildResponseAnswers() });
-  }, [allAnswered, onRespond, request.requestId, buildResponseAnswers]);
+    return onRespond(request.requestId, {
+      answers: buildResponseAnswers(),
+      wasFreeform: Object.values(wasFreeformByQuestion).some(Boolean),
+      wasFreeformByQuestion,
+    });
+  }, [
+    allAnswered,
+    buildResponseAnswers,
+    onRespond,
+    request.requestId,
+    wasFreeformByQuestion,
+  ]);
 
   const handleSubmit = useCallback(() => {
     if (!allAnswered) return false;
@@ -532,6 +651,7 @@ export function QuestionOptions({
                   otherValue={otherAnswers[questionKey] || ''}
                   notesValue={notes[questionKey] || ''}
                   isActive={activeQuestionIndex === index}
+                  isOtherOpen={!!otherOpenByQuestion[questionKey]}
                   activeOptionIndex={
                     activeQuestionIndex === index ? activeOptionIndex : 0
                   }

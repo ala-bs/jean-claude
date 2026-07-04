@@ -2,12 +2,16 @@
 // All agent backends (Claude Code, OpenCode, etc.) normalize to these types.
 // The rest of the app (IPC, database, UI) only sees these types.
 
-import type { InteractionMode, ThinkingEffort } from './types';
+import type {
+  InteractionMode,
+  ThinkingEffort,
+} from './types';
 import type {
   PermissionScope,
   ResolvedPermissionRule,
 } from './permission-types';
 import type { NormalizationEvent } from './normalized-message-v2';
+import type { QuestionResponse } from './agent-types';
 
 
 
@@ -22,7 +26,7 @@ export type {
 
 // --- Backend identification ---
 
-export type AgentBackendType = 'claude-code' | 'opencode' | 'codex';
+export type AgentBackendType = 'claude-code' | 'opencode' | 'codex' | 'copilot';
 
 // --- Prompt content parts ---
 
@@ -108,14 +112,17 @@ export interface NormalizedPermissionResponse {
  * the state the backend needs for raw message persistence:
  *
  * - `taskId` — identifies the task this backend instance serves.
- * - `sessionStartIndex` — message index offset so resumed sessions
+ * - `sessionStartIndex` — normalized message index offset so resumed sessions
  *    continue numbering where they left off.
+ * - `rawSessionStartIndex` — raw message index offset when it differs from
+ *    normalized messages (for backends that persist non-entry events).
  * - `persistRaw` — callback to store each raw SDK message in the database;
  *    returns the stored row ID (used as `rawMessageId` in AgentEvent).
  */
 export interface AgentTaskContext {
   taskId: string;
   sessionStartIndex: number;
+  rawSessionStartIndex?: number;
   persistRaw: (params: {
     messageIndex: number;
     backendSessionId: string | null;
@@ -136,6 +143,7 @@ export interface AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
+    metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
   ): Promise<void>;
   setMode(sessionId: string, mode: InteractionMode): Promise<void>;
   getSessionAllowedTools?(sessionId: string): string[];
@@ -174,6 +182,7 @@ export interface NormalizedQuestion {
   options: NormalizedQuestionOption[];
   multiSelect: boolean;
   required?: boolean;
+  allowFreeform?: boolean;
 }
 
 export interface NormalizedQuestionRequest {

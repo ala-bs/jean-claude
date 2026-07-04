@@ -19,6 +19,11 @@ import { parseFrontmatter } from '../lib/skill-frontmatter';
 
 import { getSourceProvenanceByInstalledPathMap } from './source-manifest-store';
 
+type AgentManagementBackendType = Exclude<
+  AgentBackendType,
+  'codex' | 'copilot'
+>;
+
 const JC_USER_AGENTS_DIR = path.join(
   os.homedir(),
   '.config',
@@ -26,8 +31,6 @@ const JC_USER_AGENTS_DIR = path.join(
   'agents',
   'user',
 );
-
-type AgentManagementBackendType = Exclude<AgentBackendType, 'codex'>;
 
 const AGENT_PATH_CONFIGS: Record<
   AgentManagementBackendType,
@@ -44,10 +47,11 @@ const AGENT_PATH_CONFIGS: Record<
 export function getAgentPathConfig(backendType: AgentBackendType): {
   userAgentsDir: string;
 } {
-  if (backendType === 'codex') {
-    throw new Error('Codex agents are not implemented yet');
+  const config = AGENT_PATH_CONFIGS[backendType as AgentManagementBackendType];
+  if (!config) {
+    throw new Error(`Agent management is not implemented for ${backendType}`);
   }
-  return AGENT_PATH_CONFIGS[backendType];
+  return config;
 }
 
 async function pathExists(p: string): Promise<boolean> {

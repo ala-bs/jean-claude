@@ -899,7 +899,11 @@ export function BackendsSettings() {
                     )}
                   </span>
                 }
-                description={backend.description}
+                description={
+                  backend.value === 'copilot'
+                    ? 'Uses GitHub Copilot SDK. Requires Copilot CLI login or a GitHub token with Copilot access available in the environment. Usage counts against Copilot premium requests.'
+                    : backend.description
+                }
               />
 
               {enabled && (
@@ -969,6 +973,9 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         codex: {
           ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
         },
+        copilot: {
+          ...(thinkingSettings?.efforts.copilot ?? { default: 'default' }),
+        },
       },
       selectedModels: {
         'claude-code':
@@ -983,6 +990,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
           thinkingSettings?.selectedModels?.codex ??
           backendDefaultModelsSetting?.models.codex ??
           'default',
+        copilot:
+          thinkingSettings?.selectedModels?.copilot ??
+          backendDefaultModelsSetting?.models.copilot ??
+          'default',
         [backend]: nextModel,
       },
     });
@@ -992,6 +1003,7 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
           backendDefaultModelsSetting?.models['claude-code'] ?? 'default',
         opencode: backendDefaultModelsSetting?.models.opencode ?? 'default',
         codex: backendDefaultModelsSetting?.models.codex ?? 'default',
+        copilot: backendDefaultModelsSetting?.models.copilot ?? 'default',
         [backend]: nextModel,
       },
     });
@@ -1023,18 +1035,24 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
     });
     updateThinkingSettings.mutate({
       efforts: {
+        ...(thinkingSettings?.efforts ?? {}),
         'claude-code': {
-          ...(thinkingSettings?.efforts['claude-code'] ?? {
-            default: 'default',
-          }),
+          default: 'default',
+          ...(thinkingSettings?.efforts['claude-code'] ?? {}),
         },
         opencode: {
-          ...(thinkingSettings?.efforts.opencode ?? { default: 'default' }),
+          default: 'default',
+          ...(thinkingSettings?.efforts.opencode ?? {}),
+        },
+        copilot: {
+          default: 'default',
+          ...(thinkingSettings?.efforts.copilot ?? {}),
         },
         codex: {
           ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
         },
         [backend]: {
+          default: 'default',
           ...backendEfforts,
           [targetModel]: normalizedEffort,
         },
@@ -1051,6 +1069,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         codex:
           thinkingSettings?.selectedModels?.codex ??
           backendDefaultModelsSetting?.models.codex ??
+          'default',
+        copilot:
+          thinkingSettings?.selectedModels?.copilot ??
+          backendDefaultModelsSetting?.models.copilot ??
           'default',
         [backend]: targetModel,
       },
@@ -1587,8 +1609,10 @@ export function SummaryModelsSettings() {
   );
 }
 
+type SummaryModelBackend = Exclude<AgentBackendType, 'copilot'>;
+
 const SUMMARY_MODEL_BACKENDS: Record<
-  AgentBackendType,
+  SummaryModelBackend,
   { label: string; description: string; defaultModel: string }
 > = {
   'claude-code': {
@@ -1612,7 +1636,7 @@ export function SummaryModelSettings({
   backend,
   compact = false,
 }: {
-  backend: AgentBackendType;
+  backend: SummaryModelBackend;
   compact?: boolean;
 }) {
   const { data: summaryModelsSetting } = useSummaryModelsSetting();
@@ -1620,10 +1644,12 @@ export function SummaryModelSettings({
   const { data: dynamicModels } = useBackendModels(backend);
   const details = SUMMARY_MODEL_BACKENDS[backend];
 
-  const models = summaryModelsSetting?.models ?? {
+  const models = {
     'claude-code': SUMMARY_MODEL_BACKENDS['claude-code'].defaultModel,
     opencode: SUMMARY_MODEL_BACKENDS.opencode.defaultModel,
     codex: SUMMARY_MODEL_BACKENDS.codex.defaultModel,
+    copilot: 'default',
+    ...(summaryModelsSetting?.models ?? {}),
   };
 
   const setModel = (model: string) => {
@@ -1655,7 +1681,7 @@ export function SummaryModelSettings({
           <div className="text-ink-3 text-xs">{details.description}</div>
         </div>
         <ModelSelector
-          value={models[backend]}
+          value={models[backend] ?? details.defaultModel}
           onChange={setModel}
           models={getModelsForBackend(backend, dynamicModels)}
         />

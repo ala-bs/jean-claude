@@ -35,7 +35,7 @@ export function RegistrySkillDetails({
   const addToast = useToastStore((s) => s.addToast);
 
   const [enabledBackends, setEnabledBackends] = useState<
-    Record<AgentBackendType, boolean>
+    Partial<Record<AgentBackendType, boolean>>
   >({
     'claude-code': true,
     opencode: true,
@@ -139,7 +139,7 @@ export function RegistrySkillDetails({
       {/* ── Install footer ── */}
       <div className="border-line-soft flex shrink-0 items-center gap-4 border-t bg-black/[0.12] px-5 py-3">
         <Checkbox
-          checked={enabledBackends['claude-code']}
+          checked={enabledBackends['claude-code'] ?? false}
           onChange={(checked) =>
             setEnabledBackends((prev) => ({ ...prev, 'claude-code': checked }))
           }
@@ -147,7 +147,7 @@ export function RegistrySkillDetails({
           size="sm"
         />
         <Checkbox
-          checked={enabledBackends.opencode}
+          checked={enabledBackends.opencode ?? false}
           onChange={(checked) =>
             setEnabledBackends((prev) => ({ ...prev, opencode: checked }))
           }

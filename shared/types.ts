@@ -99,6 +99,9 @@ const OPENCODE_INTERACTION_MODE_OPTIONS = [
   },
 ] as const satisfies readonly BackendInteractionModeOption[];
 
+export const COPILOT_INTERACTION_MODE_OPTIONS =
+  OPENCODE_INTERACTION_MODE_OPTIONS;
+
 export const BACKEND_INTERACTION_MODE_OPTIONS: Record<
   AgentBackendType,
   readonly BackendInteractionModeOption[]
@@ -106,6 +109,7 @@ export const BACKEND_INTERACTION_MODE_OPTIONS: Record<
   'claude-code': CLAUDE_CODE_INTERACTION_MODE_OPTIONS,
   opencode: OPENCODE_INTERACTION_MODE_OPTIONS,
   codex: OPENCODE_INTERACTION_MODE_OPTIONS,
+  copilot: COPILOT_INTERACTION_MODE_OPTIONS,
 };
 
 export function getInteractionModeOptions({
@@ -667,7 +671,7 @@ export interface AppearanceSetting {
 }
 
 export interface SummaryModelsSetting {
-  models: Record<AgentBackendType, ModelPreference>;
+  models: Partial<Record<AgentBackendType, ModelPreference>>;
 }
 
 export interface BackendDefaultModelsSetting {
@@ -827,7 +831,12 @@ function isEditorSetting(v: unknown): v is EditorSetting {
   return false;
 }
 
-const VALID_BACKENDS: AgentBackendType[] = ['claude-code', 'opencode', 'codex'];
+const VALID_BACKENDS: AgentBackendType[] = [
+  'claude-code',
+  'opencode',
+  'codex',
+  'copilot',
+];
 
 function isCompletionSetting(v: unknown): v is CompletionSetting {
   if (!v || typeof v !== 'object') return false;
@@ -919,7 +928,12 @@ function isSummaryModelsSetting(v: unknown): v is SummaryModelsSetting {
   const obj = v as Record<string, unknown>;
   if (!obj.models || typeof obj.models !== 'object') return false;
   const models = obj.models as Record<string, unknown>;
-  return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+  return (
+    Object.keys(models).every((backend) =>
+      VALID_BACKENDS.includes(backend as AgentBackendType),
+    ) &&
+    VALID_BACKENDS.every((backend) => typeof models[backend] === 'string')
+  );
 }
 
 function isBackendDefaultModelsSetting(
@@ -1258,6 +1272,7 @@ export const SETTINGS_DEFINITIONS = {
         'claude-code': 'haiku',
         opencode: 'default',
         codex: 'default',
+        copilot: 'default',
       },
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
@@ -1268,6 +1283,7 @@ export const SETTINGS_DEFINITIONS = {
         'claude-code': 'default',
         opencode: 'default',
         codex: 'default',
+        copilot: 'default',
       },
     } as BackendDefaultModelsSetting,
     validate: isBackendDefaultModelsSetting,
@@ -1317,11 +1333,13 @@ export const SETTINGS_DEFINITIONS = {
         'claude-code': { default: 'default' },
         opencode: { default: 'default' },
         codex: { default: 'default' },
+        copilot: { default: 'default' },
       },
       selectedModels: {
         'claude-code': 'default',
         opencode: 'default',
         codex: 'default',
+        copilot: 'default',
       },
     } as ThinkingSettingsSetting,
     validate: isThinkingSettingsSetting,

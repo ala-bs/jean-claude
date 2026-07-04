@@ -16,6 +16,12 @@ type StepExecutionStatus = TaskStatus | TaskStepStatus;
 const MAX_RUN_COMMAND_LOG_LINES = 5000;
 const RUN_COMMAND_LOG_CHUNK_LINE_LIMIT = 200;
 
+function clearsPendingRequests(status: StepExecutionStatus): boolean {
+  return (
+    status === 'completed' || status === 'errored' || status === 'interrupted'
+  );
+}
+
 export interface RunCommandLogLine {
   stream: RunCommandLogStream;
   line: string;
@@ -97,6 +103,7 @@ interface TaskMessagesStore {
   steps: Record<string, TaskState>;
   /** Keyed by taskId — lightweight pending request tracking (always populated) */
   pendingRequestsByTaskId: Record<string, PendingRequest>;
+  pendingRequestVersion: number;
   /** Keyed by taskId — run command logs are task-level, not step-level */
   runCommandLogs: Record<string, RunCommandLogs>;
   /** Keyed by taskId/runCommandId — drops stale IPC batches after log reset. */
@@ -311,6 +318,7 @@ function shouldKeepExistingEntry({
 export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
   steps: {},
   pendingRequestsByTaskId: {},
+  pendingRequestVersion: 0,
   runCommandLogs: {},
   runCommandLogGenerations: {},
   runCommandRunning: {},
@@ -454,6 +462,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     set((state) => {
       const step = state.steps[stepId];
       if (!step) return state;
+      const shouldClearPending = clearsPendingRequests(status);
       return {
         steps: {
           ...state.steps,
@@ -461,13 +470,15 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             ...step,
             status,
             error,
-            // Clear pending permission/question when stopped by user
-            ...(status === 'interrupted' && {
+            ...(shouldClearPending && {
               pendingPermission: null,
               pendingQuestion: null,
             }),
           },
         },
+        ...(shouldClearPending && {
+          pendingRequestVersion: state.pendingRequestVersion + 1,
+        }),
       };
     });
   },
@@ -484,6 +495,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             pendingPermission: permission,
           },
         },
+        pendingRequestVersion: state.pendingRequestVersion + 1,
       };
     });
   },
@@ -500,6 +512,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             pendingQuestion: question,
           },
         },
+        pendingRequestVersion: state.pendingRequestVersion + 1,
       };
     });
   },
@@ -722,6 +735,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
         ...state.pendingRequestsByTaskId,
         [taskId]: request,
       },
+      pendingRequestVersion: state.pendingRequestVersion + 1,
     }));
   },
 
@@ -730,7 +744,10 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
       if (!state.pendingRequestsByTaskId[taskId]) return state;
       const { [taskId]: _removed, ...rest } = state.pendingRequestsByTaskId;
       void _removed;
-      return { pendingRequestsByTaskId: rest };
+      return {
+        pendingRequestsByTaskId: rest,
+        pendingRequestVersion: state.pendingRequestVersion + 1,
+      };
     });
   },
 

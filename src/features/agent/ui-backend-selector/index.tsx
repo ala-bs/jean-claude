@@ -4,6 +4,7 @@ import { Select, type SelectRef } from '@/common/ui/select';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { BackendModel } from '@/hooks/use-backend-models';
 import type { BindingKey } from '@/common/context/keyboard-bindings/types';
+import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
 import type { KeyboardLayer } from '@/common/context/keyboard-bindings';
 import type { ModelPreference } from '@shared/types';
 import type { ThinkingModelCapabilities } from '@shared/thinking-settings';
@@ -201,6 +202,13 @@ export const AVAILABLE_BACKENDS: {
     value: 'codex',
     label: 'Codex',
     description: 'OpenAI Codex App Server',
+    badge: getAgentBackendBadge('codex'),
+  },
+  {
+    value: 'copilot',
+    label: 'Copilot',
+    description: 'GitHub Copilot SDK',
+    badge: getAgentBackendBadge('copilot'),
   },
 ];
 
@@ -213,9 +221,11 @@ export const AGENT_BACKENDS = AVAILABLE_BACKENDS.map((b) => b.value);
 export function useBackendSelector({
   value,
   onChange,
+  allowedBackends,
 }: {
   value: AgentBackendType;
   onChange: (backend: AgentBackendType) => void;
+  allowedBackends?: AgentBackendType[];
 }) {
   const { data: backendsSetting } = useBackendsSetting();
   const enabledBackends = useMemo(
@@ -228,17 +238,25 @@ export function useBackendSelector({
     () => AVAILABLE_BACKENDS.filter((b) => enabledBackends.includes(b.value)),
     [enabledBackends],
   );
+  const allowedVisibleBackends = useMemo(
+    () =>
+      allowedBackends
+        ? visibleBackends.filter((b) => allowedBackends.includes(b.value))
+        : visibleBackends,
+    [allowedBackends, visibleBackends],
+  );
 
   const selectedBackend =
     AVAILABLE_BACKENDS.find((b) => b.value === value) ?? AVAILABLE_BACKENDS[0];
 
   const toggle = useCallback(() => {
-    if (enabledBackends.length <= 1) return;
-    const currentIndex = enabledBackends.indexOf(value);
+    const backends = allowedVisibleBackends.map((b) => b.value);
+    if (backends.length <= 1) return;
+    const currentIndex = backends.indexOf(value);
     const nextIndex =
-      currentIndex === -1 ? 0 : (currentIndex + 1) % enabledBackends.length;
-    onChange(enabledBackends[nextIndex]);
-  }, [value, enabledBackends, onChange]);
+      currentIndex === -1 ? 0 : (currentIndex + 1) % backends.length;
+    onChange(backends[nextIndex]);
+  }, [value, allowedVisibleBackends, onChange]);
 
   return {
     /** Cycle to the next enabled backend (wraps around). */
@@ -246,9 +264,9 @@ export function useBackendSelector({
     /** Display label of the currently selected backend. */
     label: selectedBackend.label,
     /** Whether multiple backends are enabled. */
-    visible: visibleBackends.length > 1,
+    visible: allowedVisibleBackends.length > 1,
     /** The visible backend options (filtered by enabled). */
-    visibleBackends,
+    visibleBackends: allowedVisibleBackends,
   };
 }
 
@@ -263,6 +281,7 @@ export const BackendSelector = forwardRef<
     side?: 'top' | 'bottom';
     className?: string;
     layer?: KeyboardLayer;
+    allowedBackends?: AgentBackendType[];
   }
 >(function BackendSelector(
   {
@@ -274,12 +293,14 @@ export const BackendSelector = forwardRef<
     side,
     className,
     layer,
+    allowedBackends,
   },
   ref,
 ) {
   const { visible, visibleBackends } = useBackendSelector({
     value,
     onChange,
+    allowedBackends,
   });
 
   if (!visible) return null;

@@ -118,10 +118,10 @@ async function resolvePromptTemplate({
   projectId: string;
   steps: TaskStep[];
   summaryBackend: AgentBackendType;
-  summaryModels: Record<
+  summaryModels: Partial<Record<
     import('@shared/agent-backend-types').AgentBackendType,
     import('@shared/types').ModelPreference
-  >;
+  >>;
   onSummaryLifecycle?: {
     onStart?: (step: TaskStep, prompt: string) => Promise<void> | void;
     onResolved?: (step: TaskStep, summary: string) => Promise<void> | void;

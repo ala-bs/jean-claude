@@ -184,6 +184,7 @@ const {
     providerCalls,
     providerState,
     rawMessageRepositoryMock: {
+      getMessageCountByStepId: vi.fn(),
       create: vi.fn(),
       updateRawData: vi.fn(),
     },
@@ -566,6 +567,7 @@ function setDefaultMocks(): void {
   rawMessageRepositoryMock.create.mockResolvedValue({ id: 'raw-1' });
   rawMessageRepositoryMock.updateRawData.mockResolvedValue(undefined);
   agentMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
+  rawMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
   agentMessageRepositoryMock.create.mockResolvedValue({ id: 'message-1' });
   agentMessageRepositoryMock.updateEntry.mockResolvedValue(undefined);
   agentMessageRepositoryMock.updateToolResult.mockResolvedValue(undefined);
@@ -1085,10 +1087,12 @@ describe('agentService provider runtime', () => {
     providerState.runStartImplementation = async () => handle;
 
     await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
 
     expect(getProviderMock).toHaveBeenCalledWith('claude-code');
     expect(legacyBackendConstructorMock).not.toHaveBeenCalled();
-    expect(providerCalls.runStarts).toHaveLength(1);
     expect(providerCalls.runStarts[0]).toMatchObject({
       context: {
         taskId: 'task-1',
@@ -1109,8 +1113,33 @@ describe('agentService provider runtime', () => {
       backend: 'claude-code',
       rootPid: 123,
     });
-    expect(handle.stop).toHaveBeenCalled();
-    expect(handle.dispose).toHaveBeenCalledTimes(1);
+    await waitForAssertion(() => {
+      expect(handle.stop).toHaveBeenCalled();
+      expect(handle.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('cleans up startup session when prompt resolution fails', async () => {
+    stepServiceMock.resolveAndValidate
+      .mockRejectedValueOnce(new Error('summary failed'))
+      .mockResolvedValueOnce({
+        resolvedPrompt: 'Resolved prompt after retry',
+        step: defaultStep,
+        warnings: [],
+      });
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await expect(agentService.start('step-1')).resolves.toBeUndefined();
+    await agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    expect((providerCalls.runStarts[0] as { parts: PromptPart[] }).parts).toEqual([
+      { type: 'text', text: 'Resolved prompt after retry' },
+    ]);
+    expect(stepServiceMock.errorStep).toHaveBeenCalledWith('step-1');
   });
 
   it('stops the provider run handle when stop races with startup', async () => {
@@ -1199,8 +1228,10 @@ describe('agentService provider runtime', () => {
     outerComplete.resolve();
 
     await startPromise;
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(2);
+    });
 
-    expect(providerCalls.runStarts).toHaveLength(2);
     expect(outerHandle.stop).toHaveBeenCalledTimes(1);
     expect(nestedHandle.stop).toHaveBeenCalledTimes(1);
     expect(outerHandle.dispose).toHaveBeenCalledTimes(1);
@@ -1414,6 +1445,10 @@ describe('agentService provider runtime', () => {
         handle,
         requestId: 'question-1',
         answer: { 'Which option?': 'A' },
+        metadata: {
+          wasFreeform: undefined,
+          wasFreeformByQuestion: undefined,
+        },
       },
     ]);
     expect(notificationServiceMock.close).toHaveBeenCalledWith(
@@ -1512,6 +1547,10 @@ describe('agentService provider runtime', () => {
         handle,
         requestId: 'question-1',
         answer: { 'Which option?': 'A' },
+        metadata: {
+          wasFreeform: undefined,
+          wasFreeformByQuestion: undefined,
+        },
       },
     ]);
     expect(agentService.getPendingRequest('step-1')).toBeNull();
@@ -1538,6 +1577,9 @@ describe('agentService provider runtime', () => {
 
     release();
     await startPromise;
+    await waitForAssertion(() => {
+      expect(handle.dispose).toHaveBeenCalledTimes(1);
+    });
 
     vi.clearAllMocks();
     resetProviderState();
@@ -1571,8 +1613,10 @@ describe('agentService provider runtime', () => {
     providerState.runStartImplementation = async () => handle;
 
     await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.sessionAllowedTools).toEqual([{ handle }]);
+    });
 
-    expect(providerCalls.sessionAllowedTools).toEqual([{ handle }]);
     expect(taskRepositoryMock.update).toHaveBeenCalledWith('task-1', {
       sessionRules: {
         bash: { 'npm test': 'allow' },
@@ -1589,6 +1633,9 @@ describe('agentService provider runtime', () => {
       createHandle({ events: [completeEvent()] });
 
     await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
 
     expect(providerCalls.sessionAllowedTools).toEqual([]);
     expect(taskRepositoryMock.update).not.toHaveBeenCalledWith('task-1', {

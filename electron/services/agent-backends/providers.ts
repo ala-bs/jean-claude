@@ -26,6 +26,7 @@ import {
   type SlashCommandCapability,
   UnsupportedBackendCapabilityError,
 } from '@shared/agent-backend-provider-types';
+import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
 
 import { createGenerationCapabilities } from './provider-generation';
 
@@ -139,7 +140,7 @@ function createPermissionCapability(
 
 function createQuestionCapability(backend: AgentBackendType): QuestionCapability {
   return {
-    async respond({ handle, requestId, answer }) {
+    async respond({ handle, requestId, answer, metadata }) {
       const binding = getRunBinding({
         handle,
         backend,
@@ -149,6 +150,7 @@ function createQuestionCapability(backend: AgentBackendType): QuestionCapability
         binding.adapterSessionId,
         requestId,
         answer,
+        metadata,
       );
     },
   };
@@ -283,6 +285,7 @@ function createCapabilities({
 export const claudeCodeProvider: AgentBackendProvider = {
   id: 'claude-code',
   label: 'Claude Code',
+  badge: getAgentBackendBadge('claude-code'),
   capabilities: createCapabilities({
     backend: 'claude-code',
     run: createRunCapability({
@@ -300,6 +303,7 @@ export const claudeCodeProvider: AgentBackendProvider = {
 export const openCodeProvider: AgentBackendProvider = {
   id: 'opencode',
   label: 'OpenCode',
+  badge: getAgentBackendBadge('opencode'),
   capabilities: createCapabilities({
     backend: 'opencode',
     run: createRunCapability({
@@ -317,6 +321,7 @@ export const openCodeProvider: AgentBackendProvider = {
 export const codexProvider: AgentBackendProvider = {
   id: 'codex',
   label: 'Codex',
+  badge: getAgentBackendBadge('codex'),
   capabilities: createCapabilities({
     backend: 'codex',
     run: createRunCapability({
@@ -331,6 +336,24 @@ export const codexProvider: AgentBackendProvider = {
   }),
 };
 
+export const copilotProvider: AgentBackendProvider = {
+  id: 'copilot',
+  label: 'GitHub Copilot',
+  badge: getAgentBackendBadge('copilot'),
+  capabilities: createCapabilities({
+    backend: 'copilot',
+    run: createRunCapability({
+      backendType: 'copilot',
+      loadBackendClass: async () =>
+        (await import('./copilot/copilot-backend')).CopilotBackend,
+    }),
+    supportsPermissions: true,
+    supportsQuestions: true,
+    supportsRuntimeModeSwitch: false,
+    supportsSessionAllowedTools: true,
+  }),
+};
+
 export const AGENT_BACKEND_PROVIDERS: Record<
   AgentBackendType,
   AgentBackendProvider
@@ -338,6 +361,7 @@ export const AGENT_BACKEND_PROVIDERS: Record<
   'claude-code': claudeCodeProvider,
   opencode: openCodeProvider,
   codex: codexProvider,
+  copilot: copilotProvider,
 };
 
 export function getAgentBackendProvider(

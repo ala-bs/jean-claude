@@ -8,6 +8,7 @@ const BACKEND_LABELS: Record<AgentBackendType, string> = {
   'claude-code': 'Claude Code',
   opencode: 'OpenCode',
   codex: 'Codex',
+  copilot: 'GitHub Copilot',
 };
 
 export function useRateLimitSwapPreview(

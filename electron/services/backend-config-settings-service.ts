@@ -42,6 +42,12 @@ function getConfig(backend: AgentBackendType): {
         schemaUrl: 'https://developers.openai.com/codex/config-reference',
         defaultContent: '',
       };
+    case 'copilot':
+      return {
+        paths: [path.join(home, '.config', 'github-copilot', 'config.json')],
+        schemaUrl: '',
+        defaultContent: '{}\n',
+      };
   }
 }
 

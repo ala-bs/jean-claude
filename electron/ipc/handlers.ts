@@ -411,7 +411,12 @@ async function pullSourceBranch({
   return `origin/${remoteBranch}`;
 }
 
-const VALID_BACKENDS = new Set<string>(['claude-code', 'opencode', 'codex']);
+const VALID_BACKENDS = new Set<string>([
+  'claude-code',
+  'opencode',
+  'codex',
+  'copilot',
+]);
 
 async function cleanupFeatureMapTempDirsForTask(taskId: string): Promise<void> {
   const steps = await TaskStepRepository.findByTaskId(taskId);
@@ -625,6 +630,10 @@ function assertValidBackendArray(
     }
   }
   return value as AgentBackendType[];
+}
+
+function isBackendConfigType(value: unknown): value is AgentBackendType {
+  return typeof value === 'string' && VALID_BACKENDS.has(value);
 }
 
 function validateAddGitHubSourceParams(value: unknown): AddGitHubSourceParams {
@@ -4164,11 +4173,7 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'backendConfig:getUserConfig',
     (_: unknown, backend: unknown) => {
-      if (
-        backend !== 'claude-code' &&
-        backend !== 'opencode' &&
-        backend !== 'codex'
-      ) {
+      if (!isBackendConfigType(backend)) {
         throw new Error('Invalid backend');
       }
       return readBackendUserConfig(backend);
@@ -4177,11 +4182,7 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'backendConfig:setUserConfig',
     (_: unknown, backend: unknown, content: unknown) => {
-      if (
-        backend !== 'claude-code' &&
-        backend !== 'opencode' &&
-        backend !== 'codex'
-      ) {
+      if (!isBackendConfigType(backend)) {
         throw new Error('Invalid backend');
       }
       if (typeof content !== 'string') {

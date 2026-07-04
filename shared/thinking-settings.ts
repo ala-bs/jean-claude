@@ -30,6 +30,13 @@ export const THINKING_EFFORT_OPTIONS: ThinkingEffortOption[] = [
   { value: 'xhigh', label: 'XHigh', description: 'Extra-high reasoning' },
 ];
 
+const COPILOT_REASONING_EFFORTS: ThinkingEffort[] = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+];
+
 const CLAUDE_THINKING_EFFORTS: ThinkingEffort[] = [
   'default',
   'low',
@@ -109,6 +116,21 @@ export function getThinkingEffortOptions({
       : optionsForEfforts(CODEX_THINKING_EFFORTS);
   }
 
+  if (backend === 'copilot') {
+    if (capabilities?.supportsThinking === false) {
+      return [DEFAULT_THINKING_EFFORT_OPTION];
+    }
+
+    if (
+      capabilities?.supportsThinking &&
+      capabilities.thinkingEfforts?.length
+    ) {
+      return optionsForEfforts(['default', ...capabilities.thinkingEfforts]);
+    }
+
+    return [DEFAULT_THINKING_EFFORT_OPTION];
+  }
+
   void model;
   return [DEFAULT_THINKING_EFFORT_OPTION];
 }
@@ -118,13 +140,24 @@ export function normalizeThinkingEffortForModel({
   model,
   effort,
   capabilities,
+  allowCopilotEffortWithoutCapabilities,
 }: {
   backend: AgentBackendType | null;
   model: ModelPreference;
   effort: ThinkingEffort | null | undefined;
   capabilities?: ThinkingModelCapabilities | null;
+  allowCopilotEffortWithoutCapabilities?: boolean;
 }): ThinkingEffort {
   const value = effort ?? 'default';
+  if (
+    backend === 'copilot' &&
+    allowCopilotEffortWithoutCapabilities &&
+    capabilities == null &&
+    COPILOT_REASONING_EFFORTS.includes(value)
+  ) {
+    return value;
+  }
+
   const options = getThinkingEffortOptions({ backend, model, capabilities });
   return options.some((option) => option.value === value) ? value : 'default';
 }

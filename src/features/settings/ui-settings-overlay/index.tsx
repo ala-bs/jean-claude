@@ -54,12 +54,14 @@ import {
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
+import type { AgentBackendType } from '@shared/agent-backend-types';
 import { AgentsSettings } from '@/features/settings/ui-agents-settings';
 import { AiGenerationSettings } from '@/features/settings/ui-ai-generation-settings';
 import { api } from '@/lib/api';
 import { AutocompleteSettings } from '@/features/settings/ui-autocomplete-settings';
 import { AzureDevOpsTab } from '@/features/settings/ui-azure-devops-tab';
 import { DebugDatabase } from '@/features/settings/ui-debug-database';
+import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
 import { GlobalPermissionsSettings } from '@/features/settings/ui-global-permissions-settings';
 import { Kbd } from '@/common/ui/kbd';
 import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings';
@@ -149,9 +151,10 @@ function getGlobalSections(): GlobalSection[] {
         { id: 'process-mode', label: 'Process Mode' },
         { id: 'prompt-preface', label: 'Prompt Preface' },
         { id: 'rate-limit-swap', label: 'Rate Limit Swap' },
-        { id: 'claude-code', label: 'Claude Code', layout: 'fill' },
-        { id: 'opencode', label: 'OpenCode', layout: 'fill' },
-        { id: 'codex', label: 'Codex', layout: 'fill' },
+        createBackendSubItem({ id: 'claude-code', label: 'Claude Code' }),
+        createBackendSubItem({ id: 'opencode', label: 'OpenCode' }),
+        createBackendSubItem({ id: 'codex', label: 'Codex' }),
+        createBackendSubItem({ id: 'copilot', label: 'Copilot' }),
       ],
     },
     {
@@ -226,6 +229,21 @@ function getGlobalSections(): GlobalSection[] {
     },
   ];
   return _cachedGlobalSections;
+}
+
+function createBackendSubItem({
+  id,
+  label,
+}: {
+  id: AgentBackendType;
+  label: string;
+}): GlobalSubItem {
+  return {
+    id,
+    label,
+    beta: getAgentBackendBadge(id) === 'Beta',
+    layout: 'fill',
+  };
 }
 
 const PROJECT_SECTIONS: ProjectSection[] = [
@@ -411,6 +429,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
         globalLeaf('coding-agents', 'claude-code', 'Claude Code'),
         globalLeaf('coding-agents', 'opencode', 'OpenCode'),
         globalLeaf('coding-agents', 'codex', 'Codex'),
+        globalLeaf('coding-agents', 'copilot', 'Copilot'),
         globalLeaf('coding-agents', 'prompt-preface'),
         globalLeaf('permissions'),
         globalLeaf('coding-agents', 'rate-limit-swap'),
@@ -655,6 +674,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <BackendConfigSettings backend="opencode" />;
       case 'coding-agents:codex':
         return <BackendConfigSettings backend="codex" />;
+      case 'coding-agents:copilot':
+        return <BackendConfigSettings backend="copilot" />;
     }
   }
 
