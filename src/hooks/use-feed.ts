@@ -191,6 +191,11 @@ export function useFeed() {
     prQuery.isLoading ||
     noteQuery.isLoading ||
     workItemQuery.isLoading;
+  const isFetching =
+    taskQuery.isFetching ||
+    prQuery.isFetching ||
+    noteQuery.isFetching ||
+    workItemQuery.isFetching;
   const isError =
     taskQuery.isError ||
     prQuery.isError ||
@@ -422,6 +427,7 @@ export function useFeed() {
   return {
     data: refinedItems,
     isLoading,
+    isFetching,
     isError,
     refetch: async () => {
       await Promise.all([

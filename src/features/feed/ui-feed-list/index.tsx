@@ -1094,7 +1094,7 @@ export function FeedList() {
     projectOptions,
     hiddenProjectIds,
     filteredOutCount,
-    isLoading,
+    isFetching,
   } = useFeed();
   const reorderPinned = useFeedStore((s) => s.reorderPinned);
   const pinned = useFeedStore((s) => s.pinned);
@@ -1541,10 +1541,10 @@ export function FeedList() {
             {pinnedItems.length > 0 ? 'Pinned' : 'Feed'}
           </span>
           <div className="flex items-center gap-1">
-            {isLoading && totalCount > 0 && (
+            {isFetching && totalCount > 0 && (
               <Loader2
                 className="text-ink-3 h-3 w-3 animate-spin"
-                aria-label="Loading remaining feed items"
+                aria-label="Refreshing feed items"
               />
             )}
             {projectOptions.length > 0 && (
@@ -1669,7 +1669,7 @@ export function FeedList() {
       )}
 
       {/* Initial loading state */}
-      {isLoading && totalCount === 0 && (
+      {isFetching && totalCount === 0 && (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center">
           <Loader2 className="text-ink-2 h-6 w-6 animate-spin" />
           <span className="text-ink-3 text-sm">Loading feed...</span>
@@ -1677,7 +1677,7 @@ export function FeedList() {
       )}
 
       {/* Empty state */}
-      {!isLoading &&
+      {!isFetching &&
         totalCount === 0 &&
         runningTaskCreationCount === 0 &&
         runningVerificationNoteCount === 0 && (
