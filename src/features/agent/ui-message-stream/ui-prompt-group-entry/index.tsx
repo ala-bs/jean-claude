@@ -1,5 +1,12 @@
 import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
-import { memo, useCallback, useMemo, useState } from 'react';
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import type { MouseEvent } from 'react';
 
 
@@ -250,6 +257,17 @@ function formatMessageTime(date: string): string {
   return `${hours}:${minutes}`;
 }
 
+function formatLastMessageElapsed(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}min`;
+
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h`;
+}
+
 function getDisplayMessageDate(dm: DisplayMessage): string | undefined {
   if (dm.kind === 'entry') return dm.entry.date;
   if (dm.kind === 'compacting') return dm.startEntry.date;
@@ -336,6 +354,39 @@ function MessageTime({ date }: { date?: string }) {
     </time>
   );
 }
+
+const LastMessageElapsed = memo(function LastMessageElapsed({
+  date,
+}: {
+  date: string;
+}) {
+  const lastMessageMs = useMemo(() => parseDateMs(date), [date]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (lastMessageMs === null) return;
+
+    startTransition(() => setNowMs(Date.now()));
+
+    const intervalId = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [lastMessageMs]);
+
+  if (lastMessageMs === null) return null;
+
+  return (
+    <time
+      dateTime={ensureUtc(date)}
+      className="text-ink-4 ml-1.5 tracking-normal normal-case"
+      title={`Last message ${new Date(ensureUtc(date)).toLocaleString()}`}
+    >
+      last {formatLastMessageElapsed(nowMs - lastMessageMs)}
+    </time>
+  );
+});
 
 function shouldRenderChildMessage(dm: DisplayMessage): boolean {
   return dm.kind !== 'entry' || dm.entry.type !== 'session-summary';
@@ -578,15 +629,7 @@ const AgentHeader = memo(function AgentHeader({
             startDate={runningStartDate}
             className="text-ink-4 ml-1.5"
           />
-          {lastMessageDate && (
-            <time
-              dateTime={ensureUtc(lastMessageDate)}
-              className="text-ink-4 ml-1.5 tracking-normal normal-case"
-              title={`Last message ${new Date(ensureUtc(lastMessageDate)).toLocaleString()}`}
-            >
-              last {formatMessageTime(lastMessageDate)}
-            </time>
-          )}
+          {lastMessageDate && <LastMessageElapsed date={lastMessageDate} />}
         </>
       ) : (
         <>
