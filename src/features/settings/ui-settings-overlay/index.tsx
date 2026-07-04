@@ -151,7 +151,7 @@ function getGlobalSections(): GlobalSection[] {
         { id: 'rate-limit-swap', label: 'Rate Limit Swap' },
         { id: 'claude-code', label: 'Claude Code', layout: 'fill' },
         { id: 'opencode', label: 'OpenCode', layout: 'fill' },
-        { id: 'codex', label: 'Codex', beta: true, layout: 'fill' },
+        { id: 'codex', label: 'Codex', layout: 'fill' },
       ],
     },
     {

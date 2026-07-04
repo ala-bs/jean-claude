@@ -1894,16 +1894,9 @@ function StructuredBackendConfigSettings({
         <div className="bg-bg-0/20 flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="border-line-soft flex shrink-0 flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h2 className="text-ink-1 text-base font-semibold">
-                  {selectedField?.label ?? 'Settings'}
-                </h2>
-                {backend === 'codex' && (
-                  <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
-                    Beta
-                  </span>
-                )}
-              </div>
+              <h2 className="text-ink-1 text-base font-semibold">
+                {selectedField?.label ?? 'Settings'}
+              </h2>
               {selectedField && (
                 <p className="text-ink-3 mt-0.5 text-xs">
                   {selectedField.description}

@@ -197,7 +197,6 @@ export const AVAILABLE_BACKENDS: {
     value: 'codex',
     label: 'Codex',
     description: 'OpenAI Codex App Server',
-    badge: 'Beta',
   },
 ];
 
