@@ -2062,7 +2062,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     !isAgentBusy &&
     !isSkillCreationTask &&
     task.status === 'interrupted' &&
+    activeStep?.status === 'interrupted' &&
     !!interruptedStep &&
+    interruptedStep.id === activeStep.id &&
     continuingInterruptedStepId === null;
   const hasRepoLink =
     !!project.repoProviderId && !!project.repoProjectId && !!project.repoId;
