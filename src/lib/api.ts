@@ -104,6 +104,7 @@ import type {
   PortsInUseErrorData,
   ProjectCommand,
   ProjectCommandGroup,
+  ProjectSuggestions,
   RunCommandConfigItem,
   RunStatus,
   UpdateProjectCommand,
@@ -1282,6 +1283,11 @@ export interface Api {
       commandId: string,
     ) => Promise<void>;
     getPackageScripts: (projectPath: string) => Promise<PackageScriptsResult>;
+    getProjectSuggestions: (projectPath: string) => Promise<ProjectSuggestions>;
+    saveProjectSuggestions: (
+      projectPath: string,
+      suggestions: ProjectSuggestions,
+    ) => Promise<ProjectSuggestions>;
     onStatusChange: (
       callback: (taskId: string, status: RunStatus) => void,
     ) => () => void;
@@ -2207,6 +2213,8 @@ export const api: Api = hasWindowApi
           isWorkspace: false,
           workspacePackages: [],
         }),
+        getProjectSuggestions: async () => ({ runCommands: [] }),
+        saveProjectSuggestions: async (_projectPath, suggestions) => suggestions,
         onStatusChange: () => () => {},
         onLog: () => () => {},
         onLogsReset: () => () => {},

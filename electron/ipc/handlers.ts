@@ -66,6 +66,7 @@ import type {
 import type {
   NewProjectCommand,
   NewProjectCommandGroup,
+  ProjectSuggestions,
   RunCommandConfigItem,
   UpdateProjectCommand,
   UpdateProjectCommandGroup,
@@ -4639,6 +4640,18 @@ export function registerIpcHandlers() {
     'project:commands:run:getPackageScripts',
     (_, projectPath: string) =>
       runCommandService.getPackageScripts(projectPath),
+  );
+  ipcMain.handle(
+    'project:commands:run:getProjectSuggestions',
+    (_, projectPath: string) =>
+      runCommandService.getProjectSuggestions(projectPath),
+  );
+  ipcMain.handle(
+    'project:commands:run:saveProjectSuggestions',
+    (
+      _,
+      params: { projectPath: string; suggestions: ProjectSuggestions },
+    ) => runCommandService.saveProjectSuggestions(params),
   );
 
   const previousRunCommandStatuses = new Map<string, Map<string, string>>();
