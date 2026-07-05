@@ -2799,6 +2799,11 @@ export function registerIpcHandlers() {
         });
         const updatedTask = await TaskRepository.toggleUserCompleted(taskId);
         emitTaskUpsert(updatedTask);
+        if (task.parentTaskId) {
+          await updateTaskAndEmit(task.parentTaskId, {
+            updatedAt: new Date().toISOString(),
+          });
+        }
       }
 
       return result;
