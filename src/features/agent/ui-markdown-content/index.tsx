@@ -28,8 +28,45 @@ import { sanitizeMarkdownUrl } from '@/lib/markdown-urls';
 
 
 // Pattern to match file paths like src/foo.ts:42-50 or just src/foo.ts:42 or src/foo.ts
+const FILE_PATH_EXTENSIONS = [
+  'dockerfile',
+  'json',
+  'yaml',
+  'yml',
+  'toml',
+  'tsx',
+  'jsx',
+  'hpp',
+  'cpp',
+  'scss',
+  'less',
+  'html',
+  'java',
+  'swift',
+  'php',
+  'xml',
+  'ini',
+  'sql',
+  'css',
+  'md',
+  'py',
+  'go',
+  'rs',
+  'sh',
+  'rb',
+  'kt',
+  'cs',
+  'ts',
+  'js',
+  'c',
+  'h',
+].join('|');
+
 const FILE_PATH_PATTERN =
-  /([\w\-./]+\.(ts|tsx|js|jsx|py|go|rs|md|json|yaml|yml|toml|sql|sh|css|html|rb|java|kt|swift|c|cpp|h|hpp|cs|php|scss|less|xml|ini|dockerfile))(?::(\d+)(?:-(\d+))?)?/g;
+  new RegExp(
+    `([\\w\\-./]+\\.(${FILE_PATH_EXTENSIONS}))(?::(\\d+)(?:-(\\d+))?)?`,
+    'g',
+  );
 
 const PROMPT_XML_ROOT_TAGS = new Set([
   'attached_files',
@@ -153,6 +190,12 @@ function parseFilePath(match: string): {
     lineStart: parts[2] ? parseInt(parts[2], 10) : undefined,
     lineEnd: parts[3] ? parseInt(parts[3], 10) : undefined,
   };
+}
+
+export function getFilePathMatches(text: string): string[] {
+  return [...text.matchAll(new RegExp(FILE_PATH_PATTERN))].map(
+    (match) => match[0],
+  );
 }
 
 function TextWithFilePaths({
