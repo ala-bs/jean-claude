@@ -112,12 +112,15 @@ export const BACKEND_INTERACTION_MODE_OPTIONS: Record<
   copilot: COPILOT_INTERACTION_MODE_OPTIONS,
 };
 
+const EMPTY_INTERACTION_MODE_OPTIONS: readonly BackendInteractionModeOption[] =
+  [];
+
 export function getInteractionModeOptions({
   backend,
 }: {
   backend: AgentBackendType;
 }): readonly BackendInteractionModeOption[] {
-  return BACKEND_INTERACTION_MODE_OPTIONS[backend];
+  return BACKEND_INTERACTION_MODE_OPTIONS[backend] ?? EMPTY_INTERACTION_MODE_OPTIONS;
 }
 
 export function isInteractionModeSupportedByBackend({

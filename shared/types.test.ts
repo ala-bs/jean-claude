@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { SETTINGS_DEFINITIONS } from './types';
+import { getInteractionModeOptions, SETTINGS_DEFINITIONS } from './types';
+import type { AgentBackendType } from './agent-backend-types';
+
+describe('getInteractionModeOptions', () => {
+  it('falls back instead of returning undefined for stale backend values', () => {
+    expect(
+      getInteractionModeOptions({ backend: 'stale' as AgentBackendType }),
+    ).toEqual([]);
+  });
+});
 
 describe('SETTINGS_DEFINITIONS.thinkingSettings', () => {
   it('accepts Codex minimal reasoning effort', () => {

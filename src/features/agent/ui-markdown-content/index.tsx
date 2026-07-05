@@ -535,6 +535,7 @@ function PromptXmlBlock({
           <PromptXmlLine
             key={index}
             line={line}
+            rootTag={tag}
             onFilePathClick={onFilePathClick}
           />
         ))}
@@ -543,11 +544,47 @@ function PromptXmlBlock({
   );
 }
 
+function decodeXmlAttr(value: string): string {
+  return value
+    .replaceAll('&quot;', '"')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&');
+}
+
+function parseAttachedFileAttrs(
+  attrs: string,
+): { name: string; path: string; rawName: string; rawPath: string } | null {
+  const values = new Map<string, { decoded: string; raw: string }>();
+
+  for (const match of attrs.matchAll(/([\w:-]+)="([^"]*)"/g)) {
+    values.set(match[1], {
+      decoded: decodeXmlAttr(match[2]),
+      raw: match[2],
+    });
+  }
+
+  const name = values.get('name');
+  const path = values.get('path');
+
+  return name && path
+    ? {
+        name: name.decoded,
+        path: path.decoded,
+        rawName: name.raw,
+        rawPath: path.raw,
+      }
+    : null;
+}
+
 function PromptXmlLine({
   line,
+  rootTag,
   onFilePathClick,
 }: {
   line: string;
+  rootTag: string;
   onFilePathClick?: (
     filePath: string,
     lineStart?: number,
@@ -570,6 +607,42 @@ function PromptXmlLine({
   }
 
   const [, indent, open, slash, tag, attrs, selfClose, close] = tagLine;
+  const attachedFile =
+    rootTag === 'attached_files' && tag === 'file'
+      ? parseAttachedFileAttrs(attrs)
+      : null;
+
+  if (attachedFile && onFilePathClick) {
+    return (
+      <span className="block">
+        <span className="text-ink-4">{indent}</span>
+        <span className="text-ink-3">{open}</span>
+        <span className="text-acc-ink">{tag}</span>
+        <span className="text-ink-2"> name=&quot;</span>
+        <button
+          type="button"
+          className="text-acc-ink hover:text-acc-ink cursor-pointer underline"
+          onClick={() => onFilePathClick(attachedFile.path)}
+          title={attachedFile.path}
+        >
+          {attachedFile.rawName}
+        </button>
+        <span className="text-ink-2">&quot; path=&quot;</span>
+        <button
+          type="button"
+          className="text-acc-ink hover:text-acc-ink cursor-pointer underline"
+          onClick={() => onFilePathClick(attachedFile.path)}
+          title={attachedFile.path}
+        >
+          {attachedFile.rawPath}
+        </button>
+        <span className="text-ink-2">&quot; </span>
+        <span className="text-status-run">{selfClose}</span>
+        <span className="text-ink-3">{close}</span>
+      </span>
+    );
+  }
+
   return (
     <span className="block">
       <span className="text-ink-4">{indent}</span>
