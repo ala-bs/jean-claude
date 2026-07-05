@@ -274,6 +274,7 @@ class AgentService {
   private runStopPromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private runDisposePromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private runCleanupPromises = new WeakMap<AgentRunHandle, Promise<void>>();
+  private resultUpdateUsageQueues = new Map<string, Promise<void>>();
   private startingSteps = new Set<string>();
   private mainWindow: BrowserWindow | null = null;
   private focusedTaskId: string | null = null;
@@ -909,7 +910,7 @@ class AgentService {
               isInitialPrompt: options?.isInitialPrompt ?? false,
             });
 
-      if (session.backendType === 'opencode') {
+      if (session.backendType === 'opencode' || session.backendType === 'vibe') {
         const promptText = buildAgentPromptMarkdown(effectiveParts).trim();
         if (promptText) {
           await this.persistAndEmitSyntheticEntry(taskId, session, {
@@ -987,6 +988,27 @@ class AgentService {
         await this.cleanupRunHandle(runHandle);
       }
     }
+  }
+
+  private enqueueResultUpdateUsage(
+    sourceId: string,
+    params: Parameters<typeof aiUsageTrackingService.recordUsage>[0],
+  ): void {
+    const previous = this.resultUpdateUsageQueues.get(sourceId) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      try {
+        await aiUsageTrackingService.recordUsage(params);
+      } catch (error) {
+        dbg.agent('Failed to record result update usage: %O', error);
+      }
+    });
+
+    this.resultUpdateUsageQueues.set(sourceId, next);
+    void next.then(() => {
+      if (this.resultUpdateUsageQueues.get(sourceId) === next) {
+        this.resultUpdateUsageQueues.delete(sourceId);
+      }
+    });
   }
 
   /**
@@ -1189,6 +1211,28 @@ class AgentService {
           isError: event.isError,
           durationMs: event.durationMs,
         });
+        break;
+      }
+
+      case 'result-update': {
+        const result = event.result;
+        if (result.usage || result.cost) {
+          const sourceId = `agent-result-update:${session.sdkSessionId ?? session.runHandle?.runId ?? stepId}`;
+          this.enqueueResultUpdateUsage(sourceId, {
+            context: {
+              feature: session.usageFeature,
+              projectId: session.projectId,
+              taskId,
+              stepId,
+            },
+            backend: session.backendType,
+            model: result.model ?? session.currentModel,
+            usage: result.usage ?? {},
+            allowEmptyUsage: !result.usage,
+            cost: result.cost,
+            sourceId,
+          });
+        }
         break;
       }
 
@@ -2131,6 +2175,7 @@ class AgentService {
             await OpenCodeBackend.compactRawMessagesForTask(taskId);
             break;
           case 'codex':
+          case 'vibe':
             dbg.agent(
               'Skipping raw message compaction for unsupported backend %s',
               backendType,

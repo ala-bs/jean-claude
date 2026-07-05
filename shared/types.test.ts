@@ -20,12 +20,14 @@ describe('SETTINGS_DEFINITIONS.thinkingSettings', () => {
           opencode: { default: 'default' },
           codex: { default: 'minimal', 'gpt-5.4': 'minimal' },
           copilot: { default: 'default' },
+          vibe: { default: 'default' },
         },
         selectedModels: {
           'claude-code': 'default',
           opencode: 'default',
           codex: 'gpt-5.4',
           copilot: 'default',
+          vibe: 'default',
         },
       }),
     ).toBe(true);

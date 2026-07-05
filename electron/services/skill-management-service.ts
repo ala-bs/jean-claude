@@ -37,6 +37,7 @@ type SupportedSkillBackendType = AgentBackendType;
 //   ~/.claude/skills/<skillName>  →  ~/.config/jean-claude/skills/user/<skillName>/
 //   ~/.config/opencode/skills/<skillName>  →  ~/.config/jean-claude/skills/user/<skillName>/
 //   ~/.codex/skills/<skillName>  →  ~/.config/jean-claude/skills/user/<skillName>/
+//   ~/.vibe/skills/<skillName>  →  ~/.config/jean-claude/skills/user/<skillName>/
 //
 // Enable  = create symlink in the backend's skills dir
 // Disable = remove the symlink (canonical stays in JC folder, skill is never lost)
@@ -91,6 +92,11 @@ const SKILL_PATH_CONFIGS: Record<
     userSkillsDir: path.join(os.homedir(), '.copilot', 'skills'),
     projectSkillsDir: '.github/skills',
     projectSkillsDirs: ['.github/skills', '.claude/skills', '.agents/skills'],
+  },
+  vibe: {
+    userSkillsDir: path.join(os.homedir(), '.vibe', 'skills'),
+    projectSkillsDir: '.vibe/skills',
+    projectSkillsDirs: ['.vibe/skills'],
   },
 };
 

@@ -81,6 +81,7 @@ describe('SettingsRepository legacy normalization', () => {
         opencode: 'openai/gpt-5',
         codex: 'default',
         copilot: 'default',
+        vibe: 'default',
       },
     });
 
@@ -110,12 +111,14 @@ describe('SettingsRepository legacy normalization', () => {
         opencode: { default: 'medium' },
         codex: { default: 'default' },
         copilot: { default: 'default' },
+        vibe: { default: 'default' },
       },
       selectedModels: {
         'claude-code': 'sonnet',
         opencode: 'openai/gpt-5',
         codex: 'default',
         copilot: 'default',
+        vibe: 'default',
       },
     });
 

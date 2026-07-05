@@ -110,6 +110,7 @@ export const BACKEND_INTERACTION_MODE_OPTIONS: Record<
   opencode: OPENCODE_INTERACTION_MODE_OPTIONS,
   codex: OPENCODE_INTERACTION_MODE_OPTIONS,
   copilot: COPILOT_INTERACTION_MODE_OPTIONS,
+  vibe: CLAUDE_CODE_INTERACTION_MODE_OPTIONS,
 };
 
 const EMPTY_INTERACTION_MODE_OPTIONS: readonly BackendInteractionModeOption[] =
@@ -840,6 +841,7 @@ const VALID_BACKENDS: AgentBackendType[] = [
   'opencode',
   'codex',
   'copilot',
+  'vibe',
 ];
 
 function isCompletionSetting(v: unknown): v is CompletionSetting {
@@ -1281,6 +1283,7 @@ export const SETTINGS_DEFINITIONS = {
         opencode: 'default',
         codex: 'default',
         copilot: 'default',
+        vibe: 'default',
       },
     } as SummaryModelsSetting,
     validate: isSummaryModelsSetting,
@@ -1292,6 +1295,7 @@ export const SETTINGS_DEFINITIONS = {
         opencode: 'default',
         codex: 'default',
         copilot: 'default',
+        vibe: 'default',
       },
     } as BackendDefaultModelsSetting,
     validate: isBackendDefaultModelsSetting,
@@ -1342,12 +1346,14 @@ export const SETTINGS_DEFINITIONS = {
         opencode: { default: 'default' },
         codex: { default: 'default' },
         copilot: { default: 'default' },
+        vibe: { default: 'default' },
       },
       selectedModels: {
         'claude-code': 'default',
         opencode: 'default',
         codex: 'default',
         copilot: 'default',
+        vibe: 'default',
       },
     } as ThinkingSettingsSetting,
     validate: isThinkingSettingsSetting,
