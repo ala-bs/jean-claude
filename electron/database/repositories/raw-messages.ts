@@ -153,6 +153,18 @@ export const RawMessageRepository = {
   },
 
   /**
+   * Get count of raw SDK messages for a step.
+   */
+  getMessageCountByStepId: async (stepId: string): Promise<number> => {
+    const result = await db
+      .selectFrom('raw_messages')
+      .select((eb) => eb.fn.count<number>('id').as('count'))
+      .where('stepId', '=', stepId)
+      .executeTakeFirst();
+    return result?.count ?? 0;
+  },
+
+  /**
    * Delete all raw messages for a task.
    */
   deleteByTaskId: async (taskId: string) => {

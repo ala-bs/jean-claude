@@ -1,3 +1,4 @@
+/* eslint-disable sort-imports */
 import {
   type ChangeEvent,
   type ClipboardEvent,
@@ -14,17 +15,22 @@ import {
   isVideoFile,
   VideoGifConverter,
 } from '@/features/common/ui-video-gif-converter';
-import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import {
   useAddPrFileComments,
   useCreatePullRequest,
 } from '@/hooks/use-create-pull-request';
 import { useGenerateSummary, useTaskSummary } from '@/hooks/use-task-summary';
+import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import type { FileAnnotation } from '@/lib/api';
 import { formatBytes } from '@/lib/format-bytes';
+import {
+  getPromptImageMarkdownSize,
+  markdownImagePlaceholderPattern,
+  replaceMarkdownImageUrl,
+} from '@/lib/markdown-image-size';
 import { Input } from '@/common/ui/input';
 import { invalidateFeedResource } from '@/cache/feed-cache';
 import { Kbd } from '@/common/ui/kbd';
@@ -45,10 +51,7 @@ import { useWorktreeStatus } from '@/hooks/use-worktree-diff';
 type StagedPrImage = PromptImagePart & { placeholderMarkdown: string };
 
 function placeholderPattern(placeholderMarkdown: string) {
-  const token = placeholderMarkdown.match(/jc-image:\/\/([^)]+)/)?.[1];
-  return token
-    ? new RegExp(`!\\[[^\\]]*\\]\\(jc-image:\\/\\/${token}\\)`, 'g')
-    : null;
+  return markdownImagePlaceholderPattern(placeholderMarkdown);
 }
 
 export function PrCreationForm({
@@ -161,7 +164,7 @@ export function PrCreationForm({
       const token = imageTokenCounterRef.current;
       const fileName = image.filename || `image-${token}.png`;
       const safeAltText = fileName.replace(/[[\]()\\]/g, '_');
-      const placeholderMarkdown = `![${safeAltText}](jc-image://${token})`;
+      const placeholderMarkdown = `![${safeAltText}](jc-image://${token}${getPromptImageMarkdownSize(image)})`;
 
       insertDescriptionMarkdown(placeholderMarkdown);
       setStagedImages((current) => [
@@ -176,8 +179,9 @@ export function PrCreationForm({
     (index: number) => {
       const image = stagedImages[index];
       if (!image) return;
+      const pattern = placeholderPattern(image.placeholderMarkdown);
       updateDescription((current) =>
-        current.replace(image.placeholderMarkdown, ''),
+        pattern ? current.replace(pattern, '') : current,
       );
       setStagedImages((current) => current.filter((_, i) => i !== index));
     },
@@ -389,12 +393,8 @@ export function PrCreationForm({
                 });
               const pattern = placeholderPattern(image.placeholderMarkdown);
               updatedDescription = pattern
-                ? updatedDescription.replace(
-                    pattern,
-                    image.placeholderMarkdown.replace(
-                      /\([^)]*\)$/,
-                      `(${attachment.url})`,
-                    ),
+                ? updatedDescription.replace(pattern, (match) =>
+                    replaceMarkdownImageUrl(match, attachment.url),
                   )
                 : updatedDescription;
             }

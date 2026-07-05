@@ -1617,7 +1617,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 .join('\n\n')
             : data.promptTemplate;
 
-      const dependsOn = referenceStep ? [referenceStep.id] : [];
+      const dependsOn =
+        data.presetType === 'continue' && referenceStep ? [referenceStep.id] : [];
 
       const isReview = data.presetType === 'review-changes';
       const reviewers = isReview ? data.reviewers : undefined;
@@ -2062,7 +2063,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     !isAgentBusy &&
     !isSkillCreationTask &&
     task.status === 'interrupted' &&
+    activeStep?.status === 'interrupted' &&
     !!interruptedStep &&
+    interruptedStep.id === activeStep.id &&
     continuingInterruptedStepId === null;
   const hasRepoLink =
     !!project.repoProviderId && !!project.repoProjectId && !!project.repoId;

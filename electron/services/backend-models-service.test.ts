@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  createCopilotClient: vi.fn(),
   getOrCreateCodexAppServer: vi.fn(),
+}));
+
+vi.mock('./agent-backends/copilot/copilot-client', () => ({
+  createCopilotClient: mocks.createCopilotClient,
 }));
 
 vi.mock('./agent-backends/codex/codex-app-server', () => ({
@@ -10,11 +15,87 @@ vi.mock('./agent-backends/codex/codex-app-server', () => ({
 
 import {
   calculateTheoreticalOpenCodeCost,
+  clearBackendModelCache,
   getBackendModels,
   mergeOpenCodeModelLists,
   parseCodexModel,
   parseOpenCodeModelsVerbose,
 } from './backend-models-service';
+
+describe('getBackendModels', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    clearBackendModelCache();
+  });
+
+  it('fetches Copilot models from SDK and merges static fallbacks', async () => {
+    const stop = vi.fn().mockResolvedValue(undefined);
+    mocks.createCopilotClient.mockReturnValue({
+      start: vi.fn().mockResolvedValue(undefined),
+      stop,
+      listModels: vi.fn().mockResolvedValue([
+        {
+          id: 'gpt-5.1-codex',
+          name: 'GPT-5.1 Codex',
+          capabilities: {
+            supports: { reasoningEffort: true },
+            limits: { max_context_window_tokens: 272000 },
+          },
+          supportedReasoningEfforts: ['low', 'medium', 'high'],
+        },
+      ]),
+    });
+
+    await expect(getBackendModels('copilot')).resolves.toEqual([
+      {
+        id: 'gpt-5.1-codex',
+        label: 'GPT-5.1 Codex',
+        supportsThinking: true,
+        thinkingEfforts: ['low', 'medium', 'high'],
+        contextWindow: 272000,
+      },
+      {
+        id: 'gpt-5',
+        label: 'GPT-5',
+        supportsThinking: true,
+        thinkingEfforts: ['low', 'medium', 'high', 'xhigh'],
+      },
+      {
+        id: 'claude-sonnet-4.5',
+        label: 'Claude Sonnet 4.5',
+        supportsThinking: true,
+        thinkingEfforts: ['low', 'medium', 'high'],
+      },
+    ]);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('falls back to static Copilot models when SDK discovery fails', async () => {
+    const stop = vi.fn().mockResolvedValue(undefined);
+    mocks.createCopilotClient.mockReturnValue({
+      start: vi.fn().mockRejectedValue(new Error('not logged in')),
+      stop,
+      listModels: vi.fn(),
+    });
+
+    await expect(getBackendModels('copilot')).resolves.toEqual([
+      {
+        id: 'gpt-5',
+        label: 'GPT-5',
+        supportsThinking: true,
+        thinkingEfforts: ['low', 'medium', 'high', 'xhigh'],
+      },
+      {
+        id: 'claude-sonnet-4.5',
+        label: 'Claude Sonnet 4.5',
+        supportsThinking: true,
+        thinkingEfforts: ['low', 'medium', 'high'],
+      },
+    ]);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+});
 
 describe('parseOpenCodeModelsVerbose', () => {
   it('extracts reasoning variants from verbose OpenCode model output', () => {

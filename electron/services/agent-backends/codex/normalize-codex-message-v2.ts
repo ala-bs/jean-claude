@@ -710,15 +710,55 @@ function textFromItem(item: Record<string, unknown>): string | undefined {
   const content = item.content;
   if (!Array.isArray(content)) return undefined;
 
-  const parts = content
-    .map((part) => {
-      if (typeof part === 'string') return part;
-      const partRecord = record(part);
-      return partRecord === undefined ? undefined : str(partRecord.text);
-    })
-    .filter((part): part is string => part !== undefined);
+  const parts = content.map(textFromContentPart).filter((part) => part !== '');
 
   return parts.length === 0 ? undefined : parts.join('');
+}
+
+function textFromContentPart(part: unknown): string {
+  if (typeof part === 'string') return part;
+
+  const partRecord = record(part);
+  if (partRecord === undefined) return '';
+
+  const text = str(partRecord.text);
+  if (text !== undefined) return text;
+
+  const imageMarkdown = imageMarkdownFromContentPart(partRecord);
+  if (imageMarkdown !== undefined) return `\n\n${imageMarkdown}\n\n`;
+
+  return '';
+}
+
+function imageMarkdownFromContentPart(
+  part: Record<string, unknown>,
+): string | undefined {
+  const type = str(part.type);
+  const nestedImage = record(part.image_url) ?? record(part.imageUrl);
+  const url =
+    str(part.url) ??
+    str(part.image_url) ??
+    str(part.imageUrl) ??
+    str(nestedImage?.url);
+  const data = str(part.data) ?? str(part.base64);
+  const mimeType =
+    str(part.mimeType) ?? str(part.mime_type) ?? str(part.media_type);
+  const isImagePart =
+    type === 'image' ||
+    type === 'input_image' ||
+    mimeType?.startsWith('image/') === true ||
+    url?.startsWith('data:image/') === true;
+  if (!isImagePart) return undefined;
+
+  const imageUrl =
+    url ?? (data && mimeType ? `data:${mimeType};base64,${data}` : undefined);
+  if (imageUrl === undefined) return undefined;
+
+  const filename = (str(part.filename) ?? str(part.name) ?? 'image').replace(
+    /[[\]()\\]/g,
+    '_',
+  );
+  return `![${filename}](${imageUrl})`;
 }
 
 function dateFromItem(item: Record<string, unknown>): string {

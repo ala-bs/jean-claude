@@ -271,17 +271,20 @@ function resolveDefaultBackend({
   selectedProject: Project | null;
   backendsSetting: {
     enabledBackends: AgentBackendType[];
-    defaultBackend: AgentBackendType;
+    defaultBackend: AgentBackendType | null;
   };
-}): AgentBackendType {
+}): AgentBackendType | null {
   const projectOrGlobalDefault =
     selectedProject?.defaultAgentBackend ?? backendsSetting.defaultBackend;
 
-  if (backendsSetting.enabledBackends.includes(projectOrGlobalDefault)) {
+  if (
+    projectOrGlobalDefault &&
+    backendsSetting.enabledBackends.includes(projectOrGlobalDefault)
+  ) {
     return projectOrGlobalDefault;
   }
 
-  return backendsSetting.enabledBackends[0] ?? 'claude-code';
+  return backendsSetting.enabledBackends[0] ?? null;
 }
 
 // Auto-detect input mode based on selection
@@ -744,7 +747,7 @@ export function NewTaskOverlay({
 
   const defaultBackend = useMemo(() => {
     if (!backendsSetting) {
-      return selectedProject?.defaultAgentBackend ?? 'claude-code';
+      return selectedProject?.defaultAgentBackend ?? null;
     }
 
     return resolveDefaultBackend({
@@ -848,8 +851,12 @@ export function NewTaskOverlay({
     const configuredEffort =
       draft?.thinkingEffort ??
       currentBackendModelPreset?.thinkingEffort ??
-      thinkingSettings?.efforts[currentBackend]?.[currentModelPreference] ??
-      thinkingSettings?.efforts[currentBackend]?.default ??
+      (currentBackend
+        ? thinkingSettings?.efforts[currentBackend]?.[currentModelPreference]
+        : undefined) ??
+      (currentBackend
+        ? thinkingSettings?.efforts[currentBackend]?.default
+        : undefined) ??
       'default';
 
     return normalizeThinkingEffortForModel({
@@ -1030,6 +1037,8 @@ export function NewTaskOverlay({
               data: compressed.agent.data,
               mimeType: compressed.agent.mimeType,
               filename: fileName,
+              width: compressed.width,
+              height: compressed.height,
               storageData: compressed.storage.data,
               storageMimeType: compressed.storage.mimeType,
             };
@@ -1226,6 +1235,10 @@ export function NewTaskOverlay({
       finalPrompt += buildAttachedFilesXml(draftFiles);
 
       const backlogTodoIds = submissionDraft.backlogTodoIds ?? [];
+      if (!currentBackend) {
+        throw new Error('Select an agent backend before creating a task.');
+      }
+
       const submitSelection = await resolveRateLimitSwapSelection({
         backend: currentBackend,
         model: currentModelPreference,
@@ -1386,6 +1399,7 @@ export function NewTaskOverlay({
 
   const handleCreateVerificationNote = useCallback(async () => {
     if (selectedWorkItems.length === 0) return;
+    if (!currentBackend) return;
 
     const workItemTitles = selectedWorkItems.map((workItem) =>
       workItem.fields.title.slice(0, 80),
@@ -1843,7 +1857,7 @@ export function NewTaskOverlay({
             >
               <div className="flex items-center gap-2">
                 {/* Interaction mode selector */}
-                {!isNoteMode && (
+                {!isNoteMode && currentBackend && (
                   <ModeSelector
                     value={currentInteractionMode}
                     onChange={(mode) => updateDraft({ interactionMode: mode })}
@@ -1855,7 +1869,7 @@ export function NewTaskOverlay({
                 )}
 
                 {/* Agent backend selector — only show when multiple backends enabled */}
-                {!isNoteMode && (
+                {!isNoteMode && currentBackend && (
                   <BackendModelPresetPicker
                     backend={currentBackend}
                     model={currentModelPreference}
@@ -1903,7 +1917,7 @@ export function NewTaskOverlay({
                   />
                 )}
 
-                {!isNoteMode && (
+                {!isNoteMode && currentBackend && (
                   <ThinkingSelector
                     value={currentThinkingEffort}
                     onChange={(thinkingEffort) => {
@@ -1917,7 +1931,7 @@ export function NewTaskOverlay({
                   />
                 )}
 
-                {!isNoteMode && (
+                {!isNoteMode && currentBackend && (
                   <RateLimitSwapPreview
                     requestedBackend={currentBackend}
                     model={currentModelPreference}

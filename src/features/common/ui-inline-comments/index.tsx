@@ -1,3 +1,4 @@
+/* eslint-disable sort-imports */
 import { ImagePlus, Pencil, X } from 'lucide-react';
 import {
   useCallback,
@@ -22,6 +23,11 @@ import {
   isVideoFile,
   VideoGifConverter,
 } from '@/features/common/ui-video-gif-converter';
+import {
+  getPromptImageMarkdownSize,
+  markdownImagePlaceholderPattern,
+  replaceMarkdownImageUrl,
+} from '@/lib/markdown-image-size';
 import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import { formatBytes } from '@/lib/format-bytes';
 import { formatLineRangeLabel } from '@/stores/utils-comment-store';
@@ -56,24 +62,14 @@ function imageDataUrl(image: PromptImagePart) {
   return `data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`;
 }
 
-function placeholderPattern(placeholderMarkdown: string) {
-  const token = placeholderMarkdown.match(/jc-image:\/\/([^)]+)/)?.[1];
-  return token
-    ? new RegExp(`!\\[[^\\]]*\\]\\(jc-image:\\/\\/${token}\\)`, 'g')
-    : null;
-}
-
 function markdownWithLocalImages(body: string, images: InlineComposerImage[]) {
   return images.reduce((current, image) => {
     if (!image.placeholderMarkdown) return current;
-    const pattern = placeholderPattern(image.placeholderMarkdown);
+    const pattern = markdownImagePlaceholderPattern(image.placeholderMarkdown);
     if (!pattern) return current;
     return current.replace(
       pattern,
-      image.placeholderMarkdown.replace(
-        /\]\([^)]*\)$/,
-        `](${imageDataUrl(image)})`,
-      ),
+      (match) => replaceMarkdownImageUrl(match, imageDataUrl(image)),
     );
   }, body);
 }
@@ -200,7 +196,7 @@ export function InlineCommentComposer({
         const extension = image.mimeType.split('/')[1] || 'png';
         const fileName = image.filename || `image-${token}.${extension}`;
         const safeAltText = fileName.replace(/[[\]()\\]/g, '_');
-        const placeholderMarkdown = `![${safeAltText}](jc-image://${token})`;
+        const placeholderMarkdown = `![${safeAltText}](jc-image://${token}${getPromptImageMarkdownSize(image)})`;
 
         insertTextAtCursor(placeholderMarkdown);
         nextImage = { ...image, placeholderMarkdown };
@@ -217,8 +213,9 @@ export function InlineCommentComposer({
     (index: number) => {
       const image = imagesRef.current[index];
       if (image?.placeholderMarkdown) {
+        const pattern = markdownImagePlaceholderPattern(image.placeholderMarkdown);
         setBody((current) =>
-          current.replace(image.placeholderMarkdown ?? '', ''),
+          pattern ? current.replace(pattern, '') : current,
         );
       }
 

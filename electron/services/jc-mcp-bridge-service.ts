@@ -13,6 +13,7 @@ import {
 } from './question-broker-service';
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const QUESTION_RESULT_TTL_MS = 10 * 60 * 1000;
 
 export interface JcMcpBridgeConfig {
   serverUrl: string;
@@ -37,17 +38,25 @@ interface RegisteredJcMcpBridgeRoute extends JcMcpBridgeRoute {
   registrationId: string;
 }
 
+type QuestionResultState =
+  | { status: 'pending'; route: RegisteredJcMcpBridgeRoute }
+  | { status: 'answered'; summary: string }
+  | { status: 'cancelled'; reason: string };
+
 export class JcMcpBridgeService {
   private readonly routesByStepId = new Map<string, RegisteredJcMcpBridgeRoute>();
   private readonly token = randomBytes(32).toString('hex');
   private readonly sockets = new Set<Socket>();
-  private readonly responseSockets = new Set<Socket>();
   private readonly pendingRequestIds = new Set<string>();
   private readonly pendingRouteByRequestId = new Map<
     string,
     RegisteredJcMcpBridgeRoute
   >();
-  private readonly responseSocketByRequestId = new Map<string, Socket>();
+  private readonly resultStateByRequestId = new Map<string, QuestionResultState>();
+  private readonly resultCleanupTimerByRequestId = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private server: http.Server | null = null;
   private serverUrl: string | null = null;
   private startPromise: Promise<void> | null = null;
@@ -93,8 +102,6 @@ export class JcMcpBridgeService {
       this.routesByStepId.delete(stepId);
       this.broker.cancelSession(stepId, 'Agent session ended');
     }
-    const socketsToDestroy: Socket[] = [];
-
     await Promise.all(
       Array.from(this.pendingRouteByRequestId.entries())
         .filter(
@@ -106,21 +113,16 @@ export class JcMcpBridgeService {
         .map(async ([requestId, pendingRoute]) => {
           this.pendingRequestIds.delete(requestId);
           this.pendingRouteByRequestId.delete(requestId);
+          this.setResultState(requestId, {
+            status: 'cancelled',
+            reason: 'Agent session ended',
+          });
           this.broker.cancelRequest(requestId, 'Agent session ended');
-          const socket = this.responseSocketByRequestId.get(requestId);
-          if (socket) {
-            socketsToDestroy.push(socket);
-            this.responseSocketByRequestId.delete(requestId);
-          }
           await Promise.resolve(
             pendingRoute.onQuestionCancelled?.(requestId),
           ).catch(() => {});
         }),
     );
-
-    for (const socket of socketsToDestroy) {
-      socket.destroy();
-    }
   }
 
   async close(reason = 'Jean-Claude MCP bridge closed'): Promise<void> {
@@ -133,7 +135,6 @@ export class JcMcpBridgeService {
       this.broker.cancelSession(route.stepId, reason);
     }
 
-    const socketsToDestroy = new Set<Socket>();
     await Promise.all(
       Array.from(this.pendingRequestIds).map(async (requestId) => {
         const route = this.pendingRouteByRequestId.get(requestId);
@@ -142,11 +143,7 @@ export class JcMcpBridgeService {
         );
         this.pendingRequestIds.delete(requestId);
         this.pendingRouteByRequestId.delete(requestId);
-        const socket = this.responseSocketByRequestId.get(requestId);
-        if (socket) {
-          socketsToDestroy.add(socket);
-          this.responseSocketByRequestId.delete(requestId);
-        }
+        this.setResultState(requestId, { status: 'cancelled', reason });
       }),
     );
 
@@ -162,15 +159,12 @@ export class JcMcpBridgeService {
     });
 
     for (const socket of this.sockets) {
-      if (!this.responseSockets.has(socket)) {
-        socket.destroy();
-      }
-    }
-    for (const socket of socketsToDestroy) {
       socket.destroy();
     }
-    this.responseSocketByRequestId.clear();
-
+    for (const timer of this.resultCleanupTimerByRequestId.values()) {
+      clearTimeout(timer);
+    }
+    this.resultCleanupTimerByRequestId.clear();
     await serverClosed;
     this.server = null;
     this.serverUrl = null;
@@ -229,13 +223,18 @@ export class JcMcpBridgeService {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    if (req.method !== 'POST' || req.url !== '/ask-question') {
+    if (req.method !== 'POST') {
       writeJson(res, 404, { error: 'Not found' });
       return;
     }
 
     if (req.headers.authorization !== `Bearer ${this.token}`) {
       writeJson(res, 401, { error: 'Unauthorized' });
+      return;
+    }
+
+    if (this.closed) {
+      writeJson(res, 503, { error: 'Question bridge is closed' });
       return;
     }
 
@@ -247,8 +246,13 @@ export class JcMcpBridgeService {
       return;
     }
 
-    if (this.closed) {
-      writeJson(res, 503, { error: 'Question bridge is closed' });
+    if (req.url === '/question-result') {
+      this.handleQuestionResult({ res, body });
+      return;
+    }
+
+    if (req.url !== '/ask-question') {
+      writeJson(res, 404, { error: 'Not found' });
       return;
     }
 
@@ -267,7 +271,7 @@ export class JcMcpBridgeService {
       return;
     }
 
-    await this.handleAskQuestion({ req, res, route: route.value, body });
+    await this.handleAskQuestion({ res, route: route.value, body });
   }
 
   private resolveRoute(body: {
@@ -294,12 +298,10 @@ export class JcMcpBridgeService {
   }
 
   private async handleAskQuestion({
-    req,
     res,
     route,
     body,
   }: {
-    req: http.IncomingMessage;
     res: http.ServerResponse;
     route: RegisteredJcMcpBridgeRoute;
     body: { questions: QuestionSpec[] };
@@ -310,23 +312,15 @@ export class JcMcpBridgeService {
     }
 
     let brokerRequest: BrokerQuestionRequest | null = null;
-    let responseFinished = false;
     const cancelBrokerRequest = (reason: string) => {
       const requestId = brokerRequest?.request.requestId;
       if (!requestId || !this.pendingRequestIds.has(requestId)) return;
       this.pendingRequestIds.delete(requestId);
       this.pendingRouteByRequestId.delete(requestId);
-      this.responseSocketByRequestId.delete(requestId);
+      this.setResultState(requestId, { status: 'cancelled', reason });
       this.broker.cancelRequest(requestId, reason);
       void Promise.resolve(route.onQuestionCancelled?.(requestId)).catch(() => {});
     };
-
-    res.on('close', () => {
-      this.responseSockets.delete(req.socket);
-      if (!responseFinished) {
-        cancelBrokerRequest('Question bridge client disconnected');
-      }
-    });
 
     try {
       brokerRequest = this.broker.createRequest({
@@ -334,31 +328,103 @@ export class JcMcpBridgeService {
         stepId: route.stepId,
         questions: body.questions,
       });
+      const requestId = brokerRequest.request.requestId;
       void brokerRequest.result.catch(() => {});
-      this.pendingRequestIds.add(brokerRequest.request.requestId);
-      this.pendingRouteByRequestId.set(brokerRequest.request.requestId, route);
-      this.responseSockets.add(req.socket);
-      this.responseSocketByRequestId.set(
-        brokerRequest.request.requestId,
-        req.socket,
+      this.pendingRequestIds.add(requestId);
+      this.pendingRouteByRequestId.set(requestId, route);
+      this.setResultState(requestId, {
+        status: 'pending',
+        route,
+      });
+      void brokerRequest.result.then(
+        (summary) => {
+          this.pendingRequestIds.delete(requestId);
+          this.pendingRouteByRequestId.delete(requestId);
+          this.setResultState(requestId, {
+            status: 'answered',
+            summary,
+          });
+        },
+        (error) => {
+          this.pendingRequestIds.delete(requestId);
+          this.pendingRouteByRequestId.delete(requestId);
+          if (this.resultStateByRequestId.get(requestId)?.status === 'cancelled') {
+            return;
+          }
+          this.setResultState(requestId, {
+            status: 'cancelled',
+            reason: getErrorMessage(error),
+          });
+        },
       );
 
+      writeJson(res, 202, { requestId });
       await route.onQuestionRequest(brokerRequest.request);
-      const summary = await brokerRequest.result;
-      this.pendingRequestIds.delete(brokerRequest.request.requestId);
-      this.pendingRouteByRequestId.delete(brokerRequest.request.requestId);
-      this.responseSocketByRequestId.delete(brokerRequest.request.requestId);
-      responseFinished = true;
-      writeJson(res, 200, { summary });
     } catch (error) {
       if (brokerRequest?.request.requestId) {
         void brokerRequest.result.catch(() => {});
         cancelBrokerRequest(getErrorMessage(error));
       }
-      if (!res.destroyed) {
-        responseFinished = true;
+      if (!res.destroyed && !res.writableEnded) {
         writeJson(res, 500, { error: getErrorMessage(error) });
       }
+    }
+  }
+
+  private handleQuestionResult({
+    res,
+    body,
+  }: {
+    res: http.ServerResponse;
+    body: unknown;
+  }): void {
+    if (!isQuestionResultBody(body)) {
+      writeJson(res, 400, { error: 'Invalid question-result body' });
+      return;
+    }
+
+    const state = this.resultStateByRequestId.get(body.requestId);
+    if (!state) {
+      writeJson(res, 404, { error: 'Unknown requestId' });
+      return;
+    }
+
+    if (state.status === 'pending') {
+      writeJson(res, 202, { status: 'pending' });
+      return;
+    }
+
+    this.deleteResultState(body.requestId);
+    if (state.status === 'cancelled') {
+      writeJson(res, 409, { error: state.reason });
+      return;
+    }
+
+    writeJson(res, 200, { summary: state.summary });
+  }
+
+  private setResultState(requestId: string, state: QuestionResultState): void {
+    this.resultStateByRequestId.set(requestId, state);
+    const existingTimer = this.resultCleanupTimerByRequestId.get(requestId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.resultCleanupTimerByRequestId.delete(requestId);
+    }
+    if (state.status === 'pending') return;
+
+    const cleanupTimer = setTimeout(() => {
+      this.deleteResultState(requestId);
+    }, QUESTION_RESULT_TTL_MS);
+    cleanupTimer.unref?.();
+    this.resultCleanupTimerByRequestId.set(requestId, cleanupTimer);
+  }
+
+  private deleteResultState(requestId: string): void {
+    this.resultStateByRequestId.delete(requestId);
+    const timer = this.resultCleanupTimerByRequestId.get(requestId);
+    if (timer) {
+      clearTimeout(timer);
+      this.resultCleanupTimerByRequestId.delete(requestId);
     }
   }
 }
@@ -382,6 +448,12 @@ function isAskQuestionBody(
       typeof value.registrationId === 'string') &&
     Array.isArray(value.questions)
   );
+}
+
+function isQuestionResultBody(body: unknown): body is { requestId: string } {
+  if (!body || typeof body !== 'object') return false;
+  const value = body as { requestId?: unknown };
+  return typeof value.requestId === 'string' && value.requestId.length > 0;
 }
 
 async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {

@@ -26,6 +26,8 @@ import { getSourceProvenanceByInstalledPathMap } from './source-manifest-store';
 import { JC_BUILTIN_SKILLS_DIR } from './builtin-skills-service';
 
 
+type SupportedSkillBackendType = AgentBackendType;
+
 // --- Jean-Claude canonical skill storage ---
 //
 // All JC-managed user skills live under:
@@ -64,7 +66,10 @@ const CLAUDE_PLUGINS_CACHE_DIR = path.join(
 
 // --- Backend path configurations ---
 
-const SKILL_PATH_CONFIGS: Record<AgentBackendType, AgentSkillPathConfig> = {
+const SKILL_PATH_CONFIGS: Record<
+  SupportedSkillBackendType,
+  AgentSkillPathConfig
+> = {
   'claude-code': {
     userSkillsDir: path.join(os.homedir(), '.claude', 'skills'),
     projectSkillsDir: '.claude/skills',
@@ -82,12 +87,21 @@ const SKILL_PATH_CONFIGS: Record<AgentBackendType, AgentSkillPathConfig> = {
     projectSkillsDir: '.codex/skills',
     projectSkillsDirs: ['.codex/skills', '.agents/skills'],
   },
+  copilot: {
+    userSkillsDir: path.join(os.homedir(), '.copilot', 'skills'),
+    projectSkillsDir: '.github/skills',
+    projectSkillsDirs: ['.github/skills', '.claude/skills', '.agents/skills'],
+  },
 };
 
 export function getSkillPathConfig(
   backendType: AgentBackendType,
 ): AgentSkillPathConfig {
-  return SKILL_PATH_CONFIGS[backendType];
+  const config = SKILL_PATH_CONFIGS[backendType as SupportedSkillBackendType];
+  if (!config) {
+    throw new Error(`Skill management is not implemented for ${backendType}`);
+  }
+  return config;
 }
 
 // --- Symlink helpers ---

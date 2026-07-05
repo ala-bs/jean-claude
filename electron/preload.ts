@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('api', {
     create: (data: unknown) => ipcRenderer.invoke('projects:create', data),
     update: (id: string, data: unknown) =>
       ipcRenderer.invoke('projects:update', id, data),
+    detectAzureRemote: (projectPath: string) =>
+      ipcRenderer.invoke('projects:detectAzureRemote', projectPath),
     uploadLogo: (projectId: string, sourcePath: string) =>
       ipcRenderer.invoke('projects:uploadLogo', projectId, sourcePath),
     generateLogo: (projectId: string, customPrompt?: string) =>
@@ -88,6 +90,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:reorder', orderedIds),
     getBranches: (projectId: string) =>
       ipcRenderer.invoke('projects:getBranches', projectId),
+    getBranchesForPath: (projectPath: string) =>
+      ipcRenderer.invoke('projects:getBranchesForPath', projectPath),
     getCurrentBranch: (projectId: string) =>
       ipcRenderer.invoke('projects:getCurrentBranch', projectId),
     isGitRepository: (projectId: string) =>
@@ -735,6 +739,7 @@ contextBridge.exposeInMainWorld('api', {
     openTeamsJoinUrl: (url: string) =>
       ipcRenderer.invoke('shell:openTeamsJoinUrl', url),
     getAvailableEditors: () => ipcRenderer.invoke('shell:getAvailableEditors'),
+    getAgentCliStatus: () => ipcRenderer.invoke('shell:getAgentCliStatus'),
     setupGlobalGitignore: () =>
       ipcRenderer.invoke('shell:setupGlobalGitignore') as Promise<{
         success: boolean;
@@ -864,6 +869,10 @@ contextBridge.exposeInMainWorld('api', {
   usageDisplay: {
     saveSettings: (value: import('@shared/types').UsageDisplaySetting) =>
       ipcRenderer.invoke('usageDisplay:saveSettings', value),
+  },
+  codexbar: {
+    getStatus: () => ipcRenderer.invoke('codexbar:getStatus'),
+    openInstallPage: () => ipcRenderer.invoke('codexbar:openInstallPage'),
   },
   copilotAuth: {
     requestDeviceCode: () =>

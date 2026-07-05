@@ -27,6 +27,15 @@ function invalidateWorktreeDiffIfNeeded(
   }
 }
 
+function clearsTaskPendingRequest(status: string): boolean {
+  return (
+    status === 'running' ||
+    status === 'completed' ||
+    status === 'errored' ||
+    status === 'interrupted'
+  );
+}
+
 export function TaskMessageManager() {
   const queryClient = useQueryClient();
   const applyEntryBatch = useTaskMessagesStore((s) => s.applyEntryBatch);
@@ -132,8 +141,8 @@ export function TaskMessageManager() {
           if (isLoaded(stepId)) {
             setStatus(stepId, event.status, event.error);
           }
-          // Clear pending requests when agent resumes or is stopped
-          if (event.status === 'running' || event.status === 'interrupted') {
+          // Clear pending requests when agent resumes or reaches terminal state.
+          if (clearsTaskPendingRequest(event.status)) {
             clearPendingRequestForTask(taskId);
           }
           // Also invalidate task queries so task-level status updates

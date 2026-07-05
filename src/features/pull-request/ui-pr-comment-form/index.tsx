@@ -1,3 +1,4 @@
+/* eslint-disable sort-imports */
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Send } from 'lucide-react';
@@ -15,6 +16,11 @@ import {
   type MentionOption,
   MentionTextarea,
 } from '@/common/ui/mention-textarea';
+import {
+  getPromptImageMarkdownSize,
+  markdownImagePlaceholderPattern,
+  replaceMarkdownImageUrl,
+} from '@/lib/markdown-image-size';
 import { Button } from '@/common/ui/button';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
@@ -59,17 +65,20 @@ export async function uploadImagesIntoMarkdown({
   await Promise.all(
     images.map(async (image, index) => {
       const placeholderMarkdown = getPlaceholderMarkdown(image);
-      if (placeholderMarkdown && !encodedBody.includes(placeholderMarkdown)) {
+      const pattern = placeholderMarkdown
+        ? markdownImagePlaceholderPattern(placeholderMarkdown)
+        : null;
+      if (pattern && !encodedBody.match(pattern)) {
         return;
       }
 
       const fileName = imageFileName(image, index);
       const url = await uploadImage(image, fileName);
-      const markdownImage = `![${escapeMarkdownAltText(fileName)}](${url})`;
-      if (placeholderMarkdown) {
-        contentWithImages = contentWithImages.replaceAll(
-          placeholderMarkdown,
-          markdownImage,
+      const markdownImage = `![${escapeMarkdownAltText(fileName)}](${url}${getPromptImageMarkdownSize(image)})`;
+      if (pattern) {
+        contentWithImages = contentWithImages.replace(
+          pattern,
+          (match) => replaceMarkdownImageUrl(match, url),
         );
         return;
       }

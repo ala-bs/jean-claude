@@ -336,6 +336,7 @@ function SourceItemSection({
                                 'claude-code': true,
                                 opencode: true,
                                 codex: false,
+                                copilot: false,
                               },
                             }
                           : null,

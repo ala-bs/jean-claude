@@ -10,8 +10,8 @@ import {
   getOpenCodeFallbackCost,
   type OpenCodeModelCost,
 } from './opencode-pricing';
+import { createCopilotClient } from './agent-backends/copilot/copilot-client';
 import { getOrCreateCodexAppServer } from './agent-backends/codex/codex-app-server';
-
 
 const execAsync = promisify(exec) as (
   command: string,
@@ -64,6 +64,21 @@ const CLAUDE_CODE_MODELS: BackendModel[] = [
   },
 ];
 
+const COPILOT_MODELS: BackendModel[] = [
+  {
+    id: 'gpt-5',
+    label: 'GPT-5',
+    supportsThinking: true,
+    thinkingEfforts: ['low', 'medium', 'high', 'xhigh'],
+  },
+  {
+    id: 'claude-sonnet-4.5',
+    label: 'Claude Sonnet 4.5',
+    supportsThinking: true,
+    thinkingEfforts: ['low', 'medium', 'high'],
+  },
+];
+
 // Cache for dynamic model lists (keyed by backend type)
 const modelCache = new Map<
   AgentBackendType,
@@ -95,8 +110,88 @@ export async function getBackendModels(
     return fetchCodexModels();
   }
 
+  if (backend === 'copilot') {
+    return fetchCopilotModels();
+  }
+
   dbg.agent('Unknown backend type for model discovery: %s', backend);
   return [];
+}
+
+export function clearBackendModelCache(): void {
+  modelCache.clear();
+}
+
+async function fetchCopilotModels(): Promise<BackendModel[]> {
+  const cached = modelCache.get('copilot');
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.models;
+  }
+
+  const client = createCopilotClient({ cwd: process.cwd() });
+  try {
+    await client.start();
+    const models = mergeModelLists(
+      (await client.listModels()).map(parseCopilotModel).filter(isBackendModel),
+      COPILOT_MODELS,
+    );
+    if (models.length === 0) return COPILOT_MODELS;
+
+    dbg.agent('Discovered %d Copilot models', models.length);
+    modelCache.set('copilot', { models, fetchedAt: Date.now() });
+    return models;
+  } catch (error) {
+    dbg.agent('Failed to fetch Copilot models: %O', error);
+    return cached?.models ?? COPILOT_MODELS;
+  } finally {
+    await client.stop?.().catch(() => undefined);
+  }
+}
+
+function parseCopilotModel(item: unknown): BackendModel | null {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const model = item as {
+    id?: unknown;
+    name?: unknown;
+    capabilities?: {
+      supports?: { reasoningEffort?: unknown };
+      limits?: { max_context_window_tokens?: unknown };
+    };
+    supportedReasoningEfforts?: unknown;
+  };
+  if (typeof model.id !== 'string' || !model.id.trim()) return null;
+
+  const thinkingEfforts = Array.isArray(model.supportedReasoningEfforts)
+    ? model.supportedReasoningEfforts.filter(
+        (effort): effort is ThinkingEffort =>
+          typeof effort === 'string' &&
+          OPENCODE_THINKING_VARIANTS.has(effort as ThinkingEffort),
+      )
+    : [];
+
+  return {
+    id: model.id,
+    label:
+      typeof model.name === 'string' && model.name.trim()
+        ? model.name
+        : formatModelLabel(model.id),
+    supportsThinking:
+      model.capabilities?.supports?.reasoningEffort === true ||
+      thinkingEfforts.length > 0,
+    ...(thinkingEfforts.length > 0 ? { thinkingEfforts } : {}),
+    ...(isValidContextWindow(
+      model.capabilities?.limits?.max_context_window_tokens,
+    )
+      ? { contextWindow: model.capabilities.limits.max_context_window_tokens }
+      : {}),
+  };
+}
+
+function isBackendModel(model: BackendModel | null): model is BackendModel {
+  return model !== null;
 }
 
 async function fetchOpenCodeModels(): Promise<BackendModel[]> {
@@ -139,6 +234,13 @@ async function fetchOpenCodeModels(): Promise<BackendModel[]> {
 }
 
 export function mergeOpenCodeModelLists(
+  baseModels: BackendModel[],
+  additionalModels: BackendModel[],
+): BackendModel[] {
+  return mergeModelLists(baseModels, additionalModels);
+}
+
+function mergeModelLists(
   baseModels: BackendModel[],
   additionalModels: BackendModel[],
 ): BackendModel[] {

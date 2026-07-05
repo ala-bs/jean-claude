@@ -72,7 +72,11 @@ export const ASK_QUESTION_TOOL_SCHEMA = {
 };
 
 const ASK_QUESTION_INPUT_SCHEMA = z.object(ASK_QUESTION_TOOL_SCHEMA).strict();
-const ASK_QUESTION_RESPONSE_SCHEMA = z.object({ summary: z.string() });
+const ASK_QUESTION_RESPONSE_SCHEMA = z.union([
+  z.object({ summary: z.string() }),
+  z.object({ requestId: z.string().min(1) }),
+]);
+const QUESTION_RESULT_RESPONSE_SCHEMA = z.object({ summary: z.string() });
 const QUESTION_BRIDGE_CONFIG_SCHEMA = z
   .object({
     serverUrl: z.string().min(1),
@@ -96,10 +100,12 @@ export async function askQuestionViaBridge({
   input,
   env = process.env,
   fetchImpl = fetch,
+  pollIntervalMs = 1000,
 }: {
   input: unknown;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  pollIntervalMs?: number;
 }): Promise<string> {
   const parsedInput = ASK_QUESTION_INPUT_SCHEMA.safeParse(input);
   if (!parsedInput.success) {
@@ -166,7 +172,92 @@ export async function askQuestionViaBridge({
     );
   }
 
-  return parsedResponse.data.summary;
+  if ('summary' in parsedResponse.data) {
+    return parsedResponse.data.summary;
+  }
+
+  return pollQuestionResult({
+    serverUrl,
+    token,
+    requestId: parsedResponse.data.requestId,
+    fetchImpl,
+    pollIntervalMs,
+  });
+}
+
+async function pollQuestionResult({
+  serverUrl,
+  token,
+  requestId,
+  fetchImpl,
+  pollIntervalMs,
+}: {
+  serverUrl: string;
+  token: string;
+  requestId: string;
+  fetchImpl: typeof fetch;
+  pollIntervalMs: number;
+}): Promise<string> {
+  let url: URL;
+  try {
+    url = new URL(
+      'question-result',
+      serverUrl.endsWith('/') ? serverUrl : `${serverUrl}/`,
+    );
+  } catch {
+    throw new AskQuestionBridgeError('Invalid JC_MCP_BRIDGE_URL');
+  }
+
+  while (true) {
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ requestId }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new AskQuestionBridgeError(
+        `Question bridge result request failed: ${message}`,
+      );
+    }
+
+    if (response.status === 202) {
+      await sleep(pollIntervalMs);
+      continue;
+    }
+
+    if (!response.ok) {
+      const body = await readFailureBody(response);
+      throw new AskQuestionBridgeError(
+        `Question bridge returned ${response.status}${body ? `: ${body}` : ''}`,
+      );
+    }
+
+    let json: unknown;
+    try {
+      json = await response.json();
+    } catch {
+      throw new AskQuestionBridgeError('Question bridge returned malformed JSON');
+    }
+
+    const parsedResponse = QUESTION_RESULT_RESPONSE_SCHEMA.safeParse(json);
+    if (!parsedResponse.success) {
+      throw new AskQuestionBridgeError(
+        `Question bridge returned malformed response: ${z.prettifyError(parsedResponse.error)}`,
+      );
+    }
+
+    return parsedResponse.data.summary;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function loadQuestionBridgeConfig(

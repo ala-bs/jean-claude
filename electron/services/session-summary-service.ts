@@ -1,8 +1,11 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { AiUsageContext } from '@shared/ai-usage-types';
 import type { ModelPreference } from '@shared/types';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
-
 
 import {
   SESSION_SUMMARY_PROMPT,
@@ -11,7 +14,7 @@ import {
 import { generateText } from './ai-generation-service';
 
 
-const MAX_TRANSCRIPT_CHARS = 60_000;
+const MAX_INLINE_TRANSCRIPT_CHARS = 30_000;
 const MAX_TOOL_RESULT_CHARS = 4_000;
 
 function truncateMiddle(value: string, maxLength: number): string {
@@ -108,12 +111,10 @@ function formatEntry(entry: NormalizedEntry): string | null {
 }
 
 function formatMessagesForSummary(messages: NormalizedEntry[]): string {
-  const transcript = messages
+  return messages
     .map(formatEntry)
     .filter((entry): entry is string => Boolean(entry?.trim()))
     .join('\n\n---\n\n');
-
-  return truncateMiddle(transcript, MAX_TRANSCRIPT_CHARS);
 }
 
 export function buildSummaryGenerationPrompt(
@@ -124,30 +125,88 @@ export function buildSummaryGenerationPrompt(
     throw new Error('Cannot summarize empty message history');
   }
 
-  return `${SESSION_SUMMARY_PROMPT}\n\nPrior step normalized message history:\n\n${transcript}`;
+  return `${SESSION_SUMMARY_PROMPT}\n\nPrior step normalized message history:\n\n${truncateMiddle(transcript, MAX_INLINE_TRANSCRIPT_CHARS)}`;
+}
+
+export type PreparedSummaryGenerationPrompt = {
+  prompt: string;
+  transcriptDir?: string;
+  transcriptPath?: string;
+};
+
+export async function prepareSummaryGenerationPrompt(
+  messages: NormalizedEntry[],
+): Promise<PreparedSummaryGenerationPrompt> {
+  const transcript = formatMessagesForSummary(messages);
+  if (!transcript) {
+    throw new Error('Cannot summarize empty message history');
+  }
+
+  if (transcript.length <= MAX_INLINE_TRANSCRIPT_CHARS) {
+    return {
+      prompt: `${SESSION_SUMMARY_PROMPT}\n\nPrior step normalized message history:\n\n${transcript}`,
+    };
+  }
+
+  const tempRoot = tmpdir();
+  await mkdir(tempRoot, { recursive: true });
+  const tempDir = await mkdtemp(path.join(tempRoot, 'jc-step-summary-'));
+  const transcriptPath = path.join(tempDir, 'normalized-messages.md');
+  await writeFile(transcriptPath, transcript, 'utf-8');
+
+  return {
+    prompt: [
+      SESSION_SUMMARY_PROMPT,
+      '',
+      'Prior step normalized message history is too large to inline.',
+      'Read the full transcript from this temporary file before summarizing:',
+      transcriptPath,
+      '',
+      'Use only that transcript and return the summary requested by the schema.',
+    ].join('\n'),
+    transcriptDir: tempDir,
+    transcriptPath,
+  };
 }
 
 export async function summarizeNormalizedMessages({
   backend,
   model,
   messages,
+  preparedPrompt,
   usageContext,
 }: {
   backend: AgentBackendType;
   model: ModelPreference;
   messages: NormalizedEntry[];
+  preparedPrompt?: PreparedSummaryGenerationPrompt;
   usageContext?: AiUsageContext;
 }): Promise<string> {
-  const prompt = buildSummaryGenerationPrompt(messages);
+  const { prompt, transcriptDir, transcriptPath } =
+    preparedPrompt ?? (await prepareSummaryGenerationPrompt(messages));
 
-  const result = await generateText({
-    backend,
-    model,
-    outputSchema: SESSION_SUMMARY_SCHEMA,
-    prompt,
-    throwOnError: true,
-    usageContext,
-  });
+  let result: unknown;
+  try {
+    result = await generateText({
+      backend,
+      model,
+      outputSchema: SESSION_SUMMARY_SCHEMA,
+      prompt,
+      ...(transcriptPath
+        ? {
+            cwd: path.dirname(transcriptPath),
+            allowedTools: ['Read'],
+            allowedToolPatterns: { Read: [transcriptPath] },
+          }
+        : {}),
+      throwOnError: true,
+      usageContext,
+    });
+  } finally {
+    if (transcriptDir) {
+      await rm(transcriptDir, { force: true, recursive: true });
+    }
+  }
 
   if (
     result &&

@@ -90,11 +90,12 @@ export function AiGenerationSettings() {
   const selectedSummaryBackend = selectedItem.startsWith('summary-model:')
     ? selectedItem.replace('summary-model:', '')
     : null;
-  const fallbackBackend = enabledBackends.some(
-    (backend) => backend.value === backendsSetting?.defaultBackend,
-  )
-    ? backendsSetting!.defaultBackend
-    : (enabledBackends[0]?.value ?? 'claude-code');
+  const globalDefaultBackend = backendsSetting?.defaultBackend ?? null;
+  const fallbackBackend =
+    globalDefaultBackend &&
+    enabledBackends.some((backend) => backend.value === globalDefaultBackend)
+      ? globalDefaultBackend
+      : (enabledBackends[0]?.value ?? 'claude-code');
   const fallbackModel = getDefaultModelForBackend({
     backend: fallbackBackend,
     backendDefaultModels,

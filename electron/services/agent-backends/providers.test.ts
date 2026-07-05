@@ -90,16 +90,29 @@ vi.mock('./codex/codex-backend', () => ({
   CodexBackend: TestBackend,
 }));
 
+vi.mock('./copilot/copilot-backend', () => ({
+  CopilotBackend: TestBackend,
+}));
+
 import {
   AGENT_BACKEND_PROVIDERS,
   getAgentBackendProvider,
 } from './providers';
 
-const BACKEND_TYPES: AgentBackendType[] = ['claude-code', 'opencode', 'codex'];
+const BACKEND_TYPES: AgentBackendType[] = [
+  'claude-code',
+  'opencode',
+  'codex',
+  'copilot',
+];
 const BACKEND_LABELS: Record<AgentBackendType, string> = {
   'claude-code': 'Claude Code',
   opencode: 'OpenCode',
   codex: 'Codex',
+  copilot: 'GitHub Copilot',
+};
+const BACKEND_BADGES: Partial<Record<AgentBackendType, string>> = {
+  copilot: 'Beta',
 };
 
 const CAPABILITY_KEYS = {
@@ -184,6 +197,7 @@ describe('agent backend providers', () => {
       const provider = getAgentBackendProvider(type);
       expect(provider.id).toBe(type);
       expect(provider.label).toBe(BACKEND_LABELS[type]);
+      expect(provider.badge).toBe(BACKEND_BADGES[type]);
       expect('type' in provider).toBe(false);
       expect('displayName' in provider).toBe(false);
     }

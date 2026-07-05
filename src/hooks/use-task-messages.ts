@@ -42,8 +42,25 @@ export function useTaskMessages({
 
   const fetchPendingRequest = useCallback(async () => {
     if (!stepId) return;
+    const pendingRequestVersionAtStart =
+      useTaskMessagesStore.getState().pendingRequestVersion;
     const pendingRequest = await api.agent.getPendingRequest(stepId);
     if (pendingRequest) {
+      if (
+        useTaskMessagesStore.getState().pendingRequestVersion !==
+        pendingRequestVersionAtStart
+      ) {
+        return;
+      }
+
+      const activeRequestId = getActivePendingRequestId(stepId, taskId);
+      if (
+        activeRequestId &&
+        activeRequestId !== pendingRequest.data.requestId
+      ) {
+        return;
+      }
+
       if (pendingRequest.type === 'permission') {
         setPermission(stepId, pendingRequest.data);
         setPendingRequestForTask(taskId, {
@@ -157,4 +174,17 @@ export function useTaskMessages({
     isLoading: !stepId || !isLoaded,
     refetch,
   };
+}
+
+function getActivePendingRequestId(stepId: string, taskId: string) {
+  const state = useTaskMessagesStore.getState();
+  const step = state.steps[stepId];
+  const taskPending = state.pendingRequestsByTaskId[taskId];
+  return (
+    step?.pendingPermission?.requestId ??
+    step?.pendingQuestion?.requestId ??
+    taskPending?.permission?.requestId ??
+    taskPending?.question?.requestId ??
+    null
+  );
 }

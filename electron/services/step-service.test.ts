@@ -7,7 +7,7 @@ const {
   findStepByIdMock,
   findStepsByTaskIdMock,
   updateStepMock,
-  buildSummaryGenerationPromptMock,
+  prepareSummaryGenerationPromptMock,
   findTaskByIdMock,
   summarizeNormalizedMessagesMock,
 } = vi.hoisted(() => ({
@@ -17,7 +17,7 @@ const {
   findStepByIdMock: vi.fn(),
   findStepsByTaskIdMock: vi.fn(),
   updateStepMock: vi.fn(),
-  buildSummaryGenerationPromptMock: vi.fn(),
+  prepareSummaryGenerationPromptMock: vi.fn(),
   findTaskByIdMock: vi.fn(),
   summarizeNormalizedMessagesMock: vi.fn(),
 }));
@@ -56,7 +56,7 @@ vi.mock('../database/repositories/tasks', () => ({
 
 vi.mock('./session-summary-service', () => {
   return {
-    buildSummaryGenerationPrompt: buildSummaryGenerationPromptMock,
+    prepareSummaryGenerationPrompt: prepareSummaryGenerationPromptMock,
     summarizeNormalizedMessages: summarizeNormalizedMessagesMock,
   };
 });
@@ -92,11 +92,11 @@ describe('StepService.resolveAndValidate', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    buildSummaryGenerationPromptMock.mockImplementation((messages) => {
+    prepareSummaryGenerationPromptMock.mockImplementation((messages) => {
       if (messages.length === 0) {
         throw new Error('Cannot summarize empty message history');
       }
-      return 'summary prompt';
+      return { prompt: 'summary prompt' };
     });
     summarizeNormalizedMessagesMock.mockResolvedValue('Generated AI summary.');
     getSettingMock.mockResolvedValue({

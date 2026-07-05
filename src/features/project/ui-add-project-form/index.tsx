@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 
@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useProviderDetails, useProviders } from '@/hooks/use-providers';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
+import type { DetectedAzureRemote } from '@shared/azure-remote-utils';
 import { Input } from '@/common/ui/input';
 import { ProjectColorPicker } from '@/features/project/ui-project-color-picker';
 import { ProjectLogoSuggestions } from '@/features/project/ui-project-logo-suggestions';
@@ -32,21 +33,46 @@ export interface ProjectFormData {
   workItemProjectName: string | null;
 }
 
+function normalizeAzureName(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function getAzureOrgName(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    if (host === 'dev.azure.com') {
+      return normalizeAzureName(url.pathname.split('/').filter(Boolean)[0]);
+    }
+    if (host.endsWith('.visualstudio.com')) {
+      return normalizeAzureName(host.slice(0, -'.visualstudio.com'.length));
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
+}
+
 function RepoSection({
   formData,
   onChange,
+  detectedAzureRemote,
   defaultExpanded = false,
 }: {
   formData: ProjectFormData;
   onChange: (updates: Partial<ProjectFormData>) => void;
+  detectedAzureRemote: DetectedAzureRemote | null;
   defaultExpanded?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const { data: providers } = useProviders();
 
   // Filter to only Azure DevOps providers
-  const azureProviders =
-    providers?.filter((p) => p.type === 'azure-devops') || [];
+  const azureProviders = useMemo(
+    () => providers?.filter((p) => p.type === 'azure-devops') || [],
+    [providers],
+  );
 
   const selectedProvider = azureProviders.find(
     (p) => p.id === formData.repoProviderId,
@@ -54,6 +80,19 @@ function RepoSection({
 
   const hasValues =
     formData.repoProviderId || formData.repoProjectId || formData.repoId;
+
+  useEffect(() => {
+    if (!detectedAzureRemote || formData.repoProviderId) return;
+
+    const provider = azureProviders.find(
+      (candidate) =>
+        getAzureOrgName(candidate.baseUrl) ===
+        normalizeAzureName(detectedAzureRemote.orgName),
+    );
+    if (!provider) return;
+
+    onChange({ repoProviderId: provider.id });
+  }, [azureProviders, detectedAzureRemote, formData.repoProviderId, onChange]);
 
   return (
     <div className="border-glass-border bg-bg-1/30 rounded-lg border">
@@ -111,6 +150,7 @@ function RepoSection({
               provider={selectedProvider}
               formData={formData}
               onChange={onChange}
+              detectedAzureRemote={detectedAzureRemote}
             />
           )}
         </div>
@@ -123,12 +163,70 @@ function RepoProjectSelector({
   provider,
   formData,
   onChange,
+  detectedAzureRemote,
 }: {
   provider: Provider;
   formData: ProjectFormData;
   onChange: (updates: Partial<ProjectFormData>) => void;
+  detectedAzureRemote: DetectedAzureRemote | null;
 }) {
   const { data, isLoading } = useProviderDetails(provider.id);
+  const projects = data?.projects || [];
+  const selectedProject = projects.find(
+    (p) => p.project.id === formData.repoProjectId,
+  );
+  const repos = selectedProject?.repos || [];
+
+  useEffect(() => {
+    if (
+      !detectedAzureRemote ||
+      !data ||
+      formData.repoProjectId ||
+      formData.repoId
+    ) {
+      return;
+    }
+    if (
+      getAzureOrgName(provider.baseUrl) !==
+      normalizeAzureName(detectedAzureRemote.orgName)
+    ) {
+      return;
+    }
+
+    const providerProject = data.projects.find(
+      ({ project }) =>
+        normalizeAzureName(project.name) ===
+        normalizeAzureName(detectedAzureRemote.projectName),
+    );
+    const repo = providerProject?.repos.find(
+      (candidate) =>
+        normalizeAzureName(candidate.name) ===
+        normalizeAzureName(detectedAzureRemote.repoName),
+    );
+    if (!providerProject || !repo) return;
+
+    onChange({
+      repoProjectId: providerProject.project.id,
+      repoProjectName: providerProject.project.name,
+      repoId: repo.id,
+      repoName: repo.name,
+      workItemProviderId: formData.workItemProviderId ?? provider.id,
+      workItemProjectId:
+        formData.workItemProjectId ?? providerProject.project.id,
+      workItemProjectName:
+        formData.workItemProjectName ?? providerProject.project.name,
+    });
+  }, [
+    data,
+    detectedAzureRemote,
+    formData.repoId,
+    formData.repoProjectId,
+    formData.workItemProjectId,
+    formData.workItemProjectName,
+    formData.workItemProviderId,
+    onChange,
+    provider,
+  ]);
 
   if (isLoading) {
     return (
@@ -138,12 +236,6 @@ function RepoProjectSelector({
       </div>
     );
   }
-
-  const projects = data?.projects || [];
-  const selectedProject = projects.find(
-    (p) => p.project.id === formData.repoProjectId,
-  );
-  const repos = selectedProject?.repos || [];
 
   return (
     <>
@@ -354,6 +446,11 @@ export function AddProjectForm({
     queryFn: () => api.projects.detectLogos(formData.path),
     enabled: !!formData.path,
   });
+  const { data: detectedAzureRemote = null } = useQuery({
+    queryKey: ['project-azure-remote', formData.path],
+    queryFn: () => api.projects.detectAzureRemote(formData.path),
+    enabled: !!formData.path,
+  });
 
   return (
     <form onSubmit={onSubmit} className="space-y-4">
@@ -413,6 +510,7 @@ export function AddProjectForm({
       <RepoSection
         formData={formData}
         onChange={onChange}
+        detectedAzureRemote={detectedAzureRemote}
         defaultExpanded={repoSectionExpanded}
       />
 

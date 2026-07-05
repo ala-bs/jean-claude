@@ -65,4 +65,24 @@ describe('backend-config-settings-service', () => {
       'model = "gpt-5.5"\napproval_policy = "on-request"\n',
     );
   });
+
+  it('reads and writes Copilot JSON config', async () => {
+    const missing = await readBackendUserConfig('copilot');
+
+    expect(missing.exists).toBe(false);
+    expect(missing.content).toBe('{}\n');
+    expect(missing.path).toBe(
+      path.join(homeDirectory, '.config', 'github-copilot', 'config.json'),
+    );
+
+    const result = await writeBackendUserConfig({
+      backend: 'copilot',
+      content: '{ "model": "gpt-5", }',
+    });
+
+    expect(result.exists).toBe(true);
+    await expect(fs.readFile(result.path, 'utf8')).resolves.toBe(
+      '{\n  "model": "gpt-5"\n}\n',
+    );
+  });
 });

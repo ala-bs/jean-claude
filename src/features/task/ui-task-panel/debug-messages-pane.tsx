@@ -88,6 +88,21 @@ function CopyJsonButton({
   );
 }
 
+export function normalizedDataMatchesEntryId(
+  normalizedData: unknown,
+  entryId: string | null,
+): boolean {
+  if (!entryId) return false;
+  const entries = Array.isArray(normalizedData)
+    ? normalizedData
+    : [normalizedData];
+  return entries.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const normalized = entry as Record<string, unknown>;
+    return normalized.id === entryId || normalized.toolId === entryId;
+  });
+}
+
 // --- Collapsible JSON Tree ---
 
 function JsonValue({
@@ -405,11 +420,7 @@ export function DebugMessagesPane({
 
     // Find the matching message (check both id and toolId)
     const targetIndex = debugMessages.findIndex((msg) => {
-      const normalized = msg.normalizedData as Record<string, unknown> | null;
-      return (
-        normalized?.id === scrollToEntryId ||
-        normalized?.toolId === scrollToEntryId
-      );
+      return normalizedDataMatchesEntryId(msg.normalizedData, scrollToEntryId);
     });
 
     if (targetIndex === -1) return;
@@ -636,14 +647,10 @@ export function DebugMessagesPane({
         )}
 
         {filteredMessages?.map((msg, index) => {
-          const normalized = msg.normalizedData as Record<
-            string,
-            unknown
-          > | null;
-          const isTarget =
-            !!highlightedEntryId &&
-            (normalized?.id === highlightedEntryId ||
-              normalized?.toolId === highlightedEntryId);
+          const isTarget = normalizedDataMatchesEntryId(
+            msg.normalizedData,
+            highlightedEntryId,
+          );
           return (
             <DebugMessageCard
               key={`${msg.messageIndex}-${index}`}

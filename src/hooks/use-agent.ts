@@ -121,6 +121,19 @@ export function useAgentControls({
               ? error.message
               : 'Failed to respond to permission request',
         });
+        return;
+      }
+      const currentState = useTaskMessagesStore.getState();
+      if (
+        currentState.steps[stepId]?.pendingPermission?.requestId === requestId
+      ) {
+        setPermission(stepId, null);
+      }
+      if (
+        currentState.pendingRequestsByTaskId[taskId]?.permission?.requestId ===
+        requestId
+      ) {
+        clearPendingRequestForTask(taskId);
       }
     },
     [
@@ -166,6 +179,19 @@ export function useAgentControls({
               ? error.message
               : 'Failed to respond to question',
         });
+        return;
+      }
+      const currentState = useTaskMessagesStore.getState();
+      if (
+        currentState.steps[stepId]?.pendingQuestion?.requestId === requestId
+      ) {
+        setQuestion(stepId, null);
+      }
+      if (
+        currentState.pendingRequestsByTaskId[taskId]?.question?.requestId ===
+        requestId
+      ) {
+        clearPendingRequestForTask(taskId);
       }
     },
     [

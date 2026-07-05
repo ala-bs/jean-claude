@@ -5,6 +5,7 @@ import {
   clampCalendarLeadTimeMinutes,
   isLikelyAllDayCalendarEvent,
   parseCalendarEventRecords,
+  shouldSuppressCalendarMeetingAlert,
 } from './system-calendar-utils';
 
 describe('parseCalendarEventRecords', () => {
@@ -126,6 +127,38 @@ describe('clampCalendarLeadTimeMinutes', () => {
     expect(clampCalendarLeadTimeMinutes(5)).toBe(5);
     expect(clampCalendarLeadTimeMinutes(80)).toBe(60);
     expect(clampCalendarLeadTimeMinutes(7.9)).toBe(7);
+  });
+});
+
+describe('shouldSuppressCalendarMeetingAlert', () => {
+  it('suppresses alerts until ignored ids have synced', () => {
+    expect(
+      shouldSuppressCalendarMeetingAlert({
+        hasReceivedIgnoredMeetingIds: false,
+        ignoredMeetingIds: new Set(),
+        notificationKey: 'meeting:2026-05-23T14:00:00',
+      }),
+    ).toBe(true);
+  });
+
+  it('suppresses ignored meeting alerts', () => {
+    expect(
+      shouldSuppressCalendarMeetingAlert({
+        hasReceivedIgnoredMeetingIds: true,
+        ignoredMeetingIds: new Set(['meeting:2026-05-23T14:00:00']),
+        notificationKey: 'meeting:2026-05-23T14:00:00',
+      }),
+    ).toBe(true);
+  });
+
+  it('allows unignored meeting alerts after ignored ids sync', () => {
+    expect(
+      shouldSuppressCalendarMeetingAlert({
+        hasReceivedIgnoredMeetingIds: true,
+        ignoredMeetingIds: new Set(['other:2026-05-23T14:00:00']),
+        notificationKey: 'meeting:2026-05-23T14:00:00',
+      }),
+    ).toBe(false);
   });
 });
 

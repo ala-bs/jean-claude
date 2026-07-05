@@ -3,6 +3,7 @@ import type { Task, TaskStatus, TaskStepStatus } from '@shared/types';
 import type { CacheEvent } from '@shared/cache-events';
 
 import {
+  appendProjectToIndex,
   ingestProject,
   projectResourceKey,
   removeProject,
@@ -414,6 +415,9 @@ export function applyCacheEvent(event: CacheEvent) {
       const previousProject = cache$.projects[event.project.id].get();
       markResourceChanged(projectResourceKey(event.project.id));
       ingestProject(event.project);
+      if (previousProject === undefined) {
+        appendProjectToIndex(event.project.id);
+      }
       markResourceStale('projects');
       if (
         previousProject === undefined ||

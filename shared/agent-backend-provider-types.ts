@@ -7,7 +7,9 @@ import type {
   PromptPart,
 } from './agent-backend-types';
 import type { InteractionMode, ThinkingEffort } from './types';
+import type { AgentBackendBadge } from './agent-backend-metadata';
 import type { AiUsageContext } from './ai-usage-types';
+import type { QuestionResponse } from './agent-types';
 
 export type CapabilityValidation =
   | { ok: true }
@@ -67,6 +69,7 @@ export interface QuestionCapability {
     handle: AgentRunHandle;
     requestId: string;
     answer: Record<string, string>;
+    metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>;
   }): Promise<void>;
 }
 
@@ -187,6 +190,7 @@ export interface AgentBackendProvider {
   id: AgentBackendType;
   label: string;
   description?: string;
+  badge?: AgentBackendBadge;
   capabilities: AgentBackendCapabilities;
 }
 

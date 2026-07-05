@@ -78,6 +78,7 @@ import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-ver
 import { getImageMimeType } from '@shared/image-types';
 import type { GlobalPromptResponse } from '@shared/global-prompt-types';
 import { isValidTeamsJoinUrl } from '@shared/teams-url';
+import { parseAzureRemoteUrl } from '@shared/azure-remote-utils';
 import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 import type { UsageProviderType } from '@shared/usage-types';
 
@@ -410,7 +411,12 @@ async function pullSourceBranch({
   return `origin/${remoteBranch}`;
 }
 
-const VALID_BACKENDS = new Set<string>(['claude-code', 'opencode', 'codex']);
+const VALID_BACKENDS = new Set<string>([
+  'claude-code',
+  'opencode',
+  'codex',
+  'copilot',
+]);
 
 async function cleanupFeatureMapTempDirsForTask(taskId: string): Promise<void> {
   const steps = await TaskStepRepository.findByTaskId(taskId);
@@ -624,6 +630,10 @@ function assertValidBackendArray(
     }
   }
   return value as AgentBackendType[];
+}
+
+function isBackendConfigType(value: unknown): value is AgentBackendType {
+  return typeof value === 'string' && VALID_BACKENDS.has(value);
 }
 
 function validateAddGitHubSourceParams(value: unknown): AddGitHubSourceParams {
@@ -895,6 +905,19 @@ export function registerIpcHandlers() {
     const project = await ProjectRepository.create(data);
     emitProjectUpsert(project);
     return project;
+  });
+  ipcMain.handle('projects:detectAzureRemote', async (_, projectPath: string) => {
+    if (!projectPath) return null;
+    try {
+      const remoteUrl = await runGit(
+        ['remote', 'get-url', 'origin'],
+        projectPath,
+        { timeoutMs: 5000 },
+      );
+      return parseAzureRemoteUrl(remoteUrl);
+    } catch {
+      return null;
+    }
   });
   ipcMain.handle(
     'projects:update',
@@ -1187,6 +1210,12 @@ export function registerIpcHandlers() {
     }
     return getProjectBranches(project.path);
   });
+  ipcMain.handle(
+    'projects:getBranchesForPath',
+    async (_, projectPath: string) => {
+      return getProjectBranches(projectPath);
+    },
+  );
   ipcMain.handle('projects:getCurrentBranch', async (_, projectId: string) => {
     const project = await ProjectRepository.findById(projectId);
     if (!project) {
@@ -4109,7 +4138,7 @@ export function registerIpcHandlers() {
           encrypt: (value) => encryptionService.encrypt(value),
         }),
       );
-      agentUsageService.invalidate('copilot');
+      agentUsageService.invalidate();
       return redactUsageDisplaySetting(
         await SettingsRepository.get('usageDisplay'),
       );
@@ -4141,14 +4170,20 @@ export function registerIpcHandlers() {
       );
     },
   );
+  ipcMain.handle('codexbar:getStatus', async () => {
+    const { getCodexBarStatus } = await import('../services/codexbar-service');
+    return getCodexBarStatus();
+  });
+  ipcMain.handle('codexbar:openInstallPage', async () => {
+    const { openCodexBarInstallPage } = await import(
+      '../services/codexbar-service'
+    );
+    await openCodexBarInstallPage();
+  });
   ipcMain.handle(
     'backendConfig:getUserConfig',
     (_: unknown, backend: unknown) => {
-      if (
-        backend !== 'claude-code' &&
-        backend !== 'opencode' &&
-        backend !== 'codex'
-      ) {
+      if (!isBackendConfigType(backend)) {
         throw new Error('Invalid backend');
       }
       return readBackendUserConfig(backend);
@@ -4157,11 +4192,7 @@ export function registerIpcHandlers() {
   ipcMain.handle(
     'backendConfig:setUserConfig',
     (_: unknown, backend: unknown, content: unknown) => {
-      if (
-        backend !== 'claude-code' &&
-        backend !== 'opencode' &&
-        backend !== 'codex'
-      ) {
+      if (!isBackendConfigType(backend)) {
         throw new Error('Invalid backend');
       }
       if (typeof content !== 'string') {
@@ -4192,6 +4223,30 @@ export function registerIpcHandlers() {
       })),
     );
     return results;
+  });
+
+  ipcMain.handle('shell:getAgentCliStatus', async () => {
+    const cliCommands: Array<{ backend: AgentBackendType; command: string }> = [
+      { backend: 'claude-code', command: 'claude' },
+      { backend: 'opencode', command: 'opencode' },
+      { backend: 'codex', command: 'codex' },
+    ];
+
+    return Promise.all(
+      cliCommands.map(async ({ backend, command }) => {
+        try {
+          const { stdout } = await execAsync(`which ${command}`);
+          return {
+            backend,
+            command,
+            installed: true,
+            path: stdout.trim() || null,
+          };
+        } catch {
+          return { backend, command, installed: false, path: null };
+        }
+      }),
+    );
   });
 
   ipcMain.handle('shell:openTeamsJoinUrl', async (_, url: string) => {
@@ -4321,8 +4376,11 @@ export function registerIpcHandlers() {
   });
 
   // Usage
-  ipcMain.handle('agent:usage:getAll', (_, providers: string[]) => {
-    if (process.env.JC_DISABLE_USAGE_TRACKING) return {};
+  ipcMain.handle('agent:usage:getAll', async (_, providers: string[]) => {
+    if (process.env.JC_DISABLE_NATIVE_USAGE_TRACKING) {
+      const usageSettings = await SettingsRepository.get('usageDisplay');
+      if (!usageSettings.useCodexBar) return {};
+    }
     return agentUsageService.getUsage(providers as UsageProviderType[]);
   });
 
@@ -5106,16 +5164,6 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle('completion:getDailyUsage', async () => {
-    if (process.env.JC_DISABLE_USAGE_TRACKING) {
-      return {
-        promptTokens: 0,
-        completionTokens: 0,
-        requests: 0,
-        costUsd: 0,
-        inputCostUsd: 0,
-        outputCostUsd: 0,
-      };
-    }
     dbg.ipc('completion:getDailyUsage');
     return getCompletionDailyUsage();
   });

@@ -8,16 +8,20 @@ const BACKEND_LABELS: Record<AgentBackendType, string> = {
   'claude-code': 'Claude Code',
   opencode: 'OpenCode',
   codex: 'Codex',
+  copilot: 'GitHub Copilot',
 };
 
 export function useRateLimitSwapPreview(
-  backend: AgentBackendType,
+  backend: AgentBackendType | null,
   enabled = true,
 ) {
   return useQuery({
     queryKey: ['rate-limit-swap-preview', backend],
-    queryFn: () => api.rateLimitSwap.resolve(backend),
-    enabled,
+    queryFn: () => {
+      if (!backend) return null;
+      return api.rateLimitSwap.resolve(backend);
+    },
+    enabled: enabled && backend !== null,
     staleTime: 15_000,
   });
 }

@@ -92,6 +92,55 @@ export function getFeedItemProjectPriority(
   return item.projectPriority;
 }
 
+export function refineFeedItemAttention(
+  items: FeedItem[],
+  pendingRequestsByTaskId: Record<string, { type: 'permission' | 'question' }>,
+) {
+  const taskIdsWithQuestions = new Set<string>();
+  const taskIdsWithPermissions = new Set<string>();
+
+  // Check lightweight task-level pending request map instead of full loaded
+  // message cache; message streaming should not recompute feed.
+  for (const [taskId, req] of Object.entries(pendingRequestsByTaskId)) {
+    if (req.type === 'question') {
+      taskIdsWithQuestions.add(taskId);
+    } else if (req.type === 'permission') {
+      taskIdsWithPermissions.add(taskId);
+    }
+  }
+
+  const refineItem = (item: FeedItem): FeedItem => {
+    const children = item.children?.map(refineItem);
+    const itemWithChildren = children ? { ...item, children } : item;
+
+    if (!item.taskId) {
+      return itemWithChildren;
+    }
+
+    // Running tasks can ask permission or question, so refine running too.
+    const refinable =
+      item.attention === 'waiting' ||
+      item.attention === 'needs-permission' ||
+      item.attention === 'running';
+
+    if (!refinable) {
+      return itemWithChildren;
+    }
+
+    if (taskIdsWithQuestions.has(item.taskId)) {
+      return { ...itemWithChildren, attention: 'has-question' as const };
+    }
+
+    if (taskIdsWithPermissions.has(item.taskId)) {
+      return { ...itemWithChildren, attention: 'needs-permission' as const };
+    }
+
+    return itemWithChildren;
+  };
+
+  return items.map(refineItem);
+}
+
 export function useFeed() {
   const windowFocused = useWindowFocused();
   const { data: projects = [] } = useProjects();
@@ -191,6 +240,11 @@ export function useFeed() {
     prQuery.isLoading ||
     noteQuery.isLoading ||
     workItemQuery.isLoading;
+  const isFetching =
+    taskQuery.isFetching ||
+    prQuery.isFetching ||
+    noteQuery.isFetching ||
+    workItemQuery.isFetching;
   const isError =
     taskQuery.isError ||
     prQuery.isError ||
@@ -247,52 +301,7 @@ export function useFeed() {
 
   // Refine waiting/permission attention from in-memory pending request state.
   const refinedItems = useMemo(() => {
-    const raw = queryData;
-    const taskIdsWithQuestions = new Set<string>();
-    const taskIdsWithPermissions = new Set<string>();
-
-    // Check the lightweight task-level pending request map instead of the full
-    // loaded message cache; message streaming should not recompute the feed.
-    for (const [taskId, req] of Object.entries(pendingRequestsByTaskId)) {
-      if (req.type === 'question') {
-        taskIdsWithQuestions.add(taskId);
-      } else if (req.type === 'permission') {
-        taskIdsWithPermissions.add(taskId);
-      }
-    }
-
-    return raw.map((item) => {
-      if (!item.taskId) {
-        return item;
-      }
-
-      // Refine attention for task items based on in-memory pending request
-      // state. A running task can ask for permission or a question, so we
-      // need to check running items too, not just waiting/needs-permission.
-      const refinable =
-        item.attention === 'waiting' ||
-        item.attention === 'needs-permission' ||
-        item.attention === 'running';
-
-      if (!refinable) {
-        return item;
-      }
-
-      if (taskIdsWithQuestions.has(item.taskId)) {
-        return { ...item, attention: 'has-question' as const };
-      }
-
-      if (taskIdsWithPermissions.has(item.taskId)) {
-        return { ...item, attention: 'needs-permission' as const };
-      }
-
-      // If neither in-memory source has a pending request, trust the
-      // server-reported attention. Don't downgrade needs-permission to
-      // waiting — the server may be correct and the IPC event just hasn't
-      // arrived yet. When the permission is actually cleared, the status
-      // event triggers a feed query refetch which updates the server state.
-      return item;
-    });
+    return refineFeedItemAttention(queryData, pendingRequestsByTaskId);
   }, [queryData, pendingRequestsByTaskId]);
 
   const visibleFeedItems = useMemo(
@@ -422,6 +431,7 @@ export function useFeed() {
   return {
     data: refinedItems,
     isLoading,
+    isFetching,
     isError,
     refetch: async () => {
       await Promise.all([

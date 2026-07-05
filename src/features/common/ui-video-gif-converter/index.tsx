@@ -236,6 +236,8 @@ async function convertVideoToGif({
       mimeType: 'image/gif',
       filename: gifFileName(file.name),
       sizeBytes: gifBytes.byteLength,
+      width,
+      height,
       storageData: dataUrlToBase64(dataUrl),
       storageMimeType: 'image/gif',
     };

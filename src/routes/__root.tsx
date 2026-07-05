@@ -6,14 +6,14 @@ import {
   useRouterState,
 } from '@tanstack/react-router';
 import { scan, setOptions } from 'react-scan';
+import { useAppearanceSetting, useBackendsSetting } from '@/hooks/use-settings';
 import { useCallback, useEffect, useRef } from 'react';
-import clsx from 'clsx';
-
-
 import {
   useCurrentVisibleProject,
   useNavigationStore,
 } from '@/stores/navigation';
+import clsx from 'clsx';
+
 import { ActivityCenterOverlay } from '@/features/activity-center/ui-activity-center-overlay';
 import { api } from '@/lib/api';
 import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
@@ -23,6 +23,7 @@ import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
 import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-palette-overlay';
 import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
 import { Header } from '@/layout/ui-header';
+import { LearningCenterOverlay } from '@/features/onboarding/ui-learning-center-overlay';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
 import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
@@ -36,17 +37,16 @@ import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-comma
 import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
 import { TaskMessageManager } from '@/features/agent/task-message-manager';
 import { UsageOverlay } from '@/features/usage/ui-usage-overlay';
-import { useAppearanceSetting } from '@/hooks/use-settings';
 import { useChangelogStore } from '@/stores/changelog';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useNewTaskDraft } from '@/stores/new-task-draft';
+import { useOnboardingStore } from '@/stores/onboarding';
 import { useOverlaysStore } from '@/stores/overlays';
+import { useProjects } from '@/hooks/use-projects';
 import { useToastStore } from '@/stores/toasts';
 import { useUISetting } from '@/stores/ui';
 import { WorkActivityOverlay } from '@/features/work-activity/ui-work-activity-overlay';
-
-
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -138,6 +138,13 @@ function GlobalCommands() {
         section: 'General',
         handler: () => {
           openChangelog();
+        },
+      },
+      {
+        label: 'Learning Center',
+        section: 'General',
+        handler: () => {
+          toggle('learning-center');
         },
       },
     ],
@@ -254,6 +261,48 @@ function WorkActivityContainer() {
   return null;
 }
 
+function OnboardingBootstrap() {
+  const { data: projects = [], isLoading: isLoadingProjects } = useProjects();
+  const setupWizardCompleted = useOnboardingStore(
+    (s) => s.setupWizardCompleted,
+  );
+  const setupBackendSelected = useOnboardingStore(
+    (s) => s.setupBackendSelected,
+  );
+  const setupWizardSkipped = useOnboardingStore((s) => s.setupWizardSkipped);
+  const { data: backendsSetting } = useBackendsSetting();
+  const setupBackendReady =
+    setupBackendSelected || (backendsSetting?.enabledBackends?.length ?? 0) > 0;
+  const isChangelogOpen = useChangelogStore((s) => s.isOpen);
+  const navigate = useNavigate();
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+
+  useEffect(() => {
+    if (isLoadingProjects) return;
+    const requiredSetupDone = projects.length > 0 && setupBackendReady;
+    if (requiredSetupDone && setupWizardCompleted) return;
+    if (requiredSetupDone) return;
+    if (isOnboardingFlowPath(pathname)) return;
+    if (isChangelogOpen) return;
+    if (setupWizardSkipped) return;
+    if (window.sessionStorage.getItem('jc-setup-wizard-skipped') === '1') return;
+    void navigate({ to: '/onboarding/setup' });
+  }, [
+    isLoadingProjects,
+    isChangelogOpen,
+    navigate,
+    pathname,
+    projects.length,
+    setupWizardCompleted,
+    setupBackendReady,
+    setupWizardSkipped,
+  ]);
+
+  return null;
+}
+
 function BacklogContainer() {
   const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
@@ -353,6 +402,8 @@ function OverlayHost() {
       );
     case 'pipelines':
       return <PipelinesOverlay onClose={() => close('pipelines')} />;
+    case 'learning-center':
+      return <LearningCenterOverlay onClose={() => close('learning-center')} />;
     case 'keyboard-help':
       return null;
   }
@@ -412,6 +463,36 @@ function useCleanupNonActiveTasks() {
 
 function RootLayout() {
   useCleanupNonActiveTasks();
+  const { data: projects = [], isLoading: isLoadingProjects } = useProjects();
+  const setupBackendSelected = useOnboardingStore(
+    (s) => s.setupBackendSelected,
+  );
+  const setupWizardSkipped = useOnboardingStore((s) => s.setupWizardSkipped);
+  const { data: backendsSetting } = useBackendsSetting();
+  const setupBackendReady =
+    setupBackendSelected || (backendsSetting?.enabledBackends?.length ?? 0) > 0;
+  const closeChangelog = useChangelogStore((s) => s.close);
+  const closeOverlays = useOverlaysStore((s) => s.closeAll);
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+  const setupRequired = projects.length === 0 || !setupBackendReady;
+  const isSetupRoute = pathname.startsWith('/onboarding/setup');
+  const isOnboardingFlowRoute = isOnboardingFlowPath(pathname);
+  const setupSkippedThisSession =
+    setupWizardSkipped ||
+    window.sessionStorage.getItem('jc-setup-wizard-skipped') === '1';
+  const hideContentForSetupDecision =
+    !isOnboardingFlowRoute &&
+    (isLoadingProjects || (setupRequired && !setupSkippedThisSession));
+
+  useEffect(() => {
+    if (setupRequired || isOnboardingFlowRoute) closeChangelog();
+  }, [closeChangelog, isOnboardingFlowRoute, setupRequired]);
+
+  useEffect(() => {
+    if (isOnboardingFlowRoute) closeOverlays();
+  }, [closeOverlays, isOnboardingFlowRoute]);
 
   return (
     <div
@@ -427,29 +508,34 @@ function RootLayout() {
       <TaskMessageManager />
       <AppearanceBridge />
       <GlobalPromptFromBackModal />
-      <GlobalCommands />
+      <OnboardingBootstrap />
+      {!isOnboardingFlowRoute && <GlobalCommands />}
       {/* <TaskCommands /> */}
 
       {/* Changelog modal (startup only) */}
-      <ChangelogModal />
+      {!setupRequired && !isOnboardingFlowRoute && <ChangelogModal />}
 
       {/* Overlay containers */}
-      <NewTaskContainer />
-      <CommandPaletteContainer />
-      <ProjectOverlayContainer />
-      <BacklogContainer />
-      <ActivityCenterContainer />
-      <CalendarContainer />
-      <WorkActivityContainer />
-      <RunningCommandsContainer />
-      <PipelinesOverlayContainer />
-      <OverlayHost />
+      {!isOnboardingFlowRoute && (
+        <>
+          <NewTaskContainer />
+          <CommandPaletteContainer />
+          <ProjectOverlayContainer />
+          <BacklogContainer />
+          <ActivityCenterContainer />
+          <CalendarContainer />
+          <WorkActivityContainer />
+          <RunningCommandsContainer />
+          <PipelinesOverlayContainer />
+          <OverlayHost />
+        </>
+      )}
 
       <div className="flex h-full w-full flex-1 flex-col overflow-hidden">
         <Header />
         <main className="flex h-full w-full overflow-hidden">
-          <MainSidebar />
-          <Outlet />
+          {!isSetupRoute && !hideContentForSetupDecision && <MainSidebar />}
+          {hideContentForSetupDecision ? <StartupSetupGate /> : <Outlet />}
         </main>
       </div>
     </div>
@@ -466,6 +552,18 @@ function AppearanceBridge() {
   }, [appearanceSetting?.reduceMotion]);
 
   return null;
+}
+
+function isOnboardingFlowPath(pathname: string) {
+  return (
+    pathname.startsWith('/onboarding/setup') ||
+    (pathname === '/projects/new' &&
+      window.sessionStorage.getItem('jc-onboarding-allow-project-new') === '1')
+  );
+}
+
+function StartupSetupGate() {
+  return <div className="aurora-app-bg h-full flex-1" />;
 }
 
 function ReactScanBridge() {
