@@ -16,6 +16,7 @@ import {
   PinOff,
   ShieldAlert,
   ShieldQuestion,
+  SquareArrowOutUpRight,
   StickyNote,
   Terminal,
   XCircle,
@@ -51,6 +52,7 @@ import {
   usePullRequestPolicyEvaluations,
 } from '@/hooks/use-pull-requests';
 import { useCompleteTask, useTask } from '@/hooks/use-tasks';
+import { api } from '@/lib/api';
 import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
 import { formatRelativeTime } from '@/lib/time';
 import { getRunCommandDisplayName } from '@shared/run-command-types';
@@ -61,6 +63,7 @@ import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
+import { useToastStore } from '@/stores/toasts';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
 
 
@@ -232,6 +235,40 @@ function PrDiamond({ color }: { color: string }) {
         zIndex: 2,
       }}
     />
+  );
+}
+
+// ─── Worktree chip: opens the task's worktree in the editor ──────
+function WorktreeChip({ worktreePath }: { worktreePath: string }) {
+  const addToast = useToastStore((state) => state.addToast);
+  // Worktree dirs are named `<task-name>-<4-char-suffix>`; show the suffix
+  const suffix = worktreePath.split('/').pop()?.split('-').pop() ?? '';
+
+  const handleClick = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        await api.shell.openInEditor(worktreePath, worktreePath);
+      } catch {
+        addToast({
+          type: 'error',
+          message: `Worktree not found: ${worktreePath}`,
+        });
+      }
+    },
+    [worktreePath, addToast],
+  );
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      title={`Open worktree in editor\n${worktreePath}`}
+      className="text-ink-3 hover:text-acc-ink hover:bg-glass-light flex shrink-0 items-center gap-0.5 rounded px-1 py-0 font-mono text-[9.5px] transition-colors"
+    >
+      <SquareArrowOutUpRight className="h-2.5 w-2.5" />
+      {suffix}
+    </button>
   );
 }
 
@@ -808,6 +845,9 @@ export function FeedItemCard({
               {/* Bottom row: project + time + status */}
               <div className="flex flex-wrap items-center gap-1.5">
                 {!isSubtask && <FeedProjectLabel item={item} />}
+                {item.source === 'task' && item.worktreePath && (
+                  <WorktreeChip worktreePath={item.worktreePath} />
+                )}
                 <span className="text-ink-3/80 ml-auto shrink-0 font-mono text-[9.5px]">
                   {formatRelativeTime(itemTimestamp)}
                 </span>

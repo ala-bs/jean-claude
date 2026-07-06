@@ -34,6 +34,7 @@ export interface FeedItem {
   isDraft?: boolean;
   taskId?: string;
   taskType?: string; // TaskType — present when source === 'task'
+  worktreePath?: string;
   parentTaskId?: string;
   children?: FeedItem[];
   pendingMessage?: string;

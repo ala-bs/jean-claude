@@ -262,6 +262,7 @@ export async function getTaskFeedItems({
       hasUnread: task.hasUnread,
       taskId: task.id,
       taskType: task.type,
+      worktreePath: task.worktreePath ?? undefined,
       pendingMessage: task.pendingMessage ?? undefined,
       pullRequestId: task.pullRequestId
         ? parseInt(task.pullRequestId, 10)
@@ -326,6 +327,7 @@ export async function getTaskFeedItems({
         isCompleted: Boolean(child.userCompleted),
         taskId: child.id,
         taskType: (child.type ?? 'agent') as string,
+        worktreePath: child.worktreePath ?? undefined,
         parentTaskId: child.parentTaskId ?? undefined,
         pendingMessage: child.pendingMessage ?? undefined,
         pullRequestId: child.pullRequestId

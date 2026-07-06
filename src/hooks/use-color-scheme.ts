@@ -2,8 +2,8 @@ import { useCallback } from 'react';
 
 import {
   applyColorScheme,
-  getShikiTheme,
   type ColorScheme,
+  getShikiTheme,
   type ShikiTheme,
 } from '@/lib/theme';
 import { useUIStore } from '@/stores/ui';

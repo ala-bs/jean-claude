@@ -1,11 +1,11 @@
 import {
   Brain,
   Check,
-  Moon,
   CircleAlert,
   ExternalLink,
   FolderOpen,
   GitBranch,
+  Moon,
   RefreshCw,
   Search,
   Star,
