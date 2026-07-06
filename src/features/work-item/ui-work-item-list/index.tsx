@@ -87,7 +87,7 @@ export function WorkItemList({
   onToggleSelect: (workItem: AzureDevOpsWorkItem) => void;
   onHighlight: (workItem: AzureDevOpsWorkItem) => void;
 }) {
-  const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
 
   // Group work items so children appear after their parents
@@ -193,7 +193,7 @@ export function WorkItemList({
           workItem.parentId && parentIdsInList.has(workItem.parentId);
 
         return (
-          <button
+          <div
             key={workItem.id}
             id={itemId}
             data-work-item-id={workItem.id}
@@ -204,22 +204,36 @@ export function WorkItemList({
                 itemRefs.current.delete(index);
               }
             }}
-            type="button"
             role="option"
             aria-selected={isHighlighted || isSelected}
-            onClick={() => {
+            onClick={() => onHighlight(workItem)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
               onHighlight(workItem);
-              onToggleSelect(workItem);
             }}
+            tabIndex={0}
             className={clsx(
-              'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left',
+              'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left',
               isHighlighted && 'bg-glass-medium/50',
               !isHighlighted && 'hover:bg-glass-medium/30',
               hasParentInList && 'pl-6', // Add left indent for child items
             )}
           >
             {/* Selection checkbox */}
-            <SelectionCheckbox checked={isSelected} />
+            <button
+              type="button"
+              aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
+              aria-checked={isSelected}
+              role="checkbox"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleSelect(workItem);
+              }}
+              className="rounded"
+            >
+              <SelectionCheckbox checked={isSelected} />
+            </button>
 
             {/* Type icon */}
             <WorkItemTypeIcon type={workItem.fields.workItemType} />
@@ -263,7 +277,7 @@ export function WorkItemList({
                 }
               />
             )}
-          </button>
+          </div>
         );
       })}
     </div>

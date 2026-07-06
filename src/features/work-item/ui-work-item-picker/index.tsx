@@ -1,4 +1,4 @@
-import { Columns3, List } from 'lucide-react';
+import { Columns3, List, RefreshCw } from 'lucide-react';
 import {
   startTransition,
   useCallback,
@@ -124,8 +124,19 @@ export function WorkItemPicker({
   }, [projectId, controlledIterationFilter]);
 
   // Fetch iterations
-  const { data: iterations } = useIterations({ providerId, projectName });
-  const { data: boardColumns } = useBoardColumns({
+  const {
+    data: iterations,
+    isError: isIterationsError,
+    isFetching: isFetchingIterations,
+    isLoading: isLoadingIterations,
+    refetch: refetchIterations,
+  } = useIterations({ providerId, projectName });
+  const {
+    data: boardColumns,
+    isFetching: isFetchingBoardColumns,
+    isLoading: isLoadingBoardColumns,
+    refetch: refetchBoardColumns,
+  } = useBoardColumns({
     providerId,
     projectId,
     projectName,
@@ -146,6 +157,11 @@ export function WorkItemPicker({
     }
     return selectedIteration;
   }, [selectedIteration, currentIteration]);
+
+  const canFetchWorkItems =
+    selectedIteration !== '__current__' ||
+    iterations !== undefined ||
+    isIterationsError;
 
   // Iteration dropdown options
   const iterationOptions = useMemo<SelectOption<string>[]>(() => {
@@ -175,10 +191,16 @@ export function WorkItemPicker({
   }, [iterations, iterationOptions, selectedIteration, setSelectedIteration]);
 
   // Fetch work items
-  const { data: workItems, isLoading } = useWorkItems({
+  const {
+    data: workItems,
+    isFetching: isFetchingWorkItems,
+    isLoading,
+    refetch: refetchWorkItems,
+  } = useWorkItems({
     providerId,
     projectId,
     projectName,
+    enabled: canFetchWorkItems,
     filters: {
       excludeWorkItemTypes,
       iterationPath: resolvedIterationPath,
@@ -206,6 +228,15 @@ export function WorkItemPicker({
     }
     return fuse.search(filter).map((r) => r.item);
   }, [workItems, filter, fuse]);
+
+  const isRefreshing =
+    isFetchingWorkItems || isFetchingBoardColumns || isFetchingIterations;
+
+  const handleRefresh = useCallback(() => {
+    void refetchWorkItems();
+    void refetchBoardColumns();
+    void refetchIterations();
+  }, [refetchWorkItems, refetchBoardColumns, refetchIterations]);
 
   // Highlight state
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -276,11 +307,19 @@ export function WorkItemPicker({
     document.addEventListener('mouseup', handleMouseUp);
   };
 
+  const isBoardBootstrapping = viewMode === 'board' && isLoadingBoardColumns;
+
   // Loading state
-  if (isLoading) {
+  if (!canFetchWorkItems || isLoading || isBoardBootstrapping) {
     return (
       <div className="flex h-full w-full items-center justify-center">
-        <span className="text-ink-2 text-sm">Loading work items...</span>
+        <span className="text-ink-2 text-sm">
+          {isLoadingIterations
+            ? 'Loading iterations...'
+            : isBoardBootstrapping
+              ? 'Loading board...'
+              : 'Loading work items...'}
+        </span>
       </div>
     );
   }
@@ -289,7 +328,7 @@ export function WorkItemPicker({
     <div ref={containerRef} className="flex h-full w-full overflow-hidden">
       {/* Left panel */}
       <div
-        className="flex flex-col overflow-hidden"
+        className="flex min-w-0 flex-col overflow-hidden"
         style={{ width: `${panelWidth}%` }}
       >
         {/* Header toolbar */}
@@ -323,6 +362,19 @@ export function WorkItemPicker({
             )}
 
           <div className="flex-1" />
+
+          <button
+            type="button"
+            className="text-ink-3 hover:text-ink-1 disabled:text-ink-4 rounded p-1 transition-colors"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            title="Refresh work items"
+            aria-label="Refresh work items"
+          >
+            <RefreshCw
+              className={clsx('h-4 w-4', isRefreshing && 'animate-spin')}
+            />
+          </button>
 
           {/* Iteration dropdown */}
           {iterations && iterations.length > 0 && (
@@ -366,7 +418,7 @@ export function WorkItemPicker({
         </div>
 
         {/* Items */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {viewMode === 'list' ? (
             <WorkItemList
               workItems={filteredWorkItems}

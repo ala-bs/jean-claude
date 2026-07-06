@@ -259,16 +259,19 @@ export function WorkItemBoard({
               );
 
               return (
-                <button
+                <div
                   key={workItem.id}
-                  type="button"
                   data-work-item-id={workItem.id}
-                  onClick={() => {
+                  onClick={() => onHighlight(workItem)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
                     onHighlight(workItem);
-                    onToggleSelect(workItem);
                   }}
+                  role="button"
+                  tabIndex={0}
                   className={clsx(
-                    'flex flex-col gap-1.5 rounded border p-2 text-left',
+                    'flex cursor-pointer flex-col gap-1.5 rounded border p-2 text-left',
                     isHighlighted
                       ? 'border-acc bg-glass-medium/70'
                       : 'hover:border-glass-border border-glass-border',
@@ -276,7 +279,19 @@ export function WorkItemBoard({
                 >
                   {/* Top row: checkbox + type icon + id + type */}
                   <div className="flex items-center gap-1.5">
-                    <SelectionCheckbox checked={isSelected} size="sm" />
+                    <button
+                      type="button"
+                      aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
+                      aria-checked={isSelected}
+                      role="checkbox"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleSelect(workItem);
+                      }}
+                      className="rounded"
+                    >
+                      <SelectionCheckbox checked={isSelected} size="sm" />
+                    </button>
                     <WorkItemTypeIcon
                       type={workItem.fields.workItemType}
                       size="sm"
@@ -319,7 +334,7 @@ export function WorkItemBoard({
                       search={search}
                     />
                   </span>
-                </button>
+                </div>
               );
             })}
           </div>
