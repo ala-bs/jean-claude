@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
 
 
@@ -59,6 +59,7 @@ export function WorkItemBoard({
   workItems,
   boardColumns,
   highlightedWorkItemId,
+  exactMatchWorkItemId,
   selectedWorkItemIds,
   providerId,
   search,
@@ -68,12 +69,14 @@ export function WorkItemBoard({
   workItems: AzureDevOpsWorkItem[];
   boardColumns: AzureDevOpsBoardColumn[];
   highlightedWorkItemId: string | null;
+  exactMatchWorkItemId?: string | null;
   selectedWorkItemIds: string[];
   providerId?: string;
   search: string;
   onToggleSelect: (workItem: AzureDevOpsWorkItem) => void;
   onHighlight: (workItem: AzureDevOpsWorkItem) => void;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
 
   // Group work items by Azure board column when available, then fall back to state.
@@ -127,17 +130,22 @@ export function WorkItemBoard({
       .map(([state, items]) => ({ state, items }));
   }, [boardColumns, workItems]);
 
+  const visibleColumns = useMemo(() => {
+    if (!search.trim()) return columns;
+    return columns.filter((column) => column.items.length > 0);
+  }, [columns, search]);
+
   // Board navigation: up/down within column, left/right across columns
   const navigate = useCallback(
     (direction: 'up' | 'down' | 'left' | 'right') => {
-      if (columns.length === 0) return;
+      if (visibleColumns.length === 0) return;
 
       // Find current position [col, row]
       let curCol = -1;
       let curRow = -1;
       if (highlightedWorkItemId) {
-        for (let c = 0; c < columns.length; c++) {
-          const r = columns[c].items.findIndex(
+        for (let c = 0; c < visibleColumns.length; c++) {
+          const r = visibleColumns[c].items.findIndex(
             (wi) => wi.id.toString() === highlightedWorkItemId,
           );
           if (r !== -1) {
@@ -149,16 +157,16 @@ export function WorkItemBoard({
       }
 
       // Find first/last non-empty column
-      const firstCol = columns.findIndex((c) => c.items.length > 0);
+      const firstCol = visibleColumns.findIndex((c) => c.items.length > 0);
       if (firstCol === -1) return; // all empty
 
       // No current highlight — start at first item
       if (curCol === -1) {
-        onHighlight(columns[firstCol].items[0]);
+        onHighlight(visibleColumns[firstCol].items[0]);
         return;
       }
 
-      const col = columns[curCol].items;
+      const col = visibleColumns[curCol].items;
 
       if (direction === 'up') {
         onHighlight(col[(curRow - 1 + col.length) % col.length]);
@@ -170,20 +178,20 @@ export function WorkItemBoard({
         let nextCol = curCol + step;
         while (
           nextCol >= 0 &&
-          nextCol < columns.length &&
-          columns[nextCol].items.length === 0
+          nextCol < visibleColumns.length &&
+          visibleColumns[nextCol].items.length === 0
         ) {
           nextCol += step;
         }
-        if (nextCol < 0 || nextCol >= columns.length) return; // stay put
+        if (nextCol < 0 || nextCol >= visibleColumns.length) return; // stay put
         onHighlight(
-          columns[nextCol].items[
-            Math.min(curRow, columns[nextCol].items.length - 1)
+          visibleColumns[nextCol].items[
+            Math.min(curRow, visibleColumns[nextCol].items.length - 1)
           ],
         );
       }
     },
-    [columns, highlightedWorkItemId, onHighlight],
+    [visibleColumns, highlightedWorkItemId, onHighlight],
   );
 
   // Register keyboard bindings for board navigation
@@ -214,14 +222,14 @@ export function WorkItemBoard({
     },
   ]);
 
-  // Auto-scroll highlighted item into view
+  // Exact ID searches can land in horizontally scrolled board columns.
   useEffect(() => {
-    if (!highlightedWorkItemId) return;
-    const el = document.querySelector(
-      `[data-work-item-list] [data-work-item-id="${highlightedWorkItemId}"]`,
+    if (!exactMatchWorkItemId) return;
+    const el = listRef.current?.querySelector(
+      `[data-work-item-id="${exactMatchWorkItemId}"]`,
     );
     el?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-  }, [highlightedWorkItemId]);
+  }, [exactMatchWorkItemId, visibleColumns]);
 
   if (workItems.length === 0) {
     return (
@@ -233,10 +241,11 @@ export function WorkItemBoard({
 
   return (
     <div
+      ref={listRef}
       className="flex h-full gap-2 overflow-x-auto overflow-y-hidden pb-2"
       data-work-item-list
     >
-      {columns.map(({ state, items }) => (
+      {visibleColumns.map(({ state, items }) => (
         <div
           key={state}
           className="bg-bg-1/50 flex h-full w-56 shrink-0 flex-col overflow-hidden rounded"
@@ -254,6 +263,8 @@ export function WorkItemBoard({
             {items.map((workItem) => {
               const isHighlighted =
                 workItem.id.toString() === highlightedWorkItemId;
+              const isExactMatch =
+                workItem.id.toString() === exactMatchWorkItemId;
               const isSelected = selectedWorkItemIds.includes(
                 workItem.id.toString(),
               );
@@ -271,10 +282,12 @@ export function WorkItemBoard({
                   role="button"
                   tabIndex={0}
                   className={clsx(
-                    'flex cursor-pointer flex-col gap-1.5 rounded border p-2 text-left',
-                    isHighlighted
-                      ? 'border-acc bg-glass-medium/70'
-                      : 'hover:border-glass-border border-glass-border',
+                    'flex cursor-pointer flex-col gap-1.5 rounded border p-2 text-left transition-[box-shadow,border-color,background-color]',
+                    isExactMatch
+                      ? 'border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'
+                      : isHighlighted
+                        ? 'border-acc bg-glass-medium/70'
+                        : 'hover:border-glass-border border-glass-border',
                   )}
                 >
                   {/* Top row: checkbox + type icon + id + type */}
@@ -302,6 +315,11 @@ export function WorkItemBoard({
                         search={search}
                       />
                     </span>
+                    {isExactMatch && (
+                      <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide">
+                        Exact
+                      </span>
+                    )}
                     <span className="text-ink-2 max-w-[80px] truncate text-[10px]">
                       {workItem.fields.workItemType}
                     </span>

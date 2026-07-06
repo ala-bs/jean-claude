@@ -46,6 +46,13 @@ function getStatusUrgency(status: string): number {
   return STATUS_URGENCY[status] ?? 3;
 }
 
+function getExactWorkItemIdSearch(filter: string | undefined): string | null {
+  const trimmed = filter?.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^#?(\d+)$/);
+  return match?.[1] ?? null;
+}
+
 const DEFAULT_EXCLUDE_TYPES = ['Test Suite', 'Test Case', 'Epic', 'Feature'];
 
 export function WorkItemPicker({
@@ -229,6 +236,14 @@ export function WorkItemPicker({
     return fuse.search(filter).map((r) => r.item);
   }, [workItems, filter, fuse]);
 
+  const exactMatchWorkItemId = useMemo(() => {
+    const searchId = getExactWorkItemIdSearch(filter);
+    if (!searchId) return null;
+    return filteredWorkItems.some((wi) => wi.id.toString() === searchId)
+      ? searchId
+      : null;
+  }, [filter, filteredWorkItems]);
+
   const isRefreshing =
     isFetchingWorkItems || isFetchingBoardColumns || isFetchingIterations;
 
@@ -268,6 +283,26 @@ export function WorkItemPicker({
     },
     [onHighlightChange],
   );
+
+  useEffect(() => {
+    if (!exactMatchWorkItemId) return;
+    startTransition(() => {
+      setHighlightedId(exactMatchWorkItemId);
+    });
+    onHighlightChange?.(exactMatchWorkItemId);
+  }, [exactMatchWorkItemId, onHighlightChange]);
+
+  useEffect(() => {
+    if (!highlightedId) return;
+    if (filteredWorkItems.some((wi) => wi.id.toString() === highlightedId)) {
+      return;
+    }
+
+    startTransition(() => {
+      setHighlightedId(null);
+    });
+    onHighlightChange?.(null);
+  }, [filteredWorkItems, highlightedId, onHighlightChange]);
 
   // Resizable panel (controlled or uncontrolled)
   const [internalPanelWidth, setInternalPanelWidth] = useState(65);
@@ -423,6 +458,7 @@ export function WorkItemPicker({
             <WorkItemList
               workItems={filteredWorkItems}
               highlightedWorkItemId={highlightedId}
+              exactMatchWorkItemId={exactMatchWorkItemId}
               selectedWorkItemIds={selectedWorkItemIds}
               providerId={providerId}
               search={filter ?? ''}
@@ -434,6 +470,7 @@ export function WorkItemPicker({
               workItems={filteredWorkItems}
               boardColumns={boardColumns ?? []}
               highlightedWorkItemId={highlightedId}
+              exactMatchWorkItemId={exactMatchWorkItemId}
               selectedWorkItemIds={selectedWorkItemIds}
               providerId={providerId}
               search={filter ?? ''}
