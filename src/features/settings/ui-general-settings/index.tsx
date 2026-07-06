@@ -935,7 +935,11 @@ export function BackendsSettings() {
                     )}
                   </span>
                 }
-                description={backend.description}
+                description={
+                  backend.value === 'copilot'
+                    ? 'Uses GitHub Copilot SDK. Requires Copilot CLI login or a GitHub token with Copilot access available in the environment. Usage counts against Copilot premium requests.'
+                    : backend.description
+                }
               />
 
               {enabled && (
@@ -1005,6 +1009,9 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         codex: {
           ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
         },
+        copilot: {
+          ...(thinkingSettings?.efforts.copilot ?? { default: 'default' }),
+        },
       },
       selectedModels: {
         'claude-code':
@@ -1019,6 +1026,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
           thinkingSettings?.selectedModels?.codex ??
           backendDefaultModelsSetting?.models.codex ??
           'default',
+        copilot:
+          thinkingSettings?.selectedModels?.copilot ??
+          backendDefaultModelsSetting?.models.copilot ??
+          'default',
         [backend]: nextModel,
       },
     });
@@ -1028,6 +1039,7 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
           backendDefaultModelsSetting?.models['claude-code'] ?? 'default',
         opencode: backendDefaultModelsSetting?.models.opencode ?? 'default',
         codex: backendDefaultModelsSetting?.models.codex ?? 'default',
+        copilot: backendDefaultModelsSetting?.models.copilot ?? 'default',
         [backend]: nextModel,
       },
     });
@@ -1059,18 +1071,24 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
     });
     updateThinkingSettings.mutate({
       efforts: {
+        ...(thinkingSettings?.efforts ?? {}),
         'claude-code': {
-          ...(thinkingSettings?.efforts['claude-code'] ?? {
-            default: 'default',
-          }),
+          default: 'default',
+          ...(thinkingSettings?.efforts['claude-code'] ?? {}),
         },
         opencode: {
-          ...(thinkingSettings?.efforts.opencode ?? { default: 'default' }),
+          default: 'default',
+          ...(thinkingSettings?.efforts.opencode ?? {}),
+        },
+        copilot: {
+          default: 'default',
+          ...(thinkingSettings?.efforts.copilot ?? {}),
         },
         codex: {
           ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
         },
         [backend]: {
+          default: 'default',
           ...backendEfforts,
           [targetModel]: normalizedEffort,
         },
@@ -1087,6 +1105,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         codex:
           thinkingSettings?.selectedModels?.codex ??
           backendDefaultModelsSetting?.models.codex ??
+          'default',
+        copilot:
+          thinkingSettings?.selectedModels?.copilot ??
+          backendDefaultModelsSetting?.models.copilot ??
           'default',
         [backend]: targetModel,
       },
@@ -1440,6 +1462,12 @@ export function UsageDisplaySettings() {
   const { data: usageDisplaySetting } = useUsageDisplaySetting();
   const updateUsageDisplay = useUpdateUsageDisplaySetting();
   const enabledProviders = usageDisplaySetting?.enabledProviders ?? [];
+  const useCodexBar = usageDisplaySetting?.useCodexBar ?? false;
+  const [codexBarStatus, setCodexBarStatus] = useState<{
+    installed: boolean;
+    version?: string;
+    error?: string;
+  } | null>(null);
   const [copilotToken, setCopilotToken] = useState('');
   const [copilotDeviceCode, setCopilotDeviceCode] = useState<string | null>(
     null,
@@ -1457,6 +1485,16 @@ export function UsageDisplaySettings() {
     ));
   }, [usageDisplaySetting?.copilotToken]);
 
+  useEffect(() => {
+    let cancelled = false;
+    api.codexbar.getStatus().then((status) => {
+      if (!cancelled) setCodexBarStatus(status);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const isEnabled = (id: UsageProviderType) => enabledProviders.includes(id);
 
   const handleToggle = (id: UsageProviderType) => {
@@ -1467,6 +1505,22 @@ export function UsageDisplaySettings() {
       ...(usageDisplaySetting ?? { enabledProviders: [] }),
       enabledProviders: next,
     });
+  };
+
+  const toggleCodexBar = (enabled: boolean) => {
+    updateUsageDisplay.mutate({
+      ...(usageDisplaySetting ?? { enabledProviders: [] }),
+      useCodexBar: enabled,
+    });
+    queryClient.invalidateQueries({ queryKey: ['backend-usage'] });
+  };
+
+  const refreshCodexBarStatus = async () => {
+    setCodexBarStatus(await api.codexbar.getStatus());
+  };
+
+  const openCodexBarInstall = async () => {
+    await api.codexbar.openInstallPage();
   };
 
   const saveCopilotToken = () => {
@@ -1511,6 +1565,45 @@ export function UsageDisplaySettings() {
 
   return (
     <div>
+      <div className="border-line-soft bg-bg-0 mb-4 rounded-lg border px-4 py-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-ink-1 text-sm font-medium">CodexBar source</h3>
+            <p className="text-ink-3 mt-1 text-xs">
+              Use CodexBar CLI for rate-limit data across Claude Code, Codex,
+              OpenCode, Gemini, and Copilot.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              {codexBarStatus?.installed ? (
+                <span className="text-status-done flex items-center gap-1">
+                  <Check className="h-3 w-3" /> Installed
+                  {codexBarStatus.version ? ` (${codexBarStatus.version})` : ''}
+                </span>
+              ) : (
+                <span className="text-status-warning flex items-center gap-1">
+                  <CircleAlert className="h-3 w-3" /> CLI not found
+                </span>
+              )}
+              <Button
+                onClick={refreshCodexBarStatus}
+                variant="ghost"
+                size="xs"
+              >
+                Refresh
+              </Button>
+              <Button onClick={openCodexBarInstall} variant="secondary" size="xs">
+                Install CodexBar
+                <ExternalLink className="ml-1 h-3 w-3" />
+              </Button>
+            </div>
+            {codexBarStatus?.error && !codexBarStatus.installed && (
+              <p className="text-ink-3 mt-1 text-xs">{codexBarStatus.error}</p>
+            )}
+          </div>
+          <Switch checked={useCodexBar} onChange={toggleCodexBar} />
+        </div>
+      </div>
+
       <div className="space-y-2">
         {USAGE_PROVIDERS.map((provider) => {
           const enabled = isEnabled(provider.value);
@@ -1623,8 +1716,10 @@ export function SummaryModelsSettings() {
   );
 }
 
+type SummaryModelBackend = Exclude<AgentBackendType, 'copilot'>;
+
 const SUMMARY_MODEL_BACKENDS: Record<
-  AgentBackendType,
+  SummaryModelBackend,
   { label: string; description: string; defaultModel: string }
 > = {
   'claude-code': {
@@ -1648,7 +1743,7 @@ export function SummaryModelSettings({
   backend,
   compact = false,
 }: {
-  backend: AgentBackendType;
+  backend: SummaryModelBackend;
   compact?: boolean;
 }) {
   const { data: summaryModelsSetting } = useSummaryModelsSetting();
@@ -1656,10 +1751,12 @@ export function SummaryModelSettings({
   const { data: dynamicModels } = useBackendModels(backend);
   const details = SUMMARY_MODEL_BACKENDS[backend];
 
-  const models = summaryModelsSetting?.models ?? {
+  const models = {
     'claude-code': SUMMARY_MODEL_BACKENDS['claude-code'].defaultModel,
     opencode: SUMMARY_MODEL_BACKENDS.opencode.defaultModel,
     codex: SUMMARY_MODEL_BACKENDS.codex.defaultModel,
+    copilot: 'default',
+    ...(summaryModelsSetting?.models ?? {}),
   };
 
   const setModel = (model: string) => {
@@ -1691,7 +1788,7 @@ export function SummaryModelSettings({
           <div className="text-ink-3 text-xs">{details.description}</div>
         </div>
         <ModelSelector
-          value={models[backend]}
+          value={models[backend] ?? details.defaultModel}
           onChange={setModel}
           models={getModelsForBackend(backend, dynamicModels)}
         />

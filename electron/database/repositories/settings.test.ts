@@ -80,6 +80,7 @@ describe('SettingsRepository legacy normalization', () => {
         'claude-code': 'sonnet',
         opencode: 'openai/gpt-5',
         codex: 'default',
+        copilot: 'default',
       },
     });
 
@@ -108,11 +109,13 @@ describe('SettingsRepository legacy normalization', () => {
         'claude-code': { default: 'high', sonnet: 'max' },
         opencode: { default: 'medium' },
         codex: { default: 'default' },
+        copilot: { default: 'default' },
       },
       selectedModels: {
         'claude-code': 'sonnet',
         opencode: 'openai/gpt-5',
         codex: 'default',
+        copilot: 'default',
       },
     });
 

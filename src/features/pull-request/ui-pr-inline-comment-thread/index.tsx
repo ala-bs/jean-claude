@@ -2,8 +2,8 @@ import type { AzureDevOpsCommentThread } from '@/lib/api';
 import type { CommentThread } from '@/features/common/ui-file-diff';
 import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
 import type { MentionOption } from '@/common/ui/mention-textarea';
-import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 
 
 import { PrInlineCommentTimeline } from '../ui-pr-comments';

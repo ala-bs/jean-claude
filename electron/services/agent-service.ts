@@ -48,8 +48,6 @@ import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { AiUsageFeature } from '@shared/ai-usage-types';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
-
-
 import {
   AgentMessageRepository,
   ProjectRepository,
@@ -75,6 +73,7 @@ import { assertValidWorkspacePath } from './system-project-service';
 import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
 import { buildSessionIdStepUpdate } from './agent-session-update';
 import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
+import { CopilotBackend } from './agent-backends/copilot/copilot-backend';
 import { dbg } from '../lib/debug';
 import { generateTaskName } from './name-generation-service';
 import { getAgentBackendProvider } from './agent-backends/providers';
@@ -337,6 +336,60 @@ class AgentService {
     }
   }
 
+  private async emitPendingRequest(
+    session: ActiveSession,
+    request: ActiveSession['pendingRequests'][number],
+  ): Promise<void> {
+    const { taskId, stepId } = session;
+    const task = await TaskRepository.update(taskId, { status: 'waiting' });
+    emitTaskUpsert(task);
+    this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
+
+    if (request.type === 'question' && request.questionRequest) {
+      const questions: AgentQuestion[] = request.questionRequest.questions.map(
+        (q: NormalizedQuestion) => ({
+          question: q.question,
+          header: q.header,
+          options: q.options.map((o) => ({
+            label: o.label,
+            description: o.description,
+          })),
+          multiSelect: q.multiSelect,
+          allowFreeform: q.allowFreeform,
+        }),
+      );
+      this.emitEvent(taskId, stepId, {
+        type: 'question',
+        requestId: request.requestId,
+        questions,
+      });
+      await this.notifyTaskEvent({
+        taskId,
+        stepId,
+        event: 'question',
+        notificationId: `${taskId}:question`,
+        title: 'Question from Agent',
+        body: 'Task "{taskName}" has a question',
+      });
+      return;
+    }
+
+    if (request.type === 'permission' && request.permissionRequest) {
+      this.emitEvent(taskId, stepId, {
+        type: 'permission',
+        ...request.permissionRequest,
+      });
+      await this.notifyTaskEvent({
+        taskId,
+        stepId,
+        event: 'permission-required',
+        notificationId: `${taskId}:permission`,
+        title: 'Permission Required',
+        body: `Task "{taskName}" needs approval for ${request.permissionRequest.toolName}`,
+      });
+    }
+  }
+
   private async markTaskUnreadIfBackground(taskId: string): Promise<void> {
     const isFocused =
       this.isMainWindowAlive() &&
@@ -549,6 +602,12 @@ class AgentService {
     }
   }
 
+  private clearPendingRequests(session: ActiveSession): void {
+    notificationService.close(`${session.taskId}:permission`);
+    notificationService.close(`${session.taskId}:question`);
+    session.pendingRequests = [];
+  }
+
   // --- Session management ---
 
   private async createSession(stepId: string): Promise<ActiveSession> {
@@ -560,6 +619,8 @@ class AgentService {
 
     const existingMessageCount =
       await AgentMessageRepository.getMessageCountByStepId(stepId);
+    const existingRawMessageCount =
+      await RawMessageRepository.getMessageCountByStepId(stepId);
 
     const requestedBackend: AgentBackendType = (step.agentBackend ??
       'claude-code') as AgentBackendType;
@@ -575,6 +636,10 @@ class AgentService {
     const agentTaskContext: AgentTaskContext = {
       taskId: step.taskId,
       sessionStartIndex: existingMessageCount,
+      rawSessionStartIndex:
+        existingRawMessageCount > 0
+          ? existingRawMessageCount
+          : existingMessageCount,
       persistRaw: async (params) => {
         const row = await RawMessageRepository.create({
           taskId: step.taskId,
@@ -796,6 +861,7 @@ class AgentService {
       backend: session.backendType,
       model: modelPreference ?? 'default',
       effort: thinkingEffort,
+      allowCopilotEffortWithoutCapabilities: true,
     });
     session.currentModel = modelPreference ?? null;
 
@@ -986,6 +1052,7 @@ class AgentService {
       })),
       multiSelect: q.multiSelect,
       ...(q.required !== undefined ? { required: q.required } : {}),
+      ...(q.allowFreeform !== undefined ? { allowFreeform: q.allowFreeform } : {}),
     }));
   }
 
@@ -1127,31 +1194,15 @@ class AgentService {
 
       case 'permission-request': {
         const request = event.request;
-        // Track the pending request
+        const shouldEmit = session.pendingRequests.length === 0;
         session.pendingRequests.push({
           requestId: request.requestId,
           type: 'permission',
           permissionRequest: request,
         });
-
-        // Step stays 'running' (agent session is active, just paused);
-        // task-level status becomes 'waiting' for UI purposes.
-        const task = await TaskRepository.update(taskId, { status: 'waiting' });
-        emitTaskUpsert(task);
-        this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
-        this.emitEvent(taskId, stepId, {
-          type: 'permission',
-          ...request,
-        });
-
-        await this.notifyTaskEvent({
-          taskId,
-          stepId,
-          event: 'permission-required',
-          notificationId: `${taskId}:permission`,
-          title: 'Permission Required',
-          body: `Task "{taskName}" needs approval for ${request.toolName}`,
-        });
+        if (shouldEmit) {
+          await this.emitPendingRequest(session, session.pendingRequests[0]);
+        }
         break;
       }
 
@@ -1276,6 +1327,7 @@ class AgentService {
         });
 
         const status = result.isError ? 'errored' : 'completed';
+        this.clearPendingRequests(session);
 
         // Mark as unread BEFORE emitting the status event so the feed
         // re-fetch (triggered by the event) reads the updated value.
@@ -1312,6 +1364,7 @@ class AgentService {
       case 'error': {
         dbg.agent('Backend error for step %s: %s', stepId, event.error);
         session.hasTerminalError = true;
+        this.clearPendingRequests(session);
 
         // Emit a synthetic error entry so the user sees the error in the timeline
         await this.persistAndEmitSyntheticEntry(taskId, session, {
@@ -1487,71 +1540,79 @@ class AgentService {
       // Subsequent steps should not overwrite an already-generated name.
       const isFirstStep = step.sortOrder === 0;
 
-      try {
-        dbg.agentSession('Starting agent for step %s', stepId);
-        await this.runBackend(stepId, parts, session, {
-          generateNameOnInit: isFirstStep,
-          initialPrompt: step.promptTemplate,
-          isInitialPrompt: true,
-        });
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : 'Unknown error';
-        dbg.agent('Step %s start failed: %s', stepId, errorMessage);
+      dbg.agentSession('Starting agent for step %s', stepId);
+      const activeSession = session;
+      void this.runBackend(stepId, parts, activeSession, {
+        generateNameOnInit: isFirstStep,
+        initialPrompt: step.promptTemplate,
+        isInitialPrompt: true,
+      })
+        .catch(async (error: unknown) => {
+          const errorMessage =
+            error instanceof Error ? error.message : 'Unknown error';
+          dbg.agent('Step %s start failed: %s', stepId, errorMessage);
 
-        // Emit a synthetic error entry so the user sees the error in the timeline
-        await this.persistAndEmitSyntheticEntry(session.taskId, session, {
-          id: nanoid(),
-          date: new Date().toISOString(),
-          isSynthetic: true,
-          type: 'result',
-          value: errorMessage,
-          isError: true,
-        });
+          // Emit a synthetic error entry so the user sees the error in the timeline
+          await this.persistAndEmitSyntheticEntry(activeSession.taskId, activeSession, {
+            id: nanoid(),
+            date: new Date().toISOString(),
+            isSynthetic: true,
+            type: 'result',
+            value: errorMessage,
+            isError: true,
+          });
 
-        await StepService.errorStep(stepId);
-        this.emitEvent(session.taskId, stepId, {
-          type: 'status',
-          status: 'errored',
-          error: errorMessage,
+          await StepService.errorStep(stepId);
+          this.emitEvent(activeSession.taskId, stepId, {
+            type: 'status',
+            status: 'errored',
+            error: errorMessage,
+          });
+          await this.notifyTaskEvent({
+            taskId: activeSession.taskId,
+            stepId,
+            event: 'errored',
+            notificationId: `${activeSession.taskId}:start-error:${stepId}`,
+            title: 'Task Failed',
+            body: 'Task "{taskName}" encountered an error',
+          });
+        })
+        .finally(() => {
+          this.sessions.delete(stepId);
         });
-        await this.notifyTaskEvent({
-          taskId: session.taskId,
-          stepId,
-          event: 'errored',
-          notificationId: `${session.taskId}:start-error:${stepId}`,
-          title: 'Task Failed',
-          body: 'Task "{taskName}" encountered an error',
-        });
-      } finally {
-        this.sessions.delete(stepId);
-      }
     } catch (error) {
+      if (!session) {
+        throw error;
+      }
+
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
+      dbg.agent('Step %s startup failed: %s', stepId, errorMessage);
 
-      if (session) {
-        await this.persistAndEmitSyntheticEntry(session.taskId, session, {
-          id: nanoid(),
-          date: new Date().toISOString(),
-          isSynthetic: true,
-          type: 'result',
-          value: errorMessage,
-          isError: true,
-        });
-        this.sessions.delete(stepId);
-      }
+      await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+        id: nanoid(),
+        date: new Date().toISOString(),
+        isSynthetic: true,
+        type: 'result',
+        value: errorMessage,
+        isError: true,
+      });
 
-      if (runningStep) {
-        await StepService.errorStep(stepId);
-        this.emitEvent(runningStep.taskId, stepId, {
-          type: 'status',
-          status: 'errored',
-          error: errorMessage,
-        });
-      }
-
-      throw error;
+      await StepService.errorStep(stepId);
+      this.emitEvent(session.taskId, stepId, {
+        type: 'status',
+        status: 'errored',
+        error: errorMessage,
+      });
+      await this.notifyTaskEvent({
+        taskId: session.taskId,
+        stepId,
+        event: 'errored',
+        notificationId: `${session.taskId}:startup-error:${stepId}`,
+        title: 'Task Failed',
+        body: 'Task "{taskName}" encountered an error',
+      });
+      this.sessions.delete(stepId);
     } finally {
       this.startingSteps.delete(stepId);
     }
@@ -1598,15 +1659,10 @@ class AgentService {
       queuedPrompts: [],
     });
 
-    // Close any pending permission/question notifications
-    notificationService.close(`${taskId}:permission`);
-    notificationService.close(`${taskId}:question`);
-
     this.questionBroker.cancelSession(stepId, 'Agent session stopped');
     await this.jcMcpBridgeService.unregisterStep(stepId);
 
-    // Clear pending requests
-    session.pendingRequests = [];
+    this.clearPendingRequests(session);
 
     session.abortController.abort();
 
@@ -1754,6 +1810,10 @@ class AgentService {
           handle: session.runHandle,
           requestId,
           answer: questionResponse.answers,
+          metadata: {
+            wasFreeform: questionResponse.wasFreeform,
+            wasFreeformByQuestion: questionResponse.wasFreeformByQuestion,
+          },
         });
       }
     }
@@ -2075,6 +2135,9 @@ class AgentService {
               'Skipping raw message compaction for unsupported backend %s',
               backendType,
             );
+            break;
+          case 'copilot':
+            await CopilotBackend.compactRawMessagesForTask(taskId);
             break;
           default: {
             const _exhaustive: never = backendType;

@@ -163,7 +163,52 @@ describe('skill management project skill discovery', () => {
     await expect(fs.realpath(codexSymlinkPath)).resolves.toBe(skill.skillPath);
   });
 
-  it('marks .claude project skills enabled for both claude-code and opencode', async () => {
+  it('creates, disables, and enables Copilot user skills via ~/.copilot skills', async () => {
+    const skill = await createSkill({
+      enabledBackends: ['copilot'],
+      scope: 'user',
+      name: 'native copilot user skill',
+      description: 'Native Copilot user skill',
+      content: 'Use native Copilot user skill path.',
+    });
+    const copilotSymlinkPath = path.join(
+      os.homedir(),
+      '.copilot/skills/native-copilot-user-skill',
+    );
+
+    expect(skill.skillPath).toBe(
+      path.join(
+        os.homedir(),
+        '.config/jean-claude/skills/user/native-copilot-user-skill',
+      ),
+    );
+    await expect(fs.realpath(copilotSymlinkPath)).resolves.toBe(
+      skill.skillPath,
+    );
+
+    let skills = await getAllManagedSkills({ backendType: 'copilot' });
+    expect(
+      skills.find((entry) => entry.skillPath === skill.skillPath)
+        ?.enabledBackends,
+    ).toEqual({ copilot: true });
+
+    await disableSkill({ skillPath: skill.skillPath, backendType: 'copilot' });
+    await expect(fs.lstat(copilotSymlinkPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    skills = await getAllManagedSkills({ backendType: 'copilot' });
+    expect(
+      skills.find((entry) => entry.skillPath === skill.skillPath)
+        ?.enabledBackends,
+    ).toEqual({ copilot: false });
+
+    await enableSkill({ skillPath: skill.skillPath, backendType: 'copilot' });
+    await expect(fs.realpath(copilotSymlinkPath)).resolves.toBe(
+      skill.skillPath,
+    );
+  });
+
+  it('marks .claude project skills enabled for backends that discover them', async () => {
     const projectPath = '/project';
     const skillDir = await writeSkill({
       projectPath,
@@ -177,6 +222,7 @@ describe('skill management project skill discovery', () => {
 
     expect(skill?.enabledBackends).toEqual({
       'claude-code': true,
+      copilot: true,
       opencode: true,
     });
   });
@@ -252,6 +298,7 @@ describe('skill management safety', () => {
     expect(skill?.enabledBackends).toEqual({
       'claude-code': true,
       codex: false,
+      copilot: false,
       opencode: false,
     });
 

@@ -11,6 +11,7 @@ import {
   FEED_CACHE_SUBSCRIPTIONS,
   getFeedItemProjectPriority,
   mergeTaskPrInfo,
+  refineFeedItemAttention,
 } from './use-feed';
 
 function createProject(overrides: Partial<Project> = {}): Project {
@@ -111,6 +112,56 @@ describe('FEED_CACHE_SUBSCRIPTIONS', () => {
       'feed:notes',
       'feed:workItems',
     ]);
+  });
+});
+
+describe('refineFeedItemAttention', () => {
+  it('refines nested subtasks with pending questions', () => {
+    const [item] = refineFeedItemAttention(
+      [
+        createFeedItem({
+          id: 'task:parent',
+          source: 'task',
+          taskId: 'parent',
+          attention: 'waiting',
+          children: [
+            createFeedItem({
+              id: 'task:child',
+              source: 'task',
+              taskId: 'child',
+              attention: 'running',
+            }),
+          ],
+        }),
+      ],
+      { child: { type: 'question' } },
+    );
+
+    expect(item.children?.[0]?.attention).toBe('has-question');
+  });
+
+  it('refines nested subtasks with pending permissions', () => {
+    const [item] = refineFeedItemAttention(
+      [
+        createFeedItem({
+          id: 'task:parent',
+          source: 'task',
+          taskId: 'parent',
+          attention: 'waiting',
+          children: [
+            createFeedItem({
+              id: 'task:child',
+              source: 'task',
+              taskId: 'child',
+              attention: 'running',
+            }),
+          ],
+        }),
+      ],
+      { child: { type: 'permission' } },
+    );
+
+    expect(item.children?.[0]?.attention).toBe('needs-permission');
   });
 });
 

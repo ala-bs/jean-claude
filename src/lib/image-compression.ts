@@ -50,6 +50,8 @@ export async function compressImage(
 ): Promise<{
   agent: { data: string; mimeType: string };
   storage: { data: string; mimeType: string };
+  width: number;
+  height: number;
 }> {
   const canvas = await loadAndResize(source, maxDim);
 
@@ -63,5 +65,5 @@ export async function compressImage(
     ? { data: stripDataUriPrefix(avifUrl), mimeType: 'image/avif' }
     : { data: agent.data, mimeType: 'image/webp' };
 
-  return { agent, storage };
+  return { agent, storage, width: canvas.width, height: canvas.height };
 }

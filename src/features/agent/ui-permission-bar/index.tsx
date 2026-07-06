@@ -69,7 +69,7 @@ function ToolInputDisplay({
     case 'Write':
     case 'Read':
     case 'Edit': {
-      const filePath = String(input.file_path || '');
+      const filePath = String(input.filePath || input.file_path || '');
       const { displayPath, isExternal } = formatPathRelativeToWorktree(
         filePath,
         worktreePath,

@@ -9,6 +9,7 @@ set -e
 
 AUTO_REUSE_EXISTING_DB=false
 AUTO_OVERRIDE_DB=false
+EMPTY_DB=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,6 +21,10 @@ while [[ $# -gt 0 ]]; do
       AUTO_OVERRIDE_DB=true
       shift
       ;;
+    --empty-db|-e)
+      EMPTY_DB=true
+      shift
+      ;;
     --help|-h)
       cat <<EOF
 Usage: ./scripts/dev-tmp.sh [options]
@@ -27,6 +32,7 @@ Usage: ./scripts/dev-tmp.sh [options]
 Options:
   -r, --auto-reuse-db      Automatically reuse existing temporary DB if detected
   -o, --auto-override-db   Automatically override existing temporary DB with fresh copy
+  -e, --empty-db           Remove existing temporary DB and start empty
   -h, --help               Show this help message
 EOF
       exit 0
@@ -120,7 +126,11 @@ create_symlinked_db() {
 # Create tmp directory and copy the database
 mkdir -p "$TMP_DIR"
 
-if [[ -f "$TMP_DB" ]]; then
+if [[ "$EMPTY_DB" == true ]]; then
+  echo "Empty DB enabled: removing existing temporary database"
+  rm -f "$TMP_DB" "$TMP_DB_WAL" "$TMP_DB_SHM"
+  echo "Starting with empty database at: $TMP_DB"
+elif [[ -f "$TMP_DB" ]]; then
   echo "Existing temporary database found at: $TMP_DB"
   if [[ "$AUTO_OVERRIDE_DB" == true ]]; then
     echo "Auto-override enabled: replacing existing temporary database"

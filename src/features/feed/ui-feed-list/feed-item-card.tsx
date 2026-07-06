@@ -53,6 +53,7 @@ import {
 import { useCompleteTask, useTask } from '@/hooks/use-tasks';
 import { CompleteTaskDialog } from '@/features/task/ui-task-panel/complete-task-dialog';
 import { formatRelativeTime } from '@/lib/time';
+import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useFeedStore } from '@/stores/feed';
@@ -919,7 +920,7 @@ export function FeedItemCard({
                 <div className="bg-status-done/10 ring-status-done/20 mt-0.5 flex items-center gap-1.5 rounded px-2 py-0.5 ring-1">
                   <Terminal className="text-status-done animate-command-running h-3 w-3 shrink-0" />
                   <span className="text-status-done min-w-0 truncate text-[11px]">
-                    {runningCommands.map((c) => c.command).join(', ')}
+                    {runningCommands.map(getRunCommandDisplayName).join(', ')}
                   </span>
                 </div>
               )}

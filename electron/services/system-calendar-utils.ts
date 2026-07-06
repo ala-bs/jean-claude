@@ -74,6 +74,20 @@ export function buildCalendarNotificationKey(
   return `${baseId}:${event.startAt}`;
 }
 
+export function shouldSuppressCalendarMeetingAlert({
+  hasReceivedIgnoredMeetingIds,
+  ignoredMeetingIds,
+  notificationKey,
+}: {
+  hasReceivedIgnoredMeetingIds: boolean;
+  ignoredMeetingIds: ReadonlySet<string>;
+  notificationKey: string;
+}): boolean {
+  return (
+    !hasReceivedIgnoredMeetingIds || ignoredMeetingIds.has(notificationKey)
+  );
+}
+
 export function clampCalendarLeadTimeMinutes(value: number): number {
   return Math.min(Math.max(Math.trunc(value), 1), 60);
 }

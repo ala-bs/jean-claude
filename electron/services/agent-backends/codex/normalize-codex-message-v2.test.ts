@@ -88,6 +88,138 @@ describe('normalizeCodexNotification', () => {
     ]);
   });
 
+  it('includes image parts in Codex userMessage prompts', () => {
+    const ctx = createCodexNormalizationContext();
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/started',
+          params: {
+            item: {
+              id: 'item-user-image',
+              type: 'userMessage',
+              content: [
+                { type: 'text', text: 'Describe this' },
+                {
+                  type: 'image',
+                  url: 'data:image/png;base64,base64-data',
+                  filename: 'screen.png',
+                },
+              ],
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: expect.objectContaining({
+          id: 'item-user-image',
+          type: 'user-prompt',
+          value:
+            'Describe this\n\n![screen.png](data:image/png;base64,base64-data)\n\n',
+        }),
+      },
+    ]);
+  });
+
+  it('emits image-only Codex userMessage prompts', () => {
+    const ctx = createCodexNormalizationContext();
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/started',
+          params: {
+            item: {
+              id: 'item-user-image-only',
+              type: 'userMessage',
+              content: [
+                {
+                  type: 'input_image',
+                  image_url: { url: 'data:image/jpeg;base64,jpeg-data' },
+                },
+              ],
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: expect.objectContaining({
+          id: 'item-user-image-only',
+          type: 'user-prompt',
+          value: '\n\n![image](data:image/jpeg;base64,jpeg-data)\n\n',
+        }),
+      },
+    ]);
+  });
+
+  it('preserves whitespace in Codex text content parts', () => {
+    const ctx = createCodexNormalizationContext();
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/started',
+          params: {
+            item: {
+              id: 'item-user-whitespace',
+              type: 'userMessage',
+              content: [{ type: 'text', text: '  code block  \n' }],
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: expect.objectContaining({
+          id: 'item-user-whitespace',
+          type: 'user-prompt',
+          value: '  code block  \n',
+        }),
+      },
+    ]);
+  });
+
+  it('does not treat non-image URL content parts as prompt images', () => {
+    const ctx = createCodexNormalizationContext();
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/started',
+          params: {
+            item: {
+              id: 'item-user-non-image-url',
+              type: 'userMessage',
+              content: [
+                { type: 'link', url: 'https://example.test/file.txt' },
+                { type: 'text', text: 'Open link' },
+              ],
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: expect.objectContaining({
+          id: 'item-user-non-image-url',
+          type: 'user-prompt',
+          value: 'Open link',
+        }),
+      },
+    ]);
+  });
+
   it('maps Codex context compaction start to compacting system status', () => {
     const ctx = createCodexNormalizationContext();
 

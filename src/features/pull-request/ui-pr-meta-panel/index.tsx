@@ -7,9 +7,9 @@ import type { ReactNode } from 'react';
 import type { AzureDevOpsPullRequestDetails } from '@shared/azure-devops-types';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { encodeProxyUrl } from '@/lib/azure-image-proxy';
-import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import { PrTags } from '@/features/pull-request/ui-pr-tags';
 import { PrWorkItems } from '@/features/pull-request/ui-pr-work-items';
+import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import { UserAvatar } from '@/common/ui/user-avatar';
 
 

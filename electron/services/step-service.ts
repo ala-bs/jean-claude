@@ -24,7 +24,7 @@ import {
   emitStepUpsert,
   emitTaskUpsert,
 } from './cache-event-service';
-import { buildSummaryGenerationPrompt } from './session-summary-service';
+import { prepareSummaryGenerationPrompt } from './session-summary-service';
 import { summarizeNormalizedMessages } from './session-summary-service';
 
 
@@ -118,10 +118,10 @@ async function resolvePromptTemplate({
   projectId: string;
   steps: TaskStep[];
   summaryBackend: AgentBackendType;
-  summaryModels: Record<
+  summaryModels: Partial<Record<
     import('@shared/agent-backend-types').AgentBackendType,
     import('@shared/types').ModelPreference
-  >;
+  >>;
   onSummaryLifecycle?: {
     onStart?: (step: TaskStep, prompt: string) => Promise<void> | void;
     onResolved?: (step: TaskStep, summary: string) => Promise<void> | void;
@@ -189,6 +189,9 @@ async function resolvePromptTemplate({
       const summaryStartedAt = Date.now();
       const messageTypes = countMessageTypes(messages);
       let summaryPrompt = '';
+      let preparedSummaryPrompt:
+        | Awaited<ReturnType<typeof prepareSummaryGenerationPrompt>>
+        | undefined;
 
       const handleSummaryFailure = async (error: unknown): Promise<string> => {
         const fallback = getSummaryFallbackText({ step, messages });
@@ -232,7 +235,8 @@ async function resolvePromptTemplate({
       };
 
       try {
-        summaryPrompt = buildSummaryGenerationPrompt(messages);
+        preparedSummaryPrompt = await prepareSummaryGenerationPrompt(messages);
+        summaryPrompt = preparedSummaryPrompt.prompt;
       } catch (error) {
         return await handleSummaryFailure(error);
       }
@@ -257,6 +261,7 @@ async function resolvePromptTemplate({
           backend: summaryBackend,
           model,
           messages,
+          preparedPrompt: preparedSummaryPrompt,
           usageContext: {
             feature: 'step-summary',
             projectId,

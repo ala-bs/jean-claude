@@ -80,6 +80,15 @@ import type {
   GlobalPromptResponse,
 } from '@shared/global-prompt-types';
 import type {
+  LegacySkillMigrationExecuteResult,
+  LegacySkillMigrationPreviewResult,
+  ManagedSkill,
+  RegistrySearchResult,
+  RegistrySkillContent,
+  Skill,
+  SkillScope,
+} from '@shared/skill-types';
+import type {
   McpPreset,
   McpServerTemplate,
   NewMcpServerTemplate,
@@ -88,14 +97,6 @@ import type {
   UnifiedMcpServer,
   UpdateMcpServerTemplate,
 } from '@shared/mcp-types';
-import type {
-  NormalizedEntry,
-  NormalizedPermissionRequest,
-} from '@shared/normalized-message-v2';
-import type {
-  RecordPreferenceEvidenceParams,
-  RecordPreferenceEvidenceResult,
-} from '@shared/preference-memory-types';
 import type {
   NewProjectCommand,
   NewProjectCommandGroup,
@@ -109,24 +110,24 @@ import type {
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
 import type {
-  LegacySkillMigrationExecuteResult,
-  LegacySkillMigrationPreviewResult,
-  ManagedSkill,
-  RegistrySearchResult,
-  RegistrySkillContent,
-  Skill,
-  SkillScope,
-} from '@shared/skill-types';
-import type {
   NewWorkActivityEvent,
   WorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
+import type {
+  NormalizedEntry,
+  NormalizedPermissionRequest,
+} from '@shared/normalized-message-v2';
+import type {
+  RecordPreferenceEvidenceParams,
+  RecordPreferenceEvidenceResult,
+} from '@shared/preference-memory-types';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
 import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
 import type { AgentUIEvent } from '@shared/agent-ui-events';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { DebugLogEntry } from '@shared/debug-log-types';
+import type { DetectedAzureRemote } from '@shared/azure-remote-utils';
 import type { FoldRange } from '@shared/fold-types';
 import type { UpcomingMeeting } from '@shared/calendar-types';
 
@@ -441,6 +442,9 @@ export interface Api {
     findById: (id: string) => Promise<Project | undefined>;
     create: (data: NewProject) => Promise<Project>;
     update: (id: string, data: UpdateProject) => Promise<Project>;
+    detectAzureRemote: (
+      projectPath: string,
+    ) => Promise<DetectedAzureRemote | null>;
     uploadLogo: (projectId: string, sourcePath: string) => Promise<Project>;
     generateLogo: (
       projectId: string,
@@ -469,6 +473,7 @@ export interface Api {
     deleteWorktreesFolder: (projectId: string) => Promise<void>;
     reorder: (orderedIds: string[]) => Promise<Project[]>;
     getBranches: (projectId: string) => Promise<BranchInfo[]>;
+    getBranchesForPath: (projectPath: string) => Promise<BranchInfo[]>;
     getCurrentBranch: (projectId: string) => Promise<string>;
     isGitRepository: (projectId: string) => Promise<boolean>;
     getCommitIgnore: (projectId: string) => Promise<string>;
@@ -1088,6 +1093,14 @@ export interface Api {
     openInEditor: (dirPath: string, folderContext?: string) => Promise<void>;
     openTeamsJoinUrl: (url: string) => Promise<void>;
     getAvailableEditors: () => Promise<{ id: string; available: boolean }[]>;
+    getAgentCliStatus: () => Promise<
+      {
+        backend: AgentBackendType;
+        command: string;
+        installed: boolean;
+        path: string | null;
+      }[]
+    >;
     setupGlobalGitignore: () => Promise<{ success: boolean; path: string }>;
   };
   calendar: {
@@ -1192,6 +1205,14 @@ export interface Api {
     saveSettings: (
       value: AppSettings['usageDisplay'],
     ) => Promise<AppSettings['usageDisplay']>;
+  };
+  codexbar: {
+    getStatus: () => Promise<{
+      installed: boolean;
+      version?: string;
+      error?: string;
+    }>;
+    openInstallPage: () => Promise<void>;
   };
   copilotAuth: {
     requestDeviceCode: () => Promise<CopilotDeviceCode>;
@@ -1672,6 +1693,7 @@ export const api: Api = hasWindowApi
         update: async () => {
           throw new Error('API not available');
         },
+        detectAzureRemote: async () => null,
         uploadLogo: async () => {
           throw new Error('API not available');
         },
@@ -1705,6 +1727,7 @@ export const api: Api = hasWindowApi
         deleteWorktreesFolder: async () => {},
         reorder: async () => [],
         getBranches: async () => [],
+        getBranchesForPath: async () => [],
         getCurrentBranch: async () => '',
         isGitRepository: async () => false,
         getCommitIgnore: async () => '',
@@ -2014,6 +2037,7 @@ export const api: Api = hasWindowApi
         openInEditor: async () => {},
         openTeamsJoinUrl: async () => {},
         getAvailableEditors: async () => [],
+        getAgentCliStatus: async () => [],
         setupGlobalGitignore: async () => ({ success: true, path: '' }),
       },
       calendar: {
@@ -2117,6 +2141,13 @@ export const api: Api = hasWindowApi
       },
       usageDisplay: {
         saveSettings: async (value) => value,
+      },
+      codexbar: {
+        getStatus: async () => ({
+          installed: false,
+          error: 'API not available',
+        }),
+        openInstallPage: async () => {},
       },
       copilotAuth: {
         requestDeviceCode: async () => {

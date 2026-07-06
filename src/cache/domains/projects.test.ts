@@ -243,6 +243,7 @@ describe('project cache domain', () => {
       stale: false,
     });
     expect(cache$.resources[PROJECTS_INDEX_KEY].get()?.stale).toBe(true);
+    expect(cache$.indexes[PROJECTS_INDEX_KEY].ids.get()).toEqual([project.id]);
   });
 
   it('applies project patch events without replacing unrelated fields', () => {

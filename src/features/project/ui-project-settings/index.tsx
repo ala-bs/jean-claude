@@ -1964,11 +1964,12 @@ function ProjectAiGenerationSettings({
   const selectedSlot = SLOT_DEFINITIONS.find(
     (slot) => slot.key === selectedSlotKey,
   );
-  const fallbackBackend = enabledBackends.some(
-    (backend) => backend.value === backendsSetting?.defaultBackend,
-  )
-    ? backendsSetting!.defaultBackend
-    : (enabledBackends[0]?.value ?? 'claude-code');
+  const globalDefaultBackend = backendsSetting?.defaultBackend ?? null;
+  const fallbackBackend =
+    globalDefaultBackend &&
+    enabledBackends.some((backend) => backend.value === globalDefaultBackend)
+      ? globalDefaultBackend
+      : (enabledBackends[0]?.value ?? 'claude-code');
   const fallbackModel = getDefaultModelForBackend({
     backend: fallbackBackend,
     backendDefaultModels,

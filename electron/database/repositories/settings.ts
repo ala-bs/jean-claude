@@ -27,6 +27,7 @@ const VALID_AGENT_BACKENDS: AgentBackendType[] = [
   'claude-code',
   'opencode',
   'codex',
+  'copilot',
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -84,6 +85,8 @@ function normalizeSummaryModelsSetting(
           ? models.opencode
           : defaults.opencode,
       codex: typeof models.codex === 'string' ? models.codex : defaults.codex,
+      copilot:
+        typeof models.copilot === 'string' ? models.copilot : defaults.copilot,
     },
   };
 }
@@ -110,6 +113,8 @@ function normalizeBackendDefaultModelsSetting(
           ? models.opencode
           : defaults.opencode,
       codex: typeof models.codex === 'string' ? models.codex : defaults.codex,
+      copilot:
+        typeof models.copilot === 'string' ? models.copilot : defaults.copilot,
     },
   };
 }
@@ -126,6 +131,7 @@ function normalizeThinkingSettingsSetting(
     'claude-code': 'default',
     opencode: 'default',
     codex: 'default',
+    copilot: 'default',
   };
   const efforts = value.efforts as Record<string, unknown>;
   const selectedModels = isRecord(value.selectedModels)
@@ -143,6 +149,10 @@ function normalizeThinkingSettingsSetting(
         defaults.efforts.opencode,
       ),
       codex: normalizeThinkingEfforts(efforts.codex, defaults.efforts.codex),
+      copilot: normalizeThinkingEfforts(
+        efforts.copilot,
+        defaults.efforts.copilot,
+      ),
     },
     selectedModels: {
       'claude-code':
@@ -157,6 +167,10 @@ function normalizeThinkingSettingsSetting(
         typeof selectedModels.codex === 'string'
           ? selectedModels.codex
           : defaultSelectedModels.codex,
+      copilot:
+        typeof selectedModels.copilot === 'string'
+          ? selectedModels.copilot
+          : defaultSelectedModels.copilot,
     },
   };
 }

@@ -184,6 +184,7 @@ const {
     providerCalls,
     providerState,
     rawMessageRepositoryMock: {
+      getMessageCountByStepId: vi.fn(),
       create: vi.fn(),
       updateRawData: vi.fn(),
     },
@@ -566,6 +567,7 @@ function setDefaultMocks(): void {
   rawMessageRepositoryMock.create.mockResolvedValue({ id: 'raw-1' });
   rawMessageRepositoryMock.updateRawData.mockResolvedValue(undefined);
   agentMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
+  rawMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
   agentMessageRepositoryMock.create.mockResolvedValue({ id: 'message-1' });
   agentMessageRepositoryMock.updateEntry.mockResolvedValue(undefined);
   agentMessageRepositoryMock.updateToolResult.mockResolvedValue(undefined);
@@ -997,6 +999,90 @@ describe('JcMcpBridgeService', () => {
     expect(response.status).toBe(200);
   });
 
+  it('returns a question request id before the user answers', async () => {
+    const broker = new QuestionBrokerService();
+    bridge = new JcMcpBridgeService(broker);
+    let requestId: string | null = null;
+    const config = await bridge.registerStep({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      onQuestionRequest: vi.fn(async (request) => {
+        requestId = request.requestId;
+      }),
+    });
+
+    const response = await submitQuestion({ config, stepId: 'step-1' });
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toEqual({ requestId });
+    expect(requestId).not.toBeNull();
+    const pendingResponse = await getQuestionResult({ config, requestId: requestId! });
+    expect(pendingResponse.status).toBe(202);
+    await expect(pendingResponse.json()).resolves.toEqual({ status: 'pending' });
+  });
+
+  it('returns a completed question result once and then forgets it', async () => {
+    const broker = new QuestionBrokerService();
+    bridge = new JcMcpBridgeService(broker);
+    let requestId: string | null = null;
+    const config = await bridge.registerStep({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      onQuestionRequest: vi.fn(async (request) => {
+        requestId = request.requestId;
+      }),
+    });
+
+    const response = await submitQuestion({ config, stepId: 'step-1' });
+    expect(response.status).toBe(202);
+    broker.answerRequest(requestId!, { approach: 'Small' });
+
+    const resultResponse = await getQuestionResult({
+      config,
+      requestId: requestId!,
+    });
+    expect(resultResponse.status).toBe(200);
+    await expect(resultResponse.json()).resolves.toEqual({
+      summary: 'Which approach?: Small',
+    });
+
+    const secondResultResponse = await getQuestionResult({
+      config,
+      requestId: requestId!,
+    });
+    expect(secondResultResponse.status).toBe(404);
+  });
+
+  it('returns cancelled question results after a step unregisters', async () => {
+    const broker = new QuestionBrokerService();
+    bridge = new JcMcpBridgeService(broker);
+    let requestId: string | null = null;
+    const onQuestionCancelled = vi.fn();
+    const config = await bridge.registerStep({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      onQuestionRequest: vi.fn(async (request) => {
+        requestId = request.requestId;
+      }),
+      onQuestionCancelled,
+    });
+
+    const response = await submitQuestion({ config, stepId: 'step-1' });
+    expect(response.status).toBe(202);
+
+    await bridge.unregisterStep('step-1', config.registrationId);
+
+    const resultResponse = await getQuestionResult({
+      config,
+      requestId: requestId!,
+    });
+    expect(resultResponse.status).toBe(409);
+    await expect(resultResponse.json()).resolves.toEqual({
+      error: 'Agent session ended',
+    });
+    expect(onQuestionCancelled).toHaveBeenCalledWith(requestId);
+  });
+
   it('closes while a shared bridge request is still notifying the agent service', async () => {
     const broker = new QuestionBrokerService();
     bridge = new JcMcpBridgeService(broker);
@@ -1037,6 +1123,31 @@ async function askQuestion({
   config: { serverUrl: string; token: string; registrationId?: string };
   stepId?: string;
 }): Promise<Response> {
+  const response = await submitQuestion({ config, stepId });
+  if (response.status !== 202) {
+    return response;
+  }
+
+  const body = (await response.json()) as { requestId: string };
+  while (true) {
+    const resultResponse = await getQuestionResult({
+      config,
+      requestId: body.requestId,
+    });
+    if (resultResponse.status !== 202) {
+      return resultResponse;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
+async function submitQuestion({
+  config,
+  stepId,
+}: {
+  config: { serverUrl: string; token: string; registrationId?: string };
+  stepId?: string;
+}): Promise<Response> {
   return fetch(`${config.serverUrl}/ask-question`, {
     method: 'POST',
     headers: {
@@ -1050,6 +1161,23 @@ async function askQuestion({
         : {}),
       questions: QUESTIONS,
     }),
+  });
+}
+
+async function getQuestionResult({
+  config,
+  requestId,
+}: {
+  config: { serverUrl: string; token: string };
+  requestId: string;
+}): Promise<Response> {
+  return fetch(`${config.serverUrl}/question-result`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${config.token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ requestId }),
   });
 }
 
@@ -1085,10 +1213,12 @@ describe('agentService provider runtime', () => {
     providerState.runStartImplementation = async () => handle;
 
     await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
 
     expect(getProviderMock).toHaveBeenCalledWith('claude-code');
     expect(legacyBackendConstructorMock).not.toHaveBeenCalled();
-    expect(providerCalls.runStarts).toHaveLength(1);
     expect(providerCalls.runStarts[0]).toMatchObject({
       context: {
         taskId: 'task-1',
@@ -1109,8 +1239,33 @@ describe('agentService provider runtime', () => {
       backend: 'claude-code',
       rootPid: 123,
     });
-    expect(handle.stop).toHaveBeenCalled();
-    expect(handle.dispose).toHaveBeenCalledTimes(1);
+    await waitForAssertion(() => {
+      expect(handle.stop).toHaveBeenCalled();
+      expect(handle.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('cleans up startup session when prompt resolution fails', async () => {
+    stepServiceMock.resolveAndValidate
+      .mockRejectedValueOnce(new Error('summary failed'))
+      .mockResolvedValueOnce({
+        resolvedPrompt: 'Resolved prompt after retry',
+        step: defaultStep,
+        warnings: [],
+      });
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await expect(agentService.start('step-1')).resolves.toBeUndefined();
+    await agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    expect((providerCalls.runStarts[0] as { parts: PromptPart[] }).parts).toEqual([
+      { type: 'text', text: 'Resolved prompt after retry' },
+    ]);
+    expect(stepServiceMock.errorStep).toHaveBeenCalledWith('step-1');
   });
 
   it('stops the provider run handle when stop races with startup', async () => {
@@ -1199,8 +1354,10 @@ describe('agentService provider runtime', () => {
     outerComplete.resolve();
 
     await startPromise;
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(2);
+    });
 
-    expect(providerCalls.runStarts).toHaveLength(2);
     expect(outerHandle.stop).toHaveBeenCalledTimes(1);
     expect(nestedHandle.stop).toHaveBeenCalledTimes(1);
     expect(outerHandle.dispose).toHaveBeenCalledTimes(1);
@@ -1414,6 +1571,10 @@ describe('agentService provider runtime', () => {
         handle,
         requestId: 'question-1',
         answer: { 'Which option?': 'A' },
+        metadata: {
+          wasFreeform: undefined,
+          wasFreeformByQuestion: undefined,
+        },
       },
     ]);
     expect(notificationServiceMock.close).toHaveBeenCalledWith(
@@ -1512,6 +1673,10 @@ describe('agentService provider runtime', () => {
         handle,
         requestId: 'question-1',
         answer: { 'Which option?': 'A' },
+        metadata: {
+          wasFreeform: undefined,
+          wasFreeformByQuestion: undefined,
+        },
       },
     ]);
     expect(agentService.getPendingRequest('step-1')).toBeNull();
@@ -1538,6 +1703,9 @@ describe('agentService provider runtime', () => {
 
     release();
     await startPromise;
+    await waitForAssertion(() => {
+      expect(handle.dispose).toHaveBeenCalledTimes(1);
+    });
 
     vi.clearAllMocks();
     resetProviderState();
@@ -1571,8 +1739,10 @@ describe('agentService provider runtime', () => {
     providerState.runStartImplementation = async () => handle;
 
     await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.sessionAllowedTools).toEqual([{ handle }]);
+    });
 
-    expect(providerCalls.sessionAllowedTools).toEqual([{ handle }]);
     expect(taskRepositoryMock.update).toHaveBeenCalledWith('task-1', {
       sessionRules: {
         bash: { 'npm test': 'allow' },
@@ -1589,6 +1759,9 @@ describe('agentService provider runtime', () => {
       createHandle({ events: [completeEvent()] });
 
     await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
 
     expect(providerCalls.sessionAllowedTools).toEqual([]);
     expect(taskRepositoryMock.update).not.toHaveBeenCalledWith('task-1', {

@@ -18,6 +18,7 @@ import {
   buildCalendarNotificationKey,
   type CalendarEventRecord,
   clampCalendarLeadTimeMinutes,
+  shouldSuppressCalendarMeetingAlert,
 } from './system-calendar-utils';
 import { notificationService } from './notification-service';
 
@@ -556,6 +557,9 @@ class SystemCalendarService {
     this.ignoredMeetingIds = new Set(ids);
     this.hasReceivedIgnoredMeetingIds = true;
     this.closeIgnoredMeetingStartPopups();
+    if (process.platform === 'darwin') {
+      void this.poll();
+    }
   }
 
   suppressMeetingStartPopup(meeting: UpcomingMeeting) {
@@ -697,6 +701,16 @@ class SystemCalendarService {
 
       for (const event of events) {
         const notificationKey = buildCalendarNotificationKey(event);
+        if (
+          shouldSuppressCalendarMeetingAlert({
+            hasReceivedIgnoredMeetingIds: this.hasReceivedIgnoredMeetingIds,
+            ignoredMeetingIds: this.ignoredMeetingIds,
+            notificationKey,
+          })
+        ) {
+          continue;
+        }
+
         if (this.notifiedEvents.has(notificationKey)) {
           continue;
         }

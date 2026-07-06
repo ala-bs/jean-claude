@@ -171,6 +171,7 @@ export interface AgentQuestion {
   options: QuestionOption[];
   multiSelect: boolean;
   required?: boolean;
+  allowFreeform?: boolean;
 }
 
 export interface QuestionRequest {
@@ -192,6 +193,8 @@ export interface PermissionResponse {
 
 export interface QuestionResponse {
   answers: Record<string, string>;
+  wasFreeform?: boolean;
+  wasFreeformByQuestion?: Record<string, boolean>;
 }
 
 export interface SessionAllowButton {

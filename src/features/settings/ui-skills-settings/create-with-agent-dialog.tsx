@@ -1,8 +1,4 @@
 import React, { useCallback, useRef } from 'react';
-import { Bot } from 'lucide-react';
-import { useNavigate } from '@tanstack/react-router';
-
-
 
 import {
   AGENT_BACKENDS,
@@ -12,13 +8,19 @@ import {
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import { Bot } from 'lucide-react';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCreateSkillDraftStore } from '@/stores/create-skill-draft';
 import { useCreateSkillWithAgent } from '@/hooks/use-managed-skills';
+import { useNavigate } from '@tanstack/react-router';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 
+const GENERATED_SKILL_INSTALL_TARGET_BACKENDS: AgentBackendType[] = [
+  ...AGENT_BACKENDS,
+];
 
 export function CreateWithAgentDialog({ onClose }: { onClose: () => void }) {
   const draft = useCreateSkillDraftStore((s) => s.draft);
@@ -75,7 +77,9 @@ export function CreateWithAgentDialog({ onClose }: { onClose: () => void }) {
     try {
       const task = await createMutation.mutateAsync({
         prompt,
-        enabledBackends: [...AGENT_BACKENDS],
+        // Install generated skills into supported skill directories. The agent
+        // backend that runs the task is controlled separately by agentBackend.
+        enabledBackends: [...GENERATED_SKILL_INSTALL_TARGET_BACKENDS],
         mode,
         sourceSkillPath: draft.sourceSkillPath,
         agentBackend,
@@ -159,6 +163,7 @@ export function CreateWithAgentDialog({ onClose }: { onClose: () => void }) {
           <BackendSelector
             value={agentBackend}
             onChange={(v) => updateDraft({ agentBackend: v })}
+            allowedBackends={GENERATED_SKILL_INSTALL_TARGET_BACKENDS}
             shortcut="cmd+j"
             side="top"
           />

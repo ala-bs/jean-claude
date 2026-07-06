@@ -1,8 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
-
-import type { FeedItem, ProjectPriority } from '@shared/feed-types';
 import {
+  appendProjectToIndex,
   getProjectIndexIds,
   ingestProject,
   ingestProjects,
@@ -22,9 +19,13 @@ import {
   invalidateFeedResources,
 } from '@/cache/feed-cache';
 import { NewProject, Project, UpdateProject } from '@shared/types';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+
+import type { FeedItem, ProjectPriority } from '@shared/feed-types';
 import { api } from '@/lib/api';
 import { feedQueryKeys } from '@/lib/feed-query-keys';
 import { useCacheResource } from '@/cache/use-cache-resource';
+import { useMemo } from 'react';
 
 
 
@@ -144,7 +145,11 @@ export function useCreateProject() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (data: NewProject) => api.projects.create(data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
+    onSuccess: (project) => {
+      ingestProject(project);
+      appendProjectToIndex(project.id);
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+    },
   });
 }
 

@@ -1,8 +1,7 @@
-import { Check, HelpCircle, Send } from 'lucide-react';
+import { Check, Plus } from 'lucide-react';
 import { startTransition, useCallback, useEffect, useState } from 'react';
 
 import type { AgentQuestion, QuestionResponse } from '@shared/agent-types';
-import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
 import { Textarea } from '@/common/ui/textarea';
 import { useCommands } from '@/common/hooks/use-commands';
@@ -10,18 +9,11 @@ import { useCommands } from '@/common/hooks/use-commands';
 type QuestionInputMode = 'text' | 'single-choice' | 'multi-choice';
 
 function getQuestionInputMode(question: AgentQuestion): QuestionInputMode {
-  if (question.type === 'text') {
-    return 'text';
-  }
-
-  if (!question.type && question.options.length === 0) {
-    return 'text';
-  }
-
+  if (question.type === 'text') return 'text';
+  if (!question.type && question.options.length === 0) return 'text';
   if (question.type === 'multi_choice' || question.multiSelect) {
     return 'multi-choice';
   }
-
   return 'single-choice';
 }
 
@@ -37,7 +29,7 @@ function getSelectedLabels(value: string) {
           .filter(Boolean);
       }
     } catch {
-      // Fall back to the legacy comma-separated format below.
+      // Fall back to legacy comma-separated format.
     }
   }
 
@@ -73,27 +65,86 @@ function isQuestionAnswered({
   return value.trim().length > 0;
 }
 
+function QuestionNotes({
+  question,
+  questionIndex,
+  value,
+  isOpen,
+  onOpen,
+  onClose,
+  onChange,
+}: {
+  question: AgentQuestion;
+  questionIndex: number;
+  value: string;
+  isOpen: boolean;
+  onOpen: (questionIndex: number) => void;
+  onClose: (questionIndex: number) => void;
+  onChange: (params: { questionIndex: number; value: string }) => void;
+}) {
+  if (!isOpen && !value.trim()) {
+    return (
+      <button
+        type="button"
+        onClick={() => onOpen(questionIndex)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpen(questionIndex);
+          }
+        }}
+        className="inline-flex items-center gap-1 px-0.5 py-0.5 text-xs font-medium text-ink-3 transition-colors hover:text-ink-2"
+      >
+        <Plus className="h-3 w-3" />
+        Add note
+      </button>
+    );
+  }
+
+  return (
+    <Textarea
+      value={value}
+      aria-label={`${question.question} notes`}
+      onChange={(event) =>
+        onChange({ questionIndex, value: event.currentTarget.value })
+      }
+      placeholder="Add context, constraints, edge cases..."
+      size="sm"
+      rows={2}
+      onBlur={() => {
+        if (!value.trim()) onClose(questionIndex);
+      }}
+      className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
+      autoFocus={isOpen && !value}
+    />
+  );
+}
+
 function QuestionInput({
   question,
   questionIndex,
   value,
   otherValue,
   notesValue,
-  isActive,
-  activeOptionIndex,
+  isNotesOpen,
+  isOtherOpen,
   onActivate,
   onSelectOption,
   onTextChange,
   onOtherChange,
+  onCloseOther,
   onNotesChange,
+  onOpenNotes,
+  onCloseNotes,
 }: {
   question: AgentQuestion;
   questionIndex: number;
   value: string;
   otherValue: string;
   notesValue: string;
-  isActive: boolean;
-  activeOptionIndex: number;
+  isNotesOpen: boolean;
+  isOtherOpen: boolean;
   onActivate: (params: { questionIndex: number; optionIndex: number }) => void;
   onSelectOption: (params: {
     questionIndex: number;
@@ -101,47 +152,56 @@ function QuestionInput({
   }) => void;
   onTextChange: (params: { questionIndex: number; value: string }) => void;
   onOtherChange: (params: { questionIndex: number; value: string }) => void;
+  onCloseOther: (questionIndex: number) => void;
   onNotesChange: (params: { questionIndex: number; value: string }) => void;
+  onOpenNotes: (questionIndex: number) => void;
+  onCloseNotes: (questionIndex: number) => void;
 }) {
   const mode = getQuestionInputMode(question);
   const selectedLabels = getSelectedLabels(value);
+  const allowsFreeform = question.allowFreeform ?? true;
+  const optionCount =
+    question.options.length + (question.multiSelect || !allowsFreeform ? 0 : 1);
+  const isFreeformOpen = allowsFreeform && isOtherOpen;
   const otherPlaceholder =
     mode === 'text' ? 'Add another answer...' : 'Add other answer...';
 
   if (mode === 'text') {
     return (
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <Textarea
           value={value}
-          onFocus={() => {
-            onActivate({ questionIndex, optionIndex: 0 });
-          }}
-          onChange={(e) =>
-            onTextChange({ questionIndex, value: e.currentTarget.value })
+          onFocus={() => onActivate({ questionIndex, optionIndex: 0 })}
+          onChange={(event) =>
+            onTextChange({ questionIndex, value: event.currentTarget.value })
           }
           placeholder="Enter your answer..."
           size="sm"
           rows={3}
+          className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
         />
-        <Textarea
-          value={otherValue}
-          aria-label={`${question.question} other answer`}
-          onChange={(e) =>
-            onOtherChange({ questionIndex, value: e.currentTarget.value })
-          }
-          placeholder={otherPlaceholder}
-          size="sm"
-          rows={2}
-        />
-        <Textarea
+        {allowsFreeform ? (
+          <input
+            value={otherValue}
+            aria-label={`${question.question} other answer`}
+            onChange={(event) =>
+              onOtherChange({
+                questionIndex,
+                value: event.currentTarget.value,
+              })
+            }
+            placeholder={otherPlaceholder}
+            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/50"
+          />
+        ) : null}
+        <QuestionNotes
+          question={question}
+          questionIndex={questionIndex}
           value={notesValue}
-          aria-label={`${question.question} notes`}
-          onChange={(e) =>
-            onNotesChange({ questionIndex, value: e.currentTarget.value })
-          }
-          placeholder="Notes..."
-          size="sm"
-          rows={2}
+          isOpen={isNotesOpen}
+          onOpen={onOpenNotes}
+          onClose={onCloseNotes}
+          onChange={onNotesChange}
         />
       </div>
     );
@@ -149,129 +209,164 @@ function QuestionInput({
 
   if (mode === 'multi-choice') {
     return (
-      <div className="space-y-2">
-        <div className="flex flex-wrap gap-2">
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap gap-1">
           {question.options.map((option, index) => {
             const isSelected = selectedLabels.includes(option.label);
             return (
-              <Button
+              <button
                 key={option.label}
-                variant="unstyled"
+                type="button"
                 aria-pressed={isSelected}
-                onFocus={() => {
-                  onActivate({ questionIndex, optionIndex: index });
-                }}
+                onFocus={() => onActivate({ questionIndex, optionIndex: index })}
                 onClick={() => {
                   onActivate({ questionIndex, optionIndex: index });
                   onSelectOption({ questionIndex, optionIndex: index });
                 }}
-                className={`focus-visible:ring-acc rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+                className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-left text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
                   isSelected
-                    ? 'border-teal-400/80 bg-teal-500/25 text-teal-50 ring-1 ring-teal-400/60'
-                    : isActive && activeOptionIndex === index
-                      ? 'border-acc bg-acc/20 text-ink-0 ring-acc ring-2'
-                      : 'border-glass-border bg-glass-medium text-ink-1 hover:bg-bg-3'
+                    ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+                    : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
                 }`}
                 title={option.description}
               >
-                <div className="flex flex-col items-start gap-0.5">
-                  <div className="flex items-center gap-1.5 font-medium">
-                    {isSelected ? <Check className="h-3.5 w-3.5" /> : null}
-                    {option.label}
-                  </div>
+                {isSelected ? (
+                  <span className="grid h-3 w-3 place-items-center rounded-full bg-teal-300 text-bg-0">
+                    <Check className="h-2.5 w-2.5" />
+                  </span>
+                ) : null}
+                <span className="flex flex-col items-start gap-0.5">
+                  <span>{option.label}</span>
                   {option.description ? (
-                    <div className="text-xs leading-tight text-current/80">
+                    <span className="text-[11px] leading-tight text-current/70">
                       {option.description}
-                    </div>
+                    </span>
                   ) : null}
-                </div>
-              </Button>
+                </span>
+              </button>
             );
           })}
         </div>
-        <Textarea
-          value={otherValue}
-          aria-label={`${question.question} other answer`}
-          onChange={(e) =>
-            onOtherChange({ questionIndex, value: e.currentTarget.value })
-          }
-          placeholder={otherPlaceholder}
-          size="sm"
-          rows={2}
-        />
-        <Textarea
+        {allowsFreeform ? (
+          <input
+            value={otherValue}
+            aria-label={`${question.question} other answer`}
+            onChange={(event) =>
+              onOtherChange({
+                questionIndex,
+                value: event.currentTarget.value,
+              })
+            }
+            placeholder={otherPlaceholder}
+            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/50"
+          />
+        ) : null}
+        <QuestionNotes
+          question={question}
+          questionIndex={questionIndex}
           value={notesValue}
-          aria-label={`${question.question} notes`}
-          onChange={(e) =>
-            onNotesChange({ questionIndex, value: e.currentTarget.value })
-          }
-          placeholder="Notes..."
-          size="sm"
-          rows={2}
+          isOpen={isNotesOpen}
+          onOpen={onOpenNotes}
+          onClose={onCloseNotes}
+          onChange={onNotesChange}
         />
       </div>
     );
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {question.options.map((option, index) => (
-          <Button
-            key={option.label}
-            variant="unstyled"
-            aria-pressed={value === option.label}
-            onFocus={() => {
-              onActivate({ questionIndex, optionIndex: index });
-            }}
-            onClick={() => {
-              onActivate({ questionIndex, optionIndex: index });
-              onSelectOption({ questionIndex, optionIndex: index });
-            }}
-            className={`focus-visible:ring-acc rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none ${
-              value === option.label
-                ? 'border-teal-400/80 bg-teal-500/25 text-teal-50 ring-1 ring-teal-400/60'
-                : isActive && activeOptionIndex === index
-                  ? 'border-acc bg-acc/20 text-ink-0 ring-acc ring-2'
-                  : 'border-glass-border bg-glass-medium text-ink-1 hover:bg-bg-3'
-            }`}
-            title={option.description}
-          >
-            <div className="flex flex-col items-start gap-0.5">
-              <div className="flex items-center gap-1.5 font-medium">
-                {value === option.label ? (
-                  <Check className="h-3.5 w-3.5" />
+    <div className="space-y-1.5">
+      <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {question.options.map((option, index) => {
+          const isSelected = value === option.label && !isFreeformOpen;
+          return (
+            <button
+              key={option.label}
+              type="button"
+              aria-pressed={isSelected}
+              onFocus={() => onActivate({ questionIndex, optionIndex: index })}
+              onClick={() => {
+                onActivate({ questionIndex, optionIndex: index });
+                onSelectOption({ questionIndex, optionIndex: index });
+              }}
+              className={`group flex items-start gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+                isSelected
+                  ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+                  : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+              }`}
+              title={option.description}
+            >
+              <span
+                className={`mt-0.5 grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full border ${
+                  isSelected
+                    ? 'border-teal-300 bg-teal-300 text-bg-0'
+                    : 'border-white/15 text-transparent group-hover:border-white/25'
+                }`}
+              >
+                <Check className="h-2.5 w-2.5" />
+              </span>
+              <span className="min-w-0 space-y-0.5">
+                <span className="block text-[13px] font-semibold leading-tight text-ink-0">
+                  {option.label}
+                </span>
+                {option.description ? (
+                  <span className="block text-xs leading-snug text-ink-2">
+                    {option.description}
+                  </span>
                 ) : null}
-                {option.label}
-              </div>
-              {option.description ? (
-                <div className="text-xs leading-tight text-current/80">
-                  {option.description}
-                </div>
-              ) : null}
-            </div>
-          </Button>
-        ))}
+              </span>
+            </button>
+          );
+        })}
+        {allowsFreeform ? (
+          isFreeformOpen ? (
+            <input
+              value={value}
+              aria-label={`${question.question} custom answer`}
+              onFocus={() =>
+                onActivate({ questionIndex, optionIndex: optionCount - 1 })
+              }
+              onChange={(event) =>
+                onOtherChange({ questionIndex, value: event.currentTarget.value })
+              }
+              onBlur={() => {
+                if (!value.trim()) onCloseOther(questionIndex);
+              }}
+              placeholder="Add another answer..."
+              className="w-full rounded-lg border border-teal-400/50 bg-teal-400/10 px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/70 sm:col-span-2 xl:col-span-3 2xl:col-span-4"
+              autoFocus
+            />
+          ) : (
+            <button
+              type="button"
+              aria-pressed={isOtherOpen}
+              onFocus={() =>
+                onActivate({ questionIndex, optionIndex: optionCount - 1 })
+              }
+              onClick={() => {
+                onActivate({ questionIndex, optionIndex: optionCount - 1 });
+                onSelectOption({ questionIndex, optionIndex: optionCount - 1 });
+              }}
+              className={`flex items-center gap-2 rounded-lg border p-2 text-left text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none sm:col-span-2 xl:col-span-3 2xl:col-span-4 ${
+                'border-white/10 bg-white/[0.04] text-ink-2 hover:border-white/15 hover:bg-white/[0.07]'
+              }`}
+            >
+              <span className="grid h-3.5 w-3.5 place-items-center rounded-full border border-dashed border-white/20">
+                <Plus className="h-3 w-3" />
+              </span>
+              Add another answer
+            </button>
+          )
+        ) : null}
       </div>
-      <Textarea
-        value={otherValue}
-        aria-label={`${question.question} other answer`}
-        onChange={(e) =>
-          onOtherChange({ questionIndex, value: e.currentTarget.value })
-        }
-        placeholder={otherPlaceholder}
-        size="sm"
-        rows={2}
-      />
-      <Textarea
+      <QuestionNotes
+        question={question}
+        questionIndex={questionIndex}
         value={notesValue}
-        aria-label={`${question.question} notes`}
-        onChange={(e) =>
-          onNotesChange({ questionIndex, value: e.currentTarget.value })
-        }
-        placeholder="Notes..."
-        size="sm"
-        rows={2}
+        isOpen={isNotesOpen}
+        onOpen={onOpenNotes}
+        onClose={onCloseNotes}
+        onChange={onNotesChange}
       />
     </div>
   );
@@ -294,8 +389,36 @@ export function QuestionOptions({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [otherAnswers, setOtherAnswers] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [notesOpenByQuestion, setNotesOpenByQuestion] = useState<
+    Record<string, boolean>
+  >({});
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
   const [activeOptionIndex, setActiveOptionIndex] = useState(0);
+  const [otherOpenByQuestion, setOtherOpenByQuestion] = useState<
+    Record<string, boolean>
+  >({});
+  const [wasFreeformByQuestion, setWasFreeformByQuestion] = useState<
+    Record<string, boolean>
+  >({});
+  const questionIdentity = request.questions
+    .map(
+      (question) =>
+        `${question.question}:${question.allowFreeform === false ? 'fixed' : 'free'}`,
+    )
+    .join('|');
+
+  useEffect(() => {
+    startTransition(() => {
+      setAnswers({});
+      setOtherAnswers({});
+      setNotes({});
+      setNotesOpenByQuestion({});
+      setOtherOpenByQuestion({});
+      setWasFreeformByQuestion({});
+      setActiveQuestionIndex(0);
+      setActiveOptionIndex(0);
+    });
+  }, [request.requestId, questionIdentity]);
 
   useEffect(() => {
     if (request.questions.length === 0) {
@@ -304,29 +427,34 @@ export function QuestionOptions({
       return;
     }
 
-    startTransition(() => setActiveQuestionIndex((current) => {
-      if (current < request.questions.length) {
-        return current;
-      }
-      return 0;
-    }));
+    startTransition(() =>
+      setActiveQuestionIndex((current) => {
+        if (current < request.questions.length) return current;
+        return 0;
+      }),
+    );
   }, [request.questions]);
 
   const getOptionCount = useCallback((question: AgentQuestion) => {
     const mode = getQuestionInputMode(question);
     if (mode === 'text') return 0;
-    return question.options.length;
+    return (
+      question.options.length +
+      (question.multiSelect || question.allowFreeform === false ? 0 : 1)
+    );
   }, []);
 
   useEffect(() => {
     const question = request.questions[activeQuestionIndex];
     if (!question) return;
     const optionCount = getOptionCount(question);
-    startTransition(() => setActiveOptionIndex((current) => {
-      if (optionCount === 0) return 0;
-      if (current < optionCount) return current;
-      return 0;
-    }));
+    startTransition(() =>
+      setActiveOptionIndex((current) => {
+        if (optionCount === 0) return 0;
+        if (current < optionCount) return current;
+        return 0;
+      }),
+    );
   }, [activeQuestionIndex, getOptionCount, request.questions]);
 
   const activateOption = useCallback(
@@ -354,12 +482,9 @@ export function QuestionOptions({
       const question = request.questions[questionIndex];
       if (!question) return false;
       const questionKey = getQuestionKey(question);
-
       const mode = getQuestionInputMode(question);
 
-      if (mode === 'text') {
-        return false;
-      }
+      if (mode === 'text') return false;
 
       if (mode === 'multi-choice') {
         const label = question.options[optionIndex]?.label;
@@ -369,16 +494,40 @@ export function QuestionOptions({
         const next = selected.includes(label)
           ? selected.filter((item) => item !== label)
           : [...selected, label];
-        setAnswers((prev) => ({
+        setAnswers((prev) => ({ ...prev, [questionKey]: JSON.stringify(next) }));
+        setWasFreeformByQuestion((prev) => ({
           ...prev,
-          [questionKey]: JSON.stringify(next),
+          [question.question]: false,
         }));
+        return true;
+      }
+
+      const isOther =
+        question.allowFreeform !== false && optionIndex === question.options.length;
+      setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: isOther }));
+
+      if (isOther) {
+        setWasFreeformByQuestion((prev) => ({
+          ...prev,
+          [questionKey]: true,
+        }));
+        const current = answers[questionKey] ?? '';
+        const matchesOption = question.options.some(
+          (option) => option.label === current,
+        );
+        if (matchesOption) {
+          setAnswers((prev) => ({ ...prev, [questionKey]: '' }));
+        }
         return true;
       }
 
       const label = question.options[optionIndex]?.label;
       if (!label) return false;
       setAnswers((prev) => ({ ...prev, [questionKey]: label }));
+      setWasFreeformByQuestion((prev) => ({
+        ...prev,
+        [questionKey]: false,
+      }));
       return true;
     },
     [answers, request.questions],
@@ -396,9 +545,43 @@ export function QuestionOptions({
   const updateOtherAnswer = useCallback(
     ({ questionIndex, value }: { questionIndex: number; value: string }) => {
       const question = request.questions[questionIndex];
+      if (!question || question.allowFreeform === false) return;
+      const questionKey = getQuestionKey(question);
+      const mode = getQuestionInputMode(question);
+      if (mode === 'text' || mode === 'multi-choice') {
+        setOtherAnswers((prev) => ({ ...prev, [questionKey]: value }));
+        if (mode === 'multi-choice') {
+          setWasFreeformByQuestion((prev) => ({
+            ...prev,
+            [questionKey]: value.trim().length > 0,
+          }));
+        }
+        return;
+      }
+
+      setAnswers((prev) => ({ ...prev, [questionKey]: value }));
+      setWasFreeformByQuestion((prev) => ({
+        ...prev,
+        [questionKey]: true,
+      }));
+      setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: true }));
+    },
+    [request.questions],
+  );
+
+  const closeOtherAnswer = useCallback(
+    (questionIndex: number) => {
+      const question = request.questions[questionIndex];
       if (!question) return;
       const questionKey = getQuestionKey(question);
-      setOtherAnswers((prev) => ({ ...prev, [questionKey]: value }));
+      setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: false }));
+      if (getQuestionInputMode(question) === 'single-choice') {
+        setAnswers((prev) => ({ ...prev, [questionKey]: '' }));
+        setWasFreeformByQuestion((prev) => ({
+          ...prev,
+          [questionKey]: false,
+        }));
+      }
     },
     [request.questions],
   );
@@ -408,6 +591,30 @@ export function QuestionOptions({
       const question = request.questions[questionIndex];
       if (!question) return;
       setNotes((prev) => ({ ...prev, [getQuestionKey(question)]: value }));
+    },
+    [request.questions],
+  );
+
+  const openNotes = useCallback(
+    (questionIndex: number) => {
+      const question = request.questions[questionIndex];
+      if (!question) return;
+      setNotesOpenByQuestion((prev) => ({
+        ...prev,
+        [getQuestionKey(question)]: true,
+      }));
+    },
+    [request.questions],
+  );
+
+  const closeNotes = useCallback(
+    (questionIndex: number) => {
+      const question = request.questions[questionIndex];
+      if (!question) return;
+      setNotesOpenByQuestion((prev) => ({
+        ...prev,
+        [getQuestionKey(question)]: false,
+      }));
     },
     [request.questions],
   );
@@ -442,6 +649,14 @@ export function QuestionOptions({
       other: otherAnswers[key],
     });
   });
+  const answeredCount = request.questions.filter((question) => {
+    const key = getQuestionKey(question);
+    return isQuestionAnswered({
+      question,
+      value: answers[key],
+      other: otherAnswers[key],
+    });
+  }).length;
 
   const buildResponseAnswers = useCallback((): Record<string, string> => {
     const responseAnswers: Record<string, string> = {};
@@ -461,17 +676,25 @@ export function QuestionOptions({
       }
 
       const combined = combineAnswerParts([value, otherAnswers[key], note]);
-      if (combined) {
-        responseAnswers[key] = combined;
-      }
+      if (combined) responseAnswers[key] = combined;
     }
     return responseAnswers;
   }, [answers, notes, otherAnswers, request.questions]);
 
   const submitAnswers = useCallback(() => {
     if (!allAnswered) return;
-    return onRespond(request.requestId, { answers: buildResponseAnswers() });
-  }, [allAnswered, onRespond, request.requestId, buildResponseAnswers]);
+    return onRespond(request.requestId, {
+      answers: buildResponseAnswers(),
+      wasFreeform: Object.values(wasFreeformByQuestion).some(Boolean),
+      wasFreeformByQuestion,
+    });
+  }, [
+    allAnswered,
+    buildResponseAnswers,
+    onRespond,
+    request.requestId,
+    wasFreeformByQuestion,
+  ]);
 
   const handleSubmit = useCallback(() => {
     if (!allAnswered) return false;
@@ -510,54 +733,66 @@ export function QuestionOptions({
   ]);
 
   return (
-    <div className="border border-teal-700/50 bg-teal-900/20 px-4 py-3">
-      <div className="space-y-4">
+    <div className="overflow-hidden rounded-xl border border-white/10 bg-bg-2/95 shadow-[0_18px_50px_-30px_rgba(0,0,0,0.8)]">
+      <div className="space-y-2.5 px-3 py-2.5">
         {request.questions.map((question, index) => {
           const questionKey = getQuestionKey(question);
+          const isAnswered = isQuestionAnswered({
+            question,
+            value: answers[questionKey],
+            other: otherAnswers[questionKey],
+          });
 
           return (
-            <div key={`${index}-${questionKey}`} className="space-y-2">
-              <div className="flex items-start gap-2">
-                <HelpCircle className="mt-0.5 h-4 w-4 shrink-0 text-teal-400" />
-                <div className="text-sm font-medium text-teal-300">
-                  {request.questions.length > 1 ? `${index + 1}. ` : ''}
+            <section key={`${index}-${questionKey}`} className="space-y-1.5">
+              <header className="flex items-baseline gap-1.5">
+                <span
+                  className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] leading-none transition-colors ${
+                    isAnswered
+                      ? 'border-teal-400/50 bg-teal-400/10 text-teal-300'
+                      : 'border-white/10 text-ink-3'
+                  }`}
+                >
+                  {String(index + 1).padStart(2, '0')}
+                </span>
+                <h3 className="text-[13px] font-semibold leading-tight text-ink-0">
                   {question.question}
-                </div>
-              </div>
-              <div className="pl-6">
-                <QuestionInput
-                  question={question}
-                  questionIndex={index}
-                  value={answers[questionKey] || ''}
-                  otherValue={otherAnswers[questionKey] || ''}
-                  notesValue={notes[questionKey] || ''}
-                  isActive={activeQuestionIndex === index}
-                  activeOptionIndex={
-                    activeQuestionIndex === index ? activeOptionIndex : 0
-                  }
-                  onActivate={activateOption}
-                  onSelectOption={selectOption}
-                  onTextChange={updateTextAnswer}
-                  onOtherChange={updateOtherAnswer}
-                  onNotesChange={updateNotes}
-                />
-              </div>
-            </div>
+                </h3>
+              </header>
+              <QuestionInput
+                question={question}
+                questionIndex={index}
+                value={answers[questionKey] || ''}
+                otherValue={otherAnswers[questionKey] || ''}
+                notesValue={notes[questionKey] || ''}
+                isNotesOpen={!!notesOpenByQuestion[questionKey]}
+                isOtherOpen={!!otherOpenByQuestion[questionKey]}
+                onActivate={activateOption}
+                onSelectOption={selectOption}
+                onTextChange={updateTextAnswer}
+                onOtherChange={updateOtherAnswer}
+                onCloseOther={closeOtherAnswer}
+                onNotesChange={updateNotes}
+                onOpenNotes={openNotes}
+                onCloseNotes={closeNotes}
+              />
+            </section>
           );
         })}
       </div>
-      <div className="mt-4 flex justify-end">
-        <Button
+      <div className="flex items-center gap-2.5 border-t border-white/10 px-3 py-2.5">
+        <button
+          type="button"
           onClick={submitAnswers}
           disabled={!allAnswered}
-          variant="primary"
-          size="md"
-          icon={<Send />}
-          className="bg-teal-600 hover:bg-teal-500"
+          className="rounded-lg bg-teal-300 px-3 py-1.5 text-[13px] font-bold text-bg-0 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-ink-3 disabled:hover:brightness-100"
         >
-          Submit
+          Submit answers
+        </button>
+        <span className="text-xs text-ink-3">
+          {request.questions.length} questions · {answeredCount} answered ·{' '}
           <Kbd shortcut="cmd+enter" />
-        </Button>
+        </span>
       </div>
     </div>
   );

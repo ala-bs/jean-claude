@@ -23,6 +23,7 @@ import {
   extractImagesFromMarkdown,
 } from '@/lib/markdown-images';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { getImageDisplayWidth } from '@/lib/markdown-image-size';
 import { Modal } from '@/common/ui/modal';
 import { sanitizeMarkdownUrl } from '@/lib/markdown-urls';
 
@@ -439,7 +440,77 @@ export function splitPromptXmlSegments(content: string): MarkdownSegment[] {
 }
 
 function normalizeMarkdownContent(content: string): string {
-  return normalizeMarkdownImageSizeSyntax(content);
+  return normalizeMarkdownImageSizeSyntax(collapseConsecutiveImageBlocks(content));
+}
+
+function isMarkdownImageOnlyLine(line: string): boolean {
+  if (/^( {4,}|\t)/.test(line)) return false;
+
+  return /^\s*!\[[^\]]*\]\([^\n]+\)\s*$/.test(line);
+}
+
+function collapseConsecutiveImageBlocks(content: string): string {
+  const lines = content.split('\n');
+  const collapsed: string[] = [];
+  let fence: { marker: '`' | '~'; length: number } | null = null;
+  let imageRun: string[] = [];
+  let blankRun: string[] = [];
+
+  const flushImages = () => {
+    if (imageRun.length > 0) {
+      collapsed.push(imageRun.join(' '));
+      imageRun = [];
+    }
+  };
+
+  const flushBlanks = () => {
+    if (blankRun.length > 0) {
+      collapsed.push(...blankRun);
+      blankRun = [];
+    }
+  };
+
+  for (const line of lines) {
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      flushImages();
+      flushBlanks();
+      const marker = fenceMatch[1][0] as '`' | '~';
+      const length = fenceMatch[1].length;
+      if (!fence) {
+        fence = { marker, length };
+      } else if (fence.marker === marker && length >= fence.length) {
+        fence = null;
+      }
+      collapsed.push(line);
+      continue;
+    }
+
+    if (fence) {
+      collapsed.push(line);
+      continue;
+    }
+
+    if (isMarkdownImageOnlyLine(line)) {
+      imageRun.push(line.trim());
+      blankRun = [];
+      continue;
+    }
+
+    if (line.trim() === '' && imageRun.length > 0) {
+      blankRun.push(line);
+      continue;
+    }
+
+    flushImages();
+    flushBlanks();
+    collapsed.push(line);
+  }
+
+  flushImages();
+  flushBlanks();
+
+  return collapsed.join('\n');
 }
 
 function PromptXmlBlock({
@@ -594,6 +665,93 @@ function getSizedImageStyle(
     height: requestedSize.height,
     maxWidth: '100%',
   };
+}
+
+function getNaturalImageMaxWidthStyle(width: number, height: number): string {
+  return `min(100%, ${getImageDisplayWidth(width, height)}px)`;
+}
+
+function MarkdownImage({
+  src,
+  alt,
+  title,
+  imageClassName,
+  interactive,
+  requestedSize,
+  style,
+  onOpen,
+  ...props
+}: React.ImgHTMLAttributes<HTMLImageElement> & {
+  src: string;
+  alt: string;
+  imageClassName?: string;
+  interactive: boolean;
+  requestedSize?: { width: number; height?: number };
+  onOpen: () => void;
+}) {
+  const [naturalSize, setNaturalSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  const sizedStyle = getSizedImageStyle(requestedSize, style);
+  const imageStyle =
+    requestedSize || !naturalSize
+      ? sizedStyle
+      : {
+          ...sizedStyle,
+          maxWidth: getNaturalImageMaxWidthStyle(
+            naturalSize.width,
+            naturalSize.height,
+          ),
+        };
+
+  return (
+    <img
+      {...props}
+      src={src}
+      alt={alt}
+      title={title}
+      className={clsx(
+        'my-2 mr-2 inline-block max-w-full rounded align-top',
+        interactive && 'cursor-zoom-in',
+        imageClassName,
+      )}
+      style={imageStyle}
+      aria-label={interactive ? alt || 'Open image preview' : undefined}
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      onLoad={(event) => {
+        props.onLoad?.(event);
+        const image = event.currentTarget;
+        if (image.naturalWidth && image.naturalHeight) {
+          setNaturalSize({
+            width: image.naturalWidth,
+            height: image.naturalHeight,
+          });
+        }
+      }}
+      onClick={
+        interactive
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpen();
+            }
+          : props.onClick
+      }
+      onKeyDown={
+        interactive
+          ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                event.stopPropagation();
+                onOpen();
+              }
+            }
+          : props.onKeyDown
+      }
+    />
+  );
 }
 
 function getSizedFigureStyle(
@@ -773,15 +931,31 @@ function GifFrameScrubber({
   const [size, setSize] = useState<{ width: number; height: number } | null>(
     null,
   );
+  const [naturalSize, setNaturalSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
   const [failed, setFailed] = useState(false);
+  const sizedStyle = getSizedImageStyle(requestedSize);
+  const imageStyle =
+    requestedSize || !naturalSize
+      ? sizedStyle
+      : {
+          ...sizedStyle,
+          maxWidth: getNaturalImageMaxWidthStyle(
+            naturalSize.width,
+            naturalSize.height,
+          ),
+        };
 
   useEffect(() => {
     let cancelled = false;
     startTransition(() => setFrameImages([]));
     startTransition(() => setFrameIndex(0));
     startTransition(() => setSize(null));
+    startTransition(() => setNaturalSize(null));
     startTransition(() => setFailed(false));
     startTransition(() => setIsDecoding(false));
 
@@ -803,6 +977,7 @@ function GifFrameScrubber({
         }
 
         setSize({ width, height });
+        setNaturalSize({ width, height });
         setFrameImages(images);
         setIsDecoding(false);
       })
@@ -834,7 +1009,7 @@ function GifFrameScrubber({
 
   if (!isScrubbing || failed || !size || frameImages.length <= 1) {
     return (
-      <span className="my-2 block w-fit max-w-full">
+      <span className="my-2 mr-2 inline-block w-fit max-w-full align-top">
         <img
           src={src}
           alt={alt}
@@ -843,7 +1018,16 @@ function GifFrameScrubber({
             interactive && 'cursor-zoom-in',
             imageClassName,
           )}
-          style={getSizedImageStyle(requestedSize)}
+          style={imageStyle}
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            if (image.naturalWidth && image.naturalHeight) {
+              setNaturalSize({
+                width: image.naturalWidth,
+                height: image.naturalHeight,
+              });
+            }
+          }}
           aria-label={interactive ? alt || 'Open image preview' : undefined}
           role={interactive ? 'button' : undefined}
           tabIndex={interactive ? 0 : undefined}
@@ -901,7 +1085,7 @@ function GifFrameScrubber({
 
   return (
     <span
-      className="my-2 block w-fit max-w-full"
+      className="my-2 mr-2 inline-block w-fit max-w-full align-top"
       style={getSizedFigureStyle(requestedSize)}
     >
       <canvas
@@ -913,7 +1097,7 @@ function GifFrameScrubber({
           interactive && 'cursor-zoom-in',
           imageClassName,
         )}
-        style={getSizedImageStyle(requestedSize)}
+        style={imageStyle}
         aria-label={interactive ? alt || 'Open image preview' : alt}
         role={interactive ? 'button' : 'img'}
         tabIndex={interactive ? 0 : undefined}
@@ -1263,43 +1447,15 @@ export function MarkdownContent({
                   }
 
                   return (
-                    <img
+                    <MarkdownImage
                       src={src}
                       alt={resolvedAlt}
                       title={renderedTitle}
-                      className={clsx(
-                        'my-2 block max-w-full rounded',
-                        interactive && 'cursor-zoom-in',
-                        imageClassName,
-                      )}
-                      style={getSizedImageStyle(requestedSize, style)}
-                      aria-label={
-                        interactive
-                          ? resolvedAlt || 'Open image preview'
-                          : undefined
-                      }
-                      role={interactive ? 'button' : undefined}
-                      tabIndex={interactive ? 0 : undefined}
-                      onClick={
-                        interactive
-                          ? (event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              setSelectedImage({ src, alt: resolvedAlt });
-                            }
-                          : undefined
-                      }
-                      onKeyDown={
-                        interactive
-                          ? (event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setSelectedImage({ src, alt: resolvedAlt });
-                              }
-                            }
-                          : undefined
-                      }
+                      imageClassName={imageClassName}
+                      interactive={interactive}
+                      requestedSize={requestedSize}
+                      style={style}
+                      onOpen={() => setSelectedImage({ src, alt: resolvedAlt })}
                       {...props}
                     />
                   );

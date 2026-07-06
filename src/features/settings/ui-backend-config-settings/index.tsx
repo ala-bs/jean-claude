@@ -14,6 +14,7 @@ import { useSetting, useUpdateSetting } from '@/hooks/use-settings';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
+import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
 import { Input } from '@/common/ui/input';
 import type { OpenCodeProcessMode } from '@shared/types';
 import { Select } from '@/common/ui/select';
@@ -69,6 +70,11 @@ const BACKEND_META: Record<
     label: 'Codex',
     summary: 'User settings from Codex config.toml.',
     userPath: '~/.codex/config.toml',
+  },
+  copilot: {
+    label: 'GitHub Copilot',
+    summary: 'User settings from GitHub Copilot configuration.',
+    userPath: '~/.config/github-copilot',
   },
 };
 
@@ -1296,10 +1302,16 @@ const CODEX_FIELDS: ConfigField[] = [
   },
 ];
 
+const COPILOT_FIELDS: ConfigField[] = [];
+
 function getFields(backend: ConfigBackendType): ConfigField[] {
   if (backend === 'claude-code') return CLAUDE_FIELDS;
   if (backend === 'opencode') return OPENCODE_FIELDS;
-  return CODEX_FIELDS;
+  if (backend === 'codex') return CODEX_FIELDS;
+  if (backend === 'copilot') return COPILOT_FIELDS;
+
+  const exhaustive: never = backend;
+  return exhaustive;
 }
 
 function formatError(error: unknown): string {
@@ -1734,6 +1746,7 @@ function StructuredBackendConfigSettings({
   }, [fields, searchQuery]);
   const groups = useMemo(() => groupFields(visibleFields), [visibleFields]);
   const meta = BACKEND_META[backend];
+  const backendBadge = getAgentBackendBadge(backend);
 
   const query = useQuery({
     queryKey: ['backendConfig', backend],
@@ -1898,9 +1911,9 @@ function StructuredBackendConfigSettings({
                 <h2 className="text-ink-1 text-base font-semibold">
                   {selectedField?.label ?? 'Settings'}
                 </h2>
-                {backend === 'codex' && (
+                {backendBadge && (
                   <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
-                    Beta
+                    {backendBadge}
                   </span>
                 )}
               </div>
@@ -1916,7 +1929,9 @@ function StructuredBackendConfigSettings({
                     {query.data?.path ?? meta.userPath}
                   </span>
                 </span>
-                <span>Reference: {query.data?.schemaUrl}</span>
+                {query.data?.schemaUrl && (
+                  <span>Reference: {query.data.schemaUrl}</span>
+                )}
               </div>
               {query.data && !query.data.exists && (
                 <div className="mt-0.5 text-[11px] text-amber-300">

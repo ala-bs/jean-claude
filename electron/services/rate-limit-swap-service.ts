@@ -20,6 +20,9 @@ const BACKEND_TO_USAGE_PROVIDER: Partial<
   Record<AgentBackendType, UsageProviderType>
 > = {
   'claude-code': 'claude-code',
+  codex: 'codex',
+  opencode: 'opencode',
+  copilot: 'copilot',
 };
 
 export class RateLimitSwapService {
@@ -122,6 +125,11 @@ export class RateLimitSwapService {
     const providerType = BACKEND_TO_USAGE_PROVIDER[backend];
     if (!providerType) return null;
 
+    if (process.env.JC_DISABLE_NATIVE_USAGE_TRACKING) {
+      const usageSettings = await SettingsRepository.get('usageDisplay');
+      if (!usageSettings.useCodexBar) return null;
+    }
+
     const usage = await agentUsageService.getUsage([providerType]);
     const result = usage[providerType];
 
@@ -129,7 +137,7 @@ export class RateLimitSwapService {
 
     const primary =
       result.data.limits.find((l) => l.isPrimary) ?? result.data.limits[0];
-    return primary.range.utilization;
+    return primary.range.utilization / 100;
   }
 
   reset(): void {

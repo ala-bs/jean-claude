@@ -5,6 +5,10 @@ import type {
   AzureDevOpsFileChange,
 } from '@/lib/api';
 import {
+  convertPrThreadsForFile,
+  PrInlineCommentThread,
+} from '../ui-pr-inline-comment-thread';
+import {
   FileDiffContent,
   normalizeAzureChangeType,
 } from '@/features/common/ui-file-diff';
@@ -13,17 +17,10 @@ import type { DiffFile } from '@/features/common/ui-file-diff';
 import type { LineRange } from '@/features/agent/ui-diff-view';
 import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
 import type { MentionOption } from '@/common/ui/mention-textarea';
-import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
-import type { PromptImagePart } from '@shared/agent-backend-types';
-import { usePrFileDraftActions } from '@/stores/pr-comment-drafts';
-
-
-
-import {
-  convertPrThreadsForFile,
-  PrInlineCommentThread,
-} from '../ui-pr-inline-comment-thread';
 import { PrCommentForm } from '../ui-pr-comment-form';
+import type { PromptImagePart } from '@shared/agent-backend-types';
+import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
+import { usePrFileDraftActions } from '@/stores/pr-comment-drafts';
 
 
 export function PrDiffView({

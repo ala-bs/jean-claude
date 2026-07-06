@@ -14,6 +14,7 @@ import type {
   AzureDevOpsFileChange,
   AzureDevOpsPullRequestDetails,
 } from '@/lib/api';
+/* eslint-disable sort-imports */
 import {
   type DiffFile,
   FileDiffContent,
@@ -41,9 +42,15 @@ import {
   type MentionDisplayNames,
   normalizeMentionId,
 } from '@/lib/azure-devops-mentions';
+import {
+  getPromptImageMarkdownSize,
+  markdownImagePlaceholderPattern,
+  replaceMarkdownImageUrl,
+} from '@/lib/markdown-image-size';
 import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
 import { Button } from '@/common/ui/button';
 import { formatBytes } from '@/lib/format-bytes';
+import { Kbd } from '@/common/ui/kbd';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
@@ -68,15 +75,8 @@ type PendingDescriptionImage = PromptImagePart & {
   placeholderMarkdown: string;
 };
 
-function placeholderToken(placeholderMarkdown: string) {
-  return placeholderMarkdown.match(/jc-image:\/\/([^)]+)/)?.[1] ?? null;
-}
-
 function placeholderPattern(placeholderMarkdown: string) {
-  const token = placeholderToken(placeholderMarkdown);
-  return token
-    ? new RegExp(`!\\[[^\\]]*\\]\\(jc-image:\\/\\/${token}\\)`, 'g')
-    : null;
+  return markdownImagePlaceholderPattern(placeholderMarkdown);
 }
 
 function descriptionPreviewMarkdown(
@@ -89,7 +89,7 @@ function descriptionPreviewMarkdown(
     if (!pattern) return current;
     return current.replace(
       pattern,
-      image.placeholderMarkdown.replace(/\]\([^)]*\)$/, `](${dataUrl})`),
+      (match) => replaceMarkdownImageUrl(match, dataUrl),
     );
   }, markdown);
 }
@@ -386,7 +386,7 @@ export function PrOverview({
           dataBase64: image.data,
         });
         finalDescription = finalDescription.replace(pattern, (match) =>
-          match.replace(/\([^)]*\)$/, `(${attachment.url})`),
+          replaceMarkdownImageUrl(match, attachment.url),
         );
       }
 
@@ -449,7 +449,7 @@ export function PrOverview({
       const token = descriptionImageTokenCounterRef.current;
       const fileName = image.filename || `image-${token}.png`;
       const safeAltText = fileName.replace(/[[\]()\\]/g, '_');
-      const placeholderMarkdown = `![${safeAltText}](jc-image://${token})`;
+      const placeholderMarkdown = `![${safeAltText}](jc-image://${token}${getPromptImageMarkdownSize(image)})`;
 
       insertDescriptionMarkdown(placeholderMarkdown);
       const nextImages = [
@@ -685,9 +685,6 @@ export function PrOverview({
                         ? 'Uploading...'
                         : 'Add image/GIF'}
                     </Button>
-                    <span className="text-ink-4 text-[11px]">
-                      Cmd+Enter to save
-                    </span>
                     <div className="flex-1" />
                     <Button
                       type="button"
@@ -723,7 +720,7 @@ export function PrOverview({
                         uploadAttachment.isPending
                       }
                     >
-                      Save
+                      Save <Kbd shortcut="cmd+enter" />
                     </Button>
                   </div>
                   {previewDescriptionDraft.trim() && (

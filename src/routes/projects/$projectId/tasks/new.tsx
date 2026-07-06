@@ -110,7 +110,7 @@ function NewTask() {
   const resolvedDefaultBackend =
     project?.defaultAgentBackend ?? backendsSetting?.defaultBackend;
   const resolvedDefaultModelPreference = getDefaultModelForBackend({
-    backend: resolvedDefaultBackend ?? 'claude-code',
+    backend: resolvedDefaultBackend ?? null,
     project,
     backendDefaultModels: backendDefaultModelsSetting,
   });
@@ -120,7 +120,7 @@ function NewTask() {
     backendsSetting?.enabledBackends.includes(resolvedDefaultBackend)
       ? resolvedDefaultBackend
       : backendsSetting?.enabledBackends[0]) ??
-    'claude-code';
+    null;
   const { data: dynamicModels } = useBackendModels(effectiveAgentBackend);
   const effectiveModelPreference =
     modelPreference || resolvedDefaultModelPreference;
@@ -130,7 +130,7 @@ function NewTask() {
       : (backendModelPresetId ??
         findMatchingBackendModelPresetId({
           presets: backendModelPresets,
-          backend: agentBackend ?? resolvedDefaultBackend,
+          backend: agentBackend ?? resolvedDefaultBackend ?? undefined,
           model:
             modelPreference ??
             (resolvedDefaultBackend
@@ -162,10 +162,14 @@ function NewTask() {
       effort:
         thinkingEffort ??
         effectiveBackendModelPreset?.thinkingEffort ??
-        thinkingSettings?.efforts[effectiveAgentBackend]?.[
-          effectiveModelPreference
-        ] ??
-        thinkingSettings?.efforts[effectiveAgentBackend]?.default ??
+        (effectiveAgentBackend
+          ? thinkingSettings?.efforts[effectiveAgentBackend]?.[
+              effectiveModelPreference
+            ]
+          : undefined) ??
+        (effectiveAgentBackend
+          ? thinkingSettings?.efforts[effectiveAgentBackend]?.default
+          : undefined) ??
         'default',
       capabilities: thinkingCapabilities,
     });
@@ -218,6 +222,7 @@ function NewTask() {
 
     const resolved =
       project.defaultAgentBackend ?? backendsSetting.defaultBackend;
+    if (!resolved) return;
     if (!backendsSetting.enabledBackends.includes(resolved)) return;
 
     const presetId = findMatchingBackendModelPresetId({
@@ -281,6 +286,7 @@ function NewTask() {
 
   async function handleCreateTask(shouldStart: boolean) {
     if (isWorktreeDataFetching) return;
+    if (!effectiveAgentBackend) return;
 
     // Pass null if name is empty - will trigger auto-generation when agent starts
     const taskName = name.trim() || null;
@@ -476,81 +482,89 @@ function NewTask() {
 
           {/* Submit row with mode selector */}
           <div className="flex items-center gap-3">
-            <ModeSelector
-              value={interactionMode}
-              onChange={(mode) => setDraft({ interactionMode: mode })}
-              backend={effectiveAgentBackend}
-            />
-            <BackendModelPresetPicker
-              backend={effectiveAgentBackend}
-              model={effectiveModelPreference}
-              selectedPresetId={effectiveBackendModelPresetId}
-              onChange={(selection) => {
-                markUserTouchedSelection();
-                const nextThinkingCapabilities = getModelThinkingCapabilities(
-                  selection.model,
-                  dynamicModels,
-                );
-                setDraft({
-                  agentBackend: selection.backend,
-                  backendModelPresetId: selection.presetId,
-                  shouldAutoSelectBackendModelPreset:
-                    selection.presetId !== null,
-                  modelPreference: selection.model,
-                  thinkingEffort: normalizeThinkingEffortForModel({
-                    backend: selection.backend,
-                    model: selection.model,
-                    effort:
-                      selection.thinkingEffort ??
-                      thinkingSettings?.efforts[selection.backend]?.[
-                        selection.model
-                      ] ??
-                      thinkingSettings?.efforts[selection.backend]?.default ??
-                      'default',
-                    capabilities: nextThinkingCapabilities,
-                  }),
-                  interactionMode: normalizeInteractionModeForBackend({
-                    backend: selection.backend,
-                    mode: interactionMode,
-                  }),
-                });
-              }}
-            />
-            <ThinkingSelector
-              value={effectiveThinkingEffort}
-              options={thinkingOptions}
-              onChange={(nextThinkingEffort) => {
-                markUserTouchedSelection();
-                setDraft({ thinkingEffort: nextThinkingEffort });
-              }}
-              disabled={thinkingOptions.length <= 1}
-            />
-            <RateLimitSwapPreview
-              requestedBackend={effectiveAgentBackend}
-              model={effectiveModelPreference}
-              thinkingEffort={effectiveThinkingEffort}
-              onApplySuggestion={(selection) => {
-                markUserTouchedSelection();
-                setDraft({
-                  agentBackend: selection.backend,
-                  backendModelPresetId: null,
-                  shouldAutoSelectBackendModelPreset: false,
-                  modelPreference: selection.model,
-                  thinkingEffort: selection.thinkingEffort as ThinkingEffort,
-                  interactionMode: normalizeInteractionModeForBackend({
-                    backend: selection.backend,
-                    mode: interactionMode,
-                  }),
-                });
-              }}
-            />
+            {effectiveAgentBackend ? (
+              <>
+                <ModeSelector
+                  value={interactionMode}
+                  onChange={(mode) => setDraft({ interactionMode: mode })}
+                  backend={effectiveAgentBackend}
+                />
+                <BackendModelPresetPicker
+                  backend={effectiveAgentBackend}
+                  model={effectiveModelPreference}
+                  selectedPresetId={effectiveBackendModelPresetId}
+                  onChange={(selection) => {
+                    markUserTouchedSelection();
+                    const nextThinkingCapabilities = getModelThinkingCapabilities(
+                      selection.model,
+                      dynamicModels,
+                    );
+                    setDraft({
+                      agentBackend: selection.backend,
+                      backendModelPresetId: selection.presetId,
+                      shouldAutoSelectBackendModelPreset:
+                        selection.presetId !== null,
+                      modelPreference: selection.model,
+                      thinkingEffort: normalizeThinkingEffortForModel({
+                        backend: selection.backend,
+                        model: selection.model,
+                        effort:
+                          selection.thinkingEffort ??
+                          thinkingSettings?.efforts[selection.backend]?.[
+                            selection.model
+                          ] ??
+                          thinkingSettings?.efforts[selection.backend]
+                            ?.default ??
+                          'default',
+                        capabilities: nextThinkingCapabilities,
+                      }),
+                      interactionMode: normalizeInteractionModeForBackend({
+                        backend: selection.backend,
+                        mode: interactionMode,
+                      }),
+                    });
+                  }}
+                />
+                <ThinkingSelector
+                  value={effectiveThinkingEffort}
+                  options={thinkingOptions}
+                  onChange={(nextThinkingEffort) => {
+                    markUserTouchedSelection();
+                    setDraft({ thinkingEffort: nextThinkingEffort });
+                  }}
+                  disabled={thinkingOptions.length <= 1}
+                />
+                <RateLimitSwapPreview
+                  requestedBackend={effectiveAgentBackend}
+                  model={effectiveModelPreference}
+                  thinkingEffort={effectiveThinkingEffort}
+                  onApplySuggestion={(selection) => {
+                    markUserTouchedSelection();
+                    setDraft({
+                      agentBackend: selection.backend,
+                      backendModelPresetId: null,
+                      shouldAutoSelectBackendModelPreset: false,
+                      modelPreference: selection.model,
+                      thinkingEffort: selection.thinkingEffort as ThinkingEffort,
+                      interactionMode: normalizeInteractionModeForBackend({
+                        backend: selection.backend,
+                        mode: interactionMode,
+                      }),
+                    });
+                  }}
+                />
+              </>
+            ) : null}
             <Button
               variant="secondary"
               size="md"
               onClick={handleCreateOnly}
               loading={createTask.isPending}
               disabled={
-                createTask.isPending || !prompt.trim() || isWorktreeDataFetching
+                createTask.isPending ||
+                !prompt.trim() ||
+                isWorktreeDataFetching ||
+                !effectiveAgentBackend
               }
             >
               Create
@@ -561,7 +575,10 @@ function NewTask() {
               type="submit"
               loading={createTask.isPending}
               disabled={
-                createTask.isPending || !prompt.trim() || isWorktreeDataFetching
+                createTask.isPending ||
+                !prompt.trim() ||
+                isWorktreeDataFetching ||
+                !effectiveAgentBackend
               }
             >
               {createTask.isPending ? 'Creating…' : 'Start'}

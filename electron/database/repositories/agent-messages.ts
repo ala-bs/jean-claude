@@ -9,24 +9,41 @@ import type { AgentMessage } from '@shared/agent-types';
 import { CURRENT_NORMALIZATION_VERSION } from '@shared/normalized-message-v2';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
-
+import {
+  type CopilotNormalizationContext,
+  normalizeCopilotEventV2,
+} from '../../services/agent-backends/copilot/normalize-copilot-message-v2';
 import {
   createCodexNormalizationContext,
   normalizeCodexNotification,
 } from '../../services/agent-backends/codex/normalize-codex-message-v2';
 import {
+  type NormalizationContext,
+  normalizeClaudeMessageV2,
+} from '../../services/agent-backends/claude/normalize-claude-message-v2';
+import {
   normalizeOpenCodeV2,
   type OpenCodeNormalizationContext,
   type OpenCodeRawInput,
 } from '../../services/agent-backends/opencode/normalize-opencode-message-v2';
-import { db } from '../index';
-import type { NormalizationContext } from '../../services/agent-backends/claude/normalize-claude-message-v2';
-import { normalizeClaudeMessageV2 } from '../../services/agent-backends/claude/normalize-claude-message-v2';
-import { replayOpenCodeContextUpdate } from '../../services/agent-backends/opencode/opencode-context-replay';
 
+import {
+  db,
+} from '../index';
+import {
+  decodeRawMessageData,
+} from './raw-message-data';
+import {
+  replayOpenCodeContextUpdate,
+} from '../../services/agent-backends/opencode/opencode-context-replay';
 
-
-import { decodeRawMessageData } from './raw-message-data';
+export function formatNormalizedDataForRawId(
+  rows: string[] | undefined,
+): string | null {
+  if (!rows || rows.length === 0) return null;
+  if (rows.length === 1) return rows[0];
+  return JSON.stringify(rows.map((row) => JSON.parse(row)));
+}
 
 export const AgentMessageRepository = {
   /**
@@ -266,8 +283,9 @@ export const AgentMessageRepository = {
         : normalizedQuery
     ).execute();
 
-    // Index normalized messages by rawMessageId for O(1) lookups
-    const normalizedByRawId = new Map<string, string>();
+    // Index normalized messages by rawMessageId for O(1) lookups. One raw SDK
+    // event can normalize into multiple timeline entries.
+    const normalizedByRawId = new Map<string, string[]>();
     const syntheticNormalized: {
       messageIndex: number;
       normalizedData: string | null;
@@ -276,7 +294,9 @@ export const AgentMessageRepository = {
     for (const row of normalizedRows) {
       if (row.rawMessageId) {
         if (row.data) {
-          normalizedByRawId.set(row.rawMessageId, row.data);
+          const entries = normalizedByRawId.get(row.rawMessageId) ?? [];
+          entries.push(row.data);
+          normalizedByRawId.set(row.rawMessageId, entries);
         }
       } else if (row.data) {
         // Synthetic message (no raw counterpart)
@@ -303,7 +323,9 @@ export const AgentMessageRepository = {
         rawData: await decodeRawMessageData(raw),
         rawFormat: raw.rawFormat,
         backendSessionId: raw.backendSessionId,
-        normalizedData: normalizedByRawId.get(raw.rawId) ?? null,
+        normalizedData: formatNormalizedDataForRawId(
+          normalizedByRawId.get(raw.rawId),
+        ),
         createdAt: raw.createdAt,
       });
     }
@@ -549,6 +571,49 @@ export const AgentMessageRepository = {
           },
           codexCtx,
         );
+
+        for (const event of events) {
+          if (event.type === 'entry') {
+            const idx = entries.length;
+            entries.push({
+              originalIndex: raw.messageIndex,
+              rawMessageId: raw.id,
+              stepId: raw.stepId,
+              entry: event.entry,
+            });
+            if (event.entry.type === 'tool-use') {
+              toolIdToEntryIndex.set(event.entry.toolId, idx);
+            }
+          }
+          if (event.type === 'entry-update') {
+            const idx = entries.findIndex((e) => e.entry.id === event.entry.id);
+            if (idx !== -1) {
+              entries[idx].entry = event.entry;
+            }
+          }
+          if (event.type === 'tool-result') {
+            const idx = toolIdToEntryIndex.get(event.toolId);
+            if (idx !== undefined) {
+              const existing = entries[idx].entry;
+              if (existing.type === 'tool-use') {
+                entries[idx].entry = {
+                  ...existing,
+                  result: event.result,
+                } as NormalizedEntry;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (formats.has('copilot')) {
+      const copilotCtx: CopilotNormalizationContext = {};
+
+      for (const raw of rawRows) {
+        const rawData = await decodeRawMessageData(raw);
+        if (!rawData || raw.rawFormat !== 'copilot') continue;
+        const events = normalizeCopilotEventV2(JSON.parse(rawData), copilotCtx);
 
         for (const event of events) {
           if (event.type === 'entry') {

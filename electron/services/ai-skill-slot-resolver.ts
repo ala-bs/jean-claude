@@ -18,11 +18,11 @@ async function normalizeSlotForEnabledBackends(
     return slot;
   }
 
-  const fallbackBackend: AgentBackendType = backendsSetting.enabledBackends.includes(
-    backendsSetting.defaultBackend,
-  )
-    ? backendsSetting.defaultBackend
-    : (backendsSetting.enabledBackends[0] ?? slot.backend);
+  const fallbackBackend: AgentBackendType =
+    backendsSetting.defaultBackend &&
+    backendsSetting.enabledBackends.includes(backendsSetting.defaultBackend)
+      ? backendsSetting.defaultBackend
+      : (backendsSetting.enabledBackends[0] ?? slot.backend);
   const backendDefaultModels = await SettingsRepository.get(
     'backendDefaultModels',
   );
