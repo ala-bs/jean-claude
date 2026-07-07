@@ -67,6 +67,12 @@ export type UpdateProjectCommand = Partial<
   >
 >;
 
+export type ProjectSuggestionCommand = Omit<NewProjectCommand, 'projectId'>;
+
+export interface ProjectSuggestions {
+  runCommands: ProjectSuggestionCommand[];
+}
+
 export interface ProjectCommandGroup {
   id: string;
   projectId: string;

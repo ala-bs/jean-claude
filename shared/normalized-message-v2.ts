@@ -286,6 +286,7 @@ export type NormalizationEvent =
   | { type: 'session-id'; sessionId: string }
   | { type: 'session-updated'; title?: string; summary?: string }
   | { type: 'permission-request'; request: NormalizedPermissionRequest }
+  | { type: 'result-update'; result: NormalizedResult }
   | { type: 'complete'; result: NormalizedResult }
   | { type: 'error'; error: string }
   | { type: 'rate-limit'; retryAfterMs?: number; message?: string };

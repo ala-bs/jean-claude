@@ -26,7 +26,12 @@ export type {
 
 // --- Backend identification ---
 
-export type AgentBackendType = 'claude-code' | 'opencode' | 'codex' | 'copilot';
+export type AgentBackendType =
+  | 'claude-code'
+  | 'opencode'
+  | 'codex'
+  | 'copilot'
+  | 'vibe';
 
 // --- Prompt content parts ---
 

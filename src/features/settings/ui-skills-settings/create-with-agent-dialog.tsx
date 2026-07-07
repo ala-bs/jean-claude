@@ -1,14 +1,11 @@
 import React, { useCallback, useRef } from 'react';
 
 import {
-  AGENT_BACKENDS,
-  BackendSelector,
-} from '@/features/agent/ui-backend-selector';
-import {
   useKeyboardLayer,
   useRegisterKeyboardBindings,
 } from '@/common/context/keyboard-bindings';
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import { BackendSelector } from '@/features/agent/ui-backend-selector';
 import { Bot } from 'lucide-react';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
@@ -18,8 +15,14 @@ import { useCreateSkillWithAgent } from '@/hooks/use-managed-skills';
 import { useNavigate } from '@tanstack/react-router';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 
-const GENERATED_SKILL_INSTALL_TARGET_BACKENDS: AgentBackendType[] = [
-  ...AGENT_BACKENDS,
+type GeneratedSkillInstallTargetBackend = AgentBackendType;
+
+const GENERATED_SKILL_INSTALL_TARGET_BACKENDS: GeneratedSkillInstallTargetBackend[] = [
+  'claude-code',
+  'opencode',
+  'codex',
+  'copilot',
+  'vibe',
 ];
 
 export function CreateWithAgentDialog({ onClose }: { onClose: () => void }) {

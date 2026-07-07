@@ -17,6 +17,7 @@ export function useWorkItems(params: {
   providerId: string;
   projectId: string;
   projectName: string;
+  enabled?: boolean;
   filters: {
     states?: string[];
     workItemTypes?: string[];
@@ -33,7 +34,11 @@ export function useWorkItems(params: {
       params.filters,
     ],
     queryFn: () => api.azureDevOps.queryWorkItems(params),
-    enabled: !!params.providerId && !!params.projectId && !!params.projectName,
+    enabled:
+      params.enabled !== false &&
+      !!params.providerId &&
+      !!params.projectId &&
+      !!params.projectName,
     staleTime: 60_000,
   });
 }

@@ -48,6 +48,12 @@ function getConfig(backend: AgentBackendType): {
         schemaUrl: '',
         defaultContent: '{}\n',
       };
+    case 'vibe':
+      return {
+        paths: [path.join(home, '.vibe', 'config.toml')],
+        schemaUrl: '',
+        defaultContent: '',
+      };
   }
 }
 
@@ -181,7 +187,7 @@ export async function writeBackendUserConfig({
 }: BackendUserConfigUpdate): Promise<BackendUserConfig> {
   const config = getConfig(backend);
   const configPath = await resolveConfigPath(config);
-  if (backend === 'codex') {
+  if (backend === 'codex' || backend === 'vibe') {
     try {
       parseToml(content);
     } catch (error) {

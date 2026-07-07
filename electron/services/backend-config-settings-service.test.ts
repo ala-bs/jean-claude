@@ -66,6 +66,33 @@ describe('backend-config-settings-service', () => {
     );
   });
 
+  it('reads and writes Vibe TOML config', async () => {
+    const missing = await readBackendUserConfig('vibe');
+
+    expect(missing.exists).toBe(false);
+    expect(missing.content).toBe('');
+    expect(missing.path).toBe(path.join(homeDirectory, '.vibe', 'config.toml'));
+
+    const result = await writeBackendUserConfig({
+      backend: 'vibe',
+      content: 'model = "mistral-large-latest"',
+    });
+
+    expect(result.exists).toBe(true);
+    await expect(fs.readFile(result.path, 'utf8')).resolves.toBe(
+      'model = "mistral-large-latest"\n',
+    );
+  });
+
+  it('rejects invalid Vibe TOML on write', async () => {
+    await expect(
+      writeBackendUserConfig({
+        backend: 'vibe',
+        content: 'model = "mistral-large-latest',
+      }),
+    ).rejects.toThrow('Invalid config:');
+  });
+
   it('reads and writes Copilot JSON config', async () => {
     const missing = await readBackendUserConfig('copilot');
 
