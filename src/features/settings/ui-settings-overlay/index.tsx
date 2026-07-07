@@ -155,6 +155,7 @@ function getGlobalSections(): GlobalSection[] {
         createBackendSubItem({ id: 'opencode', label: 'OpenCode' }),
         createBackendSubItem({ id: 'codex', label: 'Codex' }),
         createBackendSubItem({ id: 'copilot', label: 'Copilot' }),
+        createBackendSubItem({ id: 'vibe', label: 'Mistral Vibe' }),
       ],
     },
     {
@@ -438,6 +439,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
         globalLeaf('coding-agents', 'opencode', 'OpenCode'),
         globalLeaf('coding-agents', 'codex', 'Codex'),
         globalLeaf('coding-agents', 'copilot', 'Copilot'),
+        globalLeaf('coding-agents', 'vibe', 'Mistral Vibe'),
         globalLeaf('coding-agents', 'prompt-preface'),
         globalLeaf('permissions'),
         globalLeaf('coding-agents', 'rate-limit-swap'),
@@ -783,6 +785,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <BackendConfigSettings backend="codex" />;
       case 'coding-agents:copilot':
         return <BackendConfigSettings backend="copilot" />;
+      case 'coding-agents:vibe':
+        return <BackendConfigSettings backend="vibe" />;
     }
   }
 

@@ -5,7 +5,7 @@ import * as path from 'path';
 import { dbg } from '../lib/debug';
 import { pathExists } from '../lib/fs';
 
-type DetectedProjectSource = 'claude-code' | 'opencode' | 'codex';
+type DetectedProjectSource = 'claude-code' | 'opencode' | 'codex' | 'vibe';
 
 // ─── Concurrency helper ───────────────────────────────────────────────────────
 

@@ -79,6 +79,19 @@ const COPILOT_MODELS: BackendModel[] = [
   },
 ];
 
+const VIBE_MODELS: BackendModel[] = [
+  {
+    id: 'mistral-medium-3.5',
+    label: 'Mistral Medium 3.5',
+    supportsThinking: false,
+  },
+  {
+    id: 'codestral-latest',
+    label: 'Codestral Latest',
+    supportsThinking: false,
+  },
+];
+
 // Cache for dynamic model lists (keyed by backend type)
 const modelCache = new Map<
   AgentBackendType,
@@ -93,7 +106,7 @@ const OPENCODE_MODELS_EXEC_OPTIONS: ExecOptions = {
 
 /**
  * Fetch available models for a given backend.
- * Claude Code models are static. OpenCode models are discovered via `opencode models`.
+ * Claude Code and Vibe models are static. OpenCode models are discovered via `opencode models`.
  */
 export async function getBackendModels(
   backend: AgentBackendType,
@@ -112,6 +125,10 @@ export async function getBackendModels(
 
   if (backend === 'copilot') {
     return fetchCopilotModels();
+  }
+
+  if (backend === 'vibe') {
+    return VIBE_MODELS;
   }
 
   dbg.agent('Unknown backend type for model discovery: %s', backend);

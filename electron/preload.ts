@@ -965,6 +965,16 @@ contextBridge.exposeInMainWorld('api', {
       }),
     getPackageScripts: (projectPath: string) =>
       ipcRenderer.invoke('project:commands:run:getPackageScripts', projectPath),
+    getProjectSuggestions: (projectPath: string) =>
+      ipcRenderer.invoke(
+        'project:commands:run:getProjectSuggestions',
+        projectPath,
+      ),
+    saveProjectSuggestions: (projectPath: string, suggestions: unknown) =>
+      ipcRenderer.invoke('project:commands:run:saveProjectSuggestions', {
+        projectPath,
+        suggestions,
+      }),
     onStatusChange: (callback: (taskId: string, status: unknown) => void) => {
       const handler = (_: unknown, taskId: string, status: unknown) =>
         callback(taskId, status);

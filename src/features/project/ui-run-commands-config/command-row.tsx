@@ -8,7 +8,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { startTransition, useEffect, useState } from 'react';
+import { startTransition, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CSS } from '@dnd-kit/utilities';
 import { useSortable } from '@dnd-kit/sortable';
 
@@ -16,6 +17,7 @@ import { useSortable } from '@dnd-kit/sortable';
 
 import type {
   ProjectCommand,
+  ProjectSuggestionCommand,
   RunCommandEnvSource,
   RunCommandEnvVar,
   UpdateProjectCommand,
@@ -26,6 +28,7 @@ import { Input } from '@/common/ui/input';
 import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
 import { Select } from '@/common/ui/select';
 import { Tooltip } from '@/common/ui/tooltip';
+import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
 
 
 
@@ -60,12 +63,14 @@ export function CommandRow({
   sortableId,
   command,
   suggestions,
+  onDraftChange,
   onUpdate,
   onDelete,
 }: {
   sortableId: string;
   command: ProjectCommand;
   suggestions: string[];
+  onDraftChange: (data: ProjectSuggestionCommand) => void;
   onUpdate: (data: UpdateProjectCommand) => void;
   onDelete: () => void;
 }) {
@@ -79,6 +84,7 @@ export function CommandRow({
   const [hasPendingEnvEdits, setHasPendingEnvEdits] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const commandInputWrapRef = useRef<HTMLDivElement | null>(null);
 
   const {
     attributes,
@@ -125,6 +131,13 @@ export function CommandRow({
       s.toLowerCase().includes(localCommand.toLowerCase()) &&
       s !== localCommand,
   );
+  const suggestionPosition = useDropdownPosition({
+    isOpen: showSuggestions && filteredSuggestions.length > 0,
+    triggerRef: commandInputWrapRef,
+    side: 'bottom',
+    align: 'left',
+    preferredMaxHeight: 192,
+  });
 
   const handleNameBlur = () => {
     const trimmed = localName.trim();
@@ -134,8 +147,26 @@ export function CommandRow({
     }
   };
 
+  const emitDraftChange = (update: Partial<ProjectSuggestionCommand>) => {
+    onDraftChange({
+      name: localName.trim() || null,
+      command: localCommand,
+      ports: command.ports,
+      envVars: getPersistedEnvVars(localEnvVars),
+      confirmBeforeRun: command.confirmBeforeRun,
+      confirmMessage: localConfirmMessage.trim() || null,
+      ...update,
+    });
+  };
+
+  const handleNameChange = (value: string) => {
+    setLocalName(value);
+    emitDraftChange({ name: value.trim() || null });
+  };
+
   const handleCommandChange = (value: string) => {
     setLocalCommand(value);
+    emitDraftChange({ command: value });
     setShowSuggestions(true);
   };
 
@@ -148,11 +179,13 @@ export function CommandRow({
 
   const handleSelectSuggestion = (suggestion: string) => {
     setLocalCommand(suggestion);
+    emitDraftChange({ command: suggestion });
     setShowSuggestions(false);
     onUpdate({ command: suggestion });
   };
 
   const handlePortsChange = (ports: number[]) => {
+    emitDraftChange({ ports });
     onUpdate({ ports });
   };
 
@@ -160,7 +193,9 @@ export function CommandRow({
     setLocalEnvVars(envVars);
     setHasLocalEnvDraftRows(envVars.some((envVar) => !envVar.name.trim()));
     setHasPendingEnvEdits(true);
-    onUpdate({ envVars: getPersistedEnvVars(envVars) });
+    const persistedEnvVars = getPersistedEnvVars(envVars);
+    emitDraftChange({ envVars: persistedEnvVars });
+    onUpdate({ envVars: persistedEnvVars });
   };
 
   const handleAddEnvVar = () => {
@@ -202,7 +237,13 @@ export function CommandRow({
   };
 
   const handleConfirmToggle = (checked: boolean) => {
+    emitDraftChange({ confirmBeforeRun: checked });
     onUpdate({ confirmBeforeRun: checked });
+  };
+
+  const handleConfirmMessageChange = (value: string) => {
+    setLocalConfirmMessage(value);
+    emitDraftChange({ confirmMessage: value.trim() || null });
   };
 
   const handleConfirmMessageBlur = () => {
@@ -234,7 +275,7 @@ export function CommandRow({
           <Input
             size="sm"
             value={localName}
-            onChange={(e) => setLocalName(e.target.value)}
+            onChange={(e) => handleNameChange(e.target.value)}
             onBlur={handleNameBlur}
             onKeyDown={(e) => {
               if (e.key === 'Enter') e.currentTarget.blur();
@@ -245,7 +286,7 @@ export function CommandRow({
         </div>
         <div className="relative flex min-w-0 flex-1 items-center gap-2">
           <Terminal className="text-acc h-3.5 w-3.5 shrink-0" />
-          <div className="relative min-w-0 flex-1">
+          <div ref={commandInputWrapRef} className="relative min-w-0 flex-1">
             <Input
               size="md"
               value={localCommand}
@@ -255,8 +296,34 @@ export function CommandRow({
               placeholder="Enter command (e.g., pnpm dev)"
               className="border-0 bg-transparent px-0 font-mono"
             />
-            {showSuggestions && filteredSuggestions.length > 0 && (
-              <div className="border-glass-border bg-bg-2 absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-md border py-1 shadow-[0_18px_44px_rgba(0,0,0,0.55)]">
+            {showSuggestions &&
+              filteredSuggestions.length > 0 &&
+              suggestionPosition &&
+              createPortal(
+                <div
+                  className="border-glass-border bg-bg-2 fixed z-[70] overflow-auto rounded-md border py-1 shadow-[0_18px_44px_rgba(0,0,0,0.55)]"
+                  style={{
+                    top:
+                      suggestionPosition.actualSide === 'bottom'
+                        ? suggestionPosition.top
+                        : undefined,
+                    bottom:
+                      suggestionPosition.actualSide === 'top'
+                        ? window.innerHeight - suggestionPosition.top
+                        : undefined,
+                    left:
+                      suggestionPosition.actualAlign === 'left'
+                        ? suggestionPosition.left
+                        : undefined,
+                    right:
+                      suggestionPosition.actualAlign === 'right'
+                        ? window.innerWidth - suggestionPosition.left
+                        : undefined,
+                    maxHeight: suggestionPosition.maxHeight,
+                    width: suggestionPosition.width,
+                    maxWidth: suggestionPosition.maxWidth,
+                  }}
+                >
                 {filteredSuggestions.map((suggestion) => (
                   <button
                     key={suggestion}
@@ -270,8 +337,9 @@ export function CommandRow({
                     {suggestion}
                   </button>
                 ))}
-              </div>
-            )}
+                </div>,
+                document.body,
+              )}
           </div>
         </div>
         {!isOpen &&
@@ -436,7 +504,7 @@ export function CommandRow({
               <Input
                 size="sm"
                 value={localConfirmMessage}
-                onChange={(e) => setLocalConfirmMessage(e.target.value)}
+                onChange={(e) => handleConfirmMessageChange(e.target.value)}
                 onBlur={handleConfirmMessageBlur}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') e.currentTarget.blur();

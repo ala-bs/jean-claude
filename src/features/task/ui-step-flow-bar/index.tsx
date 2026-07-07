@@ -386,7 +386,8 @@ function StepTypeIcon({ step }: { step: TaskStep }) {
 /* ------------------------------------------------------------------ */
 
 const CHIP_STYLES: Record<TaskStepStatus, string> = {
-  pending: 'border border-line-soft bg-bg-0 text-ink-3 cursor-default',
+  pending:
+    'border border-line-soft bg-bg-0 text-ink-3 cursor-pointer hover:border-glass-border hover:text-ink-2',
   ready:
     'border border-glass-border bg-glass-light text-ink-1 cursor-pointer hover:bg-glass-medium hover:border-glass-border-strong',
   running: 'step-chip-running text-acc-ink cursor-pointer',
@@ -433,7 +434,6 @@ function StepChip({
         ref={ref}
         variant="unstyled"
         onClick={onClick}
-        disabled={step.status === 'pending'}
         className={clsx(
           'h-full w-full gap-1 rounded-md px-1.5 py-0.5 text-[10px] leading-none transition-all duration-300 ease-out',
           CHIP_STYLES[step.status],

@@ -976,6 +976,9 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         copilot: {
           ...(thinkingSettings?.efforts.copilot ?? { default: 'default' }),
         },
+        vibe: {
+          ...(thinkingSettings?.efforts.vibe ?? { default: 'default' }),
+        },
       },
       selectedModels: {
         'claude-code':
@@ -994,6 +997,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
           thinkingSettings?.selectedModels?.copilot ??
           backendDefaultModelsSetting?.models.copilot ??
           'default',
+        vibe:
+          thinkingSettings?.selectedModels?.vibe ??
+          backendDefaultModelsSetting?.models.vibe ??
+          'default',
         [backend]: nextModel,
       },
     });
@@ -1004,6 +1011,7 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         opencode: backendDefaultModelsSetting?.models.opencode ?? 'default',
         codex: backendDefaultModelsSetting?.models.codex ?? 'default',
         copilot: backendDefaultModelsSetting?.models.copilot ?? 'default',
+        vibe: backendDefaultModelsSetting?.models.vibe ?? 'default',
         [backend]: nextModel,
       },
     });
@@ -1048,6 +1056,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
           default: 'default',
           ...(thinkingSettings?.efforts.copilot ?? {}),
         },
+        vibe: {
+          default: 'default',
+          ...(thinkingSettings?.efforts.vibe ?? {}),
+        },
         codex: {
           ...(thinkingSettings?.efforts.codex ?? { default: 'default' }),
         },
@@ -1073,6 +1085,10 @@ function BackendThinkingSettings({ backend }: { backend: AgentBackendType }) {
         copilot:
           thinkingSettings?.selectedModels?.copilot ??
           backendDefaultModelsSetting?.models.copilot ??
+          'default',
+        vibe:
+          thinkingSettings?.selectedModels?.vibe ??
+          backendDefaultModelsSetting?.models.vibe ??
           'default',
         [backend]: targetModel,
       },
@@ -1680,7 +1696,7 @@ export function SummaryModelsSettings() {
   );
 }
 
-type SummaryModelBackend = Exclude<AgentBackendType, 'copilot'>;
+type SummaryModelBackend = Exclude<AgentBackendType, 'copilot' | 'vibe'>;
 
 const SUMMARY_MODEL_BACKENDS: Record<
   SummaryModelBackend,
@@ -1720,6 +1736,7 @@ export function SummaryModelSettings({
     opencode: SUMMARY_MODEL_BACKENDS.opencode.defaultModel,
     codex: SUMMARY_MODEL_BACKENDS.codex.defaultModel,
     copilot: 'default',
+    vibe: 'default',
     ...(summaryModelsSetting?.models ?? {}),
   };
 

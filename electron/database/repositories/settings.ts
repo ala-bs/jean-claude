@@ -28,6 +28,7 @@ const VALID_AGENT_BACKENDS: AgentBackendType[] = [
   'opencode',
   'codex',
   'copilot',
+  'vibe',
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -87,6 +88,7 @@ function normalizeSummaryModelsSetting(
       codex: typeof models.codex === 'string' ? models.codex : defaults.codex,
       copilot:
         typeof models.copilot === 'string' ? models.copilot : defaults.copilot,
+      vibe: typeof models.vibe === 'string' ? models.vibe : defaults.vibe,
     },
   };
 }
@@ -115,6 +117,7 @@ function normalizeBackendDefaultModelsSetting(
       codex: typeof models.codex === 'string' ? models.codex : defaults.codex,
       copilot:
         typeof models.copilot === 'string' ? models.copilot : defaults.copilot,
+      vibe: typeof models.vibe === 'string' ? models.vibe : defaults.vibe,
     },
   };
 }
@@ -132,6 +135,7 @@ function normalizeThinkingSettingsSetting(
     opencode: 'default',
     codex: 'default',
     copilot: 'default',
+    vibe: 'default',
   };
   const efforts = value.efforts as Record<string, unknown>;
   const selectedModels = isRecord(value.selectedModels)
@@ -153,6 +157,7 @@ function normalizeThinkingSettingsSetting(
         efforts.copilot,
         defaults.efforts.copilot,
       ),
+      vibe: normalizeThinkingEfforts(efforts.vibe, defaults.efforts.vibe),
     },
     selectedModels: {
       'claude-code':
@@ -171,6 +176,10 @@ function normalizeThinkingSettingsSetting(
         typeof selectedModels.copilot === 'string'
           ? selectedModels.copilot
           : defaultSelectedModels.copilot,
+      vibe:
+        typeof selectedModels.vibe === 'string'
+          ? selectedModels.vibe
+          : defaultSelectedModels.vibe,
     },
   };
 }

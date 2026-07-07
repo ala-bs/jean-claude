@@ -1125,6 +1125,13 @@ function SubtaskRow({
     [childRunCommandStatus],
   );
   const childHasRunningCommand = childRunningCommands.length > 0;
+  const childRunningBgJobs = useRunningBackgroundJobsForTask(
+    child.taskId ?? null,
+  );
+  const childMergeJobs = useMemo(
+    () => childRunningBgJobs.filter((job) => job.type === 'merge'),
+    [childRunningBgJobs],
+  );
 
   const handleClick = useCallback(() => {
     if (child.taskId) {
@@ -1250,6 +1257,15 @@ function SubtaskRow({
                 <span>Waiting for answer</span>
               </>
             )}
+          </div>
+        )}
+        {/* Background merge jobs */}
+        {childMergeJobs.length > 0 && (
+          <div className="bg-acc/10 ring-acc/20 mt-0.5 flex items-center gap-1.5 rounded px-2 py-0.5 ring-1">
+            <Loader2 className="text-acc-ink h-3 w-3 shrink-0 animate-spin" />
+            <span className="text-acc-ink min-w-0 truncate text-[11px]">
+              {childMergeJobs.map((job) => bgJobLabel(job.type)).join(', ')}
+            </span>
           </div>
         )}
         {/* Sub-task work items */}

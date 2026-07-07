@@ -50,10 +50,8 @@ type ConfigField = {
   options?: FieldOption[];
 };
 
-type ConfigBackendType = AgentBackendType;
-
 const BACKEND_META: Record<
-  ConfigBackendType,
+  AgentBackendType,
   { label: string; summary: string; userPath: string }
 > = {
   'claude-code': {
@@ -75,6 +73,11 @@ const BACKEND_META: Record<
     label: 'GitHub Copilot',
     summary: 'User settings from GitHub Copilot configuration.',
     userPath: '~/.config/github-copilot',
+  },
+  vibe: {
+    label: 'Mistral Vibe',
+    summary: 'Setup for the Vibe ACP backend.',
+    userPath: '~/.vibe/config.toml',
   },
 };
 
@@ -1303,12 +1306,14 @@ const CODEX_FIELDS: ConfigField[] = [
 ];
 
 const COPILOT_FIELDS: ConfigField[] = [];
+const VIBE_FIELDS: ConfigField[] = [];
 
-function getFields(backend: ConfigBackendType): ConfigField[] {
+function getFields(backend: AgentBackendType): ConfigField[] {
   if (backend === 'claude-code') return CLAUDE_FIELDS;
   if (backend === 'opencode') return OPENCODE_FIELDS;
   if (backend === 'codex') return CODEX_FIELDS;
   if (backend === 'copilot') return COPILOT_FIELDS;
+  if (backend === 'vibe') return VIBE_FIELDS;
 
   const exhaustive: never = backend;
   return exhaustive;
@@ -1440,11 +1445,11 @@ function hasTomlComments(content: string): boolean {
 }
 
 function parseConfig(
-  backend: ConfigBackendType,
+  backend: AgentBackendType,
   content: string,
 ): ConfigObject {
   const parsed =
-    backend === 'codex'
+    backend === 'codex' || backend === 'vibe'
       ? (parseToml(content) as unknown)
       : (JSON.parse(
           stripTrailingCommas(stripJsonComments(content)),
@@ -1456,10 +1461,10 @@ function parseConfig(
 }
 
 function serializeConfig(
-  backend: ConfigBackendType,
+  backend: AgentBackendType,
   config: ConfigObject,
 ): string {
-  return backend === 'codex'
+  return backend === 'codex' || backend === 'vibe'
     ? `${stringifyToml(config)}\n`
     : `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -1718,7 +1723,7 @@ export function OpenCodeProcessModeSettings() {
 function StructuredBackendConfigSettings({
   backend,
 }: {
-  backend: ConfigBackendType;
+  backend: AgentBackendType;
 }) {
   const [config, setConfig] = useState<ConfigObject | null>(null);
   const [baselineConfig, setBaselineConfig] = useState('');
@@ -1999,10 +2004,136 @@ function StructuredBackendConfigSettings({
   );
 }
 
+function VibeBackendConfigSettings() {
+  const [content, setContent] = useState('');
+  const addToast = useToastStore((s) => s.addToast);
+  const queryClient = useQueryClient();
+  const meta = BACKEND_META.vibe;
+  const backendBadge = getAgentBackendBadge('vibe');
+
+  const query = useQuery({
+    queryKey: ['backendConfig', 'vibe'],
+    queryFn: () => api.backendConfig.getUserConfig('vibe'),
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
+
+  useEffect(() => {
+    if (!query.data) return;
+    startTransition(() => setContent(query.data.content));
+  }, [query.data]);
+
+  const saveConfig = useMutation({
+    mutationFn: () => api.backendConfig.setUserConfig('vibe', content),
+    onSuccess: (savedConfig) => {
+      queryClient.setQueryData(['backendConfig', 'vibe'], savedConfig);
+      addToast({ message: `${meta.label} config saved`, type: 'success' });
+    },
+    onError: (error) => {
+      addToast({ message: formatError(error), type: 'error' });
+    },
+  });
+
+  const hasChanges = !!query.data && content !== query.data.content;
+
+  return (
+    <div className="flex h-full min-w-0 flex-col overflow-hidden">
+      <div className="border-line-soft flex shrink-0 flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-ink-1 text-base font-semibold">
+              {meta.label}
+            </h2>
+            {backendBadge && (
+              <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                {backendBadge}
+              </span>
+            )}
+          </div>
+          <p className="text-ink-3 mt-0.5 text-xs">{meta.summary}</p>
+          <div className="text-ink-3 mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+            <span className="flex min-w-0 items-center gap-1">
+              <FileJson size={13} />
+              <span className="truncate">{query.data?.path ?? meta.userPath}</span>
+            </span>
+          </div>
+          {query.data && !query.data.exists && (
+            <div className="mt-0.5 text-[11px] text-amber-300">
+              File does not exist yet. Saving will create it.
+            </div>
+          )}
+        </div>
+        <Button
+          icon={<Save />}
+          disabled={!hasChanges || query.isLoading || saveConfig.isPending}
+          loading={saveConfig.isPending}
+          onClick={() => saveConfig.mutate()}
+        >
+          Save
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-3xl space-y-4">
+          <div className="border-line-soft bg-bg-1 rounded-xl border p-4">
+            <h3 className="text-ink-1 text-sm font-semibold">Setup</h3>
+            <ul className="text-ink-2 mt-2 list-disc space-y-1 pl-5 text-sm">
+              <li>
+                Install <code>mistral-vibe</code> from{' '}
+                <a
+                  href="https://github.com/mistralai/mistral-vibe"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-acc hover:text-acc-ink underline underline-offset-2"
+                >
+                  github.com/mistralai/mistral-vibe
+                </a>
+                , for example with <code>uv tool install mistral-vibe</code>.
+              </li>
+              <li>Ensure <code>vibe-acp</code> is on <code>PATH</code>.</li>
+              <li>Run <code>vibe-acp --setup</code> or set <code>MISTRAL_API_KEY</code>.</li>
+            </ul>
+            <p className="text-ink-3 mt-3 text-xs">
+              Jean-Claude managed Vibe skills are symlinked into{' '}
+              <code>~/.vibe/skills</code>. Project Vibe skills are discovered
+              from <code>.vibe/skills</code>.
+            </p>
+          </div>
+
+          <div className="border-line-soft bg-bg-1 rounded-xl border p-4">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h3 className="text-ink-1 text-sm font-semibold">
+                config.toml
+              </h3>
+              {query.isLoading && (
+                <span className="text-ink-3 text-xs">Loading...</span>
+              )}
+            </div>
+            {query.error && (
+              <div className="mb-2 text-xs text-red-300">
+                {formatError(query.error)}
+              </div>
+            )}
+            <Textarea
+              value={content}
+              placeholder={'# Vibe config TOML\n'}
+              className="min-h-72 font-mono text-[12px] leading-5"
+              disabled={query.isLoading || !!query.error}
+              onChange={(event) => setContent(event.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function BackendConfigSettings({
   backend,
 }: {
-  backend: ConfigBackendType;
+  backend: AgentBackendType;
 }) {
+  if (backend === 'vibe') return <VibeBackendConfigSettings />;
+
   return <StructuredBackendConfigSettings backend={backend} />;
 }

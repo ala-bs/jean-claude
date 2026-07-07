@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { splitPromptXmlSegments } from '.';
+import { getFilePathMatches, splitPromptXmlSegments } from '.';
+
+describe('getFilePathMatches', () => {
+  it('matches json paths without stopping at js', () => {
+    expect(
+      getFilePathMatches('name="message-mapping-df35bfb8.json"'),
+    ).toEqual(['message-mapping-df35bfb8.json']);
+  });
+});
 
 describe('splitPromptXmlSegments', () => {
   it('leaves XML inside existing fences as markdown', () => {
