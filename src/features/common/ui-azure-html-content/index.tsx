@@ -3,6 +3,10 @@ import { useMemo } from 'react';
 
 
 import {
+  expandRelativeAzureAttachmentUrls,
+  restoreEscapedMarkdownLinks,
+} from '@/lib/azure-devops-markdown';
+import {
   type MentionDisplayNames,
   replaceAzureDevOpsMentions,
 } from '@/lib/azure-devops-mentions';
@@ -26,6 +30,10 @@ function escapeTableCell(value: string): string {
 function tableCellToMarkdown(cell: Element): string {
   const markdown = turndown.turndown(cell.innerHTML).trim();
   return escapeTableCell(markdown || cell.textContent || '');
+}
+
+function escapeMarkdownText(value: string) {
+  return value.replace(/([\\`*_{}[\]()#+.!|>-])/g, '\\$1');
 }
 
 function getDirectTableRows(table: Element): Element[] {
@@ -89,6 +97,16 @@ turndown.addRule('tables', {
     `\n\n${htmlTableToMarkdown(node as Element)}\n\n`,
 });
 
+turndown.addRule('azureMentions', {
+  filter: (node) =>
+    node.nodeName.toLowerCase() === 'a' &&
+    (node as Element).hasAttribute('data-vss-mention'),
+  replacement: (_content, node) => {
+    const mentionText = escapeMarkdownText((node.textContent ?? '').trim());
+    return mentionText ? `[${mentionText}](azure-devops-mention:html)` : '';
+  },
+});
+
 /**
  * Renders Azure DevOps HTML content (e.g., work item descriptions)
  * with authenticated image proxy support.
@@ -99,6 +117,7 @@ turndown.addRule('tables', {
 export function AzureHtmlContent({
   html,
   providerId,
+  attachmentBaseUrl,
   mentionDisplayNames,
   className,
   imageClassName,
@@ -108,6 +127,8 @@ export function AzureHtmlContent({
   html: string;
   /** The provider ID for authenticating image requests */
   providerId?: string;
+  /** Base URL for expanding relative Azure work item attachment URLs */
+  attachmentBaseUrl?: string;
   /** Azure DevOps identity IDs to display names for @<guid> mention tokens */
   mentionDisplayNames?: MentionDisplayNames;
   /** Optional className for the wrapper */
@@ -122,7 +143,12 @@ export function AzureHtmlContent({
 
     // Azure DevOps TCM content uses uppercase tags (<DIV>, <P>, <STRONG>)
     // that Turndown cannot parse — lowercase them first
-    const lowered = html.replace(/<\/?[A-Z][A-Z0-9]*\b[^>]*>/g, (tag) =>
+    const expanded = expandRelativeAzureAttachmentUrls({
+      value: html,
+      attachmentBaseUrl,
+    });
+
+    const lowered = expanded.replace(/<\/?[A-Z][A-Z0-9]*\b[^>]*>/g, (tag) =>
       tag.toLowerCase(),
     );
 
@@ -131,12 +157,14 @@ export function AzureHtmlContent({
       ? rewriteAzureImageUrls(lowered, providerId)
       : lowered;
 
+    const turndownMarkdown = turndown.turndown(processedHtml);
+    const restoredMarkdown = restoreEscapedMarkdownLinks(turndownMarkdown);
     return replaceAzureDevOpsMentions(
-      turndown.turndown(processedHtml),
+      restoredMarkdown,
       mentionDisplayNames,
       { renderMarkdownLinks: true },
     );
-  }, [html, providerId, mentionDisplayNames]);
+  }, [html, providerId, attachmentBaseUrl, mentionDisplayNames]);
 
   if (!markdown.trim()) {
     return null;
@@ -163,6 +191,7 @@ export function AzureHtmlContent({
 export function AzureMarkdownContent({
   markdown,
   providerId,
+  attachmentBaseUrl,
   mentionDisplayNames,
   className,
   imageClassName,
@@ -172,6 +201,8 @@ export function AzureMarkdownContent({
   markdown: string;
   /** The provider ID for authenticating image requests */
   providerId?: string;
+  /** Base URL for expanding relative Azure work item attachment URLs */
+  attachmentBaseUrl?: string;
   /** Azure DevOps identity IDs to display names for @<guid> mention tokens */
   mentionDisplayNames?: MentionDisplayNames;
   /** Optional className for the wrapper */
@@ -185,14 +216,19 @@ export function AzureMarkdownContent({
     if (!markdown) return '';
 
     // Rewrite Azure DevOps image URLs to use the proxy protocol
+    const expanded = expandRelativeAzureAttachmentUrls({
+      value: markdown,
+      attachmentBaseUrl,
+    });
+
     const withImages = providerId
-      ? rewriteAzureImageUrls(markdown, providerId)
-      : markdown;
+      ? rewriteAzureImageUrls(expanded, providerId)
+      : expanded;
 
     return replaceAzureDevOpsMentions(withImages, mentionDisplayNames, {
       renderMarkdownLinks: true,
     });
-  }, [markdown, providerId, mentionDisplayNames]);
+  }, [markdown, providerId, attachmentBaseUrl, mentionDisplayNames]);
 
   if (!processedMarkdown.trim()) {
     return null;

@@ -2,6 +2,11 @@ import { MessageSquare, MessagesSquare, Send } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { api, type WorkItemComment } from '@/lib/api';
+import {
+  AzureHtmlContent,
+  AzureMarkdownContent,
+} from '@/features/common/ui-azure-html-content';
 import {
   containsAzureDevOpsMention,
   type MentionDisplayNames,
@@ -14,10 +19,7 @@ import {
   type MentionOption,
   MentionTextarea,
 } from '@/common/ui/mention-textarea';
-import { api } from '@/lib/api';
-import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { Button } from '@/common/ui/button';
-import type { WorkItemComment } from '@/lib/api';
 
 function formatCommentDate(value: string) {
   if (!value) return 'Unknown date';
@@ -86,14 +88,27 @@ function CommentsContent({
               {formatCommentDate(comment.createdDate)}
             </span>
           </div>
-          <AzureHtmlContent
-            html={comment.text}
-            providerId={providerId}
-            mentionDisplayNames={mentionDisplayNames}
-            className="text-ink-2 text-xs"
-            imageClassName="max-h-72 w-auto object-contain"
-            enableImageModal
-          />
+          {comment.format === 'markdown' ? (
+            <AzureMarkdownContent
+              markdown={comment.text}
+              providerId={providerId}
+              attachmentBaseUrl={comment.attachmentBaseUrl}
+              mentionDisplayNames={mentionDisplayNames}
+              className="text-ink-2 text-xs"
+              imageClassName="max-h-72 w-auto object-contain"
+              enableImageModal
+            />
+          ) : (
+            <AzureHtmlContent
+              html={comment.text}
+              providerId={providerId}
+              attachmentBaseUrl={comment.attachmentBaseUrl}
+              mentionDisplayNames={mentionDisplayNames}
+              className="text-ink-2 text-xs"
+              imageClassName="max-h-72 w-auto object-contain"
+              enableImageModal
+            />
+          )}
         </div>
       ))}
     </div>

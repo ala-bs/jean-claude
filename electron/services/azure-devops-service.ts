@@ -1150,6 +1150,8 @@ export async function getWorkItemComments(params: {
     id: number;
     workItemId: number;
     text: string;
+    format?: 'html' | 'markdown';
+    attachmentBaseUrl?: string;
     createdBy: string;
     createdDate: string;
   }[]
@@ -1157,7 +1159,7 @@ export async function getWorkItemComments(params: {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
 
   const response = await fetch(
-    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc`,
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText`,
     {
       headers: { Authorization: authHeader },
     },
@@ -1172,29 +1174,90 @@ export async function getWorkItemComments(params: {
   }
 
   const data = await response.json();
-  console.log(
-    '[getWorkItemComments]',
-    `workItem=${params.workItemId}`,
-    `keys=${Object.keys(data).join(',')}`,
-    `totalCount=${data.totalCount}`,
-    `count=${data.count}`,
-    `commentsLength=${(data.comments ?? []).length}`,
-  );
+  const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({
+    orgName,
+    projectName: params.projectName,
+  });
 
   return (data.comments ?? []).map(
     (c: {
       id: number;
       workItemId: number;
       text: string;
+      renderedText?: string;
       createdBy?: { displayName?: string };
       createdDate?: string;
-    }) => ({
-      id: c.id,
-      workItemId: c.workItemId,
-      text: c.text ?? '',
-      createdBy: c.createdBy?.displayName ?? 'Unknown',
-      createdDate: c.createdDate ?? '',
-    }),
+    }) => {
+      const renderedComment = getRenderedCommentText({
+        text: c.text,
+        renderedText: c.renderedText,
+        attachmentBaseUrl,
+      });
+      return {
+        id: c.id,
+        workItemId: c.workItemId,
+        ...renderedComment,
+        attachmentBaseUrl,
+        createdBy: c.createdBy?.displayName ?? 'Unknown',
+        createdDate: c.createdDate ?? '',
+      };
+    },
+  );
+}
+
+function getRenderedCommentText(comment: {
+  text?: string;
+  renderedText?: string;
+  attachmentBaseUrl?: string;
+}): { text: string; format: 'html' | 'markdown' } {
+  if (comment.renderedText?.trim()) {
+    return {
+      text:
+        comment.attachmentBaseUrl
+          ? expandRelativeWorkItemAttachmentUrls({
+              content: comment.renderedText,
+              attachmentBaseUrl: comment.attachmentBaseUrl,
+            })
+          : comment.renderedText,
+      format: 'html',
+    };
+  }
+
+  return {
+    text:
+      comment.attachmentBaseUrl
+        ? expandRelativeWorkItemAttachmentUrls({
+            content: comment.text ?? '',
+            attachmentBaseUrl: comment.attachmentBaseUrl,
+          })
+        : (comment.text ?? ''),
+    format: 'markdown',
+  };
+}
+
+function getWorkItemAttachmentBaseUrl({
+  orgName,
+  projectName,
+}: {
+  orgName: string;
+  projectName: string;
+}) {
+  return `https://dev.azure.com/${orgName}/${encodeURIComponent(projectName)}/_apis/wit/attachments`;
+}
+
+function expandRelativeWorkItemAttachmentUrls({
+  content,
+  attachmentBaseUrl,
+}: {
+  content: string;
+  attachmentBaseUrl: string;
+}) {
+  const relativeAttachmentUrlPattern = new RegExp(
+    String.raw`(^|["'\s]|\(\s*)[\u0000-\u001f\u007f]*(\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\?[^"')\s<]*)?)`,
+    'g',
+  );
+  return content.replace(relativeAttachmentUrlPattern, (_match, prefix, path) =>
+    `${prefix.startsWith('(') ? '(' : prefix}${attachmentBaseUrl}${path}`,
   );
 }
 
@@ -1361,11 +1424,13 @@ export async function addWorkItemComment(params: {
   text: string;
   createdBy: string;
   createdDate: string;
+  format: 'html' | 'markdown';
+  attachmentBaseUrl?: string;
 }> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
 
   const response = await fetch(
-    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4`,
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?format=markdown&api-version=7.0-preview.4`,
     {
       method: 'POST',
       headers: {
@@ -1387,14 +1452,27 @@ export async function addWorkItemComment(params: {
     id: number;
     workItemId?: number;
     text?: string;
+    renderedText?: string;
     createdBy?: { displayName?: string };
     createdDate?: string;
   } = await response.json();
 
+  const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({
+    orgName,
+    projectName: params.projectName,
+  });
+  const renderedComment = getRenderedCommentText({
+    text: c.text ?? params.text,
+    renderedText: c.renderedText,
+    attachmentBaseUrl,
+  });
+
   return {
     id: c.id,
     workItemId: c.workItemId ?? params.workItemId,
-    text: c.text ?? params.text,
+    text: renderedComment.text,
+    format: renderedComment.format,
+    attachmentBaseUrl,
     createdBy: c.createdBy?.displayName ?? 'Unknown',
     createdDate: c.createdDate ?? new Date().toISOString(),
   };

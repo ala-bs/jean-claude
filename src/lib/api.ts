@@ -308,6 +308,8 @@ export interface WorkItemComment {
   id: number;
   workItemId: number;
   text: string;
+  format?: 'html' | 'markdown';
+  attachmentBaseUrl?: string;
   createdBy: string;
   createdDate: string;
 }

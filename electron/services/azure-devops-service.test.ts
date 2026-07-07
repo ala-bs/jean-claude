@@ -18,6 +18,8 @@ vi.mock('../database/repositories/tokens', () => ({
 }));
 
 import {
+  addWorkItemComment,
+  getWorkItemComments,
   getPullRequestFileContent,
   getPullRequestThreads,
   setPullRequestAutoComplete,
@@ -136,6 +138,162 @@ describe('uploadPullRequestAttachment', () => {
     expect(urls).toContain(
       'https://dev.azure.com/org/project/_apis/git/repositories/repo/pullRequests/123/attachments/image-6105d6cc-1.png?api-version=7.1-preview.1',
     );
+  });
+});
+
+describe('addWorkItemComment', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('posts work item comments as markdown so mention tokens resolve', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        {
+          id: 50,
+          workItemId: 299,
+          text: '@<09c05d5e-5817-4b65-b3f2-07f1c8047f52> please review',
+          renderedText:
+            '<p><a href="#" data-vss-mention="version:2.0,09c05d5e-5817-4b65-b3f2-07f1c8047f52">@Patrick Lin</a> please review</p>',
+          createdBy: { displayName: 'Patrick Lin' },
+          createdDate: '2026-01-01T00:00:00Z',
+        },
+        { ok: true },
+      ),
+    );
+
+    const comment = await addWorkItemComment({
+      providerId: 'provider-1',
+      projectName: 'Project Name',
+      workItemId: 299,
+      text: '@<09c05d5e-5817-4b65-b3f2-07f1c8047f52> please review',
+    });
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?format=markdown&api-version=7.0-preview.4',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          text: '@<09c05d5e-5817-4b65-b3f2-07f1c8047f52> please review',
+        }),
+      }),
+    );
+    expect(comment.text).toContain('@Patrick Lin');
+    expect(comment.format).toBe('html');
+  });
+
+  it('uses rendered comment HTML so mentions display without identity lookup', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        {
+          comments: [
+            {
+              id: 50,
+              workItemId: 299,
+              text: '@<09c05d5e-5817-4b65-b3f2-07f1c8047f52> please review',
+              renderedText:
+                '<p><a href="#" data-vss-mention="version:2.0,09c05d5e-5817-4b65-b3f2-07f1c8047f52">@Patrick Lin</a> please review</p>',
+              createdBy: { displayName: 'Patrick Lin' },
+              createdDate: '2026-01-01T00:00:00Z',
+            },
+          ],
+        },
+        { ok: true },
+      ),
+    );
+
+    await expect(
+      getWorkItemComments({
+        providerId: 'provider-1',
+        projectName: 'Project Name',
+        workItemId: 299,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        text: '<p><a href="#" data-vss-mention="version:2.0,09c05d5e-5817-4b65-b3f2-07f1c8047f52">@Patrick Lin</a> please review</p>',
+        format: 'html',
+      }),
+    ]);
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe(
+      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText',
+    );
+  });
+
+  it('expands relative work item attachment URLs in rendered comments', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        {
+          comments: [
+            {
+              id: 50,
+              workItemId: 299,
+              text: '![Image]( /70ecf9b9-300f-48ea-a5a8-80d9c00b6209?fileName=image.png)',
+              renderedText:
+                '<p>![Image]( /70ecf9b9-300f-48ea-a5a8-80d9c00b6209?fileName=image.png)</p>',
+              createdBy: { displayName: 'Patrick Lin' },
+              createdDate: '2026-01-01T00:00:00Z',
+            },
+          ],
+        },
+        { ok: true },
+      ),
+    );
+
+    await expect(
+      getWorkItemComments({
+        providerId: 'provider-1',
+        projectName: 'Project Name',
+        workItemId: 299,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        text: '<p>![Image](https://dev.azure.com/org/Project%20Name/_apis/wit/attachments/70ecf9b9-300f-48ea-a5a8-80d9c00b6209?fileName=image.png)</p>',
+        format: 'html',
+      }),
+    ]);
+  });
+
+  it('falls back to raw markdown when Azure returns blank rendered HTML', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        {
+          comments: [
+            {
+              id: 50,
+              workItemId: 299,
+              text: 'Line one\nLine two\n\n![image.png]( /70ecf9b9-300f-48ea-a5a8-80d9c00b6209?fileName=image.png)',
+              renderedText: '',
+              createdBy: { displayName: 'Patrick Lin' },
+              createdDate: '2026-01-01T00:00:00Z',
+            },
+          ],
+        },
+        { ok: true },
+      ),
+    );
+
+    await expect(
+      getWorkItemComments({
+        providerId: 'provider-1',
+        projectName: 'Project Name',
+        workItemId: 299,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        text: 'Line one\nLine two\n\n![image.png](https://dev.azure.com/org/Project%20Name/_apis/wit/attachments/70ecf9b9-300f-48ea-a5a8-80d9c00b6209?fileName=image.png)',
+        format: 'markdown',
+      }),
+    ]);
   });
 });
 
