@@ -47,6 +47,11 @@ const SOURCE_BADGE_CONFIG: Record<
       'rounded px-1.5 py-0.5 text-[10px] font-medium bg-acc/15 text-acc-ink',
     label: 'Codex',
   },
+  vibe: {
+    className:
+      'rounded px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/15 text-purple-300',
+    label: 'Mistral Vibe',
+  },
 };
 
 function AddProjectPage() {

@@ -88,6 +88,12 @@ const backendOptions: Array<{
     name: 'Codex',
     detail: 'Use when you want Codex CLI-backed coding sessions.',
   },
+  {
+    id: 'vibe',
+    name: 'Mistral Vibe',
+    detail:
+      'Uses vibe-acp. Install mistral-vibe from github.com/mistralai/mistral-vibe, then run vibe-acp --setup or set MISTRAL_API_KEY.',
+  },
 ];
 
 const sourceBadgeConfig: Record<string, { className: string; label: string }> =
@@ -106,6 +112,11 @@ const sourceBadgeConfig: Record<string, { className: string; label: string }> =
       className:
         'rounded px-1.5 py-0.5 text-[10px] font-medium bg-acc/15 text-acc-ink',
       label: 'Codex',
+    },
+    vibe: {
+      className:
+        'rounded px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/15 text-purple-300',
+      label: 'Mistral Vibe',
     },
   };
 

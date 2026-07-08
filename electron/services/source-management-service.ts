@@ -950,6 +950,7 @@ async function planSourceInstall({
     assertValidSkillTargetName(item.targetName);
   } else {
     assertValidAgentTargetName(item.targetName);
+    assertValidAgentInstallBackends(item.enabledBackends);
   }
 
   return {
@@ -963,6 +964,18 @@ async function planSourceInstall({
     targetName: item.targetName,
     enabledBackends: item.enabledBackends,
   };
+}
+
+function assertValidAgentInstallBackends(
+  enabledBackends: InstallSourceItemsParams['items'][number]['enabledBackends'],
+): void {
+  for (const backendType of enabledBackends) {
+    if (backendType !== 'claude-code' && backendType !== 'opencode') {
+      throw new Error(
+        `Agent management is not implemented for ${backendType}`,
+      );
+    }
+  }
 }
 
 async function buildSourceFromClone({

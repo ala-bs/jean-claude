@@ -21,7 +21,7 @@ import { getSourceProvenanceByInstalledPathMap } from './source-manifest-store';
 
 type AgentManagementBackendType = Exclude<
   AgentBackendType,
-  'codex' | 'copilot'
+  'codex' | 'copilot' | 'vibe'
 >;
 
 const JC_USER_AGENTS_DIR = path.join(
