@@ -334,6 +334,7 @@ function SourceItemSection({
                                 opencode: true,
                                 codex: false,
                                 copilot: false,
+                                vibe: false,
                               },
                             }
                           : null,

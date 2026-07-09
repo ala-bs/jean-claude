@@ -221,6 +221,7 @@ const {
       stop: vi.fn(),
     },
     usageTrackingServiceMock: {
+      recordUsage: vi.fn(),
       recordUsageSafe: vi.fn(),
     },
     webContentsSendMock: vi.fn(),
@@ -1243,6 +1244,94 @@ describe('agentService provider runtime', () => {
       expect(handle.stop).toHaveBeenCalled();
       expect(handle.dispose).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('persists a synthetic user prompt for Vibe so prompt groups can form', async () => {
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      agentBackend: 'vibe',
+    });
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(agentMessageRepositoryMock.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: 'task-1',
+          stepId: 'step-1',
+          rawMessageId: null,
+          entry: expect.objectContaining({
+            isSynthetic: true,
+            type: 'user-prompt',
+            value: 'Resolved prompt',
+            isSDKSynthetic: true,
+          }),
+        }),
+      );
+    });
+    expect(providerCalls.runStarts[0]).toMatchObject({
+      config: { type: 'vibe' },
+      parts: [{ type: 'text', text: 'Resolved prompt' }],
+    });
+  });
+
+  it('records result update usage snapshots in event order with a stable source id', async () => {
+    const firstUsageRecorded = createDeferred<void>();
+    const handle = createHandle({
+      events: [
+        { type: 'session-id', sessionId: 'vibe-session-1' },
+        {
+          type: 'result-update',
+          result: {
+            isError: false,
+            cost: { costUsd: 0.25 },
+            usage: { inputTokens: 42, outputTokens: 0 },
+          },
+        },
+        {
+          type: 'result-update',
+          result: {
+            isError: false,
+            cost: { costUsd: 0.5 },
+            usage: { inputTokens: 84, outputTokens: 0 },
+          },
+        },
+        completeEvent(),
+      ],
+    });
+    providerState.runStartImplementation = async () => handle;
+    usageTrackingServiceMock.recordUsage
+      .mockReturnValueOnce(firstUsageRecorded.promise)
+      .mockResolvedValueOnce(undefined);
+
+    const startPromise = agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(usageTrackingServiceMock.recordUsage).toHaveBeenCalledTimes(1);
+    });
+    expect(usageTrackingServiceMock.recordUsage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sourceId: 'agent-result-update:vibe-session-1',
+        usage: { inputTokens: 42, outputTokens: 0 },
+      }),
+    );
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(usageTrackingServiceMock.recordUsage).toHaveBeenCalledTimes(1);
+
+    firstUsageRecorded.resolve();
+    await waitForAssertion(() => {
+      expect(usageTrackingServiceMock.recordUsage).toHaveBeenCalledTimes(2);
+    });
+    expect(usageTrackingServiceMock.recordUsage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sourceId: 'agent-result-update:vibe-session-1',
+        usage: { inputTokens: 84, outputTokens: 0 },
+      }),
+    );
   });
 
   it('cleans up startup session when prompt resolution fails', async () => {

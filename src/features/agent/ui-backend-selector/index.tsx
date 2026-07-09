@@ -210,6 +210,13 @@ export const AVAILABLE_BACKENDS: {
     description: 'GitHub Copilot SDK',
     badge: getAgentBackendBadge('copilot'),
   },
+  {
+    value: 'vibe',
+    label: 'Mistral Vibe',
+    description:
+      'Uses vibe-acp. Install mistral-vibe from github.com/mistralai/mistral-vibe, then run vibe-acp --setup or set MISTRAL_API_KEY.',
+    badge: getAgentBackendBadge('vibe'),
+  },
 ];
 
 export const AGENT_BACKENDS = AVAILABLE_BACKENDS.map((b) => b.value);

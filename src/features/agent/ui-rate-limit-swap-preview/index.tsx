@@ -9,6 +9,7 @@ const BACKEND_LABELS: Record<AgentBackendType, string> = {
   opencode: 'OpenCode',
   codex: 'Codex',
   copilot: 'GitHub Copilot',
+  vibe: 'Mistral Vibe',
 };
 
 export function useRateLimitSwapPreview(

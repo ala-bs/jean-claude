@@ -261,17 +261,19 @@ export function SkillDetails({
         {Object.entries(skill.enabledBackends).map(([backend, enabled]) => {
           const backendType = backend as AgentBackendType;
           const label =
-            backendType === 'claude-code'
-              ? 'Claude Code'
-              : backendType === 'opencode'
-                ? 'OpenCode'
-                : 'Codex';
+            {
+              'claude-code': 'Claude Code',
+              opencode: 'OpenCode',
+              codex: 'Codex',
+              copilot: 'GitHub Copilot',
+              vibe: 'Mistral Vibe',
+            } satisfies Record<AgentBackendType, string>;
           return (
             <Switch
               key={backend}
               checked={!!enabled}
               onChange={() => onToggleEnabled?.(skill, backendType)}
-              label={label}
+              label={label[backendType]}
               disabled={!skill.editable || !onToggleEnabled}
             />
           );

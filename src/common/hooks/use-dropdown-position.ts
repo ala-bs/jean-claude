@@ -9,6 +9,7 @@ const MIN_HORIZONTAL_SPACE = 200;
 export interface DropdownPosition {
   top: number;
   left: number;
+  width: number;
   actualSide: 'top' | 'bottom';
   actualAlign: 'left' | 'right';
   maxHeight: number;
@@ -92,7 +93,15 @@ export function useDropdownPosition({
           ? Math.max(0, rect.right - VIEWPORT_PADDING)
           : Math.max(0, window.innerWidth - rect.left - VIEWPORT_PADDING);
 
-      setPosition({ top, left, actualSide, actualAlign, maxHeight, maxWidth });
+      setPosition({
+        top,
+        left,
+        width: rect.width,
+        actualSide,
+        actualAlign,
+        maxHeight,
+        maxWidth,
+      });
     };
 
     updatePosition();

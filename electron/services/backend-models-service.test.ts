@@ -95,6 +95,21 @@ describe('getBackendModels', () => {
     ]);
     expect(stop).toHaveBeenCalledOnce();
   });
+
+  it('returns static Vibe models', async () => {
+    await expect(getBackendModels('vibe')).resolves.toEqual([
+      {
+        id: 'mistral-medium-3.5',
+        label: 'Mistral Medium 3.5',
+        supportsThinking: false,
+      },
+      {
+        id: 'codestral-latest',
+        label: 'Codestral Latest',
+        supportsThinking: false,
+      },
+    ]);
+  });
 });
 
 describe('parseOpenCodeModelsVerbose', () => {
