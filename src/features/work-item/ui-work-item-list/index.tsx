@@ -226,7 +226,7 @@ export function WorkItemList({
             className={clsx(
               'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left transition-[box-shadow,background-color]',
               isExactMatch &&
-                'bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_24px_oklch(0.78_0.18_295_/_0.3)]',
+                'bg-acc/15 shadow-[0_0_0_2px_color-mix(in_srgb,var(--color-acc)_45%,transparent),0_0_24px_color-mix(in_srgb,var(--color-acc)_30%,transparent)]',
               !isExactMatch && isHighlighted && 'bg-glass-medium/50',
               !isExactMatch && !isHighlighted && 'hover:bg-glass-medium/30',
               hasParentInList && 'pl-6', // Add left indent for child items

@@ -359,7 +359,7 @@ function SetupWizardPage() {
   ]);
 
   return (
-    <div className="h-full flex-1 overflow-hidden bg-[radial-gradient(ellipse_900px_560px_at_14%_-10%,rgba(125,84,255,0.28),transparent_56%),radial-gradient(ellipse_760px_520px_at_110%_116%,rgba(20,184,166,0.18),transparent_58%),#111018]">
+    <div className="h-full flex-1 overflow-hidden bg-[radial-gradient(ellipse_900px_560px_at_14%_-10%,color-mix(in_srgb,var(--color-acc)_28%,transparent),transparent_56%),radial-gradient(ellipse_760px_520px_at_110%_116%,color-mix(in_srgb,var(--color-status-done)_18%,transparent),transparent_58%),var(--color-bg-0)]">
       <div className="flex h-full flex-col">
         <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[384px_1fr]">
           <aside className="border-glass-border/70 flex min-h-0 flex-col overflow-y-auto border-r bg-black/20 p-7">
@@ -467,7 +467,7 @@ function SetupWizardPage() {
           </aside>
 
           <section className="relative min-h-0 overflow-y-auto p-6 sm:p-10">
-            <div className="pointer-events-none absolute top-5 right-10 font-mono text-[160px] leading-none font-bold text-white/[0.035] select-none">
+            <div className="text-ink-0/[0.04] pointer-events-none absolute top-5 right-10 font-mono text-[160px] leading-none font-bold select-none">
               {activeStep.number}
             </div>
             <div className="relative max-w-3xl">
@@ -528,7 +528,7 @@ function SetupWizardPage() {
                       {projects.map((project) => (
                         <div
                           key={project.id}
-                          className="rounded-xl border border-emerald-300/20 bg-emerald-400/10 p-4"
+                          className="border-status-done/20 bg-status-done/10 rounded-xl border p-4"
                         >
                           <div className="text-ink-0 font-semibold">
                             {project.name} ready
@@ -611,7 +611,7 @@ function getStepIcon(stepId: SetupStepId) {
 
 function SetupPanel({ children }: { children: ReactNode }) {
   return (
-    <div className="border-glass-border rounded-2xl border bg-[#191923]/85 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.18)]">
+    <div className="border-glass-border bg-bg-1/85 rounded-2xl border p-4 shadow-[0_24px_80px_rgba(0,0,0,0.18)]">
       {children}
     </div>
   );
@@ -626,9 +626,9 @@ function SetupNote({
 }) {
   const classes = {
     default: 'border-glass-border bg-white/[0.04] text-ink-2',
-    done: 'border-emerald-300/20 bg-emerald-400/10 text-emerald-100',
-    warn: 'border-amber-300/20 bg-amber-400/10 text-amber-100',
-    azure: 'border-sky-300/20 bg-sky-400/10 text-sky-100',
+    done: 'border-status-done/20 bg-status-done/10 text-status-done',
+    warn: 'border-status-run/20 bg-status-run/10 text-status-run',
+    azure: 'border-status-azure/20 bg-status-azure/10 text-status-azure',
   }[tone];
   return (
     <div className={`rounded-xl border p-3 text-sm leading-6 ${classes}`}>
@@ -676,8 +676,8 @@ function EnvironmentStep({
             <div
               className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
                 row.status === 'ok'
-                  ? 'bg-emerald-400/10 text-emerald-300'
-                  : 'bg-amber-400/10 text-amber-300'
+                  ? 'bg-status-done/10 text-status-done'
+                  : 'bg-status-run/10 text-status-run'
               }`}
             >
               {row.status === 'ok' ? (
@@ -697,8 +697,8 @@ function EnvironmentStep({
             <span
               className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${
                 row.status === 'ok'
-                  ? 'border-emerald-300/20 bg-emerald-400/10 text-emerald-200'
-                  : 'border-amber-300/20 bg-amber-400/10 text-amber-200'
+                  ? 'border-status-done/20 bg-status-done/10 text-status-done'
+                  : 'border-status-run/20 bg-status-run/10 text-status-run'
               }`}
             >
               {row.status === 'ok' ? 'ready' : 'optional'}
@@ -815,8 +815,8 @@ function AgentStep({
                     <span
                       className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${
                         installed
-                          ? 'border-emerald-300/20 bg-emerald-400/10 text-emerald-200'
-                          : 'border-amber-300/20 bg-amber-400/10 text-amber-200'
+                          ? 'border-status-done/20 bg-status-done/10 text-status-done'
+                          : 'border-status-run/20 bg-status-run/10 text-status-run'
                       }`}
                     >
                       {isLoading
@@ -983,8 +983,8 @@ function AzureStep({
           </SetupNote>
         ) : (
           <div className="space-y-4">
-            <div className="border-sky-300/20 bg-sky-400/10 rounded-xl border p-3">
-              <div className="text-sky-100 text-sm font-semibold">
+            <div className="border-status-azure/20 bg-status-azure/10 rounded-xl border p-3">
+              <div className="text-status-azure text-sm font-semibold">
                 Create Azure DevOps PAT
               </div>
               <div className="text-ink-2 mt-2 grid gap-2 text-xs leading-5 sm:grid-cols-3">
@@ -1014,14 +1014,14 @@ function AzureStep({
                 ].map(([scope, reason]) => (
                   <div
                     key={scope}
-                    className="border-sky-300/15 bg-black/15 rounded-lg border px-3 py-2"
+                    className="border-status-azure/15 bg-scrim/15 rounded-lg border px-3 py-2"
                   >
-                    <div className="text-sky-100 font-medium">{scope}</div>
+                    <div className="text-status-azure font-medium">{scope}</div>
                     <div className="text-ink-3 mt-0.5 leading-5">{reason}</div>
                   </div>
                 ))}
               </div>
-              <div className="border-sky-300/15 text-ink-3 mt-2 rounded-lg border bg-black/10 px-3 py-2 text-xs leading-5">
+              <div className="border-status-azure/15 text-ink-3 bg-scrim/10 mt-2 rounded-lg border px-3 py-2 text-xs leading-5">
                 Optional: add Build Execute and Release Execute only if you want
                 Jean-Claude to queue, cancel, or create pipeline and release runs.
               </div>
@@ -1113,7 +1113,7 @@ function AzureStep({
                     </>
                   ) : organizations.length > 0 ? (
                     <>
-                      <Check className="h-3.5 w-3.5 text-emerald-300" />
+                      <Check className="text-status-done h-3.5 w-3.5" />
                       Organizations found and selected.
                     </>
                   ) : (

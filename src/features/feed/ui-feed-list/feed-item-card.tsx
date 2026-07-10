@@ -403,13 +403,13 @@ function RailPrCiStatus({
   return (
     <span className="flex items-center gap-1">
       {ciCounts.running > 0 && (
-        <span className="flex items-center gap-0.5 text-blue-400">
+        <span className="text-status-azure flex items-center gap-0.5">
           <Loader2 className="h-2.5 w-2.5 animate-spin" />
           <span className="text-[9.5px]">{ciCounts.running}</span>
         </span>
       )}
       {ciCounts.pending > 0 && (
-        <span className="flex items-center gap-0.5 text-yellow-400">
+        <span className="text-status-run flex items-center gap-0.5">
           <MinusCircle className="h-2.5 w-2.5" />
           <span className="text-[9.5px]">{ciCounts.pending}</span>
         </span>

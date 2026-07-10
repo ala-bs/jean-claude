@@ -109,7 +109,8 @@ function drawVideoFrameContain({
   const drawHeight = sourceHeight * scale;
   const drawX = (width - drawWidth) / 2;
   const drawY = (height - drawHeight) / 2;
-  context.fillStyle = '#05040a';
+  // Letterbox fill baked into the exported GIF; intentionally theme-independent
+  context.fillStyle = 'rgb(5, 4, 10)';
   context.fillRect(0, 0, width, height);
   context.drawImage(
     video,
@@ -599,7 +600,7 @@ export function VideoGifConverter({
                   onPlay={handlePreviewPlay}
                   onTimeUpdate={handlePreviewTimeUpdate}
                 />
-                <div className="absolute top-3 left-3 rounded-full bg-black/65 px-2.5 py-1 font-mono text-[11px] text-white/90 ring-1 ring-white/15 backdrop-blur">
+                <div className="bg-scrim-strong text-chrome-fg ring-chrome-border absolute top-3 left-3 rounded-full px-2.5 py-1 font-mono text-[11px] ring-1 backdrop-blur">
                   {formatSeconds(clipSeconds)} · {estimatedFrames}f
                 </div>
               </div>
@@ -721,7 +722,7 @@ export function VideoGifConverter({
                     <span className="bg-acc-ink/80 h-6 w-0.5 rounded" />
                   </div>
                   <div
-                    className="absolute -top-1 -bottom-1 w-0.5 bg-yellow-300 shadow-[0_0_10px_rgba(253,224,71,0.9)]"
+                    className="bg-status-run shadow-[0_0_10px_color-mix(in_srgb,var(--color-status-run)_90%,transparent)] absolute -top-1 -bottom-1 w-0.5"
                     style={{ left: `${previewProgressPercent}%` }}
                   />
                   <input
@@ -877,8 +878,8 @@ export function VideoGifConverter({
                 <span
                   className={
                     isOverBudget
-                      ? 'font-mono text-xl font-semibold text-red-400'
-                      : 'font-mono text-xl font-semibold text-emerald-400'
+                      ? 'text-status-fail font-mono text-xl font-semibold'
+                      : 'text-status-done font-mono text-xl font-semibold'
                   }
                 >
                   {formatBytes(estimatedBytes)}
@@ -888,7 +889,7 @@ export function VideoGifConverter({
               <div className="bg-bg-0 h-2 overflow-hidden rounded-full ring-1 ring-white/10">
                 <div
                   className={
-                    isOverBudget ? 'h-full bg-red-400' : 'bg-acc h-full'
+                    isOverBudget ? 'bg-status-fail h-full' : 'bg-acc h-full'
                   }
                   style={{ width: `${budgetPercent}%` }}
                 />
@@ -927,7 +928,7 @@ export function VideoGifConverter({
             />
           </div>
         )}
-        {error && <p className="px-4 pt-3 text-xs text-red-400">{error}</p>}
+        {error && <p className="text-status-fail px-4 pt-3 text-xs">{error}</p>}
 
         <div className="border-glass-border bg-bg-0 flex shrink-0 flex-wrap items-center gap-3 border-t px-4 py-3">
           <div className="text-ink-3 min-w-0 flex-1 text-xs">

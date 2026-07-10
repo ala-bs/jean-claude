@@ -1676,7 +1676,9 @@ function FieldCard({
         />
       )}
 
-      {error && <div className="mt-1.5 text-[11px] text-red-300">{error}</div>}
+      {error && (
+        <div className="text-status-fail mt-1.5 text-[11px]">{error}</div>
+      )}
     </div>
   );
 }
@@ -1917,7 +1919,7 @@ function StructuredBackendConfigSettings({
                   {selectedField?.label ?? 'Settings'}
                 </h2>
                 {backendBadge && (
-                  <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                  <span className="border-status-run/20 bg-status-run/10 text-status-run rounded-full border px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
                     {backendBadge}
                   </span>
                 )}
@@ -1939,18 +1941,18 @@ function StructuredBackendConfigSettings({
                 )}
               </div>
               {query.data && !query.data.exists && (
-                <div className="mt-0.5 text-[11px] text-amber-300">
+                <div className="text-status-run mt-0.5 text-[11px]">
                   File does not exist yet. Saving will create it.
                 </div>
               )}
               {hasUnsafeCodexComments && (
-                <div className="mt-1 text-[11px] text-amber-300">
+                <div className="text-status-run mt-1 text-[11px]">
                   Structured Codex editor cannot safely preserve existing TOML
                   comments yet. Save disabled for this file.
                 </div>
               )}
               {loadError && (
-                <div className="mt-1.5 text-[11px] text-red-300">
+                <div className="text-status-fail mt-1.5 text-[11px]">
                   {loadError}
                 </div>
               )}
@@ -2045,7 +2047,7 @@ function VibeBackendConfigSettings() {
               {meta.label}
             </h2>
             {backendBadge && (
-              <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+              <span className="border-status-run/20 bg-status-run/10 text-status-run rounded-full border px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
                 {backendBadge}
               </span>
             )}
@@ -2058,7 +2060,7 @@ function VibeBackendConfigSettings() {
             </span>
           </div>
           {query.data && !query.data.exists && (
-            <div className="mt-0.5 text-[11px] text-amber-300">
+            <div className="text-status-run mt-0.5 text-[11px]">
               File does not exist yet. Saving will create it.
             </div>
           )}
@@ -2110,7 +2112,7 @@ function VibeBackendConfigSettings() {
               )}
             </div>
             {query.error && (
-              <div className="mb-2 text-xs text-red-300">
+              <div className="text-status-fail mb-2 text-xs">
                 {formatError(query.error)}
               </div>
             )}

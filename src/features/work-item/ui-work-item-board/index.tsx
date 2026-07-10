@@ -284,7 +284,7 @@ export function WorkItemBoard({
                   className={clsx(
                     'flex cursor-pointer flex-col gap-1.5 rounded border p-2 text-left transition-[box-shadow,border-color,background-color]',
                     isExactMatch
-                      ? 'border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'
+                      ? 'border-acc bg-acc/15 shadow-[0_0_0_2px_color-mix(in_srgb,var(--color-acc)_45%,transparent),0_0_28px_color-mix(in_srgb,var(--color-acc)_35%,transparent)]'
                       : isHighlighted
                         ? 'border-acc bg-glass-medium/70'
                         : 'hover:border-glass-border border-glass-border',

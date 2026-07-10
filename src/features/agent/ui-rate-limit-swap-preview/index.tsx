@@ -86,7 +86,7 @@ export function RateLimitSwapPreview({
           thinkingEffort: effectiveThinking ?? 'default',
         })
       }
-      className="flex cursor-pointer items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-xs whitespace-nowrap text-amber-300 transition-colors hover:border-amber-400/40 hover:bg-amber-500/15"
+      className="border-status-run/25 bg-status-run/10 text-status-run hover:border-status-run/40 hover:bg-status-run/15 flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs whitespace-nowrap transition-colors"
     >
       <span className="text-ink-3">Rate limit swapper suggests</span>
       <span className="font-medium">{BACKEND_LABELS[data.backend]}</span>
