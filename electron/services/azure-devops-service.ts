@@ -2859,35 +2859,6 @@ export async function getPullRequestPolicyEvaluations(params: {
     }>;
   } = await response.json();
 
-  dbg.azure(
-    'policy-evaluations:raw',
-    data.value.map((e) => ({
-      id: e.evaluationId,
-      status: e.status,
-      configurationId: e.configuration.id,
-      type: e.configuration.type.displayName,
-      isEnabled: e.configuration.isEnabled,
-      isBlocking: e.configuration.isBlocking,
-      settings: {
-        buildDefinitionId:
-          (e.configuration.settings.buildDefinitionId as number | undefined) ??
-          null,
-        displayName:
-          (e.configuration.settings.displayName as string | undefined) ?? null,
-        minimumApproverCount:
-          (e.configuration.settings.minimumApproverCount as
-            | number
-            | undefined) ?? null,
-      },
-      context: {
-        buildId: (e.context?.buildId as number | undefined) ?? null,
-        buildDefinitionId:
-          (e.context?.buildDefinitionId as number | undefined) ?? null,
-        isExpired: (e.context?.isExpired as boolean | undefined) ?? null,
-      },
-    })),
-  );
-
   const enabledEvals = data.value.filter((e) => e.configuration.isEnabled);
 
   // Resolve build definition names for policies that have a buildDefinitionId

@@ -6,6 +6,7 @@ const AGENT_BACKEND_BADGES: Partial<
   Record<AgentBackendType, AgentBackendBadge>
 > = {
   copilot: 'Beta',
+  vibe: 'Beta',
 };
 
 export function getAgentBackendBadge(

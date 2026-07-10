@@ -1010,6 +1010,48 @@ describe('source item installs', () => {
     );
   });
 
+  it('allows Vibe source skill installs but rejects Vibe source agent installs', async () => {
+    const { sourceId } = await writeInstallSourceFixture();
+
+    await expect(
+      installSourceItems({
+        items: [
+          {
+            sourceId,
+            sourceItemId: 'agent:agents/reviewer.md',
+            targetName: 'Installed Agent',
+            enabledBackends: ['vibe'],
+          },
+        ],
+      }),
+    ).rejects.toThrow('Agent management is not implemented for vibe');
+
+    const sources = await installSourceItems({
+      items: [
+        {
+          sourceId,
+          sourceItemId: 'skill:skills/reviewer',
+          targetName: 'Installed Skill',
+          enabledBackends: ['vibe'],
+        },
+      ],
+    });
+
+    const skillTarget = path.join(
+      os.homedir(),
+      '.config/jean-claude/skills/user/installed-skill',
+    );
+    await expect(
+      fs.realpath(path.join(os.homedir(), '.vibe/skills/installed-skill')),
+    ).resolves.toBe(skillTarget);
+    expect(sources[0].items).toContainEqual(
+      expect.objectContaining({
+        id: 'skill:skills/reviewer',
+        status: 'up-to-date',
+      }),
+    );
+  });
+
   it('installs root skill without .git and ignores .git changes for status', async () => {
     const parsed = parseGitHubRepoUrl('https://github.com/owner/root-skill');
     const clonePath = buildGithubClonePath(parsed);

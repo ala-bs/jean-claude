@@ -94,6 +94,10 @@ vi.mock('./copilot/copilot-backend', () => ({
   CopilotBackend: TestBackend,
 }));
 
+vi.mock('./vibe/vibe-backend', () => ({
+  VibeBackend: TestBackend,
+}));
+
 import {
   AGENT_BACKEND_PROVIDERS,
   getAgentBackendProvider,
@@ -104,15 +108,18 @@ const BACKEND_TYPES: AgentBackendType[] = [
   'opencode',
   'codex',
   'copilot',
+  'vibe',
 ];
 const BACKEND_LABELS: Record<AgentBackendType, string> = {
   'claude-code': 'Claude Code',
   opencode: 'OpenCode',
   codex: 'Codex',
   copilot: 'GitHub Copilot',
+  vibe: 'Mistral Vibe',
 };
 const BACKEND_BADGES: Partial<Record<AgentBackendType, string>> = {
   copilot: 'Beta',
+  vibe: 'Beta',
 };
 
 const CAPABILITY_KEYS = {
@@ -387,11 +394,23 @@ describe('agent backend providers', () => {
     expect(codexAgent.questions.supported).toBe(false);
     expect(codexAgent.runtimeModeSwitch.supported).toBe(false);
     expect(codexAgent.sessionAllowedTools.supported).toBe(false);
+
+    const vibeAgent = getAgentBackendProvider('vibe').capabilities.agent;
+    expect(vibeAgent.permissions.supported).toBe(true);
+    expect(vibeAgent.questions.supported).toBe(false);
+    expect(vibeAgent.runtimeModeSwitch.supported).toBe(true);
+    expect(vibeAgent.sessionAllowedTools.supported).toBe(false);
   });
 
-  it('supports generation capabilities for all current backends', () => {
+  it('supports generation capabilities for implemented generation backends', () => {
     for (const type of BACKEND_TYPES) {
       const generation = getAgentBackendProvider(type).capabilities.generation;
+
+      if (type === 'vibe') {
+        expect(generation.text.supported).toBe(false);
+        expect(generation.structured.supported).toBe(false);
+        continue;
+      }
 
       expect(generation.text.supported).toBe(true);
       expect(generation.structured.supported).toBe(true);

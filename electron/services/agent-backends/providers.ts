@@ -354,6 +354,24 @@ export const copilotProvider: AgentBackendProvider = {
   }),
 };
 
+export const vibeProvider: AgentBackendProvider = {
+  id: 'vibe',
+  label: 'Mistral Vibe',
+  badge: getAgentBackendBadge('vibe'),
+  capabilities: createCapabilities({
+    backend: 'vibe',
+    run: createRunCapability({
+      backendType: 'vibe',
+      loadBackendClass: async () =>
+        (await import('./vibe/vibe-backend')).VibeBackend,
+    }),
+    supportsPermissions: true,
+    supportsQuestions: false,
+    supportsRuntimeModeSwitch: true,
+    supportsSessionAllowedTools: false,
+  }),
+};
+
 export const AGENT_BACKEND_PROVIDERS: Record<
   AgentBackendType,
   AgentBackendProvider
@@ -362,6 +380,7 @@ export const AGENT_BACKEND_PROVIDERS: Record<
   opencode: openCodeProvider,
   codex: codexProvider,
   copilot: copilotProvider,
+  vibe: vibeProvider,
 };
 
 export function getAgentBackendProvider(

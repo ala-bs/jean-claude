@@ -73,6 +73,7 @@ function getStatusColor(status: string): string {
 export function WorkItemList({
   workItems,
   highlightedWorkItemId,
+  exactMatchWorkItemId,
   selectedWorkItemIds,
   providerId,
   search,
@@ -81,13 +82,14 @@ export function WorkItemList({
 }: {
   workItems: AzureDevOpsWorkItem[];
   highlightedWorkItemId: string | null;
+  exactMatchWorkItemId?: string | null;
   selectedWorkItemIds: string[];
   providerId?: string;
   search: string;
   onToggleSelect: (workItem: AzureDevOpsWorkItem) => void;
   onHighlight: (workItem: AzureDevOpsWorkItem) => void;
 }) {
-  const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
 
   // Group work items so children appear after their parents
@@ -106,6 +108,13 @@ export function WorkItemList({
       (wi) => wi.id.toString() === highlightedWorkItemId,
     );
   }, [groupedItems, highlightedWorkItemId]);
+
+  const exactMatchIndex = useMemo(() => {
+    if (!exactMatchWorkItemId) return -1;
+    return groupedItems.findIndex(
+      (wi) => wi.id.toString() === exactMatchWorkItemId,
+    );
+  }, [exactMatchWorkItemId, groupedItems]);
 
   // Flat list navigation: all directions move linearly
   const navigate = useCallback(
@@ -160,13 +169,13 @@ export function WorkItemList({
     },
   ]);
 
-  // Scroll highlighted item into view
+  // Exact ID searches should jump to the matching row; normal highlight should not.
   useEffect(() => {
-    if (highlightedIndex >= 0 && highlightedIndex < groupedItems.length) {
-      const itemElement = itemRefs.current.get(highlightedIndex);
+    if (exactMatchIndex >= 0 && exactMatchIndex < groupedItems.length) {
+      const itemElement = itemRefs.current.get(exactMatchIndex);
       itemElement?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     }
-  }, [highlightedIndex, groupedItems.length]);
+  }, [exactMatchIndex, groupedItems]);
 
   // Empty state: no work items
   if (workItems.length === 0) {
@@ -186,6 +195,7 @@ export function WorkItemList({
     >
       {groupedItems.map((workItem, index) => {
         const isHighlighted = index === highlightedIndex;
+        const isExactMatch = workItem.id.toString() === exactMatchWorkItemId;
         const isSelected = selectedWorkItemIds.includes(workItem.id.toString());
         const itemId = `work-item-${workItem.id}`;
         // Check if this item has a parent that is in the current list
@@ -193,7 +203,7 @@ export function WorkItemList({
           workItem.parentId && parentIdsInList.has(workItem.parentId);
 
         return (
-          <button
+          <div
             key={workItem.id}
             id={itemId}
             data-work-item-id={workItem.id}
@@ -204,22 +214,38 @@ export function WorkItemList({
                 itemRefs.current.delete(index);
               }
             }}
-            type="button"
             role="option"
             aria-selected={isHighlighted || isSelected}
-            onClick={() => {
+            onClick={() => onHighlight(workItem)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
               onHighlight(workItem);
-              onToggleSelect(workItem);
             }}
+            tabIndex={0}
             className={clsx(
-              'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left',
-              isHighlighted && 'bg-glass-medium/50',
-              !isHighlighted && 'hover:bg-glass-medium/30',
+              'flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left transition-[box-shadow,background-color]',
+              isExactMatch &&
+                'bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_24px_oklch(0.78_0.18_295_/_0.3)]',
+              !isExactMatch && isHighlighted && 'bg-glass-medium/50',
+              !isExactMatch && !isHighlighted && 'hover:bg-glass-medium/30',
               hasParentInList && 'pl-6', // Add left indent for child items
             )}
           >
             {/* Selection checkbox */}
-            <SelectionCheckbox checked={isSelected} />
+            <button
+              type="button"
+              aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
+              aria-checked={isSelected}
+              role="checkbox"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleSelect(workItem);
+              }}
+              className="rounded"
+            >
+              <SelectionCheckbox checked={isSelected} />
+            </button>
 
             {/* Type icon */}
             <WorkItemTypeIcon type={workItem.fields.workItemType} />
@@ -228,6 +254,12 @@ export function WorkItemList({
             <span className="text-ink-3 shrink-0 text-xs">
               <HighlightedSearchText text={`#${workItem.id}`} search={search} />
             </span>
+
+            {isExactMatch && (
+              <span className="bg-acc text-bg-1 shrink-0 rounded px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide">
+                Exact
+              </span>
+            )}
 
             {/* Title (truncated) */}
             <span className="text-ink-1 min-w-0 flex-1 truncate text-sm">
@@ -263,7 +295,7 @@ export function WorkItemList({
                 }
               />
             )}
-          </button>
+          </div>
         );
       })}
     </div>

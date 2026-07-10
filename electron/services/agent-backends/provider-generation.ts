@@ -17,6 +17,10 @@ function supported<Implementation>(
   return { supported: true, implementation };
 }
 
+function unsupported<Implementation>(reason: string): Capability<Implementation> {
+  return { supported: false, reason };
+}
+
 export const claudeCodeTextGenerationCapability: TextGenerationCapability = {
   async generate(input) {
     const output = await generateWithClaudeCode(input);
@@ -90,9 +94,20 @@ export function createGenerationCapabilities(
     };
   }
 
+  if (backend === 'codex' || backend === 'copilot') {
+    return {
+      text: supported(codexTextGenerationCapability),
+      structured: supported(codexStructuredGenerationCapability),
+    };
+  }
+
   return {
-    text: supported(codexTextGenerationCapability),
-    structured: supported(codexStructuredGenerationCapability),
+    text: unsupported<TextGenerationCapability>(
+      'generation is not integrated for this backend yet',
+    ),
+    structured: unsupported<StructuredGenerationCapability>(
+      'generation is not integrated for this backend yet',
+    ),
   };
 }
 

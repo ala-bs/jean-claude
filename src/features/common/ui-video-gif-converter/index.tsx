@@ -7,7 +7,7 @@ import { formatBytes } from '@/lib/format-bytes';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
 const MAX_VIDEO_SIZE = 80 * 1024 * 1024;
-const DEFAULT_FPS = 8;
+const DEFAULT_FPS = 24;
 const DEFAULT_SCALE = 0.5;
 const DEFAULT_QUALITY = 128;
 const DEFAULT_SPEED = 1;

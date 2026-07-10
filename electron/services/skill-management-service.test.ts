@@ -208,6 +208,121 @@ describe('skill management project skill discovery', () => {
     );
   });
 
+  it('creates, disables, and enables Vibe user skills via ~/.vibe skills', async () => {
+    const skill = await createSkill({
+      enabledBackends: ['vibe'],
+      scope: 'user',
+      name: 'native vibe user skill',
+      description: 'Native Vibe user skill',
+      content: 'Use native Vibe user skill path.',
+    });
+    const vibeSymlinkPath = path.join(
+      os.homedir(),
+      '.vibe/skills/native-vibe-user-skill',
+    );
+
+    expect(skill.skillPath).toBe(
+      path.join(
+        os.homedir(),
+        '.config/jean-claude/skills/user/native-vibe-user-skill',
+      ),
+    );
+    await expect(fs.realpath(vibeSymlinkPath)).resolves.toBe(skill.skillPath);
+
+    let skills = await getAllManagedSkills({ backendType: 'vibe' });
+    expect(
+      skills.find((entry) => entry.skillPath === skill.skillPath)
+        ?.enabledBackends,
+    ).toEqual({ vibe: true });
+
+    await disableSkill({ skillPath: skill.skillPath, backendType: 'vibe' });
+    await expect(fs.lstat(vibeSymlinkPath)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    skills = await getAllManagedSkills({ backendType: 'vibe' });
+    expect(
+      skills.find((entry) => entry.skillPath === skill.skillPath)
+        ?.enabledBackends,
+    ).toEqual({ vibe: false });
+
+    await enableSkill({ skillPath: skill.skillPath, backendType: 'vibe' });
+    await expect(fs.realpath(vibeSymlinkPath)).resolves.toBe(skill.skillPath);
+  });
+
+  it('discovers Vibe project skills from .vibe skills only for Vibe', async () => {
+    const projectPath = '/project';
+    const vibeSkillDir = await writeSkill({
+      projectPath,
+      relativeDir: '.vibe/skills',
+      dirName: 'project-vibe-skill',
+      name: 'project-vibe-skill',
+    });
+    await writeSkill({
+      projectPath,
+      relativeDir: '.agents/skills',
+      dirName: 'shared-agent-skill',
+      name: 'shared-agent-skill',
+    });
+
+    const skills = await getAllManagedSkills({
+      backendType: 'vibe',
+      projectPath,
+    });
+
+    expect(skills).toContainEqual(
+      expect.objectContaining({
+        name: 'project-vibe-skill',
+        source: 'project',
+        skillPath: vibeSkillDir,
+        enabledBackends: { vibe: true },
+      }),
+    );
+    expect(skills.map((skill) => skill.name)).not.toContain(
+      'shared-agent-skill',
+    );
+  });
+
+  it('reports Vibe enabled state for JC-managed skills independently', async () => {
+    const skill = await createSkill({
+      enabledBackends: ['opencode', 'vibe'],
+      scope: 'user',
+      name: 'multi backend skill',
+      description: 'Multi backend skill',
+      content: 'Shared body.',
+    });
+
+    await disableSkill({ skillPath: skill.skillPath, backendType: 'opencode' });
+
+    const skills = await getAllManagedSkillsUnified({});
+    expect(skills).toContainEqual(
+      expect.objectContaining({
+        name: 'multi backend skill',
+        enabledBackends: expect.objectContaining({
+          opencode: false,
+          vibe: true,
+        }),
+      }),
+    );
+  });
+
+  it('writes Vibe-compatible SKILL.md frontmatter', async () => {
+    const skill = await createSkill({
+      enabledBackends: ['vibe'],
+      scope: 'user',
+      name: 'vibe compatible skill',
+      description: 'Works with Vibe',
+      content: '# Instructions\nUse this skill.',
+    });
+
+    const content = await fs.readFile(
+      path.join(skill.skillPath, 'SKILL.md'),
+      'utf-8',
+    );
+    expect(content).toContain('name: vibe compatible skill');
+    expect(content).toContain('description: Works with Vibe');
+    expect(content).toContain('# Instructions\nUse this skill.');
+  });
+
   it('marks .claude project skills enabled for backends that discover them', async () => {
     const projectPath = '/project';
     const skillDir = await writeSkill({
@@ -300,6 +415,7 @@ describe('skill management safety', () => {
       codex: false,
       copilot: false,
       opencode: false,
+      vibe: false,
     });
 
     await expect(

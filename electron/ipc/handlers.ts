@@ -66,6 +66,7 @@ import type {
 import type {
   NewProjectCommand,
   NewProjectCommandGroup,
+  ProjectSuggestions,
   RunCommandConfigItem,
   UpdateProjectCommand,
   UpdateProjectCommandGroup,
@@ -416,6 +417,14 @@ const VALID_BACKENDS = new Set<string>([
   'opencode',
   'codex',
   'copilot',
+  'vibe',
+]);
+const VALID_SKILL_BACKENDS = new Set<string>([
+  'claude-code',
+  'opencode',
+  'codex',
+  'copilot',
+  'vibe',
 ]);
 
 async function cleanupFeatureMapTempDirsForTask(taskId: string): Promise<void> {
@@ -581,7 +590,7 @@ function assertValidSkillCreationInput(data: {
     throw new Error('enabledBackends must be a non-empty array');
   }
   for (const b of data.enabledBackends) {
-    if (!VALID_BACKENDS.has(b)) {
+    if (!VALID_SKILL_BACKENDS.has(b)) {
       throw new Error(`Invalid backend type: ${b}`);
     }
   }
@@ -625,7 +634,7 @@ function assertValidBackendArray(
     throw new Error(`${name} must be an array`);
   }
   for (const backend of value) {
-    if (typeof backend !== 'string' || !VALID_BACKENDS.has(backend)) {
+    if (typeof backend !== 'string' || !VALID_SKILL_BACKENDS.has(backend)) {
       throw new Error(`Invalid backend type: ${String(backend)}`);
     }
   }
@@ -1259,6 +1268,9 @@ export function registerIpcHandlers() {
     );
     const backendType =
       (project.defaultAgentBackend as AgentBackendType | null) ?? 'claude-code';
+    if (backendType === 'vibe') {
+      return [];
+    }
     const managed = await getAllManagedSkills({
       backendType,
       projectPath: project.path,
@@ -2798,6 +2810,11 @@ export function registerIpcHandlers() {
         });
         const updatedTask = await TaskRepository.toggleUserCompleted(taskId);
         emitTaskUpsert(updatedTask);
+        if (task.parentTaskId) {
+          await updateTaskAndEmit(task.parentTaskId, {
+            updatedAt: new Date().toISOString(),
+          });
+        }
       }
 
       return result;
@@ -4230,6 +4247,7 @@ export function registerIpcHandlers() {
       { backend: 'claude-code', command: 'claude' },
       { backend: 'opencode', command: 'opencode' },
       { backend: 'codex', command: 'codex' },
+      { backend: 'vibe', command: 'vibe-acp' },
     ];
 
     return Promise.all(
@@ -4639,6 +4657,18 @@ export function registerIpcHandlers() {
     'project:commands:run:getPackageScripts',
     (_, projectPath: string) =>
       runCommandService.getPackageScripts(projectPath),
+  );
+  ipcMain.handle(
+    'project:commands:run:getProjectSuggestions',
+    (_, projectPath: string) =>
+      runCommandService.getProjectSuggestions(projectPath),
+  );
+  ipcMain.handle(
+    'project:commands:run:saveProjectSuggestions',
+    (
+      _,
+      params: { projectPath: string; suggestions: ProjectSuggestions },
+    ) => runCommandService.saveProjectSuggestions(params),
   );
 
   const previousRunCommandStatuses = new Map<string, Map<string, string>>();
@@ -5377,6 +5407,10 @@ export function registerIpcHandlers() {
         stepBackend ??
         (project?.defaultAgentBackend as AgentBackendType | null) ??
         'claude-code';
+
+      if (backendType === 'vibe') {
+        return [];
+      }
 
       // Resolve project path (prefer worktree path, fall back to project path)
       const projectPath = task.worktreePath ?? project?.path;

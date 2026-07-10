@@ -1,5 +1,5 @@
-import { join, relative } from 'path';
-import { readFile, stat } from 'fs/promises';
+import { dirname, join, relative } from 'path';
+import { mkdir, readFile, stat, writeFile } from 'fs/promises';
 import { createServer } from 'net';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -16,10 +16,14 @@ import type {
   PortInUse,
   PortsInUseErrorData,
   ProjectCommand,
+  ProjectSuggestionCommand,
+  ProjectSuggestions,
+  RunCommandEnvVar,
   RunCommandLogStream,
   RunStatus,
   WorkspacePackage,
 } from '@shared/run-command-types';
+import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
 
 import { dbg } from '../lib/debug';
 import { ProjectCommandRepository } from '../database/repositories/project-commands';
@@ -30,8 +34,84 @@ import { TaskRepository } from '../database/repositories/tasks';
 const execAsync = promisify(exec);
 const RUN_COMMAND_LOG_FLUSH_INTERVAL_MS = 50;
 const RUN_COMMAND_LOG_FLUSH_BYTES = 16 * 1024;
+const PROJECT_SUGGESTIONS_PATH = '.jean-claude/suggestions.json';
+const RUN_COMMAND_ENV_SOURCE_KEYS = new Set(
+  RUN_COMMAND_ENV_SOURCES.map((source) => source.key),
+);
 
 type ProcessSignal = 'SIGINT' | 'SIGTERM' | 'SIGKILL';
+
+function parseSuggestionEnvVar(value: unknown): RunCommandEnvVar | null {
+  if (typeof value !== 'object' || value === null) return null;
+
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.name !== 'string' ||
+    !item.name.trim() ||
+    typeof item.source !== 'string' ||
+    !RUN_COMMAND_ENV_SOURCE_KEYS.has(item.source as RunCommandEnvVar['source'])
+  ) {
+    return null;
+  }
+
+  return {
+    source: item.source as RunCommandEnvVar['source'],
+    name: item.name.trim(),
+    value: typeof item.value === 'string' ? item.value : undefined,
+  };
+}
+
+function parseSuggestionCommand(value: unknown): ProjectSuggestionCommand | null {
+  if (typeof value === 'string') {
+    const command = value.trim();
+    if (!command) return null;
+    return {
+      name: null,
+      command,
+      ports: [],
+      envVars: [],
+      confirmBeforeRun: false,
+      confirmMessage: null,
+    };
+  }
+
+  if (typeof value !== 'object' || value === null) return null;
+
+  const item = value as Record<string, unknown>;
+  if (typeof item.command !== 'string' || !item.command.trim()) return null;
+
+  const ports = Array.isArray(item.ports)
+    ? item.ports.filter((port): port is number => Number.isInteger(port))
+    : [];
+  const envVars = Array.isArray(item.envVars)
+    ? item.envVars
+        .map(parseSuggestionEnvVar)
+        .filter((envVar): envVar is RunCommandEnvVar => Boolean(envVar))
+    : [];
+
+  return {
+    name: typeof item.name === 'string' && item.name.trim() ? item.name : null,
+    command: item.command.trim(),
+    ports,
+    envVars,
+    confirmBeforeRun: item.confirmBeforeRun === true,
+    confirmMessage:
+      typeof item.confirmMessage === 'string' && item.confirmMessage.trim()
+        ? item.confirmMessage
+        : null,
+  };
+}
+
+function dedupeSuggestionCommands(
+  commands: ProjectSuggestionCommand[],
+): ProjectSuggestionCommand[] {
+  const seen = new Set<string>();
+  return commands.filter((command) => {
+    if (seen.has(command.command)) return false;
+    seen.add(command.command);
+    return true;
+  });
+}
 
 function getProcessEnvWithoutNodeEnv(): Record<string, string> {
   const { NODE_ENV: _nodeEnv, ...env } = process.env;
@@ -1077,6 +1157,63 @@ class RunCommandService {
       isWorkspace: true,
       workspacePackages,
     };
+  }
+
+  async getProjectSuggestions(projectPath: string): Promise<ProjectSuggestions> {
+    try {
+      const content = await readFile(
+        join(projectPath, PROJECT_SUGGESTIONS_PATH),
+        'utf-8',
+      );
+      const parsed = JSON.parse(content) as unknown;
+      const runCommandsSource =
+        typeof parsed === 'object' && parsed !== null
+          ? (parsed as Record<string, unknown>).runCommands
+          : [];
+
+      return {
+        runCommands: dedupeSuggestionCommands(
+          Array.isArray(runCommandsSource)
+            ? runCommandsSource
+                .map(parseSuggestionCommand)
+                .filter((command): command is ProjectSuggestionCommand =>
+                  Boolean(command),
+                )
+            : [],
+        ),
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        dbg.runCommand('Could not read project suggestions: %O', error);
+      }
+      return { runCommands: [] };
+    }
+  }
+
+  async saveProjectSuggestions({
+    projectPath,
+    suggestions,
+  }: {
+    projectPath: string;
+    suggestions: ProjectSuggestions;
+  }): Promise<ProjectSuggestions> {
+    const filePath = join(projectPath, PROJECT_SUGGESTIONS_PATH);
+    const runCommands = dedupeSuggestionCommands(
+      suggestions.runCommands
+        .map(parseSuggestionCommand)
+        .filter((command): command is ProjectSuggestionCommand =>
+          Boolean(command),
+        ),
+    );
+
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(
+      filePath,
+      `${JSON.stringify({ runCommands }, null, 2)}\n`,
+      'utf-8',
+    );
+
+    return { runCommands };
   }
 
   private async detectPackageManager(
