@@ -1,4 +1,4 @@
-import { Check, Plus } from 'lucide-react';
+import { Check, Plus, Sparkles } from 'lucide-react';
 import { startTransition, useCallback, useEffect, useState } from 'react';
 
 import type { AgentQuestion, QuestionResponse } from '@shared/agent-types';
@@ -696,6 +696,20 @@ export function QuestionOptions({
     wasFreeformByQuestion,
   ]);
 
+  const decideForMe = useCallback(() => {
+    const decidedAnswers = Object.fromEntries(
+      request.questions.map((question) => [getQuestionKey(question), 'Decide for me']),
+    );
+    const decidedFreeform = Object.fromEntries(
+      request.questions.map((question) => [getQuestionKey(question), true]),
+    );
+    return onRespond(request.requestId, {
+      answers: decidedAnswers,
+      wasFreeform: true,
+      wasFreeformByQuestion: decidedFreeform,
+    });
+  }, [onRespond, request.questions, request.requestId]);
+
   const handleSubmit = useCallback(() => {
     if (!allAnswered) return false;
     void submitAnswers();
@@ -788,6 +802,14 @@ export function QuestionOptions({
           className="rounded-lg bg-teal-300 px-3 py-1.5 text-[13px] font-bold text-bg-0 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-ink-3 disabled:hover:brightness-100"
         >
           Submit answers
+        </button>
+        <button
+          type="button"
+          onClick={decideForMe}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[13px] font-semibold text-ink-1 transition-colors hover:border-white/20 hover:bg-white/[0.08] hover:text-ink-0"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Decide for me
         </button>
         <span className="text-xs text-ink-3">
           {request.questions.length} questions · {answeredCount} answered ·{' '}
