@@ -194,7 +194,7 @@ function loadMigrationWindowContent({
         color: #f9fafb;
       }
       main {
-        width: 320px;
+        width: min(520px, calc(100vw - 56px));
         padding: 28px;
         text-align: center;
       }
@@ -231,7 +231,7 @@ function loadMigrationWindowContent({
         line-height: 1.5;
       }
       pre {
-        max-height: 120px;
+        max-height: 260px;
         margin: 16px 0 0;
         padding: 12px;
         overflow: auto;
@@ -261,8 +261,8 @@ function loadMigrationWindowContent({
 
 function createMigrationWindow() {
   const migrationWindow = new BrowserWindow({
-    width: 420,
-    height: 280,
+    width: 640,
+    height: 480,
     resizable: false,
     minimizable: false,
     maximizable: false,
