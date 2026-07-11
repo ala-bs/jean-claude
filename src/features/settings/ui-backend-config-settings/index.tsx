@@ -2,6 +2,7 @@ import { FileJson, RotateCcw, Save } from 'lucide-react';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
 
 
 import {
@@ -1544,9 +1545,15 @@ function FieldCard({
   onReset: () => void;
 }) {
   const isSet = value !== undefined;
+  const shouldFill = field.kind === 'json';
 
   return (
-    <div className="border-line-soft bg-bg-0/45 rounded-lg border px-2.5 py-2">
+    <div
+      className={clsx(
+        'border-line-soft bg-bg-0/45 w-full rounded-lg border px-2.5 py-2',
+        shouldFill && 'flex min-h-0 flex-1 flex-col',
+      )}
+    >
       <div className="mb-1.5 flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-ink-1 text-[13px] leading-tight font-medium">
@@ -1661,7 +1668,7 @@ function FieldCard({
           value={textValue}
           placeholder={field.placeholder ?? '{ }'}
           error={!!error}
-          className="min-h-20 font-mono text-[11px] leading-4"
+          className="min-h-0 flex-1 overflow-auto font-mono text-[11px] leading-4"
           onChange={(event) => {
             const text = event.target.value;
             onTextChange(text);
@@ -1974,9 +1981,14 @@ function StructuredBackendConfigSettings({
             </Button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3">
+          <div className="flex min-h-0 flex-1 overflow-hidden p-3">
             {config && selectedField && (
-              <div className="max-w-3xl">
+              <div
+                className={clsx(
+                  'flex min-h-0 w-full',
+                  selectedField.kind !== 'json' && 'overflow-y-auto',
+                )}
+              >
                 <FieldCard
                   field={selectedField}
                   value={getPathValue(config, selectedField.path)}
