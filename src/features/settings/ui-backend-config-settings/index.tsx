@@ -1405,6 +1405,10 @@ function stripTrailingCommas(content: string): string {
   return result;
 }
 
+function parseJsonLike(content: string): unknown {
+  return JSON.parse(stripTrailingCommas(stripJsonComments(content)));
+}
+
 function hasTomlComments(content: string): boolean {
   let inString = false;
   let escaped = false;
@@ -1451,9 +1455,7 @@ function parseConfig(
   const parsed =
     backend === 'codex' || backend === 'vibe'
       ? (parseToml(content) as unknown)
-      : (JSON.parse(
-          stripTrailingCommas(stripJsonComments(content)),
-        ) as unknown);
+      : (parseJsonLike(content) as unknown);
   if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
     throw new Error('Config must be an object');
   }
@@ -1668,7 +1670,7 @@ function FieldCard({
               return;
             }
             try {
-              onChange(JSON.parse(text) as unknown);
+              onChange(parseJsonLike(text));
             } catch {
               // Keep invalid text visible; save stays disabled via field error.
             }
@@ -1830,7 +1832,7 @@ function StructuredBackendConfigSettings({
       const text = textValues[field.path] ?? '';
       if (!text.trim()) continue;
       try {
-        JSON.parse(text);
+        parseJsonLike(text);
       } catch (error) {
         errors[field.path] = formatError(error);
       }
