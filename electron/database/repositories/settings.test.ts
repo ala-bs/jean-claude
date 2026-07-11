@@ -60,6 +60,32 @@ describe('SettingsRepository legacy normalization', () => {
     vi.clearAllMocks();
   });
 
+  it('returns default PR review agent setting', async () => {
+    executeTakeFirst.mockResolvedValue(undefined);
+
+    await expect(SettingsRepository.get('prReviewAgent')).resolves.toEqual({
+      backend: null,
+      modelPreference: 'default',
+      thinkingEffort: 'default',
+    });
+
+    expect(insertInto).not.toHaveBeenCalled();
+  });
+
+  it('allows PR review agent setting to inherit backend with explicit model and thinking', async () => {
+    insertExecute.mockResolvedValue(undefined);
+
+    await expect(
+      SettingsRepository.set('prReviewAgent', {
+        backend: null,
+        modelPreference: 'sonnet',
+        thinkingEffort: 'high',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(insertInto).toHaveBeenCalledWith('settings');
+  });
+
   it('normalizes legacy backend default models missing codex', async () => {
     executeTakeFirst.mockResolvedValue({
       key: 'backendDefaultModels',

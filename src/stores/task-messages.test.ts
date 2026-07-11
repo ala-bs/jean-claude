@@ -155,4 +155,20 @@ describe('task messages store', () => {
       completedTool,
     ]);
   });
+
+  it('initializes a missing step when setting status with task id', () => {
+    const store = useTaskMessagesStore.getState();
+
+    store.setStatus('step-1', 'errored', 'Failed to fetch messages', 'task-1');
+
+    expect(useTaskMessagesStore.getState().steps['step-1']).toMatchObject({
+      taskId: 'task-1',
+      messages: [],
+      status: 'errored',
+      error: 'Failed to fetch messages',
+      pendingPermission: null,
+      pendingQuestion: null,
+      queuedPrompts: [],
+    });
+  });
 });

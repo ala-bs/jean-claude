@@ -321,6 +321,18 @@ vi.mock('./notification-service', () => ({
 
 vi.mock('./permission-settings-service', () => ({
   buildToolPermissionConfig: buildToolPermissionConfigMock,
+  flattenScope: (scope: Record<string, string | Record<string, string>>) =>
+    Object.entries(scope).flatMap(([tool, config]) => {
+      if (tool === 'extends') return [];
+      if (typeof config === 'string') {
+        return [{ tool, pattern: '*', action: config }];
+      }
+      return Object.entries(config).map(([pattern, action]) => ({
+        tool,
+        pattern,
+        action,
+      }));
+    }),
   normalizeToolRequest: normalizeToolRequestMock,
   readSettings: readSettingsMock,
   resolveRules: resolveRulesMock,
@@ -339,6 +351,7 @@ vi.mock('./system-project-service', () => ({
 }));
 
 import { agentService } from './agent-service';
+import { buildReadOnlyPrReviewSessionRules } from './pr-review-agent-service';
 
 const defaultStep = {
   id: 'step-1',
@@ -1243,6 +1256,101 @@ describe('agentService provider runtime', () => {
     await waitForAssertion(() => {
       expect(handle.stop).toHaveBeenCalled();
       expect(handle.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('rejects PR review task starts when backend permissions are unsupported', async () => {
+    providerState.permissionsSupported = false;
+    taskRepositoryMock.findById.mockResolvedValue({
+      ...defaultTask,
+      type: 'pr-review',
+      pullRequestId: '12',
+      sessionRules: buildReadOnlyPrReviewSessionRules(),
+    });
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      meta: {
+        kind: 'pr-review-chat',
+        pullRequestId: 12,
+        filePath: 'src/auth.ts',
+        lineStart: 4,
+        selectedText: 'return user.id;',
+      },
+    });
+
+    await expect(agentService.start('step-1')).rejects.toThrow(
+      'requires backend permission support',
+    );
+
+    expect(stepServiceMock.update).not.toHaveBeenCalled();
+    expect(providerCalls.runStarts).toHaveLength(0);
+  });
+
+  it('rejects generic steps under PR review tasks before backend start', async () => {
+    taskRepositoryMock.findById.mockResolvedValue({
+      ...defaultTask,
+      type: 'pr-review',
+      pullRequestId: '12',
+      sessionRules: buildReadOnlyPrReviewSessionRules(),
+    });
+    taskStepRepositoryMock.findById.mockResolvedValue(defaultStep);
+
+    await expect(agentService.start('step-1')).rejects.toThrow(
+      'PR review tasks can only run PR review chat steps',
+    );
+
+    expect(stepServiceMock.update).not.toHaveBeenCalled();
+    expect(providerCalls.runStarts).toHaveLength(0);
+  });
+
+  it('passes persisted task session deny rules to backend permissionRules after project rules', async () => {
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      agentBackend: 'opencode',
+      interactionMode: 'ask',
+    });
+    taskRepositoryMock.findById.mockResolvedValue({
+      ...defaultTask,
+      sessionRules: {
+        read: 'allow',
+        write: 'deny',
+        bash: {
+          'npm test': 'deny',
+        },
+      },
+    });
+    resolveRulesMock.mockReturnValueOnce([
+      { tool: 'write', pattern: '*', action: 'allow' },
+      { tool: 'bash', pattern: 'npm test', action: 'allow' },
+    ]);
+
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    expect(providerCalls.runStarts[0]).toMatchObject({
+      config: {
+        type: 'opencode',
+        interactionMode: 'auto',
+        persistedSessionRules: {
+          read: 'allow',
+          write: 'deny',
+          bash: {
+            'npm test': 'deny',
+          },
+        },
+        permissionRules: [
+          { tool: 'write', pattern: '*', action: 'allow' },
+          { tool: 'bash', pattern: 'npm test', action: 'allow' },
+          { tool: 'read', pattern: '*', action: 'allow' },
+          { tool: 'write', pattern: '*', action: 'deny' },
+          { tool: 'bash', pattern: 'npm test', action: 'deny' },
+        ],
+      },
     });
   });
 

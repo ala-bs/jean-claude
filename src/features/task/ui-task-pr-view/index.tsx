@@ -58,6 +58,7 @@ export function TaskPrView({
             projectId={projectId}
             prId={Number(task.pullRequestId)}
             bottomPadding={bottomPadding}
+            readOnly
           />
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { type ReactNode, useCallback, useMemo } from 'react';
 
 import type {
   AzureDevOpsCommentThread,
@@ -12,12 +12,15 @@ import {
   FileDiffContent,
   normalizeAzureChangeType,
 } from '@/features/common/ui-file-diff';
+import {
+  PrCommentForm,
+  uploadImagesIntoMarkdown,
+} from '../ui-pr-comment-form';
 import type { ReviewComment, ReviewPresetId } from '@/stores/review-comments';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import type { LineRange } from '@/features/agent/ui-diff-view';
 import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
 import type { MentionOption } from '@/common/ui/mention-textarea';
-import { PrCommentForm } from '../ui-pr-comment-form';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import { usePrFileDraftActions } from '@/stores/pr-comment-drafts';
@@ -43,12 +46,16 @@ export function PrDiffView({
   submitLabel,
   reviewComments,
   onAddReviewComment,
+  onAddReviewCommentAsPrComment,
+  onUploadReviewAsPrImage,
   onDeleteReviewComment,
   onEditReviewComment,
   onResolveReviewComment,
   defaultReviewCommentFormLineRanges,
   getReviewCommentDraftBody,
   onReviewCommentDraftBodyChange,
+  onAskAgent,
+  prReviewChatCards,
 }: {
   file: AzureDevOpsFileChange;
   baseContent: string;
@@ -64,7 +71,7 @@ export function PrDiffView({
     line: number;
     lineEnd?: number;
     content: string;
-  }) => void;
+  }) => Promise<void> | void;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   isAddingComment?: boolean;
   mentionDisplayNames?: MentionDisplayNames;
@@ -82,6 +89,16 @@ export function PrDiffView({
     presets: ReviewPresetId[];
     images?: PromptImagePart[];
   }) => void;
+  onAddReviewCommentAsPrComment?: (params: {
+    filePath: string;
+    line: number;
+    lineEnd?: number;
+    content: string;
+  }) => Promise<void>;
+  onUploadReviewAsPrImage?: (
+    image: PromptImagePart,
+    fileName: string,
+  ) => Promise<string>;
   onDeleteReviewComment?: (commentId: string) => void;
   onEditReviewComment?: (
     commentId: string,
@@ -96,6 +113,22 @@ export function PrDiffView({
     lineStart: number,
     lineEnd?: number,
   ) => void;
+  onAskAgent?: (params: {
+    filePath: string;
+    lineStart: number;
+    lineEnd?: number;
+    side?: 'old' | 'new';
+    selectedText: string;
+    question: string;
+  }) => Promise<void> | void;
+  prReviewChatCards?: Array<{
+    id: string;
+    line: number;
+    side?: 'old' | 'new';
+    content: ReactNode;
+    lineStart: number;
+    lineEnd?: number;
+  }>;
 }) {
   const { setDraft, clearDraft, getBody, getAllDrafts } = usePrFileDraftActions(
     prId,
@@ -158,9 +191,34 @@ export function PrDiffView({
     }) => {
       if (!onAddFileComment) return;
       clearDraft(params.line, params.lineEnd);
-      onAddFileComment(params);
+      void Promise.resolve(onAddFileComment(params)).catch(() => undefined);
     },
     [onAddFileComment, clearDraft],
+  );
+
+  const handleAddReviewCommentAsPrComment = useCallback(
+    async (params: {
+      filePath: string;
+      line: number;
+      lineEnd?: number;
+      body: string;
+      images: PromptImagePart[];
+    }) => {
+      if (!onAddReviewCommentAsPrComment) return;
+      const content = await uploadImagesIntoMarkdown({
+        body: params.body,
+        images: params.images,
+        uploadImage: onUploadReviewAsPrImage,
+        mentionOptions,
+      });
+      await onAddReviewCommentAsPrComment({
+        filePath: params.filePath,
+        line: params.line,
+        lineEnd: params.lineEnd,
+        content,
+      });
+    },
+    [mentionOptions, onAddReviewCommentAsPrComment, onUploadReviewAsPrImage],
   );
 
   const renderCommentForm = useCallback(
@@ -171,6 +229,7 @@ export function PrDiffView({
       lineEnd?: number;
       isSubmitting?: boolean;
       placeholder?: string;
+      onAskAgent?: (question: string) => Promise<void> | void;
     }) => {
       const lineEnd = props.lineEnd !== undefined ? props.lineEnd : undefined;
       return (
@@ -184,6 +243,7 @@ export function PrDiffView({
             handleBodyChange(body, props.lineStart, lineEnd)
           }
           submitLabel={submitLabel}
+          onAskAgent={props.onAskAgent}
         />
       );
     },
@@ -252,11 +312,18 @@ export function PrDiffView({
       }
       reviewComments={reviewComments}
       onAddReviewComment={!readOnly ? onAddReviewComment : undefined}
+      onAddReviewCommentAsPrComment={
+        !readOnly && onAddReviewCommentAsPrComment
+          ? handleAddReviewCommentAsPrComment
+          : undefined
+      }
       onDeleteReviewComment={onDeleteReviewComment}
       onEditReviewComment={onEditReviewComment}
       onResolveReviewComment={onResolveReviewComment}
       getReviewCommentDraftBody={getReviewCommentDraftBody}
       onReviewCommentDraftBodyChange={onReviewCommentDraftBodyChange}
+      onAskAgent={onAskAgent}
+      prReviewChatCards={prReviewChatCards}
     />
   );
 }

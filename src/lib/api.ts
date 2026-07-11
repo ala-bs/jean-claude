@@ -639,18 +639,29 @@ export interface Api {
       deleteWorktree?: boolean;
       commitUnstaged?: boolean;
     }) => Promise<{ id: number; url: string; editorCloseWarning?: string }>;
-    createPrReview: (params: {
+    createPrReviewTask: (params: {
       projectId: string;
       pullRequestId: number;
-      agentBackend?: AgentBackendType | null;
-      modelPreference?: string | null;
-      thinkingEffort?: ThinkingEffort | null;
     }) => Promise<Task>;
   };
   steps: {
     findByTaskId: (taskId: string) => Promise<TaskStep[]>;
     findById: (stepId: string) => Promise<TaskStep | undefined>;
     create: (data: NewTaskStep & { start?: boolean }) => Promise<TaskStep>;
+    createPrReviewChatStep: (params: {
+      taskId: string;
+      pullRequestId: number;
+      filePath: string;
+      lineStart: number;
+      lineEnd?: number;
+      side?: 'old' | 'new';
+      selectedText: string;
+      question: string;
+    }) => Promise<TaskStep>;
+    continuePrReviewChatStep: (params: {
+      stepId: string;
+      question: string;
+    }) => Promise<TaskStep>;
     update: (stepId: string, data: UpdateTaskStep) => Promise<TaskStep>;
 
     resolvePrompt: (stepId: string) => Promise<{
@@ -1835,7 +1846,7 @@ export const api: Api = hasWindowApi
           },
         },
         createPullRequest: async () => ({ id: 0, url: '' }),
-        createPrReview: async () => {
+        createPrReviewTask: async () => {
           throw new Error('API not available');
         },
       },
@@ -1843,6 +1854,12 @@ export const api: Api = hasWindowApi
         findByTaskId: async () => [],
         findById: async () => undefined,
         create: async () => {
+          throw new Error('API not available');
+        },
+        createPrReviewChatStep: async () => {
+          throw new Error('API not available');
+        },
+        continuePrReviewChatStep: async () => {
           throw new Error('API not available');
         },
         update: async () => {

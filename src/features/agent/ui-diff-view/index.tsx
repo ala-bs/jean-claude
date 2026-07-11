@@ -25,6 +25,10 @@ import { useUISetting, useUIStore } from '@/stores/ui';
 
 import { computeDiff, type DiffLine } from './diff-utils';
 import {
+  type LineRangeSelectionPosition,
+  useLineRangeSelection,
+} from './use-line-range-selection';
+import {
   renderTokensWithHighlights,
   renderWithHighlights,
 } from './utils-search-highlight';
@@ -36,7 +40,6 @@ import { DiffSearchBar } from './diff-search-bar';
 import { getLanguageFromPath } from './language-utils';
 import { SideBySideDiffTable } from './side-by-side-table';
 import { useCodeFolding } from './use-code-folding';
-import { useLineRangeSelection } from './use-line-range-selection';
 
 
 
@@ -47,15 +50,28 @@ interface DiffState {
 }
 
 const EMPTY_SEARCH_MATCHES: SearchMatch[] = [];
+export type LineAnchorSide = 'old' | 'new';
+export type CommentedLines = Set<string>;
+
+export function lineAnchorKey(side: LineAnchorSide | undefined, line: number) {
+  return `${side ?? 'new'}:${line}`;
+}
 
 export interface InlineComment {
+  id?: string;
   line: number;
+  side?: 'old' | 'new';
   content: ReactNode;
 }
 
 export interface LineRange {
   start: number;
   end: number;
+  side?: 'old' | 'new';
+}
+
+export function lineRangeKey(range: LineRange) {
+  return `${range.side ?? 'new'}:${range.start}:${range.end}`;
 }
 
 export interface CommentFormEntry {
@@ -80,11 +96,14 @@ export function DiffView({
   maxHeight?: string;
   withMinimap?: boolean;
   /** Called when user selects lines to comment on */
-  onAddCommentClick?: (lineRange: LineRange) => void;
+  onAddCommentClick?: (
+    lineRange: LineRange,
+    position: LineRangeSelectionPosition,
+  ) => void;
   /** Inline comments to render below specific lines */
   inlineComments?: InlineComment[];
-  /** Set of line numbers that have comments (for line highlighting) */
-  commentedLines?: Set<number>;
+  /** Set of side-aware line keys that have comments (for line highlighting). */
+  commentedLines?: CommentedLines;
   /** Comment forms to render inline at specific line ranges */
   commentForms?: CommentFormEntry[];
   /** New-file line to scroll into view after render */
@@ -363,9 +382,12 @@ function InlineDiffTable({
   lines: DiffLine[];
   oldTokens: ThemedToken[][];
   newTokens: ThemedToken[][];
-  onAddCommentClick?: (lineRange: LineRange) => void;
+  onAddCommentClick?: (
+    lineRange: LineRange,
+    position: LineRangeSelectionPosition,
+  ) => void;
   inlineComments?: InlineComment[];
-  commentedLines?: Set<number>;
+  commentedLines?: CommentedLines;
   commentForms?: CommentFormEntry[];
   searchMatches: SearchMatch[];
   currentMatchIndex: number;
@@ -374,26 +396,28 @@ function InlineDiffTable({
   const lineRangeSelection = useLineRangeSelection({ onAddCommentClick });
 
   const inlineCommentsByLine = useMemo(() => {
-    const map = new Map<number, InlineComment[]>();
+    const map = new Map<string, InlineComment[]>();
     for (const comment of inlineComments ?? []) {
-      const comments = map.get(comment.line);
+      const key = `${comment.side ?? 'new'}:${comment.line}`;
+      const comments = map.get(key);
       if (comments) {
         comments.push(comment);
       } else {
-        map.set(comment.line, [comment]);
+        map.set(key, [comment]);
       }
     }
     return map;
   }, [inlineComments]);
 
   const commentFormsByEndLine = useMemo(() => {
-    const map = new Map<number, CommentFormEntry[]>();
+    const map = new Map<string, CommentFormEntry[]>();
     for (const form of commentForms ?? []) {
-      const forms = map.get(form.lineRange.end);
+      const key = `${form.lineRange.side ?? 'new'}:${form.lineRange.end}`;
+      const forms = map.get(key);
       if (forms) {
         forms.push(form);
       } else {
-        map.set(form.lineRange.end, [form]);
+        map.set(key, [form]);
       }
     }
     return map;
@@ -414,18 +438,16 @@ function InlineDiffTable({
 
   // Check if a line is in any comment form range
   const isLineInCommentRange = useCallback(
-    (lineNumber: number) => {
+    (lineNumber: number, side: LineAnchorSide = 'new') => {
       if (!commentForms || commentForms.length === 0) return false;
       return commentForms.some(
         (cf) =>
+          (cf.lineRange.side ?? 'new') === side &&
           lineNumber >= cf.lineRange.start && lineNumber <= cf.lineRange.end,
       );
     },
     [commentForms],
   );
-
-  // Track which lines we've already rendered (to avoid duplicates for same newLineNumber)
-  const renderedNewLineNumbers = new Set<number>();
 
   return (
     <table
@@ -438,6 +460,8 @@ function InlineDiffTable({
       <tbody>
         {lines.map((line, i) => {
           const lineNumber = line.newLineNumber;
+          const oldLineNumber = line.oldLineNumber;
+          const selectableLineNumber = lineNumber ?? oldLineNumber;
 
           // Check if this line is hidden by a collapsed fold.
           // For deletion lines (no newLineNumber), check if the surrounding
@@ -458,26 +482,26 @@ function InlineDiffTable({
             }
           }
 
-          // Skip rendering comments/form for lines we've already processed
-          // This prevents duplicate forms when deletion+addition have same effective position
-          const shouldRenderExtras =
-            lineNumber !== undefined && !renderedNewLineNumbers.has(lineNumber);
-          if (lineNumber !== undefined) {
-            renderedNewLineNumbers.add(lineNumber);
-          }
+          const lineComments = [
+            ...(lineNumber ? (inlineCommentsByLine.get(`new:${lineNumber}`) ?? []) : []),
+            ...(oldLineNumber
+              ? (inlineCommentsByLine.get(`old:${oldLineNumber}`) ?? [])
+              : []),
+          ];
 
-          const lineComments =
-            shouldRenderExtras && lineNumber
-              ? inlineCommentsByLine.get(lineNumber)
-              : undefined;
-
-          const formsForLine =
-            shouldRenderExtras && lineNumber
-              ? commentFormsByEndLine.get(lineNumber)
-              : undefined;
+          const formsForLine = [
+            ...(lineNumber
+              ? (commentFormsByEndLine.get(`new:${lineNumber}`) ?? [])
+              : []),
+            ...(oldLineNumber
+              ? (commentFormsByEndLine.get(`old:${oldLineNumber}`) ?? [])
+              : []),
+          ];
 
           const isInCommentRange = lineNumber
-            ? isLineInCommentRange(lineNumber)
+            ? isLineInCommentRange(lineNumber, 'new')
+            : oldLineNumber
+              ? isLineInCommentRange(oldLineNumber, 'old')
             : false;
 
           // Find search matches for this line
@@ -508,10 +532,16 @@ function InlineDiffTable({
               oldTokens={oldTokens}
               newTokens={newTokens}
               canComment={!!onAddCommentClick && lineNumber !== undefined}
+              canSelect={!!onAddCommentClick && selectableLineNumber !== undefined}
               isInCommentRange={isInCommentRange}
-              hasComment={!!lineNumber && !!commentedLines?.has(lineNumber)}
-              inlineComments={lineComments}
-              commentForms={formsForLine}
+              hasComment={
+                (!!lineNumber &&
+                  !!commentedLines?.has(lineAnchorKey('new', lineNumber))) ||
+                (!!oldLineNumber &&
+                  !!commentedLines?.has(lineAnchorKey('old', oldLineNumber)))
+              }
+              inlineComments={lineComments.length > 0 ? lineComments : undefined}
+              commentForms={formsForLine.length > 0 ? formsForLine : undefined}
               searchMatches={lineMatches}
               currentMatch={currentMatchInLine}
               isFoldable={isFoldable}
@@ -532,6 +562,7 @@ const DiffLineRow = memo(function DiffLineRow({
   oldTokens,
   newTokens,
   canComment,
+  canSelect,
   isInCommentRange,
   hasComment,
   inlineComments,
@@ -548,6 +579,7 @@ const DiffLineRow = memo(function DiffLineRow({
   oldTokens: ThemedToken[][];
   newTokens: ThemedToken[][];
   canComment: boolean;
+  canSelect: boolean;
   isInCommentRange: boolean;
   hasComment: boolean;
   inlineComments?: InlineComment[];
@@ -595,6 +627,8 @@ const DiffLineRow = memo(function DiffLineRow({
       <tr
         data-line-index={lineIndex}
         data-new-line={line.newLineNumber ?? undefined}
+        data-old-line={line.oldLineNumber}
+        data-line-side={line.newLineNumber === undefined ? 'old' : 'new'}
         className={clsx('group', {
           'bg-blue-500/10': isInCommentRange,
           'bg-green-500/20':
@@ -603,7 +637,7 @@ const DiffLineRow = memo(function DiffLineRow({
             !isInCommentRange && line.type === 'deletion',
         })}
         style={{
-          cursor: canComment ? 'pointer' : undefined,
+          cursor: canSelect ? 'pointer' : undefined,
           ...(hasComment && !isInCommentRange
             ? {
                 background:
@@ -636,6 +670,7 @@ const DiffLineRow = memo(function DiffLineRow({
         </td>
         {/* Add comment button / Old line number */}
         <td
+          data-line-side="old"
           className={clsx(
             'relative w-8 pr-1 text-right align-top select-none',
             hasComment && !isInCommentRange
@@ -661,6 +696,7 @@ const DiffLineRow = memo(function DiffLineRow({
         </td>
         {/* New line number */}
         <td
+          data-line-side="new"
           className={clsx(
             'w-8 pr-1 text-right align-top select-none',
             line.type === 'addition' ? 'text-status-done' : 'text-ink-4',
@@ -670,6 +706,7 @@ const DiffLineRow = memo(function DiffLineRow({
         </td>
         {/* Prefix (+/-/space) */}
         <td
+          data-line-side={line.newLineNumber === undefined ? 'old' : 'new'}
           className={clsx('w-4 text-center align-top select-none', {
             'text-status-done': line.type === 'addition',
             'text-status-fail': line.type === 'deletion',
@@ -684,6 +721,7 @@ const DiffLineRow = memo(function DiffLineRow({
         </td>
         {/* Content with syntax highlighting and search highlights */}
         <td
+          data-line-side={line.newLineNumber === undefined ? 'old' : 'new'}
           className={clsx('pr-2 whitespace-pre-wrap', {
             'select-none': canComment,
           })}
@@ -709,7 +747,7 @@ const DiffLineRow = memo(function DiffLineRow({
           <td colSpan={5} className="p-0">
             <div>
               {inlineComments.map((comment, i) => (
-                <div key={i}>{comment.content}</div>
+                <div key={comment.id ?? i}>{comment.content}</div>
               ))}
             </div>
           </td>
@@ -720,7 +758,7 @@ const DiffLineRow = memo(function DiffLineRow({
       {commentForms &&
         commentForms.length > 0 &&
         commentForms.map((cf) => (
-          <tr key={`form-${cf.lineRange.start}-${cf.lineRange.end}`}>
+          <tr key={`form-${lineRangeKey(cf.lineRange)}`}>
             <td colSpan={5} className="p-0">
               {cf.form}
             </td>

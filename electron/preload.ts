@@ -257,19 +257,28 @@ contextBridge.exposeInMainWorld('api', {
       isDraft: boolean;
       deleteWorktree?: boolean;
     }) => ipcRenderer.invoke('tasks:createPullRequest', params),
-    createPrReview: (params: {
+    createPrReviewTask: (params: {
       projectId: string;
       pullRequestId: number;
-      agentBackend?: string | null;
-      modelPreference?: string | null;
-      thinkingEffort?: string | null;
-    }) => ipcRenderer.invoke('tasks:createPrReview', params),
+    }) => ipcRenderer.invoke('tasks:createPrReviewTask', params),
   },
   steps: {
     findByTaskId: (taskId: string) =>
       ipcRenderer.invoke('steps:findByTaskId', taskId),
     findById: (stepId: string) => ipcRenderer.invoke('steps:findById', stepId),
     create: (data: unknown) => ipcRenderer.invoke('steps:create', data),
+    createPrReviewChatStep: (params: {
+      taskId: string;
+      pullRequestId: number;
+      filePath: string;
+      lineStart: number;
+      lineEnd?: number;
+      side?: 'old' | 'new';
+      selectedText: string;
+      question: string;
+    }) => ipcRenderer.invoke('steps:createPrReviewChatStep', params),
+    continuePrReviewChatStep: (params: { stepId: string; question: string }) =>
+      ipcRenderer.invoke('steps:continuePrReviewChatStep', params),
     update: (stepId: string, data: unknown) =>
       ipcRenderer.invoke('steps:update', stepId, data),
     resolvePrompt: (stepId: string) =>

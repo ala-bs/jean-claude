@@ -288,7 +288,8 @@ function JobRow({
                 Retry
               </Button>
             )}
-            {job.type === 'task-creation' &&
+            {(job.type === 'task-creation' ||
+              job.type === 'pr-review-creation') &&
               job.status === 'succeeded' &&
               job.projectId &&
               job.taskId && (
@@ -297,7 +298,9 @@ function JobRow({
                   size="sm"
                   onClick={() => onOpenTask(job)}
                 >
-                  Open Task
+                  {job.type === 'pr-review-creation'
+                    ? 'Open Review Workspace'
+                    : 'Open Task'}
                 </Button>
               )}
             {job.type === 'verification-note' &&

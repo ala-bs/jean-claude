@@ -26,6 +26,7 @@ import {
   listPullRequests,
   queryAssignedWorkItems,
 } from './azure-devops-service';
+import { completePrReviewTasksForMergedPr } from './pr-review-task-service';
 import { emitCacheEvent } from './cache-event-service';
 import { getMostRecentlyUpdatedStep } from './step-service';
 import type { LinkedPr } from './azure-devops-service';
@@ -345,10 +346,16 @@ export async function getTaskFeedItems({
   }
 
   await enrichTaskFeedItemsWithWorkItemTypes({ feedItems });
-  await enrichTaskFeedItemsWithPrStatus({ feedItems, prItems });
+  const completedTaskIds = await enrichTaskFeedItemsWithPrStatus({
+    feedItems,
+    prItems,
+  });
+  const activeFeedItems = feedItems.filter(
+    (item) => !item.taskId || !completedTaskIds.has(item.taskId),
+  );
 
-  dbg.feed('getTaskFeedItems: returning %d tasks', feedItems.length);
-  return feedItems;
+  dbg.feed('getTaskFeedItems: returning %d tasks', activeFeedItems.length);
+  return activeFeedItems;
 }
 
 /**
@@ -452,7 +459,8 @@ async function enrichTaskFeedItemsWithPrStatus({
 }: {
   feedItems: FeedItem[];
   prItems: FeedItem[];
-}): Promise<void> {
+}): Promise<Set<string>> {
+  const completedTaskIds = new Set<string>();
   // --- Enrich task feed items with PR status ---
   // Build a set of known active PRs from the PR feed.
   const activePrMap = new Map<
@@ -557,6 +565,15 @@ async function enrichTaskFeedItemsWithPrStatus({
             entry.item.isDraft = status.isDraft;
             entry.item.pullRequestMergeStatus = status.mergeStatus;
             entry.item.approvedBy = status.approvedBy;
+            if (status.status === 'completed') {
+              const completedTasks = await completePrReviewTasksForMergedPr({
+                projectId: entry.item.projectId,
+                pullRequestId: entry.linkedPr.prId,
+              });
+              for (const task of completedTasks) {
+                completedTaskIds.add(task.id);
+              }
+            }
             if (status.url) {
               entry.item.workItemPrUrl = status.url;
             }
@@ -571,6 +588,8 @@ async function enrichTaskFeedItemsWithPrStatus({
       }
     }
   }
+
+  return completedTaskIds;
 }
 
 async function fetchNoteFeedItems(): Promise<FeedItem[]> {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { getInteractionModeOptions, SETTINGS_DEFINITIONS } from './types';
+import {
+  getInteractionModeOptions,
+  isPrReviewChatStepMeta,
+  SETTINGS_DEFINITIONS,
+} from './types';
 import type { AgentBackendType } from './agent-backend-types';
 
 describe('getInteractionModeOptions', () => {
@@ -31,5 +35,31 @@ describe('SETTINGS_DEFINITIONS.thinkingSettings', () => {
         },
       }),
     ).toBe(true);
+  });
+});
+
+describe('isPrReviewChatStepMeta', () => {
+  it('recognizes valid anchored metadata', () => {
+    expect(
+      isPrReviewChatStepMeta({
+        kind: 'pr-review-chat',
+        pullRequestId: 42,
+        filePath: 'src/example.ts',
+        lineStart: 12,
+        lineEnd: 16,
+        side: 'old',
+        selectedText: 'const value = 1;',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects unrelated metadata', () => {
+    expect(
+      isPrReviewChatStepMeta({
+        pullRequestId: 42,
+        projectId: 'project-1',
+        comments: [],
+      }),
+    ).toBe(false);
   });
 });

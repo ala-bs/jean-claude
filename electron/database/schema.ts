@@ -124,7 +124,7 @@ export interface ProjectTable {
 export interface TaskTable {
   id: Generated<string>;
   projectId: string;
-  type: Generated<string>; // TaskType: 'agent' (default) | 'skill-creation'
+  type: Generated<string>; // TaskType: 'agent' (default) | 'skill-creation' | 'feature-map' | 'pr-review'
   name: string | null;
   prompt: string;
   status: TaskStatus;

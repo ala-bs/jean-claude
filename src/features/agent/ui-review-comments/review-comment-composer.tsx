@@ -45,6 +45,8 @@ export function ReviewCommentComposer({
   onCancel,
   initialBody,
   onBodyChange,
+  onSubmitAsPrComment,
+  onAskAgent,
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -56,8 +58,16 @@ export function ReviewCommentComposer({
   onCancel: () => void;
   initialBody?: string;
   onBodyChange?: (body: string) => void;
+  onSubmitAsPrComment?: (
+    body: string,
+    images: PromptImagePart[],
+  ) => Promise<void> | void;
+  onAskAgent?: (question: string) => Promise<void> | void;
 }) {
   const [selectedPresets, setSelectedPresets] = useState<ReviewPresetId[]>([]);
+  const [isSubmittingPrComment, setIsSubmittingPrComment] = useState(false);
+  const [isAskingAgent, setIsAskingAgent] = useState(false);
+  const [prCommentError, setPrCommentError] = useState<string | null>(null);
 
   const togglePreset = useCallback((id: ReviewPresetId) => {
     setSelectedPresets((prev) =>
@@ -70,6 +80,44 @@ export function ReviewCommentComposer({
       onSubmit(body, selectedPresets, images);
     },
     [onSubmit, selectedPresets],
+  );
+
+  const handleSubmitAsPrComment = useCallback(
+    async (body: string, images: PromptImagePart[]) => {
+      if (!onSubmitAsPrComment || isSubmittingPrComment) return;
+      setPrCommentError(null);
+      setIsSubmittingPrComment(true);
+      try {
+        await onSubmitAsPrComment(body, images);
+      } catch (error) {
+        setPrCommentError(
+          error instanceof Error ? error.message : 'Failed to post PR comment',
+        );
+      } finally {
+        setIsSubmittingPrComment(false);
+      }
+    },
+    [isSubmittingPrComment, onSubmitAsPrComment],
+  );
+
+  const handleAskAgent = useCallback(
+    async (body: string) => {
+      if (!onAskAgent || isAskingAgent) return;
+      const question = body.trim();
+      if (!question) return;
+      setPrCommentError(null);
+      setIsAskingAgent(true);
+      try {
+        await onAskAgent(question);
+      } catch (error) {
+        setPrCommentError(
+          error instanceof Error ? error.message : 'Failed to ask agent',
+        );
+      } finally {
+        setIsAskingAgent(false);
+      }
+    },
+    [isAskingAgent, onAskAgent],
   );
 
   return (
@@ -96,12 +144,37 @@ export function ReviewCommentComposer({
               onToggle={togglePreset}
             />
           }
-          renderAfterActions={
-            <span className="text-ink-4 ml-auto text-[10.5px]">
-              {"Won't be sent until you submit the review."}
-            </span>
-          }
+          renderAfterActions={({ body, images, isDisabled }) => (
+            <>
+              {onAskAgent && (
+                <button
+                  type="button"
+                  className="border-glass-border/70 text-ink-2 hover:text-ink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
+                  onClick={() => void handleAskAgent(body)}
+                  disabled={isDisabled || isAskingAgent || !body.trim()}
+                >
+                  {isAskingAgent ? 'Asking...' : 'Ask Agent'}
+                </button>
+              )}
+              {onSubmitAsPrComment && (
+                <button
+                  type="button"
+                  className="border-glass-border/70 text-ink-2 hover:text-ink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
+                  onClick={() => void handleSubmitAsPrComment(body, images)}
+                  disabled={isDisabled || isSubmittingPrComment}
+                >
+                  {isSubmittingPrComment ? 'Posting...' : 'Post to PR'}
+                </button>
+              )}
+              <span className="text-ink-4 ml-auto text-[10.5px]">
+                {"Won't be sent until you submit the review."}
+              </span>
+            </>
+          )}
         />
+        {prCommentError && (
+          <p className="text-status-fail mt-2 text-xs">{prCommentError}</p>
+        )}
       </div>
     </div>
   );

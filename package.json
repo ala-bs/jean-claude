@@ -156,6 +156,7 @@
     "electron": "^33.2.1",
     "electron-builder": "^26.4.0",
     "electron-vite": "^2.3.0",
+    "happy-dom": "^20.10.6",
     "memfs": "^4.57.2",
     "oxlint": "^1.70.0",
     "react-devtools": "^7.0.1",

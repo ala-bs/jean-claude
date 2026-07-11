@@ -35,6 +35,7 @@ import {
   type ModelPreference,
   PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS,
   PRESET_EDITORS,
+  type PrReviewAgentSetting,
   type RawMessageCleanupSetting,
   type TaskNotificationEvent,
   type TaskNotificationMode,
@@ -51,6 +52,7 @@ import {
   useEditorSetting,
   usePreferenceMemorySetting,
   usePromptPrefaceSetting,
+  usePrReviewAgentSetting,
   useRawMessageCleanupSetting,
   useSetting,
   useSummaryModelsSetting,
@@ -64,6 +66,7 @@ import {
   useUpdateEditorSetting,
   useUpdatePreferenceMemorySetting,
   useUpdatePromptPrefaceSetting,
+  useUpdatePrReviewAgentSetting,
   useUpdateRawMessageCleanupSetting,
   useUpdateSetting,
   useUpdateSummaryModelsSetting,
@@ -100,6 +103,8 @@ const MEETING_JOIN_TARGET_OPTIONS = [
   { value: 'web', label: 'Web browser' },
   { value: 'app', label: 'Teams app' },
 ];
+
+const PR_REVIEW_DEFAULT_BACKEND_VALUE = '__project-default__';
 
 function getUtcDateInputValue(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -822,11 +827,123 @@ export function GeneralSettings() {
       <div className="border-line-soft my-8 border-t" />
       <NotificationsSettings />
       <div className="border-line-soft my-8 border-t" />
+      <PrReviewAgentSettings />
+      <div className="border-line-soft my-8 border-t" />
       <UsageDisplaySettings />
       <div className="border-line-soft my-8 border-t" />
       <WorkActivitySettings />
       <div className="border-line-soft my-8 border-t" />
       <MaintenanceSettings />
+    </div>
+  );
+}
+
+function PrReviewAgentSettings() {
+  const { data: prReviewAgentSetting } = usePrReviewAgentSetting();
+  const updatePrReviewAgent = useUpdatePrReviewAgentSetting();
+  const { data: backendsSetting } = useBackendsSetting();
+  const setting: PrReviewAgentSetting = prReviewAgentSetting ?? {
+    backend: null,
+    modelPreference: 'default',
+    thinkingEffort: 'default',
+  };
+  const effectiveBackend =
+    setting.backend ?? backendsSetting?.defaultBackend ?? 'claude-code';
+  const { data: dynamicModels } = useBackendModels(effectiveBackend);
+  const capabilities = getModelThinkingCapabilities(
+    setting.modelPreference,
+    dynamicModels,
+  );
+  const thinkingOptions = getThinkingEffortOptions({
+    backend: effectiveBackend,
+    model: setting.modelPreference,
+    capabilities,
+  });
+  const normalizedThinkingEffort = normalizeThinkingEffortForModel({
+    backend: effectiveBackend,
+    model: setting.modelPreference,
+    effort: setting.thinkingEffort,
+    capabilities,
+  });
+
+  const updateSetting = (next: PrReviewAgentSetting) => {
+    updatePrReviewAgent.mutate(next);
+  };
+
+  return (
+    <div>
+      <h2 className="text-ink-1 text-lg font-semibold">PR Review Agent</h2>
+      <p className="text-ink-3 mt-1 text-sm">
+        Default backend, model, and thinking effort for Ask Agent in PR diffs.
+      </p>
+
+      <div className="border-glass-border bg-bg-1 mt-4 rounded-lg border px-4 py-3">
+        <div className="grid gap-3 md:grid-cols-3">
+          <Select
+            value={setting.backend ?? PR_REVIEW_DEFAULT_BACKEND_VALUE}
+            options={[
+              {
+                value: PR_REVIEW_DEFAULT_BACKEND_VALUE,
+                label: 'Default backend',
+                description: 'Use the default agent backend',
+              },
+              ...AVAILABLE_BACKENDS.map((backend) => ({
+                value: backend.value,
+                label: backend.label,
+                description: backend.description,
+                badge: backend.badge,
+              })),
+            ]}
+            onChange={(value) =>
+              updateSetting({
+                backend:
+                  value === PR_REVIEW_DEFAULT_BACKEND_VALUE
+                    ? null
+                    : (value as AgentBackendType),
+                modelPreference: 'default',
+                thinkingEffort: 'default',
+              })
+            }
+            label="Backend"
+          />
+          <ModelSelector
+            value={setting.modelPreference}
+            models={getModelsForBackend(effectiveBackend, dynamicModels)}
+            onChange={(modelPreference) => {
+              const nextCapabilities = getModelThinkingCapabilities(
+                modelPreference,
+                dynamicModels,
+              );
+              updateSetting({
+                ...setting,
+                modelPreference,
+                thinkingEffort: normalizeThinkingEffortForModel({
+                  backend: effectiveBackend,
+                  model: modelPreference,
+                  effort: setting.thinkingEffort,
+                  capabilities: nextCapabilities,
+                }),
+              });
+            }}
+          />
+          <ThinkingSelector
+            value={normalizedThinkingEffort}
+            options={thinkingOptions}
+            onChange={(thinkingEffort) =>
+              updateSetting({
+                ...setting,
+                thinkingEffort: normalizeThinkingEffortForModel({
+                  backend: effectiveBackend,
+                  model: setting.modelPreference,
+                  effort: thinkingEffort,
+                  capabilities,
+                }),
+              })
+            }
+            disabled={thinkingOptions.length <= 1}
+          />
+        </div>
+      </div>
     </div>
   );
 }

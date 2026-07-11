@@ -124,6 +124,7 @@ function FeedProjectBackgroundLogo({ item }: { item: FeedItem }) {
 const RAIL_W = 32; // rail column width in px
 const NODE_X = 16; // center X of main node
 const FEED_RAIL_COLOR = 'var(--color-ink-4)';
+const PR_REVIEW_TASK_COLOR = 'oklch(0.74 0.19 295)';
 
 function getPrStateColor({
   isDraft,
@@ -492,7 +493,12 @@ export function FeedItemCard({
     isDraft,
     isCompleted: prMerged,
   });
-  const railColor = hasPr ? prStateColor : FEED_RAIL_COLOR;
+  const railColor =
+    item.taskType === 'pr-review'
+      ? PR_REVIEW_TASK_COLOR
+      : hasPr
+        ? prStateColor
+        : FEED_RAIL_COLOR;
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
   const canSetPrAutoComplete =

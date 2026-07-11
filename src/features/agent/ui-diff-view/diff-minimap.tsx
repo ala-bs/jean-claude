@@ -3,6 +3,12 @@ import type { RefObject } from 'react';
 
 import type { DiffLine } from './diff-utils';
 
+type CommentedLines = Set<string>;
+
+function lineAnchorKey(side: 'old' | 'new' | undefined, line: number) {
+  return `${side ?? 'new'}:${line}`;
+}
+
 interface MinimapMarker {
   type: 'addition' | 'deletion';
   startPercent: number;
@@ -61,7 +67,7 @@ function computeMarkers(lines: DiffLine[]): MinimapMarker[] {
  */
 function computeCommentMarkers(
   lines: DiffLine[],
-  commentedLines: Set<number>,
+  commentedLines: CommentedLines,
 ): CommentMarker[] {
   if (lines.length === 0 || commentedLines.size === 0) return [];
 
@@ -71,13 +77,19 @@ function computeCommentMarkers(
   let i = 0;
   while (i < totalLines) {
     const lineNum = lines[i].newLineNumber;
-    if (lineNum !== undefined && commentedLines.has(lineNum)) {
+    if (
+      lineNum !== undefined &&
+      commentedLines.has(lineAnchorKey('new', lineNum))
+    ) {
       const startIndex = i;
 
       // Merge consecutive commented lines
       while (i < totalLines) {
         const num = lines[i].newLineNumber;
-        if (num !== undefined && commentedLines.has(num)) {
+        if (
+          num !== undefined &&
+          commentedLines.has(lineAnchorKey('new', num))
+        ) {
           i++;
         } else {
           break;
@@ -104,7 +116,7 @@ export function DiffMinimap({
 }: {
   lines: DiffLine[];
   viewport?: ViewportInfo;
-  commentedLines?: Set<number>;
+  commentedLines?: CommentedLines;
 }) {
   const markers = useMemo(() => computeMarkers(lines), [lines]);
   const commentMarkers = useMemo(
@@ -184,7 +196,7 @@ export const DiffMinimapOverlay = memo(function DiffMinimapOverlay({
 }: {
   lines: DiffLine[];
   scrollContainerRef: RefObject<HTMLDivElement | null>;
-  commentedLines?: Set<number>;
+  commentedLines?: CommentedLines;
 }) {
   const [viewport, setViewport] = useState<ViewportInfo | undefined>();
   const rafRef = useRef<number | null>(null);

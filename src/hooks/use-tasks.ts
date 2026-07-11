@@ -6,6 +6,7 @@ import {
   ingestTask,
   ingestTasks,
   markTaskListsStale,
+  patchTaskSnapshot,
   projectTasksResourceKey,
   removeTask,
   selectActiveTasks,
@@ -267,6 +268,12 @@ export function useDeleteWorktree() {
       if (result.editorCloseWarning) {
         addToast({ type: 'error', message: result.editorCloseWarning });
       }
+      patchTaskSnapshot(taskId, {
+        worktreePath: null,
+        branchName: null,
+        startCommitHash: null,
+        sourceBranch: null,
+      });
       queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });

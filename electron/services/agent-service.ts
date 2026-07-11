@@ -38,9 +38,12 @@ import {
 } from '@shared/types';
 import {
   type InteractionMode,
+  isPrReviewChatStepMeta,
   isSkillCreationStepMeta,
   type ReviewStepMeta,
+  type Task,
   type TaskNotificationEvent,
+  type TaskStep,
   type TaskStepType,
   type ThinkingEffort,
 } from '@shared/types';
@@ -61,6 +64,7 @@ import {
 } from './prompt-utils';
 import {
   buildToolPermissionConfig,
+  flattenScope,
   normalizeToolRequest,
   readSettings,
   resolveRules,
@@ -71,6 +75,7 @@ import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { applyConfiguredPromptPreface } from './prompt-preface-service';
 import { assertValidWorkspacePath } from './system-project-service';
 import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
+import { buildReadOnlyPrReviewSessionRules } from './pr-review-agent-service';
 import { buildSessionIdStepUpdate } from './agent-session-update';
 import { ClaudeCodeBackend } from './agent-backends/claude/claude-code-backend';
 import { CopilotBackend } from './agent-backends/copilot/copilot-backend';
@@ -88,8 +93,6 @@ import { resolveGlobalRules } from './global-permissions-service';
 import { SettingsRepository } from '../database/repositories/settings';
 import { StepService } from './step-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
-
-
 
 /** In-memory store for queued prompt parts, keyed by QueuedPrompt.id.
  *  Keeps full PromptPart[] (with image base64) out of the QueuedPrompt.content
@@ -265,6 +268,41 @@ function getUsageFeatureForStep(type: TaskStepType): AiUsageFeature {
       const _exhaustive: never = type;
       return _exhaustive;
     }
+  }
+}
+
+function assertPrReviewAgentRunAllowed({
+  task,
+  step,
+  provider,
+}: {
+  task: Task;
+  step: TaskStep;
+  provider: AgentBackendProvider;
+}) {
+  if (task.type !== 'pr-review' && !isPrReviewChatStepMeta(step.meta)) {
+    return;
+  }
+
+  if (task.type !== 'pr-review') {
+    throw new Error('PR review chat steps can only run under PR review tasks');
+  }
+  if (!isPrReviewChatStepMeta(step.meta)) {
+    throw new Error('PR review tasks can only run PR review chat steps');
+  }
+  if (task.pullRequestId !== String(step.meta.pullRequestId)) {
+    throw new Error('PR review chat step pull request does not match review task');
+  }
+  if (!provider.capabilities.agent.permissions.supported) {
+    throw new Error(
+      `PR review chat requires backend permission support; ${provider.id} is not supported`,
+    );
+  }
+
+  const actualRules = JSON.stringify(task.sessionRules ?? {});
+  const expectedRules = JSON.stringify(buildReadOnlyPrReviewSessionRules());
+  if (actualRules !== expectedRules) {
+    throw new Error('PR review tasks must use read-only session rules');
   }
 }
 
@@ -633,6 +671,7 @@ class AgentService {
     if (!provider) {
       throw new Error(`Unknown agent backend: "${backendType}"`);
     }
+    assertPrReviewAgentRunAllowed({ task, step, provider });
 
     const agentTaskContext: AgentTaskContext = {
       taskId: step.taskId,
@@ -810,6 +849,10 @@ class AgentService {
 
     // Get step for mode/model
     const step = await TaskStepRepository.findById(stepId);
+    if (!step) {
+      throw new Error(`Step ${stepId} not found`);
+    }
+    assertPrReviewAgentRunAllowed({ task, step, provider: session.provider });
 
     // For skill-creation steps, use the workspace path as CWD
     if (step?.type === 'skill-creation' && isSkillCreationStepMeta(step.meta)) {
@@ -850,7 +893,10 @@ class AgentService {
     const isWorktree = !!task.worktreePath;
     const globalRules = await resolveGlobalRules();
     const settings = await readSettings(project.path);
-    const rules = resolveRules(settings, isWorktree, globalRules, workingDir);
+    const rules = [
+      ...resolveRules(settings, isWorktree, globalRules, workingDir),
+      ...flattenScope(task.sessionRules ?? {}),
+    ];
 
     const backendChanged = session.backendType !== session.requestedBackendType;
     const modelPreference =
@@ -1502,6 +1548,22 @@ class AgentService {
       if (!runningStep) {
         throw new Error(`Step ${stepId} not found`);
       }
+
+      const preflightTask = await TaskRepository.findById(runningStep.taskId);
+      if (!preflightTask) {
+        throw new Error(`Task ${runningStep.taskId} not found`);
+      }
+      const preflightBackend = (runningStep.agentBackend ??
+        'claude-code') as AgentBackendType;
+      const preflightProvider = getAgentBackendProvider(preflightBackend);
+      if (!preflightProvider) {
+        throw new Error(`Unknown agent backend: "${preflightBackend}"`);
+      }
+      assertPrReviewAgentRunAllowed({
+        task: preflightTask,
+        step: runningStep,
+        provider: preflightProvider,
+      });
 
       // Surface work immediately while continue-summary synthesis runs.
       await StepService.update(stepId, { status: 'running' });

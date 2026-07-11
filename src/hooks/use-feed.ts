@@ -319,14 +319,14 @@ export function useFeed() {
   const taskOwnedPrKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const item of visibleFeedItems) {
-      if (item.source === 'task') {
+      if (item.source === 'task' && item.taskType !== 'pr-review') {
         const key = getFeedPullRequestIdentityKey(item);
         if (key) keys.add(key);
       }
       // Also check children (subtasks) that own PRs
       if (item.children) {
         for (const child of item.children) {
-          if (child.source === 'task') {
+          if (child.source === 'task' && child.taskType !== 'pr-review') {
             const key = getFeedPullRequestIdentityKey(child);
             if (key) keys.add(key);
           }

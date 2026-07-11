@@ -450,7 +450,7 @@ export function bgJobLabel(type: BackgroundJobType): string {
     case 'pr-creation':
       return 'Creating PR…';
     case 'pr-review-creation':
-      return 'Creating PR review…';
+      return 'Creating review workspace…';
     case 'worktree-cleanup':
       return 'Cleaning up worktree…';
     case 'pipeline-run':

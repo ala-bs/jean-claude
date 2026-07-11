@@ -105,6 +105,7 @@ export function PrCommentForm({
   initialBody,
   onBodyChange,
   submitLabel,
+  onAskAgent,
 }: {
   onSubmit: (content: string) => void;
   onCancel?: () => void;
@@ -120,9 +121,11 @@ export function PrCommentForm({
   /** Called when body text changes for draft persistence. */
   onBodyChange?: (body: string) => void;
   submitLabel?: string;
+  onAskAgent?: (question: string) => Promise<void> | void;
 }) {
   const [content, setContent] = useState('');
   const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [isAskingAgent, setIsAskingAgent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [composerKey, setComposerKey] = useState(0);
   const submitTokenRef = useRef(0);
@@ -133,7 +136,31 @@ export function PrCommentForm({
     };
   }, []);
 
-  const isBusy = isSubmitting || isUploadingImages;
+  const isBusy = isSubmitting || isUploadingImages || isAskingAgent;
+
+  const handleAskAgent = async (body: string) => {
+    if (!onAskAgent || isBusy) return;
+    const question = body.trim();
+    if (!question) return;
+
+    const submitToken = submitTokenRef.current;
+    setError(null);
+    setIsAskingAgent(true);
+    try {
+      await onAskAgent(question);
+      if (submitToken !== submitTokenRef.current) return;
+      setComposerKey((current) => current + 1);
+    } catch (askError) {
+      if (submitToken !== submitTokenRef.current) return;
+      setError(
+        askError instanceof Error ? askError.message : 'Failed to ask agent',
+      );
+    } finally {
+      if (submitToken === submitTokenRef.current) {
+        setIsAskingAgent(false);
+      }
+    }
+  };
 
   const submitWithImages = async (body: string, images: PromptImagePart[]) => {
     const submitToken = submitTokenRef.current;
@@ -248,6 +275,20 @@ export function PrCommentForm({
           mentionOptions={mentionOptions}
           onSearchMentions={onSearchMentions}
           onBodyChange={onBodyChange}
+          renderAfterActions={
+            onAskAgent
+              ? ({ body, isDisabled }) => (
+                  <button
+                    type="button"
+                    className="border-glass-border/70 text-ink-2 hover:text-ink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
+                    onClick={() => void handleAskAgent(body)}
+                    disabled={isDisabled || isAskingAgent || !body.trim()}
+                  >
+                    {isAskingAgent ? 'Asking...' : 'Ask Agent'}
+                  </button>
+                )
+              : undefined
+          }
         />
         {error && <p className="text-status-fail mt-2 text-xs">{error}</p>}
       </div>

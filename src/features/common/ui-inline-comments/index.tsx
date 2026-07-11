@@ -106,7 +106,14 @@ export function InlineCommentComposer({
   /** Rendered between the line label and the textarea (e.g. preset chips). */
   renderBeforeTextarea?: ReactNode;
   /** Rendered after the action buttons (e.g. hint text). */
-  renderAfterActions?: ReactNode;
+  renderAfterActions?:
+    | ReactNode
+    | ((context: {
+        body: string;
+        images: PromptImagePart[];
+        isSubmitting: boolean;
+        isDisabled: boolean;
+      }) => ReactNode);
   placeholder?: string;
   submitLabel?: string;
   /**
@@ -436,7 +443,14 @@ export function InlineCommentComposer({
             Cancel
           </button>
         )}
-        {renderAfterActions}
+        {typeof renderAfterActions === 'function'
+          ? renderAfterActions({
+              body,
+              images,
+              isSubmitting,
+              isDisabled,
+            })
+          : renderAfterActions}
       </div>
       <VideoGifConverter
         file={videoFile}
