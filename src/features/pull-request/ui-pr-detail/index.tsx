@@ -95,6 +95,11 @@ export function PrDetail({
     MentionOption[]
   >([]);
   const [commentMode, setCommentMode] = useState<CommentMode>('pr');
+  const { data: pr, isLoading: isPrLoading } = usePullRequest(
+    projectId,
+    prId,
+    repoInfo,
+  );
 
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
@@ -139,6 +144,13 @@ export function PrDetail({
       handler: () => setActiveTab('commits'),
       hideInCommandPalette: true,
     },
+    pr?.url ? {
+      label: 'Open PR in Azure DevOps',
+      shortcut: 'cmd+shift+o',
+      handler: () => {
+        window.open(pr.url, '_blank', 'noopener,noreferrer');
+      },
+    } : false,
   ]);
 
   const { data: project } = useProject(projectId);
@@ -182,12 +194,6 @@ export function PrDetail({
     recordPrViewRef,
     repoInfo,
   ]);
-
-  const { data: pr, isLoading: isPrLoading } = usePullRequest(
-    projectId,
-    prId,
-    repoInfo,
-  );
 
   const { data: commits = [], isLoading: isCommitsLoading } =
     usePullRequestCommits(projectId, prId, repoInfo);

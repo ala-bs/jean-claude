@@ -43,6 +43,7 @@ import { formatRelativeTime } from '@/lib/time';
 import { getDefaultModelForBackend } from '@/lib/default-models';
 import { Input } from '@/common/ui/input';
 import { invalidateFeedItems } from '@/hooks/use-tasks';
+import { Kbd } from '@/common/ui/kbd';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useNewTaskFormStore } from '@/stores/new-task-form';
 import { useProject } from '@/hooks/use-projects';
@@ -341,6 +342,7 @@ export function PrHeader({
         >
           <ExternalLink className="h-3.5 w-3.5" />
           Azure DevOps
+          <Kbd shortcut="cmd+shift+o" className="ml-1 text-[9px]" />
         </a>
       </div>
 

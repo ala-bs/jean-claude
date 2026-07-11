@@ -713,6 +713,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
             pullRequestId: pr.id,
             pullRequestProviderId: project.repoProviderId ?? undefined,
             pullRequestRepoId: project.repoId ?? undefined,
+            pullRequestUrl: pr.url,
             isApprovedByMe:
               !!project.repoProviderId &&
               pr.reviewers.some(

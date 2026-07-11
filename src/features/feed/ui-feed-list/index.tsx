@@ -27,6 +27,7 @@ import type React from 'react';
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 import type { FeedItem } from '@shared/feed-types';
 import { Modal } from '@/common/ui/modal';
+import { openPrLinkOnModifiedClick } from '@/lib/open-pr-link';
 import { ProjectLogo } from '@/features/project/ui-project-logo';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
@@ -987,6 +988,7 @@ function PrReviewCarouselCard({
     item.pullRequestId,
   );
   const title = cachedPr?.title ?? item.title;
+  const pullRequestUrl = cachedPr?.url ?? item.pullRequestUrl;
   const isDraft = cachedPr?.isDraft ?? item.isDraft ?? false;
   const ownerName =
     cachedPr?.createdBy.displayName ?? item.subtitle ?? item.ownerName ?? '';
@@ -1011,7 +1013,8 @@ function PrReviewCarouselCard({
     >
       <button
         type="button"
-        onClick={() => {
+        onClick={(event) => {
+          if (openPrLinkOnModifiedClick({ event, url: pullRequestUrl })) return;
           if (isCenter) {
             onOpen();
           } else {
@@ -1331,42 +1334,6 @@ export function FeedList() {
     [navigate],
   );
 
-  const openInProject = useCallback(
-    (item: {
-      source: FeedItem['source'];
-      projectId: string;
-      taskId?: string;
-      pullRequestId?: number;
-      workItemId?: number;
-    }) => {
-      // Work items only exist in the cross-project (/all) context
-      if (item.source === 'work-item') return;
-      // Notes are global, not per-project
-      if (item.source === 'note') return;
-      if (item.source === 'pull-request' && item.pullRequestId) {
-        navigate({
-          to: '/projects/$projectId/prs/$prId',
-          params: {
-            projectId: item.projectId,
-            prId: String(item.pullRequestId),
-          },
-        });
-        return;
-      }
-
-      if (item.taskId) {
-        navigate({
-          to: '/projects/$projectId/tasks/$taskId',
-          params: {
-            projectId: item.projectId,
-            taskId: item.taskId,
-          },
-        });
-      }
-    },
-    [navigate],
-  );
-
   const navigateRelative = useCallback(
     (direction: 'prev' | 'next') => {
       if (allVisibleItems.length === 0) return;
@@ -1500,16 +1467,6 @@ export function FeedList() {
           unpin(currentItem.id);
         } else {
           pin(currentItem.id);
-        }
-      },
-      hideInCommandPalette: true,
-    },
-    {
-      label: 'Open Selected Feed Item in Project',
-      shortcut: 'cmd+shift+o',
-      handler: () => {
-        if (currentItem) {
-          openInProject(currentItem);
         }
       },
       hideInCommandPalette: true,

@@ -110,6 +110,7 @@ describe('getPrFeedItems', () => {
     expect(items[0]).toMatchObject({
       source: 'pull-request',
       pullRequestId: 9886,
+      pullRequestUrl: 'https://example.com/pr/9886',
       title: 'Smartbar POC',
       isDraft: true,
     });
