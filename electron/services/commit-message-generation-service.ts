@@ -73,6 +73,34 @@ function parseTitleBodyResult(
   return null;
 }
 
+function getTitleBodyValidationError(result: unknown): string {
+  const serialized = JSON.stringify(result) ?? String(result);
+  const responsePreview =
+    serialized.length > 1_000
+      ? `${serialized.slice(0, 1_000)}... (truncated)`
+      : serialized;
+  let reason: string;
+
+  if (result === null || result === undefined) {
+    reason = 'AI returned no output';
+  } else if (typeof result !== 'object') {
+    reason = `AI returned ${typeof result} instead of a structured message`;
+  } else {
+    const typed = result as { title?: unknown; body?: unknown };
+    if (typeof typed.title !== 'string') {
+      reason = 'AI response is missing a text title';
+    } else if (!typed.title.trim()) {
+      reason = 'AI response contains a blank title';
+    } else if (typeof typed.body !== 'string') {
+      reason = 'AI response is missing a text body';
+    } else {
+      reason = 'AI response contains a blank body';
+    }
+  }
+
+  return `${reason}. AI response: ${responsePreview}`;
+}
+
 function buildPrompt({
   branchName,
   targetBranch,
@@ -163,7 +191,7 @@ export async function generateMergeCommitMessage({
 
   const parsed = parseTitleBodyResult(result);
   if (!parsed?.body.trim()) {
-    return null;
+    throw new Error(getTitleBodyValidationError(result));
   }
   return parsed;
 }
@@ -274,7 +302,7 @@ export async function generateMergeMessageForTask(
     }
 
     throw new Error(
-      'AI did not return a valid merge commit message. Please try again or enter a message manually.',
+      `${getTitleBodyValidationError(result)}. Please try again or enter a message manually.`,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
