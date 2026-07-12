@@ -1,11 +1,10 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { defineConfig } from 'electron-vite';
 import { execSync } from 'child_process';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import svgr from 'vite-plugin-svgr';
 import tailwindcss from '@tailwindcss/vite';
 import { tanstackRouter } from '@tanstack/router-plugin/vite';
-
 
 const commitHash = execSync('git rev-parse --short HEAD', {
   encoding: 'utf8',
@@ -32,7 +31,6 @@ export default defineConfig({
         '@shared': resolve('shared'),
       },
     },
-    plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
         input: {
@@ -51,7 +49,6 @@ export default defineConfig({
         '@shared': resolve('shared'),
       },
     },
-    plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
         input: {

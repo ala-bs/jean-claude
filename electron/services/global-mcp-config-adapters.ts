@@ -8,7 +8,6 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 
 import { dbg } from '../lib/debug';
 
-import type { AgentBackendType } from '@shared/agent-backend-types';
 import type {
   DiscoveredMcpGroup,
   DiscoveredMcpVariant,
@@ -18,6 +17,7 @@ import {
   normalizeGlobalMcpName,
   sanitizeGlobalMcpName,
 } from '@shared/global-mcp-types';
+import type { AgentBackendType } from '@shared/agent-backend-types';
 
 export interface McpConfigEntry {
   type?: McpTransportType;

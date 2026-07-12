@@ -4,8 +4,8 @@ import type {
   NewGlobalMcpServer,
   UpdateGlobalMcpServer,
 } from '@shared/global-mcp-types';
-import { normalizeGlobalMcpName } from '@shared/global-mcp-types';
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import { normalizeGlobalMcpName } from '@shared/global-mcp-types';
 
 import { db } from '../index';
 

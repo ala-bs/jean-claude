@@ -18,6 +18,7 @@ import {
   buildCalendarNotificationKey,
   type CalendarEventRecord,
   clampCalendarLeadTimeMinutes,
+  isCalendarAccessDeniedError,
   shouldSuppressCalendarMeetingAlert,
 } from './system-calendar-utils';
 import { notificationService } from './notification-service';
@@ -763,7 +764,13 @@ class SystemCalendarService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message !== this.lastErrorKey) {
-        dbg.notification('System calendar poll failed: %O', error);
+        if (message.startsWith('Calendar access not granted.')) {
+          dbg.notification(
+            'System calendar unavailable: Calendar access not granted. Enable it in System Settings > Privacy & Security > Calendars.',
+          );
+        } else {
+          dbg.notification('System calendar poll failed: %O', error);
+        }
         this.lastErrorKey = message;
       }
     } finally {
@@ -787,10 +794,20 @@ class SystemCalendarService {
       includeOngoing,
       lookBehindMinutes,
     });
-    const { stdout } = await execFileAsync('xcrun', ['swift', '-e', script], {
-      timeout: APPLE_SCRIPT_TIMEOUT_MS,
-      maxBuffer: 1024 * 1024,
-    });
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync('xcrun', ['swift', '-e', script], {
+        timeout: APPLE_SCRIPT_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024,
+      }));
+    } catch (error) {
+      if (isCalendarAccessDeniedError(error)) {
+        throw new Error(
+          'Calendar access not granted. Enable it in System Settings > Privacy & Security > Calendars.',
+        );
+      }
+      throw error;
+    }
     const events = parseSystemCalendarEvents(stdout);
     dbg.notification(
       'Fetched %d system calendar events for %d-minute lookahead',

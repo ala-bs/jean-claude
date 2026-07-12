@@ -62,9 +62,9 @@ import { AutocompleteSettings } from '@/features/settings/ui-autocomplete-settin
 import { AzureDevOpsTab } from '@/features/settings/ui-azure-devops-tab';
 import { DebugDatabase } from '@/features/settings/ui-debug-database';
 import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
+import { GlobalMcpSettings } from '@/features/settings/ui-global-mcp-settings';
 import { GlobalPermissionsSettings } from '@/features/settings/ui-global-permissions-settings';
 import { Kbd } from '@/common/ui/kbd';
-import { GlobalMcpSettings } from '@/features/settings/ui-global-mcp-settings';
 import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings';
 import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';

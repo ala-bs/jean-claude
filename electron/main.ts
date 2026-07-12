@@ -132,7 +132,7 @@ function createWindow() {
 }
 
 function showDockIcon() {
-  if (process.platform !== 'darwin') return;
+  if (process.platform !== 'darwin' || !app.dock) return;
 
   app.setActivationPolicy('regular');
   void app.dock.show().catch((error) => {

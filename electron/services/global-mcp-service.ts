@@ -1,4 +1,3 @@
-import type { AgentBackendType } from '@shared/agent-backend-types';
 import type {
   DiscoveredMcpVariant,
   GlobalMcpBackendStates,
@@ -8,10 +7,6 @@ import type {
   NewGlobalMcpServer,
   UpdateGlobalMcpServer,
 } from '@shared/global-mcp-types';
-import { normalizeGlobalMcpName } from '@shared/global-mcp-types';
-
-import { GlobalMcpServerRepository } from '../database/repositories/global-mcp-servers';
-import { dbg } from '../lib/debug';
 import {
   discoverMcpEntries,
   fingerprintNativeEntry,
@@ -22,6 +17,10 @@ import {
   normalizeMcpName,
   toConfigEntry,
 } from './global-mcp-config-adapters';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import { dbg } from '../lib/debug';
+import { GlobalMcpServerRepository } from '../database/repositories/global-mcp-servers';
+import { normalizeGlobalMcpName } from '@shared/global-mcp-types';
 
 export interface GlobalMcpServiceDeps { adapters?: GlobalMcpConfigAdapter[] }
 

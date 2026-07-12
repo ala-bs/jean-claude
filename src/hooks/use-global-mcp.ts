@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { AgentBackendType } from '@shared/agent-backend-types';
 import type {
   DiscoveredMcpVariant,
   NewGlobalMcpServer,
   UpdateGlobalMcpServer,
 } from '@shared/global-mcp-types';
+import type { AgentBackendType } from '@shared/agent-backend-types';
 import { api } from '@/lib/api';
 
 export function useGlobalMcpServers() {

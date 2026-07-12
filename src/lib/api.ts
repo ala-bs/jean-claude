@@ -74,6 +74,13 @@ import type {
   AzureDevOpsPullRequestTag,
 } from '@shared/azure-devops-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
+import type {
+  DiscoveredMcpVariant,
+  GlobalMcpDiscoveryResult,
+  GlobalMcpServer,
+  NewGlobalMcpServer,
+  UpdateGlobalMcpServer,
+} from '@shared/global-mcp-types';
 import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
 import type {
   GlobalPrompt,
@@ -97,13 +104,6 @@ import type {
   UnifiedMcpServer,
   UpdateMcpServerTemplate,
 } from '@shared/mcp-types';
-import type {
-  DiscoveredMcpVariant,
-  GlobalMcpDiscoveryResult,
-  GlobalMcpServer,
-  NewGlobalMcpServer,
-  UpdateGlobalMcpServer,
-} from '@shared/global-mcp-types';
 import type {
   NewProjectCommand,
   NewProjectCommandGroup,

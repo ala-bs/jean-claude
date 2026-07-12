@@ -8,13 +8,16 @@ import {
 } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
-import type { AgentBackendType } from '@shared/agent-backend-types';
 import type {
   DiscoveredMcpGroup,
   DiscoveredMcpVariant,
   GlobalMcpServer,
   McpTransportType,
 } from '@shared/global-mcp-types';
+import {
+  parsePastedArguments,
+  parsePastedEnvironment,
+} from '@/lib/global-mcp-input';
 import {
   useCreateGlobalMcpServer,
   useDisableGlobalMcpServer,
@@ -25,12 +28,9 @@ import {
   useUninstallGlobalMcpServer,
   useUpdateGlobalMcpServer,
 } from '@/hooks/use-global-mcp';
-import { Button } from '@/common/ui/button';
+import type { AgentBackendType } from '@shared/agent-backend-types';
 import { backendSupportsTransport } from '@/lib/global-mcp-support';
-import {
-  parsePastedArguments,
-  parsePastedEnvironment,
-} from '@/lib/global-mcp-input';
+import { Button } from '@/common/ui/button';
 
 const ALL_BACKENDS: { id: AgentBackendType; label: string }[] = [
   { id: 'claude-code', label: 'Claude Code' },

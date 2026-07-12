@@ -1,5 +1,7 @@
 const CALENDAR_FIELD_DELIMITER = String.fromCharCode(31);
 const CALENDAR_RECORD_DELIMITER = String.fromCharCode(30);
+const CALENDAR_ACCESS_DENIED_SIGNATURE =
+  'Error Domain=JeanClaudeCalendar Code=1 "Calendar access not granted"';
 
 export interface CalendarEventRecord {
   externalId: string;
@@ -14,6 +16,17 @@ export interface CalendarEventRecord {
   notes: string;
   url: string;
   recurring: boolean;
+}
+
+export function isCalendarAccessDeniedError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('stderr' in error)) {
+    return false;
+  }
+
+  return (
+    typeof error.stderr === 'string' &&
+    error.stderr.includes(CALENDAR_ACCESS_DENIED_SIGNATURE)
+  );
 }
 
 export function parseCalendarEventRecords(
