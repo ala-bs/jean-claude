@@ -51,6 +51,7 @@ import {
 } from '../../../database/repositories';
 import { calculateTheoreticalOpenCodeCost } from '../../backend-models-service';
 import { dbg } from '../../../lib/debug';
+import { getChildProcessEnv } from '../../../lib/child-process-env';
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
 
 
@@ -232,7 +233,7 @@ async function createOpencodeServerHandle(options: {
     {
       detached: process.platform !== 'win32',
       env: {
-        ...process.env,
+        ...getChildProcessEnv(),
         OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config ?? {}),
       },
     },

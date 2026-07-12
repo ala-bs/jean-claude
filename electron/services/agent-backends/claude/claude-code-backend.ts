@@ -46,6 +46,7 @@ import {
   normalizeToolRequest,
 } from '../../permission-settings-service';
 import { dbg } from '../../../lib/debug';
+import { getChildProcessEnv } from '../../../lib/child-process-env';
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
 
 
@@ -328,15 +329,9 @@ export class ClaudeCodeBackend implements AgentBackend {
     const sdkPermissionMode =
       SDK_PERMISSION_MODES[config.interactionMode ?? 'ask'];
 
-    // Strip NODE_ENV from the environment passed to the agent session.
-    // Jean-Claude runs as an Electron app which sets NODE_ENV (e.g. "production"),
-    // but forwarding it to the agent breaks tools like vitest that require
-    // NODE_ENV to be unset or "test".
-    const { NODE_ENV: _nodeEnv, ...agentEnv } = process.env;
-
     const queryOptions: NonNullable<Parameters<typeof query>[0]['options']> = {
       cwd: config.cwd,
-      env: agentEnv as Record<string, string>,
+      env: getChildProcessEnv(),
       allowedTools: [],
       canUseTool: async (
         toolName: string,

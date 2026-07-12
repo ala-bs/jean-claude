@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { dbg } from '../../../lib/debug';
+import { getChildProcessEnv } from '../../../lib/child-process-env';
 
 import { AcpJsonRpcClient } from '../acp-json-rpc-client';
 
@@ -74,7 +75,7 @@ async function startVibeAcpServer(
   await assertVibeAcpAvailable();
 
   const proc = spawn('vibe-acp', [], {
-    env: process.env,
+    env: getChildProcessEnv(),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const client = new AcpJsonRpcClient({ process: proc });
@@ -162,7 +163,10 @@ function waitForProcessTerminal(
 
 async function assertVibeAcpAvailable(): Promise<void> {
   try {
-    await execFileAsync('vibe-acp', ['--version'], { timeout: 5_000 });
+    await execFileAsync('vibe-acp', ['--version'], {
+      env: getChildProcessEnv(),
+      timeout: 5_000,
+    });
   } catch (error) {
     const code = (error as { code?: string }).code;
     if (code === 'ENOENT') {

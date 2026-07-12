@@ -26,6 +26,7 @@ import type {
 import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
 
 import { dbg } from '../lib/debug';
+import { getChildProcessEnv } from '../lib/child-process-env';
 import { ProjectCommandRepository } from '../database/repositories/project-commands';
 import { ProjectRepository } from '../database/repositories/projects';
 import { TaskRepository } from '../database/repositories/tasks';
@@ -111,18 +112,6 @@ function dedupeSuggestionCommands(
     seen.add(command.command);
     return true;
   });
-}
-
-function getProcessEnvWithoutNodeEnv(): Record<string, string> {
-  const { NODE_ENV: _nodeEnv, ...env } = process.env;
-  // node-pty expects string values; filter out undefined values.
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined) {
-      result[key] = value;
-    }
-  }
-  return result;
 }
 
 /**
@@ -561,7 +550,7 @@ class RunCommandService {
       cols: 120,
       rows: 30,
       cwd: workingDir,
-      env: { ...getProcessEnvWithoutNodeEnv(), ...commandEnv },
+      env: getChildProcessEnv({ overrides: commandEnv }),
     });
 
     let exitResolve: (value: { exitCode: number; signal?: number }) => void;
