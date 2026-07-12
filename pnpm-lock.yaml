@@ -101,6 +101,9 @@ importers:
       ignore:
         specifier: ^7.0.5
         version: 7.0.5
+      jsonc-parser:
+        specifier: ^3.3.1
+        version: 3.3.1
       kysely:
         specifier: ^0.28.10
         version: 0.28.10
@@ -2168,8 +2171,8 @@ packages:
     peerDependencies:
       preact: '>= 10.25.0 || >=11.0.0-0'
 
-  '@react-grab/cli@0.1.47':
-    resolution: {integrity: sha512-Cc7d8mSwvoV8gpeTQbE8dMPdeXIyO6w+yIhzgi3jY06i03WLNhb/6jIxNBNF1cVRI7ujnFQXZA66BbnBNTpBSw==}
+  '@react-grab/cli@0.1.48':
+    resolution: {integrity: sha512-KXRZFN0b78BeVa4Tq1FC9kiXPpC5lS4pQp/mvQ1azy9dZUJ3zfc7Ei84+yvGh+WoYdceMCFxXfBp6qhU/G056g==}
     hasBin: true
 
   '@rolldown/pluginutils@1.0.0-beta.27':
@@ -3201,6 +3204,11 @@ packages:
     peerDependencies:
       react: '>=17.0.1'
 
+  bippy@0.5.43:
+    resolution: {integrity: sha512-Tvu7b1M7+d8b9/YHaCeODEsi2CgbuoBql+dWSBrNnCuqJ1gMUeY3i0r+319hvjjl5GVBP6FFWxrKnq3fhZER0w==}
+    peerDependencies:
+      react: '>=17.0.1'
+
   bl@4.1.0:
     resolution: {integrity: sha512-1W07cM9gS6DcLperZfFSj+bWLtaPGSOHWhPiGzXmvVJbRLdG82sH/Kn8EtW1VqWVA54AKf2h5k5BbnIbwF3h6w==}
 
@@ -3590,8 +3598,8 @@ packages:
     resolution: {integrity: sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==}
     engines: {node: '>=6'}
 
-  deslop-js@0.5.8:
-    resolution: {integrity: sha512-Vq9D2x4dAIW24zcH55DTrl3/vi13UNKfXgw0yj7ULTssZ6KOdw/oyBHtlvE94KFC9yYEhgFTrGjaqqZKvV9pwA==}
+  deslop-js@0.7.4:
+    resolution: {integrity: sha512-OKhLEBDFk3wYgfSUz65O/1SP2L/jcMOYym5EB9wvEuDUrJrg+32X3tnUHHvlB/2sSGDU6wCSMqy1006EToOptA==}
 
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
@@ -5197,8 +5205,8 @@ packages:
   oxc-resolver@11.20.0:
     resolution: {integrity: sha512-CblytBiV/a/ZXY34dsVU2NxhIOxMXst8CvDCtyBelVITgd7PLrKzbEbA6oKLdPjvDKDzCiW48qzmzZ+mYaqn+g==}
 
-  oxlint-plugin-react-doctor@0.5.8:
-    resolution: {integrity: sha512-L0jveKAMbqF1qAqA2Ksu8aH0/Q8FDQxLwXmHYgALa2XlsxEUuamJ+1Da2MhPWJ2ahn+ekFbnWK20qixxD+fw6A==}
+  oxlint-plugin-react-doctor@0.7.4:
+    resolution: {integrity: sha512-0JK+5KdT3maDvcXH9Qe79z5wVbWHax6dpqzdEM83e5uMLLZfqI6WVpCJvdtVoknMYLvJY0hdyFTf3adpzZlrQw==}
     engines: {node: ^20.19.0 || >=22.13.0}
 
   oxlint@1.66.0:
@@ -5542,8 +5550,8 @@ packages:
     resolution: {integrity: sha512-I2UXoJlsqNeN3uCrlrJw0V+K6HTHU5Q1x+BWJlF99hBC6A/lKhe+IuITZXyKb8BluMReSBYUhUYGkJGgr2KPQQ==}
     hasBin: true
 
-  react-doctor@0.5.8:
-    resolution: {integrity: sha512-gDXDQ+48KeFq2jkVgsUhQ67oQ+kUMdnIaA+YeS9VXXZFXSg9wxY5dDxurEpILSh8RwO06W8p6uCnTR+wn5B/GA==}
+  react-doctor@0.7.4:
+    resolution: {integrity: sha512-OcNqh3joJ6ihycni2d/IgZq/aJBgn5XXsztwRpt9bvb195jM76PyYgK5M2LjWnzIScvPFZu3GzQjHqzoKmjLaA==}
     engines: {node: ^20.19.0 || >=22.13.0}
     hasBin: true
 
@@ -5561,8 +5569,8 @@ packages:
       '@types/react':
         optional: true
 
-  react-grab@0.1.47:
-    resolution: {integrity: sha512-1GNy24KMJ4CY1IxorYO9mydItGi0L1HkQB19uYU3t0BMsJB0K+D/QYiaBz+rugRynyY8LzmXIuOcon1TykLlCg==}
+  react-grab@0.1.48:
+    resolution: {integrity: sha512-p3WnmK9LLvXE/c4ITPLlXcP1fkXo2VFEQqK94tIfcHIWKNdqdhYYFyNVioO50HR+uyHIwT63Z4txZDqJlVcD/Q==}
     hasBin: true
     peerDependencies:
       react: '>=17.0.0'
@@ -6196,8 +6204,8 @@ packages:
     resolution: {integrity: sha512-OZs6gsjF4vMp32qrCbiVSkrFmXtG/AZhY3t0iAMrMBiAZyV9oALtXO8hsrHbMXF9x6L3grlFuwW2oAz7cav+Gw==}
     engines: {node: '>= 0.6'}
 
-  typescript@6.0.3:
-    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -8270,7 +8278,7 @@ snapshots:
       '@preact/signals-core': 1.14.2
       preact: 10.29.2
 
-  '@react-grab/cli@0.1.47':
+  '@react-grab/cli@0.1.48':
     dependencies:
       agent-install: 0.0.6
       commander: 14.0.3
@@ -9253,6 +9261,10 @@ snapshots:
     dependencies:
       react: 19.2.3
 
+  bippy@0.5.43(react@19.2.3):
+    dependencies:
+      react: 19.2.3
+
   bl@4.1.0:
     dependencies:
       buffer: 5.7.1
@@ -9684,14 +9696,14 @@ snapshots:
 
   dequal@2.0.3: {}
 
-  deslop-js@0.5.8:
+  deslop-js@0.7.4:
     dependencies:
       '@oxc-project/types': 0.132.0
       fast-glob: 3.3.3
       minimatch: 10.2.5
       oxc-parser: 0.132.0
       oxc-resolver: 11.20.0
-      typescript: 6.0.3
+      typescript: 5.9.3
 
   detect-libc@2.1.2: {}
 
@@ -11753,7 +11765,7 @@ snapshots:
       '@oxc-resolver/binding-win32-arm64-msvc': 11.20.0
       '@oxc-resolver/binding-win32-x64-msvc': 11.20.0
 
-  oxlint-plugin-react-doctor@0.5.8:
+  oxlint-plugin-react-doctor@0.7.4:
     dependencies:
       '@typescript-eslint/types': 8.60.0
       eslint-scope: 9.1.2
@@ -12114,24 +12126,25 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  react-doctor@0.5.8(eslint@9.39.2(jiti@2.7.0)):
+  react-doctor@0.7.4(eslint@9.39.2(jiti@2.7.0)):
     dependencies:
       '@babel/code-frame': 7.29.7
       '@sentry/node': 10.56.0
       agent-install: 0.0.5
       conf: 15.1.0
       confbox: 0.2.4
-      deslop-js: 0.5.8
+      deslop-js: 0.7.4
       eslint-plugin-react-hooks: 7.1.1(eslint@9.39.2(jiti@2.7.0))
       jiti: 2.7.0
       magicast: 0.5.3
       oxlint: 1.66.0
-      oxlint-plugin-react-doctor: 0.5.8
+      oxlint-plugin-react-doctor: 0.7.4
       prompts: 2.4.2
-      typescript: 6.0.3
+      typescript: 5.9.3
       vscode-languageserver: 9.0.1
       vscode-languageserver-textdocument: 1.0.12
       vscode-uri: 3.1.0
+      yaml: 2.9.0
     transitivePeerDependencies:
       - '@opentelemetry/exporter-trace-otlp-http'
       - eslint
@@ -12155,10 +12168,10 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.8
 
-  react-grab@0.1.47(react@19.2.3):
+  react-grab@0.1.48(react@19.2.3):
     dependencies:
-      '@react-grab/cli': 0.1.47
-      bippy: 0.5.41(react@19.2.3)
+      '@react-grab/cli': 0.1.48
+      bippy: 0.5.43(react@19.2.3)
     optionalDependencies:
       react: 19.2.3
 
@@ -12224,9 +12237,9 @@ snapshots:
       preact: 10.29.2
       prompts: 2.4.2
       react: 19.2.3
-      react-doctor: 0.5.8(eslint@9.39.2(jiti@2.7.0))
+      react-doctor: 0.7.4(eslint@9.39.2(jiti@2.7.0))
       react-dom: 19.2.3(react@19.2.3)
-      react-grab: 0.1.47(react@19.2.3)
+      react-grab: 0.1.48(react@19.2.3)
     optionalDependencies:
       esbuild: 0.27.2
       unplugin: 3.0.0
@@ -12879,7 +12892,7 @@ snapshots:
       media-typer: 1.1.0
       mime-types: 3.0.2
 
-  typescript@6.0.3: {}
+  typescript@5.9.3: {}
 
   typescript@7.0.1-rc:
     optionalDependencies:

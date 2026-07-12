@@ -1089,6 +1089,21 @@ contextBridge.exposeInMainWorld('api', {
         context,
       ),
   },
+  globalMcp: {
+    findAll: () => ipcRenderer.invoke('globalMcp:findAll'),
+    findById: (id: string) => ipcRenderer.invoke('globalMcp:findById', id),
+    create: (data: import('@shared/global-mcp-types').NewGlobalMcpServer) => ipcRenderer.invoke('globalMcp:create', data),
+    update: (id: string, data: import('@shared/global-mcp-types').UpdateGlobalMcpServer) =>
+      ipcRenderer.invoke('globalMcp:update', id, data),
+    enable: (id: string, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
+      ipcRenderer.invoke('globalMcp:enable', id, backends),
+    disable: (id: string, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
+      ipcRenderer.invoke('globalMcp:disable', id, backends),
+    uninstall: (id: string) => ipcRenderer.invoke('globalMcp:uninstall', id),
+    discover: () => ipcRenderer.invoke('globalMcp:discover'),
+    import: (entry: import('@shared/global-mcp-types').DiscoveredMcpVariant, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
+      ipcRenderer.invoke('globalMcp:import', entry, backends),
+  },
   claudeProjects: {
     findNonExistent: () => ipcRenderer.invoke('claudeProjects:findNonExistent'),
     cleanup: (params: { paths: string[]; contentHash: string }) =>

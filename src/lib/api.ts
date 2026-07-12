@@ -98,6 +98,13 @@ import type {
   UpdateMcpServerTemplate,
 } from '@shared/mcp-types';
 import type {
+  DiscoveredMcpVariant,
+  GlobalMcpDiscoveryResult,
+  GlobalMcpServer,
+  NewGlobalMcpServer,
+  UpdateGlobalMcpServer,
+} from '@shared/global-mcp-types';
+import type {
   NewProjectCommand,
   NewProjectCommandGroup,
   PackageScriptsResult,
@@ -1364,6 +1371,29 @@ export interface Api {
       },
     ) => Promise<string>;
   };
+  globalMcp: {
+    findAll: () => Promise<GlobalMcpServer[]>;
+    findById: (id: string) => Promise<GlobalMcpServer | undefined>;
+    create: (data: NewGlobalMcpServer) => Promise<GlobalMcpServer>;
+    update: (
+      id: string,
+      data: UpdateGlobalMcpServer,
+    ) => Promise<GlobalMcpServer>;
+    enable: (
+      id: string,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
+    disable: (
+      id: string,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
+    uninstall: (id: string) => Promise<void>;
+    discover: () => Promise<GlobalMcpDiscoveryResult>;
+    import: (
+      entry: DiscoveredMcpVariant,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
+  };
   claudeProjects: {
     findNonExistent: () => Promise<ClaudeProjectsScanResult>;
     cleanup: (params: {
@@ -2267,6 +2297,27 @@ export const api: Api = hasWindowApi
         activate: async () => {},
         deactivate: async () => {},
         substituteVariables: async (commandTemplate) => commandTemplate,
+      },
+      globalMcp: {
+        findAll: async () => [],
+        findById: async () => undefined,
+        create: async () => {
+          throw new Error('API not available');
+        },
+        update: async () => {
+          throw new Error('API not available');
+        },
+        enable: async () => {
+          throw new Error('API not available');
+        },
+        disable: async () => {
+          throw new Error('API not available');
+        },
+        uninstall: async () => {},
+        discover: async () => ({ groups: [], errors: [] }),
+        import: async () => {
+          throw new Error('API not available');
+        },
       },
       claudeProjects: {
         findNonExistent: async () => ({ projects: [], contentHash: '' }),

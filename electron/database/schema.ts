@@ -45,6 +45,7 @@ export interface Database {
   project_command_groups: ProjectCommandGroupTable;
   mcp_templates: McpTemplateTable;
   project_mcp_overrides: ProjectMcpOverrideTable;
+  global_mcp_servers: GlobalMcpServerTable;
   task_summaries: TaskSummaryTable;
   project_todos: ProjectTodoTable;
   completion_usage: CompletionUsageTable;
@@ -291,6 +292,26 @@ export type UpdateMcpTemplateRow = Updateable<McpTemplateTable>;
 
 export type ProjectMcpOverrideRow = Selectable<ProjectMcpOverrideTable>;
 export type NewProjectMcpOverrideRow = Insertable<ProjectMcpOverrideTable>;
+
+export interface GlobalMcpServerTable {
+  id: Generated<string>;
+  name: string;
+  normalizedName: string;
+  transportType: string;
+  command: string | null;
+  args: string; // JSON array
+  env: string; // JSON object
+  envManaged: number;
+  url: string | null;
+  enabledBackends: string; // JSON array of AgentBackendType
+  backendStates: string; // JSON map of backend ownership and native entries
+  createdAt: Generated<string>;
+  updatedAt: string;
+}
+
+export type GlobalMcpServerRow = Selectable<GlobalMcpServerTable>;
+export type NewGlobalMcpServerRow = Insertable<GlobalMcpServerTable>;
+export type UpdateGlobalMcpServerRow = Updateable<GlobalMcpServerTable>;
 
 export interface TaskSummaryTable {
   id: Generated<string>;

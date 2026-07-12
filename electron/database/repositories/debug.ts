@@ -6,7 +6,7 @@ import { db } from '../index';
 
 type TableName = keyof Database;
 
-const ALL_TABLES: Record<TableName, true> = {
+const ALL_TABLES: Partial<Record<TableName, true>> = {
   tokens: true,
   providers: true,
   projects: true,

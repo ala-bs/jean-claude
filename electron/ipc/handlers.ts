@@ -93,6 +93,22 @@ import {
   substituteVariables,
 } from '../services/mcp-template-service';
 import {
+  createGlobalMcpServer,
+  disableGlobalMcpServer,
+  discoverUnmanagedMcpEntries,
+  enableGlobalMcpServer,
+  getAllGlobalMcpServers,
+  getGlobalMcpServer,
+  importMcpEntry,
+  uninstallGlobalMcpServer,
+  updateGlobalMcpServer,
+} from '../services/global-mcp-service';
+import type {
+  DiscoveredMcpVariant,
+  NewGlobalMcpServer,
+  UpdateGlobalMcpServer,
+} from '@shared/global-mcp-types';
+import {
   activateWorkItem,
   addPullRequestComment,
   addPullRequestFileComment,
@@ -4840,6 +4856,39 @@ export function registerIpcHandlers() {
       dbg.ipc('unifiedMcp:substituteVariables template=%s', commandTemplate);
       return substituteVariables(commandTemplate, userVariables, context);
     },
+  );
+
+  // Global MCP Lifecycle
+  ipcMain.handle('globalMcp:findAll', () => getAllGlobalMcpServers());
+  ipcMain.handle('globalMcp:findById', (_, id: string) =>
+    getGlobalMcpServer(id),
+  );
+  ipcMain.handle('globalMcp:create', (_, data: NewGlobalMcpServer) =>
+    createGlobalMcpServer(data),
+  );
+  ipcMain.handle(
+    'globalMcp:update',
+    (_, id: string, data: UpdateGlobalMcpServer) =>
+      updateGlobalMcpServer(id, data),
+  );
+  ipcMain.handle(
+    'globalMcp:enable',
+    (_, id: string, backends: AgentBackendType[]) =>
+      enableGlobalMcpServer(id, backends),
+  );
+  ipcMain.handle(
+    'globalMcp:disable',
+    (_, id: string, backends: AgentBackendType[]) =>
+      disableGlobalMcpServer(id, backends),
+  );
+  ipcMain.handle('globalMcp:uninstall', (_, id: string) =>
+    uninstallGlobalMcpServer(id),
+  );
+  ipcMain.handle('globalMcp:discover', () => discoverUnmanagedMcpEntries());
+  ipcMain.handle(
+    'globalMcp:import',
+    (_, entry: DiscoveredMcpVariant, backends: AgentBackendType[]) =>
+      importMcpEntry(entry, backends),
   );
 
   // Claude Projects Cleanup

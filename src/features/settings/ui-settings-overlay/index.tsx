@@ -64,6 +64,7 @@ import { DebugDatabase } from '@/features/settings/ui-debug-database';
 import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
 import { GlobalPermissionsSettings } from '@/features/settings/ui-global-permissions-settings';
 import { Kbd } from '@/common/ui/kbd';
+import { GlobalMcpSettings } from '@/features/settings/ui-global-mcp-settings';
 import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings';
 import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';
@@ -801,7 +802,14 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
     case 'prompt-snippets':
       return <PromptSnippetsSettings />;
     case 'mcp-servers':
-      return <McpServersSettings />;
+      return (
+        <>
+          <McpServersSettings />
+          <div className="mt-8 border-t border-white/10 pt-6">
+            <GlobalMcpSettings />
+          </div>
+        </>
+      );
     case 'tokens':
       return <TokensTab />;
     case 'azure-devops':
