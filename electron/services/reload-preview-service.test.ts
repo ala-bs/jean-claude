@@ -1,8 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { runReloadPreviewCommand } from './reload-preview-service';
 
 describe('runReloadPreviewCommand', () => {
+  const originalElectronRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+
+  afterEach(() => {
+    if (originalElectronRunAsNode === undefined) {
+      delete process.env.ELECTRON_RUN_AS_NODE;
+    } else {
+      process.env.ELECTRON_RUN_AS_NODE = originalElectronRunAsNode;
+    }
+  });
+
+  it('removes Electron environment variables from commands', async () => {
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+
+    await expect(
+      runReloadPreviewCommand({
+        command: process.execPath,
+        args: [
+          '-e',
+          "process.exit(process.env.ELECTRON_RUN_AS_NODE === undefined ? 0 : 1)",
+        ],
+        cwd: process.cwd(),
+        label: 'Environment check',
+        timeoutMs: 1000,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it('rejects with stderr when the command exits non-zero', async () => {
     await expect(
       runReloadPreviewCommand({

@@ -365,6 +365,7 @@ import { generatePrDescriptionForTask } from '../services/pr-description-generat
 import { generateSummary } from '../services/summary-generation-service';
 import { generateTaskName } from '../services/name-generation-service';
 import { generateWorkItemVerificationNote } from '../services/work-item-verification-note-service';
+import { getChildProcessEnv } from '../lib/child-process-env';
 import { handlePromptResponse } from '../services/global-prompt-service';
 import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { NotificationRepository } from '../database/repositories/notifications';
@@ -6197,6 +6198,7 @@ export function registerIpcHandlers() {
       const child = spawn('pnpm preview:skip-build', [], {
         cwd: projectRoot,
         detached: true,
+        env: getChildProcessEnv(),
         stdio: 'ignore',
         shell: true,
       });

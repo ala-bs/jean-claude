@@ -1,5 +1,7 @@
 import { spawn } from 'child_process';
 
+import { getChildProcessEnv } from '../lib/child-process-env';
+
 const OUTPUT_LIMIT = 4000;
 
 function appendOutput(current: string, chunk: Buffer): string {
@@ -45,6 +47,7 @@ export async function runReloadPreviewCommand(params: {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(params.command, params.args ?? [], {
       cwd: params.cwd,
+      env: getChildProcessEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
