@@ -426,6 +426,39 @@ export interface WorktreeFileContent {
   newImageDataUrl?: string | null;
 }
 
+function getSourceBranchRefs(
+  sourceBranch: string,
+  remoteNames: Set<string>,
+): {
+  localBranch: string;
+  refs: string[];
+  exactLocalRef: string | null;
+} {
+  const remoteRefMatch = sourceBranch.match(/^refs\/remotes\/([^/]+)\/(.+)$/);
+  const shorthandParts = sourceBranch.split('/');
+  const shorthandRemote = remoteNames.has(shorthandParts[0])
+    ? shorthandParts[0]
+    : sourceBranch.startsWith('origin/')
+      ? 'origin'
+      : null;
+  const remoteName = remoteRefMatch?.[1] ?? shorthandRemote;
+  const localBranch = remoteRefMatch
+    ? remoteRefMatch[2]
+    : remoteName
+      ? shorthandParts.slice(1).join('/')
+      : sourceBranch.replace(/^refs\/heads\//, '');
+
+  const refs = [`refs/heads/${localBranch}`];
+  let exactLocalRef: string | null = null;
+  if (shorthandRemote && !remoteRefMatch) {
+    exactLocalRef = `refs/heads/${sourceBranch}`;
+    refs.unshift(exactLocalRef);
+  }
+  refs.push(`refs/remotes/${remoteName ?? 'origin'}/${localBranch}`);
+
+  return { localBranch, refs, exactLocalRef };
+}
+
 /**
  * Gets the commit hash to use as the diff base.
  * If sourceBranch is provided, uses the merge-base between HEAD and the source branch.
@@ -442,32 +475,91 @@ async function getDiffBaseCommit(
   worktreePath: string,
   startCommitHash: string,
   sourceBranch: string | null,
-): Promise<string> {
+): Promise<{ baseCommit: string; sourceRef: string | null }> {
   if (!sourceBranch) {
     dbg.worktree('No sourceBranch, using startCommitHash: %s', startCommitHash);
-    return startCommitHash;
+    return { baseCommit: startCommitHash, sourceRef: null };
   }
 
-  const refs = sourceBranch.startsWith('origin/')
-    ? [sourceBranch]
-    : [sourceBranch, `origin/${sourceBranch}`];
+  let remoteNames = new Set<string>();
+  try {
+    const { stdout } = await execFileAsync('git', ['remote'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+    remoteNames = new Set(stdout.trim().split('\n').filter(Boolean));
+  } catch {
+    // Ref resolution still supports local branches and origin without remotes.
+  }
+  const { localBranch, refs, exactLocalRef } = getSourceBranchRefs(
+    sourceBranch,
+    remoteNames,
+  );
+
+  try {
+    await execFileAsync('git', ['check-ref-format', '--branch', localBranch], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+  } catch {
+    dbg.worktree(
+      'Invalid sourceBranch, falling back to startCommitHash: %s',
+      startCommitHash,
+    );
+    return { baseCommit: startCommitHash, sourceRef: null };
+  }
+
+  if (exactLocalRef) {
+    try {
+      await execFileAsync('git', ['show-ref', '--verify', exactLocalRef], {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+      });
+      refs.splice(0, refs.length, exactLocalRef);
+    } catch {
+      // No exact local branch; interpret sourceBranch as remote shorthand.
+    }
+  }
+
+  let nearest:
+    | { baseCommit: string; sourceRef: string; distance: number }
+    | undefined;
 
   for (const ref of refs) {
     try {
-      const mergeBase = await execFileAsync(
+      const mergeBase = await execFileAsync('git', ['merge-base', 'HEAD', ref], {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+      });
+      const baseCommit = mergeBase.stdout.trim();
+      const commitCount = await execFileAsync(
         'git',
-        ['merge-base', 'HEAD', ref],
+        ['rev-list', '--count', `${baseCommit}..HEAD`],
         {
           cwd: worktreePath,
           encoding: 'utf-8',
         },
       );
-      const base = mergeBase.stdout.trim();
-      dbg.worktree('Using merge-base with %s: %s', ref, base);
-      return base;
+      const distance = Number.parseInt(commitCount.stdout.trim(), 10);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { baseCommit, sourceRef: ref, distance };
+      }
     } catch {
       continue;
     }
+  }
+
+  if (nearest) {
+    dbg.worktree(
+      'Using nearest merge-base with %s: %s (%d commits from HEAD)',
+      nearest.sourceRef,
+      nearest.baseCommit,
+      nearest.distance,
+    );
+    return {
+      baseCommit: nearest.baseCommit,
+      sourceRef: nearest.sourceRef,
+    };
   }
 
   // Fall back to startCommitHash if merge-base fails
@@ -475,7 +567,7 @@ async function getDiffBaseCommit(
     'merge-base failed, falling back to startCommitHash: %s',
     startCommitHash,
   );
-  return startCommitHash;
+  return { baseCommit: startCommitHash, sourceRef: null };
 }
 
 /**
@@ -488,42 +580,36 @@ async function getDiffBaseCommit(
  */
 async function getTaskChangedFiles(
   worktreePath: string,
-  sourceBranch: string | null,
+  sourceRef: string | null,
 ): Promise<Set<string> | null> {
-  if (!sourceBranch) return null;
+  if (!sourceRef) return null;
 
-  // Prefer the local source branch because it may have unpushed commits that
-  // were present when the worktree was created.
-  const refs = sourceBranch.startsWith('origin/')
-    ? [sourceBranch]
-    : [sourceBranch, `origin/${sourceBranch}`];
-
-  for (const ref of refs) {
-    try {
-      const { stdout } = await execFileAsync(
-        'git',
-        ['diff', '--name-only', ref],
-        {
-          cwd: worktreePath,
-          encoding: 'utf-8',
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
-      const files = new Set(
-        stdout
-          .trim()
-          .split('\n')
-          .filter((f) => f),
-      );
-      dbg.worktree('Task-changed files (vs %s): %d files', ref, files.size);
-      return files;
-    } catch {
-      continue;
-    }
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['diff', '--name-only', sourceRef],
+      {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    const files = new Set(
+      stdout
+        .trim()
+        .split('\n')
+        .filter((f) => f),
+    );
+    dbg.worktree(
+      'Task-changed files (vs %s): %d files',
+      sourceRef,
+      files.size,
+    );
+    return files;
+  } catch {
+    dbg.worktree('Could not use resolved source branch for filtering, skipping');
+    return null;
   }
-
-  dbg.worktree('Could not resolve source branch for filtering, skipping');
-  return null;
 }
 
 /**
@@ -563,12 +649,14 @@ export async function getWorktreeDiff(
   }
 
   try {
-    const [baseCommit, taskChangedFiles] = await Promise.all([
-      getDiffBaseCommit(worktreePath, startCommitHash, sourceBranch ?? null),
-      // Files whose content matches the source branch are merge artifacts
-      // (from merging source into this branch) and should be excluded.
-      getTaskChangedFiles(worktreePath, sourceBranch ?? null),
-    ]);
+    const { baseCommit, sourceRef } = await getDiffBaseCommit(
+      worktreePath,
+      startCommitHash,
+      sourceBranch ?? null,
+    );
+    // Files whose content matches the source branch are merge artifacts
+    // (from merging source into this branch) and should be excluded.
+    const taskChangedFiles = await getTaskChangedFiles(worktreePath, sourceRef);
 
     // We need to combine two sources to get all changes:
     // 1. git diff --name-status <commit> - changes from baseCommit to working tree
@@ -746,7 +834,7 @@ export async function getWorktreeFileContent(
   });
 
   // Get the appropriate base commit for diffing
-  const baseCommit = await getDiffBaseCommit(
+  const { baseCommit } = await getDiffBaseCommit(
     worktreePath,
     startCommitHash,
     sourceBranch ?? null,
@@ -1788,7 +1876,7 @@ export async function getWorktreeUnifiedDiff(
 
   try {
     // Get the appropriate base commit for diffing
-    const baseCommit = await getDiffBaseCommit(
+    const { baseCommit, sourceRef } = await getDiffBaseCommit(
       worktreePath,
       startCommitHash,
       sourceBranch ?? null,
@@ -1797,7 +1885,7 @@ export async function getWorktreeUnifiedDiff(
     // Get task-changed files to filter out merge artifacts
     const taskChangedFiles = await getTaskChangedFiles(
       worktreePath,
-      sourceBranch ?? null,
+      sourceRef,
     );
 
     if (taskChangedFiles && taskChangedFiles.size > 0) {
