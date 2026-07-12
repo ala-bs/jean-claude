@@ -940,6 +940,7 @@ class AgentService {
         mcpServers = buildJcMcpServersConfigForCwd({
           cwd: workingDir,
           questionBridge,
+          enableAgentTool: step?.type === 'feature-map',
           enableReviewTool: step?.type === 'review',
           environmentMode: session.backendType === 'opencode' ? 'argv' : 'env',
         });

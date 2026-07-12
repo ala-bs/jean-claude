@@ -699,6 +699,24 @@ describe('buildJcMcpServersConfigForCwd', () => {
       },
     });
     expect(config['jean-claude-mcp'].args.join(' ')).not.toContain('token-1');
+    expect(config['jean-claude-mcp'].env).not.toHaveProperty(
+      'JC_MCP_ENABLE_AGENT_TOOL',
+    );
+  });
+
+  it('enables the agent tool only when requested', () => {
+    const config = buildJcMcpServersConfigForCwd({
+      cwd: '/tmp/worktree',
+      enableAgentTool: true,
+      questionBridge: {
+        serverUrl: 'http://127.0.0.1:4321',
+        token: 'token-1',
+      },
+    });
+
+    expect(config['jean-claude-mcp'].env).toMatchObject({
+      JC_MCP_ENABLE_AGENT_TOOL: '1',
+    });
   });
 
   it('can inject question bridge settings through argv for OpenCode runtime MCP', () => {
@@ -718,6 +736,29 @@ describe('buildJcMcpServersConfigForCwd', () => {
         'JC_MCP_BRIDGE_URL=http://127.0.0.1:4321',
         'JC_MCP_SESSION_ID=session-1',
         'JC_MCP_AUTH_TOKEN=token-1',
+        'node',
+        '--workdir',
+        '/tmp/worktree',
+      ]),
+    });
+    expect(config['jean-claude-mcp']).not.toHaveProperty('env');
+  });
+
+  it('enables the agent tool through argv for OpenCode runtime MCP', () => {
+    const config = buildJcMcpServersConfigForCwd({
+      cwd: '/tmp/worktree',
+      environmentMode: 'argv',
+      enableAgentTool: true,
+      questionBridge: {
+        serverUrl: 'http://127.0.0.1:4321',
+        token: 'token-1',
+      },
+    });
+
+    expect(config['jean-claude-mcp']).toEqual({
+      command: '/usr/bin/env',
+      args: expect.arrayContaining([
+        'JC_MCP_ENABLE_AGENT_TOOL=1',
         'node',
         '--workdir',
         '/tmp/worktree',
