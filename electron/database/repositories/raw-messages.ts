@@ -152,16 +152,16 @@ export const RawMessageRepository = {
     );
   },
 
-  /**
-   * Get count of raw SDK messages for a step.
-   */
-  getMessageCountByStepId: async (stepId: string): Promise<number> => {
+  /** Get next raw message index, preserving gaps left by compaction. */
+  getNextMessageIndexByStepId: async (stepId: string): Promise<number> => {
     const result = await db
       .selectFrom('raw_messages')
-      .select((eb) => eb.fn.count<number>('id').as('count'))
+      .select((eb) => eb.fn.max<number>('messageIndex').as('maxIndex'))
       .where('stepId', '=', stepId)
       .executeTakeFirst();
-    return result?.count ?? 0;
+    return result?.maxIndex === undefined || result.maxIndex === null
+      ? 0
+      : result.maxIndex + 1;
   },
 
   /**

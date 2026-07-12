@@ -1072,20 +1072,42 @@ type FileStats = {
   removed: number;
 };
 
-function isFileChangeToolEntry(entry: NormalizedEntry): boolean {
+function isFileChangeToolEntry(
+  entry: NormalizedEntry,
+): entry is NormalizedEntry &
+  (ToolUseByName<'edit'> | ToolUseByName<'write'>) {
   return (
     entry.type === 'tool-use' &&
     (entry.name === 'edit' || entry.name === 'write')
   );
 }
 
-function getFileChangeToolEntries(
+export function getFileChangeToolEntries(
   childMessages: DisplayMessage[],
+  promptEntry?: NormalizedEntry & { type: 'user-prompt' },
 ): NormalizedEntry[] {
   const entries: NormalizedEntry[] = [];
+  const promptMs = parseDateMs(promptEntry?.date);
 
   function addEntry(entry: NormalizedEntry) {
-    if (isFileChangeToolEntry(entry)) entries.push(entry);
+    if (!isFileChangeToolEntry(entry)) return;
+
+    const entryMs = parseDateMs(entry.date);
+    if (promptMs !== null && (entryMs === null || entryMs < promptMs)) {
+      if (import.meta.env.DEV) {
+        console.debug('[prompt-group-diff] Excluding stale edit', {
+          reason: entryMs === null ? 'invalid-entry-date' : 'predates-prompt',
+          promptId: promptEntry?.id,
+          promptDate: promptEntry?.date,
+          entryId: entry.id,
+          entryDate: entry.date,
+          input: entry.input,
+        });
+      }
+      return;
+    }
+
+    entries.push(entry);
   }
 
   for (const dm of childMessages) {
@@ -1342,10 +1364,18 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   }, [group.childMessages, isActiveGroup]);
 
   // Compute file edit/write stats from child messages
-  const fileStats = useMemo(() => {
-    const fileChangeEntries = getFileChangeToolEntries(group.childMessages);
-    return getFileStats(fileChangeEntries);
-  }, [group.childMessages]);
+  const fileChangeEntries = useMemo(
+    () =>
+      getFileChangeToolEntries(
+      group.childMessages,
+      group.promptEntry,
+      ),
+    [group.childMessages, group.promptEntry],
+  );
+  const fileStats = useMemo(
+    () => getFileStats(fileChangeEntries),
+    [fileChangeEntries],
+  );
 
   return (
     <div className="mb-5">
@@ -1583,7 +1613,7 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
         <PromptGroupDiffModal
           isOpen={diffModalOpen}
           onClose={() => setDiffModalOpen(false)}
-          childMessages={group.childMessages}
+          fileChangeEntries={fileChangeEntries}
           rootPath={rootPath}
           taskId={taskId}
         />

@@ -570,7 +570,9 @@ export class OpenCodeBackend implements AgentBackend {
         toolPermissionsByEntryId: new Map(),
         permissionRules: config.permissionRules ?? [],
       },
-      messageIndex: this.taskContext.sessionStartIndex,
+      messageIndex:
+        this.taskContext.rawSessionStartIndex ??
+        this.taskContext.sessionStartIndex,
       pendingSubtaskPartsByMessageId: new Map(),
       fetchedChildSessionIds: new Set(),
       rawDeltaRows: new Map(),

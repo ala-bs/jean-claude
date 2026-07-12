@@ -184,7 +184,7 @@ const {
     providerCalls,
     providerState,
     rawMessageRepositoryMock: {
-      getMessageCountByStepId: vi.fn(),
+      getNextMessageIndexByStepId: vi.fn(),
       create: vi.fn(),
       updateRawData: vi.fn(),
     },
@@ -581,7 +581,7 @@ function setDefaultMocks(): void {
   rawMessageRepositoryMock.create.mockResolvedValue({ id: 'raw-1' });
   rawMessageRepositoryMock.updateRawData.mockResolvedValue(undefined);
   agentMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
-  rawMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
+  rawMessageRepositoryMock.getNextMessageIndexByStepId.mockResolvedValue(0);
   agentMessageRepositoryMock.create.mockResolvedValue({ id: 'message-1' });
   agentMessageRepositoryMock.updateEntry.mockResolvedValue(undefined);
   agentMessageRepositoryMock.updateToolResult.mockResolvedValue(undefined);

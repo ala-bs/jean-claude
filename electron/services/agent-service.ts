@@ -659,7 +659,7 @@ class AgentService {
     const existingMessageCount =
       await AgentMessageRepository.getMessageCountByStepId(stepId);
     const existingRawMessageCount =
-      await RawMessageRepository.getMessageCountByStepId(stepId);
+      await RawMessageRepository.getNextMessageIndexByStepId(stepId);
 
     const requestedBackend: AgentBackendType = (step.agentBackend ??
       'claude-code') as AgentBackendType;

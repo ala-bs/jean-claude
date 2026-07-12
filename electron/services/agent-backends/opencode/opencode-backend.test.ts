@@ -130,6 +130,41 @@ describe('toOpenCodeQuestionAnswer', () => {
 });
 
 describe('OpenCodeBackend event stream', () => {
+  it('continues raw message indexes from the raw message count', async () => {
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi.fn(async () => ({ data: { id: 'session-1' } })),
+      },
+    };
+    mockOpencodeServer(client);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 3,
+      rawSessionStartIndex: 12,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const session = await backend.start(
+      {
+        type: 'opencode',
+        cwd: '/tmp/project',
+        interactionMode: 'auto',
+      },
+      [{ type: 'text', text: 'hi' }],
+    );
+    const state = (
+      backend as unknown as {
+        sessions: Map<string, { messageIndex: number }>;
+      }
+    ).sessions.get(session.sessionId);
+
+    expect(state?.messageIndex).toBe(12);
+  });
+
   it('exposes dedicated server process PID on start', async () => {
     const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
     const client = {
