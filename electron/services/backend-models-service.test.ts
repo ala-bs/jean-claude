@@ -177,6 +177,32 @@ github-copilot/gpt-4.1
     });
   });
 
+  it('prefers OpenCode input limit over total context window', () => {
+    const models = parseOpenCodeModelsVerbose(`openai/gpt-5.6
+{
+  "id": "gpt-5.6",
+  "name": "GPT-5.6",
+  "limit": { "context": 1050000, "input": 922000, "output": 128000 },
+  "variants": {}
+}
+`);
+
+    expect(models[0]).toMatchObject({ contextWindow: 922_000 });
+  });
+
+  it('falls back to OpenCode context limit when input limit is invalid', () => {
+    const models = parseOpenCodeModelsVerbose(`openai/gpt-5.6
+{
+  "id": "gpt-5.6",
+  "name": "GPT-5.6",
+  "limit": { "context": 1050000, "input": 0 },
+  "variants": {}
+}
+`);
+
+    expect(models[0]).toMatchObject({ contextWindow: 1_050_000 });
+  });
+
   it.each([
     ['zero', 0],
     ['negative', -1],
