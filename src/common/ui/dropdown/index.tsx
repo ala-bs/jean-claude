@@ -370,7 +370,8 @@ export function DropdownItem({
 }) {
   return (
     <button
-      role="menuitem"
+      role={checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+      aria-checked={checked}
       tabIndex={-1}
       onClick={onClick}
       className={clsx(

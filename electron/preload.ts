@@ -327,10 +327,17 @@ contextBridge.exposeInMainWorld('api', {
         excludeWorkItemTypes?: string[];
         searchText?: string;
         iterationPath?: string;
+        iterationPaths?: string[];
+        assignedTo?: string;
       };
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
     getWorkItemById: (params: { providerId: string; workItemId: number }) =>
       ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    getWorkItemsByIds: (params: {
+      providerId: string;
+      projectName: string;
+      workItemIds: number[];
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemsByIds', params),
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
@@ -350,6 +357,12 @@ contextBridge.exposeInMainWorld('api', {
       workItemId: number;
       state: string;
     }) => ipcRenderer.invoke('azureDevOps:updateWorkItemState', params),
+    updateWorkItemField: (params: {
+      providerId: string;
+      workItemId: number;
+      field: string;
+      value: string | number | null;
+    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemField', params),
     getRelatedTestCases: (params: {
       providerId: string;
       projectName: string;

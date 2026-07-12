@@ -277,10 +277,13 @@ export interface AzureDevOpsWorkItem {
     state: string;
     assignedTo?: string;
     description?: string;
+    acceptanceCriteria?: string;
     reproSteps?: string;
     changedDate?: string;
     boardColumn?: string;
     boardColumnDone?: boolean;
+    tags?: string;
+    priority?: number;
   };
   testSteps?: TestStep[];
   parentId?: number;
@@ -709,13 +712,20 @@ export interface Api {
         workItemTypes?: string[];
         excludeWorkItemTypes?: string[];
         searchText?: string;
-        iterationPath?: string;
+          iterationPath?: string;
+          iterationPaths?: string[];
+          assignedTo?: string;
       };
     }) => Promise<AzureDevOpsWorkItem[]>;
     getWorkItemById: (params: {
       providerId: string;
       workItemId: number;
     }) => Promise<AzureDevOpsWorkItem | null>;
+    getWorkItemsByIds: (params: {
+      providerId: string;
+      projectName: string;
+      workItemIds: number[];
+    }) => Promise<AzureDevOpsWorkItem[]>;
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
@@ -734,6 +744,12 @@ export interface Api {
       providerId: string;
       workItemId: number;
       state: string;
+    }) => Promise<void>;
+    updateWorkItemField: (params: {
+      providerId: string;
+      workItemId: number;
+      field: string;
+      value: string | number | null;
     }) => Promise<void>;
     getRelatedTestCases: (params: {
       providerId: string;
@@ -1946,10 +1962,14 @@ export const api: Api = hasWindowApi
         },
         queryWorkItems: async () => [],
         getWorkItemById: async () => null,
+        getWorkItemsByIds: async () => [],
         getPullRequestStatuses: async () => [],
         getWorkItemStates: async () => [],
         getBoardColumns: async () => [],
         updateWorkItemState: async () => {
+          throw new Error('API not available');
+        },
+        updateWorkItemField: async () => {
           throw new Error('API not available');
         },
         getRelatedTestCases: async () => [],

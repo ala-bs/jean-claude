@@ -18,12 +18,15 @@ export function useWorkItems(params: {
   projectId: string;
   projectName: string;
   enabled?: boolean;
+  refetchOnMount?: 'always' | boolean;
   filters: {
     states?: string[];
     workItemTypes?: string[];
     excludeWorkItemTypes?: string[];
     searchText?: string;
     iterationPath?: string;
+    iterationPaths?: string[];
+    assignedTo?: string;
   };
 }) {
   return useQuery<AzureDevOpsWorkItem[]>({
@@ -40,17 +43,20 @@ export function useWorkItems(params: {
       !!params.projectId &&
       !!params.projectName,
     staleTime: 60_000,
+    refetchOnMount: params.refetchOnMount,
   });
 }
 
 export function useIterations(params: {
   providerId: string;
   projectName: string;
+  refetchOnMount?: 'always' | boolean;
 }) {
   return useQuery<AzureDevOpsIteration[]>({
     queryKey: ['iterations', params.providerId, params.projectName],
     queryFn: () => api.azureDevOps.getIterations(params),
     enabled: !!params.providerId && !!params.projectName,
+    refetchOnMount: params.refetchOnMount,
     staleTime: 5 * 60_000, // 5 minutes - iterations change infrequently
   });
 }
@@ -59,6 +65,8 @@ export function useBoardColumns(params: {
   providerId: string;
   projectId: string;
   projectName: string;
+  enabled?: boolean;
+  refetchOnMount?: 'always' | boolean;
 }) {
   return useQuery<AzureDevOpsBoardColumn[]>({
     queryKey: [
@@ -68,8 +76,13 @@ export function useBoardColumns(params: {
       params.projectName,
     ],
     queryFn: () => api.azureDevOps.getBoardColumns(params),
-    enabled: !!params.providerId && !!params.projectId && !!params.projectName,
+    enabled:
+      params.enabled !== false &&
+      !!params.providerId &&
+      !!params.projectId &&
+      !!params.projectName,
     staleTime: 5 * 60_000,
+    refetchOnMount: params.refetchOnMount,
   });
 }
 
@@ -91,25 +104,24 @@ export function useWorkItemById(params: {
 
 export function useWorkItemsByIds(params: {
   providerId: string | null;
+  projectName: string | null;
   workItemIds: number[];
 }) {
   return useQuery<AzureDevOpsWorkItem[]>({
-    queryKey: ['work-items-by-ids', params.providerId, params.workItemIds],
-    queryFn: async () => {
-      const results = await Promise.allSettled(
-        params.workItemIds.map((workItemId) =>
-          api.azureDevOps.getWorkItemById({
-            providerId: params.providerId!,
-            workItemId,
-          }),
-        ),
-      );
-      return results
-        .filter((result) => result.status === 'fulfilled')
-        .map((result) => result.value)
-        .filter((item): item is AzureDevOpsWorkItem => !!item);
-    },
-    enabled: !!params.providerId && params.workItemIds.length > 0,
+    queryKey: [
+      'work-items-by-ids',
+      params.providerId,
+      params.projectName,
+      [...new Set(params.workItemIds)].sort((a, b) => a - b),
+    ],
+    queryFn: () =>
+      api.azureDevOps.getWorkItemsByIds({
+        providerId: params.providerId!,
+        projectName: params.projectName!,
+        workItemIds: [...new Set(params.workItemIds)],
+      }),
+    enabled:
+      !!params.providerId && !!params.projectName && params.workItemIds.length > 0,
     staleTime: 5 * 60_000,
   });
 }
@@ -154,10 +166,30 @@ export function useWorkItemStates(params: {
   });
 }
 
+export function useUpdateWorkItemField() {
+  const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+  return useMutation({
+    mutationFn: api.azureDevOps.updateWorkItemField,
+    onSuccess: (_result, variables) =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['work-item', variables.providerId, variables.workItemId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['work-items-by-ids', variables.providerId],
+        }),
+      ]),
+    onError: (error) => addToast({ type: 'error', message: error.message }),
+  });
+}
+
 export function useWorkItemComments(params: {
   providerId: string | null;
   projectName: string | null;
   workItemIds: number[];
+  enabled?: boolean;
 }) {
   return useQuery<WorkItemComment[]>({
     queryKey: [
@@ -185,6 +217,7 @@ export function useWorkItemComments(params: {
       return results.flat();
     },
     enabled:
+      params.enabled !== false &&
       !!params.providerId &&
       !!params.projectName &&
       params.workItemIds.length > 0,
@@ -260,6 +293,7 @@ export function useRelatedTestCases(params: {
   providerId: string | null;
   projectName: string | null;
   workItemId: number | null;
+  enabled?: boolean;
 }) {
   return useQuery<AzureDevOpsWorkItem[]>({
     queryKey: [
@@ -274,7 +308,11 @@ export function useRelatedTestCases(params: {
         projectName: params.projectName!,
         workItemId: params.workItemId!,
       }),
-    enabled: !!params.providerId && !!params.projectName && !!params.workItemId,
+    enabled:
+      params.enabled !== false &&
+      !!params.providerId &&
+      !!params.projectName &&
+      !!params.workItemId,
     staleTime: 5 * 60_000,
   });
 }

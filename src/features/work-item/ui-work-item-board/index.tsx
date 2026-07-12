@@ -1,37 +1,23 @@
+import { Bug, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
 
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
+import { getOwnerColor } from '@/features/work-item/utils-owner-color';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentAzureUser } from '@/hooks/use-work-items';
 import { UserAvatar } from '@/common/ui/user-avatar';
 
 
+import { groupWorkItemsByBoardColumns, parseAzureWorkItemTags } from './utils';
 import {
   HighlightedSearchText,
   SelectionCheckbox,
   WorkItemTypeIcon,
 } from '../ui-work-item-shared';
 
-// Status workflow order for board column positioning (lower = further left in flow)
-const STATUS_WORKFLOW_ORDER: Record<string, number> = {
-  New: 1,
-  'To Do': 1.5,
-  Active: 2,
-  'In Progress': 2.5,
-  'In Design': 2.5,
-  'Non-Compliant': 2.9,
-  Resolved: 3,
-  Deployed: 3.5,
-  Closed: 4,
-  Done: 4.5,
-  Removed: 5,
-};
-
-function getStatusWorkflowOrder(status: string): number {
-  return STATUS_WORKFLOW_ORDER[status] ?? 3;
-}
+const EMPTY_COLUMN_IDS: string[] = [];
 
 // Column header color
 function getColumnColor(status: string): string {
@@ -55,6 +41,21 @@ function getColumnColor(status: string): string {
   }
 }
 
+function getWorkItemBorderColor(type: string): string {
+  switch (type) {
+    case 'Bug':
+      return 'border-l-status-fail';
+    case 'User Story':
+      return 'border-l-status-review';
+    case 'Feature':
+      return 'border-l-acc-ink';
+    case 'Task':
+      return 'border-l-status-run';
+    default:
+      return 'border-l-ink-3';
+  }
+}
+
 export function WorkItemBoard({
   workItems,
   boardColumns,
@@ -65,6 +66,14 @@ export function WorkItemBoard({
   search,
   onToggleSelect,
   onHighlight,
+  showSelection = true,
+  onModifiedClick,
+  collapsedColumnIds,
+  onToggleColumn,
+  childBugProgressByWorkItemId,
+  onOpenChildBugs,
+  relatedBugWorkItemIds = [],
+  variant = 'default',
 }: {
   workItems: AzureDevOpsWorkItem[];
   boardColumns: AzureDevOpsBoardColumn[];
@@ -73,79 +82,52 @@ export function WorkItemBoard({
   selectedWorkItemIds: string[];
   providerId?: string;
   search: string;
-  onToggleSelect: (workItem: AzureDevOpsWorkItem) => void;
+  onToggleSelect?: (workItem: AzureDevOpsWorkItem) => void;
   onHighlight: (workItem: AzureDevOpsWorkItem) => void;
+  showSelection?: boolean;
+  onModifiedClick?: (workItem: AzureDevOpsWorkItem) => void;
+  collapsedColumnIds?: string[];
+  onToggleColumn?: (columnId: string) => void;
+  childBugProgressByWorkItemId?: Record<
+    number,
+    { closed: number; total: number }
+  >;
+  onOpenChildBugs?: (workItem: AzureDevOpsWorkItem) => void;
+  relatedBugWorkItemIds?: number[];
+  variant?: 'default' | 'editorial';
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
 
   // Group work items by Azure board column when available, then fall back to state.
-  const columns = useMemo(() => {
-    if (boardColumns.length > 0) {
-      const boardGroups = new Map(
-        boardColumns.map((column) => [column.name, [] as AzureDevOpsWorkItem[]]),
-      );
-      const fallbackGroups = new Map<string, AzureDevOpsWorkItem[]>();
-
-      for (const item of workItems) {
-        const boardColumn = item.fields.boardColumn;
-        if (boardColumn && boardGroups.has(boardColumn)) {
-          boardGroups.get(boardColumn)?.push(item);
-          continue;
-        }
-
-        const state = item.fields.state;
-        if (boardGroups.has(state)) {
-          boardGroups.get(state)?.push(item);
-          continue;
-        }
-
-        const group = fallbackGroups.get(state) ?? [];
-        group.push(item);
-        fallbackGroups.set(state, group);
-      }
-
-      return [
-        ...boardColumns.map((column) => ({
-          state: column.name,
-          items: boardGroups.get(column.name) ?? [],
-        })),
-        ...[...fallbackGroups.entries()]
-          .sort(([a], [b]) => getStatusWorkflowOrder(a) - getStatusWorkflowOrder(b))
-          .map(([state, items]) => ({ state, items })),
-      ];
-    }
-
-    const groups = new Map<string, AzureDevOpsWorkItem[]>();
-    for (const item of workItems) {
-      const state = item.fields.state;
-      const group = groups.get(state) ?? [];
-      group.push(item);
-      groups.set(state, group);
-    }
-
-    // Sort columns by status priority
-    return [...groups.entries()]
-      .sort(([a], [b]) => getStatusWorkflowOrder(a) - getStatusWorkflowOrder(b))
-      .map(([state, items]) => ({ state, items }));
-  }, [boardColumns, workItems]);
+  const columns = useMemo(
+    () => groupWorkItemsByBoardColumns({ boardColumns, workItems }),
+    [boardColumns, workItems],
+  );
+  const canCollapse = collapsedColumnIds !== undefined && !!onToggleColumn;
+  const collapsedIds = canCollapse ? collapsedColumnIds : EMPTY_COLUMN_IDS;
+  const isEditorial = variant === 'editorial';
 
   const visibleColumns = useMemo(() => {
-    if (!search.trim()) return columns;
+    if (isEditorial || !search.trim()) return columns;
     return columns.filter((column) => column.items.length > 0);
-  }, [columns, search]);
+  }, [columns, isEditorial, search]);
+  const navigableColumns = useMemo(
+    () => visibleColumns.filter((column) => !collapsedIds.includes(column.id)),
+    [collapsedIds, visibleColumns],
+  );
 
   // Board navigation: up/down within column, left/right across columns
   const navigate = useCallback(
     (direction: 'up' | 'down' | 'left' | 'right') => {
-      if (visibleColumns.length === 0) return;
+      if (navigableColumns.length === 0) return;
 
       // Find current position [col, row]
       let curCol = -1;
       let curRow = -1;
       if (highlightedWorkItemId) {
-        for (let c = 0; c < visibleColumns.length; c++) {
-          const r = visibleColumns[c].items.findIndex(
+        for (let c = 0; c < navigableColumns.length; c++) {
+          const r = navigableColumns[c].items.findIndex(
             (wi) => wi.id.toString() === highlightedWorkItemId,
           );
           if (r !== -1) {
@@ -157,16 +139,16 @@ export function WorkItemBoard({
       }
 
       // Find first/last non-empty column
-      const firstCol = visibleColumns.findIndex((c) => c.items.length > 0);
+      const firstCol = navigableColumns.findIndex((c) => c.items.length > 0);
       if (firstCol === -1) return; // all empty
 
       // No current highlight — start at first item
       if (curCol === -1) {
-        onHighlight(visibleColumns[firstCol].items[0]);
+        onHighlight(navigableColumns[firstCol].items[0]);
         return;
       }
 
-      const col = visibleColumns[curCol].items;
+      const col = navigableColumns[curCol].items;
 
       if (direction === 'up') {
         onHighlight(col[(curRow - 1 + col.length) % col.length]);
@@ -178,20 +160,20 @@ export function WorkItemBoard({
         let nextCol = curCol + step;
         while (
           nextCol >= 0 &&
-          nextCol < visibleColumns.length &&
-          visibleColumns[nextCol].items.length === 0
+          nextCol < navigableColumns.length &&
+          navigableColumns[nextCol].items.length === 0
         ) {
           nextCol += step;
         }
-        if (nextCol < 0 || nextCol >= visibleColumns.length) return; // stay put
+        if (nextCol < 0 || nextCol >= navigableColumns.length) return; // stay put
         onHighlight(
-          visibleColumns[nextCol].items[
-            Math.min(curRow, visibleColumns[nextCol].items.length - 1)
+          navigableColumns[nextCol].items[
+            Math.min(curRow, navigableColumns[nextCol].items.length - 1)
           ],
         );
       }
     },
-    [visibleColumns, highlightedWorkItemId, onHighlight],
+    [navigableColumns, highlightedWorkItemId, onHighlight],
   );
 
   // Register keyboard bindings for board navigation
@@ -242,24 +224,78 @@ export function WorkItemBoard({
   return (
     <div
       ref={listRef}
-      className="flex h-full gap-2 overflow-x-auto overflow-y-hidden pb-2"
+      className={clsx(
+        'flex h-full overflow-x-auto overflow-y-hidden',
+        isEditorial ? 'gap-0' : 'gap-2 pb-2',
+      )}
       data-work-item-list
     >
-      {visibleColumns.map(({ state, items }) => (
+      {visibleColumns.map(({ id, name, items }) => {
+        const isCollapsed = canCollapse && collapsedIds.includes(id);
+        if (isCollapsed) {
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onToggleColumn(id)}
+              title={`Expand ${name} column`}
+              aria-label={`Expand ${name} column, ${items.length} items`}
+              className={clsx(
+                'text-ink-2 hover:bg-glass-light flex h-full shrink-0 flex-col items-center py-2 transition-colors',
+                isEditorial
+                  ? 'border-line-soft bg-bg-0 w-8 border-r'
+                  : 'bg-bg-1/50 border-glass-border w-10 rounded border',
+              )}
+            >
+              <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+              <span className="text-ink-3 mt-2 text-[10px] tabular-nums">{items.length}</span>
+              <span className="mt-2 min-h-0 flex-1 overflow-hidden text-xs font-medium [writing-mode:vertical-rl]">
+                {name}
+              </span>
+            </button>
+          );
+        }
+        return (
         <div
-          key={state}
-          className="bg-bg-1/50 flex h-full w-56 shrink-0 flex-col overflow-hidden rounded"
+          key={id}
+          className={clsx(
+            'flex h-full shrink-0 flex-col overflow-hidden',
+            isEditorial
+              ? 'border-line-soft bg-bg-0 w-63 border-r'
+              : 'bg-bg-1/50 w-56 rounded',
+          )}
         >
           {/* Column header */}
-          <div
-            className={clsx('border-t-2 px-2 py-1.5', getColumnColor(state))}
+          <button
+            type="button"
+            disabled={!canCollapse}
+            onClick={() => onToggleColumn?.(id)}
+            className={clsx(
+              'flex w-full items-center text-left disabled:cursor-default',
+              isEditorial
+                ? 'border-line h-10 border-b px-3'
+                : ['border-t-2 px-2 py-1.5', getColumnColor(name)],
+            )}
           >
-            <span className="text-ink-1 text-xs font-medium">{state}</span>
-            <span className="text-ink-3 ml-1.5 text-xs">{items.length}</span>
-          </div>
+            <span
+              className={clsx(
+                'text-ink-1 min-w-0 truncate text-xs font-medium',
+                isEditorial && 'font-mono uppercase tracking-[0.04em]',
+              )}
+            >
+              {name}
+            </span>
+            <span className="text-ink-3 ml-1.5 font-mono text-[10px]">{items.length}</span>
+            {canCollapse && <ChevronLeft className="text-ink-3 ml-auto h-3.5 w-3.5" />}
+          </button>
 
           {/* Cards */}
-          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-1.5">
+          <div
+            className={clsx(
+              'flex min-h-0 flex-1 flex-col overflow-y-auto',
+              isEditorial ? 'gap-0 p-2.5' : 'gap-1 p-1.5',
+            )}
+          >
             {items.map((workItem) => {
               const isHighlighted =
                 workItem.id.toString() === highlightedWorkItemId;
@@ -268,96 +304,138 @@ export function WorkItemBoard({
               const isSelected = selectedWorkItemIds.includes(
                 workItem.id.toString(),
               );
+              const isRelatedBug = relatedBugWorkItemIds.includes(workItem.id);
+              const bugProgress = childBugProgressByWorkItemId?.[workItem.id];
+              const openWorkItem = (modified: boolean) => {
+                if (modified && onModifiedClick) {
+                  onModifiedClick(workItem);
+                  return;
+                }
+                onHighlight(workItem);
+              };
+              const cardHeading = <>
+                <div className="flex items-center gap-1.5">
+                  {showSelection && onToggleSelect && <button
+                    type="button"
+                    aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
+                    aria-checked={isSelected}
+                    role="checkbox"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onToggleSelect(workItem);
+                    }}
+                    className="rounded"
+                  >
+                    <SelectionCheckbox checked={isSelected} size="sm" />
+                  </button>}
+                  <WorkItemTypeIcon
+                    type={workItem.fields.workItemType}
+                    size="sm"
+                    variant={variant}
+                  />
+                  <span className="text-ink-3 font-mono text-[10px]">
+                    <HighlightedSearchText text={`#${workItem.id}`} search={search} />
+                  </span>
+                  {isExactMatch && <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">Exact</span>}
+                  {!isEditorial && <span className="text-ink-2 max-w-[80px] truncate text-[10px]">{workItem.fields.workItemType}</span>}
+                  <div className="ml-auto">
+                    {workItem.fields.assignedTo && <UserAvatar
+                      name={workItem.fields.assignedTo}
+                      color={getOwnerColor(workItem.fields.assignedTo)}
+                      title={currentUser?.displayName && workItem.fields.assignedTo === currentUser.displayName ? `${workItem.fields.assignedTo} (you)` : workItem.fields.assignedTo}
+                      highlight={!!currentUser?.displayName && workItem.fields.assignedTo === currentUser.displayName}
+                    />}
+                  </div>
+                </div>
+                <span className="text-ink-0 line-clamp-2 text-[12.5px] leading-[1.36]">
+                  <HighlightedSearchText text={workItem.fields.title} search={search} />
+                </span>
+              </>;
 
               return (
                 <div
                   key={workItem.id}
                   data-work-item-id={workItem.id}
-                  onClick={() => onHighlight(workItem)}
-                  onKeyDown={(event) => {
+                  onClick={(event) => openWorkItem(event.metaKey || event.ctrlKey)}
+                  onKeyDown={isEditorial ? undefined : (event) => {
                     if (event.key !== 'Enter' && event.key !== ' ') return;
                     event.preventDefault();
-                    onHighlight(workItem);
+                    openWorkItem(event.metaKey || event.ctrlKey);
                   }}
-                  role="button"
-                  tabIndex={0}
+                  role={isEditorial ? undefined : 'button'}
+                  tabIndex={isEditorial ? undefined : 0}
                   className={clsx(
-                    'flex cursor-pointer flex-col gap-1.5 rounded border p-2 text-left transition-[box-shadow,border-color,background-color]',
+                    'flex cursor-pointer flex-col gap-1.5 border p-2 text-left transition-[box-shadow,border-color,background-color]',
+                    isEditorial
+                      ? ['bg-bg-0 rounded-none border-l-[3px] px-3 py-2.5', getWorkItemBorderColor(workItem.fields.workItemType)]
+                      : 'rounded',
                     isExactMatch
                       ? 'border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'
                       : isHighlighted
-                        ? 'border-acc bg-glass-medium/70'
-                        : 'hover:border-glass-border border-glass-border',
+                        ? 'border-acc bg-acc/10 shadow-[0_0_0_3px_oklch(0.72_0.2_295_/_0.1)]'
+                        : isRelatedBug
+                          ? 'border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_oklch(0.72_0.18_25_/_0.12)]'
+                        : 'hover:bg-bg-2 border-line',
                   )}
                 >
-                  {/* Top row: checkbox + type icon + id + type */}
-                  <div className="flex items-center gap-1.5">
-                    <button
+                  {isEditorial ? <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openWorkItem(event.metaKey || event.ctrlKey);
+                    }}
+                    className="focus-visible:ring-acc flex w-full flex-col gap-1.5 text-left outline-none focus-visible:ring-1"
+                  >
+                    {cardHeading}
+                  </button> : cardHeading}
+                  {bugProgress && (
+                    onOpenChildBugs ? <button
                       type="button"
-                      aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
-                      aria-checked={isSelected}
-                      role="checkbox"
+                      title={`${bugProgress.closed} of ${bugProgress.total} related bugs closed`}
                       onClick={(event) => {
                         event.stopPropagation();
-                        onToggleSelect(workItem);
+                        onOpenChildBugs(workItem);
                       }}
-                      className="rounded"
-                    >
-                      <SelectionCheckbox checked={isSelected} size="sm" />
-                    </button>
-                    <WorkItemTypeIcon
-                      type={workItem.fields.workItemType}
-                      size="sm"
-                    />
-                    <span className="text-ink-3 text-[10px]">
-                      <HighlightedSearchText
-                        text={`#${workItem.id}`}
-                        search={search}
-                      />
-                    </span>
-                    {isExactMatch && (
-                      <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide">
-                        Exact
-                      </span>
-                    )}
-                    <span className="text-ink-2 max-w-[80px] truncate text-[10px]">
-                      {workItem.fields.workItemType}
-                    </span>
-                    {/* Assignee (far right) */}
-                    <div className="ml-auto">
-                      {workItem.fields.assignedTo && (
-                        <UserAvatar
-                          name={workItem.fields.assignedTo}
-                          title={
-                            currentUser?.displayName &&
-                            workItem.fields.assignedTo ===
-                              currentUser.displayName
-                              ? `${workItem.fields.assignedTo} (you)`
-                              : workItem.fields.assignedTo
-                          }
-                          highlight={
-                            !!currentUser?.displayName &&
-                            workItem.fields.assignedTo ===
-                              currentUser.displayName
-                          }
-                        />
+                      className={clsx(
+                        'flex items-center gap-1 self-start rounded-sm px-1.5 py-0.5 font-mono text-[10px] underline decoration-current/40 underline-offset-2 transition-colors',
+                        bugProgress.closed === bugProgress.total
+                          ? 'text-status-done hover:bg-status-done/10'
+                          : 'text-status-fail hover:bg-status-fail/10',
                       )}
+                    >
+                      <Bug className="h-3 w-3" />
+                      {bugProgress.closed}/{bugProgress.total} closed
+                    </button> : <span className={clsx(
+                      'flex items-center gap-1 self-start font-mono text-[10px]',
+                      bugProgress.closed === bugProgress.total ? 'text-status-done' : 'text-status-fail',
+                    )}>
+                      <Bug className="h-3 w-3" />
+                      {bugProgress.closed}/{bugProgress.total} closed
+                    </span>
+                  )}
+                  {workItem.fields.tags && (
+                    <div className="flex max-h-8 flex-wrap gap-1 overflow-hidden" aria-label="Tags">
+                      {parseAzureWorkItemTags(workItem.fields.tags).map((tag) => (
+                        <span
+                          key={tag}
+                          className={clsx(
+                            'bg-bg-3 text-ink-3 max-w-full truncate px-1.5 py-0.5 font-mono text-[9px] leading-3',
+                            !isEditorial && 'rounded',
+                          )}
+                          title={tag}
+                        >
+                          {tag}
+                        </span>
+                      ))}
                     </div>
-                  </div>
-
-                  {/* Title (2-line clamp) */}
-                  <span className="text-ink-1 line-clamp-2 text-xs">
-                    <HighlightedSearchText
-                      text={workItem.fields.title}
-                      search={search}
-                    />
-                  </span>
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

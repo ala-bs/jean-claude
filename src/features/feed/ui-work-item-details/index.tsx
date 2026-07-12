@@ -233,6 +233,7 @@ export function WorkItemDetails({
   const { data: linkedWorkItems = [], isLoading: isLoadingLinkedWorkItems } =
     useWorkItemsByIds({
       providerId,
+      projectName,
       workItemIds: linkedWorkItemIds,
     });
   const addComment = useAddWorkItemComment();

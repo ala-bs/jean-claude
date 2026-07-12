@@ -16,6 +16,7 @@ import clsx from 'clsx';
 
 import { ActivityCenterOverlay } from '@/features/activity-center/ui-activity-center-overlay';
 import { api } from '@/lib/api';
+import { AzureBoardOverlay } from '@/features/work-item/ui-azure-board-overlay';
 import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
 import { Button } from '@/common/ui/button';
 import { CalendarOverlay } from '@/features/calendar/ui-calendar-overlay';
@@ -325,6 +326,22 @@ function BacklogContainer() {
   return null;
 }
 
+function AzureBoardContainer() {
+  const layer = useKeyboardLayer('global-nav');
+  const toggle = useOverlaysStore((s) => s.toggle);
+  useCommands(
+    'azure-board-trigger',
+    [{
+      shortcut: 'cmd+shift+a',
+      label: 'Open Azure Board',
+      section: 'Navigation',
+      handler: () => toggle('azure-board'),
+    }],
+    { layer },
+  );
+  return null;
+}
+
 function RunningCommandsContainer() {
   const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
@@ -396,6 +413,8 @@ function OverlayHost() {
       return <ResourcesOverlay onClose={() => close('resources')} />;
     case 'backlog':
       return <BacklogOverlay onClose={() => close('backlog')} />;
+    case 'azure-board':
+      return <AzureBoardOverlay onClose={() => close('azure-board')} />;
     case 'running-commands':
       return (
         <RunningCommandsOverlay onClose={() => close('running-commands')} />
@@ -522,6 +541,7 @@ function RootLayout() {
           <CommandPaletteContainer />
           <ProjectOverlayContainer />
           <BacklogContainer />
+          <AzureBoardContainer />
           <ActivityCenterContainer />
           <CalendarContainer />
           <WorkActivityContainer />

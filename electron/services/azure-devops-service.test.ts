@@ -19,13 +19,400 @@ vi.mock('../database/repositories/tokens', () => ({
 
 import {
   addWorkItemComment,
+  buildWorkItemFieldPatch,
+  buildIterationPathsCondition,
+  getIterations,
+  getWorkItemById,
+  getWorkItemsByIds,
   getWorkItemComments,
   getPullRequestFileContent,
   getPullRequestThreads,
+  queryWorkItems,
   setPullRequestAutoComplete,
   updatePullRequestTitle,
   uploadPullRequestAttachment,
 } from './azure-devops-service';
+
+describe('getWorkItemById', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('maps acceptance criteria from detailed work items', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            id: 55803,
+            url: 'api-url',
+            fields: {
+              'System.Title': 'Story',
+              'System.WorkItemType': 'User Story',
+              'System.State': 'Active',
+              'Microsoft.VSTS.Common.AcceptanceCriteria': '<p>Ship it</p>',
+            },
+          },
+          { ok: true },
+        ),
+      ),
+    );
+
+    await expect(
+      getWorkItemById({ providerId: 'provider-1', workItemId: 55803 }),
+    ).resolves.toMatchObject({
+      fields: { acceptanceCriteria: '<p>Ship it</p>' },
+    });
+  });
+});
+
+describe('getWorkItemsByIds', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('deduplicates IDs and maps child and related relations', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          count: 1,
+          value: [
+            {
+              id: 10,
+              url: 'api-url',
+              fields: {
+                'System.Title': 'Story',
+                'System.WorkItemType': 'User Story',
+                'System.State': 'Active',
+              },
+              relations: [
+                {
+                  rel: 'System.LinkTypes.Hierarchy-Forward',
+                  url: 'https://example/_apis/wit/workItems/11',
+                  attributes: {},
+                },
+                {
+                  rel: 'System.LinkTypes.Related',
+                  url: 'https://example/_apis/wit/workItems/12',
+                  attributes: {},
+                },
+              ],
+            },
+          ],
+        },
+        { ok: true },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      getWorkItemsByIds({
+        providerId: 'provider-1',
+        projectName: 'Team Project',
+        workItemIds: [10, 10],
+      }),
+    ).resolves.toMatchObject([
+      { id: 10, childIds: [11], relatedWorkItemIds: [12] },
+    ]);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      ids: [10],
+      $expand: 'Relations',
+      errorPolicy: 'Omit',
+    });
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      '/Team%20Project/_apis/wit/workitemsbatch',
+    );
+    expect(
+      (await getWorkItemsByIds({
+        providerId: 'provider-1',
+        projectName: 'Team Project',
+        workItemIds: [10],
+      }))[0].url,
+    ).toContain('/Team%20Project/_workitems/edit/10');
+  });
+
+  it('rejects when a batch chunk request fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse('service unavailable', { ok: false }),
+      ),
+    );
+
+    await expect(
+      getWorkItemsByIds({
+        providerId: 'provider-1',
+        projectName: 'Team Project',
+        workItemIds: [10],
+      }),
+    ).rejects.toThrow('Failed to batch-fetch work items for Team Project');
+  });
+
+  it('fetches more than 200 IDs in chunks and preserves requested order', async () => {
+    const ids = Array.from({ length: 401 }, (_, index) => index + 1);
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const chunk = JSON.parse(String(init?.body)).ids as number[];
+      return jsonResponse(
+        {
+          count: chunk.length,
+          value: [...chunk].reverse().map(workItemResponse),
+        },
+        { ok: true },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getWorkItemsByIds({
+      providerId: 'provider-1',
+      projectName: 'Team Project',
+      workItemIds: ids,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body).ids.length)).toEqual([
+      200,
+      200,
+      1,
+    ]);
+    expect(result.map(({ id }) => id)).toEqual(ids);
+    expect(result[0].childIds).toEqual([10_001]);
+  });
+
+  it('bounds chunk concurrency at four requests', async () => {
+    const ids = Array.from({ length: 1_201 }, (_, index) => index + 1);
+    let active = 0;
+    let maxActive = 0;
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      const chunk = JSON.parse(String(init?.body)).ids as number[];
+      return jsonResponse(
+        { count: chunk.length, value: chunk.map(workItemResponse) },
+        { ok: true },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getWorkItemsByIds({
+      providerId: 'provider-1',
+      projectName: 'Team Project',
+      workItemIds: ids,
+    });
+
+    expect(maxActive).toBe(4);
+    expect(result.map(({ id }) => id)).toEqual(ids);
+  });
+
+  it('rejects all results when a later chunk fails', async () => {
+    const ids = Array.from({ length: 1_001 }, (_, index) => index + 1);
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const chunk = JSON.parse(String(init?.body)).ids as number[];
+      if (chunk[0] === 801) {
+        return jsonResponse('later chunk failed', { ok: false });
+      }
+      return jsonResponse(
+        { count: chunk.length, value: chunk.map(workItemResponse) },
+        { ok: true },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      getWorkItemsByIds({
+        providerId: 'provider-1',
+        projectName: 'Team Project',
+        workItemIds: ids,
+      }),
+    ).rejects.toThrow('later chunk failed');
+  });
+
+  it('aborts active requests and does not claim later chunks after first failure', async () => {
+    const ids = Array.from({ length: 1_201 }, (_, index) => index + 1);
+    const startedChunks: number[] = [];
+    const abortedChunks: number[] = [];
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const chunk = JSON.parse(String(init?.body)).ids as number[];
+      const chunkStart = chunk[0];
+      startedChunks.push(chunkStart);
+      if (chunkStart === 1) {
+        return jsonResponse('controlled first failure', { ok: false });
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          abortedChunks.push(chunkStart);
+          reject(new DOMException('Aborted', 'AbortError'));
+        });
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      getWorkItemsByIds({
+        providerId: 'provider-1',
+        projectName: 'Team Project',
+        workItemIds: ids,
+      }),
+    ).rejects.toThrow('controlled first failure');
+
+    expect(startedChunks).toEqual([1, 201, 401, 601]);
+    expect(abortedChunks).toEqual([201, 401, 601]);
+    expect(startedChunks).not.toContain(801);
+  });
+});
+
+describe('queryWorkItems', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('does not truncate WIQL and batch-fetches every returned ID', async () => {
+    const ids = Array.from({ length: 201 }, (_, index) => index + 1);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { workItems: ids.map((id) => ({ id, url: `work-item-${id}` })) },
+          { ok: true },
+        ),
+      )
+      .mockImplementation(async (_url, init) => {
+        const chunk = JSON.parse(String(init?.body)).ids as number[];
+        return jsonResponse(
+          { count: chunk.length, value: chunk.map(workItemResponse) },
+          { ok: true },
+        );
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await queryWorkItems({
+      providerId: 'provider-1',
+      projectId: 'project-1',
+      projectName: 'Team Project',
+      filters: {},
+    });
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('$top=200');
+    expect(result).toHaveLength(201);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('buildIterationPathsCondition', () => {
+  it('deduplicates paths and escapes WIQL quotes', () => {
+    expect(
+      buildIterationPathsCondition([
+        'Project\\Sprint 9',
+        "Project\\Team's Sprint",
+        'Project\\Sprint 9',
+      ]),
+    ).toBe(
+      "[System.IterationPath] IN ('Project\\Sprint 9', 'Project\\Team''s Sprint')",
+    );
+  });
+});
+
+describe('getIterations', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses Azure timeFrame when current iteration has no dates', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            count: 1,
+            value: [
+              {
+                id: 'iteration-1',
+                name: 'Sprint 10',
+                path: 'Project\\Sprint 10',
+                attributes: { timeFrame: 'current' },
+              },
+            ],
+          },
+          { ok: true },
+        ),
+      ),
+    );
+
+    await expect(
+      getIterations({ providerId: 'provider-1', projectName: 'Project' }),
+    ).resolves.toEqual([
+      {
+        id: 'iteration-1',
+        name: 'Sprint 10',
+        path: 'Project\\Sprint 10',
+        startDate: null,
+        finishDate: null,
+        isCurrent: true,
+      },
+    ]);
+  });
+});
+
+describe('buildWorkItemFieldPatch', () => {
+  it('validates required fields and priority bounds', () => {
+    expect(() => buildWorkItemFieldPatch({ field: 'System.Title', value: ' ' })).toThrow(
+      'title cannot be empty',
+    );
+    expect(() =>
+      buildWorkItemFieldPatch({
+        field: 'Microsoft.VSTS.Common.Priority',
+        value: Number.NaN,
+      }),
+    ).toThrow('integer from 1 to 4');
+    expect(() =>
+      buildWorkItemFieldPatch({
+        field: 'Microsoft.VSTS.Common.Priority',
+        value: 5,
+      }),
+    ).toThrow('integer from 1 to 4');
+  });
+
+  it('only removes fields that Azure permits clearing', () => {
+    expect(buildWorkItemFieldPatch({ field: 'System.Tags', value: '' })).toEqual({
+      op: 'remove',
+      path: '/fields/System.Tags',
+    });
+    expect(() =>
+      buildWorkItemFieldPatch({ field: 'System.State', value: '' }),
+    ).toThrow('state cannot be empty');
+  });
+});
 
 function jsonResponse(body: unknown, init: { ok: boolean; status?: number }) {
   return {
@@ -34,6 +421,25 @@ function jsonResponse(body: unknown, init: { ok: boolean; status?: number }) {
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response;
+}
+
+function workItemResponse(id: number) {
+  return {
+    id,
+    url: `api-${id}`,
+    fields: {
+      'System.Title': `Item ${id}`,
+      'System.WorkItemType': 'User Story',
+      'System.State': 'Active',
+    },
+    relations: [
+      {
+        rel: 'System.LinkTypes.Hierarchy-Forward',
+        url: `https://example/_apis/wit/workItems/${id + 10_000}`,
+        attributes: {},
+      },
+    ],
+  };
 }
 
 describe('uploadPullRequestAttachment', () => {

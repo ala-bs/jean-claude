@@ -108,10 +108,13 @@ export interface AzureDevOpsWorkItem {
     state: string;
     assignedTo?: string;
     description?: string;
+    acceptanceCriteria?: string;
     reproSteps?: string;
     changedDate?: string;
     boardColumn?: string;
     boardColumnDone?: boolean;
+    tags?: string;
+    priority?: number;
   };
   testSteps?: TestStep[];
   parentId?: number;
@@ -179,11 +182,14 @@ interface WorkItemsBatchResponse {
       'System.State': string;
       'System.AssignedTo'?: { displayName: string };
       'System.Description'?: string;
+      'Microsoft.VSTS.Common.AcceptanceCriteria'?: string;
       'Microsoft.VSTS.TCM.ReproSteps'?: string;
       'Microsoft.VSTS.TCM.Steps'?: string;
       'System.ChangedDate'?: string;
       'System.BoardColumn'?: string;
       'System.BoardColumnDone'?: boolean;
+      'System.Tags'?: string;
+      'Microsoft.VSTS.Common.Priority'?: number;
     };
     relations?: WorkItemRelation[];
   }>;
@@ -484,6 +490,16 @@ function escapeWiql(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+export function buildIterationPathsCondition(iterationPaths: string[]) {
+  const paths = [...new Set(iterationPaths.map((path) => path.trim()).filter(Boolean))];
+  if (paths.length === 0) {
+    throw new Error('At least one iteration path is required');
+  }
+  return `[System.IterationPath] IN (${paths
+    .map((path) => `'${escapeWiql(path)}'`)
+    .join(', ')})`;
+}
+
 /** Extract parent work item ID from a work item's relations array. */
 function extractParentId(relations?: WorkItemRelation[]): number | undefined {
   if (!relations) return undefined;
@@ -671,6 +687,8 @@ export async function queryWorkItems(params: {
     excludeWorkItemTypes?: string[];
     searchText?: string;
     iterationPath?: string;
+    iterationPaths?: string[];
+    assignedTo?: string;
   };
 }): Promise<AzureDevOpsWorkItem[]> {
   const provider = await ProviderRepository.findById(params.providerId);
@@ -741,9 +759,17 @@ export async function queryWorkItems(params: {
   }
 
   // Filter by iteration path
-  if (params.filters.iterationPath) {
+  if (params.filters.iterationPaths?.length) {
+    conditions.push(buildIterationPathsCondition(params.filters.iterationPaths));
+  } else if (params.filters.iterationPath) {
     conditions.push(
       `[System.IterationPath] = '${escapeWiql(params.filters.iterationPath)}'`,
+    );
+  }
+
+  if (params.filters.assignedTo?.trim()) {
+    conditions.push(
+      `[System.AssignedTo] CONTAINS '${escapeWiql(params.filters.assignedTo.trim())}'`,
     );
   }
 
@@ -751,7 +777,7 @@ export async function queryWorkItems(params: {
 
   // POST WIQL query - use projectName in URL path (Azure DevOps requires name, not GUID)
   const wiqlResponse = await fetch(
-    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/wiql?api-version=7.0&$top=200`,
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/wiql?api-version=7.0`,
     {
       method: 'POST',
       headers: {
@@ -773,42 +799,12 @@ export async function queryWorkItems(params: {
     return [];
   }
 
-  // Batch-fetch work item details with relations to get parent info
-  // Note: $expand=relations cannot be used with the fields parameter, so we fetch all fields
   const ids = wiqlData.workItems.map((wi) => wi.id);
-  const batchResponse = await fetch(
-    `https://dev.azure.com/${orgName}/_apis/wit/workitems?ids=${ids.join(',')}&$expand=relations&api-version=7.0`,
-    {
-      headers: { Authorization: authHeader },
-    },
-  );
-
-  if (!batchResponse.ok) {
-    const error = await batchResponse.text();
-    throw new Error(`Failed to fetch work item details: ${error}`);
-  }
-
-  const batchData: WorkItemsBatchResponse = await batchResponse.json();
-
-  // Map to AzureDevOpsWorkItem[]
-  return batchData.value.map((wi) => ({
-    id: wi.id,
-    url: `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_workitems/edit/${wi.id}`,
-    fields: {
-      title: wi.fields['System.Title'],
-      workItemType: wi.fields['System.WorkItemType'],
-      teamProject: wi.fields['System.TeamProject'] ?? params.projectName,
-      state: wi.fields['System.State'],
-      assignedTo: wi.fields['System.AssignedTo']?.displayName,
-      description: wi.fields['System.Description'],
-      reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
-      changedDate: wi.fields['System.ChangedDate'],
-      boardColumn: wi.fields['System.BoardColumn'],
-      boardColumnDone: wi.fields['System.BoardColumnDone'],
-    },
-    parentId: extractParentId(wi.relations),
-    relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
-  }));
+  return getWorkItemsByIds({
+    providerId: params.providerId,
+    projectName: params.projectName,
+    workItemIds: ids,
+  });
 }
 
 export async function queryAssignedWorkItems(params: {
@@ -875,12 +871,17 @@ export async function queryAssignedWorkItems(params: {
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
       description: wi.fields['System.Description'],
+      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
       boardColumn: wi.fields['System.BoardColumn'],
       boardColumnDone: wi.fields['System.BoardColumnDone'],
+      tags: wi.fields['System.Tags'],
+      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
     },
     parentId: extractParentId(wi.relations),
+    childIds: extractChildIds(wi.relations),
+    relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
     linkedPrs: extractLinkedPrs(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
   }));
@@ -907,6 +908,27 @@ export async function getWorkItemById(params: {
 
   const wi = await response.json();
 
+  if (
+    !wi.fields['System.Description'] &&
+    !wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] &&
+    !wi.fields['Microsoft.VSTS.TCM.ReproSteps']
+  ) {
+    const contentFields = Object.entries(wi.fields)
+      .filter(([name]) =>
+        /(description|criteria|content|detail|repro|step)/i.test(name),
+      )
+      .map(([name, value]) => ({
+        name,
+        type: Array.isArray(value) ? 'array' : typeof value,
+        length: typeof value === 'string' ? value.length : undefined,
+      }));
+    dbg.azure(
+      'Work item %d has no mapped content fields; candidates=%o',
+      wi.id,
+      contentFields,
+    );
+  }
+
   return {
     id: wi.id,
     url:
@@ -919,10 +941,13 @@ export async function getWorkItemById(params: {
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
       description: wi.fields['System.Description'],
+      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
       boardColumn: wi.fields['System.BoardColumn'],
       boardColumnDone: wi.fields['System.BoardColumnDone'],
+      tags: wi.fields['System.Tags'],
+      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
     },
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
@@ -930,6 +955,110 @@ export async function getWorkItemById(params: {
     linkedPrs: extractLinkedPrs(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
   };
+}
+
+export async function getWorkItemsByIds(params: {
+  providerId: string;
+  projectName: string;
+  workItemIds: number[];
+}): Promise<AzureDevOpsWorkItem[]> {
+  const ids = [...new Set(params.workItemIds)];
+  if (ids.length === 0) return [];
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const chunks: number[][] = [];
+  for (let index = 0; index < ids.length; index += 200) {
+    chunks.push(ids.slice(index, index + 200));
+  }
+
+  const results = new Array<WorkItemsBatchResponse>(chunks.length);
+  const controller = new AbortController();
+  let firstError: unknown = null;
+  let failureClaimed = false;
+  let stopped = false;
+  let nextChunkIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(4, chunks.length) },
+    async () => {
+      while (!stopped && nextChunkIndex < chunks.length) {
+        const chunkIndex = nextChunkIndex++;
+        const chunk = chunks[chunkIndex];
+        try {
+          const response = await fetch(
+            `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemsbatch?api-version=7.0`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: authHeader,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                ids: chunk,
+                $expand: 'Relations',
+                errorPolicy: 'Omit',
+              }),
+              signal: controller.signal,
+            },
+          );
+          if (!response.ok) {
+            if (failureClaimed) return;
+            failureClaimed = true;
+            stopped = true;
+            const error = await response.text();
+            firstError = new Error(
+              `Failed to batch-fetch work items for ${params.projectName}: ${error}`,
+            );
+            controller.abort();
+            return;
+          }
+          results[chunkIndex] = (await response.json()) as WorkItemsBatchResponse;
+        } catch (error) {
+          if (!failureClaimed) {
+            failureClaimed = true;
+            stopped = true;
+            firstError = error;
+            controller.abort();
+          }
+          return;
+        }
+      }
+    },
+  );
+  await Promise.allSettled(workers);
+  if (firstError !== null) throw firstError;
+
+  const items = results.flatMap((result) =>
+    result.value.map((wi) => ({
+      id: wi.id,
+      url: `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_workitems/edit/${wi.id}`,
+      fields: {
+        title: wi.fields['System.Title'],
+        workItemType: wi.fields['System.WorkItemType'],
+        teamProject: wi.fields['System.TeamProject'],
+        state: wi.fields['System.State'],
+        assignedTo: wi.fields['System.AssignedTo']?.displayName,
+        description: wi.fields['System.Description'],
+        acceptanceCriteria:
+          wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
+        reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
+        changedDate: wi.fields['System.ChangedDate'],
+        boardColumn: wi.fields['System.BoardColumn'],
+        boardColumnDone: wi.fields['System.BoardColumnDone'],
+        tags: wi.fields['System.Tags'],
+        priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      },
+      parentId: extractParentId(wi.relations),
+      childIds: extractChildIds(wi.relations),
+      relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
+      linkedPrs: extractLinkedPrs(wi.relations),
+      relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
+    })),
+  );
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  return ids.flatMap((id) => {
+    const item = itemById.get(id);
+    return item ? [item] : [];
+  });
 }
 
 export async function getWorkItemStates(params: {
@@ -1133,8 +1262,13 @@ export async function getRelatedTestCases(params: {
         state: wi.fields['System.State'],
         assignedTo: wi.fields['System.AssignedTo']?.displayName,
         description: wi.fields['System.Description'],
+        acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
         reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
         changedDate: wi.fields['System.ChangedDate'],
+        boardColumn: wi.fields['System.BoardColumn'],
+        boardColumnDone: wi.fields['System.BoardColumnDone'],
+        tags: wi.fields['System.Tags'],
+        priority: wi.fields['Microsoft.VSTS.Common.Priority'],
       },
       testSteps,
     };
@@ -1516,9 +1650,10 @@ export async function getIterations(params: {
     const startDate = iter.attributes.startDate ?? null;
     const finishDate = iter.attributes.finishDate ?? null;
     const isCurrent =
-      startDate && finishDate
+      iter.attributes.timeFrame?.toLocaleLowerCase() === 'current' ||
+      (startDate && finishDate
         ? now >= new Date(startDate) && now <= new Date(finishDate)
-        : false;
+        : false);
 
     return {
       id: iter.id,
@@ -3109,10 +3244,17 @@ export async function getPullRequestWorkItems(params: {
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
       description: wi.fields['System.Description'],
+      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
+      boardColumn: wi.fields['System.BoardColumn'],
+      boardColumnDone: wi.fields['System.BoardColumnDone'],
+      tags: wi.fields['System.Tags'],
+      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
     },
     parentId: extractParentId(wi.relations),
+    childIds: extractChildIds(wi.relations),
+    relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
   }));
 }
 
@@ -3520,6 +3662,73 @@ export async function updateWorkItemState(params: {
     const error = await response.text();
     throw new Error(
       `Failed to update work item ${params.workItemId} state to ${params.state}: ${error}`,
+    );
+  }
+}
+
+const EDITABLE_WORK_ITEM_FIELDS = new Set([
+  'System.Title',
+  'System.AssignedTo',
+  'System.Tags',
+  'Microsoft.VSTS.Common.Priority',
+  'System.State',
+]);
+
+export function buildWorkItemFieldPatch(params: {
+  field: string;
+  value: string | number | null;
+}) {
+  if (!EDITABLE_WORK_ITEM_FIELDS.has(params.field)) {
+    throw new Error(`Work item field is not editable: ${params.field}`);
+  }
+
+  const value = typeof params.value === 'string' ? params.value.trim() : params.value;
+  if (params.field === 'System.Title' && !value) {
+    throw new Error('Work item title cannot be empty');
+  }
+  if (params.field === 'System.State' && !value) {
+    throw new Error('Work item state cannot be empty');
+  }
+  if (params.field === 'Microsoft.VSTS.Common.Priority') {
+    if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 4) {
+      throw new Error('Work item priority must be an integer from 1 to 4');
+    }
+  }
+
+  const removable =
+    params.field === 'System.AssignedTo' || params.field === 'System.Tags';
+  if ((value === null || value === '') && !removable) {
+    throw new Error(`Work item field cannot be empty: ${params.field}`);
+  }
+  return {
+    op: value === null || value === '' ? 'remove' : 'add',
+    path: `/fields/${params.field}`,
+    ...(value === null || value === '' ? {} : { value }),
+  };
+}
+
+export async function updateWorkItemField(params: {
+  providerId: string;
+  workItemId: number;
+  field: string;
+  value: string | number | null;
+}): Promise<void> {
+  const patch = buildWorkItemFieldPatch(params);
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/_apis/wit/workitems/${params.workItemId}?api-version=7.0`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json-patch+json',
+      },
+      body: JSON.stringify([patch]),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Failed to update work item ${params.workItemId}: ${await response.text()}`,
     );
   }
 }

@@ -1,4 +1,4 @@
-import { BookOpen, Bug, Check, CheckSquare, FileText } from 'lucide-react';
+import { BookOpen, Bug, Check, CheckSquare, FileText, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
@@ -17,19 +17,22 @@ const CHECKBOX_SIZE = {
 export function WorkItemTypeIcon({
   type,
   size = 'md',
+  variant = 'default',
 }: {
   type: string;
   size?: 'sm' | 'md';
+  variant?: 'default' | 'editorial';
 }) {
   const s = ICON_SIZE[size];
   switch (type) {
     case 'Bug':
       return <Bug className={clsx(s, 'text-status-fail shrink-0')} />;
     case 'User Story':
+      return <BookOpen className={clsx(s, variant === 'editorial' ? 'text-status-review' : 'text-acc-ink', 'shrink-0')} />;
     case 'Feature':
-      return <BookOpen className={clsx(s, 'text-acc-ink shrink-0')} />;
+      return <Sparkles className={clsx(s, 'text-acc-ink shrink-0')} />;
     case 'Task':
-      return <CheckSquare className={clsx(s, 'text-status-done shrink-0')} />;
+      return <CheckSquare className={clsx(s, variant === 'editorial' ? 'text-status-run' : 'text-status-done', 'shrink-0')} />;
     default:
       return <FileText className={clsx(s, 'text-ink-2 shrink-0')} />;
   }

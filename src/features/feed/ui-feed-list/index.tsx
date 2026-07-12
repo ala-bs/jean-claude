@@ -8,6 +8,7 @@ import {
   Filter,
   GitPullRequest,
   GripVertical,
+  LayoutDashboard,
   ListTodo,
   Loader2,
   MessageSquare,
@@ -1606,6 +1607,15 @@ export function FeedList() {
                 )}
               </Dropdown>
             )}
+            <button
+              type="button"
+              onClick={() => openOverlay('azure-board')}
+              className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 flex h-5 w-5 items-center justify-center rounded transition-colors"
+              title="Azure Board (Cmd+Shift+A)"
+              aria-label="Open Azure Board"
+            >
+              <LayoutDashboard size={13} />
+            </button>
             <button
               type="button"
               onClick={() => openOverlay('new-task')}
