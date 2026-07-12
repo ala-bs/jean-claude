@@ -319,6 +319,36 @@ describe('generateText opencode structured output', () => {
     );
   });
 
+  it('surfaces OpenCode assistant errors instead of returning null', async () => {
+    const client = createMockClient({
+      data: {
+        info: {
+          error: {
+            name: 'StructuredOutputError',
+            data: {
+              message: 'Model failed to produce valid structured output',
+              retries: 1,
+            },
+          },
+        },
+        parts: [],
+      },
+    });
+    getOrCreateServerMock.mockResolvedValue({ client });
+
+    await expect(
+      generateText({
+        backend: 'opencode',
+        model: 'default',
+        prompt: 'Generate message',
+        outputSchema: { type: 'object' },
+        throwOnError: true,
+      }),
+    ).rejects.toThrow(
+      'AI generation failed: OpenCode StructuredOutputError: Model failed to produce valid structured output',
+    );
+  });
+
   it('records one-off OpenCode requests even when token usage is absent', async () => {
     const client = createMockClient({
       data: {

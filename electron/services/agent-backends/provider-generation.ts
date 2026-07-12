@@ -329,6 +329,18 @@ async function generateWithOpenCode({
       });
     }
 
+    if (info?.error) {
+      const message =
+        'data' in info.error &&
+        typeof info.error.data === 'object' &&
+        info.error.data !== null &&
+        'message' in info.error.data &&
+        typeof info.error.data.message === 'string'
+          ? info.error.data.message
+          : 'No error details returned';
+      throw new Error(`OpenCode ${info.error.name}: ${message}`);
+    }
+
     return extractOpenCodeResponseOutput({
       response,
       outputSchema,
