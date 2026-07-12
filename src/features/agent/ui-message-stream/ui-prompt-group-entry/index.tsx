@@ -14,6 +14,7 @@ import { ensureUtc, formatDuration } from '@/lib/time';
 import type {
   NormalizedEntry,
   NormalizedToolUse,
+  TokenUsage,
   ToolUseByName,
 } from '@shared/normalized-message-v2';
 import { countUnifiedPatchStats } from '@/features/agent/ui-diff-view/diff-utils';
@@ -45,6 +46,17 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 const PROMPT_MAX_CHARS = 300;
 const RECENT_RUNNING_MESSAGE_COUNT = 5;
 const EMPTY_DISPLAY_MESSAGES: DisplayMessage[] = [];
+
+export function getResultDisplayTokenCount({
+  usage,
+  contextUsage,
+}: {
+  usage?: TokenUsage;
+  contextUsage?: TokenUsage;
+}): number {
+  const displayUsage = contextUsage ?? usage;
+  return (displayUsage?.inputTokens ?? 0) + (displayUsage?.outputTokens ?? 0);
+}
 
 type RunningActivityMessage =
   | {
@@ -1249,9 +1261,7 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
     }
     const cost = entry.cost?.toFixed(2) || '0.00';
     const apiCost = entry.apiCost?.toFixed(2);
-    const tokens = formatNumber(
-      (entry.usage?.inputTokens ?? 0) + (entry.usage?.outputTokens ?? 0),
-    );
+    const tokens = formatNumber(getResultDisplayTokenCount(entry));
     const durationMs = group.durationMs ?? entry.durationMs ?? 0;
     const fallbackAssistantMessage =
       !entry.value || !entry.value.trim()
