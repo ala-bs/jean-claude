@@ -8,8 +8,10 @@ import {
   isAzureBacklogItemType,
   matchesAnyAzureWorkItemAssignee,
   matchesAnyAzureWorkItemTag,
+  normalizeAzureWorkItemTags,
   parseAzureWorkItemTags,
   pushWorkItemStack,
+  serializeAzureWorkItemTags,
 } from '@/features/work-item/ui-work-item-board/utils';
 
 const columns: AzureDevOpsBoardColumn[] = [
@@ -71,6 +73,20 @@ describe('parseAzureWorkItemTags', () => {
 
   it('returns no tags for missing values', () => {
     expect(parseAzureWorkItemTags(undefined)).toEqual([]);
+  });
+
+  it('normalizes tags while preserving first-seen casing', () => {
+    expect(normalizeAzureWorkItemTags([' Frontend ', 'frontend', '', 'Urgent'])).toEqual([
+      'Frontend',
+      'Urgent',
+    ]);
+  });
+
+  it('serializes normalized tags for Azure', () => {
+    expect(serializeAzureWorkItemTags([' Frontend ', 'frontend', 'Urgent'])).toBe(
+      'Frontend; Urgent',
+    );
+    expect(serializeAzureWorkItemTags([])).toBe('');
   });
 
   it('matches any selected tag case-insensitively', () => {

@@ -20,6 +20,20 @@ export function parseAzureWorkItemTags(tags: string | undefined) {
     .filter(Boolean);
 }
 
+export function normalizeAzureWorkItemTags(tags: string[]) {
+  const normalizedTags = new Map<string, string>();
+  for (const value of tags) {
+    const tag = value.trim();
+    const key = tag.toLocaleLowerCase();
+    if (tag && !normalizedTags.has(key)) normalizedTags.set(key, tag);
+  }
+  return [...normalizedTags.values()];
+}
+
+export function serializeAzureWorkItemTags(tags: string[]) {
+  return normalizeAzureWorkItemTags(tags).join('; ');
+}
+
 export function matchesAnyAzureWorkItemTag(
   tags: string | undefined,
   selectedTags: string[],

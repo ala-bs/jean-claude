@@ -38,6 +38,7 @@ import {
   getWorkItemPreviewQueryPolicy,
 } from './query-policy';
 import { WorkItemComments } from '../ui-work-item-comments';
+import { WorkItemTagEditor } from '../ui-work-item-tag-editor';
 import { WorkItemTypeIcon } from '../ui-work-item-shared';
 type DetailsTab = 'content' | 'comments' | 'test-cases';
 
@@ -49,6 +50,7 @@ export function WorkItemPreview({
   readOnly = false,
   editableMetadata = false,
   assigneeOptions = [],
+  tagOptions = [],
   showRelatedWorkItems = false,
   onOpenRelatedWorkItem,
   headerLeading,
@@ -62,6 +64,7 @@ export function WorkItemPreview({
   readOnly?: boolean;
   editableMetadata?: boolean;
   assigneeOptions?: string[];
+  tagOptions?: string[];
   showRelatedWorkItems?: boolean;
   onOpenRelatedWorkItem?: (workItemId: number) => void;
   headerLeading?: ReactNode;
@@ -191,6 +194,7 @@ export function WorkItemPreview({
                 value={fields.title}
                 label="Title"
                 className="text-ink-0 block min-w-0 flex-1 text-left text-sm font-semibold leading-snug"
+                fullWidth
                 validate={(value) => value.trim() ? null : 'Title cannot be empty'}
                 onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Title', value })}
               />
@@ -199,31 +203,60 @@ export function WorkItemPreview({
             )}
           </div>
           {isEditorial && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              <MetadataDropdown
-                key={`${id}:owner`}
-                label="Owner"
-                value={assignedTo ?? ''}
-                emptyLabel="Unassigned"
-                options={[
-                  '',
-                  ...(assignedTo ? [assignedTo] : []),
-                  ...assigneeOptions.filter(
-                    (assignee) => normalizeOwnerName(assignee) !== normalizeOwnerName(assignedTo ?? ''),
-                  ),
-                ]}
-                colorizeOwners
-                disabled={!canEditMetadata || !providerId}
-                onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.AssignedTo', value })}
-              />
-              <MetadataDropdown
-                key={`${id}:state`}
-                label="State"
-                value={currentState}
-                options={[...new Set([currentState, ...availableStates.map((state) => state.name)])]}
-                disabled={!canEditMetadata || !providerId}
-                onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.State', value })}
-              />
+            <div className="mt-2 space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <MetadataDropdown
+                  key={`${id}:owner`}
+                  label="Owner"
+                  value={assignedTo ?? ''}
+                  emptyLabel="Unassigned"
+                  options={[
+                    '',
+                    ...(assignedTo ? [assignedTo] : []),
+                    ...assigneeOptions.filter(
+                      (assignee) => normalizeOwnerName(assignee) !== normalizeOwnerName(assignedTo ?? ''),
+                    ),
+                  ]}
+                  colorizeOwners
+                  disabled={!canEditMetadata || !providerId}
+                  onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.AssignedTo', value })}
+                />
+                <MetadataDropdown
+                  key={`${id}:state`}
+                  label="State"
+                  value={currentState}
+                  options={[...new Set([currentState, ...availableStates.map((state) => state.name)])]}
+                  disabled={!canEditMetadata || !providerId}
+                  onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.State', value })}
+                />
+                {canEditMetadata && providerId && (
+                  <div className="border-line bg-bg-0 text-ink-1 flex min-h-8 items-center gap-1.5 border px-2.5 py-1 text-[11px]">
+                    <span className="text-ink-3">Priority</span>
+                    <EditableMetadataValue
+                      key={`${id}:priority:${fields.priority ?? ''}`}
+                      value={String(fields.priority ?? '')}
+                      label="Priority"
+                      emptyLabel="None"
+                      className="hover:text-acc-ink"
+                      validate={(value) => {
+                        const priority = Number(value);
+                        return Number.isInteger(priority) && priority >= 1 && priority <= 4
+                          ? null
+                          : 'Priority must be an integer from 1 to 4';
+                      }}
+                      onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'Microsoft.VSTS.Common.Priority', value: Number(value) })}
+                    />
+                  </div>
+                )}
+              </div>
+              {canEditMetadata && providerId && (
+                <WorkItemTagEditor
+                  key={`${id}:tags:${fields.tags ?? ''}`}
+                  value={fields.tags ?? ''}
+                  suggestions={tagOptions}
+                  onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })}
+                />
+              )}
             </div>
           )}
         </div>
@@ -321,10 +354,10 @@ export function WorkItemPreview({
                   )}
                 </div>
                 </>}
-                {canEditMetadata && providerId && (
+                {!isEditorial && canEditMetadata && providerId && (
                   <>
                     <div className="flex items-center gap-1"><span className="text-ink-3">Priority:</span><EditableMetadataValue key={`${id}:priority:${fields.priority ?? ''}`} value={String(fields.priority ?? '')} label="Priority" emptyLabel="None" validate={(value) => { const priority = Number(value); return Number.isInteger(priority) && priority >= 1 && priority <= 4 ? null : 'Priority must be an integer from 1 to 4'; }} onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'Microsoft.VSTS.Common.Priority', value: Number(value) })} /></div>
-                    <div className="flex min-w-0 items-center gap-1"><span className="text-ink-3">Tags:</span><EditableMetadataValue key={`${id}:tags:${fields.tags ?? ''}`} value={fields.tags ?? ''} label="Tags" emptyLabel="None" onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })} /></div>
+                    <WorkItemTagEditor key={`${id}:tags:${fields.tags ?? ''}`} value={fields.tags ?? ''} suggestions={tagOptions} onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })} />
                   </>
                 )}
               </div>
@@ -689,6 +722,7 @@ function EditableMetadataValue({
   emptyLabel = label,
   options,
   className = 'text-ink-1 hover:text-acc-ink rounded px-1 py-0.5 text-xs',
+  fullWidth = false,
   validate,
   onSave,
 }: {
@@ -697,6 +731,7 @@ function EditableMetadataValue({
   emptyLabel?: string;
   options?: string[];
   className?: string;
+  fullWidth?: boolean;
   validate?: (value: string) => string | null;
   onSave: (value: string) => Promise<unknown>;
 }) {
@@ -741,9 +776,9 @@ function EditableMetadataValue({
     return <button type="button" className={className} onClick={() => { beginMetadataEdit(lifecycleRef.current); setDraft(value); setError(null); setEditing(true); }}>{value || emptyLabel}</button>;
   }
 
-  const inputClassName = "bg-bg-2 text-ink-1 min-w-0 rounded border border-white/10 px-1.5 py-1 text-xs outline-none";
+  const inputClassName = `bg-bg-2 text-ink-1 min-w-0 rounded border border-white/10 px-1.5 py-1 text-xs outline-none${fullWidth ? ' w-full' : ''}`;
   return (
-    <span className="inline-flex min-w-0 flex-col">
+    <span className={`inline-flex min-w-0 flex-col${fullWidth ? ' flex-1' : ''}`}>
       {options ? <select autoFocus aria-label={label} aria-invalid={!!error} value={draft} className={inputClassName} onChange={(event) => { selectCommitRef.current = true; setDraft(event.target.value); void save(event.target.value).finally(() => { selectCommitRef.current = false; }); }} onBlur={() => { if (!selectCommitRef.current) setEditing(false); }} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); cancelMetadataEdit(lifecycleRef.current); setDraft(value); setError(null); setEditing(false); } }}>{options.map((option) => <option key={option}>{option}</option>)}</select> : <input autoFocus aria-label={label} aria-invalid={!!error} value={draft} className={inputClassName} onChange={(event) => setDraft(event.target.value)} onBlur={() => void save()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.stopPropagation(); cancelMetadataEdit(lifecycleRef.current); setDraft(value); setError(null); setEditing(false); } }} />}
       {error && <span role="alert" className="mt-0.5 text-[10px] leading-tight text-red-400">{error}</span>}
     </span>

@@ -273,15 +273,16 @@ export function AzureBoardProjectContent({
     iterationFilter.status === 'resolved' || iterationFilter.status === 'partial'
       ? (itemsQuery.data ?? [])
       : [];
-  const isLoading =
-    iterationFilter.status === 'pending' ||
-    (itemsQuery.isLoading && items.length === 0);
   const columnsQuery = useBoardColumns({
     ...params,
     enabled: true,
     refetchOnMount: 'always',
   });
   const columns = columnsQuery.data ?? [];
+  const isLoading =
+    iterationFilter.status === 'pending' ||
+    (itemsQuery.isLoading && items.length === 0) ||
+    columnsQuery.isPending;
   const {
     visibleItems,
     types,
@@ -466,7 +467,7 @@ export function AzureBoardProjectContent({
               </div>
             </div>
           ) : isLoading ? (
-            <div className="grid flex-1 place-items-center"><Loader2 className="text-acc-ink h-6 w-6 animate-spin" /></div>
+            <div role="status" aria-label="Loading Azure Board" className="grid flex-1 place-items-center"><Loader2 aria-hidden="true" className="text-acc-ink h-6 w-6 animate-spin" /></div>
           ) : (
             <div className="relative flex min-h-0 flex-1 overflow-hidden">
             {(boardWarnings.length > 0 || iterationFilter.status === 'partial' || iterationFilter.status === 'no-match') && (
@@ -555,9 +556,10 @@ export function AzureBoardProjectContent({
                       workItem={selectedWorkItem}
                       providerId={params.providerId}
                       projectName={params.projectName}
-                      editableMetadata
-                      assigneeOptions={assignees}
-                      showRelatedWorkItems
+                       editableMetadata
+                       assigneeOptions={assignees}
+                       tagOptions={tagOptions}
+                       showRelatedWorkItems
                       variant="editorial"
                       headerLeading={workItemStack.length > 1 ? <button
                         type="button"
