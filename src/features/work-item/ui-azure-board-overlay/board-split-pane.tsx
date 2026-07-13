@@ -102,7 +102,7 @@ export function BoardSplitPane({
 
   return (
     <div ref={containerRef} className="flex min-h-0 flex-1 overflow-hidden">
-      <div className="min-w-0 shrink-0" style={{ width: `${boardWidth}%` }}>
+      <div className="h-full min-h-0 min-w-0 shrink-0" style={{ width: `${boardWidth}%` }}>
         {board}
       </div>
       <div

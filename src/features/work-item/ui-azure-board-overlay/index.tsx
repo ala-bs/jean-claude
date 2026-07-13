@@ -46,30 +46,40 @@ export function AzureBoardOverlay({ onClose }: { onClose: () => void }) {
     projects.find((candidate) => candidate.id === selectedProjectId) ?? projects[0];
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-2 pb-2 pt-[54px] backdrop-blur-sm sm:px-5 sm:pb-5">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center px-2 pb-2 pt-[54px] backdrop-blur-sm sm:px-5 sm:pb-5"
+      onClick={onClose}
+    >
       <FocusLock returnFocus className="h-full w-full">
         <section
           role="dialog"
           aria-modal="true"
           aria-label="Azure Board"
           className="bg-bg-0 border-line flex h-full w-full flex-col overflow-hidden rounded-xl border shadow-2xl"
+          onClick={(event) => event.stopPropagation()}
         >
           {project ? (
-            <>
-              <div className="border-line flex min-h-12 items-center gap-2 border-b px-4 py-2.5">
-                <LayoutDashboard className="text-acc-ink h-4 w-4" />
-                <strong className="text-ink-0 mr-1 text-sm">Work items</strong>
-                <Select
-                  value={project.id}
-                  onChange={setSelectedProjectId}
-                  options={projects.map((candidate) => ({
-                    value: candidate.id,
-                    label: candidate.name,
-                  }))}
-                />
-              </div>
-              <AzureBoardProjectContent key={project.id} project={project} onClose={onClose} />
-            </>
+            <AzureBoardProjectContent
+              key={project.id}
+              project={project}
+              onClose={onClose}
+              headerLeading={
+                <>
+                  <LayoutDashboard className="text-acc-ink h-4 w-4" />
+                  <strong className="text-ink-0 mr-1 text-sm">Work items</strong>
+                  <Select
+                    value={project.id}
+                    onChange={setSelectedProjectId}
+                    label="Select Azure Board project"
+                    className="max-w-40"
+                    options={projects.map((candidate) => ({
+                      value: candidate.id,
+                      label: candidate.name,
+                    }))}
+                  />
+                </>
+              }
+            />
           ) : (
             <>
               <header className="border-line flex min-h-12 items-center gap-2 border-b px-4 py-2.5">

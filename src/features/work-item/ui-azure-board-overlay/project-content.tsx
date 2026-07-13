@@ -16,6 +16,7 @@ import {
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { BoardSplitPane } from '@/features/work-item/ui-azure-board-overlay/board-split-pane';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/time';
@@ -77,7 +78,7 @@ function MultiFilterDropdown({
         <button
           type="button"
           aria-label={label}
-          className="bg-bg-1 border-line hover:bg-bg-2 text-ink-1 flex h-7 max-w-44 min-w-0 items-center gap-2 rounded-md border px-2.5 text-xs transition-colors"
+          className="bg-bg-1 border-line hover:bg-bg-2 text-ink-1 flex h-7 max-w-44 min-w-0 shrink-0 items-center gap-2 rounded-md border px-2.5 text-xs transition-colors"
         >
           {selected.length === 1 && selectedOption?.ownerName && <UserAvatar
             name={selectedOption.ownerName}
@@ -197,9 +198,11 @@ function RelatedBugsPanel({
 export function AzureBoardProjectContent({
   project,
   onClose,
+  headerLeading,
 }: {
   project: ConfiguredAzureBoardProject;
   onClose: () => void;
+  headerLeading: ReactNode;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -401,44 +404,50 @@ export function AzureBoardProjectContent({
     setWorkItemStack((stack) => pushWorkItemStack(stack, workItemId));
   };
   return (
-    <>
-      <header className="border-line flex min-h-12 flex-wrap items-center gap-2 border-b px-4 py-2.5">
-                <div className="bg-bg-1 border-line flex min-w-40 max-w-80 flex-1 items-center gap-2 rounded-md border px-2.5 py-1.5">
-                  <Search className="text-ink-3 h-3.5 w-3.5 shrink-0" />
-                  <input value={filters.search} onChange={(event) => setFilters(project.id, { search: event.target.value })} placeholder="Search work items..." className="text-ink-1 min-w-0 flex-1 bg-transparent text-xs outline-none" />
-                  {filters.search && <button type="button" onClick={() => setFilters(project.id, { search: '' })} className="text-ink-3 hover:text-ink-1" aria-label="Clear search"><X className="h-3 w-3" /></button>}
-                </div>
-                <MultiFilterDropdown label="Filter by assignees" allLabel="All assignees" countLabel="assignees" options={assignees.map((assignee) => ({ value: assignee, label: assignee, ownerName: assignee }))} selected={filters.assignees} onChange={(assignees) => setFilters(project.id, { assignees })} />
-                <MultiFilterDropdown label="Filter by work item types" allLabel="All types" countLabel="types" options={types.map((type) => ({ value: type, label: type }))} selected={filters.workItemTypes} onChange={(workItemTypes) => setFilters(project.id, { workItemTypes })} />
-                <MultiFilterDropdown label="Filter by iterations" allLabel="All iterations" countLabel="iterations" options={iterationOptions} selected={filters.iterations} onChange={(iterations) => setFilters(project.id, { iterations })} />
-                <MultiFilterDropdown label="Filter by tags" allLabel="All tags" countLabel="tags" options={tagOptions.map((tag) => ({ value: tag, label: tag }))} selected={filters.tags} onChange={(tags) => setFilters(project.id, { tags })} />
-              
-            <Tooltip
-              align="right"
-              content={
-                lastRefreshedAt ? (
-                  <div>
-                    <div>{formatRelativeTime(lastRefreshedAt.toISOString())}</div>
-                    <div className="text-ink-3 text-[10px]">
-                      {lastRefreshedAt.toLocaleString()}
-                    </div>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <header className="border-line flex min-h-12 shrink-0 items-center gap-2 border-b px-4 py-2.5">
+        <div className="flex shrink-0 items-center gap-2">{headerLeading}</div>
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+          <div className="bg-bg-1 border-line flex min-w-40 max-w-80 flex-1 items-center gap-2 rounded-md border px-2.5 py-1.5">
+            <Search className="text-ink-3 h-3.5 w-3.5 shrink-0" />
+            <input aria-label="Search work items" value={filters.search} onChange={(event) => setFilters(project.id, { search: event.target.value })} placeholder="Search work items..." className="text-ink-1 min-w-0 flex-1 bg-transparent text-xs outline-none" />
+            {filters.search && <button type="button" onClick={() => setFilters(project.id, { search: '' })} className="text-ink-3 hover:text-ink-1" aria-label="Clear search"><X className="h-3 w-3" /></button>}
+          </div>
+          <MultiFilterDropdown label="Filter by assignees" allLabel="All assignees" countLabel="assignees" options={assignees.map((assignee) => ({ value: assignee, label: assignee, ownerName: assignee }))} selected={filters.assignees} onChange={(assignees) => setFilters(project.id, { assignees })} />
+          <MultiFilterDropdown label="Filter by work item types" allLabel="All types" countLabel="types" options={types.map((type) => ({ value: type, label: type }))} selected={filters.workItemTypes} onChange={(workItemTypes) => setFilters(project.id, { workItemTypes })} />
+          <MultiFilterDropdown label="Filter by iterations" allLabel="All iterations" countLabel="iterations" options={iterationOptions} selected={filters.iterations} onChange={(iterations) => setFilters(project.id, { iterations })} />
+          <MultiFilterDropdown label="Filter by tags" allLabel="All tags" countLabel="tags" options={tagOptions.map((tag) => ({ value: tag, label: tag }))} selected={filters.tags} onChange={(tags) => setFilters(project.id, { tags })} />
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Tooltip
+            align="right"
+            content={
+              lastRefreshedAt ? (
+                <div>
+                  <div>{formatRelativeTime(lastRefreshedAt.toISOString())}</div>
+                  <div className="text-ink-3 text-[10px]">
+                    {lastRefreshedAt.toLocaleString()}
                   </div>
-                ) : (
-                  'Not refreshed yet'
-                )
-              }
+                </div>
+              ) : (
+                'Not refreshed yet'
+              )
+            }
+          >
+            <button
+              type="button"
+              onClick={() => void refreshWorkItems()}
+              disabled={isRefreshing}
+              className="text-ink-3 hover:text-ink-1 rounded p-1 disabled:opacity-50"
+              aria-label={isRefreshing ? 'Refreshing work items' : 'Refresh work items'}
             >
-              <button
-                type="button"
-                onClick={() => void refreshWorkItems()}
-                 disabled={isRefreshing}
-                className="text-ink-3 hover:text-ink-1 ml-auto rounded p-1 disabled:opacity-50"
-                aria-label={isRefreshing ? 'Refreshing work items' : 'Refresh work items'}
-              >
-                <RefreshCw className={isRefreshing ? 'animate-spin' : undefined} size={17} />
-              </button>
-            </Tooltip>
-            <button type="button" onClick={onClose} className="text-ink-3 hover:text-ink-1 rounded p-1" aria-label="Close Azure Board"><X size={17} /></button>
+              <RefreshCw className={isRefreshing ? 'animate-spin' : undefined} size={17} />
+            </button>
+          </Tooltip>
+          <button type="button" onClick={onClose} className="text-ink-3 hover:text-ink-1 rounded p-1" aria-label="Close Azure Board">
+            <X size={17} />
+          </button>
+        </div>
       </header>
           {blockingBoardError ? (
             <div className="grid flex-1 place-items-center px-6 text-center">
@@ -459,7 +468,7 @@ export function AzureBoardProjectContent({
           ) : isLoading ? (
             <div className="grid flex-1 place-items-center"><Loader2 className="text-acc-ink h-6 w-6 animate-spin" /></div>
           ) : (
-            <div className="relative min-h-0 flex-1">
+            <div className="relative flex min-h-0 flex-1 overflow-hidden">
             {(boardWarnings.length > 0 || iterationFilter.status === 'partial' || iterationFilter.status === 'no-match') && (
               <div className="border-line bg-bg-2 text-ink-2 absolute inset-x-0 top-0 z-10 flex items-center gap-2 border-b px-3 py-1 text-xs">
                 <span role={boardWarnings.length > 0 ? 'alert' : 'status'}>
@@ -497,10 +506,10 @@ export function AzureBoardProjectContent({
                   onModifiedClick={(item) => window.open(item.url, '_blank')}
                   collapsedColumnIds={
                      collapsedColumnIds
-                  }
-                  onToggleColumn={(columnId) => {
-                     toggleCollapsedColumn(project.id, columnId);
-                  }}
+                   }
+                   onToggleColumn={(columnId) => {
+                      toggleCollapsedColumn(project.id, columnId);
+                   }}
                   childBugProgressByWorkItemId={childBugProgressByWorkItemId}
                   relatedBugWorkItemIds={relatedBugs.map((bug) => bug.id)}
                   onOpenChildBugs={(item) => {
@@ -586,6 +595,6 @@ export function AzureBoardProjectContent({
             />
             </div>
           )}
-    </>
+    </div>
   );
 }
