@@ -259,6 +259,11 @@ async function generateWithOpenCode({
   abortController.signal.addEventListener('abort', onAbort, { once: true });
 
   try {
+    if (abortController.signal.aborted) {
+      onAbort();
+      throw new Error('OpenCode generation aborted');
+    }
+
     const response = await client.session.prompt({
       sessionID: sessionId,
       directory,
@@ -606,13 +611,31 @@ function extractOpenCodeResponseOutput({
     .trim();
 
   if (!textParts) {
+    const info = response.data?.info as Partial<OcAssistantMessage> | undefined;
     dbg.agent(
-      'OpenCode generation returned no usable output (session=%s model=%s skill=%s structured=%s parts=%d)',
+      'OpenCode generation returned no usable output (session=%s model=%s skill=%s structured=%s responseKeys=%O info=%O partTypes=%O)',
       sessionId,
       model,
       skillName ?? '(none)',
       outputSchema ? 'yes' : 'no',
-      response.data?.parts?.length ?? 0,
+      Object.keys(response.data ?? {}),
+      info
+        ? {
+            id: info.id,
+            providerID: info.providerID,
+            modelID: info.modelID,
+            mode: info.mode,
+            agent: info.agent,
+            finish: info.finish,
+            variant: info.variant,
+            time: info.time,
+            tokens: info.tokens,
+            cost: info.cost,
+            hasError: info.error !== undefined,
+            hasStructuredOutput: info.structured !== undefined,
+          }
+        : null,
+      (response.data?.parts ?? []).map((part) => part.type ?? '(unknown)'),
     );
     return null;
   }
