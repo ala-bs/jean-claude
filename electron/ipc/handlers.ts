@@ -357,6 +357,7 @@ import { agentService } from '../services/agent-service';
 import { agentUsageService } from '../services/agent-usage-service';
 import { closeEditorWindowsForTaskWorktree } from '../services/editor-automation-service';
 import { dbg } from '../lib/debug';
+import { deleteProjectWithPreferenceMemoryCleanup } from '../services/project-deletion-service';
 import { detectProjectLogos } from '../services/project-logo-detection-service';
 import { detectProjects } from '../services/project-detection-service';
 import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
@@ -1220,7 +1221,7 @@ export function registerIpcHandlers() {
   ipcMain.handle('projects:delete', async (_, id: string) => {
     dbg.ipc('projects:delete %s', id);
     const project = await ProjectRepository.findById(id);
-    const result = await ProjectRepository.delete(id);
+    const result = await deleteProjectWithPreferenceMemoryCleanup(id);
     if (project) {
       await cleanupProjectLogos(id);
       await cleanupProjectLogoPath(project.logoPath);

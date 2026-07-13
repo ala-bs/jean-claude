@@ -26,9 +26,14 @@ import {
 } from '../database/repositories';
 import { dbg } from '../lib/debug';
 
+import {
+  assertSafeProjectPreferenceMemoryTree,
+  getProjectPreferenceMemoryDir,
+  withProjectPreferenceMemoryLock,
+  writeProjectPreferenceMemoryMetadata,
+} from './preference-memory-storage';
 import { generateText } from './ai-generation-service';
 
-const MEMORY_DIR = '.jean-claude/memory';
 const USER_REVIEWS_DIR = 'user-reviews';
 const USER_PREFERENCES_HISTORY_DIR = 'user-preferences-history';
 const USER_REVIEWS_STATE_FILE = 'user-reviews-state.json';
@@ -53,31 +58,30 @@ interface ProcessedEvidenceRange {
   recordCount: number;
 }
 
-function getMemoryDir(projectPath: string): string {
-  return path.join(projectPath, MEMORY_DIR);
+function getUserReviewsDir(projectMemoryDir: string): string {
+  return path.join(projectMemoryDir, USER_REVIEWS_DIR);
 }
 
-function getUserReviewsDir(projectPath: string): string {
-  return path.join(getMemoryDir(projectPath), USER_REVIEWS_DIR);
+function getUserPreferencesHistoryDir(projectMemoryDir: string): string {
+  return path.join(projectMemoryDir, USER_PREFERENCES_HISTORY_DIR);
 }
 
-function getUserPreferencesHistoryDir(projectPath: string): string {
-  return path.join(getMemoryDir(projectPath), USER_PREFERENCES_HISTORY_DIR);
+function getUserReviewsStatePath(projectMemoryDir: string): string {
+  return path.join(projectMemoryDir, USER_REVIEWS_STATE_FILE);
 }
 
-function getUserReviewsStatePath(projectPath: string): string {
-  return path.join(getMemoryDir(projectPath), USER_REVIEWS_STATE_FILE);
-}
-
-function getDailyEvidencePath(projectPath: string, date = new Date()): string {
+function getDailyEvidencePath(
+  projectMemoryDir: string,
+  date = new Date(),
+): string {
   return path.join(
-    getUserReviewsDir(projectPath),
+    getUserReviewsDir(projectMemoryDir),
     `${date.toISOString().slice(0, 10)}.jsonl`,
   );
 }
 
-function getUserPreferencesPath(projectPath: string): string {
-  return path.join(getMemoryDir(projectPath), USER_PREFERENCES_FILE);
+function getUserPreferencesPath(projectMemoryDir: string): string {
+  return path.join(projectMemoryDir, USER_PREFERENCES_FILE);
 }
 
 function getHistoryFileName(date: Date): string {
@@ -219,46 +223,60 @@ export async function recordPreferenceEvidence(
     throw new Error('At least one comment is required');
   }
 
-  const { project, task } = await resolveProject(params);
-  const reviewsDir = getUserReviewsDir(project.path);
-  const evidencePath = getDailyEvidencePath(project.path);
-  const createdAt = new Date().toISOString();
-  const context = compactContext(params.context);
-  const metadata = buildMetadata({ project, task });
+  const { project: resolvedProject, task } = await resolveProject(params);
+  return withProjectPreferenceMemoryLock(resolvedProject.id, async () => {
+    const project = await ProjectRepository.findById(resolvedProject.id);
+    if (!project) return { path: '', recorded: 0 };
 
-  const records: PreferenceEvidenceRecord[] = await Promise.all(
-    params.comments.map(async (comment) => {
-      const fileSnapshot = await buildFileSnapshot({ comment, task });
-      return {
-        id: crypto.randomUUID(),
-        createdAt,
-        source: params.source,
-        taskId: params.taskId,
-        projectId: project.id,
-        comment,
-        ...(fileSnapshot ? { fileSnapshot } : {}),
-        metadata,
-        ...(context ? { context } : {}),
-      };
-    }),
-  );
+    const projectMemoryDir = getProjectPreferenceMemoryDir(project.id);
+    await writeProjectPreferenceMemoryMetadata({
+      projectId: project.id,
+      name: project.name ?? project.id,
+      sourcePath: project.path,
+      projectMemoryDir,
+    });
+    await assertSafeProjectPreferenceMemoryTree(projectMemoryDir);
+    const reviewsDir = getUserReviewsDir(projectMemoryDir);
+    const evidencePath = getDailyEvidencePath(projectMemoryDir);
+    const createdAt = new Date().toISOString();
+    const context = compactContext(params.context);
+    const metadata = buildMetadata({ project, task });
 
-  await fs.mkdir(reviewsDir, { recursive: true });
-  await fs.appendFile(
-    evidencePath,
-    records.map((record) => JSON.stringify(record)).join('\n') + '\n',
-    'utf-8',
-  );
+    const records: PreferenceEvidenceRecord[] = await Promise.all(
+      params.comments.map(async (comment) => {
+        const fileSnapshot = await buildFileSnapshot({ comment, task });
+        return {
+          id: crypto.randomUUID(),
+          createdAt,
+          source: params.source,
+          taskId: params.taskId,
+          projectId: project.id,
+          comment,
+          ...(fileSnapshot ? { fileSnapshot } : {}),
+          metadata,
+          ...(context ? { context } : {}),
+        };
+      }),
+    );
 
-  return { path: evidencePath, recorded: records.length };
+    await assertSafeProjectPreferenceMemoryTree(projectMemoryDir);
+    await fs.mkdir(reviewsDir, { recursive: true });
+    await fs.appendFile(
+      evidencePath,
+      records.map((record) => JSON.stringify(record)).join('\n') + '\n',
+      'utf-8',
+    );
+
+    return { path: evidencePath, recorded: records.length };
+  });
 }
 
 async function readPreferenceMemoryState(
-  projectPath: string,
+  projectMemoryDir: string,
 ): Promise<PreferenceMemoryState> {
   try {
     const raw = await fs.readFile(
-      getUserReviewsStatePath(projectPath),
+      getUserReviewsStatePath(projectMemoryDir),
       'utf-8',
     );
     const parsed: unknown = JSON.parse(raw);
@@ -297,29 +315,29 @@ async function readPreferenceMemoryState(
 }
 
 async function writePreferenceMemoryState({
-  projectPath,
+  projectMemoryDir,
   state,
 }: {
-  projectPath: string;
+  projectMemoryDir: string;
   state: PreferenceMemoryState;
 }): Promise<void> {
-  await fs.mkdir(getMemoryDir(projectPath), { recursive: true });
+  await fs.mkdir(projectMemoryDir, { recursive: true });
   await fs.writeFile(
-    getUserReviewsStatePath(projectPath),
+    getUserReviewsStatePath(projectMemoryDir),
     `${JSON.stringify(state, null, 2)}\n`,
     'utf-8',
   );
 }
 
-async function collectUnprocessedEvidence(projectPath: string): Promise<{
+async function collectUnprocessedEvidence(projectMemoryDir: string): Promise<{
   evidence: string;
   nextState: PreferenceMemoryState;
   processedFiles: ProcessedEvidenceRange[];
 }> {
-  const state = await readPreferenceMemoryState(projectPath);
+  const state = await readPreferenceMemoryState(projectMemoryDir);
   let fileNames: string[] = [];
   try {
-    fileNames = (await fs.readdir(getUserReviewsDir(projectPath)))
+    fileNames = (await fs.readdir(getUserReviewsDir(projectMemoryDir)))
       .filter((fileName) => fileName.endsWith('.jsonl'))
       .sort();
   } catch {
@@ -335,7 +353,7 @@ async function collectUnprocessedEvidence(projectPath: string): Promise<{
 
   for (const fileName of fileNames) {
     if (evidence.length >= MAX_CONSOLIDATION_EVIDENCE_CHARS) break;
-    const evidencePath = path.join(getUserReviewsDir(projectPath), fileName);
+    const evidencePath = path.join(getUserReviewsDir(projectMemoryDir), fileName);
     const stats = await fs.stat(evidencePath);
     const offset = Math.min(state.files[fileName]?.offset ?? 0, stats.size);
     if (offset >= stats.size) continue;
@@ -381,6 +399,7 @@ async function writePreferenceHistoryEntry({
   config,
   processedFiles,
   createdAt,
+  projectMemoryDir,
 }: {
   project: { id: string; name?: string | null; path: string };
   config: {
@@ -390,8 +409,9 @@ async function writePreferenceHistoryEntry({
   };
   processedFiles: ProcessedEvidenceRange[];
   createdAt: string;
+  projectMemoryDir: string;
 }): Promise<void> {
-  const preferencesPath = getUserPreferencesPath(project.path);
+  const preferencesPath = getUserPreferencesPath(projectMemoryDir);
   let document = '';
   try {
     document = await fs.readFile(preferencesPath, 'utf-8');
@@ -399,7 +419,7 @@ async function writePreferenceHistoryEntry({
     document = '';
   }
 
-  const historyDir = getUserPreferencesHistoryDir(project.path);
+  const historyDir = getUserPreferencesHistoryDir(projectMemoryDir);
   await fs.mkdir(historyDir, { recursive: true });
   await fs.writeFile(
     path.join(historyDir, getHistoryFileName(new Date(createdAt))),
@@ -414,7 +434,7 @@ async function writePreferenceHistoryEntry({
         thinkingEffort: config.thinkingEffort,
         evidence: { files: processedFiles },
         document: {
-          path: path.relative(project.path, preferencesPath),
+          path: path.relative(projectMemoryDir, preferencesPath),
           sha256: sha256(document),
           content: document,
         },
@@ -426,7 +446,7 @@ async function writePreferenceHistoryEntry({
   );
 }
 
-export async function consolidatePreferenceMemoryForProject(
+async function consolidatePreferenceMemoryForProjectUnlocked(
   project: {
     id: string;
     name?: string | null;
@@ -438,8 +458,16 @@ export async function consolidatePreferenceMemoryForProject(
     thinkingEffort?: ThinkingEffort;
   },
 ): Promise<{ processed: boolean }> {
+  const projectMemoryDir = getProjectPreferenceMemoryDir(project.id);
+  await writeProjectPreferenceMemoryMetadata({
+    projectId: project.id,
+    name: project.name ?? project.id,
+    sourcePath: project.path,
+    projectMemoryDir,
+  });
+  await assertSafeProjectPreferenceMemoryTree(projectMemoryDir);
   const { evidence, nextState, processedFiles } =
-    await collectUnprocessedEvidence(project.path);
+    await collectUnprocessedEvidence(projectMemoryDir);
   if (!evidence) return { processed: false };
 
   const resolvedConfig = {
@@ -450,37 +478,39 @@ export async function consolidatePreferenceMemoryForProject(
       DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT,
   };
 
-  const preferencesPath = getUserPreferencesPath(project.path);
+  const preferencesPath = getUserPreferencesPath(projectMemoryDir);
   const startedAtMs = Date.now();
-  const statePath = getUserReviewsStatePath(project.path);
-  const prompt = `Consolidate new review evidence into durable user preferences for this repository.
+  const statePath = getUserReviewsStatePath(projectMemoryDir);
+  const prompt = `Consolidate new review evidence into durable user preferences for this project.
 
 Project: ${project.name ?? project.id}
-Memory file: ${path.relative(project.path, preferencesPath)}
-Evidence state file managed by Jean-Claude: ${path.relative(project.path, statePath)}
+Global project memory folder: ${projectMemoryDir}
+Memory file: ${preferencesPath}
+Evidence state file managed by Jean-Claude: ${statePath}
 
 Requirements:
 - Read existing memory if present.
-- Update ${path.relative(project.path, preferencesPath)} with concise, evidence-backed coding preferences.
+- Update ${preferencesPath} with concise, evidence-backed coding preferences.
 - Use only reusable preferences. Put weak or ambiguous signals under Needs confirmation.
 - Do not delete prior useful preferences unless contradicted by stronger evidence.
-- Write ${path.relative(project.path, preferencesPath)} after reviewing the evidence, even if you decide no new preference should be added.
+- Write ${preferencesPath} after reviewing the evidence, even if you decide no new preference should be added.
 - Evidence below is already selected as unprocessed; Jean-Claude will update byte offsets after this run succeeds.
 
 New evidence:
 ${evidence}`;
 
+  await assertSafeProjectPreferenceMemoryTree(projectMemoryDir);
   const result = await generateText({
     backend: resolvedConfig.backend,
     model: resolvedConfig.model,
     thinkingEffort: resolvedConfig.thinkingEffort,
     skillName: 'user-preference-memory',
-    cwd: project.path,
+    cwd: projectMemoryDir,
     allowedTools: ['Read', 'Write', 'Edit'],
     allowedToolPatterns: {
-      Read: ['.jean-claude/memory/**'],
-      Write: ['.jean-claude/memory/**'],
-      Edit: ['.jean-claude/memory/**'],
+      Read: [preferencesPath],
+      Write: [preferencesPath],
+      Edit: [preferencesPath],
     },
     timeoutMs: CONSOLIDATION_TIMEOUT_MS,
     allowRateLimitSwap: false,
@@ -495,6 +525,7 @@ ${evidence}`;
 
   if (result === null) return { processed: false };
 
+  await assertSafeProjectPreferenceMemoryTree(projectMemoryDir);
   const preferencesStats = await fs.stat(preferencesPath).catch(() => null);
   if (!preferencesStats || preferencesStats.mtimeMs < startedAtMs) {
     dbg.agent(
@@ -509,13 +540,33 @@ ${evidence}`;
     config: resolvedConfig,
     processedFiles,
     createdAt: nextState.lastConsolidatedAt ?? new Date().toISOString(),
+    projectMemoryDir,
   });
 
   await writePreferenceMemoryState({
-    projectPath: project.path,
+    projectMemoryDir,
     state: nextState,
   });
   return { processed: true };
+}
+
+export async function consolidatePreferenceMemoryForProject(
+  project: {
+    id: string;
+    name?: string | null;
+    path: string;
+  },
+  config?: {
+    backend?: AgentBackendType;
+    model?: ModelPreference;
+    thinkingEffort?: ThinkingEffort;
+  },
+): Promise<{ processed: boolean }> {
+  return withProjectPreferenceMemoryLock(project.id, async () => {
+    const currentProject = await ProjectRepository.findById(project.id);
+    if (!currentProject) return { processed: false };
+    return consolidatePreferenceMemoryForProjectUnlocked(currentProject, config);
+  });
 }
 
 class PreferenceMemoryConsolidationService {
@@ -549,15 +600,25 @@ class PreferenceMemoryConsolidationService {
         Math.max(15, setting.consolidationIntervalMinutes) * 60_000;
       const projects = await ProjectRepository.findAll();
       for (const project of projects) {
-        const state = await readPreferenceMemoryState(project.path);
-        const lastRun = state.lastConsolidatedAt
-          ? new Date(state.lastConsolidatedAt).getTime()
-          : 0;
-        if (Number.isFinite(lastRun) && now - lastRun < intervalMs) continue;
-        await consolidatePreferenceMemoryForProject(project, {
-          backend: setting.consolidationBackend,
-          model: setting.consolidationModel,
-          thinkingEffort: setting.consolidationThinkingEffort,
+        await withProjectPreferenceMemoryLock(project.id, async () => {
+          const currentProject = await ProjectRepository.findById(project.id);
+          if (!currentProject) return;
+          const projectMemoryDir = getProjectPreferenceMemoryDir(project.id);
+          try {
+            await assertSafeProjectPreferenceMemoryTree(projectMemoryDir);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          const state = await readPreferenceMemoryState(projectMemoryDir);
+          const lastRun = state.lastConsolidatedAt
+            ? new Date(state.lastConsolidatedAt).getTime()
+            : 0;
+          if (Number.isFinite(lastRun) && now - lastRun < intervalMs) return;
+          await consolidatePreferenceMemoryForProjectUnlocked(currentProject, {
+            backend: setting.consolidationBackend,
+            model: setting.consolidationModel,
+            thinkingEffort: setting.consolidationThinkingEffort,
+          });
         });
       }
     } finally {

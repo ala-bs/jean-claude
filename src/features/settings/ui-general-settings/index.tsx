@@ -425,9 +425,9 @@ export function PreferenceMemorySettings() {
               When enabled, Jean-Claude writes review/PR comments, selected
               code, task context, and bounded file snapshots to daily files in{' '}
               <span className="font-mono">
-                .jean-claude/memory/user-reviews/
-              </span>{' '}
-              in each project.
+                ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-reviews/
+              </span>
+              .
             </p>
           </div>
           <Switch
@@ -453,11 +453,11 @@ export function PreferenceMemorySettings() {
               When enabled, Jean-Claude regularly processes new review evidence
               from byte offsets tracked in{' '}
               <span className="font-mono">
-                .jean-claude/memory/user-reviews-state.json
+                ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-reviews-state.json
               </span>{' '}
               and updates{' '}
               <span className="font-mono">
-                .jean-claude/memory/user-preferences.md
+                ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-preferences.md
               </span>
               .
             </p>
@@ -570,7 +570,9 @@ export function PreferenceMemorySettings() {
           <li>Leave task review comments or PR file comments.</li>
           <li>
             Jean-Claude appends evidence to daily JSONL files under{' '}
-            <span className="font-mono">.jean-claude/memory/user-reviews/</span>
+            <span className="font-mono">
+              ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-reviews/
+            </span>
             .
           </li>
           <li>
@@ -578,7 +580,7 @@ export function PreferenceMemorySettings() {
             <span className="font-mono">user-preference-memory</span> skill to
             update{' '}
             <span className="font-mono">
-              .jean-claude/memory/user-preferences.md
+              ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-preferences.md
             </span>
             .
           </li>

@@ -73,4 +73,17 @@ describe('builtin skills installation', () => {
       'Stop early when a full pass finds no new missing features',
     );
   });
+
+  it('honors an explicitly supplied preference memory location', async () => {
+    await upsertBuiltinSkills({ skillsDir: testDir });
+
+    const content = await fs.readFile(
+      path.join(testDir, 'user-preference-memory', 'SKILL.md'),
+      'utf-8',
+    );
+
+    expect(content).toContain(
+      'use that exact location and resolve its evidence and state files within that folder',
+    );
+  });
 });
