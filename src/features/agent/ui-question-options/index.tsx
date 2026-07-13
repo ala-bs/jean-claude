@@ -181,7 +181,7 @@ function QuestionInput({
           className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
         />
         {allowsFreeform ? (
-          <input
+          <Textarea
             value={otherValue}
             aria-label={`${question.question} other answer`}
             onChange={(event) =>
@@ -191,7 +191,9 @@ function QuestionInput({
               })
             }
             placeholder={otherPlaceholder}
-            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/50"
+            size="sm"
+            rows={2}
+            className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
           />
         ) : null}
         <QuestionNotes
@@ -248,7 +250,7 @@ function QuestionInput({
           })}
         </div>
         {allowsFreeform ? (
-          <input
+          <Textarea
             value={otherValue}
             aria-label={`${question.question} other answer`}
             onChange={(event) =>
@@ -258,7 +260,9 @@ function QuestionInput({
               })
             }
             placeholder={otherPlaceholder}
-            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/50"
+            size="sm"
+            rows={2}
+            className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
           />
         ) : null}
         <QuestionNotes
@@ -320,7 +324,7 @@ function QuestionInput({
         })}
         {allowsFreeform ? (
           isFreeformOpen ? (
-            <input
+            <Textarea
               value={value}
               aria-label={`${question.question} custom answer`}
               onFocus={() =>
@@ -333,7 +337,9 @@ function QuestionInput({
                 if (!value.trim()) onCloseOther(questionIndex);
               }}
               placeholder="Add another answer..."
-              className="w-full rounded-lg border border-teal-400/50 bg-teal-400/10 px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/70 sm:col-span-2 xl:col-span-3 2xl:col-span-4"
+              size="sm"
+              rows={2}
+              className="border-teal-400/50 bg-teal-400/10 text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/70 sm:col-span-2 xl:col-span-3 2xl:col-span-4"
               autoFocus
             />
           ) : (
