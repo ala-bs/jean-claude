@@ -2,12 +2,14 @@ export function getWorkItemPreviewQueryPolicy({
   variant,
   showCommentsAside,
   commentsTabActive,
+  historyTabActive,
   workItemId,
   openedCommentsWorkItemIds,
 }: {
   variant: 'default' | 'editorial';
   showCommentsAside: boolean;
   commentsTabActive: boolean;
+  historyTabActive: boolean;
   workItemId: number | null;
   openedCommentsWorkItemIds: ReadonlySet<number>;
 }) {
@@ -16,6 +18,7 @@ export function getWorkItemPreviewQueryPolicy({
       showCommentsAside ||
       commentsTabActive ||
       (workItemId !== null && openedCommentsWorkItemIds.has(workItemId)),
+    history: historyTabActive,
     relatedTestCases: variant !== 'editorial',
   };
 }

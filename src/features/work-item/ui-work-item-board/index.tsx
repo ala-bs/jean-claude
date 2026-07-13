@@ -293,7 +293,7 @@ export function WorkItemBoard({
           <div
             className={clsx(
               'flex min-h-0 flex-1 flex-col overflow-y-auto',
-              isEditorial ? 'gap-0 p-2.5' : 'gap-1 p-1.5',
+              isEditorial ? 'gap-[5px] p-2.5' : 'gap-1 p-1.5',
             )}
           >
             {items.map((workItem) => {
@@ -347,7 +347,10 @@ export function WorkItemBoard({
                     />}
                   </div>
                 </div>
-                <span className="text-ink-0 line-clamp-2 text-[12.5px] leading-[1.36]">
+                <span className={clsx(
+                  'text-ink-0 line-clamp-2 leading-[1.36]',
+                  isEditorial ? 'text-xs' : 'text-[12.5px]',
+                )}>
                   <HighlightedSearchText text={workItem.fields.title} search={search} />
                 </span>
               </>;
@@ -367,7 +370,7 @@ export function WorkItemBoard({
                   className={clsx(
                     'flex cursor-pointer flex-col gap-1.5 border p-2 text-left transition-[box-shadow,border-color,background-color]',
                     isEditorial
-                      ? ['bg-bg-0 rounded-none border-l-[3px] px-3 py-2.5', getWorkItemBorderColor(workItem.fields.workItemType)]
+                      ? ['bg-bg-0 rounded-[6px] border-l-[3px] px-3 py-2.5', getWorkItemBorderColor(workItem.fields.workItemType)]
                       : 'rounded',
                     isExactMatch
                       ? 'border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'

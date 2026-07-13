@@ -3,6 +3,7 @@ import {
   ChevronRight,
   FileText,
   FlaskConical,
+  History,
   Link2,
   Loader2,
   MessagesSquare,
@@ -19,6 +20,7 @@ import {
   useUpdateWorkItemField,
   useUpdateWorkItemState,
   useWorkItemComments,
+  useWorkItemHistory,
   useWorkItemsByIds,
   useWorkItemStates,
 } from '@/hooks/use-work-items';
@@ -38,9 +40,10 @@ import {
   getWorkItemPreviewQueryPolicy,
 } from './query-policy';
 import { WorkItemComments } from '../ui-work-item-comments';
+import { WorkItemHistory } from '../ui-work-item-history';
 import { WorkItemTagEditor } from '../ui-work-item-tag-editor';
 import { WorkItemTypeIcon } from '../ui-work-item-shared';
-type DetailsTab = 'content' | 'comments' | 'test-cases';
+type DetailsTab = 'content' | 'comments' | 'history' | 'test-cases';
 
 export function WorkItemPreview({
   workItem,
@@ -50,6 +53,7 @@ export function WorkItemPreview({
   readOnly = false,
   editableMetadata = false,
   assigneeOptions = [],
+  iterationOptions = [],
   tagOptions = [],
   showRelatedWorkItems = false,
   onOpenRelatedWorkItem,
@@ -64,6 +68,7 @@ export function WorkItemPreview({
   readOnly?: boolean;
   editableMetadata?: boolean;
   assigneeOptions?: string[];
+  iterationOptions?: Array<{ value: string; label: string }>;
   tagOptions?: string[];
   showRelatedWorkItems?: boolean;
   onOpenRelatedWorkItem?: (workItemId: number) => void;
@@ -85,6 +90,7 @@ export function WorkItemPreview({
     variant,
     showCommentsAside,
     commentsTabActive: activeTab === 'comments',
+    historyTabActive: activeTab === 'history',
     workItemId,
     openedCommentsWorkItemIds,
   });
@@ -98,6 +104,16 @@ export function WorkItemPreview({
     projectName: projectName ?? null,
     workItemIds: workItemId ? [workItemId] : [],
     enabled: queryPolicy.comments,
+  });
+  const {
+    data: history = [],
+    isLoading: isLoadingHistory,
+    error: historyError,
+  } = useWorkItemHistory({
+    providerId: providerId ?? null,
+    projectName: projectName ?? null,
+    workItemId,
+    enabled: queryPolicy.history,
   });
 
   const {
@@ -229,8 +245,30 @@ export function WorkItemPreview({
                   disabled={!canEditMetadata || !providerId}
                   onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.State', value })}
                 />
+                {fields.iterationPath && (
+                  <MetadataDropdown
+                    key={`${id}:iteration`}
+                    label="Iteration"
+                    value={fields.iterationPath}
+                    options={[
+                      fields.iterationPath,
+                      ...iterationOptions
+                        .map((iteration) => iteration.value)
+                        .filter((path) => path !== fields.iterationPath),
+                    ]}
+                    optionLabels={{
+                      [fields.iterationPath]:
+                        fields.iterationPath.split(/[\\/]/).at(-1) ?? fields.iterationPath,
+                      ...Object.fromEntries(
+                        iterationOptions.map((iteration) => [iteration.value, iteration.label]),
+                      ),
+                    }}
+                    disabled={!canEditMetadata || !providerId}
+                    onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.IterationPath', value })}
+                  />
+                )}
                 {canEditMetadata && providerId && (
-                  <div className="border-line bg-bg-0 text-ink-1 flex min-h-8 items-center gap-1.5 border px-2.5 py-1 text-[11px]">
+                  <div className="border-glass-border bg-glass-light text-ink-1 focus-within:border-acc-line flex min-h-8 items-center gap-2 rounded-md border px-3 py-1 text-xs transition-colors">
                     <span className="text-ink-3">Priority</span>
                     <EditableMetadataValue
                       key={`${id}:priority:${fields.priority ?? ''}`}
@@ -287,6 +325,13 @@ export function WorkItemPreview({
             }
           />
         )}
+        <TabButton
+          active={activeTab === 'history'}
+          onClick={() => setActiveTab('history')}
+          icon={<History className="h-3.5 w-3.5" />}
+          label="History"
+          count={history.length}
+        />
         {showTestCases && (
           <TabButton
             active={activeTab === 'test-cases'}
@@ -453,6 +498,15 @@ export function WorkItemPreview({
             />
           )}
 
+          {activeTab === 'history' && (
+            <WorkItemHistory
+              history={history}
+              isLoading={isLoadingHistory}
+              error={historyError instanceof Error ? historyError.message : null}
+              providerId={providerId}
+            />
+          )}
+
           {activeTab === 'test-cases' && (
             <div className="flex flex-col gap-1 pb-2">
               {relatedTestCasesError ? (
@@ -537,6 +591,7 @@ function RelatedWorkItems({
   error: Error | null;
   onOpen?: (workItemId: number) => void;
 }) {
+  const [expanded, setExpanded] = useState(true);
   const byId = new Map(items.map((item) => [item.id, item]));
   const groups = [
     { label: 'Parent', ids: workItem.parentId ? [workItem.parentId] : [] },
@@ -544,56 +599,66 @@ function RelatedWorkItems({
     { label: 'Related', ids: workItem.relatedWorkItemIds ?? [] },
   ].filter((group) => group.ids.length > 0);
   return (
-    <section className="border-glass-border mt-4 border-t pt-3">
-      <h4 className="text-ink-1 mb-2 flex items-center gap-1.5 text-xs font-medium">
-        <Link2 className="h-3.5 w-3.5" /> Related work items
-      </h4>
-      <div className="space-y-2.5">
-        {error && (
-          <p role="alert" className="text-status-fail text-xs">
-            Failed to load related work items: {error.message}
-          </p>
-        )}
-        {groups.map((group) => (
-          <div key={group.label}>
-            <div className="text-ink-3 mb-1 text-[10px] font-medium uppercase tracking-wide">
-              {group.label}
+    <section className="border-glass-border border-l-acc-line bg-glass-light mt-4 rounded-lg border border-l-2 p-3 shadow-sm">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+        className={`text-ink-1 hover:text-ink-0 flex w-full items-center gap-2 text-left text-xs font-medium transition-colors ${expanded ? 'mb-3' : ''}`}
+      >
+        <ChevronRight
+          className={`text-ink-3 h-3 w-3 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+        />
+        <Link2 className="text-acc-ink h-3.5 w-3.5" /> Related work items
+      </button>
+      {expanded && (
+        <div className="space-y-2.5">
+          {error && (
+            <p role="alert" className="text-status-fail text-xs">
+              Failed to load related work items: {error.message}
+            </p>
+          )}
+          {groups.map((group) => (
+            <div key={group.label}>
+              <div className="text-ink-3 mb-1 text-[10px] font-medium uppercase tracking-wide">
+                {group.label}
+              </div>
+              <div className="space-y-1">
+                {group.ids.map((id) => {
+                  const item = byId.get(id);
+                  return item ? (
+                    <button
+                      key={id}
+                      type="button"
+                      disabled={!onOpen}
+                      onClick={() => onOpen?.(id)}
+                      className="border-glass-border bg-bg-1/60 hover:bg-glass-medium flex w-full min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors disabled:cursor-default"
+                    >
+                      <WorkItemTypeIcon type={item.fields.workItemType} size="sm" />
+                      <span className="text-ink-3 text-[10px]">#{id}</span>
+                      <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">
+                        {item.fields.title}
+                      </span>
+                      <span className="text-ink-3 text-[10px]">{item.fields.state}</span>
+                    </button>
+                  ) : (
+                    <div
+                      key={id}
+                      className="border-glass-border bg-bg-1/60 text-ink-3 rounded-md border px-2.5 py-2 text-xs"
+                    >
+                      {isLoading
+                        ? `Loading #${id}...`
+                        : error
+                          ? `Work item #${id} could not be loaded`
+                          : `Work item #${id} unavailable`}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-            <div className="space-y-1">
-              {group.ids.map((id) => {
-                const item = byId.get(id);
-                return item ? (
-                  <button
-                    key={id}
-                    type="button"
-                    disabled={!onOpen}
-                    onClick={() => onOpen?.(id)}
-                    className="border-glass-border/70 hover:bg-white/[0.04] flex w-full min-w-0 items-center gap-2 rounded-md border bg-white/[0.025] px-2 py-1.5 text-left disabled:cursor-default"
-                  >
-                    <WorkItemTypeIcon type={item.fields.workItemType} size="sm" />
-                    <span className="text-ink-3 text-[10px]">#{id}</span>
-                    <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">
-                      {item.fields.title}
-                    </span>
-                    <span className="text-ink-3 text-[10px]">{item.fields.state}</span>
-                  </button>
-                ) : (
-                  <div
-                    key={id}
-                    className="border-glass-border/70 text-ink-3 rounded-md border bg-white/[0.025] px-2 py-1.5 text-xs"
-                  >
-                    {isLoading
-                      ? `Loading #${id}...`
-                      : error
-                        ? `Work item #${id} could not be loaded`
-                        : `Work item #${id} unavailable`}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -603,6 +668,7 @@ function MetadataDropdown({
   value,
   emptyLabel = label,
   options,
+  optionLabels = {},
   colorizeOwners = false,
   disabled,
   onSave,
@@ -611,6 +677,7 @@ function MetadataDropdown({
   value: string;
   emptyLabel?: string;
   options: string[];
+  optionLabels?: Record<string, string>;
   colorizeOwners?: boolean;
   disabled?: boolean;
   onSave: (value: string) => Promise<unknown>;
@@ -667,7 +734,7 @@ function MetadataDropdown({
     }
   };
 
-  const displayLabel = displayValue || emptyLabel;
+  const displayLabel = optionLabels[displayValue] ?? (displayValue || emptyLabel);
   return (
     <div className="relative min-w-0">
       <Dropdown
@@ -677,7 +744,7 @@ function MetadataDropdown({
           <button
             type="button"
             disabled={disabled || isSaving || options.length <= 1}
-            className="border-line bg-bg-0 hover:bg-bg-2 text-ink-1 flex h-8 min-w-0 items-center gap-1.5 border px-2.5 text-[11px] transition-colors disabled:cursor-default"
+            className="border-glass-border bg-glass-light hover:bg-glass-medium focus:border-acc-line text-ink-1 flex h-8 min-w-0 items-center gap-2 rounded-md border px-3 text-xs transition-colors focus:outline-none disabled:cursor-default disabled:opacity-50"
             aria-label={`Edit ${label.toLocaleLowerCase()}`}
           >
             <span className="text-ink-3">{label}</span>
@@ -693,7 +760,7 @@ function MetadataDropdown({
         }
       >
         {options.map((option) => {
-          const optionLabel = option || emptyLabel;
+          const optionLabel = optionLabels[option] ?? (option || emptyLabel);
           return (
             <DropdownItem
               key={option || '__empty__'}

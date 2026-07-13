@@ -284,6 +284,7 @@ export interface AzureDevOpsWorkItem {
     boardColumnDone?: boolean;
     tags?: string;
     priority?: number;
+    iterationPath?: string;
   };
   testSteps?: TestStep[];
   parentId?: number;

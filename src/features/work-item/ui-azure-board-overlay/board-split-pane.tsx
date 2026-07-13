@@ -17,7 +17,7 @@ export function BoardSplitPane({
 }: {
   initialBoardWidth: number;
   board: ReactNode;
-  details: ReactNode;
+  details?: ReactNode;
   onBoardWidthCommit: (width: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -28,6 +28,7 @@ export function BoardSplitPane({
   } | null>(null);
   const commitRef = useRef(onBoardWidthCommit);
   const [boardWidth, setBoardWidth] = useState(() => clampBoardWidth(initialBoardWidth));
+  const hasDetails = details !== null && details !== undefined;
 
   const finishActiveResize = () => {
     const drag = dragRef.current;
@@ -102,29 +103,36 @@ export function BoardSplitPane({
 
   return (
     <div ref={containerRef} className="flex min-h-0 flex-1 overflow-hidden">
-      <div className="h-full min-h-0 min-w-0 shrink-0" style={{ width: `${boardWidth}%` }}>
+      <div
+        className={`h-full min-h-0 min-w-0 ${hasDetails ? 'shrink-0' : 'flex-1'}`}
+        style={hasDetails ? { width: `${boardWidth}%` } : undefined}
+      >
         {board}
       </div>
-      <div
-        ref={separatorRef}
-        role="separator"
-        aria-label="Resize board pane"
-        aria-orientation="vertical"
-        aria-valuemin={MIN_BOARD_WIDTH}
-        aria-valuemax={MAX_BOARD_WIDTH}
-        aria-valuenow={boardWidth}
-        tabIndex={0}
-        onPointerDown={startResize}
-        onPointerMove={resize}
-        onPointerUp={finishResize}
-        onPointerCancel={finishResize}
-        onLostPointerCapture={finishResize}
-        onKeyDown={resizeWithKeyboard}
-        className="group relative z-10 w-0 shrink-0 touch-none cursor-col-resize outline-none after:absolute after:inset-y-0 after:-inset-x-[6px] after:content-['']"
-      >
-        <div className="bg-line group-hover:bg-acc/50 group-focus-visible:bg-acc/50 absolute inset-y-0 left-0 w-px transition-colors" />
-      </div>
-      {details}
+      {hasDetails && (
+        <>
+          <div
+            ref={separatorRef}
+            role="separator"
+            aria-label="Resize board pane"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_BOARD_WIDTH}
+            aria-valuemax={MAX_BOARD_WIDTH}
+            aria-valuenow={boardWidth}
+            tabIndex={0}
+            onPointerDown={startResize}
+            onPointerMove={resize}
+            onPointerUp={finishResize}
+            onPointerCancel={finishResize}
+            onLostPointerCapture={finishResize}
+            onKeyDown={resizeWithKeyboard}
+            className="group relative z-10 w-0 shrink-0 touch-none cursor-col-resize outline-none after:absolute after:inset-y-0 after:-inset-x-[6px] after:content-['']"
+          >
+            <div className="bg-line group-hover:bg-acc/50 group-focus-visible:bg-acc/50 absolute inset-y-0 left-0 w-px transition-colors" />
+          </div>
+          {details}
+        </>
+      )}
     </div>
   );
 }

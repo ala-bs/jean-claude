@@ -180,6 +180,9 @@ export function useUpdateWorkItemField() {
         queryClient.invalidateQueries({
           queryKey: ['work-items-by-ids', variables.providerId],
         }),
+        queryClient.invalidateQueries({
+          queryKey: ['work-item-history', variables.providerId],
+        }),
       ]),
     onError: (error) => addToast({ type: 'error', message: error.message }),
   });
@@ -229,6 +232,7 @@ export function useWorkItemHistory(params: {
   providerId: string | null;
   projectName: string | null;
   workItemId: number | null;
+  enabled?: boolean;
 }) {
   return useQuery<WorkItemHistoryEntry[]>({
     queryKey: [
@@ -243,7 +247,11 @@ export function useWorkItemHistory(params: {
         projectName: params.projectName!,
         workItemId: params.workItemId!,
       }),
-    enabled: !!params.providerId && !!params.projectName && !!params.workItemId,
+    enabled:
+      params.enabled !== false &&
+      !!params.providerId &&
+      !!params.projectName &&
+      !!params.workItemId,
     staleTime: 60_000,
   });
 }

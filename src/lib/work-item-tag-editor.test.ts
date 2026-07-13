@@ -52,14 +52,23 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new InputEvent('input', { bubbles: true }));
 }
 
+async function openTagInput() {
+  const addButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Add tag"]',
+  )!;
+  await act(async () => {
+    addButton.click();
+  });
+  return document.querySelector<HTMLInputElement>('input[aria-label="Add tag"]')!;
+}
+
 describe('WorkItemTagEditor', () => {
   it('adds an existing tag from autocomplete with Enter', async () => {
     const onSave = vi.fn(async () => undefined);
     renderEditor({ suggestions: ['Frontend', 'Backend'], onSave });
-    const input = document.querySelector<HTMLInputElement>('input[aria-label="Add tag"]')!;
+    const input = await openTagInput();
 
     await act(async () => {
-      input.focus();
       setInputValue(input, 'front');
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
@@ -87,7 +96,7 @@ describe('WorkItemTagEditor', () => {
   it('splits pasted tags and deduplicates them case-insensitively', async () => {
     const onSave = vi.fn(async () => undefined);
     renderEditor({ value: 'Frontend', onSave });
-    const input = document.querySelector<HTMLInputElement>('input[aria-label="Add tag"]')!;
+    const input = await openTagInput();
 
     await act(async () => {
       setInputValue(input, 'frontend; Urgent');
@@ -102,11 +111,7 @@ describe('WorkItemTagEditor', () => {
   it('rolls chips back when saving fails', async () => {
     const onSave = vi.fn(async () => Promise.reject(new Error('Save failed')));
     renderEditor({ suggestions: ['Frontend'], onSave });
-    const input = document.querySelector<HTMLInputElement>('input[aria-label="Add tag"]')!;
-
-    await act(async () => {
-      input.focus();
-    });
+    const input = await openTagInput();
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
@@ -118,7 +123,7 @@ describe('WorkItemTagEditor', () => {
   it('preserves custom tag input when saving fails', async () => {
     const onSave = vi.fn(async () => Promise.reject(new Error('Save failed')));
     renderEditor({ onSave });
-    const input = document.querySelector<HTMLInputElement>('input[aria-label="Add tag"]')!;
+    const input = await openTagInput();
 
     await act(async () => {
       setInputValue(input, 'Needs review');
@@ -127,6 +132,8 @@ describe('WorkItemTagEditor', () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
 
-    expect(input.value).toBe('Needs review');
+    expect(
+      document.querySelector<HTMLInputElement>('input[aria-label="Add tag"]')?.value,
+    ).toBe('Needs review');
   });
 });

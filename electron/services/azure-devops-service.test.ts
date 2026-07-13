@@ -412,6 +412,19 @@ describe('buildWorkItemFieldPatch', () => {
       buildWorkItemFieldPatch({ field: 'System.State', value: '' }),
     ).toThrow('state cannot be empty');
   });
+
+  it('builds an iteration path update', () => {
+    expect(
+      buildWorkItemFieldPatch({
+        field: 'System.IterationPath',
+        value: 'Project\\Sprint 9',
+      }),
+    ).toEqual({
+      op: 'add',
+      path: '/fields/System.IterationPath',
+      value: 'Project\\Sprint 9',
+    });
+  });
 });
 
 function jsonResponse(body: unknown, init: { ok: boolean; status?: number }) {

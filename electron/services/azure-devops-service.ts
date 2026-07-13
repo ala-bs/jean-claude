@@ -115,6 +115,7 @@ export interface AzureDevOpsWorkItem {
     boardColumnDone?: boolean;
     tags?: string;
     priority?: number;
+    iterationPath?: string;
   };
   testSteps?: TestStep[];
   parentId?: number;
@@ -190,6 +191,7 @@ interface WorkItemsBatchResponse {
       'System.BoardColumnDone'?: boolean;
       'System.Tags'?: string;
       'Microsoft.VSTS.Common.Priority'?: number;
+      'System.IterationPath'?: string;
     };
     relations?: WorkItemRelation[];
   }>;
@@ -878,6 +880,7 @@ export async function queryAssignedWorkItems(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
@@ -948,6 +951,7 @@ export async function getWorkItemById(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
@@ -1046,6 +1050,7 @@ export async function getWorkItemsByIds(params: {
         boardColumnDone: wi.fields['System.BoardColumnDone'],
         tags: wi.fields['System.Tags'],
         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+        iterationPath: wi.fields['System.IterationPath'],
       },
       parentId: extractParentId(wi.relations),
       childIds: extractChildIds(wi.relations),
@@ -1269,6 +1274,7 @@ export async function getRelatedTestCases(params: {
         boardColumnDone: wi.fields['System.BoardColumnDone'],
         tags: wi.fields['System.Tags'],
         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+        iterationPath: wi.fields['System.IterationPath'],
       },
       testSteps,
     };
@@ -3251,6 +3257,7 @@ export async function getPullRequestWorkItems(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
@@ -3672,6 +3679,7 @@ const EDITABLE_WORK_ITEM_FIELDS = new Set([
   'System.Tags',
   'Microsoft.VSTS.Common.Priority',
   'System.State',
+  'System.IterationPath',
 ]);
 
 export function buildWorkItemFieldPatch(params: {
@@ -3688,6 +3696,9 @@ export function buildWorkItemFieldPatch(params: {
   }
   if (params.field === 'System.State' && !value) {
     throw new Error('Work item state cannot be empty');
+  }
+  if (params.field === 'System.IterationPath' && !value) {
+    throw new Error('Work item iteration cannot be empty');
   }
   if (params.field === 'Microsoft.VSTS.Common.Priority') {
     if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 4) {

@@ -5,6 +5,7 @@ import {
   serializeAzureWorkItemTags,
 } from '@/features/work-item/ui-work-item-board/utils';
 import {
+  useEffect,
   useId,
   useMemo,
   useRef,
@@ -65,7 +66,12 @@ export function WorkItemTagEditor({
   const close = () => {
     setIsOpen(false);
     setFocusedIndex(0);
+    setQuery('');
   };
+
+  useEffect(() => {
+    if (isOpen) inputRef.current?.focus();
+  }, [isOpen]);
 
   useRegisterOverlay({
     id: `work-item-tag-editor-${id}`,
@@ -93,6 +99,7 @@ export function WorkItemTagEditor({
     } catch (saveError) {
       setTags(previousTags);
       setQuery(previousQuery);
+      if (previousQuery) setIsOpen(true);
       setError(saveError instanceof Error ? saveError.message : 'Failed to save tags');
     } finally {
       setIsSaving(false);
@@ -101,6 +108,7 @@ export function WorkItemTagEditor({
   };
 
   const addTag = (tag: string) => {
+    close();
     void saveTags([...tags, ...tag.split(/[;,]/)]);
   };
 
@@ -108,13 +116,12 @@ export function WorkItemTagEditor({
     <div className="relative min-w-0">
       <div
         ref={triggerRef}
-        className="border-line bg-bg-0 flex min-h-8 min-w-0 flex-wrap items-center gap-1 border px-2 py-1"
+        className="flex min-h-7 w-fit max-w-full min-w-0 flex-wrap items-center gap-1.5"
       >
-        <span className="text-ink-3 mr-0.5 text-[11px]">Tags</span>
         {tags.map((tag) => (
           <span
             key={tag.toLocaleLowerCase()}
-            className="bg-bg-3 text-ink-1 inline-flex min-w-0 items-center gap-1 px-1.5 py-0.5 text-[10px]"
+            className="bg-acc/15 text-acc-ink border-acc-line/30 inline-flex min-w-0 items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px]"
             title={tag}
           >
             <span className="max-w-32 truncate">{tag}</span>
@@ -122,59 +129,69 @@ export function WorkItemTagEditor({
               type="button"
               disabled={isSaving}
               onClick={() => void saveTags(tags.filter((item) => item !== tag))}
-              className="text-ink-3 hover:text-ink-0 disabled:opacity-40"
+              className="text-acc-ink/60 hover:text-acc-ink disabled:opacity-40"
               aria-label={`Remove ${tag} tag`}
             >
               <X className="h-2.5 w-2.5" />
             </button>
           </span>
         ))}
-        <input
-          ref={inputRef}
-          role="combobox"
-          aria-label="Add tag"
-          aria-expanded={showSuggestions}
-          aria-controls={showSuggestions ? listboxId : undefined}
-          aria-activedescendant={
-            showSuggestions ? `${listboxId}-option-${activeFocusedIndex}` : undefined
-          }
-          aria-autocomplete="list"
-          disabled={isSaving}
-          value={query}
-          onFocus={() => setIsOpen(true)}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setFocusedIndex(0);
-            setIsOpen(true);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'ArrowDown' && filteredSuggestions.length > 0) {
-              event.preventDefault();
-              setFocusedIndex((index) => (index + 1) % filteredSuggestions.length);
-            } else if (event.key === 'ArrowUp' && filteredSuggestions.length > 0) {
-              event.preventDefault();
-              setFocusedIndex((index) =>
-                index <= 0 ? filteredSuggestions.length - 1 : index - 1,
-              );
-            } else if (event.key === 'Enter') {
-              event.preventDefault();
-              const suggestion = filteredSuggestions[activeFocusedIndex];
-              if (suggestion) addTag(suggestion);
-              else if (query.trim()) addTag(query);
-            } else if (event.key === ',' || event.key === ';') {
-              event.preventDefault();
-              if (query.trim()) addTag(query);
-            } else if (event.key === 'Backspace' && !query && tags.length > 0) {
-              event.preventDefault();
-              void saveTags(tags.slice(0, -1));
-            } else if (event.key === 'Escape') {
-              event.stopPropagation();
-              close();
+        {isOpen ? (
+          <input
+            ref={inputRef}
+            role="combobox"
+            aria-label="Add tag"
+            aria-expanded={showSuggestions}
+            aria-controls={showSuggestions ? listboxId : undefined}
+            aria-activedescendant={
+              showSuggestions ? `${listboxId}-option-${activeFocusedIndex}` : undefined
             }
-          }}
-          placeholder={tags.length === 0 ? 'Add tag...' : '+'}
-          className="text-ink-1 placeholder:text-ink-3 min-w-12 flex-1 bg-transparent text-[11px] outline-none disabled:cursor-wait"
-        />
+            aria-autocomplete="list"
+            disabled={isSaving}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setFocusedIndex(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' && filteredSuggestions.length > 0) {
+                event.preventDefault();
+                setFocusedIndex((index) => (index + 1) % filteredSuggestions.length);
+              } else if (event.key === 'ArrowUp' && filteredSuggestions.length > 0) {
+                event.preventDefault();
+                setFocusedIndex((index) =>
+                  index <= 0 ? filteredSuggestions.length - 1 : index - 1,
+                );
+              } else if (event.key === 'Enter') {
+                event.preventDefault();
+                const suggestion = filteredSuggestions[activeFocusedIndex];
+                if (suggestion) addTag(suggestion);
+                else if (query.trim()) addTag(query);
+              } else if (event.key === ',' || event.key === ';') {
+                event.preventDefault();
+                if (query.trim()) addTag(query);
+              } else if (event.key === 'Backspace' && !query && tags.length > 0) {
+                event.preventDefault();
+                void saveTags(tags.slice(0, -1));
+              } else if (event.key === 'Escape') {
+                event.stopPropagation();
+                close();
+              }
+            }}
+            placeholder="tag name..."
+            className="border-acc-line bg-bg-0 text-ink-1 placeholder:text-ink-3 h-7 w-28 rounded border px-2 font-mono text-[10px] outline-none disabled:cursor-wait"
+          />
+        ) : (
+          <button
+            type="button"
+            aria-label="Add tag"
+            disabled={isSaving}
+            onClick={() => setIsOpen(true)}
+            className="border-line text-ink-3 hover:border-acc-line hover:text-ink-1 h-7 rounded border border-dashed px-2 font-mono text-[10px] transition-colors disabled:opacity-40"
+          >
+            + tag
+          </button>
+        )}
         {isSaving && <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />}
       </div>
       {error && (
@@ -188,7 +205,7 @@ export function WorkItemTagEditor({
           id={listboxId}
           role="listbox"
           aria-label="Existing tags"
-          className="bg-bg-1 border-line fixed z-[70] overflow-y-auto border py-1 shadow-xl"
+          className="bg-bg-1 border-glass-border fixed z-[70] overflow-y-auto rounded-md border py-1 shadow-xl"
           style={{
             top: position.actualSide === 'bottom' ? position.top : undefined,
             bottom: position.actualSide === 'top' ? window.innerHeight - position.top : undefined,

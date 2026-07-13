@@ -18,6 +18,7 @@ describe('work item preview query policy', () => {
         variant: 'default',
         showCommentsAside: true,
         commentsTabActive: false,
+        historyTabActive: false,
         workItemId: 1,
         openedCommentsWorkItemIds: noOpenedComments,
       }).comments,
@@ -30,6 +31,7 @@ describe('work item preview query policy', () => {
         variant: 'default',
         showCommentsAside: false,
         commentsTabActive: false,
+        historyTabActive: false,
         workItemId: 1,
         openedCommentsWorkItemIds: noOpenedComments,
       }).comments,
@@ -39,6 +41,7 @@ describe('work item preview query policy', () => {
         variant: 'default',
         showCommentsAside: false,
         commentsTabActive: false,
+        historyTabActive: false,
         workItemId: 1,
         openedCommentsWorkItemIds: new Set([1]),
       }).comments,
@@ -53,6 +56,7 @@ describe('work item preview query policy', () => {
         variant: 'default',
         showCommentsAside: false,
         commentsTabActive: true,
+        historyTabActive: false,
         workItemId: 2,
         openedCommentsWorkItemIds,
       }).comments,
@@ -75,6 +79,7 @@ describe('work item preview query policy', () => {
         variant: 'default',
         showCommentsAside: false,
         commentsTabActive: false,
+        historyTabActive: false,
         workItemId: 1,
         openedCommentsWorkItemIds,
       }).comments,
@@ -87,6 +92,7 @@ describe('work item preview query policy', () => {
         variant: 'editorial',
         showCommentsAside: false,
         commentsTabActive: true,
+        historyTabActive: false,
         workItemId: 1,
         openedCommentsWorkItemIds: new Set([1]),
       }).relatedTestCases,
@@ -99,9 +105,33 @@ describe('work item preview query policy', () => {
         variant: 'default',
         showCommentsAside: false,
         commentsTabActive: false,
+        historyTabActive: false,
         workItemId: 1,
         openedCommentsWorkItemIds: noOpenedComments,
       }).relatedTestCases,
+    ).toBe(true);
+  });
+
+  it('loads history only while the history tab is active', () => {
+    const params = {
+      variant: 'editorial' as const,
+      showCommentsAside: false,
+      commentsTabActive: false,
+      workItemId: 1,
+      openedCommentsWorkItemIds: noOpenedComments,
+    };
+
+    expect(
+      getWorkItemPreviewQueryPolicy({
+        ...params,
+        historyTabActive: false,
+      }).history,
+    ).toBe(false);
+    expect(
+      getWorkItemPreviewQueryPolicy({
+        ...params,
+        historyTabActive: true,
+      }).history,
     ).toBe(true);
   });
 });

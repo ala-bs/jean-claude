@@ -139,7 +139,19 @@ function workItemSummary(workItem: AzureDevOpsWorkItem) {
   if (!value.includes('<')) return value.trim();
   const element = document.createElement('div');
   element.innerHTML = value;
-  return (element.textContent ?? '').replace(/\s+/g, ' ').trim();
+  element.querySelectorAll('br').forEach((breakElement) => {
+    breakElement.replaceWith('\n');
+  });
+  element
+    .querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6')
+    .forEach((block) => block.append('\n'));
+  return (element.textContent ?? '')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 function RelatedBugsPanel({
@@ -173,8 +185,8 @@ function RelatedBugsPanel({
               type="button"
               onClick={() => onOpenBug(bug.id)}
               className={isClosed
-                ? 'border-line bg-bg-2 hover:bg-bg-3 border-l-status-done flex w-full flex-col border border-l-[3px] px-3 py-2.5 text-left transition-colors'
-                : 'border-line bg-bg-2 hover:bg-bg-3 border-l-status-fail flex w-full flex-col border border-l-[3px] px-3 py-2.5 text-left transition-colors'}
+                ? 'border-line bg-bg-2 hover:bg-bg-3 border-l-status-done flex w-full flex-col rounded-lg border border-l-[3px] px-3 py-2.5 text-left transition-colors'
+                : 'border-line bg-bg-2 hover:bg-bg-3 border-l-status-fail flex w-full flex-col rounded-lg border border-l-[3px] px-3 py-2.5 text-left transition-colors'}
             >
               <span className="mb-1.5 flex w-full items-center gap-1.5">
                 <Bug className={isClosed ? 'text-status-done h-3 w-3' : 'text-status-fail h-3 w-3'} />
@@ -185,7 +197,7 @@ function RelatedBugsPanel({
                 <ChevronRight className="text-ink-3 h-3 w-3" />
               </span>
               <span className="text-ink-0 mb-1 text-xs font-semibold leading-snug">{bug.fields.title}</span>
-              <span className="text-ink-2 line-clamp-3 text-xs leading-relaxed">{workItemSummary(bug)}</span>
+              <span className="text-ink-2 line-clamp-3 whitespace-pre-line text-xs leading-relaxed">{workItemSummary(bug)}</span>
             </button>
           );
         })}
@@ -342,7 +354,9 @@ export function AzureBoardProjectContent({
 
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) setWorkItemStack([]);
+      if (cancelled) return;
+      setWorkItemStack([]);
+      setHighlightedBoardWorkItemId(null);
     });
     return () => {
       cancelled = true;
@@ -522,7 +536,7 @@ export function AzureBoardProjectContent({
                   variant="editorial"
                 />
               }
-              details={
+              details={selectedWorkItemId !== null ? (
                 <aside
                  ref={detailsPaneRef}
                  tabIndex={-1}
@@ -556,9 +570,13 @@ export function AzureBoardProjectContent({
                       workItem={selectedWorkItem}
                       providerId={params.providerId}
                       projectName={params.projectName}
-                       editableMetadata
-                       assigneeOptions={assignees}
-                       tagOptions={tagOptions}
+                        editableMetadata
+                        assigneeOptions={assignees}
+                        iterationOptions={iterations.map((iteration) => ({
+                          value: iteration.path,
+                          label: iteration.name,
+                        }))}
+                        tagOptions={tagOptions}
                        showRelatedWorkItems
                       variant="editorial"
                       headerLeading={workItemStack.length > 1 ? <button
@@ -593,7 +611,7 @@ export function AzureBoardProjectContent({
                       </div>
                     ) : <WorkItemPreview workItem={null} variant="editorial" />}
                 </aside>
-              }
+              ) : undefined}
             />
             </div>
           )}
