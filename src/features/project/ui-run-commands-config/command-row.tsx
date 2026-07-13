@@ -79,12 +79,25 @@ export function CommandRow({
   const [localConfirmMessage, setLocalConfirmMessage] = useState(
     command.confirmMessage ?? '',
   );
+  const [localPortConflictStrategy, setLocalPortConflictStrategy] = useState(
+    command.portConflictStrategy,
+  );
+  const [localPortOverrideProvider, setLocalPortOverrideProvider] = useState(
+    command.portOverrideProvider,
+  );
+  const [localPortOverrideEnvVar, setLocalPortOverrideEnvVar] = useState(
+    command.portOverrideEnvVar ?? 'PORT',
+  );
+  const [localPortOverrideArgs, setLocalPortOverrideArgs] = useState(
+    command.portOverrideArgs ?? '',
+  );
   const [localEnvVars, setLocalEnvVars] = useState(command.envVars);
   const [hasLocalEnvDraftRows, setHasLocalEnvDraftRows] = useState(false);
   const [hasPendingEnvEdits, setHasPendingEnvEdits] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const commandInputWrapRef = useRef<HTMLDivElement | null>(null);
+  const lastPortDraftCommandIdRef = useRef(command.id);
 
   const {
     attributes,
@@ -112,6 +125,26 @@ export function CommandRow({
   useEffect(() => {
     startTransition(() => setLocalConfirmMessage(command.confirmMessage ?? ''));
   }, [command.confirmMessage]);
+
+  useEffect(() => {
+    if (lastPortDraftCommandIdRef.current === command.id) {
+      return;
+    }
+
+    lastPortDraftCommandIdRef.current = command.id;
+    startTransition(() => {
+      setLocalPortConflictStrategy(command.portConflictStrategy);
+      setLocalPortOverrideProvider(command.portOverrideProvider);
+      setLocalPortOverrideEnvVar(command.portOverrideEnvVar ?? 'PORT');
+      setLocalPortOverrideArgs(command.portOverrideArgs ?? '');
+    });
+  }, [
+    command.id,
+    command.portConflictStrategy,
+    command.portOverrideArgs,
+    command.portOverrideEnvVar,
+    command.portOverrideProvider,
+  ]);
 
   useEffect(() => {
     if (hasPendingEnvEdits) {
@@ -152,6 +185,10 @@ export function CommandRow({
       name: localName.trim() || null,
       command: localCommand,
       ports: command.ports,
+      portConflictStrategy: localPortConflictStrategy,
+      portOverrideProvider: localPortOverrideProvider,
+      portOverrideEnvVar: localPortOverrideEnvVar.trim() || null,
+      portOverrideArgs: localPortOverrideArgs.trim() || null,
       envVars: getPersistedEnvVars(localEnvVars),
       confirmBeforeRun: command.confirmBeforeRun,
       confirmMessage: localConfirmMessage.trim() || null,
@@ -187,6 +224,71 @@ export function CommandRow({
   const handlePortsChange = (ports: number[]) => {
     emitDraftChange({ ports });
     onUpdate({ ports });
+  };
+
+  const handlePortConflictStrategyChange = (value: string) => {
+    const portConflictStrategy =
+      value === 'use-available-port' ? 'use-available-port' : 'prompt';
+    setLocalPortConflictStrategy(portConflictStrategy);
+    const portOverrideEnvVar =
+      portConflictStrategy === 'use-available-port'
+        ? localPortOverrideEnvVar.trim() || 'PORT'
+        : null;
+    const portOverrideArgs =
+      portConflictStrategy === 'use-available-port'
+        ? localPortOverrideArgs.trim() || null
+        : null;
+
+    emitDraftChange({
+      portConflictStrategy,
+      portOverrideEnvVar,
+      portOverrideArgs,
+    });
+    onUpdate({ portConflictStrategy, portOverrideEnvVar, portOverrideArgs });
+  };
+
+  const handlePortOverrideProviderChange = (value: string) => {
+    const portOverrideProvider: ProjectCommand['portOverrideProvider'] =
+      value === 'args' ? 'args' : 'env';
+    setLocalPortOverrideProvider(portOverrideProvider);
+    const update = {
+      portOverrideProvider,
+      portOverrideEnvVar:
+        portOverrideProvider === 'env'
+          ? localPortOverrideEnvVar.trim() || 'PORT'
+          : localPortOverrideEnvVar.trim() || null,
+      portOverrideArgs:
+        portOverrideProvider === 'args'
+          ? localPortOverrideArgs.trim() || null
+          : localPortOverrideArgs.trim() || null,
+    };
+
+    emitDraftChange(update);
+    onUpdate(update);
+  };
+
+  const handlePortOverrideEnvVarChange = (value: string) => {
+    setLocalPortOverrideEnvVar(value);
+    emitDraftChange({ portOverrideEnvVar: value.trim() || null });
+  };
+
+  const handlePortOverrideEnvVarBlur = () => {
+    const portOverrideEnvVar = localPortOverrideEnvVar.trim() || null;
+    if (portOverrideEnvVar !== command.portOverrideEnvVar) {
+      onUpdate({ portOverrideEnvVar });
+    }
+  };
+
+  const handlePortOverrideArgsChange = (value: string) => {
+    setLocalPortOverrideArgs(value);
+    emitDraftChange({ portOverrideArgs: value.trim() || null });
+  };
+
+  const handlePortOverrideArgsBlur = () => {
+    const portOverrideArgs = localPortOverrideArgs.trim() || null;
+    if (portOverrideArgs !== command.portOverrideArgs) {
+      onUpdate({ portOverrideArgs });
+    }
   };
 
   const handleEnvVarsChange = (envVars: RunCommandEnvVar[]) => {
@@ -391,6 +493,72 @@ export function CommandRow({
               Ports to check
             </label>
             <PortChipInput ports={command.ports} onChange={handlePortsChange} />
+            <div className="mt-3 grid gap-2">
+              <label className="text-ink-3 block text-xs">
+                When port is in use
+              </label>
+              <Select
+                size="sm"
+                value={localPortConflictStrategy}
+                options={[
+                  { value: 'prompt', label: 'Ask to kill process' },
+                  {
+                    value: 'use-available-port',
+                    label: 'Use available port',
+                  },
+                ]}
+                onChange={handlePortConflictStrategyChange}
+              />
+              {localPortConflictStrategy === 'use-available-port' && (
+                <>
+                  <Select
+                    size="sm"
+                    value={localPortOverrideProvider}
+                    options={[
+                      { value: 'env', label: 'Provide as env var' },
+                      { value: 'args', label: 'Provide as command args' },
+                    ]}
+                    onChange={handlePortOverrideProviderChange}
+                  />
+                  {localPortOverrideProvider === 'env' ? (
+                    <Input
+                      size="sm"
+                      value={localPortOverrideEnvVar}
+                      onChange={(e) =>
+                        handlePortOverrideEnvVarChange(e.target.value)
+                      }
+                      onBlur={handlePortOverrideEnvVarBlur}
+                      placeholder="Env var name, e.g. PORT"
+                      className="font-mono"
+                    />
+                  ) : (
+                    <Input
+                      size="sm"
+                      value={localPortOverrideArgs}
+                      onChange={(e) =>
+                        handlePortOverrideArgsChange(e.target.value)
+                      }
+                      onBlur={handlePortOverrideArgsBlur}
+                      placeholder="Default: --port {PORT}"
+                      className="font-mono"
+                    />
+                  )}
+                  {localPortOverrideProvider === 'args' && (
+                    <p className="text-ink-3 text-xs leading-5">
+                      Example:{' '}
+                      <span className="text-ink-1 font-mono">
+                        pnpm dev -- --port {'{PORT}'}
+                      </span>{' '}
+                      or append{' '}
+                      <span className="text-ink-1 font-mono">
+                        --port {'{PORT}'}
+                      </span>
+                      .
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
           </div>
           <div className="min-w-64 flex-1">
             <div className="mb-1.5 flex items-center justify-between gap-2">

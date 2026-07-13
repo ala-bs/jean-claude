@@ -70,6 +70,10 @@ function parseSuggestionCommand(value: unknown): ProjectSuggestionCommand | null
       name: null,
       command,
       ports: [],
+      portConflictStrategy: 'prompt',
+      portOverrideProvider: 'env',
+      portOverrideEnvVar: null,
+      portOverrideArgs: null,
       envVars: [],
       confirmBeforeRun: false,
       confirmMessage: null,
@@ -94,6 +98,20 @@ function parseSuggestionCommand(value: unknown): ProjectSuggestionCommand | null
     name: typeof item.name === 'string' && item.name.trim() ? item.name : null,
     command: item.command.trim(),
     ports,
+    portConflictStrategy:
+      item.portConflictStrategy === 'use-available-port'
+        ? 'use-available-port'
+        : 'prompt',
+    portOverrideProvider: item.portOverrideProvider === 'args' ? 'args' : 'env',
+    portOverrideEnvVar:
+      typeof item.portOverrideEnvVar === 'string' &&
+      item.portOverrideEnvVar.trim()
+        ? item.portOverrideEnvVar.trim()
+        : null,
+    portOverrideArgs:
+      typeof item.portOverrideArgs === 'string' && item.portOverrideArgs.trim()
+        ? item.portOverrideArgs.trim()
+        : null,
     envVars,
     confirmBeforeRun: item.confirmBeforeRun === true,
     confirmMessage:
@@ -444,22 +462,123 @@ class RunCommandService {
     return portsInUse;
   }
 
-  private async getAvailablePort(): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const server = createServer();
-      server.unref();
-      server.on('error', reject);
-      server.listen(0, () => {
-        const address = server.address();
-        server.close(() => {
-          if (address && typeof address === 'object') {
-            resolve(address.port);
-            return;
-          }
-          reject(new Error('Failed to allocate available port'));
+  private getPortOverrideEnvVar(command: ProjectCommand): string | null {
+    if (command.portConflictStrategy !== 'use-available-port') return null;
+    if (command.portOverrideProvider !== 'env') return null;
+
+    const envVarName = command.portOverrideEnvVar?.trim();
+    return envVarName || 'PORT';
+  }
+
+  private shouldOverridePortWithArgs(command: ProjectCommand): boolean {
+    return (
+      command.portConflictStrategy === 'use-available-port' &&
+      command.portOverrideProvider === 'args'
+    );
+  }
+
+  private replacePortPlaceholder(value: string, port: string): string {
+    return value.replaceAll('{PORT}', port);
+  }
+
+  private getCommandWithPortArgs({
+    command,
+    port,
+  }: {
+    command: ProjectCommand;
+    port: string;
+  }): string {
+    const commandValue = this.replacePortPlaceholder(command.command, port);
+    if (command.command.includes('{PORT}')) return commandValue;
+
+    const args =
+      command.portOverrideArgs?.trim() ||
+      '--port {PORT}';
+
+    return `${commandValue} ${this.replacePortPlaceholder(args, port)}`;
+  }
+
+  private getBlockingPortsInUse(
+    portsInUse: PortInUse[],
+    commands: ProjectCommand[],
+  ): PortInUse[] {
+    const commandsById = new Map(commands.map((command) => [command.id, command]));
+    return portsInUse.filter((portInfo) => {
+      const command = commandsById.get(portInfo.commandId);
+      return (
+        !command ||
+        (!this.getPortOverrideEnvVar(command) &&
+          !this.shouldOverridePortWithArgs(command))
+      );
+    });
+  }
+
+  private async getPortOverrides({
+    commands,
+    portsInUse,
+  }: {
+    commands: ProjectCommand[];
+    portsInUse: PortInUse[];
+  }): Promise<
+    Map<string, { envOverrides?: Record<string, string>; command?: string }>
+  > {
+    const commandIdsWithConflicts = new Set(
+      portsInUse.map((portInfo) => portInfo.commandId),
+    );
+    const overrides = new Map<
+      string,
+      { envOverrides?: Record<string, string>; command?: string }
+    >();
+    const excludedPorts = new Set(commands.flatMap((command) => command.ports));
+
+    for (const command of commands) {
+      if (!commandIdsWithConflicts.has(command.id)) continue;
+
+      const envVarName = this.getPortOverrideEnvVar(command);
+      const usesArgs = this.shouldOverridePortWithArgs(command);
+      if (!envVarName && !usesArgs) continue;
+
+      const port = await this.getAvailablePort({ excludedPorts });
+      excludedPorts.add(port);
+      const portValue = String(port);
+
+      overrides.set(command.id, {
+        envOverrides: envVarName ? { [envVarName]: portValue } : undefined,
+        command: usesArgs
+          ? this.getCommandWithPortArgs({ command, port: portValue })
+          : undefined,
+      });
+    }
+
+    return overrides;
+  }
+
+  private async getAvailablePort({
+    excludedPorts = new Set<number>(),
+  }: {
+    excludedPorts?: Set<number>;
+  } = {}): Promise<number> {
+    while (true) {
+      const port = await new Promise<number>((resolve, reject) => {
+        const server = createServer();
+        server.unref();
+        server.on('error', reject);
+        server.listen(0, () => {
+          const address = server.address();
+          server.close(() => {
+            if (address && typeof address === 'object') {
+              resolve(address.port);
+              return;
+            }
+            reject(new Error('Failed to allocate available port'));
+          });
         });
       });
-    });
+
+      if (!excludedPorts.has(port)) {
+        return port;
+      }
+    }
   }
 
   private async getRunCommandContext({
@@ -529,28 +648,33 @@ class RunCommandService {
     workingDir,
     command,
     context,
+    envOverrides = {},
+    commandOverride,
   }: {
     taskId: string;
     workingDir: string;
     command: ProjectCommand;
     context: RunCommandContext;
+    envOverrides?: Record<string, string>;
+    commandOverride?: string;
   }): Promise<void> {
-    dbg.runCommand('Spawning command via PTY: %s', command.command);
+    const commandValue = commandOverride ?? command.command;
+    dbg.runCommand('Spawning command via PTY: %s', commandValue);
     const commandEnv = await this.getCommandEnv({ command, context });
 
     const shell =
       process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/sh';
     const shellArgs =
       process.platform === 'win32'
-        ? ['/c', command.command]
-        : ['-c', command.command];
+        ? ['/c', commandValue]
+        : ['-c', commandValue];
 
     const ptyProcess = nodePty.spawn(shell, shellArgs, {
       name: 'xterm-256color',
       cols: 120,
       rows: 30,
       cwd: workingDir,
-      env: getChildProcessEnv({ overrides: commandEnv }),
+      env: getChildProcessEnv({ overrides: { ...commandEnv, ...envOverrides } }),
     });
 
     let exitResolve: (value: { exitCode: number; signal?: number }) => void;
@@ -563,7 +687,7 @@ class RunCommandService {
     const trackedProcess: TrackedProcess = {
       commandId: command.id,
       name: command.name,
-      command: command.command,
+      command: commandValue,
       pty: ptyProcess,
       pid: ptyProcess.pid,
       status: 'running',
@@ -580,7 +704,7 @@ class RunCommandService {
     dbg.runCommand(
       'PTY process started with PID %d for command: %s',
       trackedProcess.pid,
-      command.command,
+      commandValue,
     );
 
     ptyProcess.onData((data: string) => {
@@ -757,25 +881,43 @@ class RunCommandService {
       return this.getRunStatus(taskId);
     }
 
-    await this.stopCommandWithoutLock({ taskId, runCommandId });
+    const didStop = await this.stopCommandWithoutLock({ taskId, runCommandId });
+    if (!didStop) {
+      return this.getRunStatus(taskId);
+    }
 
-    const portsInUse = await this.getPortsInUse([command]);
+    const commands = [command];
+    const portsInUse = await this.getPortsInUse(commands);
+    const blockingPortsInUse = this.getBlockingPortsInUse(portsInUse, commands);
 
-    if (portsInUse.length > 0) {
-      dbg.runCommand('Ports in use, cannot start: %o', portsInUse);
+    if (blockingPortsInUse.length > 0) {
+      dbg.runCommand('Ports in use, cannot start: %o', blockingPortsInUse);
       return {
         type: 'PortsInUseError',
-        message: `Ports in use: ${portsInUse.map((p) => p.port).join(', ')}`,
-        portsInUse,
+        message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
+        portsInUse: blockingPortsInUse,
       };
     }
+
+    const portOverrides = await this.getPortOverrides({
+      commands,
+      portsInUse,
+    });
+    const portOverride = portOverrides.get(command.id);
 
     const context = await this.getRunCommandContext({
       taskId,
       projectId,
       workingDir,
     });
-    await this.spawnTrackedCommand({ taskId, workingDir, command, context });
+    await this.spawnTrackedCommand({
+      taskId,
+      workingDir,
+      command,
+      context,
+      envOverrides: portOverride?.envOverrides,
+      commandOverride: portOverride?.command,
+    });
 
     this.notifyStatusChange(taskId);
     return this.getRunStatus(taskId);
@@ -803,21 +945,33 @@ class RunCommandService {
         command != null && command.projectId === projectId,
     );
 
-    await Promise.all(
+    const stopResults = await Promise.all(
       validCommands.map((command) =>
-        this.stopCommand({ taskId, runCommandId: command.id }),
+        this.stopCommandWithLock({ taskId, runCommandId: command.id }),
       ),
     );
+    if (stopResults.some((didStop) => !didStop)) {
+      return this.getRunStatus(taskId);
+    }
 
     const portsInUse = await this.getPortsInUse(validCommands);
-    if (portsInUse.length > 0) {
-      dbg.runCommand('Group ports in use, cannot start: %o', portsInUse);
+    const blockingPortsInUse = this.getBlockingPortsInUse(
+      portsInUse,
+      validCommands,
+    );
+    if (blockingPortsInUse.length > 0) {
+      dbg.runCommand('Group ports in use, cannot start: %o', blockingPortsInUse);
       return {
         type: 'PortsInUseError',
-        message: `Ports in use: ${portsInUse.map((p) => p.port).join(', ')}`,
-        portsInUse,
+        message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
+        portsInUse: blockingPortsInUse,
       };
     }
+
+    const portOverrides = await this.getPortOverrides({
+      commands: validCommands,
+      portsInUse,
+    });
 
     const context = await this.getRunCommandContext({
       taskId,
@@ -828,7 +982,17 @@ class RunCommandService {
     try {
       await Promise.all(
         validCommands.map((command) =>
-          this.spawnTrackedCommand({ taskId, workingDir, command, context }),
+          {
+            const portOverride = portOverrides.get(command.id);
+            return this.spawnTrackedCommand({
+              taskId,
+              workingDir,
+              command,
+              context,
+              envOverrides: portOverride?.envOverrides,
+              commandOverride: portOverride?.command,
+            });
+          },
         ),
       );
     } finally {
@@ -844,6 +1008,16 @@ class RunCommandService {
     taskId: string;
     runCommandId: string;
   }): Promise<void> {
+    await this.stopCommandWithLock({ taskId, runCommandId });
+  }
+
+  private async stopCommandWithLock({
+    taskId,
+    runCommandId,
+  }: {
+    taskId: string;
+    runCommandId: string;
+  }): Promise<boolean> {
     return this.withCommandLock({
       taskId,
       runCommandId,
@@ -931,15 +1105,15 @@ class RunCommandService {
   }: {
     taskId: string;
     runCommandId: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const taskProcesses = this.runningProcesses.get(taskId);
     if (!taskProcesses) {
-      return;
+      return true;
     }
 
     const tracked = taskProcesses.get(runCommandId);
     if (!tracked) {
-      return;
+      return true;
     }
 
     if (tracked.status === 'running') {
@@ -998,7 +1172,7 @@ class RunCommandService {
           pid,
         );
         this.notifyStatusChange(taskId);
-        return;
+        return false;
       }
     }
 
@@ -1008,6 +1182,7 @@ class RunCommandService {
     }
 
     this.notifyStatusChange(taskId);
+    return true;
   }
 
   async killPortsForCommand(

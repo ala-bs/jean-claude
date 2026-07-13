@@ -245,6 +245,10 @@ export interface ProjectCommandTable {
   name: string | null;
   command: string;
   ports: string; // JSON array stored as text
+  portConflictStrategy: string;
+  portOverrideProvider: string;
+  portOverrideEnvVar: string | null;
+  portOverrideArgs: string | null;
   envVars: string; // JSON array stored as text
   confirmBeforeRun: Generated<number>; // 0 or 1
   confirmMessage: string | null;

@@ -71,6 +71,7 @@ import * as m069 from './migrations/069_work_activity_events';
 import * as m070 from './migrations/070_migrate_prompt_preface_array';
 import * as m071 from './migrations/071_project_archived_at';
 import * as m072 from './migrations/072_global_mcp_servers';
+import * as m073 from './migrations/073_run_command_port_override';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -144,6 +145,7 @@ const migrations: Record<string, Migration> = {
   '070_migrate_prompt_preface_array': m070,
   '071_project_archived_at': m071,
   '072_global_mcp_servers': m072,
+  '073_run_command_port_override': m073,
 };
 
 export const migrationProvider: MigrationProvider = {
