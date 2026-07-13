@@ -400,6 +400,9 @@ class AgentService {
       this.emitEvent(taskId, stepId, {
         type: 'question',
         requestId: request.requestId,
+        ...(request.questionRequest.contextReminder
+          ? { contextReminder: request.questionRequest.contextReminder }
+          : {}),
         questions,
       });
       await this.notifyTaskEvent({
@@ -1104,6 +1107,9 @@ class AgentService {
     this.emitEvent(taskId, stepId, {
       type: 'question',
       requestId: request.requestId,
+      ...(request.contextReminder
+        ? { contextReminder: request.contextReminder }
+        : {}),
       questions: this.toAgentQuestions(request.questions),
     });
   }
@@ -2142,6 +2148,7 @@ class AgentService {
           taskId: string;
           stepId: string;
           requestId: string;
+          contextReminder?: string;
           questions: AgentQuestion[];
         };
       }
@@ -2160,6 +2167,9 @@ class AgentService {
           taskId,
           stepId,
           requestId: request.requestId,
+          ...(request.questionRequest.contextReminder
+            ? { contextReminder: request.questionRequest.contextReminder }
+            : {}),
           questions: this.toAgentQuestions(request.questionRequest.questions),
         },
       };

@@ -64,6 +64,31 @@ describe('askQuestionViaBridge', () => {
     });
   });
 
+  it('posts an optional Markdown context reminder', async () => {
+    const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ summary: 'Which approach?: Small change' }), {
+        status: 200,
+      }),
+    );
+
+    await askQuestionViaBridge({
+      input: {
+        ...input,
+        contextReminder: '**Current constraint:** keep the change scoped.',
+      },
+      env,
+      fetchImpl,
+    });
+
+    const [, init] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(String(init.body))).toEqual({
+      sessionId: 'session-1',
+      contextReminder: '**Current constraint:** keep the change scoped.',
+      questions: input.questions,
+    });
+  });
+
   it('polls question results after the bridge accepts a request', async () => {
     const env = await createQuestionBridgeEnv();
     const fetchImpl = vi
@@ -221,6 +246,20 @@ describe('askQuestionViaBridge', () => {
         fetchImpl,
       }),
     ).rejects.toThrow('Invalid ask_question input');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blank context reminder', async () => {
+    const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi.fn();
+
+    await expect(
+      askQuestionViaBridge({
+        input: { ...input, contextReminder: '   ' },
+        env,
+        fetchImpl,
+      }),
+    ).rejects.toThrow('Context reminder must not be blank');
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

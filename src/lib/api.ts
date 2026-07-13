@@ -1195,6 +1195,7 @@ export interface Api {
           data: {
             taskId: string;
             requestId: string;
+            contextReminder?: string;
             questions: AgentQuestion[];
           };
         }

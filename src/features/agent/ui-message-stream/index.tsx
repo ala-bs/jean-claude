@@ -74,6 +74,7 @@ export interface QuestionBannerProps {
   request: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   };
   onRespond: (

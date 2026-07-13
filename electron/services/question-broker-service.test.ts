@@ -165,10 +165,12 @@ describe('question-broker-service', () => {
     expect(
       toNormalizedQuestionRequest({
         requestId: 'question-request-1',
+        contextReminder: '**Current constraint:** keep the change scoped.',
         questions,
       }),
     ).toEqual({
       requestId: 'question-request-1',
+      contextReminder: '**Current constraint:** keep the change scoped.',
       questions: [
         {
           id: 'approach',

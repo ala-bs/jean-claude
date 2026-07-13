@@ -57,6 +57,15 @@ export const ASK_QUESTION_TOOL_SCHEMA = {
       'Task step id. Optional when the Jean-Claude bridge can infer a single active route; required when multiple app-scoped routes are active.',
     )
     .optional(),
+  contextReminder: z
+    .string()
+    .refine((contextReminder) => contextReminder.trim().length > 0, {
+      message: 'Context reminder must not be blank',
+    })
+    .describe(
+      'Optional Markdown recap shown immediately before all questions. Use it when preceding agent messages may be hidden by prompt grouping; keep it concise and do not repeat the questions.',
+    )
+    .optional(),
   questions: z
     .array(QUESTION_SCHEMA)
     .min(1)
@@ -143,6 +152,9 @@ export async function askQuestionViaBridge({
               ...(routedStepId ? { stepId: routedStepId } : {}),
               ...(registrationId ? { registrationId } : {}),
             }),
+        ...(parsedInput.data.contextReminder
+          ? { contextReminder: parsedInput.data.contextReminder }
+          : {}),
         questions: parsedInput.data.questions,
       }),
     });

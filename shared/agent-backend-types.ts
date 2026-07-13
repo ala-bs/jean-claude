@@ -192,5 +192,6 @@ export interface NormalizedQuestion {
 
 export interface NormalizedQuestionRequest {
   requestId: string;
+  contextReminder?: string;
   questions: NormalizedQuestion[];
 }

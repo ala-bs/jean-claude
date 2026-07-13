@@ -76,6 +76,7 @@ export interface TaskState {
   pendingQuestion: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   } | null;
   queuedPrompts: QueuedPrompt[];
@@ -94,6 +95,7 @@ export interface PendingRequest {
   question?: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   };
 }

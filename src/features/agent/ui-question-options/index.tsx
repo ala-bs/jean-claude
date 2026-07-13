@@ -3,6 +3,7 @@ import { startTransition, useCallback, useEffect, useState } from 'react';
 
 import type { AgentQuestion, QuestionResponse } from '@shared/agent-types';
 import { Kbd } from '@/common/ui/kbd';
+import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import { Textarea } from '@/common/ui/textarea';
 import { useCommands } from '@/common/hooks/use-commands';
 
@@ -378,6 +379,19 @@ function QuestionInput({
   );
 }
 
+export function QuestionContextReminder({ content }: { content?: string }) {
+  if (!content) return null;
+
+  return (
+    <aside className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2.5">
+      <div className="mb-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-teal-300/80">
+        Context
+      </div>
+      <MarkdownContent content={content} />
+    </aside>
+  );
+}
+
 export function QuestionOptions({
   request,
   onRespond,
@@ -385,6 +399,7 @@ export function QuestionOptions({
   request: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   };
   onRespond: (
@@ -756,7 +771,9 @@ export function QuestionOptions({
   ]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-white/10 bg-bg-2/95 shadow-[0_18px_50px_-30px_rgba(0,0,0,0.8)]">
+    <div className="space-y-2">
+      <QuestionContextReminder content={request.contextReminder} />
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-bg-2/95 shadow-[0_18px_50px_-30px_rgba(0,0,0,0.8)]">
       <div className="space-y-2.5 px-3 py-2.5">
         {request.questions.map((question, index) => {
           const questionKey = getQuestionKey(question);
@@ -829,6 +846,7 @@ export function QuestionOptions({
           {request.questions.length} questions · {answeredCount} answered ·{' '}
           <Kbd shortcut="cmd+enter" />
         </span>
+      </div>
       </div>
     </div>
   );

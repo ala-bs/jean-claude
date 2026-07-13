@@ -177,6 +177,7 @@ export interface AgentQuestion {
 export interface QuestionRequest {
   requestId: string;
   taskId: string;
+  contextReminder?: string;
   questions: AgentQuestion[];
 }
 

@@ -143,15 +143,18 @@ export function validateQuestionSpecs(questions: QuestionSpec[]): void {
 
 export function toNormalizedQuestionRequest({
   requestId,
+  contextReminder,
   questions,
 }: {
   requestId: string;
+  contextReminder?: string;
   questions: QuestionSpec[];
 }): NormalizedQuestionRequest {
   validateQuestionSpecs(questions);
 
   return {
     requestId,
+    ...(contextReminder ? { contextReminder } : {}),
     questions: questions.map(toNormalizedQuestion),
   };
 }
@@ -215,14 +218,20 @@ export class QuestionBrokerService {
   createRequest({
     taskId,
     stepId,
+    contextReminder,
     questions,
   }: {
     taskId: string;
     stepId: string;
+    contextReminder?: string;
     questions: QuestionSpec[];
   }): BrokerQuestionRequest {
     const requestId = randomUUID();
-    const request = toNormalizedQuestionRequest({ requestId, questions });
+    const request = toNormalizedQuestionRequest({
+      requestId,
+      contextReminder,
+      questions,
+    });
     let resolveResult: (summary: string) => void = () => {};
     let rejectResult: (error: QuestionRequestCancelledError) => void = () => {};
     const result = new Promise<string>((resolve, reject) => {
