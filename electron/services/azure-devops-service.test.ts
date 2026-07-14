@@ -28,6 +28,7 @@ import {
   getWorkItemsByIds,
   getWorkItemComments,
   getPullRequestFileContent,
+  getPullRequestStatuses,
   getPullRequestThreads,
   queryWorkItems,
   resolveWorkItemBoardColumnUpdate,
@@ -1273,6 +1274,96 @@ describe('getPullRequestFileContent', () => {
     expect(urls).toContain(
       'https://dev.azure.com/org/project/_apis/git/repositories/repo/items?path=%2Fsrc%2Ffile.ts&versionDescriptor.version=target-commit&versionDescriptor.versionType=commit&api-version=7.0',
     );
+  });
+});
+
+describe('getPullRequestStatuses', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('includes active thread count for active PRs', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/threads?')) {
+          return jsonResponse(
+            {
+              count: 2,
+              value: [
+                {
+                  id: 1,
+                  status: 'active',
+                  isDeleted: false,
+                  comments: [
+                    {
+                      id: 1,
+                      content: 'Needs work',
+                      commentType: 'text',
+                      author: { id: 'user-1', displayName: 'Reviewer' },
+                      publishedDate: '2026-01-01T00:00:00Z',
+                      lastUpdatedDate: '2026-01-01T00:00:00Z',
+                    },
+                  ],
+                },
+                {
+                  id: 2,
+                  status: 'closed',
+                  isDeleted: false,
+                  comments: [
+                    {
+                      id: 2,
+                      content: 'Resolved',
+                      commentType: 'text',
+                      author: { id: 'user-1', displayName: 'Reviewer' },
+                      publishedDate: '2026-01-01T00:00:00Z',
+                      lastUpdatedDate: '2026-01-01T00:00:00Z',
+                    },
+                  ],
+                },
+              ],
+            },
+            { ok: true },
+          );
+        }
+
+        return jsonResponse(
+          {
+            status: 'active',
+            isDraft: false,
+            mergeStatus: 'succeeded',
+            pullRequestId: 123,
+            repository: {
+              name: 'repo',
+              project: { name: 'project' },
+            },
+            reviewers: [],
+          },
+          { ok: true },
+        );
+      }),
+    );
+
+    const statuses = await getPullRequestStatuses({
+      providerId: 'provider-1',
+      linkedPrs: [{ prId: 123, projectId: 'project', repoId: 'repo' }],
+      includeActiveThreadCount: true,
+    });
+
+    expect(statuses.get('project:repo:123')).toMatchObject({
+      status: 'active',
+      activeThreadCount: 1,
+    });
   });
 });
 

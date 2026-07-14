@@ -62,9 +62,10 @@ export function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
 
     return {
       ...withChildren,
-      workItemPrStatus: 'active',
-      activeThreadCount: pr.activeThreadCount,
-      unresolvedCommentCount: pr.unresolvedCommentCount,
+      activeThreadCount:
+        withChildren.activeThreadCount ?? pr.activeThreadCount,
+      unresolvedCommentCount:
+        withChildren.unresolvedCommentCount ?? pr.unresolvedCommentCount,
     };
   };
 

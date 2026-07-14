@@ -47,6 +47,11 @@ import {
 } from '@/common/ui/dropdown';
 import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
 import {
+  getPrStateColor,
+  getPrStatusLabel,
+  resolvePrStatus,
+} from '@/lib/feed-pr-state';
+import {
   useCachedPullRequest,
   usePullRequest,
   usePullRequestPolicyEvaluations,
@@ -127,18 +132,6 @@ const RAIL_W = 32; // rail column width in px
 const NODE_X = 16; // center X of main node
 const FEED_RAIL_COLOR = 'var(--color-ink-4)';
 const PR_REVIEW_TASK_COLOR = 'oklch(0.74 0.19 295)';
-
-function getPrStateColor({
-  isDraft,
-  isCompleted,
-}: {
-  isDraft: boolean | undefined;
-  isCompleted: boolean;
-}) {
-  if (isCompleted) return 'var(--color-status-done)';
-  if (isDraft) return 'var(--color-ink-3)';
-  return 'var(--color-status-azure)';
-}
 
 function isModifiedClick(e: React.MouseEvent): boolean {
   return e.metaKey || e.ctrlKey;
@@ -458,9 +451,13 @@ export function FeedItemCard({
       ? (cachedPr?.creationDate ?? item.timestamp)
       : item.timestamp;
   const pullRequestUrl = cachedPr?.url ?? item.pullRequestUrl;
-  const isDraft = cachedPr?.isDraft ?? item.isDraft;
+  const isDraft = isTask
+    ? (item.isDraft ?? cachedPr?.isDraft)
+    : (cachedPr?.isDraft ?? item.isDraft);
   const pullRequestMergeStatus =
-    cachedPr?.mergeStatus ?? item.pullRequestMergeStatus;
+    isTask
+      ? (item.pullRequestMergeStatus ?? cachedPr?.mergeStatus)
+      : (cachedPr?.mergeStatus ?? item.pullRequestMergeStatus);
   const approvedBy =
     cachedPr?.reviewers
       .filter(
@@ -487,19 +484,26 @@ export function FeedItemCard({
   );
   const hasChildren = !isSubtask && visibleChildren.length > 0;
   const hasPr = isTask && !!item.pullRequestId;
-  const prMerged =
-    item.workItemPrStatus === 'completed' || cachedPr?.status === 'completed';
+  const prStatus = resolvePrStatus({
+    cachedStatus: cachedPr?.status,
+    feedStatus: item.workItemPrStatus,
+  });
+  const prMerged = prStatus === 'completed';
+  const prStatusLabel = getPrStatusLabel(prStatus);
   const prHasConflicts = pullRequestMergeStatus === 'conflicts';
+  const prHasOpenComments = (item.activeThreadCount ?? 0) > 0;
   const prApprovalCount = approvedBy.length;
   const prStateColor = getPrStateColor({
+    status: prStatus,
     isDraft,
-    isCompleted: prMerged,
+    hasConflicts: prHasConflicts,
+    hasOpenComments: prHasOpenComments,
   });
   const railColor =
-    item.taskType === 'pr-review'
-      ? PR_REVIEW_TASK_COLOR
-      : hasPr
-        ? prStateColor
+    hasPr
+      ? prStateColor
+      : item.taskType === 'pr-review'
+        ? PR_REVIEW_TASK_COLOR
         : FEED_RAIL_COLOR;
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
@@ -1018,7 +1022,7 @@ export function FeedItemCard({
                     )}{' '}
                     #{item.pullRequestId}
                   </span>
-                  <span>{prMerged ? 'merged' : 'open'}</span>
+                  <span>{prStatusLabel}</span>
                   {isDraft && (
                     <span className="border-glass-border text-ink-3 rounded border px-1 py-0 text-[9px]">
                       Draft

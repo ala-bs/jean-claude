@@ -605,6 +605,7 @@ type PullRequestStatusMetadata = {
   status: 'active' | 'completed' | 'abandoned';
   url: string;
   isDraft: boolean;
+  activeThreadCount?: number;
   mergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   approvedBy: Array<{
     displayName: string;
@@ -616,6 +617,7 @@ type PullRequestStatusMetadata = {
 export async function getPullRequestStatuses(params: {
   providerId: string;
   linkedPrs: LinkedPr[];
+  includeActiveThreadCount?: boolean;
 }): Promise<Map<string, PullRequestStatusMetadata>> {
   if (params.linkedPrs.length === 0) return new Map();
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
@@ -657,12 +659,31 @@ export async function getPullRequestStatuses(params: {
               ? `https://dev.azure.com/${orgName}/${encodeURIComponent(projectName)}/_git/${encodeURIComponent(repoName)}/pullrequest/${linkedPr.prId}`
               : '';
           const mappedStatus = mapPrStatus(pr.status);
+          let activeThreadCount: number | undefined;
+          if (mappedStatus === 'active' && params.includeActiveThreadCount) {
+            try {
+              const threads = await getPullRequestThreads({
+                providerId: params.providerId,
+                projectId: linkedPr.projectId,
+                repoId: linkedPr.repoId,
+                pullRequestId: linkedPr.prId,
+              });
+              activeThreadCount = getPullRequestThreadCounts(threads).active;
+            } catch (err) {
+              dbg.azure(
+                'getPullRequestStatuses: failed threads for PR#%d: %O',
+                linkedPr.prId,
+                err,
+              );
+            }
+          }
           results.set(
             `${linkedPr.projectId}:${linkedPr.repoId}:${linkedPr.prId}`,
             {
               status: mappedStatus,
               url,
               isDraft: !!pr.isDraft,
+              activeThreadCount,
               mergeStatus:
                 pr.mergeStatus as PullRequestStatusMetadata['mergeStatus'],
               approvedBy: (pr.reviewers ?? [])
@@ -3987,27 +4008,16 @@ export async function getPullRequestActivityMetadata(params: {
   // Latest commit date (commits are returned newest-first by Azure DevOps)
   const lastCommitDate = commits.length > 0 ? commits[0].author.date : null;
 
-  // Filter out deleted and system threads
-  const realThreads = threads.filter(
-    (t) => !t.isDeleted && t.comments.some((c) => c.commentType !== 'system'),
-  );
-
   // Find max lastUpdatedDate across all comments in all threads
   let lastThreadActivityDate: string | null = null;
-  let activeThreadCount = 0;
-  let unresolvedCommentCount = 0;
+  const threadCounts = getPullRequestThreadCounts(threads);
 
-  for (const thread of realThreads) {
-    const isActiveThread =
-      thread.status === 'active' ||
-      thread.status === 'pending' ||
-      thread.status === 'unknown';
-
-    if (isActiveThread) {
-      activeThreadCount++;
-      unresolvedCommentCount += thread.comments.filter(
-        (comment) => comment.commentType !== 'system',
-      ).length;
+  for (const thread of threads) {
+    if (
+      thread.isDeleted ||
+      !thread.comments.some((comment) => comment.commentType !== 'system')
+    ) {
+      continue;
     }
     for (const comment of thread.comments) {
       if (
@@ -4022,9 +4032,30 @@ export async function getPullRequestActivityMetadata(params: {
   return {
     lastCommitDate,
     lastThreadActivityDate,
-    activeThreadCount,
-    unresolvedCommentCount,
+    activeThreadCount: threadCounts.active,
+    unresolvedCommentCount: threadCounts.unresolvedComments,
   };
+}
+
+function getPullRequestThreadCounts(threads: AzureDevOpsCommentThread[]) {
+  let active = 0;
+  let unresolvedComments = 0;
+
+  for (const thread of threads) {
+    const comments = thread.comments.filter(
+      (comment) => comment.commentType !== 'system',
+    );
+    const isActive =
+      thread.status === 'active' ||
+      thread.status === 'pending' ||
+      thread.status === 'unknown';
+    if (!thread.isDeleted && comments.length > 0 && isActive) {
+      active++;
+      unresolvedComments += comments.length;
+    }
+  }
+
+  return { active, unresolvedComments };
 }
 
 export async function addThreadReply(params: {

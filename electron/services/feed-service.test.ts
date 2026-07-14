@@ -224,6 +224,55 @@ describe('getTaskFeedItems', () => {
     });
   });
 
+  it('adds active PR thread count to linked task items', async () => {
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(
+      new Map([
+        [
+          'ado-project-1:repo-1:12',
+          {
+            status: 'active',
+            isDraft: false,
+            mergeStatus: 'succeeded',
+            approvedBy: [],
+            activeThreadCount: 2,
+            url: 'https://example.com/pr/12',
+          },
+        ],
+      ]),
+    );
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      {
+        id: 'task-1',
+        projectId: 'project-1',
+        type: 'code',
+        name: 'Linked task',
+        prompt: 'Linked task',
+        status: 'waiting',
+        hasUnread: false,
+        userCompleted: false,
+        pullRequestId: '12',
+        pullRequestUrl: 'https://example.com/pr/12',
+        workItemIds: null,
+        workItemUrls: null,
+        pendingMessage: null,
+        updatedAt: '2026-07-05T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: 'provider-1',
+        repoId: 'repo-1',
+      } as never,
+    ]);
+
+    await expect(getTaskFeedItems()).resolves.toEqual([
+      expect.objectContaining({
+        taskId: 'task-1',
+        workItemPrStatus: 'active',
+        activeThreadCount: 2,
+      }),
+    ]);
+  });
+
   it('marks a PR-linked task when its worktree has uncommitted changes', async () => {
     vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
       {

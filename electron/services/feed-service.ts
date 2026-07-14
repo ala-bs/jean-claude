@@ -511,7 +511,7 @@ async function enrichTaskFeedItemsWithPrStatus({
     });
   }
 
-  // Collect task PRs that need status fetching (not already active in feed)
+  // Refresh linked task PRs directly; active-feed data remains fallback metadata.
   const projects = await ProjectRepository.findAll();
   const projectsById = new Map(projects.map((p) => [p.id, p]));
 
@@ -529,31 +529,30 @@ async function enrichTaskFeedItemsWithPrStatus({
       const itemPrKey = feedItemPrIdentityKey(item);
       const activePrInfo = itemPrKey ? activePrMap.get(itemPrKey) : undefined;
       if (activePrInfo) {
-        // PR is active in the feed — mark it
+        // Use active-feed metadata as fallback if direct status refresh fails.
         item.workItemPrStatus = 'active';
         item.isDraft = activePrInfo.isDraft;
         item.pullRequestMergeStatus = activePrInfo.mergeStatus;
         item.approvedBy = activePrInfo.approvedBy;
         item.activeThreadCount = activePrInfo.activeThreadCount;
         item.unresolvedCommentCount = activePrInfo.unresolvedCommentCount;
-      } else {
-        // Need to fetch status — parse project/repo from the task's project config
-        const project = projectsById.get(item.projectId);
-        if (
-          project?.repoProviderId &&
-          project.repoProjectId &&
-          project.repoId
-        ) {
-          taskPrsToFetch.push({
-            item,
-            linkedPr: {
-              prId: item.pullRequestId,
-              projectId: project.repoProjectId,
-              repoId: project.repoId,
-            },
-            providerId: project.repoProviderId,
-          });
-        }
+      }
+
+      const project = projectsById.get(item.projectId);
+      if (
+        project?.repoProviderId &&
+        project.repoProjectId &&
+        project.repoId
+      ) {
+        taskPrsToFetch.push({
+          item,
+          linkedPr: {
+            prId: item.pullRequestId,
+            projectId: project.repoProjectId,
+            repoId: project.repoId,
+          },
+          providerId: project.repoProviderId,
+        });
       }
       continue;
     }
@@ -581,7 +580,15 @@ async function enrichTaskFeedItemsWithPrStatus({
       try {
         const statuses = await getPullRequestStatuses({
           providerId,
-          linkedPrs: entries.map((e) => e.linkedPr),
+          linkedPrs: Array.from(
+            new Map(
+              entries.map((entry) => [
+                linkedPrKey(entry.linkedPr),
+                entry.linkedPr,
+              ]),
+            ).values(),
+          ),
+          includeActiveThreadCount: true,
         });
         for (const entry of entries) {
           const status = statuses.get(linkedPrKey(entry.linkedPr));
@@ -590,6 +597,9 @@ async function enrichTaskFeedItemsWithPrStatus({
             entry.item.isDraft = status.isDraft;
             entry.item.pullRequestMergeStatus = status.mergeStatus;
             entry.item.approvedBy = status.approvedBy;
+            if (status.activeThreadCount !== undefined) {
+              entry.item.activeThreadCount = status.activeThreadCount;
+            }
             if (status.status === 'completed') {
               const completedTasks = await completePrReviewTasksForMergedPr({
                 projectId: entry.item.projectId,
