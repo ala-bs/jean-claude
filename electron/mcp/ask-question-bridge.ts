@@ -63,7 +63,7 @@ export const ASK_QUESTION_TOOL_SCHEMA = {
       message: 'Context reminder must not be blank',
     })
     .describe(
-      'Optional Markdown recap shown immediately before all questions. Use it when preceding agent messages may be hidden by prompt grouping; keep it concise and do not repeat the questions.',
+      'Optional Markdown shown immediately before all questions. Put any explanation, design, constraints, or recap needed to answer here instead of in an assistant message before this tool call, because that message may be hidden by prompt grouping. Keep it concise and do not repeat the questions.',
     )
     .optional(),
   questions: z
