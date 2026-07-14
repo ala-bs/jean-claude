@@ -22,6 +22,10 @@ import {
   replaceMarkdownImageUrl,
 } from '@/lib/markdown-image-size';
 import { Button } from '@/common/ui/button';
+import {
+  createPromptImageUploadCache,
+  type PromptImageUploadCache,
+} from '@/lib/prompt-image-upload-cache';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
 
@@ -48,11 +52,13 @@ export async function uploadImagesIntoMarkdown({
   body,
   images,
   uploadImage,
+  uploadCache,
   mentionOptions,
 }: {
   body: string;
   images: PromptImagePart[];
   uploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
+  uploadCache?: PromptImageUploadCache;
   mentionOptions?: MentionOption[];
 }) {
   const encodedBody = encodeMentionDisplayNames(body, mentionOptions ?? []);
@@ -62,7 +68,7 @@ export async function uploadImagesIntoMarkdown({
   let contentWithImages = encodedBody.trimEnd();
   const attachedMarkdownImages: string[] = [];
 
-  await Promise.all(
+  const uploadedImages = await Promise.all(
     images.map(async (image, index) => {
       const placeholderMarkdown = getPlaceholderMarkdown(image);
       const pattern = placeholderMarkdown
@@ -73,19 +79,30 @@ export async function uploadImagesIntoMarkdown({
       }
 
       const fileName = imageFileName(image, index);
-      const url = await uploadImage(image, fileName);
+      const url = uploadCache
+        ? await uploadCache.resolve({
+            image,
+            fileName,
+            upload: () => uploadImage(image, fileName),
+          })
+        : await uploadImage(image, fileName);
       const markdownImage = `![${escapeMarkdownAltText(fileName)}](${url}${getPromptImageMarkdownSize(image)})`;
-      if (pattern) {
-        contentWithImages = contentWithImages.replace(
-          pattern,
-          (match) => replaceMarkdownImageUrl(match, url),
-        );
-        return;
-      }
-
-      attachedMarkdownImages.push(markdownImage);
+      return { markdownImage, pattern, url };
     }),
   );
+
+  for (const uploadedImage of uploadedImages) {
+    if (!uploadedImage) continue;
+    if (uploadedImage.pattern) {
+      contentWithImages = contentWithImages.replace(
+        uploadedImage.pattern,
+        (match) => replaceMarkdownImageUrl(match, uploadedImage.url),
+      );
+      continue;
+    }
+
+    attachedMarkdownImages.push(uploadedImage.markdownImage);
+  }
 
   const separator =
     contentWithImages.trim() && attachedMarkdownImages.length ? '\n\n' : '';
@@ -107,7 +124,7 @@ export function PrCommentForm({
   submitLabel,
   onAskAgent,
 }: {
-  onSubmit: (content: string) => void;
+  onSubmit: (content: string) => Promise<void> | void;
   onCancel?: () => void;
   lineStart?: number;
   lineEnd?: number;
@@ -124,19 +141,23 @@ export function PrCommentForm({
   onAskAgent?: (question: string) => Promise<void> | void;
 }) {
   const [content, setContent] = useState('');
-  const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [isAskingAgent, setIsAskingAgent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [composerKey, setComposerKey] = useState(0);
   const submitTokenRef = useRef(0);
+  const submitInFlightRef = useRef(false);
+  const uploadedImageUrlsRef = useRef(createPromptImageUploadCache());
 
   useEffect(() => {
+    const uploadCache = uploadedImageUrlsRef.current;
     return () => {
       submitTokenRef.current += 1;
+      uploadCache.clear();
     };
   }, []);
 
-  const isBusy = isSubmitting || isUploadingImages || isAskingAgent;
+  const isBusy = isSubmitting || isSubmittingComment || isAskingAgent;
 
   const handleAskAgent = async (body: string) => {
     if (!onAskAgent || isBusy) return;
@@ -149,6 +170,7 @@ export function PrCommentForm({
     try {
       await onAskAgent(question);
       if (submitToken !== submitTokenRef.current) return;
+      uploadedImageUrlsRef.current.clear();
       setComposerKey((current) => current + 1);
     } catch (askError) {
       if (submitToken !== submitTokenRef.current) return;
@@ -163,24 +185,22 @@ export function PrCommentForm({
   };
 
   const submitWithImages = async (body: string, images: PromptImagePart[]) => {
+    if (isBusy || submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     const submitToken = submitTokenRef.current;
     setError(null);
-    const encodedBody = encodeMentionDisplayNames(body, mentionOptions);
-
-    if (images.length === 0 || !uploadImage) {
-      onSubmit(encodedBody);
-      setComposerKey((current) => current + 1);
-      return;
-    }
-
-    setIsUploadingImages(true);
+    setIsSubmittingComment(true);
     try {
-      const finalContent = await uploadImagesIntoMarkdown({
-        body,
-        images,
-        uploadImage,
-        mentionOptions,
-      });
+      let finalContent = encodeMentionDisplayNames(body, mentionOptions);
+      if (images.length > 0 && uploadImage) {
+        finalContent = await uploadImagesIntoMarkdown({
+          body,
+          images,
+          uploadImage,
+          uploadCache: uploadedImageUrlsRef.current,
+          mentionOptions,
+        });
+      }
       if (submitToken !== submitTokenRef.current) return;
       if (!finalContent.trim()) {
         setError('Add a comment or insert an image.');
@@ -192,61 +212,93 @@ export function PrCommentForm({
         return;
       }
 
-      onSubmit(finalContent);
+      const submission = onSubmit(finalContent);
+      if (submission) await submission;
+      if (submitToken !== submitTokenRef.current) return;
+      uploadedImageUrlsRef.current.clear();
       setComposerKey((current) => current + 1);
     } catch (submitError) {
       if (submitToken !== submitTokenRef.current) return;
       setError(
         submitError instanceof Error
           ? submitError.message
-          : 'Failed to upload image',
+          : 'Failed to submit comment',
       );
     } finally {
       if (submitToken === submitTokenRef.current) {
-        setIsUploadingImages(false);
+        submitInFlightRef.current = false;
+        setIsSubmittingComment(false);
       }
     }
   };
 
   const handleCancel = () => {
     submitTokenRef.current += 1;
-    setIsUploadingImages(false);
+    submitInFlightRef.current = false;
+    uploadedImageUrlsRef.current.clear();
+    setIsSubmittingComment(false);
     setError(null);
     onCancel?.();
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (content.trim() && !isBusy) {
-      onSubmit(encodeMentionDisplayNames(content.trim(), mentionOptions));
+    if (!content.trim() || isBusy || submitInFlightRef.current) return;
+
+    submitInFlightRef.current = true;
+    const submitToken = submitTokenRef.current;
+    setError(null);
+    setIsSubmittingComment(true);
+    try {
+      const submission = onSubmit(
+        encodeMentionDisplayNames(content.trim(), mentionOptions),
+      );
+      if (submission) await submission;
+      if (submitToken !== submitTokenRef.current) return;
+      uploadedImageUrlsRef.current.clear();
       setContent('');
+    } catch (submitError) {
+      if (submitToken !== submitTokenRef.current) return;
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : 'Failed to submit comment',
+      );
+    } finally {
+      if (submitToken === submitTokenRef.current) {
+        submitInFlightRef.current = false;
+        setIsSubmittingComment(false);
+      }
     }
   };
 
   if (!uploadImage && (lineStart === undefined || !onCancel)) {
     return (
-      <form onSubmit={handleSubmit} className="flex gap-2">
-        <MentionTextarea
-          value={content}
-          onChange={setContent}
-          mentionOptions={mentionOptions}
-          onSearchMentions={onSearchMentions}
-          placeholder={placeholder}
-          className={MENTION_TEXTAREA_MD_CLASS}
-          minHeight={58}
-          disabled={isBusy}
-        />
-        <Button
-          type="submit"
-          variant="primary"
-          size="md"
-          disabled={!content.trim() || isBusy}
-          icon={<Send />}
-          className="self-end"
-        >
-          {isBusy ? 'Sending...' : (submitLabel ?? 'Send')}
-        </Button>
-      </form>
+      <div>
+        <form onSubmit={(event) => void handleSubmit(event)} className="flex gap-2">
+          <MentionTextarea
+            value={content}
+            onChange={setContent}
+            mentionOptions={mentionOptions}
+            onSearchMentions={onSearchMentions}
+            placeholder={placeholder}
+            className={MENTION_TEXTAREA_MD_CLASS}
+            minHeight={58}
+            disabled={isBusy}
+          />
+          <Button
+            type="submit"
+            variant="primary"
+            size="md"
+            disabled={!content.trim() || isBusy}
+            icon={<Send />}
+            className="self-end"
+          >
+            {isBusy ? 'Sending...' : (submitLabel ?? 'Send')}
+          </Button>
+        </form>
+        {error && <p className="text-status-fail mt-2 text-xs">{error}</p>}
+      </div>
     );
   }
 

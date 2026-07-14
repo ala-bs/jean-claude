@@ -22,6 +22,7 @@ import type { LineRange } from '@/features/agent/ui-diff-view';
 import type { MentionDisplayNames } from '@/lib/azure-devops-mentions';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import type { PromptImageUploadCache } from '@/lib/prompt-image-upload-cache';
 import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import { usePrFileDraftActions } from '@/stores/pr-comment-drafts';
 
@@ -181,19 +182,17 @@ export function PrDiffView({
     [setDraft, clearDraft],
   );
 
-  // Clear draft for submitted range
   const handleAddFileComment = useCallback(
-    (params: {
+    async (params: {
       filePath: string;
       line: number;
       lineEnd?: number;
       content: string;
     }) => {
       if (!onAddFileComment) return;
-      clearDraft(params.line, params.lineEnd);
-      void Promise.resolve(onAddFileComment(params)).catch(() => undefined);
+      await onAddFileComment(params);
     },
-    [onAddFileComment, clearDraft],
+    [onAddFileComment],
   );
 
   const handleAddReviewCommentAsPrComment = useCallback(
@@ -203,12 +202,14 @@ export function PrDiffView({
       lineEnd?: number;
       body: string;
       images: PromptImagePart[];
+      uploadCache: PromptImageUploadCache;
     }) => {
       if (!onAddReviewCommentAsPrComment) return;
       const content = await uploadImagesIntoMarkdown({
         body: params.body,
         images: params.images,
         uploadImage: onUploadReviewAsPrImage,
+        uploadCache: params.uploadCache,
         mentionOptions,
       });
       await onAddReviewCommentAsPrComment({
@@ -223,7 +224,7 @@ export function PrDiffView({
 
   const renderCommentForm = useCallback(
     (props: {
-      onSubmit: (content: string) => void;
+      onSubmit: (content: string) => Promise<void> | void;
       onCancel: () => void;
       lineStart: number;
       lineEnd?: number;

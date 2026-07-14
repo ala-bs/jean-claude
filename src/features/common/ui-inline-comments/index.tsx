@@ -1,6 +1,7 @@
 /* eslint-disable sort-imports */
 import { ImagePlus, Pencil, X } from 'lucide-react';
 import {
+  memo,
   useCallback,
   useEffect,
   useId,
@@ -34,6 +35,7 @@ import { formatLineRangeLabel } from '@/stores/utils-comment-store';
 import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 
 
@@ -58,21 +60,105 @@ type InlineComposerImage = PromptImagePart & {
   placeholderMarkdown?: string;
 };
 
-function imageDataUrl(image: PromptImagePart) {
-  return `data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`;
-}
-
-function markdownWithLocalImages(body: string, images: InlineComposerImage[]) {
-  return images.reduce((current, image) => {
+function markdownWithLocalImages(
+  body: string,
+  images: InlineComposerImage[],
+  previewUrls: (string | undefined)[],
+) {
+  return images.reduce((current, image, index) => {
     if (!image.placeholderMarkdown) return current;
     const pattern = markdownImagePlaceholderPattern(image.placeholderMarkdown);
     if (!pattern) return current;
-    return current.replace(
-      pattern,
-      (match) => replaceMarkdownImageUrl(match, imageDataUrl(image)),
-    );
+    const previewUrl = previewUrls[index];
+    if (previewUrl) {
+      return current.replace(pattern, (match) =>
+        replaceMarkdownImageUrl(match, previewUrl),
+      );
+    }
+    const mediaType = image.mimeType === 'image/gif' ? 'GIF' : 'image';
+    return current.replace(pattern, `_[Attached ${mediaType}: ${image.filename ?? mediaType}]_`);
   }, body);
 }
+
+const ComposerMarkdownPreview = memo(function ComposerMarkdownPreview({
+  markdown,
+}: {
+  markdown: string;
+}) {
+  if (!markdown.trim()) return null;
+
+  return (
+    <div className="border-glass-border/60 bg-bg-1/60 rounded border px-2.5 py-2">
+      <div className="text-ink-4 mb-1 text-[10px] font-medium tracking-wide uppercase">
+        Preview
+      </div>
+      <MarkdownContent
+        content={markdown}
+        imageClassName="max-h-64 object-contain"
+        enableImageModal
+        allowBlobImages
+      />
+    </div>
+  );
+});
+
+const ImageAttachments = memo(function ImageAttachments({
+  images,
+  previewUrls,
+  onRemove,
+  className,
+}: {
+  images: InlineComposerImage[];
+  previewUrls: (string | undefined)[];
+  onRemove?: (index: number) => void;
+  className?: string;
+}) {
+  if (images.length === 0) return null;
+
+  return (
+    <div className={`flex flex-wrap gap-1.5${className ? ` ${className}` : ''}`}>
+      {images.map((image, index) => (
+        <div
+          key={`${image.filename ?? 'img'}-${index}`}
+          className="group relative"
+        >
+          {previewUrls[index] ? (
+            <img
+              src={previewUrls[index]}
+              alt={image.filename || 'Attached image'}
+              title={image.sizeBytes ? formatBytes(image.sizeBytes) : undefined}
+              className="h-8 w-8 rounded border border-white/10 object-cover"
+            />
+          ) : (
+            <div
+              title={image.filename}
+              className="text-ink-3 border-stroke-1 flex h-8 max-w-36 items-center rounded border px-1.5 text-[9px]"
+            >
+              <span className="truncate">
+                {image.filename ?? image.mimeType}
+              </span>
+            </div>
+          )}
+          {image.sizeBytes && (
+            <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
+              {formatBytes(image.sizeBytes)}
+            </span>
+          )}
+          {onRemove && (
+            <button
+              type="button"
+              aria-label={`Remove ${image.filename ?? 'attached image'}`}
+              onClick={() => onRemove(index)}
+              className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // InlineCommentComposer — shared comment input form
@@ -155,6 +241,7 @@ export function InlineCommentComposer({
     [onBodyChange],
   );
   const [images, setImages] = useState<InlineComposerImage[]>(initialImages);
+  const imagePreviewUrls = useImagePreviewUrls(images);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -192,7 +279,7 @@ export function InlineCommentComposer({
 
   const handleImageAttach = useCallback(
     (image: PromptImagePart) => {
-      if (!allowImages) return;
+      if (!allowImages || isSubmitting) return;
       if (imagesRef.current.length >= MAX_IMAGES) return;
 
       let nextImage: InlineComposerImage = image;
@@ -213,11 +300,12 @@ export function InlineCommentComposer({
       imagesRef.current = nextImages;
       setImages(nextImages);
     },
-    [allowImages, insertImagesInBody, insertTextAtCursor],
+    [allowImages, insertImagesInBody, insertTextAtCursor, isSubmitting],
   );
 
   const handleImageRemove = useCallback(
     (index: number) => {
+      if (isSubmitting) return;
       const image = imagesRef.current[index];
       if (image?.placeholderMarkdown) {
         const pattern = markdownImagePlaceholderPattern(image.placeholderMarkdown);
@@ -230,7 +318,7 @@ export function InlineCommentComposer({
       imagesRef.current = nextImages;
       setImages(nextImages);
     },
-    [setBody],
+    [isSubmitting, setBody],
   );
 
   const handleSubmit = useCallback(() => {
@@ -242,7 +330,7 @@ export function InlineCommentComposer({
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
-      if (!allowImages) return;
+      if (!allowImages || isSubmitting) return;
       const files = Array.from(e.clipboardData.files);
       const imageFiles = files.filter((f) => f.type.startsWith('image/'));
       const nextVideoFile = files.find(isVideoFile);
@@ -255,12 +343,12 @@ export function InlineCommentComposer({
       if (nextVideoFile && allowed > imageFiles.length)
         setVideoFile(nextVideoFile);
     },
-    [allowImages, images.length, handleImageAttach],
+    [allowImages, images.length, handleImageAttach, isSubmitting],
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
-      if (!allowImages) return;
+      if (!allowImages || isSubmitting) return;
       e.preventDefault();
       const files = Array.from(e.dataTransfer.files);
       const imageFiles = files.filter((f) => f.type.startsWith('image/'));
@@ -272,7 +360,7 @@ export function InlineCommentComposer({
       if (nextVideoFile && allowed > imageFiles.length)
         setVideoFile(nextVideoFile);
     },
-    [allowImages, images.length, handleImageAttach],
+    [allowImages, images.length, handleImageAttach, isSubmitting],
   );
 
   const handleDragOver = useCallback(
@@ -285,7 +373,7 @@ export function InlineCommentComposer({
 
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (!allowImages) return;
+      if (!allowImages || isSubmitting) return;
       const files = Array.from(e.target.files ?? []);
       const nextVideoFile = files.find(isVideoFile);
       const allowed = MAX_IMAGES - images.length;
@@ -297,7 +385,7 @@ export function InlineCommentComposer({
       if (nextVideoFile && allowed > 0) setVideoFile(nextVideoFile);
       e.target.value = '';
     },
-    [allowImages, images.length, handleImageAttach],
+    [allowImages, images.length, handleImageAttach, isSubmitting],
   );
 
   // Register cmd+enter and escape at the top of the keyboard binding stack.
@@ -325,8 +413,13 @@ export function InlineCommentComposer({
 
   const debouncedPreviewBody = useDebouncedValue(body, 300);
   const previewMarkdown = useMemo(
-    () => markdownWithLocalImages(debouncedPreviewBody, images),
-    [debouncedPreviewBody, images],
+    () =>
+      markdownWithLocalImages(
+        debouncedPreviewBody,
+        images,
+        imagePreviewUrls,
+      ),
+    [debouncedPreviewBody, images, imagePreviewUrls],
   );
 
   return (
@@ -357,48 +450,13 @@ export function InlineCommentComposer({
         minHeight={60}
       />
 
-      {previewMarkdown.trim() && (
-        <div className="border-glass-border/60 bg-bg-1/60 rounded border px-2.5 py-2">
-          <div className="text-ink-4 mb-1 text-[10px] font-medium tracking-wide uppercase">
-            Preview
-          </div>
-          <MarkdownContent
-            content={previewMarkdown}
-            imageClassName="max-h-64 object-contain"
-            enableImageModal
-          />
-        </div>
-      )}
+      <ComposerMarkdownPreview markdown={previewMarkdown} />
 
-      {images.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {images.map((img, index) => (
-            <div
-              key={`${img.filename ?? 'img'}-${index}`}
-              className="group relative"
-            >
-              <img
-                src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
-                alt={img.filename || 'Attached image'}
-                title={img.sizeBytes ? formatBytes(img.sizeBytes) : undefined}
-                className="h-8 w-8 rounded border border-white/10 object-cover"
-              />
-              {img.sizeBytes && (
-                <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
-                  {formatBytes(img.sizeBytes)}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => handleImageRemove(index)}
-                className="absolute -top-1 -right-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white group-hover:flex"
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      <ImageAttachments
+        images={images}
+        previewUrls={imagePreviewUrls}
+        onRemove={isSubmitting ? undefined : handleImageRemove}
+      />
 
       <div className="flex items-center gap-2">
         <button
@@ -467,6 +525,203 @@ export function InlineCommentComposer({
 
 const EMPTY_IMAGES: PromptImagePart[] = [];
 
+function InlineCommentEditComposer({
+  body,
+  initialImages,
+  onSave,
+  onCancel,
+}: {
+  body: string;
+  initialImages: PromptImagePart[];
+  onSave: (body: string, images: PromptImagePart[]) => void;
+  onCancel: () => void;
+}) {
+  const [editBody, setEditBody] = useState(body);
+  const [editImages, setEditImages] =
+    useState<PromptImagePart[]>(initialImages);
+  const editImagePreviewUrls = useImagePreviewUrls(editImages);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const bindingId = useId();
+
+  const handleImageAttach = useCallback((image: PromptImagePart) => {
+    setEditImages((current) =>
+      current.length < MAX_IMAGES ? [...current, image] : current,
+    );
+  }, []);
+
+  const handleImageRemove = useCallback((index: number) => {
+    setEditImages((current) =>
+      current.filter((_, imageIndex) => imageIndex !== index),
+    );
+  }, []);
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent) => {
+      const files = Array.from(event.clipboardData.files);
+      const imageFiles = files.filter((file) =>
+        file.type.startsWith('image/'),
+      );
+      const nextVideoFile = files.find(isVideoFile);
+      if (imageFiles.length === 0 && !nextVideoFile) return;
+      event.preventDefault();
+      const allowed = MAX_IMAGES - editImages.length;
+      for (const file of imageFiles.slice(0, allowed)) {
+        void processImageFile(file, handleImageAttach);
+      }
+      if (nextVideoFile && allowed > imageFiles.length)
+        setVideoFile(nextVideoFile);
+    },
+    [editImages.length, handleImageAttach],
+  );
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      const files = Array.from(event.dataTransfer.files);
+      const imageFiles = files.filter((file) =>
+        file.type.startsWith('image/'),
+      );
+      const nextVideoFile = files.find(isVideoFile);
+      const allowed = MAX_IMAGES - editImages.length;
+      for (const file of imageFiles.slice(0, allowed)) {
+        void processImageFile(file, handleImageAttach);
+      }
+      if (nextVideoFile && allowed > imageFiles.length)
+        setVideoFile(nextVideoFile);
+    },
+    [editImages.length, handleImageAttach],
+  );
+
+  const handleFileSelect = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? []);
+      const nextVideoFile = files.find(isVideoFile);
+      const allowed = MAX_IMAGES - editImages.length;
+      for (const file of files
+        .filter((item) => item.type.startsWith('image/'))
+        .slice(0, allowed)) {
+        void processImageFile(file, handleImageAttach);
+      }
+      if (nextVideoFile && allowed > 0) setVideoFile(nextVideoFile);
+      event.target.value = '';
+    },
+    [editImages.length, handleImageAttach],
+  );
+
+  const save = useCallback(() => {
+    const trimmed = editBody.trim();
+    const imagesChanged =
+      editImages.length !== initialImages.length ||
+      editImages.some((image, index) => image !== initialImages[index]);
+    if (
+      (!trimmed && editImages.length === 0) ||
+      (!imagesChanged && trimmed === body)
+    ) {
+      onCancel();
+      return;
+    }
+    onSave(trimmed, editImages);
+  }, [body, editBody, editImages, initialImages, onCancel, onSave]);
+
+  const debouncedPreviewBody = useDebouncedValue(editBody, 300);
+  const previewMarkdown = useMemo(
+    () =>
+      markdownWithLocalImages(
+        debouncedPreviewBody,
+        editImages,
+        editImagePreviewUrls,
+      ),
+    [debouncedPreviewBody, editImages, editImagePreviewUrls],
+  );
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
+
+  useRegisterKeyboardBindings(`inline-comment-edit-${bindingId}`, {
+    'cmd+enter': () => {
+      if (document.activeElement !== textareaRef.current) return false;
+      save();
+      return true;
+    },
+    escape: () => {
+      onCancel();
+      return true;
+    },
+  });
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <textarea
+        ref={textareaRef}
+        className="bg-bg-2 text-ink-1 border-stroke-1 min-h-[48px] w-full resize-y rounded border px-2 py-1.5 text-xs focus:outline-none"
+        value={editBody}
+        onChange={(event) => setEditBody(event.target.value)}
+        onPaste={handlePaste}
+        onDrop={handleDrop}
+        onDragOver={(event) => event.preventDefault()}
+      />
+      <ComposerMarkdownPreview markdown={previewMarkdown} />
+      <ImageAttachments
+        images={editImages}
+        previewUrls={editImagePreviewUrls}
+        onRemove={handleImageRemove}
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="bg-acc text-acc-ink inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium disabled:opacity-50"
+          onClick={save}
+          disabled={
+            (!editBody.trim() && editImages.length === 0) ||
+            (editBody.trim() === body &&
+              editImages.length === initialImages.length &&
+              editImages.every(
+                (image, index) => image === initialImages[index],
+              ))
+          }
+        >
+          Save
+          <kbd className="rounded bg-white/20 px-1 py-px font-mono text-[9px]">
+            {'\u2318\u21B5'}
+          </kbd>
+        </button>
+        <button
+          type="button"
+          className="text-ink-3 hover:text-ink-1 p-1"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={editImages.length >= MAX_IMAGES}
+          title="Attach image"
+        >
+          <ImagePlus className="h-3.5 w-3.5" />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,video/*"
+          multiple
+          className="hidden"
+          onChange={handleFileSelect}
+        />
+        <button
+          type="button"
+          className="text-ink-3 hover:text-ink-1 rounded px-2 py-1 text-xs"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+      <VideoGifConverter
+        file={videoFile}
+        onAttach={handleImageAttach}
+        onClose={() => setVideoFile(null)}
+      />
+    </div>
+  );
+}
+
 export function InlineCommentBubble({
   lineStart,
   lineEnd,
@@ -498,132 +753,22 @@ export function InlineCommentBubble({
   const currentImages = images ?? EMPTY_IMAGES;
   const lineLabel = formatLineRangeLabel(lineStart, lineEnd);
   const [isEditing, setIsEditing] = useState(false);
-  const [editBody, setEditBody] = useState(body);
-  const [editImages, setEditImages] =
-    useState<PromptImagePart[]>(currentImages);
-  const [editVideoFile, setEditVideoFile] = useState<File | null>(null);
-  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const editFileInputRef = useRef<HTMLInputElement>(null);
-  const bindingId = useId();
+  const displayedImagePreviewUrls = useImagePreviewUrls(
+    isEditing ? EMPTY_IMAGES : currentImages,
+  );
 
   const startEditing = useCallback(() => {
-    setEditBody(body);
-    setEditImages(currentImages);
     setIsEditing(true);
-  }, [body, currentImages]);
+  }, []);
 
   const cancelEditing = useCallback(() => {
     setIsEditing(false);
-    setEditBody(body);
-    setEditImages(currentImages);
-  }, [body, currentImages]);
-
-  const handleEditImageAttach = useCallback((image: PromptImagePart) => {
-    setEditImages((prev) =>
-      prev.length < MAX_IMAGES ? [...prev, image] : prev,
-    );
   }, []);
 
-  const handleEditPaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const files = Array.from(e.clipboardData.files);
-      const imageFiles = files.filter((f) => f.type.startsWith('image/'));
-      const nextVideoFile = files.find(isVideoFile);
-      if (imageFiles.length === 0 && !nextVideoFile) return;
-      e.preventDefault();
-      const allowed = MAX_IMAGES - editImages.length;
-      for (const file of imageFiles.slice(0, allowed)) {
-        void processImageFile(file, handleEditImageAttach);
-      }
-      if (nextVideoFile && allowed > imageFiles.length)
-        setEditVideoFile(nextVideoFile);
-    },
-    [editImages.length, handleEditImageAttach],
-  );
-
-  const handleEditDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      const files = Array.from(e.dataTransfer.files);
-      const imageFiles = files.filter((f) => f.type.startsWith('image/'));
-      const nextVideoFile = files.find(isVideoFile);
-      const allowed = MAX_IMAGES - editImages.length;
-      for (const file of imageFiles.slice(0, allowed)) {
-        void processImageFile(file, handleEditImageAttach);
-      }
-      if (nextVideoFile && allowed > imageFiles.length)
-        setEditVideoFile(nextVideoFile);
-    },
-    [editImages.length, handleEditImageAttach],
-  );
-
-  const handleEditDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-  }, []);
-
-  const handleEditFileSelect = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files ?? []);
-      const nextVideoFile = files.find(isVideoFile);
-      const allowed = MAX_IMAGES - editImages.length;
-      for (const file of files
-        .filter((f) => f.type.startsWith('image/'))
-        .slice(0, allowed)) {
-        void processImageFile(file, handleEditImageAttach);
-      }
-      if (nextVideoFile && allowed > 0) setEditVideoFile(nextVideoFile);
-      e.target.value = '';
-    },
-    [editImages.length, handleEditImageAttach],
-  );
-
-  const saveEdit = useCallback(() => {
-    const trimmed = editBody.trim();
-    const imagesChanged =
-      editImages.length !== currentImages.length ||
-      editImages.some((img, i) => img !== currentImages[i]);
-    if (
-      (!trimmed && editImages.length === 0) ||
-      (!imagesChanged && trimmed === body)
-    ) {
-      cancelEditing();
-      return;
-    }
-    onEdit?.(trimmed, editImages);
+  const saveEdit = useCallback((newBody: string, newImages: PromptImagePart[]) => {
+    onEdit?.(newBody, newImages);
     setIsEditing(false);
-  }, [editBody, editImages, body, currentImages, onEdit, cancelEditing]);
-
-  const debouncedEditPreviewBody = useDebouncedValue(editBody, 300);
-  const editPreviewMarkdown = useMemo(
-    () => markdownWithLocalImages(debouncedEditPreviewBody, editImages),
-    [debouncedEditPreviewBody, editImages],
-  );
-
-  // Focus textarea when entering edit mode
-  useEffect(() => {
-    if (isEditing) {
-      editTextareaRef.current?.focus();
-    }
-  }, [isEditing]);
-
-  // Keyboard bindings for edit mode
-  useRegisterKeyboardBindings(
-    `inline-comment-edit-${bindingId}`,
-    isEditing
-      ? {
-          'cmd+enter': () => {
-            if (document.activeElement !== editTextareaRef.current)
-              return false;
-            saveEdit();
-            return true;
-          },
-          escape: () => {
-            cancelEditing();
-            return true;
-          },
-        }
-      : {},
-  );
+  }, [onEdit]);
 
   return (
     <div className="group/bubble flex items-start gap-2 rounded px-3 py-1.5">
@@ -672,98 +817,12 @@ export function InlineCommentBubble({
           )}
         </div>
         {isEditing ? (
-          <div className="flex flex-col gap-1.5">
-            <textarea
-              ref={editTextareaRef}
-              className="bg-bg-2 text-ink-1 border-stroke-1 min-h-[48px] w-full resize-y rounded border px-2 py-1.5 text-xs focus:outline-none"
-              value={editBody}
-              onChange={(e) => setEditBody(e.target.value)}
-              onPaste={handleEditPaste}
-              onDrop={handleEditDrop}
-              onDragOver={handleEditDragOver}
-            />
-            {editPreviewMarkdown.trim() && (
-              <div className="border-glass-border/60 bg-bg-1/60 rounded border px-2.5 py-2">
-                <div className="text-ink-4 mb-1 text-[10px] font-medium tracking-wide uppercase">
-                  Preview
-                </div>
-                <MarkdownContent
-                  content={editPreviewMarkdown}
-                  imageClassName="max-h-64 object-contain"
-                  enableImageModal
-                />
-              </div>
-            )}
-            {editImages.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {editImages.map((img, index) => (
-                  <div
-                    key={`${img.filename ?? 'img'}-${index}`}
-                    className="group/thumb relative"
-                  >
-                    <img
-                      src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
-                      alt={img.filename || 'Attached image'}
-                      className="h-8 w-8 rounded border border-white/10 object-cover"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEditImages((prev) =>
-                          prev.filter((_, i) => i !== index),
-                        )
-                      }
-                      className="absolute -top-1 -right-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white group-hover/thumb:flex"
-                    >
-                      <X className="h-2.5 w-2.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="bg-acc text-acc-ink inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium disabled:opacity-50"
-                onClick={saveEdit}
-                disabled={
-                  (!editBody.trim() && editImages.length === 0) ||
-                  (editBody.trim() === body &&
-                    editImages.length === currentImages.length &&
-                    editImages.every((img, i) => img === currentImages[i]))
-                }
-              >
-                Save
-                <kbd className="rounded bg-white/20 px-1 py-px font-mono text-[9px]">
-                  {'\u2318\u21B5'}
-                </kbd>
-              </button>
-              <button
-                type="button"
-                className="text-ink-3 hover:text-ink-1 p-1"
-                onClick={() => editFileInputRef.current?.click()}
-                disabled={editImages.length >= MAX_IMAGES}
-                title="Attach image"
-              >
-                <ImagePlus className="h-3.5 w-3.5" />
-              </button>
-              <input
-                ref={editFileInputRef}
-                type="file"
-                accept="image/*,video/*"
-                multiple
-                className="hidden"
-                onChange={handleEditFileSelect}
-              />
-              <button
-                type="button"
-                className="text-ink-3 hover:text-ink-1 rounded px-2 py-1 text-xs"
-                onClick={cancelEditing}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+          <InlineCommentEditComposer
+            body={body}
+            initialImages={currentImages}
+            onSave={saveEdit}
+            onCancel={cancelEditing}
+          />
         ) : (
           <>
             {selectedText && (
@@ -775,38 +834,14 @@ export function InlineCommentBubble({
               </div>
             )}
             <div className="text-ink-0 text-xs whitespace-pre-wrap">{body}</div>
-            {currentImages.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {currentImages.map((img, index) => (
-                  <div
-                    key={`${img.filename ?? 'img'}-${index}`}
-                    className="relative"
-                  >
-                    <img
-                      src={`data:${img.storageMimeType ?? img.mimeType};base64,${img.storageData ?? img.data}`}
-                      alt={img.filename || 'Attached image'}
-                      title={
-                        img.sizeBytes ? formatBytes(img.sizeBytes) : undefined
-                      }
-                      className="h-8 w-8 rounded border border-white/10 object-cover"
-                    />
-                    {img.sizeBytes && (
-                      <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
-                        {formatBytes(img.sizeBytes)}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            <ImageAttachments
+              images={currentImages}
+              previewUrls={displayedImagePreviewUrls}
+              className="mt-1.5"
+            />
           </>
         )}
         {renderFooter}
-        <VideoGifConverter
-          file={editVideoFile}
-          onAttach={handleEditImageAttach}
-          onClose={() => setEditVideoFile(null)}
-        />
       </div>
     </div>
   );

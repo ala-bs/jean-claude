@@ -2448,7 +2448,7 @@ async function getPullRequestIterations(params: {
 interface CommentResponse {
   id: number;
   parentCommentId?: number;
-  content: string;
+  content?: string;
   commentType?: string; // 'unknown', 'text', 'codeChange', 'system'
   isDeleted?: boolean;
   author: {
@@ -2472,7 +2472,7 @@ function mapCommentResponse(comment: CommentResponse): AzureDevOpsComment {
   return {
     id: comment.id,
     parentCommentId: comment.parentCommentId,
-    content: comment.content,
+    content: comment.content ?? '',
     commentType: mapCommentType(comment.commentType),
     author: {
       id: comment.author.id,
@@ -3627,7 +3627,10 @@ export async function getPullRequestThreads(params: {
         if (thread.isDeleted) return false;
         // Keep thread if it has at least one non-system comment
         return thread.comments.some(
-          (c) => c.commentType !== 'system' && c.content,
+          (c) =>
+            c.isDeleted !== true &&
+            c.commentType !== 'system' &&
+            Boolean(c.content),
         );
       })
       .map((thread) => ({
@@ -3649,7 +3652,12 @@ export async function getPullRequestThreads(params: {
           : undefined,
         comments: thread.comments
           // Filter out system comments within threads
-          .filter((c) => c.commentType !== 'system')
+          .filter(
+            (c) =>
+              c.isDeleted !== true &&
+              c.commentType !== 'system' &&
+              Boolean(c.content),
+          )
           .map(mapCommentResponse),
         isDeleted: thread.isDeleted,
       }))

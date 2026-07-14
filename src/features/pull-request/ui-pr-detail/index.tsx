@@ -63,6 +63,7 @@ import { useToastStore } from '@/stores/toasts';
 
 
 import { getCommentStatusCountByPrFile } from '../utils-pr-comment-counts';
+import { getPrThreadImageUploader } from './utils-pr-thread-image-uploader';
 import { PrCommitDiffView } from '../ui-pr-commit-diff-view';
 import { PrCommits } from '../ui-pr-commits';
 import { PrDiffView } from '../ui-pr-diff-view';
@@ -309,8 +310,8 @@ export function PrDetail({
   });
 
   const handleAddComment = useCallback(
-    (content: string) => {
-      addComment.mutate(content);
+    async (content: string) => {
+      await addComment.mutateAsync(content);
     },
     [addComment],
   );
@@ -709,9 +710,11 @@ export function PrDetail({
                   : addComment.isPending
             }
             onUploadImage={
-              readOnly || activeCommentMode === 'task'
-                ? undefined
-                : handleUploadImage
+              getPrThreadImageUploader({
+                readOnly,
+                activeCommentMode,
+                uploadImage: handleUploadImage,
+              })
             }
             bottomPadding={bottomPadding}
             fileCount={files.length}
@@ -795,9 +798,11 @@ export function PrDetail({
                         : handleAddFileComment
                   }
                   onUploadImage={
-                    readOnly || activeCommentMode === 'task'
-                      ? undefined
-                      : handleUploadImage
+                    getPrThreadImageUploader({
+                      readOnly,
+                      activeCommentMode,
+                      uploadImage: handleUploadImage,
+                    })
                   }
                   isAddingComment={
                     readOnly

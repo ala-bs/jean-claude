@@ -23,6 +23,7 @@ import { isSvgPath } from '@shared/image-types';
 import type { LineRangeSelectionPosition } from '@/features/agent/ui-diff-view/use-line-range-selection';
 import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import type { PromptImageUploadCache } from '@/lib/prompt-image-upload-cache';
 import { ReviewCommentComposer } from '@/features/agent/ui-review-comments/review-comment-composer';
 import { ReviewCommentThread } from '@/features/agent/ui-review-comments/review-comment-thread';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
@@ -100,10 +101,10 @@ export function FileDiffContent({
     line: number;
     lineEnd?: number;
     content: string;
-  }) => void;
+  }) => Promise<void> | void;
   isAddingComment?: boolean;
   CommentForm?: ComponentType<{
-    onSubmit: (content: string) => void;
+    onSubmit: (content: string) => Promise<void> | void;
     onCancel: () => void;
     lineStart: number;
     lineEnd?: number;
@@ -112,7 +113,7 @@ export function FileDiffContent({
     onAskAgent?: (question: string) => Promise<void> | void;
   }>;
   renderCommentForm?: (props: {
-    onSubmit: (content: string) => void;
+    onSubmit: (content: string) => Promise<void> | void;
     onCancel: () => void;
     lineStart: number;
     lineEnd?: number;
@@ -167,6 +168,7 @@ export function FileDiffContent({
     lineEnd?: number;
     body: string;
     images: PromptImagePart[];
+    uploadCache: PromptImageUploadCache;
   }) => Promise<void>;
   onDeleteReviewComment?: (commentId: string) => void;
   onEditReviewComment?: (
@@ -230,10 +232,10 @@ export function FileDiffContent({
   const hasReviewSupport = !!onAddReviewComment;
 
   const handleAddCommentForRange = useCallback(
-    (range: LineRange, content: string) => {
+    async (range: LineRange, content: string) => {
       if (!onAddComment) return;
       if (range.side === 'old') return;
-      onAddComment({
+      await onAddComment({
         filePath: file.path,
         line: range.start,
         lineEnd: range.end !== range.start ? range.end : undefined,
@@ -514,7 +516,12 @@ export function FileDiffContent({
   );
 
   const handleAddReviewCommentAsPrCommentForRange = useCallback(
-    async (range: LineRange, body: string, images: PromptImagePart[]) => {
+    async (
+      range: LineRange,
+      body: string,
+      images: PromptImagePart[],
+      uploadCache: PromptImageUploadCache,
+    ) => {
       if (!onAddReviewCommentAsPrComment) return;
       if (range.side === 'old') return;
       await onAddReviewCommentAsPrComment({
@@ -523,6 +530,7 @@ export function FileDiffContent({
         lineEnd: range.end !== range.start ? range.end : undefined,
         body,
         images,
+        uploadCache,
       });
       onReviewCommentDraftBodyChange?.(
         '',
@@ -564,11 +572,12 @@ export function FileDiffContent({
               }
               onSubmitAsPrComment={
                 onAddReviewCommentAsPrComment
-                  ? (body, images) =>
+                  ? (body, images, uploadCache) =>
                       handleAddReviewCommentAsPrCommentForRange(
                         range,
                         body,
                         images,
+                        uploadCache,
                       )
                   : undefined
               }
@@ -582,7 +591,7 @@ export function FileDiffContent({
         });
       } else if (hasCommentSupport && (CommentForm || renderCommentForm)) {
         const props = {
-          onSubmit: (content: string) =>
+          onSubmit: async (content: string) =>
             handleAddCommentForRange(range, content),
           onCancel: () => removeRange(range),
           lineStart: range.start,

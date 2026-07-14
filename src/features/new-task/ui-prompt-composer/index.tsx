@@ -2,6 +2,7 @@ import {
   type ChangeEvent,
   type ClipboardEvent,
   type DragEvent,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -55,12 +56,97 @@ import { useToastStore } from '@/stores/toasts';
 
 
 
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 import { useLatestRef } from '@/hooks/use-latest-ref';
+
+const EMPTY_IMAGES: PromptImagePart[] = [];
+
 export function getWorkItemCommentSelectionId(
   comment: WorkItemComment,
 ): string {
   return `${comment.workItemId}:${comment.id}`;
 }
+
+export const PromptImageAttachments = memo(function PromptImageAttachments({
+  images,
+  previewUrls,
+  onPreview,
+  onRemove,
+}: {
+  images: PromptImagePart[];
+  previewUrls: (string | undefined)[];
+  onPreview: (index: number) => void;
+  onRemove?: (index: number) => void;
+}) {
+  return images.map((image, index) => {
+    const previewUrl = previewUrls[index];
+    return (
+      <div
+        key={`${image.filename ?? 'img'}-${index}`}
+        className="group relative h-12 w-12 shrink-0 rounded border"
+        style={{ borderColor: 'oklch(1 0 0 / 0.08)' }}
+      >
+        {previewUrl ? (
+          <button
+            type="button"
+            onClick={() => onPreview(index)}
+            className="relative h-full w-full cursor-pointer overflow-hidden rounded focus-visible:outline-none"
+            aria-label={`Preview ${image.filename ?? `image ${index + 1}`}`}
+            title={image.sizeBytes ? formatBytes(image.sizeBytes) : undefined}
+          >
+            <img
+              src={previewUrl}
+              alt={image.filename ?? 'Attached image'}
+              className="h-full w-full object-cover transition duration-150 group-focus-within:scale-105 group-focus-within:brightness-75 group-hover:scale-105 group-hover:brightness-75"
+            />
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
+              <span
+                className="flex h-6 w-6 items-center justify-center rounded-full border"
+                style={{
+                  background: 'oklch(0.2 0.02 280 / 0.72)',
+                  borderColor: 'oklch(1 0 0 / 0.14)',
+                }}
+              >
+                <Eye className="text-ink-0 h-3.5 w-3.5" />
+              </span>
+            </span>
+            {image.sizeBytes && (
+              <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
+                {formatBytes(image.sizeBytes)}
+              </span>
+            )}
+          </button>
+        ) : (
+          <div
+            title={image.filename}
+            className="text-ink-3 flex h-full w-full items-center justify-center overflow-hidden rounded px-1 text-center text-[8px] leading-tight"
+          >
+            <span className="line-clamp-3 break-all">
+              {image.filename ?? image.mimeType}
+            </span>
+          </div>
+        )}
+        {onRemove && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRemove(index);
+            }}
+            className="absolute top-0 right-0 flex h-4 w-4 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border transition-transform hover:scale-110"
+            style={{
+              background: 'oklch(0.2 0.02 280 / 0.92)',
+              borderColor: 'oklch(1 0 0 / 0.16)',
+            }}
+            aria-label={`Remove ${image.filename ?? `image ${index + 1}`}`}
+          >
+            <X className="text-ink-0 h-2.5 w-2.5" />
+          </button>
+        )}
+      </div>
+    );
+  });
+});
 
 function escapeXml(value: string): string {
   return value
@@ -533,6 +619,7 @@ export function PromptComposer({
   >;
 }) {
   const [showComments, setShowComments] = useState(false);
+  const imagePreviewUrls = useImagePreviewUrls(images ?? EMPTY_IMAGES);
   const [selectedSnippetId, setSelectedSnippetId] = useState<string | null>(
     null,
   );
@@ -1174,66 +1261,12 @@ export function PromptComposer({
           )}
           {images &&
             images.length > 0 &&
-            images.map((image, index) => {
-              const thumbData = image.storageData ?? image.data;
-              const thumbMime = image.storageMimeType ?? image.mimeType;
-              return (
-                <div
-                  key={`${image.filename ?? 'img'}-${index}`}
-                  className="group relative h-12 w-12 shrink-0 rounded border"
-                  style={{ borderColor: 'oklch(1 0 0 / 0.08)' }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setPreviewIndex(index)}
-                    className="relative h-full w-full cursor-pointer overflow-hidden rounded focus-visible:outline-none"
-                    aria-label={`Preview ${image.filename ?? `image ${index + 1}`}`}
-                    title={
-                      image.sizeBytes ? formatBytes(image.sizeBytes) : undefined
-                    }
-                  >
-                    <img
-                      src={`data:${thumbMime};base64,${thumbData}`}
-                      alt={image.filename ?? 'Attached image'}
-                      className="h-full w-full object-cover transition duration-150 group-focus-within:scale-105 group-focus-within:brightness-75 group-hover:scale-105 group-hover:brightness-75"
-                    />
-                    <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
-                      <span
-                        className="flex h-6 w-6 items-center justify-center rounded-full border"
-                        style={{
-                          background: 'oklch(0.2 0.02 280 / 0.72)',
-                          borderColor: 'oklch(1 0 0 / 0.14)',
-                        }}
-                      >
-                        <Eye className="text-ink-0 h-3.5 w-3.5" />
-                      </span>
-                    </span>
-                    {image.sizeBytes && (
-                      <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
-                        {formatBytes(image.sizeBytes)}
-                      </span>
-                    )}
-                  </button>
-                  {onImageRemove && (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onImageRemove(index);
-                      }}
-                      className="absolute top-0 right-0 flex h-4 w-4 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border transition-transform hover:scale-110"
-                      style={{
-                        background: 'oklch(0.2 0.02 280 / 0.92)',
-                        borderColor: 'oklch(1 0 0 / 0.16)',
-                      }}
-                      aria-label={`Remove ${image.filename ?? `image ${index + 1}`}`}
-                    >
-                      <X className="text-ink-0 h-2.5 w-2.5" />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+            <PromptImageAttachments
+              images={images}
+              previewUrls={imagePreviewUrls}
+              onPreview={setPreviewIndex}
+              onRemove={onImageRemove}
+            />}
         </div>
       )}
 
@@ -1272,6 +1305,7 @@ export function PromptComposer({
       {previewIndex !== null && images && images.length > 0 && (
         <ImagePreviewDialog
           images={images}
+          previewUrls={imagePreviewUrls}
           initialIndex={previewIndex}
           onClose={() => setPreviewIndex(null)}
         />
@@ -1293,17 +1327,20 @@ export function PromptComposer({
   );
 }
 
-function ImagePreviewDialog({
+export function ImagePreviewDialog({
   images,
+  previewUrls,
   initialIndex,
   onClose,
 }: {
   images: PromptImagePart[];
+  previewUrls: (string | undefined)[];
   initialIndex: number;
   onClose: () => void;
 }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const img = images[currentIndex];
+  const previewUrl = previewUrls[currentIndex];
 
   const onCloseRef = useLatestRef(onClose);
 
@@ -1352,12 +1389,21 @@ function ImagePreviewDialog({
         </button>
       )}
 
-      <img
-        src={`data:${img.mimeType};base64,${img.data}`}
-        alt={img.filename || 'Image preview'}
-        className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain"
-        onClick={(e) => e.stopPropagation()}
-      />
+      {previewUrl ? (
+        <img
+          src={previewUrl}
+          alt={img.filename || 'Image preview'}
+          className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain"
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <div
+          className="bg-bg-1 text-ink-2 border-glass-border max-w-[85vw] rounded-lg border px-6 py-5 text-sm"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {img.filename ?? img.mimeType}
+        </div>
+      )}
 
       {images.length > 1 && currentIndex < images.length - 1 && (
         <button

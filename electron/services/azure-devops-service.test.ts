@@ -1462,6 +1462,85 @@ describe('getPullRequestThreads', () => {
     ]);
   });
 
+  it('excludes deleted comments whose content Azure omits', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        {
+          count: 2,
+          value: [
+            {
+              id: 9,
+              status: 'active',
+              isDeleted: false,
+              comments: [
+                {
+                  id: 1,
+                  content: 'Keep this comment.',
+                  commentType: 'text',
+                  isDeleted: false,
+                  author: {
+                    id: 'user-1',
+                    displayName: 'Reviewer',
+                    uniqueName: 'reviewer@example.com',
+                  },
+                  publishedDate: '2026-01-01T00:00:00Z',
+                  lastUpdatedDate: '2026-01-01T00:00:00Z',
+                },
+                {
+                  id: 2,
+                  commentType: 'text',
+                  isDeleted: true,
+                  author: {
+                    id: 'user-1',
+                    displayName: 'Reviewer',
+                    uniqueName: 'reviewer@example.com',
+                  },
+                  publishedDate: '2026-01-01T00:00:00Z',
+                  lastUpdatedDate: '2026-01-01T00:00:00Z',
+                },
+              ],
+            },
+            {
+              id: 10,
+              status: 'active',
+              isDeleted: false,
+              comments: [
+                {
+                  id: 3,
+                  content: 'Deleted content may still be returned.',
+                  commentType: 'text',
+                  isDeleted: true,
+                  author: {
+                    id: 'user-1',
+                    displayName: 'Reviewer',
+                    uniqueName: 'reviewer@example.com',
+                  },
+                  publishedDate: '2026-01-01T00:00:00Z',
+                  lastUpdatedDate: '2026-01-01T00:00:00Z',
+                },
+              ],
+            },
+          ],
+        },
+        { ok: true },
+      ),
+    );
+
+    await expect(
+      getPullRequestThreads({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: 9,
+        comments: [expect.objectContaining({ id: 1, content: 'Keep this comment.' })],
+      }),
+    ]);
+  });
+
   it('keeps threads when original iteration lookup fails', async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);

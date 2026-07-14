@@ -311,7 +311,11 @@ app.whenReady().then(async () => {
     );
 
     // Stream the response directly from Azure DevOps
-    return fetchAuthenticatedImageStream({ providerId, imageUrl });
+    return fetchAuthenticatedImageStream({
+      providerId,
+      imageUrl,
+      signal: request.signal,
+    });
   });
   dbg.main('azure-image-proxy protocol handler registered');
 

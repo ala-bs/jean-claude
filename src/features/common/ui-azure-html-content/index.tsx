@@ -196,6 +196,7 @@ export function AzureMarkdownContent({
   className,
   imageClassName,
   enableImageModal,
+  allowBlobImages,
 }: {
   /** The Markdown content from Azure DevOps */
   markdown: string;
@@ -211,6 +212,8 @@ export function AzureMarkdownContent({
   imageClassName?: string;
   /** Whether rendered images should open in a modal when clicked */
   enableImageModal?: boolean;
+  /** Whether local Blob URLs may render as images */
+  allowBlobImages?: boolean;
 }) {
   const processedMarkdown = useMemo(() => {
     if (!markdown) return '';
@@ -240,6 +243,7 @@ export function AzureMarkdownContent({
         content={processedMarkdown}
         imageClassName={imageClassName}
         enableImageModal={enableImageModal}
+        allowBlobImages={allowBlobImages}
       />
     </div>
   );
