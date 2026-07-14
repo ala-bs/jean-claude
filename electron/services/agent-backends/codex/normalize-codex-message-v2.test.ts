@@ -250,6 +250,42 @@ describe('normalizeCodexNotification', () => {
     ]);
   });
 
+  it('maps Codex context compaction completion to a distinct end status', () => {
+    const ctx = createCodexNormalizationContext();
+    const item = {
+      type: 'contextCompaction',
+      id: 'd7fd0a73-ca64-4286-915a-d9d37508d01c',
+    };
+
+    normalizeCodexNotification(
+      {
+        method: 'item/started',
+        params: { item, startedAtMs: 1782557385824 },
+      },
+      ctx,
+    );
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/completed',
+          params: { item, completedAtMs: 1782557421140 },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: {
+          id: 'd7fd0a73-ca64-4286-915a-d9d37508d01c-completed',
+          date: '2026-06-27T10:50:21.140Z',
+          type: 'system-status',
+          status: null,
+        },
+      },
+    ]);
+  });
+
   it('updates repeated Codex userMessage completion instead of duplicating prompt', () => {
     const ctx = createCodexNormalizationContext();
     const notification = {
@@ -877,6 +913,117 @@ describe('normalizeCodexNotification', () => {
             description: 'Review the diff carefully.',
             prompt: 'Review the diff carefully.\nReturn findings only.',
           },
+        }),
+      },
+    ]);
+  });
+
+  it('maps compacted Codex sub-agent start activity to a sub-agent card', () => {
+    const ctx = createCodexNormalizationContext();
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/completed',
+          params: {
+            completedAtMs: 1784038566345,
+            item: {
+              id: 'call-activity-started',
+              type: 'subAgentActivity',
+              kind: 'started',
+              agentThreadId: 'thread-child',
+              agentPath: '/root/requested_code_review',
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: {
+          id: 'call-activity-started',
+          date: '2026-07-14T14:16:06.345Z',
+          type: 'tool-use',
+          toolId: 'call-activity-started',
+          name: 'sub-agent',
+          input: {
+            agentType: 'Codex',
+            description: 'requested_code_review',
+            prompt: 'requested_code_review',
+          },
+        },
+      },
+    ]);
+  });
+
+  it('moves child message parenting to the latest Codex sub-agent activity', () => {
+    const ctx = createCodexNormalizationContext();
+
+    normalizeCodexNotification(
+      {
+        method: 'item/completed',
+        params: {
+          item: {
+            id: 'call-activity-started',
+            type: 'subAgentActivity',
+            kind: 'started',
+            agentThreadId: 'thread-child',
+            agentPath: '/root/review',
+          },
+        },
+      },
+      ctx,
+    );
+
+    const interaction = normalizeCodexNotification(
+      {
+        method: 'item/completed',
+        params: {
+          item: {
+            id: 'call-activity-interacted',
+            type: 'subAgentActivity',
+            kind: 'interacted',
+            agentThreadId: 'thread-child',
+            agentPath: '/root/review',
+          },
+        },
+      },
+      ctx,
+    );
+
+    expect(interaction).toEqual([
+      {
+        type: 'entry',
+        entry: expect.objectContaining({
+          id: 'call-activity-interacted',
+          name: 'sub-agent',
+          input: expect.objectContaining({ description: 'review' }),
+        }),
+      },
+    ]);
+
+    expect(
+      normalizeCodexNotification(
+        {
+          method: 'item/completed',
+          params: {
+            threadId: 'thread-child',
+            item: {
+              id: 'child-message-after-interaction',
+              type: 'agentMessage',
+              text: 'Follow-up finding',
+            },
+          },
+        },
+        ctx,
+      ),
+    ).toEqual([
+      {
+        type: 'entry',
+        entry: expect.objectContaining({
+          id: 'child-message-after-interaction',
+          parentToolId: 'call-activity-interacted',
         }),
       },
     ]);
