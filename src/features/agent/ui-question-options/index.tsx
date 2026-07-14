@@ -9,6 +9,8 @@ import { useCommands } from '@/common/hooks/use-commands';
 
 type QuestionInputMode = 'text' | 'single-choice' | 'multi-choice';
 
+const DECIDE_FOR_ME = 'Decide for me';
+
 function getQuestionInputMode(question: AgentQuestion): QuestionInputMode {
   if (question.type === 'text') return 'text';
   if (!question.type && question.options.length === 0) return 'text';
@@ -161,9 +163,10 @@ function QuestionInput({
   const mode = getQuestionInputMode(question);
   const selectedLabels = getSelectedLabels(value);
   const allowsFreeform = question.allowFreeform ?? true;
-  const optionCount =
-    question.options.length + (question.multiSelect || !allowsFreeform ? 0 : 1);
+  const decideForMeIndex = question.options.length;
+  const otherOptionIndex = decideForMeIndex + 1;
   const isFreeformOpen = allowsFreeform && isOtherOpen;
+  const isDecideForMeSelected = value === DECIDE_FOR_ME;
   const otherPlaceholder =
     mode === 'text' ? 'Add another answer...' : 'Add other answer...';
 
@@ -171,7 +174,7 @@ function QuestionInput({
     return (
       <div className="space-y-1.5">
         <Textarea
-          value={value}
+          value={isDecideForMeSelected ? '' : value}
           onFocus={() => onActivate({ questionIndex, optionIndex: 0 })}
           onChange={(event) =>
             onTextChange({ questionIndex, value: event.currentTarget.value })
@@ -181,6 +184,23 @@ function QuestionInput({
           rows={3}
           className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
         />
+        <button
+          type="button"
+          aria-pressed={isDecideForMeSelected}
+          onFocus={() => onActivate({ questionIndex, optionIndex: 0 })}
+          onClick={() => {
+            onActivate({ questionIndex, optionIndex: 0 });
+            onSelectOption({ questionIndex, optionIndex: 0 });
+          }}
+          className={`flex items-center gap-2 rounded-lg border p-2 text-left text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+            isDecideForMeSelected
+              ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+              : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+          }`}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Decide for me
+        </button>
         {allowsFreeform ? (
           <Textarea
             value={otherValue}
@@ -249,6 +269,25 @@ function QuestionInput({
               </button>
             );
           })}
+          <button
+            type="button"
+            aria-pressed={isDecideForMeSelected}
+            onFocus={() =>
+              onActivate({ questionIndex, optionIndex: decideForMeIndex })
+            }
+            onClick={() => {
+              onActivate({ questionIndex, optionIndex: decideForMeIndex });
+              onSelectOption({ questionIndex, optionIndex: decideForMeIndex });
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-left text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+              isDecideForMeSelected
+                ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+                : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+            }`}
+          >
+            <Sparkles className="h-3 w-3" />
+            Decide for me
+          </button>
         </div>
         {allowsFreeform ? (
           <Textarea
@@ -323,13 +362,34 @@ function QuestionInput({
             </button>
           );
         })}
+        <button
+          type="button"
+          aria-pressed={isDecideForMeSelected}
+          onFocus={() =>
+            onActivate({ questionIndex, optionIndex: decideForMeIndex })
+          }
+          onClick={() => {
+            onActivate({ questionIndex, optionIndex: decideForMeIndex });
+            onSelectOption({ questionIndex, optionIndex: decideForMeIndex });
+          }}
+          className={`flex items-start gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+            isDecideForMeSelected
+              ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+              : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+          }`}
+        >
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="block text-[13px] font-semibold leading-tight text-ink-0">
+            Decide for me
+          </span>
+        </button>
         {allowsFreeform ? (
           isFreeformOpen ? (
             <Textarea
               value={value}
               aria-label={`${question.question} custom answer`}
               onFocus={() =>
-                onActivate({ questionIndex, optionIndex: optionCount - 1 })
+                onActivate({ questionIndex, optionIndex: otherOptionIndex })
               }
               onChange={(event) =>
                 onOtherChange({ questionIndex, value: event.currentTarget.value })
@@ -348,11 +408,11 @@ function QuestionInput({
               type="button"
               aria-pressed={isOtherOpen}
               onFocus={() =>
-                onActivate({ questionIndex, optionIndex: optionCount - 1 })
+                onActivate({ questionIndex, optionIndex: otherOptionIndex })
               }
               onClick={() => {
-                onActivate({ questionIndex, optionIndex: optionCount - 1 });
-                onSelectOption({ questionIndex, optionIndex: optionCount - 1 });
+                onActivate({ questionIndex, optionIndex: otherOptionIndex });
+                onSelectOption({ questionIndex, optionIndex: otherOptionIndex });
               }}
               className={`flex items-center gap-2 rounded-lg border p-2 text-left text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none sm:col-span-2 xl:col-span-3 2xl:col-span-4 ${
                 'border-white/10 bg-white/[0.04] text-ink-2 hover:border-white/15 hover:bg-white/[0.07]'
@@ -458,11 +518,9 @@ export function QuestionOptions({
 
   const getOptionCount = useCallback((question: AgentQuestion) => {
     const mode = getQuestionInputMode(question);
-    if (mode === 'text') return 0;
-    return (
-      question.options.length +
-      (question.multiSelect || question.allowFreeform === false ? 0 : 1)
-    );
+    if (mode === 'text') return 1;
+    if (mode === 'multi-choice') return question.options.length + 1;
+    return question.options.length + (question.allowFreeform === false ? 1 : 2);
   }, []);
 
   useEffect(() => {
@@ -505,13 +563,26 @@ export function QuestionOptions({
       const questionKey = getQuestionKey(question);
       const mode = getQuestionInputMode(question);
 
+      if (optionIndex === question.options.length) {
+        setAnswers((prev) => ({ ...prev, [questionKey]: DECIDE_FOR_ME }));
+        setOtherAnswers((prev) => ({ ...prev, [questionKey]: '' }));
+        setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: false }));
+        setWasFreeformByQuestion((prev) => ({
+          ...prev,
+          [questionKey]: true,
+        }));
+        return true;
+      }
+
       if (mode === 'text') return false;
 
       if (mode === 'multi-choice') {
         const label = question.options[optionIndex]?.label;
         if (!label) return false;
         const current = answers[questionKey] ?? '';
-        const selected = getSelectedLabels(current);
+        const selected = getSelectedLabels(current).filter(
+          (item) => item !== DECIDE_FOR_ME,
+        );
         const next = selected.includes(label)
           ? selected.filter((item) => item !== label)
           : [...selected, label];
@@ -524,7 +595,8 @@ export function QuestionOptions({
       }
 
       const isOther =
-        question.allowFreeform !== false && optionIndex === question.options.length;
+        question.allowFreeform !== false &&
+        optionIndex === question.options.length + 1;
       setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: isOther }));
 
       if (isOther) {
@@ -536,7 +608,7 @@ export function QuestionOptions({
         const matchesOption = question.options.some(
           (option) => option.label === current,
         );
-        if (matchesOption) {
+        if (matchesOption || current === DECIDE_FOR_ME) {
           setAnswers((prev) => ({ ...prev, [questionKey]: '' }));
         }
         return true;
@@ -571,6 +643,13 @@ export function QuestionOptions({
       const mode = getQuestionInputMode(question);
       if (mode === 'text' || mode === 'multi-choice') {
         setOtherAnswers((prev) => ({ ...prev, [questionKey]: value }));
+        if (value.trim()) {
+          setAnswers((prev) =>
+            prev[questionKey] === DECIDE_FOR_ME
+              ? { ...prev, [questionKey]: '' }
+              : prev,
+          );
+        }
         if (mode === 'multi-choice') {
           setWasFreeformByQuestion((prev) => ({
             ...prev,
@@ -717,23 +796,6 @@ export function QuestionOptions({
     wasFreeformByQuestion,
   ]);
 
-  const decideForMe = useCallback(
-    (questionIndex: number) => {
-      const question = request.questions[questionIndex];
-      if (!question) return;
-      const questionKey = getQuestionKey(question);
-
-      setAnswers((prev) => ({ ...prev, [questionKey]: 'Decide for me' }));
-      setOtherAnswers((prev) => ({ ...prev, [questionKey]: '' }));
-      setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: false }));
-      setWasFreeformByQuestion((prev) => ({
-        ...prev,
-        [questionKey]: true,
-      }));
-    },
-    [request.questions],
-  );
-
   const handleSubmit = useCallback(() => {
     if (!allAnswered) return false;
     void submitAnswers();
@@ -798,19 +860,6 @@ export function QuestionOptions({
                 <h3 className="text-[13px] font-semibold leading-tight text-ink-0">
                   {question.question}
                 </h3>
-                <button
-                  type="button"
-                  onClick={() => decideForMe(index)}
-                  aria-pressed={answers[questionKey] === 'Decide for me'}
-                  className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs font-semibold transition-colors ${
-                    answers[questionKey] === 'Decide for me'
-                      ? 'border-teal-400/50 bg-teal-400/10 text-teal-300'
-                      : 'border-white/10 bg-white/[0.04] text-ink-2 hover:border-white/20 hover:bg-white/[0.08] hover:text-ink-0'
-                  }`}
-                >
-                  <Sparkles className="h-3 w-3" />
-                  Decide for me
-                </button>
               </header>
               <QuestionInput
                 question={question}
