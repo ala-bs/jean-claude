@@ -722,6 +722,11 @@ function SubagentCard({
           <span className="text-ink-3 shrink-0 rounded bg-white/[0.06] px-1.5 py-px text-[9.5px] font-semibold tracking-wide uppercase">
             {sa.kind}
           </span>
+          {sa.model && (
+            <span className="text-ink-4 shrink-0">
+              {formatModelName(sa.model)}
+            </span>
+          )}
         </div>
         {sa.step && (
           <div className="text-ink-3 flex items-center gap-2 font-mono text-[10.5px]">
@@ -732,11 +737,6 @@ function SubagentCard({
               {sa.step}
               <span className="rg-caret">▍</span>
             </span>
-            {sa.model && (
-              <span className="text-ink-4 shrink-0">
-                {formatModelName(sa.model)}
-              </span>
-            )}
           </div>
         )}
       </div>
