@@ -1834,7 +1834,9 @@ describe('agentService provider runtime', () => {
             question: 'Which option?',
             header: 'Choice',
             multiSelect: false,
-            options: [{ label: 'A', description: 'Pick A' }],
+            options: [
+              { label: 'A', description: 'Pick A', recommended: true },
+            ],
           },
         ],
       },
@@ -1845,7 +1847,14 @@ describe('agentService provider runtime', () => {
     await waitForAssertion(() => {
       expect(agentService.getPendingRequest('step-1')).toMatchObject({
         type: 'question',
-        data: { requestId: 'question-1' },
+        data: {
+          requestId: 'question-1',
+          questions: [
+            {
+              options: [{ label: 'A', recommended: true }],
+            },
+          ],
+        },
       });
     });
 

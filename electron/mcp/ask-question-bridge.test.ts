@@ -17,6 +17,7 @@ const input = {
           id: 'small',
           label: 'Small change',
           description: 'Keep the change scoped',
+          recommended: true,
         },
       ],
     },
@@ -299,6 +300,29 @@ describe('askQuestionViaBridge', () => {
         fetchImpl: vi.fn(),
       }),
     ).rejects.toThrow('Invalid ask_question input');
+  });
+
+  it('rejects non-boolean recommended metadata', async () => {
+    const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi.fn();
+
+    await expect(
+      askQuestionViaBridge({
+        input: {
+          questions: [
+            {
+              id: 'approach',
+              type: 'single_choice',
+              label: 'Which approach?',
+              options: [{ label: 'Small', recommended: 'yes' }],
+            },
+          ],
+        },
+        env,
+        fetchImpl,
+      }),
+    ).rejects.toThrow('Invalid ask_question input');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('rejects allowOther metadata', async () => {

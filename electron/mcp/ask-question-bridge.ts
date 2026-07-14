@@ -11,6 +11,10 @@ const QUESTION_OPTION_SCHEMA = z
       .optional(),
     label: z.string().min(1),
     description: z.string().optional(),
+    recommended: z
+      .boolean()
+      .describe('Whether this answer should be visually marked as recommended')
+      .optional(),
   })
   .strict();
 

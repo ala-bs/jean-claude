@@ -92,4 +92,46 @@ describe('QuestionOptions', () => {
       }
     },
   );
+
+  it.each([
+    ['single_choice', false],
+    ['multi_choice', true],
+  ] as const)('marks recommended %s options', (type, multiSelect) => {
+    const markup = renderToStaticMarkup(
+      <RootKeyboardBindings>
+        <QuestionOptions
+          request={{
+            taskId: 'task-1',
+            requestId: `request-recommended-${type}`,
+            questions: [
+              {
+                type,
+                question: 'Choose one',
+                header: 'Choice',
+                multiSelect,
+                options: [
+                  {
+                    label: 'Preferred option',
+                    description: '',
+                    recommended: true,
+                  },
+                  {
+                    label: 'Other option',
+                    description: '',
+                    recommended: false,
+                  },
+                ],
+              },
+            ],
+          }}
+          onRespond={() => {}}
+        />
+      </RootKeyboardBindings>,
+    );
+
+    expect(markup.match(/Recommended/g)).toHaveLength(1);
+    expect(markup.indexOf('Preferred option')).toBeLessThan(
+      markup.indexOf('Recommended'),
+    );
+  });
 });

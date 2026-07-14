@@ -392,6 +392,9 @@ class AgentService {
           options: q.options.map((o) => ({
             label: o.label,
             description: o.description,
+            ...(o.recommended !== undefined
+              ? { recommended: o.recommended }
+              : {}),
           })),
           multiSelect: q.multiSelect,
           allowFreeform: q.allowFreeform,
@@ -1124,6 +1127,9 @@ class AgentService {
         ...(o.id !== undefined ? { id: o.id } : {}),
         label: o.label,
         description: o.description,
+        ...(o.recommended !== undefined
+          ? { recommended: o.recommended }
+          : {}),
       })),
       multiSelect: q.multiSelect,
       ...(q.required !== undefined ? { required: q.required } : {}),

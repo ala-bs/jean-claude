@@ -11,6 +11,14 @@ type QuestionInputMode = 'text' | 'single-choice' | 'multi-choice';
 
 const DECIDE_FOR_ME = 'Decide for me';
 
+function RecommendedBadge() {
+  return (
+    <span className="rounded border border-teal-400/30 bg-teal-400/10 px-1 py-0.5 font-mono text-[9px] font-semibold uppercase leading-none tracking-wide text-teal-300">
+      Recommended
+    </span>
+  );
+}
+
 function getQuestionInputMode(question: AgentQuestion): QuestionInputMode {
   if (question.type === 'text') return 'text';
   if (!question.type && question.options.length === 0) return 'text';
@@ -259,7 +267,10 @@ function QuestionInput({
                   </span>
                 ) : null}
                 <span className="flex flex-col items-start gap-0.5">
-                  <span>{option.label}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span>{option.label}</span>
+                    {option.recommended ? <RecommendedBadge /> : null}
+                  </span>
                   {option.description ? (
                     <span className="text-[11px] leading-tight text-current/70">
                       {option.description}
@@ -350,8 +361,9 @@ function QuestionInput({
                 <Check className="h-2.5 w-2.5" />
               </span>
               <span className="min-w-0 space-y-0.5">
-                <span className="block text-[13px] font-semibold leading-tight text-ink-0">
-                  {option.label}
+                <span className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold leading-tight text-ink-0">
+                  <span>{option.label}</span>
+                  {option.recommended ? <RecommendedBadge /> : null}
                 </span>
                 {option.description ? (
                   <span className="block text-xs leading-snug text-ink-2">

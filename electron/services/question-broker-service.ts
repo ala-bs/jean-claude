@@ -11,6 +11,7 @@ export interface QuestionOptionSpec {
   id?: string;
   label: string;
   description?: string;
+  recommended?: boolean;
 }
 
 interface BaseQuestionSpec {
@@ -115,11 +116,6 @@ export function validateQuestionSpecs(questions: QuestionSpec[]): void {
 
     validateQuestionMetadata(question);
 
-    if (question.type === 'text') {
-      validateOptionsArray(question);
-      continue;
-    }
-
     const options = validateOptionsArray(question);
     for (const option of options) {
       if (!isQuestionOptionSpec(option)) {
@@ -127,6 +123,11 @@ export function validateQuestionSpecs(questions: QuestionSpec[]): void {
           `Question ${question.id} has an invalid option`,
         );
       }
+    }
+
+    if (question.type === 'text') continue;
+
+    for (const option of options) {
       if (option.id !== undefined && option.id !== option.id.trim()) {
         throw new QuestionValidationError(
           `Question ${question.id} option id must not contain leading or trailing whitespace`,
@@ -311,6 +312,9 @@ function toNormalizedQuestion(question: QuestionSpec): NormalizedQuestion {
             ...(option.id !== undefined ? { id: option.id } : {}),
             label: option.label,
             description: option.description ?? '',
+            ...(option.recommended !== undefined
+              ? { recommended: option.recommended }
+              : {}),
           })),
     multiSelect: question.type === 'multi_choice',
     required: question.required ?? true,
@@ -334,6 +338,8 @@ function isQuestionOptionSpec(value: unknown): value is QuestionOptionSpec {
   const option = value as Partial<QuestionOptionSpec>;
   return (
     (option.id === undefined || typeof option.id === 'string') &&
+    (option.recommended === undefined ||
+      typeof option.recommended === 'boolean') &&
     typeof option.label === 'string' &&
     option.label.trim().length > 0
   );

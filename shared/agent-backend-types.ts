@@ -175,6 +175,7 @@ export interface NormalizedQuestionOption {
   id?: string;
   label: string;
   description: string;
+  recommended?: boolean;
 }
 
 export type NormalizedQuestionType = 'single_choice' | 'multi_choice' | 'text';

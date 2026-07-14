@@ -159,6 +159,7 @@ export interface QuestionOption {
   id?: string;
   label: string;
   description: string;
+  recommended?: boolean;
 }
 
 export type AgentQuestionType = 'single_choice' | 'multi_choice' | 'text';
