@@ -313,6 +313,8 @@ export interface AzureDevOpsBoardColumn {
   name: string;
   columnType?: string;
   stateMappings: Record<string, string>;
+  teamId?: string;
+  boardId?: string;
 }
 
 export interface WorkItemComment {
@@ -751,6 +753,15 @@ export interface Api {
       workItemId: number;
       field: string;
       value: string | number | null;
+    }) => Promise<void>;
+    updateWorkItemBoardColumn: (params: {
+      providerId: string;
+      projectId: string;
+      projectName: string;
+      workItemId: number;
+      column: string;
+      teamId: string;
+      boardId: string;
     }) => Promise<void>;
     getRelatedTestCases: (params: {
       providerId: string;
@@ -1972,6 +1983,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         updateWorkItemField: async () => {
+          throw new Error('API not available');
+        },
+        updateWorkItemBoardColumn: async () => {
           throw new Error('API not available');
         },
         getRelatedTestCases: async () => [],

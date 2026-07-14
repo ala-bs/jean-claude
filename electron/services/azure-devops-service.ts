@@ -145,7 +145,17 @@ export interface AzureDevOpsBoardColumn {
   name: string;
   columnType?: string;
   stateMappings: Record<string, string>;
+  teamId?: string;
+  boardId?: string;
 }
+
+type AzureDevOpsBoardConfiguration = {
+  columns: AzureDevOpsBoardColumn[];
+  columnFieldReferenceName: string;
+  doneFieldReferenceName: string;
+  teamId: string;
+  boardId: string;
+};
 
 export interface WorkItemHistoryEntry {
   id: number;
@@ -213,6 +223,10 @@ interface AzureDevOpsBoardResponse {
   id: string;
   name: string;
   columns?: AzureDevOpsBoardColumn[];
+  fields?: {
+    columnField?: { referenceName?: string };
+    doneField?: { referenceName?: string };
+  };
 }
 
 interface WorkItemUpdateRelation {
@@ -1102,6 +1116,15 @@ export async function getBoardColumns(params: {
   projectId: string;
   projectName: string;
 }): Promise<AzureDevOpsBoardColumn[]> {
+  const configuration = await getBoardConfiguration(params);
+  return configuration?.columns ?? [];
+}
+
+async function getBoardConfiguration(params: {
+  providerId: string;
+  projectId: string;
+  projectName: string;
+}): Promise<AzureDevOpsBoardConfiguration | null> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
   const projectPath = encodeURIComponent(params.projectName);
 
@@ -1123,8 +1146,8 @@ export async function getBoardColumns(params: {
     return a.name.localeCompare(b.name);
   });
 
-  let bestColumns: AzureDevOpsBoardColumn[] = [];
-  let bestScore = 0;
+  let bestConfiguration: AzureDevOpsBoardConfiguration | null = null;
+  let bestScore = -1;
 
   for (const team of teams) {
     const teamPath = encodeURIComponent(team.name);
@@ -1136,27 +1159,76 @@ export async function getBoardColumns(params: {
 
     const boardsData: AzureDevOpsBoardsResponse = await boardsResponse.json();
     for (const board of boardsData.value ?? []) {
-      const columns = board.columns ?? (await fetchBoardColumns({
+      const fullBoard = await fetchBoard({
         authHeader,
         orgName,
         projectPath,
         teamPath,
         boardId: board.id,
-      }));
+      });
+      const columns = fullBoard?.columns ?? [];
+      const columnFieldReferenceName =
+        fullBoard?.fields?.columnField?.referenceName;
+      const doneFieldReferenceName = fullBoard?.fields?.doneField?.referenceName;
+      if (!columnFieldReferenceName || !doneFieldReferenceName) continue;
       const mappedColumns = columns.filter(
         (column) => Object.keys(column.stateMappings ?? {}).length > 0,
       );
       if (mappedColumns.length === 0) continue;
       const score = getTaskBoardScore(mappedColumns);
       if (score > bestScore) {
-        bestColumns = mappedColumns;
+        bestConfiguration = {
+          columns: mappedColumns.map((column) => ({
+            ...column,
+            teamId: team.id,
+            boardId: board.id,
+          })),
+          columnFieldReferenceName,
+          doneFieldReferenceName,
+          teamId: team.id,
+          boardId: board.id,
+        };
         bestScore = score;
       }
-      if (score >= TASK_BOARD_TYPES.length) return mappedColumns;
+      if (score >= TASK_BOARD_TYPES.length) return bestConfiguration;
     }
   }
 
-  return bestColumns;
+  return bestConfiguration;
+}
+
+async function getBoardConfigurationById(params: {
+  providerId: string;
+  projectName: string;
+  teamId: string;
+  boardId: string;
+}): Promise<AzureDevOpsBoardConfiguration | null> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const board = await fetchBoard({
+    authHeader,
+    orgName,
+    projectPath: encodeURIComponent(params.projectName),
+    teamPath: encodeURIComponent(params.teamId),
+    boardId: params.boardId,
+  });
+  const columnFieldReferenceName = board?.fields?.columnField?.referenceName;
+  const doneFieldReferenceName = board?.fields?.doneField?.referenceName;
+  if (!board?.columns || !columnFieldReferenceName || !doneFieldReferenceName) {
+    return null;
+  }
+  return {
+    columns: board.columns
+      .filter((column) => Object.keys(column.stateMappings ?? {}).length > 0)
+      .map((column) => ({
+        ...column,
+        teamId: params.teamId,
+        boardId: params.boardId,
+      })),
+    columnFieldReferenceName,
+    doneFieldReferenceName,
+    teamId: params.teamId,
+    boardId: params.boardId,
+  };
 }
 
 const TASK_BOARD_TYPES = ['Bug', 'Task', 'User Story', 'Product Backlog Item'];
@@ -1168,21 +1240,20 @@ function getTaskBoardScore(columns: AzureDevOpsBoardColumn[]): number {
   return TASK_BOARD_TYPES.filter((type) => mappedTypes.has(type)).length;
 }
 
-async function fetchBoardColumns(params: {
+async function fetchBoard(params: {
   authHeader: string;
   orgName: string;
   projectPath: string;
   teamPath: string;
   boardId: string;
-}): Promise<AzureDevOpsBoardColumn[]> {
+}): Promise<AzureDevOpsBoardResponse | null> {
   const response = await fetch(
     `https://dev.azure.com/${params.orgName}/${params.projectPath}/${params.teamPath}/_apis/work/boards/${encodeURIComponent(params.boardId)}?api-version=7.1`,
     { headers: { Authorization: params.authHeader } },
   );
-  if (!response.ok) return [];
+  if (!response.ok) return null;
 
-  const board: AzureDevOpsBoardResponse = await response.json();
-  return board.columns ?? [];
+  return response.json();
 }
 
 /**
@@ -3740,6 +3811,112 @@ export async function updateWorkItemField(params: {
   if (!response.ok) {
     throw new Error(
       `Failed to update work item ${params.workItemId}: ${await response.text()}`,
+    );
+  }
+}
+
+export function buildWorkItemBoardColumnPatch(params: {
+  column: string;
+  state: string;
+  isDone: boolean;
+  columnFieldReferenceName: string;
+  doneFieldReferenceName: string;
+}) {
+  const column = params.column.trim();
+  const state = params.state.trim();
+  if (!column) throw new Error('Work item board column cannot be empty');
+  if (!state) throw new Error('Work item state cannot be empty');
+
+  return [
+    { op: 'add', path: '/fields/System.State', value: state },
+    {
+      op: 'add',
+      path: `/fields/${params.columnFieldReferenceName}`,
+      value: column,
+    },
+    {
+      op: 'add',
+      path: `/fields/${params.doneFieldReferenceName}`,
+      value: params.isDone,
+    },
+  ];
+}
+
+export function resolveWorkItemBoardColumnUpdate(params: {
+  columns: AzureDevOpsBoardColumn[];
+  workItemType: string;
+  column: string;
+}) {
+  const columnName = params.column.trim();
+  const column = params.columns.find((candidate) => candidate.name === columnName);
+  if (!column) throw new Error(`Board column not found: ${columnName}`);
+  const state = column.stateMappings[params.workItemType];
+  if (!state) {
+    throw new Error(
+      `Board column ${column.name} is not mapped for ${params.workItemType}`,
+    );
+  }
+  return {
+    column: column.name,
+    state,
+    isDone: false,
+  };
+}
+
+export async function updateWorkItemBoardColumn(params: {
+  providerId: string;
+  projectId: string;
+  projectName: string;
+  workItemId: number;
+  column: string;
+  teamId: string;
+  boardId: string;
+}): Promise<void> {
+  const workItem = await getWorkItemById({
+    providerId: params.providerId,
+    workItemId: params.workItemId,
+  });
+  if (!workItem) throw new Error(`Work item not found: ${params.workItemId}`);
+  if (
+    workItem.fields.teamProject &&
+    workItem.fields.teamProject.toLowerCase() !== params.projectName.toLowerCase()
+  ) {
+    throw new Error(`Work item ${params.workItemId} does not belong to ${params.projectName}`);
+  }
+  const boardConfiguration = await getBoardConfigurationById({
+    providerId: params.providerId,
+    projectName: params.projectName,
+    teamId: params.teamId,
+    boardId: params.boardId,
+  });
+  if (!boardConfiguration) {
+    throw new Error(`No writable board configuration found for ${params.projectName}`);
+  }
+  const update = resolveWorkItemBoardColumnUpdate({
+    columns: boardConfiguration.columns,
+    workItemType: workItem.fields.workItemType,
+    column: params.column,
+  });
+  const patch = buildWorkItemBoardColumnPatch({
+    ...update,
+    columnFieldReferenceName: boardConfiguration.columnFieldReferenceName,
+    doneFieldReferenceName: boardConfiguration.doneFieldReferenceName,
+  });
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/_apis/wit/workitems/${params.workItemId}?api-version=7.0`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json-patch+json',
+      },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Failed to move work item ${params.workItemId} to ${update.column}: ${await response.text()}`,
     );
   }
 }

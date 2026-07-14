@@ -363,6 +363,15 @@ contextBridge.exposeInMainWorld('api', {
       field: string;
       value: string | number | null;
     }) => ipcRenderer.invoke('azureDevOps:updateWorkItemField', params),
+    updateWorkItemBoardColumn: (params: {
+      providerId: string;
+      projectId: string;
+      projectName: string;
+      workItemId: number;
+      column: string;
+      teamId: string;
+      boardId: string;
+    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemBoardColumn', params),
     getRelatedTestCases: (params: {
       providerId: string;
       projectName: string;

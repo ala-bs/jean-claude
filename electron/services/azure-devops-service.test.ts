@@ -19,17 +19,21 @@ vi.mock('../database/repositories/tokens', () => ({
 
 import {
   addWorkItemComment,
+  buildWorkItemBoardColumnPatch,
   buildWorkItemFieldPatch,
   buildIterationPathsCondition,
   getIterations,
+  getBoardColumns,
   getWorkItemById,
   getWorkItemsByIds,
   getWorkItemComments,
   getPullRequestFileContent,
   getPullRequestThreads,
   queryWorkItems,
+  resolveWorkItemBoardColumnUpdate,
   setPullRequestAutoComplete,
   updatePullRequestTitle,
+  updateWorkItemBoardColumn,
   uploadPullRequestAttachment,
 } from './azure-devops-service';
 
@@ -424,6 +428,239 @@ describe('buildWorkItemFieldPatch', () => {
       path: '/fields/System.IterationPath',
       value: 'Project\\Sprint 9',
     });
+  });
+});
+
+describe('buildWorkItemBoardColumnPatch', () => {
+  it('updates state, board column, and done status atomically', () => {
+    expect(
+      buildWorkItemBoardColumnPatch({
+        column: 'Done',
+        state: 'Closed',
+        isDone: false,
+        columnFieldReferenceName: 'WEF_BOARD_Kanban.Column',
+        doneFieldReferenceName: 'WEF_BOARD_Kanban.Column.Done',
+      }),
+    ).toEqual([
+      { op: 'add', path: '/fields/System.State', value: 'Closed' },
+      {
+        op: 'add',
+        path: '/fields/WEF_BOARD_Kanban.Column',
+        value: 'Done',
+      },
+      {
+        op: 'add',
+        path: '/fields/WEF_BOARD_Kanban.Column.Done',
+        value: false,
+      },
+    ]);
+  });
+
+  it('rejects empty column and state values', () => {
+    expect(() =>
+      buildWorkItemBoardColumnPatch({
+        column: ' ',
+        state: 'Active',
+        isDone: false,
+        columnFieldReferenceName: 'WEF_BOARD_Kanban.Column',
+        doneFieldReferenceName: 'WEF_BOARD_Kanban.Column.Done',
+      }),
+    ).toThrow('column cannot be empty');
+    expect(() =>
+      buildWorkItemBoardColumnPatch({
+        column: 'Doing',
+        state: ' ',
+        isDone: false,
+        columnFieldReferenceName: 'WEF_BOARD_Kanban.Column',
+        doneFieldReferenceName: 'WEF_BOARD_Kanban.Column.Done',
+      }),
+    ).toThrow('state cannot be empty');
+  });
+});
+
+describe('resolveWorkItemBoardColumnUpdate', () => {
+  const columns: Parameters<
+    typeof resolveWorkItemBoardColumnUpdate
+  >[0]['columns'] = [
+    {
+      id: 'doing',
+      name: 'Doing',
+      stateMappings: { Bug: 'Active' },
+    },
+    {
+      id: 'done',
+      name: 'Done',
+      columnType: 'outgoing',
+      stateMappings: { Bug: 'Closed', Task: 'Closed' },
+    },
+  ];
+
+  it('derives state and done status from server board mappings', () => {
+    expect(
+      resolveWorkItemBoardColumnUpdate({
+        columns,
+        workItemType: 'Bug',
+        column: 'Done',
+      }),
+    ).toEqual({ column: 'Done', state: 'Closed', isDone: false });
+  });
+
+  it('rejects unknown and unmapped columns', () => {
+    expect(() =>
+      resolveWorkItemBoardColumnUpdate({
+        columns,
+        workItemType: 'Bug',
+        column: 'Missing',
+      }),
+    ).toThrow('Board column not found');
+    expect(() =>
+      resolveWorkItemBoardColumnUpdate({
+        columns,
+        workItemType: 'Task',
+        column: 'Doing',
+      }),
+    ).toThrow('not mapped for Task');
+  });
+});
+
+describe('board column configuration and updates', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('returns custom-type board columns with stable board identity', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/_apis/projects/project-1/teams')) {
+        return jsonResponse(
+          { value: [{ id: 'team-1', name: 'Project Team' }] },
+          { ok: true },
+        );
+      }
+      if (url.endsWith('/Project%20Team/_apis/work/boards?api-version=7.1')) {
+        return jsonResponse(
+          { value: [{ id: 'board-1', name: 'Custom Items' }] },
+          { ok: true },
+        );
+      }
+      if (url.includes('/_apis/work/boards/board-1?')) {
+        return jsonResponse(
+          {
+            id: 'board-1',
+            name: 'Custom Items',
+            columns: [
+              {
+                id: 'ready',
+                name: 'Ready',
+                stateMappings: { 'Custom Request': 'Ready' },
+              },
+            ],
+            fields: {
+              columnField: { referenceName: 'WEF_BOARD_Kanban.Column' },
+              doneField: { referenceName: 'WEF_BOARD_Kanban.Column.Done' },
+            },
+          },
+          { ok: true },
+        );
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+
+    await expect(
+      getBoardColumns({
+        providerId: 'provider-1',
+        projectId: 'project-1',
+        projectName: 'Project',
+      }),
+    ).resolves.toEqual([
+      {
+        id: 'ready',
+        name: 'Ready',
+        stateMappings: { 'Custom Request': 'Ready' },
+        teamId: 'team-1',
+        boardId: 'board-1',
+      },
+    ]);
+  });
+
+  it('updates exact selected board writable fields', async () => {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/_apis/wit/workitems/55778?')) {
+        if (init?.method === 'PATCH') return jsonResponse({}, { ok: true });
+        return jsonResponse(
+          {
+            id: 55778,
+            url: 'api-55778',
+            fields: {
+              'System.Title': 'Request',
+              'System.WorkItemType': 'Custom Request',
+              'System.TeamProject': 'Project',
+              'System.State': 'New',
+            },
+          },
+          { ok: true },
+        );
+      }
+      if (url.includes('/Project/team-2/_apis/work/boards/board-2?')) {
+        return jsonResponse(
+          {
+            id: 'board-2',
+            name: 'Requests',
+            columns: [
+              {
+                id: 'ready',
+                name: 'Ready for development',
+                stateMappings: { 'Custom Request': 'Ready' },
+              },
+            ],
+            fields: {
+              columnField: { referenceName: 'WEF_EXACT_Kanban.Column' },
+              doneField: { referenceName: 'WEF_EXACT_Kanban.Column.Done' },
+            },
+          },
+          { ok: true },
+        );
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+
+    await updateWorkItemBoardColumn({
+      providerId: 'provider-1',
+      projectId: 'project-1',
+      projectName: 'Project',
+      workItemId: 55778,
+      column: 'Ready for development',
+      teamId: 'team-2',
+      boardId: 'board-2',
+    });
+
+    const patchCall = vi.mocked(fetch).mock.calls.find(
+      ([, init]) => init?.method === 'PATCH',
+    );
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual([
+      { op: 'add', path: '/fields/System.State', value: 'Ready' },
+      {
+        op: 'add',
+        path: '/fields/WEF_EXACT_Kanban.Column',
+        value: 'Ready for development',
+      },
+      {
+        op: 'add',
+        path: '/fields/WEF_EXACT_Kanban.Column.Done',
+        value: false,
+      },
+    ]);
   });
 });
 

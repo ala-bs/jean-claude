@@ -569,6 +569,7 @@ export function AzureBoardProjectContent({
                       <WorkItemPreview
                       workItem={selectedWorkItem}
                       providerId={params.providerId}
+                      projectId={params.projectId}
                       projectName={params.projectName}
                         editableMetadata
                         assigneeOptions={assignees}
@@ -576,6 +577,7 @@ export function AzureBoardProjectContent({
                           value: iteration.path,
                           label: iteration.name,
                         }))}
+                        boardColumns={columns}
                         tagOptions={tagOptions}
                        showRelatedWorkItems
                       variant="editorial"

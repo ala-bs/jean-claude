@@ -11,7 +11,11 @@ import {
   type WorkItemComment,
   type WorkItemHistoryEntry,
 } from '@/lib/api';
+import { markDocumentStale } from '@/cache/cache-actions';
 import { useToastStore } from '@/stores/toasts';
+
+let boardColumnMutationSequence = 0;
+const boardColumnUpdateQueues = new Map<string, Promise<unknown>>();
 
 export function useWorkItems(params: {
   providerId: string;
@@ -186,6 +190,313 @@ export function useUpdateWorkItemField() {
       ]),
     onError: (error) => addToast({ type: 'error', message: error.message }),
   });
+}
+
+export function useUpdateWorkItemBoardColumn() {
+  const queryClient = useQueryClient();
+  const addToast = useToastStore((state) => state.addToast);
+  return useMutation({
+    mutationFn: ({ state: _state, isDone: _isDone, ...params }: {
+      providerId: string;
+      projectId: string;
+      projectName: string;
+      workItemId: number;
+      column: string;
+      teamId: string;
+      boardId: string;
+      state: string;
+      isDone: boolean;
+    }) => enqueueWorkItemBoardColumnUpdate({
+      key: `${params.providerId}:${params.workItemId}`,
+      update: () => api.azureDevOps.updateWorkItemBoardColumn(params),
+    }),
+    onMutate: async (variables) => {
+      const mutationId = ++boardColumnMutationSequence;
+      const detailKey = [
+        'work-item',
+        variables.providerId,
+        variables.workItemId,
+      ];
+      const workItemsKey = ['work-items', variables.providerId];
+      const workItemsByIdsKey = ['work-items-by-ids', variables.providerId];
+      const pullRequestWorkItemsFilter = {
+        queryKey: ['pull-request-work-items'],
+        predicate: (query: { queryKey: readonly unknown[] }) =>
+          query.queryKey[2] === variables.providerId,
+      };
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: detailKey }),
+        queryClient.cancelQueries({ queryKey: workItemsKey }),
+        queryClient.cancelQueries({ queryKey: workItemsByIdsKey }),
+        queryClient.cancelQueries(pullRequestWorkItemsFilter),
+      ]);
+      const previousDetail =
+        queryClient.getQueryData<AzureDevOpsWorkItem | null>(detailKey);
+      const previousWorkItems =
+        queryClient.getQueriesData<AzureDevOpsWorkItem[]>({
+          queryKey: workItemsKey,
+        });
+      const previousWorkItemsByIds =
+        queryClient.getQueriesData<AzureDevOpsWorkItem[]>({
+          queryKey: workItemsByIdsKey,
+        });
+      const previousPullRequestWorkItems =
+        queryClient.getQueriesData<AzureDevOpsWorkItem[]>(
+          pullRequestWorkItemsFilter,
+        );
+      const updateItem = (item: AzureDevOpsWorkItem) =>
+        applyWorkItemBoardColumnUpdate(item, { ...variables, mutationId });
+
+      if (previousDetail) {
+        queryClient.setQueryData(detailKey, updateItem(previousDetail));
+      }
+      queryClient.setQueriesData<AzureDevOpsWorkItem[]>(
+        { queryKey: workItemsKey },
+        (items) => items?.map(updateItem),
+      );
+      queryClient.setQueriesData<AzureDevOpsWorkItem[]>(
+        { queryKey: workItemsByIdsKey },
+        (items) => items?.map(updateItem),
+      );
+      queryClient.setQueriesData<AzureDevOpsWorkItem[]>(
+        pullRequestWorkItemsFilter,
+        (items) => items?.map(updateItem),
+      );
+      return {
+        previousDetail,
+        previousWorkItems,
+        previousWorkItemsByIds,
+        previousPullRequestWorkItems,
+        mutationId,
+      };
+    },
+    onError: (error, variables, context) => {
+      if (context?.previousDetail) {
+        queryClient.setQueryData<AzureDevOpsWorkItem | null>(
+          ['work-item', variables.providerId, variables.workItemId],
+          (item) =>
+            item
+              ? rollbackWorkItemBoardColumnUpdate(
+                  item,
+                  context.previousDetail!,
+                  { ...variables, mutationId: context.mutationId },
+                )
+              : item,
+        );
+      }
+      const rollbackQueries = (
+        snapshots: Array<[readonly unknown[], AzureDevOpsWorkItem[] | undefined]>,
+      ) => snapshots.forEach(([queryKey, previousItems]) => {
+        const previousItem = previousItems?.find(
+          (item) => item.id === variables.workItemId,
+        );
+        if (!previousItem) return;
+        queryClient.setQueryData<AzureDevOpsWorkItem[]>(queryKey, (items) =>
+          items?.map((item) =>
+            rollbackWorkItemBoardColumnUpdate(item, previousItem, {
+              ...variables,
+              mutationId: context!.mutationId,
+            }),
+          ),
+        );
+      });
+      rollbackQueries(context?.previousWorkItems ?? []);
+      rollbackQueries(context?.previousWorkItemsByIds ?? []);
+      rollbackQueries(context?.previousPullRequestWorkItems ?? []);
+      addToast({ type: 'error', message: error.message });
+    },
+    onSettled: (_result, _error, variables, context) => {
+      const cachedItems = [
+        queryClient.getQueryData<AzureDevOpsWorkItem | null>([
+          'work-item',
+          variables.providerId,
+          variables.workItemId,
+        ]),
+        ...queryClient
+          .getQueriesData<AzureDevOpsWorkItem[]>({
+            queryKey: ['work-items', variables.providerId],
+          })
+          .flatMap(([, items]) => items ?? []),
+        ...queryClient
+          .getQueriesData<AzureDevOpsWorkItem[]>({
+            queryKey: ['work-items-by-ids', variables.providerId],
+          })
+          .flatMap(([, items]) => items ?? []),
+      ].filter((item): item is AzureDevOpsWorkItem => !!item);
+      const hasNewerMutation = context && hasNewerWorkItemBoardColumnMutation({
+        items: cachedItems,
+        workItemId: variables.workItemId,
+        mutationId: context.mutationId,
+      });
+      if (hasNewerMutation) {
+        markDocumentStale('feed:workItems');
+        return Promise.resolve([]);
+      }
+      if (context) {
+        const clearItem = (item: AzureDevOpsWorkItem) =>
+          clearWorkItemBoardColumnUpdate(item, context.mutationId);
+        const pullRequestWorkItemsFilter = {
+          queryKey: ['pull-request-work-items'],
+          predicate: (query: { queryKey: readonly unknown[] }) =>
+            query.queryKey[2] === variables.providerId,
+        };
+        queryClient.setQueryData<AzureDevOpsWorkItem | null>(
+          ['work-item', variables.providerId, variables.workItemId],
+          (item) => (item ? clearItem(item) : item),
+        );
+        queryClient.setQueriesData<AzureDevOpsWorkItem[]>(
+          { queryKey: ['work-items', variables.providerId] },
+          (items) => items?.map(clearItem),
+        );
+        queryClient.setQueriesData<AzureDevOpsWorkItem[]>(
+          { queryKey: ['work-items-by-ids', variables.providerId] },
+          (items) => items?.map(clearItem),
+        );
+        queryClient.setQueriesData<AzureDevOpsWorkItem[]>(
+          pullRequestWorkItemsFilter,
+          (items) => items?.map(clearItem),
+        );
+      }
+      markDocumentStale('feed:workItems');
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['work-item', variables.providerId, variables.workItemId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['work-items-by-ids', variables.providerId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['work-item-history', variables.providerId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['pull-request-work-items'],
+        }),
+      ]);
+    },
+  });
+}
+
+export function applyWorkItemBoardColumnUpdate(
+  item: AzureDevOpsWorkItem,
+  update: {
+    workItemId: number;
+    column: string;
+    state: string;
+    isDone: boolean;
+    mutationId: number;
+  },
+): AzureDevOpsWorkItem {
+  if (item.id !== update.workItemId) return item;
+  const optimisticItem: AzureDevOpsWorkItem & {
+    __boardColumnMutationId: number;
+  } = {
+    ...item,
+    fields: {
+      ...item.fields,
+      state: update.state,
+      boardColumn: update.column,
+      boardColumnDone: update.isDone,
+    },
+    __boardColumnMutationId: update.mutationId,
+  };
+  return optimisticItem;
+}
+
+export function rollbackWorkItemBoardColumnUpdate(
+  item: AzureDevOpsWorkItem,
+  previousItem: AzureDevOpsWorkItem,
+  update: {
+    workItemId: number;
+    column: string;
+    state: string;
+    isDone: boolean;
+    mutationId: number;
+  },
+): AzureDevOpsWorkItem {
+  if (item.id !== update.workItemId) return item;
+  const optimisticItem = item as AzureDevOpsWorkItem & {
+    __boardColumnMutationId?: number;
+  };
+  if (optimisticItem.__boardColumnMutationId !== update.mutationId) return item;
+  const state = item.fields.state === update.state
+    ? previousItem.fields.state
+    : item.fields.state;
+  const boardColumn = item.fields.boardColumn === update.column
+    ? previousItem.fields.boardColumn
+    : item.fields.boardColumn;
+  const boardColumnDone = item.fields.boardColumnDone === update.isDone
+    ? previousItem.fields.boardColumnDone
+    : item.fields.boardColumnDone;
+  const { __boardColumnMutationId: _mutationId, ...itemWithoutMutation } =
+    optimisticItem;
+  return {
+    ...itemWithoutMutation,
+    fields: {
+      ...item.fields,
+      state,
+      boardColumn,
+      boardColumnDone,
+    },
+  };
+}
+
+export function clearWorkItemBoardColumnUpdate(
+  item: AzureDevOpsWorkItem,
+  mutationId: number,
+): AzureDevOpsWorkItem {
+  const optimisticItem = item as AzureDevOpsWorkItem & {
+    __boardColumnMutationId?: number;
+  };
+  if (optimisticItem.__boardColumnMutationId !== mutationId) return item;
+  const { __boardColumnMutationId: _mutationId, ...itemWithoutMutation } =
+    optimisticItem;
+  return itemWithoutMutation;
+}
+
+export function getWorkItemBoardColumnMutationId(
+  item: AzureDevOpsWorkItem,
+): number | undefined {
+  return (item as AzureDevOpsWorkItem & {
+    __boardColumnMutationId?: number;
+  }).__boardColumnMutationId;
+}
+
+export function hasNewerWorkItemBoardColumnMutation({
+  items,
+  workItemId,
+  mutationId,
+}: {
+  items: AzureDevOpsWorkItem[];
+  workItemId: number;
+  mutationId: number;
+}): boolean {
+  return items.some((item) => {
+    const itemMutationId = getWorkItemBoardColumnMutationId(item);
+    return item.id === workItemId &&
+      itemMutationId !== undefined &&
+      itemMutationId !== mutationId;
+  });
+}
+
+export function enqueueWorkItemBoardColumnUpdate<T>({
+  key,
+  update,
+}: {
+  key: string;
+  update: () => Promise<T>;
+}): Promise<T> {
+  const previous = boardColumnUpdateQueues.get(key);
+  const queued = previous
+    ? previous.catch(() => undefined).then(update)
+    : update();
+  boardColumnUpdateQueues.set(key, queued);
+  void queued.finally(() => {
+    if (boardColumnUpdateQueues.get(key) === queued) {
+      boardColumnUpdateQueues.delete(key);
+    }
+  }).catch(() => undefined);
+  return queued;
 }
 
 export function useWorkItemComments(params: {

@@ -13,6 +13,7 @@ import { startTransition, useCallback, useEffect, useRef, useState } from 'react
 import type { ReactNode } from 'react';
 
 
+import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import { getOwnerColor, normalizeOwnerName } from '@/features/work-item/utils-owner-color';
 import {
@@ -25,7 +26,6 @@ import {
   useWorkItemsByIds,
   useWorkItemStates,
 } from '@/hooks/use-work-items';
-import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { Kbd } from '@/common/ui/kbd';
 import { UserAvatar } from '@/common/ui/user-avatar';
@@ -40,6 +40,7 @@ import {
   finishMetadataSave,
   getWorkItemPreviewQueryPolicy,
 } from './query-policy';
+import { WorkItemBoardColumnEditor } from '../ui-work-item-board-column-editor';
 import { WorkItemComments } from '../ui-work-item-comments';
 import { WorkItemHistory } from '../ui-work-item-history';
 import { WorkItemTagEditor } from '../ui-work-item-tag-editor';
@@ -49,12 +50,14 @@ type DetailsTab = 'content' | 'comments' | 'history' | 'test-cases';
 export function WorkItemPreview({
   workItem,
   providerId,
+  projectId,
   projectName,
   showCommentsAside = false,
   readOnly = false,
   editableMetadata = false,
   assigneeOptions = [],
   iterationOptions = [],
+  boardColumns = [],
   tagOptions = [],
   showRelatedWorkItems = false,
   onOpenRelatedWorkItem,
@@ -65,12 +68,14 @@ export function WorkItemPreview({
 }: {
   workItem: AzureDevOpsWorkItem | null;
   providerId?: string;
+  projectId?: string;
   projectName?: string;
   showCommentsAside?: boolean;
   readOnly?: boolean;
   editableMetadata?: boolean;
   assigneeOptions?: string[];
   iterationOptions?: Array<{ value: string; label: string }>;
+  boardColumns?: AzureDevOpsBoardColumn[];
   tagOptions?: string[];
   showRelatedWorkItems?: boolean;
   onOpenRelatedWorkItem?: (workItemId: number) => void;
@@ -248,6 +253,16 @@ export function WorkItemPreview({
                   disabled={!canEditMetadata || !providerId}
                   onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.State', value })}
                 />
+                {canEditMetadata && providerId && projectId && projectName && boardColumns.length > 0 && (
+                  <WorkItemBoardColumnEditor
+                    key={`${id}:column`}
+                    workItem={workItem}
+                    providerId={providerId}
+                    projectId={projectId}
+                    projectName={projectName}
+                    columns={boardColumns}
+                  />
+                )}
                 {fields.iterationPath && (
                   <MetadataDropdown
                     key={`${id}:iteration`}

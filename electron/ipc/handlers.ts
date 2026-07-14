@@ -2965,6 +2965,26 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:updateWorkItemBoardColumn',
+    async (
+      _event,
+      params: {
+        providerId: string;
+        projectId: string;
+        projectName: string;
+        workItemId: number;
+        column: string;
+        teamId: string;
+        boardId: string;
+      },
+    ) => {
+      const { updateWorkItemBoardColumn } =
+        await import('../services/azure-devops-service');
+      return updateWorkItemBoardColumn(params);
+    },
+  );
+
+  ipcMain.handle(
     'azureDevOps:getRelatedTestCases',
     async (
       _event,

@@ -24,6 +24,7 @@ import type {
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import {
   useAddWorkItemComment,
+  useBoardColumns,
   useLinkedPullRequestStatuses,
   useRelatedTestCases,
   useUpdateWorkItemState,
@@ -40,6 +41,7 @@ import { PrDetail } from '@/features/pull-request/ui-pr-detail';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProject } from '@/hooks/use-projects';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
+import { WorkItemBoardColumnEditor } from '@/features/work-item/ui-work-item-board-column-editor';
 import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
 import { WorkItemHistory } from '@/features/work-item/ui-work-item-history';
 
@@ -193,6 +195,12 @@ export function WorkItemDetails({
     workItemId,
   });
   const projectName = workItem?.fields.teamProject ?? configuredProjectName;
+  const { data: boardColumns = [] } = useBoardColumns({
+    providerId: providerId ?? '',
+    projectId: project?.workItemProjectId ?? '',
+    projectName: projectName ?? '',
+    enabled: !!providerId && !!project?.workItemProjectId && !!projectName,
+  });
   const { data: availableStates = [] } = useWorkItemStates({
     providerId,
     projectName,
@@ -344,6 +352,17 @@ export function WorkItemDetails({
             />
           ) : (
             <StateBadge state={fields.state} />
+          )}
+          {providerId && project.workItemProjectId && projectName && boardColumns.length > 0 && (
+            <WorkItemBoardColumnEditor
+              key={`${workItem.id}:column`}
+              workItem={workItem}
+              providerId={providerId}
+              projectId={project.workItemProjectId}
+              projectName={projectName}
+              columns={boardColumns}
+              variant="details"
+            />
           )}
           <div className="flex items-center gap-1.5 text-xs">
             <span className="text-ink-3">Assigned to:</span>
