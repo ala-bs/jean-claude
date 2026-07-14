@@ -1148,6 +1148,22 @@ export interface WorktreeStatus {
   worktreeDeleted?: boolean;
 }
 
+export async function hasUncommittedWorktreeChanges(
+  worktreePath: string,
+): Promise<boolean> {
+  const { stdout } = await execFileAsync(
+    'git',
+    [
+      '--no-optional-locks',
+      'status',
+      '--porcelain',
+      '--untracked-files=normal',
+    ],
+    { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+  );
+  return stdout.trim().length > 0;
+}
+
 /**
  * Checks if a worktree has uncommitted or unpushed changes.
  */

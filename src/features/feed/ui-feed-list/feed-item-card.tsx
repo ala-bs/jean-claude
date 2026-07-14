@@ -3,6 +3,7 @@ import {
   Bot,
   Bug,
   CheckCircle2,
+  CircleDotDashed,
   CircleHelp,
   ClipboardList,
   FolderOpen,
@@ -57,6 +58,7 @@ import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useFeedStore } from '@/stores/feed';
+import { useNavigationStore } from '@/stores/navigation';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
@@ -637,6 +639,21 @@ export function FeedItemCard({
     [navigate, item.projectId, item.pullRequestId, pullRequestUrl],
   );
 
+  const handleUncommittedClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!item.taskId) return;
+      const navigation = useNavigationStore.getState();
+      navigation.setTaskViewMode(item.taskId, 'diff');
+      navigation.setReviewMode(item.taskId, 'changes');
+      navigate({
+        to: '/all/$taskId',
+        params: { taskId: item.taskId },
+      });
+    },
+    [item.taskId, navigate],
+  );
+
   const handleWorkItemClick = useCallback(
     (e: React.MouseEvent, workItemId: string, workItemUrl?: string) => {
       e.stopPropagation();
@@ -1027,6 +1044,18 @@ export function FeedItemCard({
                       <XCircle className="h-2.5 w-2.5" />
                       <span className="text-[9.5px]">Conflicts</span>
                     </span>
+                  )}
+                  {item.hasUncommittedChanges && (
+                    <button
+                      type="button"
+                      onClick={handleUncommittedClick}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      className="text-status-run hover:bg-status-run/15 flex items-center gap-0.5 rounded px-1 py-0.5 transition-colors"
+                      title="Open uncommitted worktree changes"
+                    >
+                      <CircleDotDashed className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">Uncommitted</span>
+                    </button>
                   )}
                   {(item.activeThreadCount ?? 0) > 0 && (
                     <span className="text-status-pr flex items-center gap-0.5">

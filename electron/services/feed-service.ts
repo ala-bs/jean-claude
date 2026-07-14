@@ -29,6 +29,7 @@ import {
 import { completePrReviewTasksForMergedPr } from './pr-review-task-service';
 import { emitCacheEvent } from './cache-event-service';
 import { getMostRecentlyUpdatedStep } from './step-service';
+import { hasUncommittedWorktreeChanges } from './worktree-service';
 import type { LinkedPr } from './azure-devops-service';
 
 
@@ -276,6 +277,30 @@ export async function getTaskFeedItems({
 
     feedItems.push(taskFeedItem);
   }
+
+  const feedItemsByTaskId = new Map(
+    feedItems.flatMap((item) => (item.taskId ? [[item.taskId, item]] : [])),
+  );
+  await runInChunks(
+    activeTasks.filter((task) => task.pullRequestId && task.worktreePath),
+    10,
+    async (task) => {
+      try {
+        const item = feedItemsByTaskId.get(task.id);
+        if (item) {
+          item.hasUncommittedChanges = await hasUncommittedWorktreeChanges(
+            task.worktreePath!,
+          );
+        }
+      } catch (error) {
+        dbg.feed(
+          'getTaskFeedItems: failed checking worktree status for task %s: %O',
+          task.id,
+          error,
+        );
+      }
+    },
+  );
 
   // Fetch child tasks and nest them into parent feed items
   const parentTaskIds = activeTasks.map((t) => t.id);

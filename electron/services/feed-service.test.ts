@@ -19,6 +19,7 @@ import {
 } from './feed-service';
 import { completePrReviewTasksForMergedPr } from './pr-review-task-service';
 import { emitCacheEvent } from './cache-event-service';
+import { hasUncommittedWorktreeChanges } from './worktree-service';
 
 
 
@@ -60,6 +61,10 @@ vi.mock('./cache-event-service', () => ({
 
 vi.mock('./pr-review-task-service', () => ({
   completePrReviewTasksForMergedPr: vi.fn(),
+}));
+
+vi.mock('./worktree-service', () => ({
+  hasUncommittedWorktreeChanges: vi.fn(),
 }));
 
 vi.mock('./step-service', () => ({
@@ -217,5 +222,114 @@ describe('getTaskFeedItems', () => {
       projectId: 'project-1',
       pullRequestId: 12,
     });
+  });
+
+  it('marks a PR-linked task when its worktree has uncommitted changes', async () => {
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      {
+        id: 'task-1',
+        projectId: 'project-1',
+        type: 'agent',
+        name: 'Ship feed indicator',
+        prompt: 'Ship feed indicator',
+        status: 'waiting',
+        hasUnread: false,
+        userCompleted: false,
+        pullRequestId: '12',
+        pullRequestUrl: 'https://example.com/pr/12',
+        worktreePath: '/repo/worktrees/task-1',
+        workItemIds: null,
+        workItemUrls: null,
+        pendingMessage: null,
+        updatedAt: '2026-07-14T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: 'provider-1',
+        repoId: 'repo-1',
+      } as never,
+    ]);
+    vi.mocked(hasUncommittedWorktreeChanges).mockResolvedValue(true);
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(new Map());
+
+    await expect(getTaskFeedItems()).resolves.toEqual([
+      expect.objectContaining({
+        taskId: 'task-1',
+        hasUncommittedChanges: true,
+      }),
+    ]);
+    expect(hasUncommittedWorktreeChanges).toHaveBeenCalledWith(
+      '/repo/worktrees/task-1',
+    );
+  });
+
+  it('does not check worktree status for a task without an associated PR', async () => {
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      {
+        id: 'task-1',
+        projectId: 'project-1',
+        type: 'agent',
+        name: 'No PR yet',
+        prompt: 'No PR yet',
+        status: 'waiting',
+        hasUnread: false,
+        userCompleted: false,
+        pullRequestId: null,
+        pullRequestUrl: null,
+        worktreePath: '/repo/worktrees/task-1',
+        workItemIds: null,
+        workItemUrls: null,
+        pendingMessage: null,
+        updatedAt: '2026-07-14T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: 'provider-1',
+        repoId: 'repo-1',
+      } as never,
+    ]);
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(new Map());
+
+    await getTaskFeedItems();
+
+    expect(hasUncommittedWorktreeChanges).not.toHaveBeenCalled();
+  });
+
+  it('keeps a PR-linked task in the feed when its worktree status check fails', async () => {
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      {
+        id: 'task-1',
+        projectId: 'project-1',
+        type: 'agent',
+        name: 'Status unavailable',
+        prompt: 'Status unavailable',
+        status: 'waiting',
+        hasUnread: false,
+        userCompleted: false,
+        pullRequestId: '12',
+        pullRequestUrl: 'https://example.com/pr/12',
+        worktreePath: '/repo/worktrees/task-1',
+        workItemIds: null,
+        workItemUrls: null,
+        pendingMessage: null,
+        updatedAt: '2026-07-14T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: 'provider-1',
+        repoId: 'repo-1',
+      } as never,
+    ]);
+    vi.mocked(hasUncommittedWorktreeChanges).mockRejectedValue(
+      new Error('git status timed out'),
+    );
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(new Map());
+
+    const items = await getTaskFeedItems();
+
+    expect(items).toEqual([
+      expect.objectContaining({ taskId: 'task-1' }),
+    ]);
+    expect(items[0]).not.toHaveProperty('hasUncommittedChanges');
   });
 });

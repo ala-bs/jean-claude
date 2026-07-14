@@ -38,6 +38,7 @@ const {
   getWorktreeDiff,
   getWorktreeFileContent,
   getWorktreeUnifiedDiff,
+  hasUncommittedWorktreeChanges,
 } = await import('./worktree-service');
 
 let testDir: string;
@@ -58,6 +59,32 @@ async function commit(message: string) {
   const { stdout } = await git(['rev-parse', 'HEAD']);
   return stdout.trim();
 }
+
+describe('hasUncommittedWorktreeChanges', () => {
+  beforeEach(async () => {
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-worktree-status-'));
+    await git(['init', '-b', 'main']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test User']);
+    await writeFile('tracked.txt', 'base\n');
+    await commit('base');
+  });
+
+  afterEach(async () => {
+    if (testDir) await fs.rm(testDir, { force: true, recursive: true });
+  });
+
+  it('detects tracked and untracked worktree changes', async () => {
+    await expect(hasUncommittedWorktreeChanges(testDir)).resolves.toBe(false);
+
+    await writeFile('tracked.txt', 'changed\n');
+    await expect(hasUncommittedWorktreeChanges(testDir)).resolves.toBe(true);
+
+    await git(['restore', 'tracked.txt']);
+    await writeFile('generated/nested/untracked.txt', 'new\n');
+    await expect(hasUncommittedWorktreeChanges(testDir)).resolves.toBe(true);
+  });
+});
 
 describe('getWorktreeDiff', () => {
   beforeEach(async () => {
