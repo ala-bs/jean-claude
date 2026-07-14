@@ -15,6 +15,12 @@ import {
 import type { PermissionScope } from './permission-types';
 import type { ProjectPriority } from './feed-types';
 import type { UsageProviderType } from './usage-types';
+import type { WorkItemTitleParserSetting } from './work-item-title-parser-types';
+
+export type {
+  WorkItemTitleParserRule,
+  WorkItemTitleParserSetting,
+} from './work-item-title-parser-types';
 
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
@@ -253,6 +259,7 @@ export interface Project {
   workItemProviderId: string | null;
   workItemProjectId: string | null;
   workItemProjectName: string | null;
+  workItemTitleParser: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed: boolean;
   showPrsInFeed: boolean;
   autoPullSourceBranch: boolean;
@@ -291,6 +298,7 @@ export interface NewProject {
   workItemProviderId?: string | null;
   workItemProjectId?: string | null;
   workItemProjectName?: string | null;
+  workItemTitleParser?: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
@@ -329,6 +337,7 @@ export interface UpdateProject {
   workItemProviderId?: string | null;
   workItemProjectId?: string | null;
   workItemProjectName?: string | null;
+  workItemTitleParser?: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
@@ -28,6 +29,7 @@ import {
 } from '@/hooks/use-work-items';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { Kbd } from '@/common/ui/kbd';
+import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { UserAvatar } from '@/common/ui/user-avatar';
 
 
@@ -65,6 +67,7 @@ export function WorkItemPreview({
   headerLeading,
   headerActions,
   variant = 'default',
+  parserSetting = null,
 }: {
   workItem: AzureDevOpsWorkItem | null;
   providerId?: string;
@@ -83,6 +86,7 @@ export function WorkItemPreview({
   headerLeading?: ReactNode;
   headerActions?: ReactNode;
   variant?: 'default' | 'editorial';
+  parserSetting?: WorkItemTitleParserSetting | null;
 }) {
   const workItemId = workItem?.id ?? null;
   const [activeTab, setActiveTab] = useState<DetailsTab>('content');
@@ -218,12 +222,26 @@ export function WorkItemPreview({
                 value={fields.title}
                 label="Title"
                 className="text-ink-0 block min-w-0 flex-1 text-left text-sm font-semibold leading-snug"
+                displayValue={parserSetting ? (
+                  <ParsedWorkItemTitle
+                    title={fields.title}
+                    parserSetting={parserSetting}
+                    titleClassName="text-ink-0 text-sm font-semibold leading-snug"
+                    titleElement="span"
+                    inline
+                  />
+                ) : undefined}
                 fullWidth
                 validate={(value) => value.trim() ? null : 'Title cannot be empty'}
                 onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Title', value })}
               />
             ) : (
-              <h3 className="text-ink-0 min-w-0 flex-1 text-sm font-medium">{fields.title}</h3>
+              parserSetting ? <div className="min-w-0 flex-1"><ParsedWorkItemTitle
+                title={fields.title}
+                parserSetting={parserSetting}
+                titleClassName="text-ink-0 text-sm font-medium"
+                titleElement="h3"
+              /></div> : <h3 className="text-ink-0 min-w-0 flex-1 text-sm font-medium">{fields.title}</h3>
             )}
           </div>
           {isEditorial && (
@@ -446,6 +464,7 @@ export function WorkItemPreview({
                   isLoading={isLoadingRelatedWorkItems}
                   error={relatedWorkItemsError}
                   onOpen={onOpenRelatedWorkItem}
+                  parserSetting={parserSetting}
                 />
               )}
 
@@ -616,12 +635,14 @@ function RelatedWorkItems({
   isLoading,
   error,
   onOpen,
+  parserSetting,
 }: {
   workItem: AzureDevOpsWorkItem;
   items: AzureDevOpsWorkItem[];
   isLoading: boolean;
   error: Error | null;
   onOpen?: (workItemId: number) => void;
+  parserSetting: WorkItemTitleParserSetting | null;
 }) {
   const [expanded, setExpanded] = useState(true);
   const byId = new Map(items.map((item) => [item.id, item]));
@@ -659,7 +680,30 @@ function RelatedWorkItems({
                 {group.ids.map((id) => {
                   const item = byId.get(id);
                   return item ? (
-                    <button
+                    parserSetting ? <div key={id} onClick={() => onOpen?.(id)}>
+                      <ParsedWorkItemTitle
+                        title={item.fields.title}
+                        parserSetting={parserSetting}
+                        compact
+                        className="border-glass-border bg-bg-1/60 hover:bg-glass-medium w-full rounded-md border transition-colors"
+                        labelsClassName="px-2.5 pb-2"
+                        titleClassName="text-ink-1 truncate text-xs"
+                        renderTitle={(title) => <button
+                          type="button"
+                          disabled={!onOpen}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onOpen?.(id);
+                          }}
+                          className="flex w-full min-w-0 items-center gap-2 px-2.5 py-2 text-left disabled:cursor-default"
+                        >
+                          <WorkItemTypeIcon type={item.fields.workItemType} size="sm" />
+                          <span className="text-ink-3 text-[10px]">#{id}</span>
+                           <span className="min-w-0 flex-1">{title}</span>
+                          <span className="text-ink-3 text-[10px]">{item.fields.state}</span>
+                        </button>}
+                      />
+                    </div> : <button
                       key={id}
                       type="button"
                       disabled={!onOpen}
@@ -668,9 +712,7 @@ function RelatedWorkItems({
                     >
                       <WorkItemTypeIcon type={item.fields.workItemType} size="sm" />
                       <span className="text-ink-3 text-[10px]">#{id}</span>
-                      <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">
-                        {item.fields.title}
-                      </span>
+                      <span className="text-ink-1 min-w-0 flex-1 truncate text-xs">{item.fields.title}</span>
                       <span className="text-ink-3 text-[10px]">{item.fields.state}</span>
                     </button>
                   ) : (
@@ -822,6 +864,7 @@ function EditableMetadataValue({
   options,
   className = 'text-ink-1 hover:text-acc-ink rounded px-1 py-0.5 text-xs',
   fullWidth = false,
+  displayValue,
   validate,
   onSave,
 }: {
@@ -831,6 +874,7 @@ function EditableMetadataValue({
   options?: string[];
   className?: string;
   fullWidth?: boolean;
+  displayValue?: ReactNode;
   validate?: (value: string) => string | null;
   onSave: (value: string) => Promise<unknown>;
 }) {
@@ -872,7 +916,16 @@ function EditableMetadataValue({
   };
 
   if (!editing) {
-    return <button type="button" className={className} onClick={() => { beginMetadataEdit(lifecycleRef.current); setDraft(value); setError(null); setEditing(true); }}>{value || emptyLabel}</button>;
+    const beginEdit = () => {
+      beginMetadataEdit(lifecycleRef.current);
+      setDraft(value);
+      setError(null);
+      setEditing(true);
+    };
+    if (displayValue) {
+      return <button type="button" className={className} onClick={beginEdit}>{displayValue}</button>;
+    }
+    return <button type="button" className={className} onClick={beginEdit}>{value || emptyLabel}</button>;
   }
 
   const inputClassName = `bg-bg-2 text-ink-1 min-w-0 rounded border border-white/10 px-1.5 py-1 text-xs outline-none${fullWidth ? ' w-full' : ''}`;

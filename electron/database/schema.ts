@@ -103,6 +103,7 @@ export interface ProjectTable {
   workItemProviderId: string | null;
   workItemProjectId: string | null;
   workItemProjectName: string | null;
+  workItemTitleParser: string | null; // JSON text
   // Agent backend (null = use global default)
   defaultAgentBackend: string | null;
   defaultAgentModelPreference: string | null;

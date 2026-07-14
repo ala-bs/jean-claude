@@ -1,10 +1,12 @@
 import { Bug, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
+import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
 import { getOwnerColor } from '@/features/work-item/utils-owner-color';
+import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentAzureUser } from '@/hooks/use-work-items';
 import { UserAvatar } from '@/common/ui/user-avatar';
@@ -16,6 +18,7 @@ import {
   SelectionCheckbox,
   WorkItemTypeIcon,
 } from '../ui-work-item-shared';
+import { WorkItemBoardPrimaryHeading } from './card-primary-heading';
 
 const EMPTY_COLUMN_IDS: string[] = [];
 
@@ -74,6 +77,7 @@ export function WorkItemBoard({
   onOpenChildBugs,
   relatedBugWorkItemIds = [],
   variant = 'default',
+  parserSetting = null,
 }: {
   workItems: AzureDevOpsWorkItem[];
   boardColumns: AzureDevOpsBoardColumn[];
@@ -95,6 +99,7 @@ export function WorkItemBoard({
   onOpenChildBugs?: (workItem: AzureDevOpsWorkItem) => void;
   relatedBugWorkItemIds?: number[];
   variant?: 'default' | 'editorial';
+  parserSetting?: WorkItemTitleParserSetting | null;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
@@ -313,9 +318,7 @@ export function WorkItemBoard({
                 }
                 onHighlight(workItem);
               };
-              const cardHeading = <>
-                <div className="flex items-center gap-1.5">
-                  {showSelection && onToggleSelect && <button
+              const selectionControl = showSelection && onToggleSelect ? <button
                     type="button"
                     aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
                     aria-checked={isSelected}
@@ -327,7 +330,14 @@ export function WorkItemBoard({
                     className="rounded"
                   >
                     <SelectionCheckbox checked={isSelected} size="sm" />
-                  </button>}
+                  </button> : undefined;
+              const avatar = workItem.fields.assignedTo ? <UserAvatar
+                name={workItem.fields.assignedTo}
+                color={getOwnerColor(workItem.fields.assignedTo)}
+                title={currentUser?.displayName && workItem.fields.assignedTo === currentUser.displayName ? `${workItem.fields.assignedTo} (you)` : workItem.fields.assignedTo}
+                highlight={!!currentUser?.displayName && workItem.fields.assignedTo === currentUser.displayName}
+              /> : null;
+              const metadataContent = <>
                   <WorkItemTypeIcon
                     type={workItem.fields.workItemType}
                     size="sm"
@@ -338,35 +348,52 @@ export function WorkItemBoard({
                   </span>
                   {isExactMatch && <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">Exact</span>}
                   {!isEditorial && <span className="text-ink-2 max-w-[80px] truncate text-[10px]">{workItem.fields.workItemType}</span>}
-                  <div className="ml-auto">
-                    {workItem.fields.assignedTo && <UserAvatar
-                      name={workItem.fields.assignedTo}
-                      color={getOwnerColor(workItem.fields.assignedTo)}
-                      title={currentUser?.displayName && workItem.fields.assignedTo === currentUser.displayName ? `${workItem.fields.assignedTo} (you)` : workItem.fields.assignedTo}
-                      highlight={!!currentUser?.displayName && workItem.fields.assignedTo === currentUser.displayName}
-                    />}
-                  </div>
-                </div>
-                <span className={clsx(
-                  'text-ink-0 line-clamp-2 leading-[1.36]',
-                  isEditorial ? 'text-xs' : 'text-[12.5px]',
-                )}>
-                  <HighlightedSearchText text={workItem.fields.title} search={search} />
-                </span>
-              </>;
+                </>;
+              const cardMetadata = <span className="flex items-center gap-1.5">
+                {selectionControl}
+                {metadataContent}
+                <span className="ml-auto">{avatar}</span>
+              </span>;
+              const rawTitle = <span className={clsx(
+                'text-ink-0 line-clamp-2 leading-[1.36]',
+                isEditorial ? 'text-xs' : 'text-[12.5px]',
+              )}>
+                <HighlightedSearchText text={workItem.fields.title} search={search} />
+              </span>;
+              const cardHeading = parserSetting ? <ParsedWorkItemTitle
+                  title={workItem.fields.title}
+                  parserSetting={parserSetting}
+                  compact
+                  search={search}
+                  renderTitle={(title) => <WorkItemBoardPrimaryHeading
+                    selectionControl={selectionControl}
+                    trailingControl={avatar}
+                    metadata={metadataContent}
+                    title={title}
+                    onOpen={(event) => {
+                      event.stopPropagation();
+                      openWorkItem(event.metaKey || event.ctrlKey);
+                    }}
+                  />}
+                  titleClassName={clsx(
+                    'text-ink-0 line-clamp-2 leading-[1.36]',
+                    isEditorial ? 'text-xs' : 'text-[12.5px]',
+                  )}
+                /> : <>{cardMetadata}{rawTitle}</>;
+              const hasPrimaryButton = isEditorial || parserSetting !== null;
 
               return (
                 <div
                   key={workItem.id}
                   data-work-item-id={workItem.id}
                   onClick={(event) => openWorkItem(event.metaKey || event.ctrlKey)}
-                  onKeyDown={isEditorial ? undefined : (event) => {
+                  onKeyDown={hasPrimaryButton ? undefined : (event) => {
                     if (event.key !== 'Enter' && event.key !== ' ') return;
                     event.preventDefault();
                     openWorkItem(event.metaKey || event.ctrlKey);
                   }}
-                  role={isEditorial ? undefined : 'button'}
-                  tabIndex={isEditorial ? undefined : 0}
+                  role={hasPrimaryButton ? undefined : 'button'}
+                  tabIndex={hasPrimaryButton ? undefined : 0}
                   className={clsx(
                     'flex cursor-pointer flex-col gap-1.5 border p-2 text-left transition-[box-shadow,border-color,background-color]',
                     isEditorial
@@ -381,7 +408,7 @@ export function WorkItemBoard({
                         : 'hover:bg-bg-2 border-line',
                   )}
                 >
-                  {isEditorial ? <button
+                  {isEditorial && !parserSetting ? <button
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation();

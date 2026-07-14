@@ -1,3 +1,7 @@
+import {
+  isWorkItemTitleParserSetting,
+  type WorkItemTitleParserSetting,
+} from '@shared/work-item-title-parser-types';
 import { isAiSkillSlotsSetting } from '@shared/types';
 
 import { NewProject, ProjectRow, ProjectType, UpdateProject } from '../schema';
@@ -26,6 +30,36 @@ function sanitizeBranchList(
   return sanitized.length > 0 ? JSON.stringify(sanitized) : null;
 }
 
+export function parseWorkItemTitleParser(
+  value: string | null,
+): WorkItemTitleParserSetting | null {
+  if (value === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isWorkItemTitleParserSetting(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function serializeWorkItemTitleParser(
+  setting: WorkItemTitleParserSetting | null,
+): string | null {
+  if (setting === null) return null;
+  if (!isWorkItemTitleParserSetting(setting)) {
+    throw new TypeError('Invalid work item title parser setting');
+  }
+  return JSON.stringify(setting);
+}
+
+export function serializeWorkItemTitleParserUpdate(
+  setting: WorkItemTitleParserSetting | null | undefined,
+): { workItemTitleParser?: string | null } {
+  return setting === undefined
+    ? {}
+    : { workItemTitleParser: serializeWorkItemTitleParser(setting) };
+}
+
 function parseProjectRow(row: ProjectRow) {
   let aiSkillSlots = null;
   if (row.aiSkillSlots) {
@@ -36,6 +70,7 @@ function parseProjectRow(row: ProjectRow) {
       // Malformed JSON — fall back to null
     }
   }
+  const workItemTitleParser = parseWorkItemTitleParser(row.workItemTitleParser);
   let protectedBranches: string[] = [];
   if (row.protectedBranches) {
     try {
@@ -69,6 +104,7 @@ function parseProjectRow(row: ProjectRow) {
     autoPullSourceBranch: row.autoPullSourceBranch === 1,
     commitWithNoVerify: row.commitWithNoVerify === 1,
     aiSkillSlots,
+    workItemTitleParser,
     protectedBranches,
     favoriteBranches,
   };
@@ -119,6 +155,7 @@ export const ProjectRepository = {
       autoPullSourceBranch,
       commitWithNoVerify,
       aiSkillSlots,
+      workItemTitleParser,
       protectedBranches,
       favoriteBranches,
       ...rest
@@ -135,6 +172,9 @@ export const ProjectRepository = {
         autoPullSourceBranch: autoPullSourceBranch === true ? 1 : 0,
         commitWithNoVerify: commitWithNoVerify === true ? 1 : 0,
         aiSkillSlots: aiSkillSlots ? JSON.stringify(aiSkillSlots) : null,
+        workItemTitleParser: serializeWorkItemTitleParser(
+          workItemTitleParser ?? null,
+        ),
         protectedBranches: sanitizeBranchList(protectedBranches),
         favoriteBranches: sanitizeBranchList(favoriteBranches),
       })
@@ -152,6 +192,7 @@ export const ProjectRepository = {
       autoPullSourceBranch,
       commitWithNoVerify,
       aiSkillSlots,
+      workItemTitleParser,
       protectedBranches,
       favoriteBranches,
       ...rest
@@ -175,6 +216,7 @@ export const ProjectRepository = {
         ...(aiSkillSlots !== undefined && {
           aiSkillSlots: aiSkillSlots ? JSON.stringify(aiSkillSlots) : null,
         }),
+        ...serializeWorkItemTitleParserUpdate(workItemTitleParser),
         ...(protectedBranches !== undefined && {
           protectedBranches: sanitizeBranchList(protectedBranches),
         }),

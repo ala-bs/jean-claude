@@ -36,6 +36,7 @@ function createProject(overrides: Partial<Project> = {}): Project {
     workItemProviderId: null,
     workItemProjectId: null,
     workItemProjectName: null,
+    workItemTitleParser: null,
     showWorkItemsInFeed: true,
     showPrsInFeed: true,
     defaultAgentBackend: null,

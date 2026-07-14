@@ -33,7 +33,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { UserAvatar } from '@/common/ui/user-avatar';
 import { WorkItemBoard } from '@/features/work-item/ui-work-item-board';
 import { WorkItemPreview } from '@/features/work-item/ui-work-item-preview';
+import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import type { Project } from '@shared/types';
+import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 import {
   buildAzureBoardBaseModel,
   buildAzureBoardRelationshipModel,
@@ -159,11 +161,13 @@ function RelatedBugsPanel({
   bugs,
   onBack,
   onOpenBug,
+  parserSetting,
 }: {
   story: AzureDevOpsWorkItem;
   bugs: AzureDevOpsWorkItem[];
   onBack: () => void;
   onOpenBug: (bugId: number) => void;
+  parserSetting: WorkItemTitleParserSetting | null;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -173,32 +177,52 @@ function RelatedBugsPanel({
         </button>
         <div className="min-w-0 flex-1">
           <div className="text-ink-3 mb-0.5 font-mono text-[10px]">#{story.id} · related bugs</div>
-          <div className="text-ink-0 truncate text-sm font-semibold">{story.fields.title}</div>
+          <ParsedWorkItemTitle
+            title={story.fields.title}
+            parserSetting={parserSetting}
+            compact
+            titleClassName="text-ink-0 truncate text-sm font-semibold"
+          />
         </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3.5">
         {bugs.map((bug) => {
           const isClosed = isWorkItemClosedState(bug.fields.state);
           return (
-            <button
+            <div
               key={bug.id}
-              type="button"
               onClick={() => onOpenBug(bug.id)}
               className={isClosed
                 ? 'border-line bg-bg-2 hover:bg-bg-3 border-l-status-done flex w-full flex-col rounded-lg border border-l-[3px] px-3 py-2.5 text-left transition-colors'
                 : 'border-line bg-bg-2 hover:bg-bg-3 border-l-status-fail flex w-full flex-col rounded-lg border border-l-[3px] px-3 py-2.5 text-left transition-colors'}
             >
-              <span className="mb-1.5 flex w-full items-center gap-1.5">
-                <Bug className={isClosed ? 'text-status-done h-3 w-3' : 'text-status-fail h-3 w-3'} />
-                <span className="text-ink-3 font-mono text-[10px]">#{bug.id}</span>
-                <span className={isClosed ? 'bg-status-done/15 text-status-done ml-auto px-1.5 py-0.5 font-mono text-[9px]' : 'bg-status-fail/15 text-status-fail ml-auto px-1.5 py-0.5 font-mono text-[9px]'}>
-                  {bug.fields.state}
-                </span>
-                <ChevronRight className="text-ink-3 h-3 w-3" />
-              </span>
-              <span className="text-ink-0 mb-1 text-xs font-semibold leading-snug">{bug.fields.title}</span>
+              <ParsedWorkItemTitle
+                title={bug.fields.title}
+                parserSetting={parserSetting}
+                compact
+                className="mb-1 w-full"
+                titleClassName="text-ink-0 text-xs font-semibold leading-snug"
+                renderTitle={(title) => <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenBug(bug.id);
+                  }}
+                  className="flex w-full flex-col text-left"
+                >
+                  <span className="mb-1.5 flex w-full items-center gap-1.5">
+                    <Bug className={isClosed ? 'text-status-done h-3 w-3' : 'text-status-fail h-3 w-3'} />
+                    <span className="text-ink-3 font-mono text-[10px]">#{bug.id}</span>
+                    <span className={isClosed ? 'bg-status-done/15 text-status-done ml-auto px-1.5 py-0.5 font-mono text-[9px]' : 'bg-status-fail/15 text-status-fail ml-auto px-1.5 py-0.5 font-mono text-[9px]'}>
+                      {bug.fields.state}
+                    </span>
+                    <ChevronRight className="text-ink-3 h-3 w-3" />
+                  </span>
+                  {title}
+                </button>}
+              />
               <span className="text-ink-2 line-clamp-3 whitespace-pre-line text-xs leading-relaxed">{workItemSummary(bug)}</span>
-            </button>
+            </div>
           );
         })}
         {bugs.length === 0 && <p className="text-ink-3 text-xs italic">No related bugs.</p>}
@@ -534,6 +558,7 @@ export function AzureBoardProjectContent({
                     setWorkItemStack([item.id]);
                   }}
                   variant="editorial"
+                  parserSetting={project.workItemTitleParser}
                 />
               }
               details={selectedWorkItemId !== null ? (
@@ -545,7 +570,8 @@ export function AzureBoardProjectContent({
                >
                     {bugsForWorkItem && isRelatedBugsPanelOpen ? <RelatedBugsPanel
                       story={bugsForWorkItem}
-                      bugs={relatedBugs}
+                       bugs={relatedBugs}
+                       parserSetting={project.workItemTitleParser}
                       onBack={() => {
                         setBugsForWorkItemId(null);
                         setIsRelatedBugsPanelOpen(false);
@@ -580,6 +606,7 @@ export function AzureBoardProjectContent({
                         boardColumns={columns}
                         tagOptions={tagOptions}
                        showRelatedWorkItems
+                       parserSetting={project.workItemTitleParser}
                       variant="editorial"
                       headerLeading={workItemStack.length > 1 ? <button
                         type="button"
