@@ -465,6 +465,29 @@ describe('generateText opencode structured output', () => {
     );
   });
 
+  it('surfaces OpenCode session creation errors', async () => {
+    const client = createMockClient(null);
+    client.session.create.mockRejectedValueOnce(
+      new Error('Session directory is invalid'),
+    );
+    getOrCreateServerMock.mockResolvedValue({ client });
+
+    const result = generateText({
+      backend: 'opencode',
+      model: 'default',
+      prompt: 'Generate message',
+      outputSchema: { type: 'object' },
+      throwOnError: true,
+    });
+
+    const error = await result.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'AI generation failed: Session directory is invalid',
+    );
+    expect((error as Error).message).not.toContain('did not return a session ID');
+  });
+
   it('records one-off OpenCode requests even when token usage is absent', async () => {
     const client = createMockClient({
       data: {
@@ -525,34 +548,37 @@ describe('generateText opencode structured output', () => {
       },
     });
 
-    expect(client.session.create).toHaveBeenCalledWith({
-      directory: expect.any(String),
-      body: {
-        permission: [
-          { permission: '*', pattern: '*', action: 'deny' },
-          {
-            permission: 'read',
-            pattern: '.jean-claude/memory/**',
-            action: 'allow',
-          },
-          {
-            permission: 'write',
-            pattern: '.jean-claude/memory/**',
-            action: 'allow',
-          },
-          {
-            permission: 'edit',
-            pattern: '.jean-claude/memory/**',
-            action: 'allow',
-          },
-          {
-            permission: 'skill',
-            pattern: 'user-preference-memory',
-            action: 'allow',
-          },
-        ],
+    expect(client.session.create).toHaveBeenCalledWith(
+      {
+        directory: expect.any(String),
+        body: {
+          permission: [
+            { permission: '*', pattern: '*', action: 'deny' },
+            {
+              permission: 'read',
+              pattern: '.jean-claude/memory/**',
+              action: 'allow',
+            },
+            {
+              permission: 'write',
+              pattern: '.jean-claude/memory/**',
+              action: 'allow',
+            },
+            {
+              permission: 'edit',
+              pattern: '.jean-claude/memory/**',
+              action: 'allow',
+            },
+            {
+              permission: 'skill',
+              pattern: 'user-preference-memory',
+              action: 'allow',
+            },
+          ],
+        },
       },
-    });
+      { throwOnError: true },
+    );
   });
 
   it('does not pass OpenCode permissions when allowed tools are unset', async () => {
@@ -570,9 +596,12 @@ describe('generateText opencode structured output', () => {
       prompt: 'Generate text',
     });
 
-    expect(client.session.create).toHaveBeenCalledWith({
-      directory: expect.any(String),
-    });
+    expect(client.session.create).toHaveBeenCalledWith(
+      {
+        directory: expect.any(String),
+      },
+      { throwOnError: true },
+    );
   });
 });
 

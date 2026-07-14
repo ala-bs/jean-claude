@@ -246,7 +246,7 @@ async function generateWithOpenCode({
   const session = await client.session.create({
     directory,
     ...(permission.length > 0 ? { body: { permission } } : {}),
-  });
+  }, { throwOnError: true });
   const sessionId = session.data?.id;
 
   if (!sessionId) {
