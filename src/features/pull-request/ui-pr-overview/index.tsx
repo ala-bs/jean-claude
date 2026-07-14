@@ -335,9 +335,14 @@ export function PrOverview({
     [pr.completionOptions?.autoCompleteIgnoreConfigIds],
   );
 
-  const handleIgnoreOptionalPolicy = useCallback(
-    (configId: number) => {
-      if (!pr.autoCompleteSetBy) return;
+  const handleSetPolicyIgnored = useCallback(
+    (configId: number, shouldIgnore: boolean) => {
+      if (!pr.autoCompleteSetBy || autoCompleteMutation.isAnyPending) return;
+
+      const currentIds = pr.completionOptions?.autoCompleteIgnoreConfigIds ?? [];
+      const autoCompleteIgnoreConfigIds = shouldIgnore
+        ? Array.from(new Set([...currentIds, configId]))
+        : currentIds.filter((id) => id !== configId);
 
       autoCompleteMutation.mutate({
         enabled: true,
@@ -351,12 +356,7 @@ export function PrOverview({
           transitionWorkItems:
             pr.completionOptions?.transitionWorkItems ?? false,
           mergeCommitMessage: pr.completionOptions?.mergeCommitMessage,
-          autoCompleteIgnoreConfigIds: Array.from(
-            new Set([
-              ...(pr.completionOptions?.autoCompleteIgnoreConfigIds ?? []),
-              configId,
-            ]),
-          ),
+          autoCompleteIgnoreConfigIds,
         },
       });
     },
@@ -611,12 +611,12 @@ export function PrOverview({
                 : undefined
             }
             ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
-            onIgnoreOptionalPolicy={
+            onSetPolicyIgnored={
               !readOnly && pr.autoCompleteSetBy
-                ? handleIgnoreOptionalPolicy
+                ? handleSetPolicyIgnored
                 : undefined
             }
-            isIgnoringOptionalPolicy={autoCompleteMutation.isPending}
+            isSettingPolicyIgnored={autoCompleteMutation.isAnyPending}
           />
 
           {/* Description */}

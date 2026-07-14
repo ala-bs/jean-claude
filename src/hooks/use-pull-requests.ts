@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useValue } from '@legendapp/state/react';
 
 
@@ -1245,8 +1250,11 @@ export function useSetAutoComplete(
   const queryClient = useQueryClient();
   const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
   const queryKey = ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)];
+  const mutationKey = ['set-pull-request-auto-complete', ...queryKey];
+  const isAnyPending = useIsMutating({ mutationKey, exact: true }) > 0;
 
-  return useMutation({
+  const mutation = useMutation({
+    mutationKey,
     mutationFn: (params: {
       enabled: boolean;
       autoCompleteSetById?: string;
@@ -1280,6 +1288,8 @@ export function useSetAutoComplete(
       });
     },
   });
+
+  return { ...mutation, isAnyPending };
 }
 
 export function usePublishPullRequest(
