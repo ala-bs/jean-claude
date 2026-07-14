@@ -23,14 +23,6 @@ vi.mock('./mcp-template-service', () => ({
   installMcpForWorktree: vi.fn(),
 }));
 
-vi.mock('../lib/fs', () => ({
-  isEnoent: (error: unknown) =>
-    error instanceof Error &&
-    'code' in error &&
-    (error as { code?: string }).code === 'ENOENT',
-  pathExists: vi.fn(async () => true),
-}));
-
 const execFileAsync = promisify(execFile);
 const fs =
   await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -71,6 +63,7 @@ describe('hasUncommittedWorktreeChanges', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     if (testDir) await fs.rm(testDir, { force: true, recursive: true });
   });
 
@@ -83,6 +76,20 @@ describe('hasUncommittedWorktreeChanges', () => {
     await git(['restore', 'tracked.txt']);
     await writeFile('generated/nested/untracked.txt', 'new\n');
     await expect(hasUncommittedWorktreeChanges(testDir)).resolves.toBe(true);
+  });
+
+  it('returns false when the worktree was deleted', async () => {
+    await fs.rm(testDir, { recursive: true });
+
+    await expect(hasUncommittedWorktreeChanges(testDir)).resolves.toBe(false);
+  });
+
+  it('rejects when git is missing but the worktree exists', async () => {
+    vi.stubEnv('PATH', '');
+
+    await expect(hasUncommittedWorktreeChanges(testDir)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 });
 

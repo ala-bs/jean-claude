@@ -1151,17 +1151,22 @@ export interface WorktreeStatus {
 export async function hasUncommittedWorktreeChanges(
   worktreePath: string,
 ): Promise<boolean> {
-  const { stdout } = await execFileAsync(
-    'git',
-    [
-      '--no-optional-locks',
-      'status',
-      '--porcelain',
-      '--untracked-files=normal',
-    ],
-    { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
-  );
-  return stdout.trim().length > 0;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        '--no-optional-locks',
+        'status',
+        '--porcelain',
+        '--untracked-files=normal',
+      ],
+      { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+    );
+    return stdout.trim().length > 0;
+  } catch (error) {
+    if (isEnoent(error) && !(await pathExists(worktreePath))) return false;
+    throw error;
+  }
 }
 
 /**
