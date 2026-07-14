@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   FileText,
   FlaskConical,
   History,
@@ -57,6 +58,7 @@ export function WorkItemPreview({
   tagOptions = [],
   showRelatedWorkItems = false,
   onOpenRelatedWorkItem,
+  onOpenInBrowser,
   headerLeading,
   headerActions,
   variant = 'default',
@@ -72,6 +74,7 @@ export function WorkItemPreview({
   tagOptions?: string[];
   showRelatedWorkItems?: boolean;
   onOpenRelatedWorkItem?: (workItemId: number) => void;
+  onOpenInBrowser?: () => void;
   headerLeading?: ReactNode;
   headerActions?: ReactNode;
   variant?: 'default' | 'editorial';
@@ -341,9 +344,23 @@ export function WorkItemPreview({
             count={relatedTestCases.length}
           />
         )}
-        {!isEditorial && <span className="text-ink-3 ml-auto flex items-center gap-1 text-xs">
-          <Kbd shortcut="cmd+shift+o" /> open
-        </span>}
+        {!isEditorial &&
+          (onOpenInBrowser ? (
+            <button
+              type="button"
+              onClick={onOpenInBrowser}
+              className="text-ink-3 hover:bg-bg-2 hover:text-ink-1 ml-auto flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors"
+              title="Open in Azure DevOps"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open in Azure
+              <Kbd shortcut="cmd+shift+o" />
+            </button>
+          ) : (
+            <span className="text-ink-3 ml-auto flex items-center gap-1 text-xs">
+              <Kbd shortcut="cmd+shift+o" /> open
+            </span>
+          ))}
       </div>
 
        <div
