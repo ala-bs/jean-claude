@@ -353,6 +353,7 @@ import {
   writeBackendUserConfig,
 } from '../services/backend-config-settings-service';
 import { agentResourceMonitorService } from '../services/agent-resource-monitor-service';
+import { agentResourceSamplingLeaseService } from '../services/agent-resource-sampling-lease-service';
 import { agentService } from '../services/agent-service';
 import { agentUsageService } from '../services/agent-usage-service';
 import { closeEditorWindowsForTaskWorktree } from '../services/editor-automation-service';
@@ -4460,6 +4461,13 @@ export function registerIpcHandlers() {
   ipcMain.handle('agent:resources:getHistory', () => {
     return agentResourceMonitorService.getHistory();
   });
+
+  ipcMain.handle(
+    'agent:resources:setHighFrequencySampling',
+    (event, enabled: boolean) => {
+      agentResourceSamplingLeaseService.setSampling(event.sender, enabled);
+    },
+  );
 
   ipcMain.handle(
     'rate-limit-swap:resolve',

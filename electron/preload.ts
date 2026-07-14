@@ -834,6 +834,11 @@ contextBridge.exposeInMainWorld('api', {
     getResourceSnapshots: () =>
       ipcRenderer.invoke('agent:resources:getSnapshots'),
     getResourceHistory: () => ipcRenderer.invoke('agent:resources:getHistory'),
+    setHighFrequencyResourceSampling: (enabled: boolean) =>
+      ipcRenderer.invoke(
+        'agent:resources:setHighFrequencySampling',
+        enabled,
+      ),
     compactRawMessages: (taskId: string) =>
       ipcRenderer.invoke(AGENT_CHANNELS.COMPACT_RAW_MESSAGES, taskId),
     reprocessNormalization: (taskId: string) =>

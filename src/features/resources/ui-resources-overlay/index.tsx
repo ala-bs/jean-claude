@@ -1,16 +1,19 @@
 import { Cpu, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { type ReactNode, useMemo } from 'react';
+import { type ReactNode, useEffect, useMemo } from 'react';
 import FocusLock from 'react-focus-lock';
 import { useQueries } from '@tanstack/react-query';
 
 
 
 import {
+  AGENT_RESOURCE_HIGH_FREQUENCY_SAMPLING_INTERVAL_MS,
+  type AgentResourceSnapshot,
+} from '@shared/agent-resource-types';
+import {
   type AgentResourceSample,
   useAgentResourceSnapshots,
 } from '@/hooks/use-agent-resource-snapshots';
-import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
@@ -391,9 +394,21 @@ function AppMetric({ label, value }: { label: string; value: string }) {
 
 export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
   const layer = useKeyboardLayer('dialog', { exclusive: true });
-  const { data: memory, history: memoryHistory } = useMemoryUsage();
-  const { data: snapshots = [], historyByStepId } = useAgentResourceSnapshots();
+  const { data: memory, history: memoryHistory } = useMemoryUsage({
+    pollIntervalMs: AGENT_RESOURCE_HIGH_FREQUENCY_SAMPLING_INTERVAL_MS,
+    isolatedHistory: true,
+  });
+  const { data: snapshots = [], historyByStepId } = useAgentResourceSnapshots({
+    refetchIntervalMs: AGENT_RESOURCE_HIGH_FREQUENCY_SAMPLING_INTERVAL_MS,
+  });
   const shouldReduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    void api.agent.setHighFrequencyResourceSampling(true);
+    return () => {
+      void api.agent.setHighFrequencyResourceSampling(false);
+    };
+  }, []);
 
   const supportedSnapshots = useMemo(
     () =>
@@ -712,7 +727,7 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
           </div>
 
           <div className="border-glass-border text-ink-4 flex items-center border-t bg-black/18 px-5 py-3 text-xs">
-            sampled every 2s
+            sampled every 500ms
             <div className="flex-1" />
             Close <Kbd shortcut="escape" />
           </div>

@@ -1195,6 +1195,7 @@ export interface Api {
     ) => Promise<DebugMessageWithRawData[]>;
     getResourceSnapshots: () => Promise<AgentResourceSnapshot[]>;
     getResourceHistory: () => Promise<Record<string, AgentResourceSnapshot[]>>;
+    setHighFrequencyResourceSampling: (enabled: boolean) => Promise<void>;
     compactRawMessages: (taskId: string) => Promise<void>;
     reprocessNormalization: (taskId: string) => Promise<number>;
     getPendingRequest: (stepId: string) => Promise<
@@ -2166,6 +2167,7 @@ export const api: Api = hasWindowApi
         getMessagesWithRawData: async () => [],
         getResourceSnapshots: async () => [],
         getResourceHistory: async () => ({}),
+        setHighFrequencyResourceSampling: async () => {},
         compactRawMessages: async () => {},
         reprocessNormalization: async () => 0,
         getPendingRequest: async () => null,
