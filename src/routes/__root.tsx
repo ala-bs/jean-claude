@@ -22,6 +22,7 @@ import { Button } from '@/common/ui/button';
 import { CalendarOverlay } from '@/features/calendar/ui-calendar-overlay';
 import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
 import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-palette-overlay';
+import { createInterruptAllTasksCommand } from '@/lib/interrupt-all-tasks-command';
 import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
 import { Header } from '@/layout/ui-header';
 import { LearningCenterOverlay } from '@/features/onboarding/ui-learning-center-overlay';
@@ -41,6 +42,7 @@ import { UsageOverlay } from '@/features/usage/ui-usage-overlay';
 import { useChangelogStore } from '@/stores/changelog';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
+import { useModal } from '@/common/context/modal';
 import { useNewTaskDraft } from '@/stores/new-task-draft';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useOverlaysStore } from '@/stores/overlays';
@@ -124,6 +126,8 @@ function GlobalCommands() {
   const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
   const openChangelog = useChangelogStore((s) => s.open);
+  const modal = useModal();
+  const addToast = useToastStore((s) => s.addToast);
   useCommands(
     'global-commands',
     [
@@ -148,6 +152,12 @@ function GlobalCommands() {
           toggle('learning-center');
         },
       },
+      createInterruptAllTasksCommand({
+        confirm: modal.confirm,
+        addToast,
+        stopAllAgentTasks: api.agent.stopAll,
+        stopAllRunCommands: api.runCommands.stopAll,
+      }),
     ],
     { layer },
   );

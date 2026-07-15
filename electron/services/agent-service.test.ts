@@ -1528,6 +1528,316 @@ describe('agentService provider runtime', () => {
     expect(providerCalls.stops).toContain('provider-run-1');
   });
 
+  it('drains an admitted start before stopAll snapshots sessions', async () => {
+    const stepLookup = createDeferred<typeof defaultStep>();
+    taskStepRepositoryMock.findById.mockReturnValueOnce(stepLookup.promise);
+    const startPromise = agentService.start('step-1');
+    let stopSettled = false;
+    const stopPromise = agentService.stopAll({ reason: 'user' }).then(() => {
+      stopSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+
+    stepLookup.resolve(defaultStep);
+    await startPromise;
+    await stopPromise;
+
+    expect(providerCalls.runStarts).toHaveLength(0);
+    expect(stepServiceMock.interruptStep).toHaveBeenCalledWith('step-1');
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  it('does not start a backend after stopAll interrupts a registered session', async () => {
+    const promptResolution = createDeferred<{
+      resolvedPrompt: string;
+      step: typeof defaultStep;
+      warnings: never[];
+    }>();
+    stepServiceMock.resolveAndValidate.mockReturnValueOnce(
+      promptResolution.promise,
+    );
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.resolveAndValidate).toHaveBeenCalled();
+    });
+
+    await agentService.stopAll({ reason: 'user' });
+    promptResolution.resolve({
+      resolvedPrompt: 'Resolved prompt',
+      step: defaultStep,
+      warnings: [],
+    });
+    await startPromise;
+    await Promise.resolve();
+
+    expect(providerCalls.runStarts).toHaveLength(0);
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  it('holds sendMessage registration through running-status updates', async () => {
+    const statusSync = createDeferred<void>();
+    const ordering: string[] = [];
+    stepServiceMock.syncTaskStatus.mockImplementationOnce(async () => {
+      ordering.push('status-sync-start');
+      await statusSync.promise;
+      ordering.push('status-sync-end');
+    });
+    stepServiceMock.interruptStep.mockImplementationOnce(async () => {
+      ordering.push('interrupt');
+    });
+    const sendPromise = agentService.sendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+    await waitForAssertion(() => {
+      expect(ordering).toContain('status-sync-start');
+    });
+    let stopSettled = false;
+    const stopPromise = agentService.stopAll({ reason: 'user' }).then(() => {
+      stopSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+
+    statusSync.resolve();
+    await Promise.all([sendPromise, stopPromise]);
+
+    expect(providerCalls.runStarts).toHaveLength(0);
+    expect(ordering).toEqual([
+      'status-sync-start',
+      'status-sync-end',
+      'interrupt',
+    ]);
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  it('rejects concurrent sendMessage registration for the same step', async () => {
+    const stepLookup = createDeferred<typeof defaultStep>();
+    taskStepRepositoryMock.findById.mockReturnValueOnce(stepLookup.promise);
+    const firstSend = agentService.sendMessage('step-1', [
+      { type: 'text', text: 'first' },
+    ]);
+
+    await expect(
+      agentService.sendMessage('step-1', [{ type: 'text', text: 'second' }]),
+    ).rejects.toThrow('Session registration already in progress for step step-1');
+
+    const stopPromise = agentService.stopAll({ reason: 'user' });
+    stepLookup.resolve(defaultStep);
+    await Promise.all([firstSend, stopPromise]);
+
+    expect(
+      agentMessageRepositoryMock.getMessageCountByStepId,
+    ).toHaveBeenCalledOnce();
+    expect(providerCalls.runStarts).toHaveLength(0);
+    expect(stepServiceMock.interruptStep).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores interruption when completion wins a terminal status race', async () => {
+    const terminalMutation = createDeferred<void>();
+    const ordering: string[] = [];
+    stepServiceMock.completeStep.mockImplementationOnce(async () => {
+      ordering.push('complete-start');
+      await terminalMutation.promise;
+      ordering.push('complete-end');
+      return ['step-2'];
+    });
+    stepServiceMock.interruptStep.mockImplementation(async () => {
+      ordering.push('interrupt');
+    });
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send: webContentsSendMock,
+        },
+      },
+    ] as never);
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(ordering).toContain('complete-start');
+    });
+
+    await agentService.stopAll({ reason: 'user' });
+    terminalMutation.resolve();
+    await waitForAssertion(() => {
+      expect(ordering).toContain('complete-end');
+    });
+
+    expect(ordering).toEqual([
+      'complete-start',
+      'interrupt',
+      'complete-end',
+      'interrupt',
+    ]);
+    expect(providerCalls.runStarts).toHaveLength(1);
+    expect(
+      webContentsSendMock.mock.calls.some(
+        ([, payload]) => payload?.type === 'status' && payload.status === 'completed',
+      ),
+    ).toBe(false);
+    expect(notificationServiceMock.notify).not.toHaveBeenCalled();
+  });
+
+  it('restores interruption when backend error handling races stopAll', async () => {
+    const terminalMutation = createDeferred<void>();
+    const ordering: string[] = [];
+    stepServiceMock.errorStep.mockImplementationOnce(async () => {
+      ordering.push('error-start');
+      await terminalMutation.promise;
+      ordering.push('error-end');
+    });
+    stepServiceMock.interruptStep.mockImplementation(async () => {
+      ordering.push('interrupt');
+    });
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send: webContentsSendMock,
+        },
+      },
+    ] as never);
+    const handle = createHandle({
+      events: [{ type: 'error', error: 'backend failed' }],
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(ordering).toContain('error-start');
+    });
+
+    await agentService.stopAll({ reason: 'user' });
+    terminalMutation.resolve();
+    await waitForAssertion(() => {
+      expect(ordering).toContain('error-end');
+    });
+
+    expect(ordering).toEqual([
+      'error-start',
+      'interrupt',
+      'error-end',
+      'interrupt',
+    ]);
+    expect(
+      webContentsSendMock.mock.calls.some(
+        ([, payload]) => payload?.type === 'status' && payload.status === 'errored',
+      ),
+    ).toBe(false);
+    expect(notificationServiceMock.notify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['completed', completeEvent()],
+    ['errored', { type: 'error', error: 'backend failed' } as AgentEvent],
+  ])(
+    'skips stale %s notification when stopAll wins during notification lookup',
+    async (_, terminalEvent) => {
+      const notificationSettings = createDeferred<{
+        modes: {
+          completed: 'always';
+          'permission-required': 'disabled';
+          question: 'disabled';
+          errored: 'always';
+        };
+      }>();
+      settingsRepositoryMock.get.mockReturnValueOnce(
+        notificationSettings.promise,
+      );
+      let windowDestroyed = false;
+      agentService.setMainWindow({
+        isDestroyed: () => windowDestroyed,
+        isFocused: () => false,
+        isMinimized: () => false,
+        focus: vi.fn(),
+        restore: vi.fn(),
+        webContents: {
+          isDestroyed: () => windowDestroyed,
+          send: vi.fn(),
+        },
+      } as never);
+      const terminalFinished = createDeferred<void>();
+      const baseHandle = createHandle();
+      const handle: AgentRunHandle = {
+        ...baseHandle,
+        events: (async function* () {
+          yield terminalEvent;
+          terminalFinished.resolve();
+        })(),
+      };
+      providerState.runStartImplementation = async () => handle;
+
+      try {
+        await agentService.start('step-1');
+        await waitForAssertion(() => {
+          expect(settingsRepositoryMock.get).toHaveBeenCalledWith(
+            'taskEventNotifications',
+          );
+        });
+
+        await agentService.stopAll({ reason: 'user' });
+        notificationSettings.resolve({
+          modes: {
+            completed: 'always',
+            'permission-required': 'disabled',
+            question: 'disabled',
+            errored: 'always',
+          },
+        });
+        await terminalFinished.promise;
+
+        expect(notificationServiceMock.notify).not.toHaveBeenCalled();
+      } finally {
+        windowDestroyed = true;
+      }
+    },
+  );
+
+  it('rejects new session producers and shares concurrent stopAll calls', async () => {
+    const sessions = (
+      agentService as unknown as { sessions: Map<string, unknown> }
+    ).sessions;
+    sessions.set('active-step', {});
+    const stopRelease = createDeferred<void>();
+    const stopMock = vi
+      .spyOn(agentService, 'stop')
+      .mockImplementation(async (stepId) => {
+        await stopRelease.promise;
+        sessions.delete(stepId);
+      });
+
+    try {
+      const firstStop = agentService.stopAll({ reason: 'user' });
+      const secondStop = agentService.stopAll({ reason: 'user' });
+      await Promise.resolve();
+      expect(stopMock).toHaveBeenCalledOnce();
+
+      await expect(agentService.start('step-1')).rejects.toThrow(
+        'Cannot start agent sessions while stopAll is active',
+      );
+      await expect(
+        agentService.sendMessage('step-1', [{ type: 'text', text: 'hello' }]),
+      ).rejects.toThrow('Cannot start agent sessions while stopAll is active');
+
+      stopRelease.resolve();
+      await Promise.all([firstStop, secondStop]);
+      expect(stopMock).toHaveBeenCalledOnce();
+    } finally {
+      stopMock.mockRestore();
+      sessions.delete('active-step');
+    }
+  });
+
   it('shares one stop workflow for concurrent stop calls', async () => {
     const { handle } = createIdleHandle();
     providerState.runStartImplementation = async () => handle;
@@ -1566,6 +1876,33 @@ describe('agentService provider runtime', () => {
     expect(interruptedStatusEvents).toHaveLength(1);
     expect(handle.stop).toHaveBeenCalledTimes(1);
     expect(handle.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('attempts every active session before reporting stopAll failures', async () => {
+    const sessions = (
+      agentService as unknown as { sessions: Map<string, unknown> }
+    ).sessions;
+    sessions.set('step-1', {});
+    sessions.set('step-2', {});
+    const stopMock = vi
+      .spyOn(agentService, 'stop')
+      .mockImplementation(async (stepId, options) => {
+        if (stepId === 'step-1') throw new Error('stop failed');
+        expect(options).toEqual({ reason: 'user' });
+      });
+
+    try {
+      await expect(
+        agentService.stopAll({ reason: 'user' }),
+      ).rejects.toThrow('Failed to stop 1 active agent sessions');
+      expect(stopMock).toHaveBeenCalledTimes(2);
+      expect(stopMock).toHaveBeenCalledWith('step-1', { reason: 'user' });
+      expect(stopMock).toHaveBeenCalledWith('step-2', { reason: 'user' });
+    } finally {
+      stopMock.mockRestore();
+      sessions.delete('step-1');
+      sessions.delete('step-2');
+    }
   });
 
   it('stops queued run handles independently when runBackend is nested', async () => {

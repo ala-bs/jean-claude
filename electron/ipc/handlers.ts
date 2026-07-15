@@ -4007,6 +4007,11 @@ export function registerIpcHandlers() {
     return agentService.stop(stepId);
   });
 
+  ipcMain.handle(AGENT_CHANNELS.STOP_ALL, () => {
+    dbg.ipc('agent:stopAll');
+    return agentService.stopAll({ reason: 'user' });
+  });
+
   ipcMain.handle(
     AGENT_CHANNELS.RESPOND,
     (
@@ -4603,6 +4608,9 @@ export function registerIpcHandlers() {
     'project:commands:run:stopCommand',
     (_, params: { taskId: string; runCommandId: string }) =>
       runCommandService.stopCommand(params),
+  );
+  ipcMain.handle('project:commands:run:stopAll', () =>
+    runCommandService.stopAllCommands(),
   );
   ipcMain.handle(
     'project:commands:run:sendInput',

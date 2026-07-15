@@ -212,15 +212,25 @@ async function killProcessTree(
   }
 }
 
-function signalProcessGroupOrProcess(pid: number, signal: ProcessSignal): void {
+function getErrnoCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return undefined;
+  }
+  return typeof error.code === 'string' ? error.code : undefined;
+}
+
+export function signalProcessGroupOrProcess(
+  pid: number,
+  signal: ProcessSignal,
+): void {
   if (pid <= 0) return;
 
   if (process.platform !== 'win32') {
     try {
       process.kill(-pid, signal);
       return;
-    } catch {
-      // Fall back to the PTY shell process if group signaling fails.
+    } catch (error) {
+      if (getErrnoCode(error) !== 'ESRCH') throw error;
     }
   }
 
@@ -268,6 +278,9 @@ class RunCommandService {
   private runningProcesses = new Map<string, Map<string, TrackedProcess>>();
   private logGenerations = new Map<string, number>();
   private commandOperationLocks = new Map<string, Promise<void>>();
+  private pendingStarts = new Set<Promise<unknown>>();
+  private stopAllActive = false;
+  private stopAllPromise: Promise<void> | null = null;
   private statusChangeCallbacks: StatusChangeCallback[] = [];
   private logCallbacks: LogCallback[] = [];
 
@@ -326,6 +339,23 @@ class RunCommandService {
         this.commandOperationLocks.delete(key);
       }
     }
+  }
+
+  private trackStart<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.stopAllActive) {
+      return Promise.reject(
+        new Error('Cannot start commands while stopAll is active'),
+      );
+    }
+
+    const promise = Promise.resolve().then(operation);
+    this.pendingStarts.add(promise);
+    void promise
+      .finally(() => {
+        this.pendingStarts.delete(promise);
+      })
+      .catch(() => {});
+    return promise;
   }
 
   private waitForExit({
@@ -841,6 +871,27 @@ class RunCommandService {
     workingDir: string;
     runCommandId: string;
   }): Promise<RunStatus | PortsInUseErrorData> {
+    return this.trackStart(() =>
+      this.startCommandAdmitted({
+        taskId,
+        projectId,
+        workingDir,
+        runCommandId,
+      }),
+    );
+  }
+
+  private async startCommandAdmitted({
+    taskId,
+    projectId,
+    workingDir,
+    runCommandId,
+  }: {
+    taskId: string;
+    projectId: string;
+    workingDir: string;
+    runCommandId: string;
+  }): Promise<RunStatus | PortsInUseErrorData> {
     return this.withCommandLock({
       taskId,
       runCommandId,
@@ -924,6 +975,27 @@ class RunCommandService {
   }
 
   async startGroup({
+    taskId,
+    projectId,
+    workingDir,
+    runCommandIds,
+  }: {
+    taskId: string;
+    projectId: string;
+    workingDir: string;
+    runCommandIds: string[];
+  }): Promise<RunStatus | PortsInUseErrorData> {
+    return this.trackStart(() =>
+      this.startGroupAdmitted({
+        taskId,
+        projectId,
+        workingDir,
+        runCommandIds,
+      }),
+    );
+  }
+
+  private async startGroupAdmitted({
     taskId,
     projectId,
     workingDir,
@@ -1094,8 +1166,8 @@ class RunCommandService {
 
     try {
       signalProcessGroupOrProcess(tracked.pid, signal as ProcessSignal);
-    } catch {
-      // Process may already be dead
+    } catch (error) {
+      if (getErrnoCode(error) !== 'ESRCH') throw error;
     }
   }
 
@@ -1141,7 +1213,8 @@ class RunCommandService {
           signalProcessGroupOrProcess(pid, 'SIGKILL');
           exited = await this.waitForExit({ tracked, timeoutMs: 1500 });
         }
-      } catch {
+      } catch (error) {
+        if (getErrnoCode(error) !== 'ESRCH') throw error;
         dbg.runCommand('PTY process %d may already be dead', pid);
         exited = true;
       }
@@ -1156,8 +1229,8 @@ class RunCommandService {
         for (const descendantPid of descendantPids.reverse()) {
           try {
             process.kill(descendantPid, 'SIGKILL');
-          } catch {
-            // Process may already be dead
+          } catch (error) {
+            if (getErrnoCode(error) !== 'ESRCH') throw error;
           }
         }
 
@@ -1197,11 +1270,53 @@ class RunCommandService {
     }
   }
 
-  async stopAllCommands(): Promise<void> {
-    const taskIds = [...this.runningProcesses.keys()];
-    dbg.runCommand('Stopping all commands for %d tasks', taskIds.length);
-    for (const taskId of taskIds) {
-      await this.stopCommandsForTask(taskId);
+  stopAllCommands(): Promise<void> {
+    if (this.stopAllPromise) return this.stopAllPromise;
+
+    this.stopAllActive = true;
+    const operation = this.performStopAllCommands();
+    const sharedOperation = operation.finally(() => {
+      if (this.stopAllPromise === sharedOperation) {
+        this.stopAllPromise = null;
+        this.stopAllActive = false;
+      }
+    });
+    this.stopAllPromise = sharedOperation;
+    return sharedOperation;
+  }
+
+  private async performStopAllCommands(): Promise<void> {
+    await Promise.allSettled([...this.pendingStarts]);
+    const commands = [...this.runningProcesses].flatMap(
+      ([taskId, taskProcesses]) =>
+        [...taskProcesses.keys()].map((runCommandId) => ({
+          taskId,
+          runCommandId,
+        })),
+    );
+    dbg.runCommand('Stopping all running commands (%d)', commands.length);
+    const results = await Promise.allSettled(
+      commands.map((params) => this.stopCommand(params)),
+    );
+    const failureCount = results.filter(
+      (result) => result.status === 'rejected',
+    ).length;
+    let runningCount = 0;
+    for (const taskProcesses of this.runningProcesses.values()) {
+      for (const tracked of taskProcesses.values()) {
+        if (tracked.status === 'running') runningCount++;
+      }
+    }
+
+    if (failureCount > 0 || runningCount > 0) {
+      dbg.runCommand(
+        'Failed to stop all commands: %d stop failures, %d commands still running',
+        failureCount,
+        runningCount,
+      );
+      throw new Error(
+        `Failed to stop all commands: ${failureCount} stop request(s) failed; ${runningCount} command(s) still running`,
+      );
     }
     dbg.runCommand('All commands stopped');
   }

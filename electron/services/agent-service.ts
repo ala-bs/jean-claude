@@ -248,6 +248,7 @@ interface ActiveSession {
     source?: 'backend' | 'jc-mcp';
   }>;
   hasTerminalError: boolean;
+  stopRequested: boolean;
 }
 
 function getUsageFeatureForStep(type: TaskStepType): AiUsageFeature {
@@ -314,6 +315,10 @@ class AgentService {
   private runCleanupPromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private resultUpdateUsageQueues = new Map<string, Promise<void>>();
   private startingSteps = new Set<string>();
+  private registeringSteps = new Set<string>();
+  private pendingSessionRegistrations = new Set<Promise<void>>();
+  private stopAllActive = false;
+  private stopAllPromise: Promise<void> | null = null;
   private mainWindow: BrowserWindow | null = null;
   private focusedTaskId: string | null = null;
   private pendingImageAttachments = new Map<string, PromptImagePart[]>();
@@ -345,6 +350,55 @@ class AgentService {
    */
   setPendingImages(taskId: string, images: PromptImagePart[]): void {
     this.pendingImageAttachments.set(taskId, images);
+  }
+
+  private admitSessionRegistration(
+    stepId: string,
+    duplicateBehavior: 'ignore' | 'reject',
+  ): (() => void) | null {
+    if (this.stopAllActive) {
+      throw new Error('Cannot start agent sessions while stopAll is active');
+    }
+    if (this.registeringSteps.has(stepId)) {
+      if (duplicateBehavior === 'ignore') return null;
+      throw new Error(
+        `Session registration already in progress for step ${stepId}`,
+      );
+    }
+
+    this.registeringSteps.add(stepId);
+    let resolveRegistration!: () => void;
+    const registration = new Promise<void>((resolve) => {
+      resolveRegistration = resolve;
+    });
+    this.pendingSessionRegistrations.add(registration);
+    let completed = false;
+    return () => {
+      if (completed) return;
+      completed = true;
+      this.registeringSteps.delete(stepId);
+      this.pendingSessionRegistrations.delete(registration);
+      resolveRegistration();
+    };
+  }
+
+  private deleteSession(stepId: string, session: ActiveSession): void {
+    if (this.sessions.get(stepId) === session) {
+      this.sessions.delete(stepId);
+    }
+  }
+
+  private async shouldAbortTerminalHandling(
+    stepId: string,
+    session: ActiveSession,
+  ): Promise<boolean> {
+    if (this.sessions.get(stepId) === session && !session.stopRequested) {
+      return false;
+    }
+    if (session.stopRequested) {
+      await StepService.interruptStep(stepId);
+    }
+    return true;
   }
 
   private getLiveWindows(): BrowserWindow[] {
@@ -563,6 +617,7 @@ class AgentService {
     notificationId,
     title,
     body,
+    guard,
   }: {
     taskId: string;
     stepId: string;
@@ -570,6 +625,7 @@ class AgentService {
     notificationId: string;
     title: string;
     body: string;
+    guard?: () => boolean;
   }): Promise<void> {
     if (!this.isMainWindowAlive()) {
       return;
@@ -583,6 +639,7 @@ class AgentService {
     const displayName = task?.name
       ? task.name
       : await this.resolveTaskDisplayName(taskId, stepId);
+    if (guard && !guard()) return;
     notificationService.notify({
       id: notificationId,
       title: `${TASK_NOTIFICATION_TITLE_PREFIX[event]} ${title}`,
@@ -721,6 +778,7 @@ class AgentService {
       abortController: new AbortController(),
       pendingRequests: [],
       hasTerminalError: false,
+      stopRequested: false,
     };
 
     this.sessions.set(stepId, session);
@@ -832,6 +890,7 @@ class AgentService {
       isInitialPrompt?: boolean;
     },
   ): Promise<void> {
+    if (session.stopRequested) return;
     const { taskId } = session;
     const task = await TaskRepository.findById(taskId);
     if (!task) {
@@ -880,6 +939,8 @@ class AgentService {
       workingDir,
       session.sdkSessionId ? 'yes' : 'no',
     );
+
+    if (session.stopRequested) return;
 
     // Create new abort controller for this query iteration
     session.abortController = new AbortController();
@@ -1007,6 +1068,7 @@ class AgentService {
         session.provider.capabilities.agent
           .run as Capability<RunAgentCapability>,
       );
+      if (session.stopRequested) return;
       session.runStartPromise = runCapability.start({
         context: session.agentTaskContext,
         config,
@@ -1335,6 +1397,7 @@ class AgentService {
           );
           break;
         }
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
         const resultEntryId = nanoid();
 
@@ -1407,12 +1470,14 @@ class AgentService {
         }
 
         // No more queued prompts - finalize
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
         let autoStartStepIds: string[] = [];
         if (result.isError) {
           await StepService.errorStep(stepId);
         } else {
           autoStartStepIds = await StepService.completeStep(stepId);
         }
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
         await this.persistAndEmitSyntheticEntry(taskId, session, {
           id: resultEntryId,
@@ -1428,6 +1493,7 @@ class AgentService {
           usage: result.usage,
           contextUsage: result.contextUsage,
         });
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
         const status = result.isError ? 'errored' : 'completed';
         this.clearPendingRequests(session);
@@ -1435,6 +1501,7 @@ class AgentService {
         // Mark as unread BEFORE emitting the status event so the feed
         // re-fetch (triggered by the event) reads the updated value.
         await this.markTaskUnreadIfBackground(taskId);
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
         this.emitEvent(taskId, stepId, { type: 'status', status });
 
@@ -1460,11 +1527,14 @@ class AgentService {
             status === 'completed'
               ? 'Task "{taskName}" finished successfully'
               : 'Task "{taskName}" encountered an error',
+          guard: () =>
+            this.sessions.get(stepId) === session && !session.stopRequested,
         });
         break;
       }
 
       case 'error': {
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
         dbg.agent('Backend error for step %s: %s', stepId, event.error);
         session.hasTerminalError = true;
         this.clearPendingRequests(session);
@@ -1478,9 +1548,12 @@ class AgentService {
           value: event.error,
           isError: true,
         });
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
         await StepService.errorStep(stepId);
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
         await this.markTaskUnreadIfBackground(taskId);
+        if (await this.shouldAbortTerminalHandling(stepId, session)) break;
         this.emitEvent(taskId, stepId, {
           type: 'status',
           status: 'errored',
@@ -1493,6 +1566,8 @@ class AgentService {
           notificationId: `${taskId}:error`,
           title: 'Task Failed',
           body: 'Task "{taskName}" encountered an error',
+          guard: () =>
+            this.sessions.get(stepId) === session && !session.stopRequested,
         });
         break;
       }
@@ -1538,9 +1613,12 @@ class AgentService {
   // --- Public API ---
 
   async start(stepId: string): Promise<void> {
+    const completeRegistration = this.admitSessionRegistration(stepId, 'ignore');
+    if (!completeRegistration) return;
     // Check if already running
     if (this.sessions.has(stepId)) {
       dbg.agentSession('Ignoring duplicate start for running step %s', stepId);
+      completeRegistration();
       return;
     }
 
@@ -1548,6 +1626,7 @@ class AgentService {
     // resolving prompt/dependencies and creating the in-memory session.
     if (this.startingSteps.has(stepId)) {
       dbg.agentSession('Ignoring duplicate start for pending step %s', stepId);
+      completeRegistration();
       return;
     }
 
@@ -1585,6 +1664,7 @@ class AgentService {
       // Create session before prompt resolution so synthetic summary entries can
       // appear in timeline while {{summary(step.*)}} resolves.
       session = await this.createSession(stepId);
+      completeRegistration();
       this.emitEvent(session.taskId, stepId, {
         type: 'status',
         status: 'running',
@@ -1667,6 +1747,7 @@ class AgentService {
         isInitialPrompt: true,
       })
         .catch(async (error: unknown) => {
+          if (activeSession.stopRequested) return;
           const errorMessage =
             error instanceof Error ? error.message : 'Unknown error';
           dbg.agent('Step %s start failed: %s', stepId, errorMessage);
@@ -1697,12 +1778,14 @@ class AgentService {
           });
         })
         .finally(() => {
-          this.sessions.delete(stepId);
+          this.deleteSession(stepId, activeSession);
         });
     } catch (error) {
       if (!session) {
         throw error;
       }
+
+      if (session.stopRequested) return;
 
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
@@ -1731,8 +1814,9 @@ class AgentService {
         title: 'Task Failed',
         body: 'Task "{taskName}" encountered an error',
       });
-      this.sessions.delete(stepId);
+      this.deleteSession(stepId, session);
     } finally {
+      completeRegistration();
       this.startingSteps.delete(stepId);
     }
   }
@@ -1765,6 +1849,8 @@ class AgentService {
       dbg.agentSession('No session found for step %s, nothing to stop', stepId);
       return;
     }
+
+    session.stopRequested = true;
 
     const { taskId } = session;
 
@@ -1809,11 +1895,29 @@ class AgentService {
           ? 'Stopped by app shutdown'
           : 'Stopped by user',
     });
-    this.sessions.delete(stepId);
+    this.deleteSession(stepId, session);
     dbg.agentSession('Step %s stopped and session cleaned up', stepId);
   }
 
-  async stopAll(options: { reason?: 'user' | 'shutdown' } = {}): Promise<void> {
+  stopAll(options: { reason?: 'user' | 'shutdown' } = {}): Promise<void> {
+    if (this.stopAllPromise) return this.stopAllPromise;
+
+    this.stopAllActive = true;
+    const operation = this.performStopAll(options);
+    const sharedOperation = operation.finally(() => {
+      if (this.stopAllPromise === sharedOperation) {
+        this.stopAllPromise = null;
+        this.stopAllActive = false;
+      }
+    });
+    this.stopAllPromise = sharedOperation;
+    return sharedOperation;
+  }
+
+  private async performStopAll(options: {
+    reason?: 'user' | 'shutdown';
+  }): Promise<void> {
+    await Promise.all([...this.pendingSessionRegistrations]);
     const stepIds = [...this.sessions.keys()];
     dbg.agentSession('Stopping all active agent sessions (%d)', stepIds.length);
     const results = await Promise.allSettled(
@@ -1975,24 +2079,31 @@ class AgentService {
   }
 
   async sendMessage(stepId: string, parts: PromptPart[]): Promise<void> {
-    // If session exists and running, stop it first
-    if (this.sessions.has(stepId)) {
-      await this.stop(stepId);
-    }
-
-    // Create new session (will pick up existing sessionId for resume)
-    const session = await this.createSession(stepId);
-    const { taskId } = session;
-
-    // Update step status to running (stop() above sets it to 'interrupted')
-    await StepService.update(stepId, { status: 'running' });
-    await StepService.syncTaskStatus(taskId);
-    this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
-
+    const completeRegistration = this.admitSessionRegistration(stepId, 'reject');
+    if (!completeRegistration) return;
+    let session: ActiveSession | null = null;
     try {
+      // If session exists and running, stop it first
+      if (this.sessions.has(stepId)) {
+        await this.stop(stepId);
+      }
+
+      // Create new session (will pick up existing sessionId for resume)
+      session = await this.createSession(stepId);
+      const { taskId } = session;
+
+      // Update step status to running (stop() above sets it to 'interrupted')
+      await StepService.update(stepId, { status: 'running' });
+      await StepService.syncTaskStatus(taskId);
+      this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
+      completeRegistration();
+
       dbg.agentSession('Sending follow-up message for step %s', stepId);
       await this.runBackend(stepId, parts, session);
     } catch (error) {
+      if (!session) throw error;
+      if (session.stopRequested) return;
+      const { taskId } = session;
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
       dbg.agent('Step %s sendMessage failed: %s', stepId, errorMessage);
@@ -2022,7 +2133,8 @@ class AgentService {
         body: 'Task "{taskName}" encountered an error',
       });
     } finally {
-      this.sessions.delete(stepId);
+      completeRegistration();
+      if (session) this.deleteSession(stepId, session);
     }
   }
 

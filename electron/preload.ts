@@ -806,6 +806,7 @@ contextBridge.exposeInMainWorld('api', {
   agent: {
     start: (stepId: string) => ipcRenderer.invoke(AGENT_CHANNELS.START, stepId),
     stop: (stepId: string) => ipcRenderer.invoke(AGENT_CHANNELS.STOP, stepId),
+    stopAll: () => ipcRenderer.invoke(AGENT_CHANNELS.STOP_ALL),
     respond: (stepId: string, requestId: string, response: unknown) =>
       ipcRenderer.invoke(AGENT_CHANNELS.RESPOND, stepId, requestId, response),
     sendMessage: (stepId: string, parts: unknown[]) =>
@@ -977,6 +978,7 @@ contextBridge.exposeInMainWorld('api', {
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>
       ipcRenderer.invoke('project:commands:run:stopCommand', params),
+    stopAll: () => ipcRenderer.invoke('project:commands:run:stopAll'),
     sendInput: (params: {
       taskId: string;
       runCommandId: string;

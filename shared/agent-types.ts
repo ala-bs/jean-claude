@@ -243,6 +243,7 @@ export const AGENT_CHANNELS = {
   // Invoke (renderer -> main) — unchanged
   START: 'agent:start',
   STOP: 'agent:stop',
+  STOP_ALL: 'agent:stopAll',
   RESPOND: 'agent:respond',
   SEND_MESSAGE: 'agent:sendMessage',
   GET_MESSAGES: 'agent:getMessages',

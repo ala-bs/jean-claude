@@ -1167,6 +1167,7 @@ export interface Api {
   agent: {
     start: (stepId: string) => Promise<void>;
     stop: (stepId: string) => Promise<void>;
+    stopAll: () => Promise<void>;
     respond: (
       stepId: string,
       requestId: string,
@@ -1316,6 +1317,7 @@ export interface Api {
       taskId: string;
       runCommandId: string;
     }) => Promise<void>;
+    stopAll: () => Promise<void>;
     sendInput: (params: {
       taskId: string;
       runCommandId: string;
@@ -2152,6 +2154,9 @@ export const api: Api = hasWindowApi
         stop: async () => {
           throw new Error('API not available');
         },
+        stopAll: async () => {
+          throw new Error('API not available');
+        },
         respond: async () => {
           throw new Error('API not available');
         },
@@ -2291,6 +2296,7 @@ export const api: Api = hasWindowApi
           commands: [],
         }),
         stopCommand: async () => {},
+        stopAll: async () => {},
         sendInput: async () => {},
         resetLogs: async () => 0,
         sendSignal: async () => {},
