@@ -780,13 +780,14 @@ export async function runReloadPreviewCommand(params: {
   cwd: string;
   label: string;
   timeoutMs: number;
+  envOverrides?: Record<string, string>;
   onStdout?: (data: Buffer) => void;
   onStderr?: (data: Buffer) => void;
 }): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(params.command, params.args ?? [], {
       cwd: params.cwd,
-      env: getChildProcessEnv(),
+      env: getChildProcessEnv({ overrides: params.envOverrides }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

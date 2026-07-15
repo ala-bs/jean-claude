@@ -324,12 +324,18 @@ describe('exitCurrentPreviewAfterReload', () => {
 
 describe('runReloadPreviewCommand', () => {
   const originalElectronRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+  const originalCi = process.env.CI;
 
   afterEach(() => {
     if (originalElectronRunAsNode === undefined) {
       delete process.env.ELECTRON_RUN_AS_NODE;
     } else {
       process.env.ELECTRON_RUN_AS_NODE = originalElectronRunAsNode;
+    }
+    if (originalCi === undefined) {
+      delete process.env.CI;
+    } else {
+      process.env.CI = originalCi;
     }
   });
 
@@ -345,6 +351,22 @@ describe('runReloadPreviewCommand', () => {
         ],
         cwd: process.cwd(),
         label: 'Environment check',
+        timeoutMs: 1000,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('passes CI mode to non-interactive package-manager commands', async () => {
+    await expect(
+      runReloadPreviewCommand({
+        command: process.execPath,
+        args: [
+          '-e',
+          "process.exit(process.env.CI === 'true' ? 0 : 1)",
+        ],
+        cwd: process.cwd(),
+        envOverrides: { CI: 'true' },
+        label: 'pnpm install',
         timeoutMs: 1000,
       }),
     ).resolves.toBeUndefined();

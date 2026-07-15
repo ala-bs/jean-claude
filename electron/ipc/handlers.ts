@@ -6235,6 +6235,7 @@ export function registerIpcHandlers() {
         cwd: projectRoot,
         label: 'pnpm install',
         timeoutMs: PREVIEW_RELOAD_INSTALL_TIMEOUT_MS,
+        envOverrides: { CI: 'true' },
         onStdout: (data) => {
           dbg.ipc(
             'app:reloadPreview pnpm install stdout: %s',
