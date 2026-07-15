@@ -1039,7 +1039,10 @@ export class OpenCodeBackend implements AgentBackend {
         }
 
         const isIdleEvent =
-          ocEvent.type === 'session.idle' && sessionIdFromEvent === sessionId;
+          sessionIdFromEvent === sessionId &&
+          (ocEvent.type === 'session.idle' ||
+            (ocEvent.type === 'session.status' &&
+              ocEvent.properties.status.type === 'idle'));
 
         const rawMessageId = await this.persistRawForMessage(state, ocEvent);
 

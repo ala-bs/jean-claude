@@ -1256,6 +1256,40 @@ describe('OpenCodeBackend event stream', () => {
     ]);
   });
 
+  it('completes when OpenCode reports idle through session status', async () => {
+    async function* statusStream() {
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'idle' } },
+      };
+      await new Promise(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: statusStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'complete',
+      result: { isError: false },
+    });
+  });
+
   it('aborts a session after ten minutes without owned session activity', async () => {
     vi.useFakeTimers();
 
