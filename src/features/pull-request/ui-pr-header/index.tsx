@@ -16,7 +16,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { ChangeEvent, FormEvent } from 'react';
+import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
 import { startTransition, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -221,6 +221,16 @@ export function PrHeader({
     [titleDraft, updateTitle],
   );
 
+  const handleTitleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        handleSaveTitle();
+      }
+    },
+    [handleSaveTitle],
+  );
+
   return (
     <>
       {/* Top bar — breadcrumb + actions */}
@@ -344,6 +354,7 @@ export function PrHeader({
                     onChange={(event: ChangeEvent<HTMLInputElement>) =>
                       setTitleDraft(event.target.value)
                     }
+                    onKeyDown={handleTitleKeyDown}
                     className="font-mono text-base font-semibold"
                     disabled={updateTitle.isPending}
                     autoFocus
@@ -361,7 +372,7 @@ export function PrHeader({
                     }
                     disabled={updateTitle.isPending}
                   >
-                    Save
+                    Save <Kbd shortcut="cmd+enter" />
                   </Button>
                   <Button
                     type="button"
