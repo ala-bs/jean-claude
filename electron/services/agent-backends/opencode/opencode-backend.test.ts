@@ -1290,6 +1290,217 @@ describe('OpenCodeBackend event stream', () => {
     });
   });
 
+  it('completes after OpenCode sends bookkeeping events after idle', async () => {
+    vi.useFakeTimers();
+
+    async function* statusStream() {
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'idle' } },
+      };
+      yield {
+        type: 'session.updated',
+        properties: {
+          sessionID: 'session-1',
+          info: {
+            id: 'session-1',
+            title: 'Completed session',
+            time: { updated: Date.now() },
+            summary: { additions: 1, deletions: 0, files: 1 },
+          },
+        },
+      };
+      yield {
+        type: 'session.diff',
+        properties: { sessionID: 'session-1', diff: [] },
+      };
+      yield {
+        type: 'message.updated',
+        properties: {
+          sessionID: 'session-1',
+          info: {
+            id: 'assistant-message-1',
+            sessionID: 'session-1',
+            role: 'user',
+            time: { created: Date.now() },
+            agent: 'build',
+            model: { providerID: 'openai', modelID: 'gpt-5.6-sol' },
+            summary: { diffs: [] },
+          },
+        },
+      };
+      await new Promise(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: statusStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(200);
+      const events = await eventsPromise;
+
+      expect(events.at(-1)).toMatchObject({
+        type: 'complete',
+        result: { isError: false },
+      });
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'entry',
+            entry: expect.objectContaining({ type: 'session-summary' }),
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels idle completion when OpenCode reports resumed work', async () => {
+    vi.useFakeTimers();
+
+    async function* statusStream() {
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'idle' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'busy' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'session-1', error: 'resumed work failed' },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: statusStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(250);
+      const events = await eventsPromise;
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'error',
+            error: expect.any(String),
+          }),
+          expect.objectContaining({
+            type: 'complete',
+            result: expect.objectContaining({ isError: true }),
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels idle completion when a new user message precedes delayed busy status', async () => {
+    vi.useFakeTimers();
+
+    async function* statusStream() {
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'idle' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield {
+        type: 'message.updated',
+        properties: {
+          sessionID: 'session-1',
+          info: {
+            id: 'new-user-message',
+            sessionID: 'session-1',
+            role: 'user',
+            time: { created: Date.now() },
+            agent: 'build',
+            model: { providerID: 'openai', modelID: 'gpt-5.6-sol' },
+          },
+        },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'busy' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'session-1', error: 'resumed work failed' },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: statusStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(350);
+      const events = await eventsPromise;
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'error' }),
+          expect.objectContaining({
+            type: 'complete',
+            result: expect.objectContaining({ isError: true }),
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('aborts a session after ten minutes without owned session activity', async () => {
     vi.useFakeTimers();
 
@@ -1783,7 +1994,7 @@ describe('OpenCodeBackend event stream', () => {
     },
   );
 
-  it('cancels idle timeout when another session event arrives', async () => {
+  it('reports a session error that arrives during idle grace', async () => {
     vi.useFakeTimers();
 
     async function* idleThenErrorStream() {

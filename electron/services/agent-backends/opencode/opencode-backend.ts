@@ -936,6 +936,10 @@ export class OpenCodeBackend implements AgentBackend {
         }
 
         if (read.type === 'idle-timeout') {
+          dbg.agent(
+            'OpenCode session %s completed after idle grace period',
+            sessionId,
+          );
           this.closeSubscriptionIterator(iterator);
           break;
         }
@@ -1049,12 +1053,23 @@ export class OpenCodeBackend implements AgentBackend {
         // Give already-queued terminal events a short chance to arrive before
         // treating session.idle as definitive completion.
         if (isIdleEvent && this.hasPendingUserInput(state)) {
+          dbg.agent(
+            'OpenCode session %s ignored idle with %d pending permissions and %d pending questions',
+            sessionId,
+            state.pendingPermissions.size,
+            state.pendingQuestions.size,
+          );
           continue;
         }
 
         if (isIdleEvent) {
           sessionIdle = true;
           idleDeadline = Date.now() + IDLE_COMPLETION_TIMEOUT_MS;
+          dbg.agent(
+            'OpenCode session %s entered idle; waiting %dms for terminal events',
+            sessionId,
+            IDLE_COMPLETION_TIMEOUT_MS,
+          );
           continue;
         }
 
@@ -1067,8 +1082,32 @@ export class OpenCodeBackend implements AgentBackend {
         }
 
         if (sessionIdle) {
-          sessionIdle = false;
-          idleDeadline = null;
+          const eventInfo =
+            ocEvent.type === 'session.updated' ||
+            ocEvent.type === 'message.updated'
+              ? (ocEvent.properties as { info?: { summary?: unknown } }).info
+              : undefined;
+          const isIdleBookkeepingEvent =
+            ocEvent.type === 'session.diff' ||
+            ((ocEvent.type === 'session.updated' ||
+              ocEvent.type === 'message.updated') &&
+              eventInfo?.summary !== undefined);
+          if (isIdleBookkeepingEvent) {
+            idleDeadline = Date.now() + IDLE_COMPLETION_TIMEOUT_MS;
+            dbg.agent(
+              'OpenCode session %s received trailing %s; extending idle grace period',
+              sessionId,
+              ocEvent.type,
+            );
+          } else {
+            sessionIdle = false;
+            idleDeadline = null;
+            dbg.agent(
+              'OpenCode session %s resumed with %s during idle grace period',
+              sessionId,
+              ocEvent.type,
+            );
+          }
         }
 
         const agentEvents = this.mapEvent(ocEvent, state, rawMessageId);
