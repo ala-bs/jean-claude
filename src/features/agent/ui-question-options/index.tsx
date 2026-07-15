@@ -1,5 +1,11 @@
 import { Check, Plus, Sparkles } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useState } from 'react';
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 
 import type { AgentQuestion, QuestionResponse } from '@shared/agent-types';
 import { Kbd } from '@/common/ui/kbd';
@@ -132,7 +138,7 @@ function QuestionNotes({
   );
 }
 
-function QuestionInput({
+const QuestionInput = memo(function QuestionInput({
   question,
   questionIndex,
   value,
@@ -449,7 +455,7 @@ function QuestionInput({
       />
     </div>
   );
-}
+});
 
 export function QuestionContextReminder({ content }: { content?: string }) {
   if (!content) return null;
@@ -591,14 +597,15 @@ export function QuestionOptions({
       if (mode === 'multi-choice') {
         const label = question.options[optionIndex]?.label;
         if (!label) return false;
-        const current = answers[questionKey] ?? '';
-        const selected = getSelectedLabels(current).filter(
-          (item) => item !== DECIDE_FOR_ME,
-        );
-        const next = selected.includes(label)
-          ? selected.filter((item) => item !== label)
-          : [...selected, label];
-        setAnswers((prev) => ({ ...prev, [questionKey]: JSON.stringify(next) }));
+        setAnswers((prev) => {
+          const selected = getSelectedLabels(prev[questionKey] ?? '').filter(
+            (item) => item !== DECIDE_FOR_ME,
+          );
+          const next = selected.includes(label)
+            ? selected.filter((item) => item !== label)
+            : [...selected, label];
+          return { ...prev, [questionKey]: JSON.stringify(next) };
+        });
         setWasFreeformByQuestion((prev) => ({
           ...prev,
           [question.question]: false,
@@ -616,13 +623,15 @@ export function QuestionOptions({
           ...prev,
           [questionKey]: true,
         }));
-        const current = answers[questionKey] ?? '';
-        const matchesOption = question.options.some(
-          (option) => option.label === current,
-        );
-        if (matchesOption || current === DECIDE_FOR_ME) {
-          setAnswers((prev) => ({ ...prev, [questionKey]: '' }));
-        }
+        setAnswers((prev) => {
+          const current = prev[questionKey] ?? '';
+          const matchesOption = question.options.some(
+            (option) => option.label === current,
+          );
+          return matchesOption || current === DECIDE_FOR_ME
+            ? { ...prev, [questionKey]: '' }
+            : prev;
+        });
         return true;
       }
 
@@ -635,7 +644,7 @@ export function QuestionOptions({
       }));
       return true;
     },
-    [answers, request.questions],
+    [request.questions],
   );
 
   const updateTextAnswer = useCallback(
