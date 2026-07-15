@@ -411,10 +411,7 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
   }, []);
 
   const supportedSnapshots = useMemo(
-    () =>
-      snapshots
-        .filter((snapshot) => !snapshot.unsupportedReason)
-        .sort((a, b) => b.cpuPercent - a.cpuPercent || b.rssBytes - a.rssBytes),
+    () => snapshots.filter((snapshot) => !snapshot.unsupportedReason),
     [snapshots],
   );
   const taskQueries = useQueries({
