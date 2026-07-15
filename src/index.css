@@ -750,6 +750,13 @@ button {
     0 4px 6px -1px rgba(0, 0, 0, 0.2);
 }
 
+.prompt-input-border:focus-within {
+  box-shadow:
+    0 0 14px 0 oklch(0.72 0.2 295 / 0.25),
+    0 0 6px 0 oklch(0.6 0.22 320 / 0.15),
+    0 4px 6px -1px rgba(0, 0, 0, 0.25);
+}
+
 @utility prompt-input-border-focused {
   position: relative;
   isolation: isolate;
