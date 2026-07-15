@@ -363,16 +363,17 @@ import { deleteProjectWithPreferenceMemoryCleanup } from '../services/project-de
 import { detectProjectLogos } from '../services/project-logo-detection-service';
 import { detectProjects } from '../services/project-detection-service';
 import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
+import { exitCurrentPreviewAfterReload } from '../services/reload-preview-service';
 import { fetchImageAsBase64 } from '../services/azure-image-proxy-service';
 import { generatePrDescriptionForTask } from '../services/pr-description-generation-service';
 import { generateSummary } from '../services/summary-generation-service';
 import { generateTaskName } from '../services/name-generation-service';
 import { generateWorkItemVerificationNote } from '../services/work-item-verification-note-service';
-import { getChildProcessEnv } from '../lib/child-process-env';
 import { handlePromptResponse } from '../services/global-prompt-service';
 import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { NotificationRepository } from '../database/repositories/notifications';
 import { notificationService } from '../services/notification-service';
+import { orchestrateReloadedPreview } from '../services/reload-preview-service';
 import { pathExists } from '../lib/fs';
 import type { PermissionScope } from '../../shared/permission-types';
 import { pipelineTrackingService } from '../services/pipeline-tracking-service';
@@ -387,6 +388,7 @@ import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import { runCommandService } from '../services/run-command-service';
 import { runReloadPreviewCommand } from '../services/reload-preview-service';
 import { StepService } from '../services/step-service';
+import { stopReloadPreviewActivities } from '../services/reload-preview-service';
 import { systemCalendarService } from '../services/system-calendar-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 import { TrackedPipelineRepository } from '../database/repositories/tracked-pipelines';
@@ -6179,13 +6181,19 @@ export function registerIpcHandlers() {
     };
 
     try {
-      dbg.ipc('app:reloadPreview — stopping all running commands');
+      dbg.ipc(
+        'app:reloadPreview — stopping active agents and running commands',
+      );
       sendReloadProgress({
         step: 'stopping-commands',
-        label: 'Stopping running commands',
-        detail: 'Waiting for project commands to stop',
+        label: 'Stopping agents and commands',
+        detail: 'Waiting for active sessions and project commands to stop',
       });
-      await runCommandService.stopAllCommands();
+      await stopReloadPreviewActivities({
+        stopAgents: (options) => agentService.stopAll(options),
+        stopCommands: () => runCommandService.stopAllCommands(),
+      });
+      dbg.ipc('app:reloadPreview — active agents and commands stopped');
 
       dbg.ipc('app:reloadPreview — running git pull in %s', projectRoot);
       sendReloadProgress({
@@ -6277,24 +6285,30 @@ export function registerIpcHandlers() {
         label: 'Launching preview',
         detail: 'pnpm preview:skip-build',
       });
-      app.releaseSingleInstanceLock();
-      const child = spawn('pnpm preview:skip-build', [], {
+      await orchestrateReloadedPreview({
         cwd: projectRoot,
-        detached: true,
-        env: getChildProcessEnv(),
-        stdio: 'ignore',
-        shell: true,
+        timeoutMs: 30_000,
+        releaseSingleInstanceLock: () => app.releaseSingleInstanceLock(),
+        reacquireSingleInstanceLock: () => app.requestSingleInstanceLock(),
+        exitCurrentApp: () => {
+          exitCurrentPreviewAfterReload({
+            notifyRestarting: () => {
+              sendReloadProgress({
+                step: 'restarting',
+                label: 'Restarting app',
+                detail: 'New preview is ready',
+              });
+            },
+            onNotificationError: (error) => {
+              dbg.ipc(
+                'app:reloadPreview — failed to send restarting progress: %s',
+                error instanceof Error ? error.message : String(error),
+              );
+            },
+            exitCurrentApp: () => app.exit(0),
+          });
+        },
       });
-      child.unref();
-
-      sendReloadProgress({
-        step: 'restarting',
-        label: 'Restarting app',
-        detail: 'New preview is starting',
-      });
-      setTimeout(() => {
-        app.exit(0);
-      }, 500);
     } catch (error) {
       previewReloadInProgress = false;
       throw error;

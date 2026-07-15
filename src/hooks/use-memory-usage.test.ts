@@ -122,4 +122,44 @@ describe('useMemoryUsage', () => {
 
     expect(getMemoryUsage).toHaveBeenCalledTimes(3);
   });
+
+  it('polls shared header metrics every 10 seconds', async () => {
+    const getMemoryUsage = vi
+      .spyOn(api.system, 'getMemoryUsage')
+      .mockResolvedValue({
+        logicalCpuCount: 8,
+        totalRssBytes: 300,
+        mainProcess: { heapUsedBytes: 50, rssBytes: 100, cpuPercent: 2 },
+        rendererProcess: {
+          rssBytes: 200,
+          privateBytes: 150,
+          cpuPercent: 3,
+        },
+      });
+
+    function Harness() {
+      useMemoryUsage();
+      return null;
+    }
+
+    act(() => {
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client: new QueryClient() },
+          createElement(Harness),
+        ),
+      );
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_999);
+    });
+    expect(getMemoryUsage).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(getMemoryUsage).toHaveBeenCalledTimes(2);
+  });
 });

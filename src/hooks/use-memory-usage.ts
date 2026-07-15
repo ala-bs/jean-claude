@@ -8,9 +8,10 @@ import {
 } from '@shared/agent-resource-types';
 import { api } from '@/lib/api';
 
-const RAM_POLL_INTERVAL_MS = AGENT_RESOURCE_SAMPLING_INTERVAL_MS;
+const RAM_POLL_INTERVAL_MS = 10_000;
 const MEMORY_USAGE_HISTORY_WINDOW_MS = 20 * 60 * 1000;
-const MAX_MEMORY_USAGE_SAMPLE_GAP_MS = RAM_POLL_INTERVAL_MS * 2;
+const RAM_MAX_SAMPLE_GAP_MS = RAM_POLL_INTERVAL_MS * 2;
+const CUSTOM_POLL_MAX_SAMPLE_GAP_MS = AGENT_RESOURCE_SAMPLING_INTERVAL_MS * 2;
 export const MAX_MEMORY_USAGE_SAMPLES = Math.ceil(
   MEMORY_USAGE_HISTORY_WINDOW_MS / RAM_POLL_INTERVAL_MS,
 );
@@ -41,6 +42,10 @@ export function useMemoryUsage(
   const historyStore = isolatedHistory
     ? isolatedHistoryStore
     : memoryUsageHistory;
+  const maxSampleGapMs =
+    pollIntervalMs === RAM_POLL_INTERVAL_MS
+      ? RAM_MAX_SAMPLE_GAP_MS
+      : CUSTOM_POLL_MAX_SAMPLE_GAP_MS;
   const [history, setHistory] = useState(historyStore);
   const mutation = useMutation({
     mutationFn: () => api.system.getMemoryUsage(),
@@ -50,7 +55,7 @@ export function useMemoryUsage(
 
       if (
         lastSample &&
-        sampledAt - lastSample.sampledAt > MAX_MEMORY_USAGE_SAMPLE_GAP_MS
+        sampledAt - lastSample.sampledAt > maxSampleGapMs
       ) {
         historyStore.splice(0);
       }

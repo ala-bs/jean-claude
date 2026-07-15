@@ -20,7 +20,7 @@
     ]
   },
   "scripts": {
-    "postinstall": "electron-rebuild",
+    "postinstall": "node scripts/ensure-electron-installed.mjs && electron-rebuild",
     "dev": "electron-vite dev",
     "dev:quiet": "DEBUG= electron-vite dev",
     "dev:tmp": "JC_DISABLE_NATIVE_USAGE_TRACKING=1 JC_SKIP_INSTANCE_LOCK=1 ./scripts/dev-tmp.sh",
