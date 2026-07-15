@@ -695,20 +695,8 @@ export function PrDetail({
             repoInfo={repoInfo}
             readOnly={readOnly}
             threads={threads}
-            onAddComment={
-              readOnly
-                ? undefined
-                : activeCommentMode === 'task'
-                  ? undefined
-                  : handleAddComment
-            }
-            isAddingComment={
-              readOnly
-                ? false
-                : activeCommentMode === 'task'
-                  ? false
-                  : addComment.isPending
-            }
+            onAddComment={readOnly ? undefined : handleAddComment}
+            isAddingComment={!readOnly && addComment.isPending}
             onUploadImage={
               getPrThreadImageUploader({
                 readOnly,
