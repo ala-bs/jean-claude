@@ -15,6 +15,7 @@ export function Toaster() {
       {toasts.map((toast) => (
         <div
           key={toast.id}
+          role={toast.type === 'error' ? 'alert' : 'status'}
           className={clsx(
             'flex items-start gap-2 rounded-lg border px-4 py-3 shadow-lg backdrop-blur-sm',
             toast.type === 'error' &&

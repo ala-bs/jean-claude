@@ -1,10 +1,11 @@
 /* eslint-disable sort-imports */
-import { ArrowLeft, Bug, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Loader2, RefreshCw, Search, X } from 'lucide-react';
+import { ArrowLeft, Bug, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import {
   isWorkItemClosedState,
   pushWorkItemStack,
 } from '@/features/work-item/ui-work-item-board/utils';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
+import { IconButton } from '@/common/ui/icon-button';
 import { getOwnerColor, normalizeOwnerName } from '@/features/work-item/utils-owner-color';
 import {
   useBoardColumns,
@@ -26,9 +27,9 @@ import {
   EMPTY_AZURE_BOARD_COLUMN_IDS,
   useAzureBoardStore,
 } from '@/stores/azure-board';
-import { useNavigate } from '@tanstack/react-router';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
+import { useToastStore } from '@/stores/toasts';
 import { useQueryClient } from '@tanstack/react-query';
 import { UserAvatar } from '@/common/ui/user-avatar';
 import { WorkItemBoard } from '@/features/work-item/ui-work-item-board';
@@ -231,6 +232,42 @@ function RelatedBugsPanel({
   );
 }
 
+export function AzureWorkItemActions({
+  workItem,
+  onCreateTask,
+}: {
+  workItem: AzureDevOpsWorkItem;
+  onCreateTask: () => void;
+}) {
+  const addToast = useToastStore((state) => state.addToast);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(workItem.url);
+      addToast({ message: 'Work item link copied', type: 'success' });
+    } catch {
+      addToast({ message: 'Failed to copy work item link', type: 'error' });
+    }
+  };
+
+  return <>
+    <button type="button" onClick={onCreateTask} className="text-ink-1 hover:bg-bg-3 px-2 py-1 text-xs font-medium" title="Create local task">Create task</button>
+    <IconButton
+      size="sm"
+      icon={<ExternalLink />}
+      tooltip="Open in Azure DevOps"
+      onClick={() => {
+        window.open(workItem.url, '_blank', 'noopener,noreferrer');
+      }}
+    />
+    <IconButton
+      size="sm"
+      icon={<Copy />}
+      tooltip="Copy work item link"
+      onClick={copyLink}
+    />
+  </>;
+}
+
 export function AzureBoardProjectContent({
   project,
   onClose,
@@ -240,7 +277,6 @@ export function AzureBoardProjectContent({
   onClose: () => void;
   headerLeading: ReactNode;
 }) {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [workItemStack, setWorkItemStack] = useState<number[]>([]);
   const [highlightedBoardWorkItemId, setHighlightedBoardWorkItemId] = useState<number | null>(null);
@@ -432,13 +468,6 @@ export function AzureBoardProjectContent({
     });
     useOverlaysStore.getState().open('new-task');
   };
-  const openDetails = (item: AzureDevOpsWorkItem) => {
-    onClose();
-    void navigate({
-      to: '/all/work-items/$projectId/$workItemId',
-      params: { projectId: project.id, workItemId: String(item.id) },
-    });
-  };
   const openRelatedWorkItem = (workItemId: number) => {
     setWorkItemStack((stack) => pushWorkItemStack(stack, workItemId));
   };
@@ -625,7 +654,7 @@ export function AzureBoardProjectContent({
                         <ArrowLeft size={14} />
                       </button> : undefined}
                       onOpenRelatedWorkItem={openRelatedWorkItem}
-                      headerActions={selectedWorkItem && <><button type="button" onClick={() => createTask(selectedWorkItem)} className="text-ink-1 hover:bg-bg-3 px-2 py-1 text-xs font-medium" title="Create local task">Create task</button><button type="button" onClick={() => openDetails(selectedWorkItem)} className="text-ink-3 hover:bg-bg-3 hover:text-ink-1 p-1.5" title="Open full details" aria-label="Open full details"><ExternalLink size={14} /></button></>}
+                      headerActions={selectedWorkItem && <AzureWorkItemActions workItem={selectedWorkItem} onCreateTask={() => createTask(selectedWorkItem)} />}
                      />
                     </div> : selectedWorkItemId !== null ? (
                       <div className="grid h-full place-items-center px-6 text-center">
