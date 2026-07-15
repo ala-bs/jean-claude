@@ -276,6 +276,7 @@ export interface AzureDevOpsWorkItem {
     teamProject?: string;
     state: string;
     assignedTo?: string;
+    assignedToUniqueName?: string;
     description?: string;
     acceptanceCriteria?: string;
     reproSteps?: string;
@@ -720,6 +721,10 @@ export interface Api {
           assignedTo?: string;
       };
     }) => Promise<AzureDevOpsWorkItem[]>;
+    queryWorkItemOwners: (params: {
+      providerId: string;
+      projectName: string;
+    }) => Promise<Array<{ displayName: string; value: string }>>;
     getWorkItemById: (params: {
       providerId: string;
       workItemId: number;
@@ -1975,6 +1980,7 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         queryWorkItems: async () => [],
+        queryWorkItemOwners: async () => [],
         getWorkItemById: async () => null,
         getWorkItemsByIds: async () => [],
         getPullRequestStatuses: async () => [],

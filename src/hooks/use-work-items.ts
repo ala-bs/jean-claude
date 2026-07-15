@@ -51,6 +51,22 @@ export function useWorkItems(params: {
   });
 }
 
+export function useWorkItemOwners(params: {
+  providerId: string | null;
+  projectName: string | null;
+}) {
+  return useQuery<Array<{ displayName: string; value: string }>>({
+    queryKey: ['work-item-owners', params.providerId, params.projectName],
+    queryFn: () =>
+      api.azureDevOps.queryWorkItemOwners({
+        providerId: params.providerId!,
+        projectName: params.projectName!,
+      }),
+    enabled: !!params.providerId && !!params.projectName,
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useIterations(params: {
   providerId: string;
   projectName: string;

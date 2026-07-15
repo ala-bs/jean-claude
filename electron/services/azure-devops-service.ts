@@ -107,6 +107,7 @@ export interface AzureDevOpsWorkItem {
     teamProject?: string;
     state: string;
     assignedTo?: string;
+    assignedToUniqueName?: string;
     description?: string;
     acceptanceCriteria?: string;
     reproSteps?: string;
@@ -191,7 +192,7 @@ interface WorkItemsBatchResponse {
       'System.WorkItemType': string;
       'System.TeamProject'?: string;
       'System.State': string;
-      'System.AssignedTo'?: { displayName: string };
+      'System.AssignedTo'?: { displayName: string; uniqueName?: string };
       'System.Description'?: string;
       'Microsoft.VSTS.Common.AcceptanceCriteria'?: string;
       'Microsoft.VSTS.TCM.ReproSteps'?: string;
@@ -844,6 +845,78 @@ export async function queryWorkItems(params: {
   });
 }
 
+export async function queryWorkItemOwners(params: {
+  providerId: string;
+  projectName: string;
+}): Promise<Array<{ displayName: string; value: string }>> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const projectName = escapeWiql(params.projectName);
+  const query = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${projectName}' AND [System.AssignedTo] <> '' AND [System.WorkItemType] <> 'Test Suite' AND [System.WorkItemType] <> 'Test Plan'`;
+  const wiqlResponse = await fetch(
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/wiql?api-version=7.0`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query }),
+    },
+  );
+  if (!wiqlResponse.ok) {
+    const error = await wiqlResponse.text();
+    throw new Error(`Failed to query work item owners: ${error}`);
+  }
+
+  const wiqlData: WiqlResponse = await wiqlResponse.json();
+  const ids = wiqlData.workItems.map((workItem) => workItem.id);
+  const chunks: number[][] = [];
+  for (let index = 0; index < ids.length; index += 200) {
+    chunks.push(ids.slice(index, index + 200));
+  }
+  const ownersByKey = new Map<
+    string,
+    { displayName: string; value: string }
+  >();
+  for (let index = 0; index < chunks.length; index += 4) {
+    const batches = await Promise.all(
+      chunks.slice(index, index + 4).map(async (chunk) => {
+        const response = await fetch(
+          `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemsbatch?api-version=7.0`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: authHeader,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              ids: chunk,
+              fields: ['System.AssignedTo'],
+              errorPolicy: 'Omit',
+            }),
+          },
+        );
+        if (!response.ok) {
+          const error = await response.text();
+          throw new Error(`Failed to fetch work item owners: ${error}`);
+        }
+        return (await response.json()) as WorkItemsBatchResponse;
+      }),
+    );
+    for (const item of batches.flatMap((batch) => batch.value)) {
+      const identity = item.fields['System.AssignedTo'];
+      const displayName = identity?.displayName.trim();
+      const value = identity?.uniqueName?.trim() || displayName;
+      if (displayName && value && !ownersByKey.has(value.toLocaleLowerCase())) {
+        ownersByKey.set(value.toLocaleLowerCase(), { displayName, value });
+      }
+    }
+  }
+  return [...ownersByKey.values()].sort((a, b) =>
+    a.displayName.localeCompare(b.displayName),
+  );
+}
+
 export async function queryAssignedWorkItems(params: {
   providerId: string;
   projectName: string;
@@ -907,6 +980,7 @@ export async function queryAssignedWorkItems(params: {
       teamProject: wi.fields['System.TeamProject'] ?? params.projectName,
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
+      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
       description: wi.fields['System.Description'],
       acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
@@ -978,6 +1052,7 @@ export async function getWorkItemById(params: {
       teamProject: wi.fields['System.TeamProject'],
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
+      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
       description: wi.fields['System.Description'],
       acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
@@ -1076,6 +1151,7 @@ export async function getWorkItemsByIds(params: {
         teamProject: wi.fields['System.TeamProject'],
         state: wi.fields['System.State'],
         assignedTo: wi.fields['System.AssignedTo']?.displayName,
+        assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
         description: wi.fields['System.Description'],
         acceptanceCriteria:
           wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
@@ -1358,6 +1434,7 @@ export async function getRelatedTestCases(params: {
         teamProject: wi.fields['System.TeamProject'] ?? params.projectName,
         state: wi.fields['System.State'],
         assignedTo: wi.fields['System.AssignedTo']?.displayName,
+        assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
         description: wi.fields['System.Description'],
         acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
         reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
@@ -3341,6 +3418,7 @@ export async function getPullRequestWorkItems(params: {
       teamProject: wi.fields['System.TeamProject'],
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
+      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
       description: wi.fields['System.Description'],
       acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],

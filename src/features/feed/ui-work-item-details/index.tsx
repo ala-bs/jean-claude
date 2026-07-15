@@ -13,7 +13,14 @@ import {
   Loader2,
   MessagesSquare,
 } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
@@ -23,14 +30,20 @@ import type {
 } from '@/lib/api';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import {
+  getOwnerColor,
+  normalizeOwnerName,
+} from '@/features/work-item/utils-owner-color';
+import {
   useAddWorkItemComment,
   useBoardColumns,
   useLinkedPullRequestStatuses,
   useRelatedTestCases,
+  useUpdateWorkItemField,
   useUpdateWorkItemState,
   useWorkItemById,
   useWorkItemComments,
   useWorkItemHistory,
+  useWorkItemOwners,
   useWorkItemsByIds,
   useWorkItemStates,
 } from '@/hooks/use-work-items';
@@ -40,6 +53,7 @@ import { Modal } from '@/common/ui/modal';
 import { PrDetail } from '@/features/pull-request/ui-pr-detail';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProject } from '@/hooks/use-projects';
+import { UserAvatar } from '@/common/ui/user-avatar';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { WorkItemBoardColumnEditor } from '@/features/work-item/ui-work-item-board-column-editor';
 import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
@@ -169,6 +183,144 @@ function EditableStateBadge({
   );
 }
 
+export function getOwnerOptions(
+  owners: Array<{ displayName: string; value: string }>,
+  currentOwner?: string,
+  currentOwnerValue?: string,
+): Array<{ displayName: string; value: string }> {
+  const ownersByKey = new Map<
+    string,
+    { displayName: string; value: string }
+  >();
+  const currentValue = currentOwnerValue?.trim() || currentOwner?.trim();
+  if (currentOwner?.trim() && currentValue) {
+    ownersByKey.set(normalizeOwnerName(currentValue), {
+      displayName: currentOwner.trim(),
+      value: currentValue,
+    });
+  }
+  for (const owner of owners) {
+    const displayName = owner.displayName.trim();
+    const value = owner.value.trim();
+    if (!displayName || !value) continue;
+    const normalized = normalizeOwnerName(value);
+    if (!ownersByKey.has(normalized)) {
+      ownersByKey.set(normalized, { displayName, value });
+    }
+  }
+  const ownersList = [...ownersByKey.values()];
+  const current = currentValue ? ownersList.shift() : undefined;
+  ownersList.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return [
+    { displayName: 'Unassigned', value: '' },
+    ...(current ? [current] : []),
+    ...ownersList,
+  ];
+}
+
+function EditableOwner({
+  owner,
+  ownerValue,
+  options,
+  disabled,
+  error,
+  onRetry,
+  providerId,
+  workItemId,
+}: {
+  owner?: string;
+  ownerValue?: string;
+  options: Array<{ displayName: string; value: string }>;
+  disabled: boolean;
+  error: string | null;
+  onRetry: () => void;
+  providerId: string;
+  workItemId: number;
+}) {
+  const updateField = useUpdateWorkItemField();
+  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
+  const currentOwner = owner ?? '';
+  const currentOwnerValue = ownerValue ?? currentOwner;
+
+  const handleSelect = useCallback(
+    (nextOwner: { displayName: string; value: string }) => {
+      dropdownRef.current?.toggle();
+      if (nextOwner.value === currentOwnerValue) return;
+      updateField.mutate({
+        providerId,
+        workItemId,
+        field: 'System.AssignedTo',
+        value: nextOwner.value,
+      });
+    },
+    [currentOwnerValue, providerId, updateField, workItemId],
+  );
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <span className="text-ink-3">Assigned to:</span>
+      <Dropdown
+        dropdownRef={dropdownRef}
+        className="min-w-52"
+        trigger={
+          <button
+            type="button"
+            disabled={disabled || updateField.isPending || options.length <= 1}
+            className="text-ink-1 hover:text-acc-ink flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors disabled:cursor-default disabled:opacity-60"
+            aria-label={`Edit owner. Current owner: ${currentOwner || 'Unassigned'}`}
+          >
+            {currentOwner && (
+              <UserAvatar
+                name={currentOwner}
+                color={getOwnerColor(currentOwner)}
+              />
+            )}
+            <span className="max-w-36 truncate">
+              {currentOwner || 'Unassigned'}
+            </span>
+            {updateField.isPending ? (
+              <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />
+            ) : (
+              <ChevronDown className="text-ink-3 h-3 w-3" />
+            )}
+          </button>
+        }
+      >
+        {options.map((option) => (
+          <DropdownItem
+            key={option.value || '__unassigned__'}
+            checked={option.value === currentOwnerValue}
+            onClick={() => handleSelect(option)}
+          >
+            <span className="flex items-center gap-2">
+              {option.value && (
+                <UserAvatar
+                  name={option.displayName}
+                  color={getOwnerColor(option.displayName)}
+                />
+              )}
+              <span>{option.displayName}</span>
+              {option.value && option.value !== option.displayName && (
+                <span className="text-ink-3">{option.value}</span>
+              )}
+            </span>
+          </DropdownItem>
+        ))}
+      </Dropdown>
+      {error && (
+        <button
+          type="button"
+          className="text-status-fail hover:underline"
+          title={error}
+          onClick={onRetry}
+        >
+          Retry owners
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function WorkItemDetails({
   projectId,
   workItemId,
@@ -206,6 +358,23 @@ export function WorkItemDetails({
     projectName,
     workItemType: workItem?.fields.workItemType ?? null,
   });
+  const ownerQuery = useWorkItemOwners({
+    providerId,
+    projectName,
+  });
+  const ownerOptions = useMemo(
+    () =>
+      getOwnerOptions(
+        ownerQuery.data ?? [],
+        workItem?.fields.assignedTo,
+        workItem?.fields.assignedToUniqueName,
+      ),
+    [
+      ownerQuery.data,
+      workItem?.fields.assignedTo,
+      workItem?.fields.assignedToUniqueName,
+    ],
+  );
   const {
     data: comments = [],
     isLoading: isLoadingComments,
@@ -364,12 +533,25 @@ export function WorkItemDetails({
               variant="details"
             />
           )}
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="text-ink-3">Assigned to:</span>
-            <span className="text-ink-1">
-              {fields.assignedTo ?? 'Unassigned'}
-            </span>
-          </div>
+          {providerId ? (
+            <EditableOwner
+              owner={fields.assignedTo}
+              ownerValue={fields.assignedToUniqueName}
+              options={ownerOptions}
+              disabled={ownerQuery.data === undefined}
+              error={ownerQuery.error?.message ?? null}
+              onRetry={() => void ownerQuery.refetch()}
+              providerId={providerId}
+              workItemId={workItem.id}
+            />
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-ink-3">Assigned to:</span>
+              <span className="text-ink-1">
+                {fields.assignedTo ?? 'Unassigned'}
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-1.5 text-xs">
             <span className="text-ink-3">Project:</span>
               <span className="text-ink-1">

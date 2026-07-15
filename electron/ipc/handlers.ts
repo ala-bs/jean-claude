@@ -149,6 +149,7 @@ import {
   listPullRequests,
   listReleases,
   publishPullRequest,
+  queryWorkItemOwners,
   queryWorkItems,
   queueBuild,
   removePullRequestTag,
@@ -2871,6 +2872,17 @@ export function registerIpcHandlers() {
         };
       },
     ) => queryWorkItems(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:queryWorkItemOwners',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectName: string;
+      },
+    ) => queryWorkItemOwners(params),
   );
 
   ipcMain.handle(

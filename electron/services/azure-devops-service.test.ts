@@ -30,6 +30,7 @@ import {
   getPullRequestFileContent,
   getPullRequestStatuses,
   getPullRequestThreads,
+  queryWorkItemOwners,
   queryWorkItems,
   resolveWorkItemBoardColumnUpdate,
   setPullRequestAutoComplete,
@@ -326,6 +327,72 @@ describe('queryWorkItems', () => {
   });
 });
 
+describe('queryWorkItemOwners', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('fetches only assigned-to fields in batches and returns unique owners', async () => {
+    const ids = Array.from({ length: 201 }, (_, index) => index + 1);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { workItems: ids.map((id) => ({ id, url: `work-item-${id}` })) },
+          { ok: true },
+        ),
+      )
+      .mockImplementation(async (_url, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          ids: number[];
+          fields: string[];
+          errorPolicy: string;
+        };
+        expect(body.fields).toEqual(['System.AssignedTo']);
+        expect(body).not.toHaveProperty('$expand');
+        return jsonResponse(
+          {
+            count: body.ids.length,
+            value: body.ids.map((id) => ({
+              id,
+              fields: {
+                'System.AssignedTo': {
+                  displayName: id % 3 === 1 ? 'Zoe' : ' Alex ',
+                  uniqueName:
+                    id % 3 === 1
+                      ? 'zoe@example.com'
+                      : id % 3 === 2
+                        ? 'alex.one@example.com'
+                        : 'alex.two@example.com',
+                },
+              },
+            })),
+          },
+          { ok: true },
+        );
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      queryWorkItemOwners({
+        providerId: 'provider-1',
+        projectName: 'Team Project',
+      }),
+    ).resolves.toEqual([
+      { displayName: 'Alex', value: 'alex.one@example.com' },
+      { displayName: 'Alex', value: 'alex.two@example.com' },
+      { displayName: 'Zoe', value: 'zoe@example.com' },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('buildIterationPathsCondition', () => {
   it('deduplicates paths and escapes WIQL quotes', () => {
     expect(
@@ -429,6 +496,22 @@ describe('buildWorkItemFieldPatch', () => {
       path: '/fields/System.IterationPath',
       value: 'Project\\Sprint 9',
     });
+  });
+
+  it('builds owner assignment and unassignment updates', () => {
+    expect(
+      buildWorkItemFieldPatch({
+        field: 'System.AssignedTo',
+        value: 'Alice',
+      }),
+    ).toEqual({
+      op: 'add',
+      path: '/fields/System.AssignedTo',
+      value: 'Alice',
+    });
+    expect(
+      buildWorkItemFieldPatch({ field: 'System.AssignedTo', value: '' }),
+    ).toEqual({ op: 'remove', path: '/fields/System.AssignedTo' });
   });
 });
 
