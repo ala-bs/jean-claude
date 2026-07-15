@@ -17,9 +17,12 @@ import {
   getTaskFeedItems,
   invalidatePrCache,
 } from './feed-service';
+import {
+  hasUncommittedWorktreeChanges,
+  hasUnpushedWorktreeCommits,
+} from './worktree-service';
 import { completePrReviewTasksForMergedPr } from './pr-review-task-service';
 import { emitCacheEvent } from './cache-event-service';
-import { hasUncommittedWorktreeChanges } from './worktree-service';
 
 
 
@@ -65,6 +68,7 @@ vi.mock('./pr-review-task-service', () => ({
 
 vi.mock('./worktree-service', () => ({
   hasUncommittedWorktreeChanges: vi.fn(),
+  hasUnpushedWorktreeCommits: vi.fn(),
 }));
 
 vi.mock('./step-service', () => ({
@@ -299,16 +303,91 @@ describe('getTaskFeedItems', () => {
       } as never,
     ]);
     vi.mocked(hasUncommittedWorktreeChanges).mockResolvedValue(true);
+    vi.mocked(hasUnpushedWorktreeCommits).mockResolvedValue(true);
     vi.mocked(getPullRequestStatuses).mockResolvedValue(new Map());
 
     await expect(getTaskFeedItems()).resolves.toEqual([
       expect.objectContaining({
         taskId: 'task-1',
         hasUncommittedChanges: true,
+        hasUnpushedCommits: true,
       }),
     ]);
     expect(hasUncommittedWorktreeChanges).toHaveBeenCalledWith(
       '/repo/worktrees/task-1',
+    );
+    expect(hasUnpushedWorktreeCommits).toHaveBeenCalledWith(
+      '/repo/worktrees/task-1',
+    );
+  });
+
+  it('marks a nested PR-linked task when its worktree has unpushed commits', async () => {
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      {
+        id: 'parent-task',
+        projectId: 'project-1',
+        type: 'agent',
+        name: 'Parent task',
+        prompt: 'Parent task',
+        status: 'waiting',
+        hasUnread: false,
+        userCompleted: false,
+        pullRequestId: null,
+        worktreePath: '/repo/worktrees/parent-task',
+        workItemIds: null,
+        workItemUrls: null,
+        pendingMessage: null,
+        updatedAt: '2026-07-14T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: 'provider-1',
+        repoId: 'repo-1',
+      } as never,
+    ]);
+    vi.mocked(TaskRepository.findChildrenForTasks).mockResolvedValue({
+      'parent-task': [
+        {
+          id: 'child-task',
+          parentTaskId: 'parent-task',
+          projectId: 'project-1',
+          type: 'agent',
+          name: 'Child task',
+          prompt: 'Child task',
+          status: 'waiting',
+          hasUnread: false,
+          userCompleted: false,
+          pullRequestId: '34',
+          pullRequestUrl: 'https://example.com/pr/34',
+          worktreePath: '/repo/worktrees/child-task',
+          workItemIds: null,
+          workItemUrls: null,
+          pendingMessage: null,
+          updatedAt: '2026-07-14T00:00:00.000Z',
+          projectName: 'oes-v2',
+          projectColor: '#ff6b6b',
+          projectLogoPath: null,
+          repoProviderId: 'provider-1',
+          repoId: 'repo-1',
+        } as never,
+      ],
+    });
+    vi.mocked(hasUncommittedWorktreeChanges).mockResolvedValue(false);
+    vi.mocked(hasUnpushedWorktreeCommits).mockResolvedValue(true);
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(new Map());
+
+    const items = await getTaskFeedItems();
+
+    expect(items[0]?.children).toEqual([
+      expect.objectContaining({
+        taskId: 'child-task',
+        projectId: 'project-1',
+        pullRequestId: 34,
+        hasUnpushedCommits: true,
+      }),
+    ]);
+    expect(hasUnpushedWorktreeCommits).toHaveBeenCalledWith(
+      '/repo/worktrees/child-task',
     );
   });
 
@@ -342,6 +421,7 @@ describe('getTaskFeedItems', () => {
     await getTaskFeedItems();
 
     expect(hasUncommittedWorktreeChanges).not.toHaveBeenCalled();
+    expect(hasUnpushedWorktreeCommits).not.toHaveBeenCalled();
   });
 
   it('keeps a PR-linked task in the feed when its worktree status check fails', async () => {
@@ -372,6 +452,7 @@ describe('getTaskFeedItems', () => {
     vi.mocked(hasUncommittedWorktreeChanges).mockRejectedValue(
       new Error('git status timed out'),
     );
+    vi.mocked(hasUnpushedWorktreeCommits).mockResolvedValue(true);
     vi.mocked(getPullRequestStatuses).mockResolvedValue(new Map());
 
     const items = await getTaskFeedItems();
@@ -380,5 +461,6 @@ describe('getTaskFeedItems', () => {
       expect.objectContaining({ taskId: 'task-1' }),
     ]);
     expect(items[0]).not.toHaveProperty('hasUncommittedChanges');
+    expect(items[0]).toHaveProperty('hasUnpushedCommits', true);
   });
 });

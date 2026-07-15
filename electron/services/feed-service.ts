@@ -26,10 +26,13 @@ import {
   listPullRequests,
   queryAssignedWorkItems,
 } from './azure-devops-service';
+import {
+  hasUncommittedWorktreeChanges,
+  hasUnpushedWorktreeCommits,
+} from './worktree-service';
 import { completePrReviewTasksForMergedPr } from './pr-review-task-service';
 import { emitCacheEvent } from './cache-event-service';
 import { getMostRecentlyUpdatedStep } from './step-service';
-import { hasUncommittedWorktreeChanges } from './worktree-service';
 import type { LinkedPr } from './azure-devops-service';
 
 
@@ -278,30 +281,6 @@ export async function getTaskFeedItems({
     feedItems.push(taskFeedItem);
   }
 
-  const feedItemsByTaskId = new Map(
-    feedItems.flatMap((item) => (item.taskId ? [[item.taskId, item]] : [])),
-  );
-  await runInChunks(
-    activeTasks.filter((task) => task.pullRequestId && task.worktreePath),
-    10,
-    async (task) => {
-      try {
-        const item = feedItemsByTaskId.get(task.id);
-        if (item) {
-          item.hasUncommittedChanges = await hasUncommittedWorktreeChanges(
-            task.worktreePath!,
-          );
-        }
-      } catch (error) {
-        dbg.feed(
-          'getTaskFeedItems: failed checking worktree status for task %s: %O',
-          task.id,
-          error,
-        );
-      }
-    },
-  );
-
   // Fetch child tasks and nest them into parent feed items
   const parentTaskIds = activeTasks.map((t) => t.id);
   const childrenByParent =
@@ -369,6 +348,49 @@ export async function getTaskFeedItems({
       };
     });
   }
+
+  const allTaskFeedItems = feedItems.flatMap((item) => [
+    item,
+    ...(item.children ?? []),
+  ]);
+  const feedItemsByTaskId = new Map(
+    allTaskFeedItems.flatMap((item) =>
+      item.taskId ? [[item.taskId, item] as const] : [],
+    ),
+  );
+  await runInChunks(
+    [...activeTasks, ...allChildTasks].filter(
+      (task) => task.pullRequestId && task.worktreePath,
+    ),
+    10,
+    async (task) => {
+      const item = feedItemsByTaskId.get(task.id);
+      if (!item) return;
+
+      const [uncommittedResult, unpushedResult] = await Promise.allSettled([
+        hasUncommittedWorktreeChanges(task.worktreePath!),
+        hasUnpushedWorktreeCommits(task.worktreePath!),
+      ]);
+      if (uncommittedResult.status === 'fulfilled') {
+        item.hasUncommittedChanges = uncommittedResult.value;
+      } else {
+        dbg.feed(
+          'getTaskFeedItems: failed checking uncommitted status for task %s: %O',
+          task.id,
+          uncommittedResult.reason,
+        );
+      }
+      if (unpushedResult.status === 'fulfilled') {
+        item.hasUnpushedCommits = unpushedResult.value;
+      } else {
+        dbg.feed(
+          'getTaskFeedItems: failed checking unpushed status for task %s: %O',
+          task.id,
+          unpushedResult.reason,
+        );
+      }
+    },
+  );
 
   await enrichTaskFeedItemsWithWorkItemTypes({ feedItems });
   const completedTaskIds = await enrichTaskFeedItemsWithPrStatus({

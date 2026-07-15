@@ -1,4 +1,4 @@
-import { GitMerge, GitPullRequest } from 'lucide-react';
+import { ArrowUpFromLine, GitMerge, GitPullRequest } from 'lucide-react';
 import clsx from 'clsx';
 import { Link } from '@tanstack/react-router';
 
@@ -33,6 +33,7 @@ export function PrListItem({
   basePath = 'project',
   projectName,
   projectColor,
+  hasUnpushedCommits = false,
 }: {
   pr: AzureDevOpsPullRequest;
   projectId: string;
@@ -40,6 +41,7 @@ export function PrListItem({
   basePath?: 'project' | 'all';
   projectName?: string;
   projectColor?: string;
+  hasUnpushedCommits?: boolean;
 }) {
   const linkProps =
     basePath === 'all'
@@ -72,6 +74,15 @@ export function PrListItem({
         {pr.isDraft && (
           <span className="text-ink-2 bg-glass-medium rounded px-1.5 py-0.5 text-[10px] font-medium uppercase">
             Draft
+          </span>
+        )}
+        {hasUnpushedCommits && (
+          <span
+            title="Local commits not pushed to remote"
+            className="text-status-run bg-status-run/10 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium"
+          >
+            <ArrowUpFromLine className="h-2.5 w-2.5" />
+            Unpushed
           </span>
         )}
       </div>

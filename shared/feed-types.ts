@@ -43,6 +43,7 @@ export interface FeedItem {
   pullRequestUrl?: string;
   pullRequestMergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   hasUncommittedChanges?: boolean;
+  hasUnpushedCommits?: boolean;
   noteId?: string;
   noteContent?: string;
   isCompleted?: boolean;

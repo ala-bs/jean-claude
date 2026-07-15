@@ -31,6 +31,7 @@ const {
   getWorktreeFileContent,
   getWorktreeUnifiedDiff,
   hasUncommittedWorktreeChanges,
+  hasUnpushedWorktreeCommits,
 } = await import('./worktree-service');
 
 let testDir: string;
@@ -88,6 +89,54 @@ describe('hasUncommittedWorktreeChanges', () => {
     vi.stubEnv('PATH', '');
 
     await expect(hasUncommittedWorktreeChanges(testDir)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+});
+
+describe('hasUnpushedWorktreeCommits', () => {
+  beforeEach(async () => {
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-worktree-ahead-'));
+    await git(['init', '-b', 'main']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test User']);
+    await writeFile('tracked.txt', 'base\n');
+    await commit('base');
+    await git(['branch', 'upstream']);
+    await git(['branch', '--set-upstream-to=upstream', 'main']);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    if (testDir) await fs.rm(testDir, { force: true, recursive: true });
+  });
+
+  it('detects commits ahead of the upstream branch', async () => {
+    await expect(hasUnpushedWorktreeCommits(testDir)).resolves.toBe(false);
+
+    await writeFile('tracked.txt', 'changed\n');
+    await commit('local change');
+
+    await expect(hasUnpushedWorktreeCommits(testDir)).resolves.toBe(true);
+  });
+
+  it('treats commits without an upstream branch as unpushed', async () => {
+    await git(['branch', '--unset-upstream']);
+
+    await expect(hasUnpushedWorktreeCommits(testDir)).resolves.toBe(true);
+  });
+
+  it('does not mark a branch as unpushed when a remote ref contains HEAD', async () => {
+    await git(['branch', '--unset-upstream']);
+    await git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+
+    await expect(hasUnpushedWorktreeCommits(testDir)).resolves.toBe(false);
+  });
+
+  it('rejects when git is missing but the worktree exists', async () => {
+    vi.stubEnv('PATH', '');
+
+    await expect(hasUnpushedWorktreeCommits(testDir)).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });

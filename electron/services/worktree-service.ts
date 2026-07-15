@@ -1169,6 +1169,59 @@ export async function hasUncommittedWorktreeChanges(
   }
 }
 
+export async function hasUnpushedWorktreeCommits(
+  worktreePath: string,
+): Promise<boolean> {
+  let branchStatus: string;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        '--no-optional-locks',
+        'status',
+        '--porcelain=v2',
+        '--branch',
+        '--untracked-files=no',
+      ],
+      { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+    );
+    branchStatus = stdout;
+  } catch (error) {
+    if (isEnoent(error) && !(await pathExists(worktreePath))) return false;
+    throw error;
+  }
+
+  const lines = branchStatus.split('\n');
+  const hasUpstream = lines.some((line) => line.startsWith('# branch.upstream '));
+  if (hasUpstream) {
+    const aheadLine = lines.find((line) => line.startsWith('# branch.ab '));
+    const aheadCount = aheadLine?.match(/^# branch\.ab \+(\d+) /)?.[1];
+    return Number(aheadCount ?? 0) > 0;
+  }
+
+  // A branch can be published without tracking configuration.
+  const { stdout: containingRemoteRefs } = await execFileAsync(
+    'git',
+    [
+      '--no-optional-locks',
+      'for-each-ref',
+      '--contains=HEAD',
+      '--format=%(refname)',
+      'refs/remotes',
+    ],
+    { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+  );
+  if (containingRemoteRefs.trim().length > 0) return false;
+
+  // Without an upstream or containing remote ref, local commits need a push.
+  const { stdout } = await execFileAsync(
+    'git',
+    ['--no-optional-locks', 'log', '--oneline', '-1'],
+    { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+  );
+  return stdout.trim().length > 0;
+}
+
 /**
  * Checks if a worktree has uncommitted or unpushed changes.
  */
@@ -1197,27 +1250,8 @@ export async function getWorktreeStatus(
     const hasUnstagedChanges = unstagedOutput.trim().length > 0;
     const currentBranch = await getCurrentBranch(worktreePath);
 
-    // Check for unpushed commits (commits ahead of upstream)
-    let hasUnpushedCommits = false;
-    try {
-      const { stdout: aheadOutput } = await execAsync(
-        'git rev-list --count @{u}..HEAD',
-        { cwd: worktreePath, encoding: 'utf-8' },
-      );
-      hasUnpushedCommits = parseInt(aheadOutput.trim(), 10) > 0;
-    } catch {
-      // No upstream tracking branch — any local commits are unpushed
-      // Check if there are any commits at all
-      try {
-        const { stdout: logOutput } = await execAsync('git log --oneline -1', {
-          cwd: worktreePath,
-          encoding: 'utf-8',
-        });
-        hasUnpushedCommits = logOutput.trim().length > 0;
-      } catch {
-        hasUnpushedCommits = false;
-      }
-    }
+    const hasUnpushedCommits =
+      await hasUnpushedWorktreeCommits(worktreePath);
 
     return {
       hasUncommittedChanges: hasStagedChanges || hasUnstagedChanges,
