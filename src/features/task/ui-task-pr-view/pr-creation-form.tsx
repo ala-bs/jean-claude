@@ -22,7 +22,11 @@ import {
 } from '@/hooks/use-create-pull-request';
 import { useGenerateSummary, useTaskSummary } from '@/hooks/use-task-summary';
 import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
-import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
+import {
+  MAX_FILE_SIZE,
+  MAX_IMAGES,
+  processImageFile,
+} from '@/lib/image-utils';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -54,6 +58,15 @@ type StagedPrImage = PromptImagePart & { placeholderMarkdown: string };
 
 function placeholderPattern(placeholderMarkdown: string) {
   return markdownImagePlaceholderPattern(placeholderMarkdown);
+}
+
+async function readFileAsBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
+  }
+  return btoa(binary);
 }
 
 export const PrImageAttachments = memo(function PrImageAttachments({
@@ -253,13 +266,26 @@ export function PrCreationForm({
 
       try {
         await Promise.all(
-          imageFiles
-            .slice(0, allowed)
-            .map((file) =>
-              processImageFile(file, stageDescriptionImage, (message) =>
-                addToast({ type: 'error', message }),
-              ),
-            ),
+          imageFiles.slice(0, allowed).map(async (file) => {
+            const gifData =
+              file.type === 'image/gif' && file.size <= MAX_FILE_SIZE
+                ? await readFileAsBase64(file)
+                : undefined;
+            await processImageFile(
+              file,
+              (image) =>
+                stageDescriptionImage(
+                  gifData
+                    ? {
+                        ...image,
+                        storageData: gifData,
+                        storageMimeType: 'image/gif',
+                      }
+                    : image,
+                ),
+              (message) => addToast({ type: 'error', message }),
+            );
+          }),
         );
         if (nextVideoFile && allowed > imageFiles.length) {
           setVideoFile(nextVideoFile);

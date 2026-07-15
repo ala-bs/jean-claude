@@ -6,8 +6,16 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
-const { processImageFileSpy } = vi.hoisted(() => ({
+const {
+  createPullRequestSpy,
+  processImageFileSpy,
+  updatePullRequestDescriptionSpy,
+  uploadPullRequestAttachmentSpy,
+} = vi.hoisted(() => ({
+  createPullRequestSpy: vi.fn(),
   processImageFileSpy: vi.fn(),
+  updatePullRequestDescriptionSpy: vi.fn(),
+  uploadPullRequestAttachmentSpy: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
@@ -21,7 +29,17 @@ vi.mock('@/features/common/ui-video-gif-converter', () => ({
 
 vi.mock('@/hooks/use-create-pull-request', () => ({
   useAddPrFileComments: () => ({ mutateAsync: vi.fn() }),
-  useCreatePullRequest: () => ({ mutateAsync: vi.fn() }),
+  useCreatePullRequest: () => ({ mutateAsync: createPullRequestSpy }),
+}));
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    azureDevOps: {
+      updatePullRequestDescription: updatePullRequestDescriptionSpy,
+      uploadPullRequestAttachment: uploadPullRequestAttachmentSpy,
+    },
+    preferenceMemory: { recordEvidence: vi.fn() },
+  },
 }));
 
 vi.mock('@/hooks/use-task-summary', () => ({
@@ -85,19 +103,24 @@ vi.mock('@/stores/toasts', () => ({
 }));
 
 vi.mock('@/lib/image-utils', () => ({
+  MAX_FILE_SIZE: 10 * 1024 * 1024,
   MAX_IMAGES: 5,
   processImageFile: processImageFileSpy,
 }));
 
 import { PrCreationForm } from './pr-creation-form';
 
-const GIF_CONTENT = `GIF_CONTENT_${'A'.repeat(100_000)}`;
-const BASE64_SENTINEL = btoa(GIF_CONTENT);
+const GIF_BYTES = Uint8Array.from([
+  0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x80, 0xff, 0x21, 0xf9, 0x04,
+]);
+const BASE64_SENTINEL = btoa(String.fromCharCode(...GIF_BYTES));
 const gifImage: PromptImagePart = {
   type: 'image',
-  data: BASE64_SENTINEL,
-  mimeType: 'image/gif',
+  data: 'compressed-agent-data',
+  mimeType: 'image/webp',
   filename: 'converted-demo.gif',
+  storageData: 'compressed-storage-data',
+  storageMimeType: 'image/avif',
 };
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -113,6 +136,7 @@ describe('PrCreationForm image previews', () => {
   const revokeObjectUrl = vi.fn();
 
   beforeEach(() => {
+    vi.clearAllMocks();
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -125,6 +149,14 @@ describe('PrCreationForm image previews', () => {
         onAttach: (image: PromptImagePart) => void,
       ) => onAttach(gifImage),
     );
+    createPullRequestSpy.mockResolvedValue({
+      id: 42,
+      url: 'https://dev.azure.com/pr/42',
+    });
+    uploadPullRequestAttachmentSpy.mockResolvedValue({
+      url: 'https://dev.azure.com/attachments/converted-demo.gif',
+    });
+    updatePullRequestDescriptionSpy.mockResolvedValue(undefined);
     vi.stubGlobal('URL', {
       createObjectURL: createObjectUrl,
       revokeObjectURL: revokeObjectUrl,
@@ -140,8 +172,7 @@ describe('PrCreationForm image previews', () => {
     vi.restoreAllMocks();
   });
 
-  it('wires pending, ready, and removed previews through the production form', async () => {
-    vi.useFakeTimers();
+  it('wires ready and removed previews through the production form', async () => {
     await act(async () => {
       root.render(
         createElement(PrCreationForm, {
@@ -159,25 +190,24 @@ describe('PrCreationForm image previews', () => {
     if (!fileInput) throw new Error('Image input not found');
     Object.defineProperty(fileInput, 'files', {
       configurable: true,
-      value: [new File(['video'], 'converted-demo.gif', { type: 'image/gif' })],
+      value: [
+        new File([GIF_BYTES], 'converted-demo.gif', { type: 'image/gif' }),
+      ],
     });
 
     await act(async () => {
       fileInput.dispatchEvent(new Event('change', { bubbles: true }));
     });
-
-    expect(container.textContent).toContain('converted-demo.gif');
-    expect(container.querySelector('img[alt="converted-demo.gif"]')).toBeNull();
-    expect(container.innerHTML).not.toContain(BASE64_SENTINEL);
-    expect(createObjectUrl).not.toHaveBeenCalled();
-
     await act(async () => {
-      await vi.runAllTimersAsync();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     const gifBlob = createObjectUrl.mock.calls[0]?.[0] as Blob;
     expect(gifBlob.type).toBe('image/gif');
-    expect(await gifBlob.text()).toBe(GIF_CONTENT);
+    expect(new Uint8Array(await gifBlob.arrayBuffer())).toEqual(GIF_BYTES);
     expect(
       container.querySelector<HTMLImageElement>('img[alt="converted-demo.gif"]')
         ?.src,
@@ -196,5 +226,78 @@ describe('PrCreationForm image previews', () => {
     expect(
       container.querySelector<HTMLTextAreaElement>('#pr-description')?.value,
     ).not.toContain('jc-image://');
+  });
+
+  it('uploads original GIF bytes when creating the pull request', async () => {
+    await act(async () => {
+      root.render(
+        createElement(PrCreationForm, {
+          taskId: 'task-id',
+          projectId: 'project-id',
+          onSuccess: vi.fn(),
+          onCancel: vi.fn(),
+        }),
+      );
+    });
+
+    const fileInput = container.querySelector<HTMLInputElement>(
+      'input[type="file"]',
+    );
+    const titleInput = container.querySelector<HTMLInputElement>('#pr-title');
+    if (!fileInput || !titleInput) throw new Error('PR form input not found');
+
+    Object.defineProperty(fileInput, 'files', {
+      configurable: true,
+      value: [
+        new File([GIF_BYTES], 'converted-demo.gif', { type: 'image/gif' }),
+      ],
+    });
+    await act(async () => {
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain('converted-demo.gif');
+
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    await act(async () => {
+      valueSetter?.call(titleInput, 'Preserve GIF animation');
+      titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    const createButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('Create PR'),
+    );
+    if (!createButton) throw new Error('Create PR button not found');
+    await act(async () => createButton.click());
+
+    await vi.waitFor(() => {
+      expect(uploadPullRequestAttachmentSpy).toHaveBeenCalledWith({
+        providerId: 'provider-id',
+        projectId: 'repo-project-id',
+        repoId: 'repo-id',
+        pullRequestId: 42,
+        fileName: 'converted-demo.gif',
+        mimeType: 'image/gif',
+        dataBase64: BASE64_SENTINEL,
+      });
+    });
+    expect(createPullRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Preserve GIF animation',
+        description: expect.stringContaining('jc-image://'),
+      }),
+    );
+    expect(updatePullRequestDescriptionSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: expect.stringContaining(
+          'https://dev.azure.com/attachments/converted-demo.gif',
+        ),
+      }),
+    );
   });
 });
