@@ -35,14 +35,12 @@ import {
   isAiSkillSlotsSetting,
   isFeatureMapStepMeta,
   isOpenAiImageModel,
+  isPrReviewChatStepMeta,
   isSkillCreationStepMeta,
-  type ModelPreference,
   type NewTaskStep,
   type NewToken,
   PRESET_EDITORS,
   type Project,
-  type ReviewerConfig,
-  type ReviewStepMeta,
   type SkillCreationStepMeta,
   type Task,
   type ThinkingEffort,
@@ -95,6 +93,23 @@ import {
   substituteVariables,
 } from '../services/mcp-template-service';
 import {
+  createGlobalMcpServer,
+  disableGlobalMcpServer,
+  discoverUnmanagedMcpEntries,
+  enableGlobalMcpServer,
+  getAllGlobalMcpServers,
+  getGlobalMcpServer,
+  importMcpEntry,
+  uninstallGlobalMcpServer,
+  updateGlobalMcpServer,
+} from '../services/global-mcp-service';
+import type {
+  DiscoveredMcpVariant,
+  NewGlobalMcpServer,
+  UpdateGlobalMcpServer,
+} from '@shared/global-mcp-types';
+
+import {
   activateWorkItem,
   addPullRequestComment,
   addPullRequestFileComment,
@@ -134,6 +149,7 @@ import {
   listPullRequests,
   listReleases,
   publishPullRequest,
+  queryWorkItemOwners,
   queryWorkItems,
   queueBuild,
   removePullRequestTag,
@@ -212,6 +228,7 @@ import {
 import {
   buildPromptActivityText,
   buildTaskCreationActivityText,
+  textPrompt,
 } from '../services/prompt-utils';
 import {
   checkMergeConflicts,
@@ -279,6 +296,17 @@ import {
   invalidateWorkItemCache,
   updateFeedNote,
 } from '../services/feed-service';
+// eslint-disable-next-line sort-imports
+import {
+  continuePrReviewChatStep,
+  createPrReviewChatStep,
+} from '../services/pr-review-agent-service';
+// eslint-disable-next-line sort-imports
+import {
+  completePrReviewTasksForMergedPr,
+  createOrGetPrReviewTask,
+  fetchPrReviewSourceBranch,
+} from '../services/pr-review-task-service';
 import {
   createSkill,
   deleteSkill,
@@ -326,13 +354,16 @@ import {
   writeBackendUserConfig,
 } from '../services/backend-config-settings-service';
 import { agentResourceMonitorService } from '../services/agent-resource-monitor-service';
+import { agentResourceSamplingLeaseService } from '../services/agent-resource-sampling-lease-service';
 import { agentService } from '../services/agent-service';
 import { agentUsageService } from '../services/agent-usage-service';
 import { closeEditorWindowsForTaskWorktree } from '../services/editor-automation-service';
 import { dbg } from '../lib/debug';
+import { deleteProjectWithPreferenceMemoryCleanup } from '../services/project-deletion-service';
 import { detectProjectLogos } from '../services/project-logo-detection-service';
 import { detectProjects } from '../services/project-detection-service';
 import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
+import { exitCurrentPreviewAfterReload } from '../services/reload-preview-service';
 import { fetchImageAsBase64 } from '../services/azure-image-proxy-service';
 import { generatePrDescriptionForTask } from '../services/pr-description-generation-service';
 import { generateSummary } from '../services/summary-generation-service';
@@ -342,6 +373,7 @@ import { handlePromptResponse } from '../services/global-prompt-service';
 import { McpTemplateRepository } from '../database/repositories/mcp-templates';
 import { NotificationRepository } from '../database/repositories/notifications';
 import { notificationService } from '../services/notification-service';
+import { orchestrateReloadedPreview } from '../services/reload-preview-service';
 import { pathExists } from '../lib/fs';
 import type { PermissionScope } from '../../shared/permission-types';
 import { pipelineTrackingService } from '../services/pipeline-tracking-service';
@@ -356,6 +388,7 @@ import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import { runCommandService } from '../services/run-command-service';
 import { runReloadPreviewCommand } from '../services/reload-preview-service';
 import { StepService } from '../services/step-service';
+import { stopReloadPreviewActivities } from '../services/reload-preview-service';
 import { systemCalendarService } from '../services/system-calendar-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 import { TrackedPipelineRepository } from '../database/repositories/tracked-pipelines';
@@ -504,6 +537,33 @@ async function updateTaskAndEmit(
   const task = await TaskRepository.update(taskId, data);
   emitTaskUpsert(task, previousTask?.projectId);
   return task;
+}
+
+function ensureSessionRulesCanBeModified(task: Task) {
+  if (task.type === 'pr-review') {
+    throw new Error('PR review tasks are read-only and cannot allow tools');
+  }
+}
+
+async function ensureGenericStepCanBeCreated(data: NewTaskStep) {
+  const task = await TaskRepository.findById(data.taskId);
+  if (!task) throw new Error(`Task ${data.taskId} not found`);
+  if (task.type === 'pr-review') {
+    throw new Error('Use the PR review chat API to create PR review steps');
+  }
+}
+
+async function ensureGenericStepCanBeUpdated(stepId: string) {
+  const step = await TaskStepRepository.findById(stepId);
+  if (!step) throw new Error(`Step ${stepId} not found`);
+  const task = await TaskRepository.findById(step.taskId);
+  if (!task) throw new Error(`Task ${step.taskId} not found`);
+  if (task.type === 'pr-review') {
+    throw new Error('PR review chat steps cannot be updated through generic step APIs');
+  }
+  if (isPrReviewChatStepMeta(step.meta)) {
+    throw new Error('PR review chat steps cannot be updated through generic step APIs');
+  }
 }
 
 async function deleteTaskAndEmit(task: Task, stepIds?: string[]) {
@@ -740,22 +800,6 @@ function buildSkillCreationPrompt({
     ``,
     `Use the skill-creator skill for best practices.`,
   ].join('\n');
-}
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 async function activateAssociatedWorkItems(params: {
@@ -1181,7 +1225,7 @@ export function registerIpcHandlers() {
   ipcMain.handle('projects:delete', async (_, id: string) => {
     dbg.ipc('projects:delete %s', id);
     const project = await ProjectRepository.findById(id);
-    const result = await ProjectRepository.delete(id);
+    const result = await deleteProjectWithPreferenceMemoryCleanup(id);
     if (project) {
       await cleanupProjectLogos(id);
       await cleanupProjectLogoPath(project.logoPath);
@@ -1598,261 +1642,42 @@ export function registerIpcHandlers() {
     },
   );
   ipcMain.handle(
-    'tasks:createPrReview',
+    'tasks:createPrReviewTask',
     async (
-      event,
+      _,
       params: {
         projectId: string;
         pullRequestId: number;
-        agentBackend?: AgentBackendType | null;
-        modelPreference?: ModelPreference | null;
-        thinkingEffort?: ThinkingEffort | null;
       },
     ) => {
       const { projectId, pullRequestId } = params;
       dbg.ipc(
-        'tasks:createPrReview projectId=%s prId=%d',
+        'tasks:createPrReviewTask projectId=%s prId=%d',
         projectId,
         pullRequestId,
       );
 
-      // 1. Get project and PR details
-      const project = await ProjectRepository.findById(projectId);
-      if (!project) throw new Error(`Project ${projectId} not found`);
-      if (
-        !project.repoProviderId ||
-        !project.repoProjectId ||
-        !project.repoId
-      ) {
-        throw new Error('Project has no linked repository');
-      }
-
-      const pr = await getPullRequest({
-        providerId: project.repoProviderId,
-        projectId: project.repoProjectId,
-        repoId: project.repoId,
-        pullRequestId,
-      });
-
-      // 2. Extract branch names
-      const sourceBranch = pr.sourceRefName.replace('refs/heads/', '');
-
-      // 3. Generate task name
-      const rawName = `Review: ${pr.title}`;
-      const taskName =
-        rawName.length > 40 ? rawName.slice(0, 37) + '...' : rawName;
-
-      // 4. Create worktree on the PR source branch
-      const remoteSourceBranch = `origin/${sourceBranch}`;
-
-      try {
-        await execAsync(`git fetch origin "${sourceBranch}"`, {
-          cwd: project.path,
-          encoding: 'utf-8',
-        });
-      } catch (fetchError) {
-        dbg.ipc(
-          'Failed to fetch origin/%s before review worktree creation: %O',
-          sourceBranch,
-          fetchError,
-        );
-      }
-
-      let worktreeResult:
-        | {
-            worktreePath: string;
-            startCommitHash: string;
-            branchName: string;
-          }
-        | undefined;
-
-      try {
-        worktreeResult = await createWorktree(
-          project.path,
-          project.id,
-          project.name,
-          `Review PR #${pullRequestId}`,
-          taskName,
-          remoteSourceBranch,
-        );
-      } catch (remoteBranchError) {
-        dbg.ipc(
-          'Failed to create worktree from %s, retrying with local branch %s: %O',
-          remoteSourceBranch,
-          sourceBranch,
-          remoteBranchError,
-        );
-
-        worktreeResult = await createWorktree(
-          project.path,
-          project.id,
-          project.name,
-          `Review PR #${pullRequestId}`,
-          taskName,
-          sourceBranch,
-        );
-      }
-
-      const { worktreePath, startCommitHash, branchName } = worktreeResult;
-
-      // 5. Create task linked to PR
-      let task = await createTaskAndEmit({
-        projectId,
-        prompt: `Review PR #${pullRequestId}: ${pr.title}`,
-        name: taskName,
-        worktreePath,
-        startCommitHash,
-        branchName,
-        sourceBranch,
-        pullRequestId: String(pullRequestId),
-        pullRequestUrl: pr.url ?? null,
-        updatedAt: new Date().toISOString(),
-      });
-
-      // 6. Fetch work items linked to the PR (best-effort)
-      let workItemContext = '';
-      try {
-        const workItems = await getPullRequestWorkItems({
-          providerId: project.repoProviderId,
-          projectId: project.repoProjectId,
-          repoId: project.repoId,
-          pullRequestId,
-        });
-
-        if (workItems.length > 0) {
-          workItemContext = workItems
-            .map((wi) => {
-              const desc = wi.fields.description
-                ? stripHtml(wi.fields.description)
-                : '';
-              const repro = wi.fields.reproSteps
-                ? `\nRepro Steps: ${stripHtml(wi.fields.reproSteps)}`
-                : '';
-              return `- **#${wi.id} [${wi.fields.workItemType}] ${wi.fields.title}** (${wi.fields.state})${desc ? `\n  ${desc}` : ''}${repro}`;
-            })
-            .join('\n');
-
-          // Store work item IDs on the task
-          task = await updateTaskAndEmit(task.id, {
-            workItemIds: workItems.map((wi) => String(wi.id)),
-            workItemUrls: workItems.map((wi) => wi.url),
-          });
-        }
-      } catch (wiError) {
-        dbg.ipc('Failed to fetch PR work items (non-fatal): %O', wiError);
-      }
-
-      // 7. Build reviewer configs
-      const defaultBackend =
-        params.agentBackend ??
-        (project.defaultAgentBackend as AgentBackendType | null) ??
-        'claude-code';
-      const modelPreference = params.modelPreference ?? 'default';
-      const thinkingEffort = params.thinkingEffort ?? 'default';
-
-      const reviewers: ReviewerConfig[] = [
-        {
-          id: crypto.randomUUID(),
-          label: 'Bug Detection',
-          focusPrompt:
-            'Look for potential bugs, logic errors, race conditions, off-by-one errors, null/undefined issues, and unhandled edge cases in the changed code.',
-          backend: defaultBackend,
-          model: modelPreference,
-          thinkingEffort,
-        },
-        {
-          id: crypto.randomUUID(),
-          label: 'Code Quality',
-          focusPrompt:
-            'Evaluate code quality: naming, readability, DRY violations, overly complex logic, missing error handling, and adherence to project conventions.',
-          backend: defaultBackend,
-          model: modelPreference,
-          thinkingEffort,
-        },
-        {
-          id: crypto.randomUUID(),
-          label: 'Security & Performance',
-          focusPrompt:
-            'Check for security vulnerabilities (injection, XSS, auth issues, secrets exposure) and performance concerns (N+1 queries, unnecessary re-renders, memory leaks, large allocations).',
-          backend: defaultBackend,
-          model: modelPreference,
-          thinkingEffort,
-        },
-      ];
-
-      if (workItemContext) {
-        reviewers.push({
-          id: crypto.randomUUID(),
-          label: 'Requirements Alignment',
-          focusPrompt:
-            'Verify that the code changes fulfill the requirements described in the associated work items. Check for missing acceptance criteria, incomplete implementations, and deviations from the specification.',
-          backend: defaultBackend,
-          model: modelPreference,
-          thinkingEffort,
-        });
-      }
-
-      // 8. Create Step 1: Review Changes (review type with multi-reviewer)
-      const reviewMeta: ReviewStepMeta = {
-        reviewers,
-        ...(workItemContext ? { workItemContext } : {}),
-      };
-
-      const reviewStep = await StepService.create({
-        taskId: task.id,
-        name: 'Review Changes',
-        type: 'review',
-        promptTemplate: [
-          `Reviewing PR #${pullRequestId}: ${pr.title}`,
-          '',
-          'At the end of your synthesized summary, output a JSON block fenced with ```json containing an array of review comments with this shape:',
-          '`[{ "filePath": "path/to/file", "lineNumber": 42, "comment": "Your review comment" }]`',
-          '',
-          'Each comment should reference a specific file and line number from the changed files.',
-          'Only include actionable comments that warrant posting on the PR.',
-        ].join('\n'),
-        interactionMode: 'auto',
-        agentBackend: defaultBackend,
-        modelPreference,
-        thinkingEffort,
-        meta: reviewMeta,
-        sortOrder: 0,
-      });
-
-      // 9. Create Step 2: Submit Review (pr-review)
-      await StepService.create({
-        taskId: task.id,
-        name: 'Submit Review',
-        type: 'pr-review',
-        dependsOn: [reviewStep.id],
-        promptTemplate: '',
-        sortOrder: 1,
-        meta: {
-          pullRequestId,
-          projectId,
-          comments: [],
-        } as import('@shared/types').PrReviewStepMeta,
-      });
-
-      // 10. Auto-start the review step
-      const window = BrowserWindow.fromWebContents(event.sender);
-      if (window) {
-        agentService.setMainWindow(window);
-      }
-      agentService.start(reviewStep.id).catch((err) => {
-        dbg.ipc(
-          'Error auto-starting review agent for step %s: %O',
-          reviewStep.id,
-          err,
-        );
+      const { task } = await createOrGetPrReviewTask(params, {
+        findActivePrReviewTask: TaskRepository.findActivePrReviewTask,
+        findProjectById: ProjectRepository.findById,
+        getPullRequest,
+        fetchSourceBranch: fetchPrReviewSourceBranch,
+        createWorktree,
+        createTask: createTaskAndEmit,
+        updateTask: updateTaskAndEmit,
       });
 
       return task;
     },
   );
-  ipcMain.handle('tasks:update', (_, id: string, data: UpdateTask) =>
-    updateTaskAndEmit(id, data),
-  );
+  ipcMain.handle('tasks:update', async (_, id: string, data: UpdateTask) => {
+    if (data.sessionRules !== undefined) {
+      const task = await TaskRepository.findById(id);
+      if (!task) throw new Error(`Task ${id} not found`);
+      ensureSessionRulesCanBeModified(task);
+    }
+    return updateTaskAndEmit(id, data);
+  });
   ipcMain.handle(
     'tasks:updatePendingMessage',
     (_, id: string, pendingMessage: string | null) =>
@@ -2166,6 +1991,8 @@ export function registerIpcHandlers() {
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
 
       const task = await TaskRepository.findById(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      ensureSessionRulesCanBeModified(task);
       const current: PermissionScope = task?.sessionRules ?? {};
       const updated: PermissionScope = { ...current };
       updated[tool] = buildToolPermissionConfig({
@@ -2180,6 +2007,8 @@ export function registerIpcHandlers() {
     'tasks:removeSessionAllowedTool',
     async (_, taskId: string, toolName: string, pattern?: string) => {
       const task = await TaskRepository.findById(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      ensureSessionRulesCanBeModified(task);
       const current: PermissionScope = { ...(task?.sessionRules ?? {}) };
 
       if (pattern) {
@@ -2213,6 +2042,7 @@ export function registerIpcHandlers() {
     ) => {
       const task = await TaskRepository.findById(taskId);
       if (!task) throw new Error(`Task ${taskId} not found`);
+      ensureSessionRulesCanBeModified(task);
       const project = await ProjectRepository.findById(task.projectId);
       if (!project) throw new Error(`Project ${task.projectId} not found`);
 
@@ -2240,6 +2070,7 @@ export function registerIpcHandlers() {
     ) => {
       const task = await TaskRepository.findById(taskId);
       if (!task) throw new Error(`Task ${taskId} not found`);
+      ensureSessionRulesCanBeModified(task);
       const project = await ProjectRepository.findById(task.projectId);
       if (!project) throw new Error(`Project ${task.projectId} not found`);
 
@@ -2501,6 +2332,7 @@ export function registerIpcHandlers() {
       // Also add to session rules for immediate effect
       const task = await TaskRepository.findById(taskId);
       if (!task) throw new Error(`Task ${taskId} not found`);
+      ensureSessionRulesCanBeModified(task);
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
       const current: PermissionScope = { ...(task.sessionRules ?? {}) };
       current[tool] = buildToolPermissionConfig({
@@ -2844,6 +2676,7 @@ export function registerIpcHandlers() {
     'steps:create',
     async (event, data: NewTaskStep & { start?: boolean }) => {
       const { start, ...stepData } = data;
+      await ensureGenericStepCanBeCreated(stepData);
       const stepPromptOccurredAt = new Date().toISOString();
 
       // If auto-start is requested but step has dependencies, defer the start
@@ -2890,9 +2723,82 @@ export function registerIpcHandlers() {
       return step;
     },
   );
-  ipcMain.handle('steps:update', (_, stepId: string, data: UpdateTaskStep) =>
-    StepService.update(stepId, data),
+  ipcMain.handle(
+    'steps:createPrReviewChatStep',
+    async (
+      event,
+      params: Parameters<typeof createPrReviewChatStep>[0],
+    ) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (window) {
+        agentService.setMainWindow(window);
+      }
+
+      return createPrReviewChatStep(params, {
+        findTaskById: TaskRepository.findById,
+        findProjectById: ProjectRepository.findById,
+        getPullRequest,
+        getPrReviewAgentSetting: () => SettingsRepository.get('prReviewAgent'),
+        getBackendsSetting: () => SettingsRepository.get('backends'),
+        createStep: StepService.create,
+        startAgent: (stepId) => agentService.start(stepId),
+        onStartError: (step, error) => {
+          dbg.ipc('Error starting PR review chat step %s: %O', step.id, error);
+          StepService.errorStep(step.id).catch((stepErr) => {
+            dbg.ipc(
+              'Error marking failed PR review chat step %s: %O',
+              step.id,
+              stepErr,
+            );
+          });
+        },
+      });
+    },
   );
+  ipcMain.handle(
+    'steps:continuePrReviewChatStep',
+    async (
+      event,
+      params: Parameters<typeof continuePrReviewChatStep>[0],
+    ) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (window) {
+        agentService.setMainWindow(window);
+      }
+
+      return continuePrReviewChatStep(params, {
+        findStepById: TaskStepRepository.findById,
+        findTaskById: TaskRepository.findById,
+        markStepRunning: async (stepId) => {
+          const step = await StepService.update(stepId, { status: 'running' });
+          await StepService.syncTaskStatus(step.taskId);
+          return step;
+        },
+        continueAgent: async (stepId, prompt) => {
+          void workActivityService.recordTaskPrompt({
+            stepId,
+            prompt,
+            occurredAt: new Date().toISOString(),
+          });
+          await agentService.sendMessage(stepId, textPrompt(prompt));
+        },
+        onContinueError: (step, error) => {
+          dbg.ipc('Error continuing PR review chat step %s: %O', step.id, error);
+          StepService.errorStep(step.id).catch((stepErr) => {
+            dbg.ipc(
+              'Error marking failed PR review chat step %s: %O',
+              step.id,
+              stepErr,
+            );
+          });
+        },
+      });
+    },
+  );
+  ipcMain.handle('steps:update', async (_, stepId: string, data: UpdateTaskStep) => {
+    await ensureGenericStepCanBeUpdated(stepId);
+    return StepService.update(stepId, data);
+  });
 
   ipcMain.handle('steps:resolvePrompt', (_, stepId: string) =>
     StepService.resolveAndValidate(stepId),
@@ -2963,9 +2869,22 @@ export function registerIpcHandlers() {
           excludeWorkItemTypes?: string[];
           searchText?: string;
           iterationPath?: string;
+          iterationPaths?: string[];
+          assignedTo?: string;
         };
       },
     ) => queryWorkItems(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:queryWorkItemOwners',
+    (
+      _,
+      params: {
+        providerId: string;
+        projectName: string;
+      },
+    ) => queryWorkItemOwners(params),
   );
 
   ipcMain.handle(
@@ -2974,6 +2893,22 @@ export function registerIpcHandlers() {
       const { getWorkItemById } =
         await import('../services/azure-devops-service');
       return getWorkItemById(params);
+    },
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getWorkItemsByIds',
+    async (
+      _event,
+      params: {
+        providerId: string;
+        projectName: string;
+        workItemIds: number[];
+      },
+    ) => {
+      const { getWorkItemsByIds } =
+        await import('../services/azure-devops-service');
+      return getWorkItemsByIds(params);
     },
   );
 
@@ -3019,6 +2954,22 @@ export function registerIpcHandlers() {
       return getWorkItemStates(params);
     },
   );
+  ipcMain.handle(
+    'azureDevOps:updateWorkItemField',
+    async (
+      _event,
+      params: {
+        providerId: string;
+        workItemId: number;
+        field: string;
+        value: string | number | null;
+      },
+    ) => {
+      const { updateWorkItemField } =
+        await import('../services/azure-devops-service');
+      return updateWorkItemField(params);
+    },
+  );
 
   ipcMain.handle(
     'azureDevOps:getBoardColumns',
@@ -3026,6 +2977,26 @@ export function registerIpcHandlers() {
       _,
       params: { providerId: string; projectId: string; projectName: string },
     ) => getBoardColumns(params),
+  );
+
+  ipcMain.handle(
+    'azureDevOps:updateWorkItemBoardColumn',
+    async (
+      _event,
+      params: {
+        providerId: string;
+        projectId: string;
+        projectName: string;
+        workItemId: number;
+        column: string;
+        teamId: string;
+        boardId: string;
+      },
+    ) => {
+      const { updateWorkItemBoardColumn } =
+        await import('../services/azure-devops-service');
+      return updateWorkItemBoardColumn(params);
+    },
   );
 
   ipcMain.handle(
@@ -3132,7 +3103,7 @@ export function registerIpcHandlers() {
 
   ipcMain.handle(
     'azureDevOps:getPullRequest',
-    (
+    async (
       _,
       params: {
         providerId: string;
@@ -3140,7 +3111,29 @@ export function registerIpcHandlers() {
         repoId: string;
         pullRequestId: number;
       },
-    ) => getPullRequest(params),
+    ) => {
+      const pullRequest = await getPullRequest(params);
+      if (pullRequest.status === 'completed') {
+        const projects = await ProjectRepository.findAll();
+        await Promise.all(
+          projects
+            .filter(
+              (project) =>
+                project.repoProviderId === params.providerId &&
+                project.repoProjectId === params.projectId &&
+                project.repoId === params.repoId,
+            )
+            .map((project) =>
+              completePrReviewTasksForMergedPr({
+                projectId: project.id,
+                pullRequestId: params.pullRequestId,
+              }),
+            ),
+        );
+      }
+
+      return pullRequest;
+    },
   );
 
   ipcMain.handle(
@@ -4016,6 +4009,11 @@ export function registerIpcHandlers() {
     return agentService.stop(stepId);
   });
 
+  ipcMain.handle(AGENT_CHANNELS.STOP_ALL, () => {
+    dbg.ipc('agent:stopAll');
+    return agentService.stopAll({ reason: 'user' });
+  });
+
   ipcMain.handle(
     AGENT_CHANNELS.RESPOND,
     (
@@ -4484,6 +4482,13 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle(
+    'agent:resources:setHighFrequencySampling',
+    (event, enabled: boolean) => {
+      agentResourceSamplingLeaseService.setSampling(event.sender, enabled);
+    },
+  );
+
+  ipcMain.handle(
     'rate-limit-swap:resolve',
     async (_, backend: AgentBackendType) => {
       const { rateLimitSwapService } =
@@ -4605,6 +4610,9 @@ export function registerIpcHandlers() {
     'project:commands:run:stopCommand',
     (_, params: { taskId: string; runCommandId: string }) =>
       runCommandService.stopCommand(params),
+  );
+  ipcMain.handle('project:commands:run:stopAll', () =>
+    runCommandService.stopAllCommands(),
   );
   ipcMain.handle(
     'project:commands:run:sendInput',
@@ -4935,6 +4943,39 @@ export function registerIpcHandlers() {
       dbg.ipc('unifiedMcp:substituteVariables template=%s', commandTemplate);
       return substituteVariables(commandTemplate, userVariables, context);
     },
+  );
+
+  // Global MCP Lifecycle
+  ipcMain.handle('globalMcp:findAll', () => getAllGlobalMcpServers());
+  ipcMain.handle('globalMcp:findById', (_, id: string) =>
+    getGlobalMcpServer(id),
+  );
+  ipcMain.handle('globalMcp:create', (_, data: NewGlobalMcpServer) =>
+    createGlobalMcpServer(data),
+  );
+  ipcMain.handle(
+    'globalMcp:update',
+    (_, id: string, data: UpdateGlobalMcpServer) =>
+      updateGlobalMcpServer(id, data),
+  );
+  ipcMain.handle(
+    'globalMcp:enable',
+    (_, id: string, backends: AgentBackendType[]) =>
+      enableGlobalMcpServer(id, backends),
+  );
+  ipcMain.handle(
+    'globalMcp:disable',
+    (_, id: string, backends: AgentBackendType[]) =>
+      disableGlobalMcpServer(id, backends),
+  );
+  ipcMain.handle('globalMcp:uninstall', (_, id: string) =>
+    uninstallGlobalMcpServer(id),
+  );
+  ipcMain.handle('globalMcp:discover', () => discoverUnmanagedMcpEntries());
+  ipcMain.handle(
+    'globalMcp:import',
+    (_, entry: DiscoveredMcpVariant, backends: AgentBackendType[]) =>
+      importMcpEntry(entry, backends),
   );
 
   // Claude Projects Cleanup
@@ -6140,13 +6181,19 @@ export function registerIpcHandlers() {
     };
 
     try {
-      dbg.ipc('app:reloadPreview — stopping all running commands');
+      dbg.ipc(
+        'app:reloadPreview — stopping active agents and running commands',
+      );
       sendReloadProgress({
         step: 'stopping-commands',
-        label: 'Stopping running commands',
-        detail: 'Waiting for project commands to stop',
+        label: 'Stopping agents and commands',
+        detail: 'Waiting for active sessions and project commands to stop',
       });
-      await runCommandService.stopAllCommands();
+      await stopReloadPreviewActivities({
+        stopAgents: (options) => agentService.stopAll(options),
+        stopCommands: () => runCommandService.stopAllCommands(),
+      });
+      dbg.ipc('app:reloadPreview — active agents and commands stopped');
 
       dbg.ipc('app:reloadPreview — running git pull in %s', projectRoot);
       sendReloadProgress({
@@ -6188,6 +6235,7 @@ export function registerIpcHandlers() {
         cwd: projectRoot,
         label: 'pnpm install',
         timeoutMs: PREVIEW_RELOAD_INSTALL_TIMEOUT_MS,
+        envOverrides: { CI: 'true' },
         onStdout: (data) => {
           dbg.ipc(
             'app:reloadPreview pnpm install stdout: %s',
@@ -6238,23 +6286,30 @@ export function registerIpcHandlers() {
         label: 'Launching preview',
         detail: 'pnpm preview:skip-build',
       });
-      app.releaseSingleInstanceLock();
-      const child = spawn('pnpm preview:skip-build', [], {
+      await orchestrateReloadedPreview({
         cwd: projectRoot,
-        detached: true,
-        stdio: 'ignore',
-        shell: true,
+        timeoutMs: 30_000,
+        releaseSingleInstanceLock: () => app.releaseSingleInstanceLock(),
+        reacquireSingleInstanceLock: () => app.requestSingleInstanceLock(),
+        exitCurrentApp: () => {
+          exitCurrentPreviewAfterReload({
+            notifyRestarting: () => {
+              sendReloadProgress({
+                step: 'restarting',
+                label: 'Restarting app',
+                detail: 'New preview is ready',
+              });
+            },
+            onNotificationError: (error) => {
+              dbg.ipc(
+                'app:reloadPreview — failed to send restarting progress: %s',
+                error instanceof Error ? error.message : String(error),
+              );
+            },
+            exitCurrentApp: () => app.exit(0),
+          });
+        },
       });
-      child.unref();
-
-      sendReloadProgress({
-        step: 'restarting',
-        label: 'Restarting app',
-        detail: 'New preview is starting',
-      });
-      setTimeout(() => {
-        app.exit(0);
-      }, 500);
     } catch (error) {
       previewReloadInProgress = false;
       throw error;

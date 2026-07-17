@@ -1,20 +1,36 @@
-import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 import { Film, Loader2, Pause, Play, X } from 'lucide-react';
-import { type PointerEvent, startTransition, useEffect, useRef, useState } from 'react';
+import {
+  type PointerEvent,
+  startTransition,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+import FocusLock from 'react-focus-lock';
 
 import { Button } from '@/common/ui/button';
+import { createGifEncoderWorkerClient } from '@/features/common/ui-video-gif-converter/gif-encoder-worker-client';
 import { formatBytes } from '@/lib/format-bytes';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
-const MAX_VIDEO_SIZE = 80 * 1024 * 1024;
+export const MAX_VIDEO_SIZE = 80 * 1024 * 1024;
 const DEFAULT_FPS = 24;
 const DEFAULT_SCALE = 0.5;
 const DEFAULT_QUALITY = 128;
 const DEFAULT_SPEED = 1;
 const SEEK_TIMEOUT_MS = 8_000;
-const GIF_BUDGET_BYTES = 10 * 1024 * 1024;
+const MAX_FRAME_COUNT = 360;
+const MAX_OUTPUT_DIMENSION = 1280;
+const MAX_PIXELS_PER_FRAME = 1_000_000;
+const MAX_TOTAL_PROCESSED_PIXELS = 150_000_000;
 const DEFAULT_FILMSTRIP_FRAME_COUNT = 12;
 const FILMSTRIP_HEIGHT_PX = 64;
+export const MAX_FILMSTRIP_FRAME_COUNT = 24;
+export const MAX_FILMSTRIP_CANVAS_WIDTH = 512;
+export const MAX_FILMSTRIP_CANVAS_HEIGHT = 128;
+export const MAX_FILMSTRIP_CANVAS_PIXELS = 65_536;
 const FPS_OPTIONS = [8, 12, 15, 24];
 const SPEED_OPTIONS = [0.5, 1, 1.5, 2];
 const SCALE_OPTIONS = [
@@ -23,13 +39,52 @@ const SCALE_OPTIONS = [
   { label: '75%', value: 0.75 },
   { label: 'Full', value: 1 },
 ];
+const fileInstanceIds = new WeakMap<File, number>();
+let nextFileInstanceId = 1;
 
-function readFileAsDataUrl(file: File) {
+function getFileInstanceId(file: File) {
+  const existingId = fileInstanceIds.get(file);
+  if (existingId) return existingId;
+  const id = nextFileInstanceId;
+  nextFileInstanceId += 1;
+  fileInstanceIds.set(file, id);
+  return id;
+}
+
+function abortReason(signal: AbortSignal) {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('Conversion cancelled', 'AbortError');
+}
+
+function readFileAsDataUrl(file: File, signal: AbortSignal) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () =>
+    const cleanup = () => {
+      signal.removeEventListener('abort', onAbort);
+      reader.onload = null;
+      reader.onerror = null;
+      reader.onabort = null;
+    };
+    const onAbort = () => {
+      reader.abort();
+      cleanup();
+      reject(abortReason(signal));
+    };
+    reader.onload = () => {
+      cleanup();
+      resolve(String(reader.result));
+    };
+    reader.onerror = () => {
+      cleanup();
       reject(reader.error ?? new Error('Failed to read video'));
+    };
+    reader.onabort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    signal.throwIfAborted();
+    signal.addEventListener('abort', onAbort, { once: true });
     reader.readAsDataURL(file);
   });
 }
@@ -48,30 +103,56 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+export function getFilmstripLayout({
+  timelineWidth,
+  sourceWidth,
+  sourceHeight,
+}: {
+  timelineWidth: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}) {
+  const aspectRatio =
+    sourceWidth > 0 && sourceHeight > 0 && Number.isFinite(sourceWidth / sourceHeight)
+      ? sourceWidth / sourceHeight
+      : 16 / 9;
+  const requestedFrameCount = timelineWidth
+    ? Math.round(timelineWidth / Math.max(1, FILMSTRIP_HEIGHT_PX * aspectRatio))
+    : DEFAULT_FILMSTRIP_FRAME_COUNT;
+  const frameCount = clamp(requestedFrameCount, 3, MAX_FILMSTRIP_FRAME_COUNT);
+
+  let canvasWidth = clamp(
+    Math.round(MAX_FILMSTRIP_CANVAS_HEIGHT * aspectRatio),
+    1,
+    MAX_FILMSTRIP_CANVAS_WIDTH,
+  );
+  let canvasHeight = clamp(
+    Math.round(canvasWidth / aspectRatio),
+    1,
+    MAX_FILMSTRIP_CANVAS_HEIGHT,
+  );
+  if (canvasWidth * canvasHeight > MAX_FILMSTRIP_CANVAS_PIXELS) {
+    const scale = Math.sqrt(
+      MAX_FILMSTRIP_CANVAS_PIXELS / (canvasWidth * canvasHeight),
+    );
+    canvasWidth = Math.max(1, Math.floor(canvasWidth * scale));
+    canvasHeight = Math.max(1, Math.floor(canvasHeight * scale));
+  }
+
+  return { frameCount, canvasWidth, canvasHeight };
+}
+
+export function getVideoSizeError(file: File): string | null {
+  return file.size > MAX_VIDEO_SIZE
+    ? `Video is ${formatBytes(file.size)}. Choose a clip under 80 MB before creating a GIF.`
+    : null;
+}
+
 function formatSeconds(value: number) {
   const minutes = Math.floor(value / 60);
   const seconds = Math.floor(value % 60);
   const tenths = Math.floor((value % 1) * 10);
   return `${minutes}:${seconds.toString().padStart(2, '0')}.${tenths}`;
-}
-
-function estimateGifSize({
-  width,
-  height,
-  frames,
-  colors,
-}: {
-  width: number;
-  height: number;
-  frames: number;
-  colors: number;
-}) {
-  const indexedPixels = width * height * frames;
-  const paletteBytes = colors * 3 * frames;
-  const compressionFactor = 0.2 + (colors / 256) * 0.45;
-  const low = indexedPixels * compressionFactor * 0.6 + paletteBytes;
-  const high = indexedPixels * compressionFactor * 1.4 + paletteBytes;
-  return `${formatBytes(low)}-${formatBytes(high)}`;
 }
 
 function estimateGifSizeBytes({
@@ -88,7 +169,35 @@ function estimateGifSizeBytes({
   const indexedPixels = width * height * frames;
   const paletteBytes = colors * 3 * frames;
   const compressionFactor = 0.2 + (colors / 256) * 0.45;
-  return indexedPixels * compressionFactor + paletteBytes;
+  return {
+    low: indexedPixels * compressionFactor * 0.6 + paletteBytes,
+    high: indexedPixels * compressionFactor * 1.4 + paletteBytes,
+  };
+}
+
+export function getGifConversionLimitError({
+  width,
+  height,
+  frames,
+}: {
+  width: number;
+  height: number;
+  frames: number;
+}) {
+  const pixelsPerFrame = width * height;
+  if (frames > MAX_FRAME_COUNT) {
+    return `Too many frames (${frames}). Trim the clip, lower FPS, or increase speed to stay at ${MAX_FRAME_COUNT} frames or fewer.`;
+  }
+  if (width > MAX_OUTPUT_DIMENSION || height > MAX_OUTPUT_DIMENSION) {
+    return `Output dimensions are too large (${width}x${height}). Lower scale so each side is ${MAX_OUTPUT_DIMENSION}px or less.`;
+  }
+  if (pixelsPerFrame > MAX_PIXELS_PER_FRAME) {
+    return `Each frame is too large (${pixelsPerFrame.toLocaleString()} pixels). Lower scale to stay at 1 million pixels per frame or fewer.`;
+  }
+  if (pixelsPerFrame * frames > MAX_TOTAL_PROCESSED_PIXELS) {
+    return 'Conversion requires too much pixel processing. Trim the clip, lower FPS, or lower scale.';
+  }
+  return null;
 }
 
 function drawVideoFrameContain({
@@ -124,11 +233,59 @@ function drawVideoFrameContain({
   );
 }
 
-async function seekVideo(video: HTMLVideoElement, time: number) {
+async function yieldToRenderer(signal: AbortSignal) {
+  signal.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, 0);
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function waitForVideoMetadata(
+  video: HTMLVideoElement,
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
+  if (video.readyState >= 1) return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener('loadedmetadata', onLoadedMetadata);
+      video.removeEventListener('error', onError);
+      signal.removeEventListener('abort', onAbort);
+    };
+    const onLoadedMetadata = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error('Failed to load video'));
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+    video.addEventListener('error', onError, { once: true });
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function seekVideo(
+  video: HTMLVideoElement,
+  time: number,
+  signal: AbortSignal,
+) {
+  signal.throwIfAborted();
   if (Math.abs(video.currentTime - time) < 0.01 && video.readyState >= 2) {
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => resolve()),
-    );
+    await yieldToRenderer(signal);
     return;
   }
 
@@ -141,6 +298,7 @@ async function seekVideo(video: HTMLVideoElement, time: number) {
       window.clearTimeout(timeout);
       video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('error', onError);
+      signal.removeEventListener('abort', onAbort);
     };
     const onSeeked = () => {
       cleanup();
@@ -150,13 +308,18 @@ async function seekVideo(video: HTMLVideoElement, time: number) {
       cleanup();
       reject(new Error('Failed to seek video'));
     };
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
     video.addEventListener('seeked', onSeeked, { once: true });
     video.addEventListener('error', onError, { once: true });
+    signal.addEventListener('abort', onAbort, { once: true });
     video.currentTime = time;
   });
 }
 
-async function convertVideoToGif({
+export async function convertVideoToGif({
   file,
   fps,
   outputWidth,
@@ -166,6 +329,7 @@ async function convertVideoToGif({
   startTime,
   endTime,
   onProgress,
+  signal,
 }: {
   file: File;
   fps: number;
@@ -176,10 +340,22 @@ async function convertVideoToGif({
   startTime: number;
   endTime: number;
   onProgress: (progress: number) => void;
+  signal: AbortSignal;
 }): Promise<PromptImagePart> {
+  signal.throwIfAborted();
   if (file.size > MAX_VIDEO_SIZE) {
     throw new Error('Video too large. Use a clip under 80 MB.');
   }
+  const plannedFrameCount = Math.max(
+    1,
+    Math.ceil((Math.max(0.1, endTime - startTime) * fps) / speed),
+  );
+  const plannedLimitError = getGifConversionLimitError({
+    width: Math.max(1, Math.round(outputWidth)),
+    height: Math.max(1, Math.round(outputHeight)),
+    frames: plannedFrameCount,
+  });
+  if (plannedLimitError) throw new Error(plannedLimitError);
 
   const sourceUrl = URL.createObjectURL(file);
   const video = document.createElement('video');
@@ -189,10 +365,7 @@ async function convertVideoToGif({
   video.src = sourceUrl;
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () => resolve();
-      video.onerror = () => reject(new Error('Failed to load video'));
-    });
+    await waitForVideoMetadata(video, signal);
 
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
     const safeStart = Math.max(0, Math.min(startTime, duration));
@@ -203,6 +376,12 @@ async function convertVideoToGif({
       1,
       Math.ceil(((safeEnd - safeStart) * fps) / speed),
     );
+    const limitError = getGifConversionLimitError({
+      width,
+      height,
+      frames: frameCount,
+    });
+    if (limitError) throw new Error(limitError);
     const delay = Math.round(1000 / fps);
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -210,38 +389,57 @@ async function convertVideoToGif({
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) throw new Error('Failed to create canvas');
 
-    const gif = GIFEncoder();
-    for (let index = 0; index < frameCount; index += 1) {
-      const time = Math.min(safeEnd, safeStart + (index * speed) / fps);
-      await seekVideo(video, time);
-      context.drawImage(video, 0, 0, width, height);
-      const pixels = context.getImageData(0, 0, width, height).data;
-      const palette = quantize(pixels, colors);
-      const indexed = applyPalette(pixels, palette);
-      gif.writeFrame(indexed, width, height, { palette, delay });
-      onProgress((index + 1) / frameCount);
+    const workerClient = createGifEncoderWorkerClient(signal);
+    let gifBuffer: ArrayBuffer;
+    try {
+      await workerClient.initialize({
+        width,
+        height,
+        colors,
+        delay,
+      });
+      for (let index = 0; index < frameCount; index += 1) {
+        const time = Math.min(safeEnd, safeStart + (index * speed) / fps);
+        await seekVideo(video, time, signal);
+        await yieldToRenderer(signal);
+        context.drawImage(video, 0, 0, width, height);
+        const pixels = context.getImageData(0, 0, width, height).data;
+        signal.throwIfAborted();
+        const rgba =
+          pixels.buffer instanceof ArrayBuffer &&
+          pixels.byteOffset === 0 &&
+          pixels.byteLength === pixels.buffer.byteLength
+            ? pixels.buffer
+            : pixels.slice().buffer;
+        await workerClient.encodeFrame(index, rgba);
+        onProgress((index + 1) / frameCount);
+      }
+      gifBuffer = (await workerClient.finish()).bytes;
+    } finally {
+      workerClient.terminate();
     }
-    gif.finish();
 
-    const gifBytes = gif.bytesView();
-    const gifBuffer = new ArrayBuffer(gifBytes.byteLength);
-    new Uint8Array(gifBuffer).set(gifBytes);
     const blob = new Blob([gifBuffer], { type: 'image/gif' });
     const dataUrl = await readFileAsDataUrl(
       new File([blob], gifFileName(file.name), { type: 'image/gif' }),
+      signal,
     );
+    signal.throwIfAborted();
+    const base64Data = dataUrlToBase64(dataUrl);
     return {
       type: 'image',
-      data: dataUrlToBase64(dataUrl),
+      data: base64Data,
       mimeType: 'image/gif',
       filename: gifFileName(file.name),
-      sizeBytes: gifBytes.byteLength,
+      sizeBytes: gifBuffer.byteLength,
       width,
       height,
-      storageData: dataUrlToBase64(dataUrl),
+      storageData: base64Data,
       storageMimeType: 'image/gif',
     };
   } finally {
+    video.removeAttribute('src');
+    video.load();
     URL.revokeObjectURL(sourceUrl);
   }
 }
@@ -260,8 +458,72 @@ export function VideoGifConverter({
   onAttach: (image: PromptImagePart) => void;
   onClose: () => void;
 }) {
+  if (!file) return null;
+  const sizeError = getVideoSizeError(file);
+  if (sizeError) {
+    return <VideoSizeErrorDialog error={sizeError} onClose={onClose} />;
+  }
+  return (
+    <VideoGifConverterDialog
+      key={getFileInstanceId(file)}
+      file={file}
+      onAttach={onAttach}
+      onClose={onClose}
+    />
+  );
+}
+
+function VideoSizeErrorDialog({
+  error,
+  onClose,
+}: {
+  error: string;
+  onClose: () => void;
+}) {
+  const titleId = useId();
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+      <FocusLock returnFocus>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          className="border-glass-border bg-bg-1 w-full max-w-md rounded-xl border p-5 shadow-2xl"
+        >
+          <h2 id={titleId} className="text-ink-0 text-sm font-semibold">
+            Video cannot be converted
+          </h2>
+          <p className="mt-2 text-sm text-red-400" role="alert">
+            {error}
+          </p>
+          <div className="mt-5 flex justify-end">
+            <Button type="button" variant="primary" size="sm" onClick={onClose}>
+              Choose another video
+            </Button>
+          </div>
+        </div>
+      </FocusLock>
+    </div>
+  );
+}
+
+function VideoGifConverterDialog({
+  file,
+  onAttach,
+  onClose,
+}: {
+  file: File;
+  onAttach: (image: PromptImagePart) => void;
+  onClose: () => void;
+}) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
+  const currentFileRef = useRef<File | null>(file);
+  const conversionRef = useRef<{
+    controller: AbortController;
+    file: File;
+  } | null>(null);
+  const filmstripGenerationRef = useRef<AbortController | null>(null);
   const isPreviewPlayingRef = useRef(false);
   const isScrubbingPlayheadRef = useRef(false);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
@@ -280,35 +542,39 @@ export function VideoGifConverter({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [filmstripFrames, setFilmstripFrames] = useState<string[]>([]);
   const [timelineWidth, setTimelineWidth] = useState(0);
+  const titleId = useId();
 
   useEffect(() => {
-    if (!file) {
-      startTransition(() => setPreviewUrl(null));
-      return;
-    }
-
     const nextPreviewUrl = URL.createObjectURL(file);
     startTransition(() => setPreviewUrl(nextPreviewUrl));
+    return () => URL.revokeObjectURL(nextPreviewUrl);
+  }, [file]);
+
+  useLayoutEffect(() => {
+    currentFileRef.current = file;
     return () => {
-      URL.revokeObjectURL(nextPreviewUrl);
+      currentFileRef.current = null;
+      conversionRef.current?.controller.abort();
+      conversionRef.current = null;
+      filmstripGenerationRef.current?.abort();
+      filmstripGenerationRef.current = null;
     };
   }, [file]);
 
   useEffect(() => {
-    startTransition(() => setDuration(0));
-    startTransition(() => setSourceSize({ width: 0, height: 0 }));
-    startTransition(() => setStartTime(0));
-    startTransition(() => setEndTime(6));
-    startTransition(() => setScale(DEFAULT_SCALE));
-    startTransition(() => setColors(DEFAULT_QUALITY));
-    startTransition(() => setSpeed(DEFAULT_SPEED));
-    startTransition(() => setProgress(0));
-    startTransition(() => setError(null));
-    startTransition(() => setFilmstripFrames([]));
-    startTransition(() => setIsPreviewPlaying(false));
-    startTransition(() => setPreviewTime(0));
-    isPreviewPlayingRef.current = false;
-  }, [file]);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      conversionRef.current?.controller.abort();
+      conversionRef.current = null;
+      filmstripGenerationRef.current?.abort();
+      startTransition(() => setFilmstripFrames([]));
+      onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [onClose]);
 
   useEffect(() => {
     const element = timelineRef.current;
@@ -320,16 +586,12 @@ export function VideoGifConverter({
     return () => observer.disconnect();
   }, [previewUrl]);
 
-  const sourceAspectRatio =
-    sourceSize.width > 0 && sourceSize.height > 0
-      ? sourceSize.width / sourceSize.height
-      : 16 / 9;
-  const filmstripFrameCount = Math.max(
-    3,
-    timelineWidth
-      ? Math.round(timelineWidth / (FILMSTRIP_HEIGHT_PX * sourceAspectRatio))
-      : DEFAULT_FILMSTRIP_FRAME_COUNT,
-  );
+  const filmstripLayout = getFilmstripLayout({
+    timelineWidth,
+    sourceWidth: sourceSize.width,
+    sourceHeight: sourceSize.height,
+  });
+  const filmstripFrameCount = filmstripLayout.frameCount;
 
   useEffect(() => {
     if (!previewUrl || !duration) {
@@ -337,30 +599,38 @@ export function VideoGifConverter({
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
+    filmstripGenerationRef.current?.abort();
+    filmstripGenerationRef.current = controller;
+    const { signal } = controller;
     const video = document.createElement('video');
     const canvas = document.createElement('canvas');
-    canvas.width = Math.round(FILMSTRIP_HEIGHT_PX * sourceAspectRatio * 2);
-    canvas.height = FILMSTRIP_HEIGHT_PX * 2;
+    canvas.width = filmstripLayout.canvasWidth;
+    canvas.height = filmstripLayout.canvasHeight;
     const context = canvas.getContext('2d');
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
     video.src = previewUrl;
+    const releaseVideo = () => {
+      video.removeAttribute('src');
+      video.load();
+    };
+    signal.addEventListener('abort', releaseVideo, { once: true });
 
     const generateFrames = async () => {
       try {
-        await new Promise<void>((resolve, reject) => {
-          video.onloadedmetadata = () => resolve();
-          video.onerror = () => reject(new Error('Failed to load video'));
-        });
-        if (!context || cancelled) return;
+        await waitForVideoMetadata(video, signal);
+        if (!context || signal.aborted) return;
         const nextFrames: string[] = [];
         const lastFrameIndex = filmstripFrameCount - 1;
         for (let index = 0; index < filmstripFrameCount; index += 1) {
           const time = duration * (index / lastFrameIndex);
-          await seekVideo(video, Math.min(time, Math.max(0, duration - 0.05)));
-          if (cancelled) return;
+          await seekVideo(
+            video,
+            Math.min(time, Math.max(0, duration - 0.05)),
+            signal,
+          );
           drawVideoFrameContain({
             context,
             video,
@@ -369,21 +639,30 @@ export function VideoGifConverter({
           });
           nextFrames.push(canvas.toDataURL('image/jpeg', 0.55));
         }
-        if (!cancelled) setFilmstripFrames(nextFrames);
+        if (!signal.aborted) setFilmstripFrames(nextFrames);
       } catch {
-        if (!cancelled) setFilmstripFrames([]);
+        if (!signal.aborted) setFilmstripFrames([]);
       }
     };
 
     void generateFrames();
     return () => {
-      cancelled = true;
-      video.removeAttribute('src');
-      video.load();
+      controller.abort();
+      if (filmstripGenerationRef.current === controller) {
+        filmstripGenerationRef.current = null;
+      }
+      signal.removeEventListener('abort', releaseVideo);
+      releaseVideo();
     };
-  }, [duration, filmstripFrameCount, previewUrl, sourceAspectRatio]);
+  }, [
+    duration,
+    filmstripFrameCount,
+    filmstripLayout.canvasHeight,
+    filmstripLayout.canvasWidth,
+    previewUrl,
+  ]);
 
-  if (!file || !previewUrl) return null;
+  if (!previewUrl) return null;
 
   const handleMetadata = () => {
     const video = videoRef.current;
@@ -402,23 +681,21 @@ export function VideoGifConverter({
   const estimatedFrames = Math.ceil((clipSeconds * fps) / speed);
   const outputWidth = Math.max(1, Math.round(sourceSize.width * scale));
   const outputHeight = Math.max(1, Math.round(sourceSize.height * scale));
-  const estimatedSize = estimateGifSize({
+  const estimatedSize = estimateGifSizeBytes({
     width: outputWidth,
     height: outputHeight,
     frames: estimatedFrames,
     colors,
   });
-  const estimatedBytes = estimateGifSizeBytes({
+  const conversionLimitError = getGifConversionLimitError({
     width: outputWidth,
     height: outputHeight,
     frames: estimatedFrames,
-    colors,
   });
-  const budgetPercent = Math.min(
-    100,
-    (estimatedBytes / GIF_BUDGET_BYTES) * 100,
-  );
-  const isOverBudget = estimatedBytes > GIF_BUDGET_BYTES;
+  const conversionBlockReason =
+    duration > 0 && sourceSize.width > 0 && sourceSize.height > 0
+      ? conversionLimitError
+      : 'Loading video metadata...';
   const startPercent = duration ? (startTime / duration) * 100 : 0;
   const endPercent = duration ? (endTime / duration) * 100 : 100;
   const visualStartPercent = startTime <= 0.05 ? 0 : startPercent;
@@ -533,6 +810,10 @@ export function VideoGifConverter({
   };
 
   const handleConvert = async () => {
+    if (conversionBlockReason) return;
+    conversionRef.current?.controller.abort();
+    const conversion = { controller: new AbortController(), file };
+    conversionRef.current = conversion;
     setIsConverting(true);
     setError(null);
     setProgress(0);
@@ -546,39 +827,74 @@ export function VideoGifConverter({
         speed,
         startTime,
         endTime,
-        onProgress: setProgress,
+        signal: conversion.controller.signal,
+        onProgress: (nextProgress) => {
+          if (conversionRef.current === conversion) setProgress(nextProgress);
+        },
       });
+      if (
+        conversionRef.current !== conversion ||
+        conversion.controller.signal.aborted ||
+        currentFileRef.current !== conversion.file
+      ) {
+        return;
+      }
       onAttach(image);
       onClose();
     } catch (convertError) {
+      if (
+        conversionRef.current !== conversion ||
+        conversion.controller.signal.aborted ||
+        currentFileRef.current !== conversion.file
+      ) {
+        return;
+      }
       setError(
         convertError instanceof Error
           ? convertError.message
           : 'Failed to convert video',
       );
     } finally {
-      setIsConverting(false);
+      if (conversionRef.current === conversion) {
+        conversionRef.current = null;
+        setIsConverting(false);
+      }
     }
+  };
+
+  const handleClose = () => {
+    conversionRef.current?.controller.abort();
+    conversionRef.current = null;
+    filmstripGenerationRef.current?.abort();
+    filmstripGenerationRef.current = null;
+    setFilmstripFrames([]);
+    onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-[radial-gradient(ellipse_at_18%_0%,rgba(143,92,255,0.22),transparent_34%),radial-gradient(ellipse_at_86%_100%,rgba(57,132,255,0.14),transparent_38%),rgba(7,6,12,0.92)] p-4">
-      <div className="border-glass-border bg-bg-1 flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border shadow-[0_40px_100px_-30px_rgba(0,0,0,0.85)]">
+      <FocusLock returnFocus>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          className="border-glass-border bg-bg-1 flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border shadow-[0_40px_100px_-30px_rgba(0,0,0,0.85)]"
+        >
         <div className="border-glass-border bg-bg-0 flex h-14 shrink-0 items-center gap-3 border-b px-4">
           <div className="bg-acc/15 text-acc flex h-8 w-8 items-center justify-center rounded-lg ring-1 ring-white/10">
             <Film className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-ink-0 text-sm font-semibold">
+            <h2 id={titleId} className="text-ink-0 text-sm font-semibold">
               New GIF from recording
-            </div>
+            </h2>
             <div className="text-ink-3 truncate text-xs">{file.name}</div>
           </div>
           <button
             type="button"
+            autoFocus
             className="text-ink-3 hover:text-ink-1 ml-auto rounded-md p-1.5 transition-colors hover:bg-white/5"
-            onClick={onClose}
-            disabled={isConverting}
+            onClick={handleClose}
             aria-label="Close GIF converter"
           >
             <X className="h-4 w-4" />
@@ -874,24 +1190,11 @@ export function VideoGifConverter({
 
             <div className="pt-4">
               <div className="mb-2 flex items-baseline gap-2">
-                <span
-                  className={
-                    isOverBudget
-                      ? 'font-mono text-xl font-semibold text-red-400'
-                      : 'font-mono text-xl font-semibold text-emerald-400'
-                  }
-                >
-                  {formatBytes(estimatedBytes)}
+                <span className="font-mono text-xl font-semibold text-emerald-400">
+                  {formatBytes(estimatedSize.low)}-
+                  {formatBytes(estimatedSize.high)}
                 </span>
-                <span className="text-ink-3 text-xs">est. · 10 MB limit</span>
-              </div>
-              <div className="bg-bg-0 h-2 overflow-hidden rounded-full ring-1 ring-white/10">
-                <div
-                  className={
-                    isOverBudget ? 'h-full bg-red-400' : 'bg-acc h-full'
-                  }
-                  style={{ width: `${budgetPercent}%` }}
-                />
+                <span className="text-ink-3 text-xs">estimated output</span>
               </div>
               <div className="text-ink-3 mt-3 grid grid-cols-3 gap-3 text-xs">
                 <div>
@@ -912,22 +1215,45 @@ export function VideoGifConverter({
                   <div className="text-ink-4 text-[10px] font-semibold tracking-wide uppercase">
                     Range
                   </div>
-                  <div className="text-ink-1 font-mono">{estimatedSize}</div>
+                  <div className="text-ink-1 font-mono">
+                    {formatBytes(estimatedSize.low)}-
+                    {formatBytes(estimatedSize.high)}
+                  </div>
                 </div>
               </div>
+              {conversionLimitError && (
+                <p className="mt-3 text-xs text-red-400" role="alert">
+                  {conversionLimitError}
+                </p>
+              )}
             </div>
           </div>
         </div>
 
         {isConverting && (
-          <div className="bg-bg-2 h-1.5 overflow-hidden">
+          <div
+            className="bg-bg-2 h-1.5 overflow-hidden"
+            role="progressbar"
+            aria-label="GIF conversion progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(progress * 100)}
+          >
             <div
               className="bg-acc h-full"
               style={{ width: `${Math.round(progress * 100)}%` }}
             />
           </div>
         )}
-        {error && <p className="px-4 pt-3 text-xs text-red-400">{error}</p>}
+        {error && (
+          <p
+            className="px-4 pt-3 text-xs text-red-400"
+            role="alert"
+            aria-live="assertive"
+          >
+            {error}
+          </p>
+        )}
 
         <div className="border-glass-border bg-bg-0 flex shrink-0 flex-wrap items-center gap-3 border-t px-4 py-3">
           <div className="text-ink-3 min-w-0 flex-1 text-xs">
@@ -938,8 +1264,7 @@ export function VideoGifConverter({
             type="button"
             variant="ghost"
             size="sm"
-            onClick={onClose}
-            disabled={isConverting}
+            onClick={handleClose}
           >
             Cancel
           </Button>
@@ -948,7 +1273,8 @@ export function VideoGifConverter({
             variant="primary"
             size="sm"
             onClick={() => void handleConvert()}
-            disabled={isConverting}
+            disabled={isConverting || Boolean(conversionBlockReason)}
+            title={conversionBlockReason ?? undefined}
             icon={
               isConverting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -958,7 +1284,8 @@ export function VideoGifConverter({
             {isConverting ? 'Converting...' : 'Convert to GIF'}
           </Button>
         </div>
-      </div>
+        </div>
+      </FocusLock>
     </div>
   );
 }

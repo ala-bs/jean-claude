@@ -14,6 +14,7 @@ import { ensureUtc, formatDuration } from '@/lib/time';
 import type {
   NormalizedEntry,
   NormalizedToolUse,
+  TokenUsage,
   ToolUseByName,
 } from '@shared/normalized-message-v2';
 import { countUnifiedPatchStats } from '@/features/agent/ui-diff-view/diff-utils';
@@ -45,6 +46,17 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 const PROMPT_MAX_CHARS = 300;
 const RECENT_RUNNING_MESSAGE_COUNT = 5;
 const EMPTY_DISPLAY_MESSAGES: DisplayMessage[] = [];
+
+export function getResultDisplayTokenCount({
+  usage,
+  contextUsage,
+}: {
+  usage?: TokenUsage;
+  contextUsage?: TokenUsage;
+}): number {
+  const displayUsage = contextUsage ?? usage;
+  return (displayUsage?.inputTokens ?? 0) + (displayUsage?.outputTokens ?? 0);
+}
 
 type RunningActivityMessage =
   | {
@@ -710,6 +722,11 @@ function SubagentCard({
           <span className="text-ink-3 shrink-0 rounded bg-white/[0.06] px-1.5 py-px text-[9.5px] font-semibold tracking-wide uppercase">
             {sa.kind}
           </span>
+          {sa.model && (
+            <span className="text-ink-4 shrink-0">
+              {formatModelName(sa.model)}
+            </span>
+          )}
         </div>
         {sa.step && (
           <div className="text-ink-3 flex items-center gap-2 font-mono text-[10.5px]">
@@ -720,11 +737,6 @@ function SubagentCard({
               {sa.step}
               <span className="rg-caret">▍</span>
             </span>
-            {sa.model && (
-              <span className="text-ink-4 shrink-0">
-                {formatModelName(sa.model)}
-              </span>
-            )}
           </div>
         )}
       </div>
@@ -1060,20 +1072,42 @@ type FileStats = {
   removed: number;
 };
 
-function isFileChangeToolEntry(entry: NormalizedEntry): boolean {
+function isFileChangeToolEntry(
+  entry: NormalizedEntry,
+): entry is NormalizedEntry &
+  (ToolUseByName<'edit'> | ToolUseByName<'write'>) {
   return (
     entry.type === 'tool-use' &&
     (entry.name === 'edit' || entry.name === 'write')
   );
 }
 
-function getFileChangeToolEntries(
+export function getFileChangeToolEntries(
   childMessages: DisplayMessage[],
+  promptEntry?: NormalizedEntry & { type: 'user-prompt' },
 ): NormalizedEntry[] {
   const entries: NormalizedEntry[] = [];
+  const promptMs = parseDateMs(promptEntry?.date);
 
   function addEntry(entry: NormalizedEntry) {
-    if (isFileChangeToolEntry(entry)) entries.push(entry);
+    if (!isFileChangeToolEntry(entry)) return;
+
+    const entryMs = parseDateMs(entry.date);
+    if (promptMs !== null && (entryMs === null || entryMs < promptMs)) {
+      if (import.meta.env.DEV) {
+        console.debug('[prompt-group-diff] Excluding stale edit', {
+          reason: entryMs === null ? 'invalid-entry-date' : 'predates-prompt',
+          promptId: promptEntry?.id,
+          promptDate: promptEntry?.date,
+          entryId: entry.id,
+          entryDate: entry.date,
+          input: entry.input,
+        });
+      }
+      return;
+    }
+
+    entries.push(entry);
   }
 
   for (const dm of childMessages) {
@@ -1249,9 +1283,7 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
     }
     const cost = entry.cost?.toFixed(2) || '0.00';
     const apiCost = entry.apiCost?.toFixed(2);
-    const tokens = formatNumber(
-      (entry.usage?.inputTokens ?? 0) + (entry.usage?.outputTokens ?? 0),
-    );
+    const tokens = formatNumber(getResultDisplayTokenCount(entry));
     const durationMs = group.durationMs ?? entry.durationMs ?? 0;
     const fallbackAssistantMessage =
       !entry.value || !entry.value.trim()
@@ -1332,10 +1364,18 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   }, [group.childMessages, isActiveGroup]);
 
   // Compute file edit/write stats from child messages
-  const fileStats = useMemo(() => {
-    const fileChangeEntries = getFileChangeToolEntries(group.childMessages);
-    return getFileStats(fileChangeEntries);
-  }, [group.childMessages]);
+  const fileChangeEntries = useMemo(
+    () =>
+      getFileChangeToolEntries(
+      group.childMessages,
+      group.promptEntry,
+      ),
+    [group.childMessages, group.promptEntry],
+  );
+  const fileStats = useMemo(
+    () => getFileStats(fileChangeEntries),
+    [fileChangeEntries],
+  );
 
   return (
     <div className="mb-5">
@@ -1573,7 +1613,7 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
         <PromptGroupDiffModal
           isOpen={diffModalOpen}
           onClose={() => setDiffModalOpen(false)}
-          childMessages={group.childMessages}
+          fileChangeEntries={fileChangeEntries}
           rootPath={rootPath}
           taskId={taskId}
         />

@@ -3,6 +3,8 @@ import { PassThrough } from 'stream';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getChildProcessEnv } from '../../../lib/child-process-env';
+
 const mocks = vi.hoisted(() => {
   const spawn = vi.fn();
   const execFile = vi.fn((_command, _args, _options, callback) => {
@@ -116,14 +118,14 @@ describe('Codex app server process manager', () => {
     expect(mocks.execFile).toHaveBeenCalledWith(
       'codex',
       ['--version'],
-      { timeout: 5_000 },
+      { env: getChildProcessEnv(), timeout: 5_000 },
       expect.any(Function),
     );
     expect(mocks.spawn).toHaveBeenCalledWith(
       'codex',
       ['app-server', '--listen', 'stdio://'],
       expect.objectContaining({
-        env: process.env,
+        env: getChildProcessEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
       }),
     );

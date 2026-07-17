@@ -51,6 +51,7 @@ import {
 } from '../../../database/repositories';
 import { calculateTheoreticalOpenCodeCost } from '../../backend-models-service';
 import { dbg } from '../../../lib/debug';
+import { getChildProcessEnv } from '../../../lib/child-process-env';
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
 
 
@@ -232,7 +233,7 @@ async function createOpencodeServerHandle(options: {
     {
       detached: process.platform !== 'win32',
       env: {
-        ...process.env,
+        ...getChildProcessEnv(),
         OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config ?? {}),
       },
     },
@@ -446,19 +447,40 @@ interface OpenCodeSessionState {
   ownsServerHandle: boolean;
   /** Guards against double-close of dedicated servers */
   serverClosed: boolean;
+  /** Stable timeout promise whose timer can be paused or reset externally. */
+  activityWatchdog: {
+    timer: ReturnType<typeof setTimeout> | null;
+    promise: Promise<void>;
+    resolve: () => void;
+    deadline: number | null;
+    lastEventType: string;
+  };
 }
-
-type PromptResultEvent =
-  | { type: 'entries'; events: AgentEvent[] }
-  | { type: 'error'; error: string };
 
 type SubscriptionReadResult =
   | { type: 'event'; result: IteratorResult<unknown> }
   | { type: 'idle-timeout' }
-  | { type: 'prompt-result'; result: PromptResultEvent | null };
+  | { type: 'activity-timeout' }
+  | { type: 'aborted' }
+  | { type: 'prompt-error'; error: string };
 
-const IDLE_COMPLETION_TIMEOUT_MS = 3 * 60 * 1000;
-const IDLE_TIMEOUT_SETTLE_GRACE_MS = 250;
+const IDLE_COMPLETION_TIMEOUT_MS = 100;
+const IDLE_TIMEOUT_SETTLE_GRACE_MS = 100;
+const SESSION_ACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
+
+function createActivityWatchdog(): OpenCodeSessionState['activityWatchdog'] {
+  let resolve = () => {};
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return {
+    timer: null,
+    promise,
+    resolve,
+    deadline: null,
+    lastEventType: 'prompt-submitted',
+  };
+}
 
 export class OpenCodeBackend implements AgentBackend {
   private sessions = new Map<string, OpenCodeSessionState>();
@@ -570,7 +592,9 @@ export class OpenCodeBackend implements AgentBackend {
         toolPermissionsByEntryId: new Map(),
         permissionRules: config.permissionRules ?? [],
       },
-      messageIndex: this.taskContext.sessionStartIndex,
+      messageIndex:
+        this.taskContext.rawSessionStartIndex ??
+        this.taskContext.sessionStartIndex,
       pendingSubtaskPartsByMessageId: new Map(),
       fetchedChildSessionIds: new Set(),
       rawDeltaRows: new Map(),
@@ -579,6 +603,7 @@ export class OpenCodeBackend implements AgentBackend {
       serverHandle,
       ownsServerHandle: !useSharedServer,
       serverClosed: false,
+      activityWatchdog: createActivityWatchdog(),
     };
 
     this.sessions.set(session.id, state);
@@ -598,15 +623,16 @@ export class OpenCodeBackend implements AgentBackend {
     if (!state) return;
 
     state.abortController.abort();
+    this.disposeActivityWatchdog(state);
 
-    try {
-      await state.serverHandle.client.session.abort({
+    state.serverHandle.client.session
+      .abort({
         sessionID: sessionId,
         directory: state.cwd,
+      })
+      .catch((error) => {
+        dbg.agent('Error aborting OpenCode session %s: %O', sessionId, error);
       });
-    } catch (error) {
-      dbg.agent('Error aborting OpenCode session %s: %O', sessionId, error);
-    }
 
     // Resolve any pending permissions with rejection
     for (const [, pending] of state.pendingPermissions) {
@@ -639,25 +665,28 @@ export class OpenCodeBackend implements AgentBackend {
       ocResponse = 'once';
     }
 
-    try {
-      await state.serverHandle.client.permission.reply({
+    state.serverHandle.client.permission
+      .reply({
         requestID: requestId,
         directory: state.cwd,
         reply: ocResponse,
+      })
+      .catch((error) => {
+        dbg.agent(
+          'Error responding to OpenCode permission %s: %O',
+          requestId,
+          error,
+        );
       });
-    } catch (error) {
-      dbg.agent(
-        'Error responding to OpenCode permission %s: %O',
-        requestId,
-        error,
-      );
-    }
 
     // Resolve the pending permission promise
     const pending = state.pendingPermissions.get(requestId);
     if (pending) {
       pending.resolve();
       state.pendingPermissions.delete(requestId);
+      if (!this.hasPendingUserInput(state)) {
+        this.resetActivityWatchdog(state, 'user-input-resolved');
+      }
     }
   }
 
@@ -695,7 +724,12 @@ export class OpenCodeBackend implements AgentBackend {
           error,
         );
       });
-    state.pendingQuestions.delete(requestId);
+    if (
+      state.pendingQuestions.delete(requestId) &&
+      !this.hasPendingUserInput(state)
+    ) {
+      this.resetActivityWatchdog(state, 'user-input-resolved');
+    }
   }
 
   async setMode(_sessionId: string, _mode: InteractionMode): Promise<void> {
@@ -828,23 +862,21 @@ export class OpenCodeBackend implements AgentBackend {
       directory: state.cwd,
     });
 
-    // Track whether we've received the prompt response
-    let promptComplete = false;
+    // Track whether OpenCode accepted the asynchronous prompt submission.
     let sessionIdle = false;
     let idleDeadline: number | null = null;
-    let idleTimedOut = false;
     let emittedError = false;
     let sessionErrored = false;
-    let capturedPromptResult: PromptResultEvent | null = null;
-    let hasCapturedPromptResult = false;
+    let streamEndedUnexpectedly = false;
+    let streamErrorMessage: string | null = null;
 
-    // Send the initial prompt (fire and forget — events arrive via SSE)
+    // Send the initial prompt without holding open a response request. OpenCode's
+    // synchronous prompt endpoint can remain pending even while the SSE stream is
+    // healthy, which previously left the backend session stuck indefinitely.
     const model = this.parseModel(config.model);
 
-    let promptSettled = false;
-
-    const promptPromise: Promise<PromptResultEvent | null> = client.session
-      .prompt({
+    const promptSubmissionPromise = client.session
+      .promptAsync({
         sessionID: sessionId,
         directory: state.cwd,
         parts: parts
@@ -866,107 +898,93 @@ export class OpenCodeBackend implements AgentBackend {
           : {}),
         agent: this.getPrimaryAgentName(config.interactionMode),
       })
-      .then(async (result): Promise<PromptResultEvent | null> => {
-        promptComplete = true;
-        promptSettled = true;
-
-        // Emit the final assistant message from prompt response using V2 normalizer
-        if (result.data) {
-          const ctx = state.normalizationCtx;
-
-          // Update context with prompt result data
-          ctx.rawMessages.set(result.data.info.id, result.data.info);
-          ctx.rawParts.set(result.data.info.id, result.data.parts);
-
-          // Track cost/tokens from unique assistant messages.
-          if (result.data.info.role === 'assistant') {
-            this.updateUsageTotals(state);
-          }
-
-          // Persist raw prompt result
-          const rawMessageId = await this.persistRawForMessage(
-            state,
-            result.data,
-          );
-
-          // Normalize via V2 prompt-result path
-          const input: OpenCodeRawInput = {
-            kind: 'prompt-result',
-            info: result.data.info as OcAssistantMessage,
-            parts: result.data.parts,
-          };
-          const normEvents = normalizeOpenCodeV2(input, ctx);
-
-          // Update emittedEntryIds
-          for (const ne of normEvents) {
-            if (ne.type === 'entry') {
-              ctx.emittedEntryIds.add(ne.entry.id);
-            }
-          }
-
-          const promptEvents = normEvents.map((ne): AgentEvent => {
-            if (ne.type === 'entry') {
-              return {
-                ...ne,
-                rawMessageId,
-              };
-            }
-            return ne as AgentEvent;
-          });
-
-          for (const childSession of this.getCompletedTaskChildSessions(
-            result.data.parts,
-          )) {
-            promptEvents.push(
-              ...(await this.fetchChildSessionEvents(state, childSession)),
-            );
-          }
-
-          if (promptEvents.length > 0) {
-            return {
-              type: 'entries',
-              events: promptEvents,
-            };
-          }
-        }
-        return null;
-      })
-      .catch((error): PromptResultEvent => {
-        promptComplete = true;
-        promptSettled = true;
-        dbg.agent('OpenCode prompt error: %O', error);
-        return {
-          type: 'error',
-          error: error instanceof Error ? error.message : String(error),
-        };
-      });
+      .then((result): string | null =>
+        result.error ? this.formatRequestError(result.error) : null,
+      )
+      .catch((error): string => this.formatRequestError(error));
+    const promptErrorPromise = promptSubmissionPromise.then(
+      (error): Promise<never> | SubscriptionReadResult =>
+        error
+          ? { type: 'prompt-error', error }
+          : new Promise<never>(() => {}),
+    );
+    let promptSubmissionError: string | null = null;
+    this.resetActivityWatchdog(state, 'prompt-submitted');
 
     try {
       // Process SSE events
       const iterator = subscription.stream[Symbol.asyncIterator]();
       while (true) {
+        const activityWatchdogPaused = this.hasPendingUserInput(state);
+        if (activityWatchdogPaused) {
+          this.pauseActivityWatchdog(state);
+        } else if (state.activityWatchdog.deadline === null) {
+          this.resetActivityWatchdog(state, 'user-input-resolved');
+        }
+
         const read = await this.readSubscriptionEvent({
           iterator,
           idleDeadline,
-          promptPromise,
-          promptSettled,
+          activityTimeoutPromise: state.activityWatchdog.promise,
+          abortSignal: state.abortController.signal,
+          promptErrorPromise,
         });
 
-        if (read.type === 'idle-timeout') {
-          idleTimedOut = true;
+        if (read.type === 'aborted') {
           this.closeSubscriptionIterator(iterator);
           break;
         }
 
-        if (read.type === 'prompt-result') {
-          capturedPromptResult = read.result;
-          hasCapturedPromptResult = true;
+        if (read.type === 'idle-timeout') {
+          dbg.agent(
+            'OpenCode session %s completed after idle grace period',
+            sessionId,
+          );
+          this.closeSubscriptionIterator(iterator);
+          break;
+        }
+
+        if (read.type === 'activity-timeout') {
+          emittedError = true;
+          const error = `OpenCode session stopped after 10 minutes with no activity (last event: ${state.activityWatchdog.lastEventType})`;
+          dbg.agent(
+            'OpenCode session %s stalled after %dms without activity (last event: %s)',
+            sessionId,
+            SESSION_ACTIVITY_TIMEOUT_MS,
+            state.activityWatchdog.lastEventType,
+          );
+          client.session
+            .abort({
+              sessionID: sessionId,
+              directory: state.cwd,
+            })
+            .catch((abortError) => {
+              dbg.agent(
+                'Error aborting stalled OpenCode session %s: %O',
+                sessionId,
+                abortError,
+              );
+            });
+          yield { type: 'error', error };
+          this.closeSubscriptionIterator(iterator);
+          break;
+        }
+
+        if (read.type === 'prompt-error') {
+          promptSubmissionError = read.error;
+          emittedError = true;
+          dbg.agent('OpenCode prompt error: %s', promptSubmissionError);
+          yield { type: 'error', error: promptSubmissionError };
           this.closeSubscriptionIterator(iterator);
           break;
         }
 
         const { value: event, done } = read.result;
         if (done) {
+          streamEndedUnexpectedly =
+            !sessionIdle &&
+            !sessionErrored &&
+            !state.abortController.signal.aborted;
           break;
         }
 
@@ -1015,24 +1033,43 @@ export class OpenCodeBackend implements AgentBackend {
           continue;
         }
 
+        if (
+          sessionIdFromEvent === sessionId ||
+          isKnownChildSession ||
+          isOwnedSubtaskPartEvent ||
+          (ocEvent.type === 'session.error' && !sessionIdFromEvent)
+        ) {
+          this.resetActivityWatchdog(state, ocEvent.type);
+        }
+
         const isIdleEvent =
-          ocEvent.type === 'session.idle' && sessionIdFromEvent === sessionId;
+          sessionIdFromEvent === sessionId &&
+          (ocEvent.type === 'session.idle' ||
+            (ocEvent.type === 'session.status' &&
+              ocEvent.properties.status.type === 'idle'));
 
         const rawMessageId = await this.persistRawForMessage(state, ocEvent);
 
-        // Treat session.idle as a possible completion signal, not definitive.
-        // Do not yield the normalizer's complete event here; the final complete
-        // is emitted after the idle timeout/prompt-result handling below.
+        // Give already-queued terminal events a short chance to arrive before
+        // treating session.idle as definitive completion.
         if (isIdleEvent && this.hasPendingUserInput(state)) {
+          dbg.agent(
+            'OpenCode session %s ignored idle with %d pending permissions and %d pending questions',
+            sessionId,
+            state.pendingPermissions.size,
+            state.pendingQuestions.size,
+          );
           continue;
         }
 
         if (isIdleEvent) {
           sessionIdle = true;
           idleDeadline = Date.now() + IDLE_COMPLETION_TIMEOUT_MS;
-          if (promptSettled) {
-            break;
-          }
+          dbg.agent(
+            'OpenCode session %s entered idle; waiting %dms for terminal events',
+            sessionId,
+            IDLE_COMPLETION_TIMEOUT_MS,
+          );
           continue;
         }
 
@@ -1045,8 +1082,32 @@ export class OpenCodeBackend implements AgentBackend {
         }
 
         if (sessionIdle) {
-          sessionIdle = false;
-          idleDeadline = null;
+          const eventInfo =
+            ocEvent.type === 'session.updated' ||
+            ocEvent.type === 'message.updated'
+              ? (ocEvent.properties as { info?: { summary?: unknown } }).info
+              : undefined;
+          const isIdleBookkeepingEvent =
+            ocEvent.type === 'session.diff' ||
+            ((ocEvent.type === 'session.updated' ||
+              ocEvent.type === 'message.updated') &&
+              eventInfo?.summary !== undefined);
+          if (isIdleBookkeepingEvent) {
+            idleDeadline = Date.now() + IDLE_COMPLETION_TIMEOUT_MS;
+            dbg.agent(
+              'OpenCode session %s received trailing %s; extending idle grace period',
+              sessionId,
+              ocEvent.type,
+            );
+          } else {
+            sessionIdle = false;
+            idleDeadline = null;
+            dbg.agent(
+              'OpenCode session %s resumed with %s during idle grace period',
+              sessionId,
+              ocEvent.type,
+            );
+          }
         }
 
         const agentEvents = this.mapEvent(ocEvent, state, rawMessageId);
@@ -1075,11 +1136,19 @@ export class OpenCodeBackend implements AgentBackend {
                 'Auto-allowing %s (pattern match)',
                 req.toolName,
               );
-              await state.serverHandle.client.permission.reply({
-                requestID: req.requestId,
-                directory: state.cwd,
-                reply: 'once',
-              });
+              state.serverHandle.client.permission
+                .reply({
+                  requestID: req.requestId,
+                  directory: state.cwd,
+                  reply: 'once',
+                })
+                .catch((error) => {
+                  dbg.agent(
+                    'Error auto-allowing OpenCode permission %s: %O',
+                    req.requestId,
+                    error,
+                  );
+                });
               (state.normalizationCtx.pendingToolPermissionDecisions ??=
                 []).push(
                 permissionDecision.matchedRule
@@ -1102,11 +1171,19 @@ export class OpenCodeBackend implements AgentBackend {
                 'Auto-denying %s (pattern match)',
                 req.toolName,
               );
-              await state.serverHandle.client.permission.reply({
-                requestID: req.requestId,
-                directory: state.cwd,
-                reply: 'reject',
-              });
+              state.serverHandle.client.permission
+                .reply({
+                  requestID: req.requestId,
+                  directory: state.cwd,
+                  reply: 'reject',
+                })
+                .catch((error) => {
+                  dbg.agent(
+                    'Error auto-denying OpenCode permission %s: %O',
+                    req.requestId,
+                    error,
+                  );
+                });
               continue; // Don't yield the permission-request event
             }
 
@@ -1154,28 +1231,21 @@ export class OpenCodeBackend implements AgentBackend {
     } catch (error) {
       if (!state.abortController.signal.aborted) {
         dbg.agent('[opencode] event stream error: %O', error);
+        streamEndedUnexpectedly = true;
+        streamErrorMessage = this.formatRequestError(error);
       }
     }
 
     await this.flushRawDeltaRows(state);
 
-    const promptResult = hasCapturedPromptResult
-      ? capturedPromptResult
-      : idleTimedOut || sessionErrored || state.abortController.signal.aborted
-        ? null
-        : await promptPromise;
-    if (promptResult) {
-      if (promptResult.type === 'entries') {
-        for (const event of promptResult.events) {
-          if (event.type === 'error') {
-            emittedError = true;
-          }
-          yield event;
-        }
-      } else if (promptResult.type === 'error' && !emittedError) {
-        emittedError = true;
-        yield promptResult;
-      }
+    if (streamEndedUnexpectedly && !emittedError) {
+      emittedError = true;
+      yield {
+        type: 'error',
+        error: streamErrorMessage
+          ? `OpenCode event stream failed: ${streamErrorMessage}`
+          : 'OpenCode event stream ended before the session completed',
+      };
     }
 
     // Emit completion
@@ -1183,7 +1253,8 @@ export class OpenCodeBackend implements AgentBackend {
     const hasError =
       emittedError ||
       sessionErrored ||
-      (!promptComplete && !sessionIdle) ||
+      streamEndedUnexpectedly ||
+      Boolean(promptSubmissionError) ||
       (!sessionIdle && state.abortController.signal.aborted);
 
     yield {
@@ -1213,6 +1284,7 @@ export class OpenCodeBackend implements AgentBackend {
   }
 
   private closeDedicatedServer(state: OpenCodeSessionState): void {
+    this.disposeActivityWatchdog(state);
     if (!state.ownsServerHandle || state.serverClosed) {
       if (!state.ownsServerHandle && !state.serverClosed) {
         releaseSharedServer();
@@ -1232,6 +1304,39 @@ export class OpenCodeBackend implements AgentBackend {
     return state.pendingPermissions.size > 0 || state.pendingQuestions.size > 0;
   }
 
+  private resetActivityWatchdog(
+    state: OpenCodeSessionState,
+    lastEventType: string,
+  ): void {
+    const watchdog = state.activityWatchdog;
+    if (watchdog.timer) clearTimeout(watchdog.timer);
+    watchdog.lastEventType = lastEventType;
+    watchdog.deadline = Date.now() + SESSION_ACTIVITY_TIMEOUT_MS;
+    watchdog.timer = setTimeout(watchdog.resolve, SESSION_ACTIVITY_TIMEOUT_MS);
+    watchdog.timer.unref?.();
+  }
+
+  private pauseActivityWatchdog(state: OpenCodeSessionState): void {
+    const watchdog = state.activityWatchdog;
+    if (watchdog.timer) clearTimeout(watchdog.timer);
+    watchdog.timer = null;
+    watchdog.deadline = null;
+  }
+
+  private disposeActivityWatchdog(state: OpenCodeSessionState): void {
+    this.pauseActivityWatchdog(state);
+  }
+
+  private formatRequestError(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
   private closeSubscriptionIterator(iterator: AsyncIterator<unknown>): void {
     iterator.return?.().catch((error) => {
       dbg.agent('[opencode] error closing event stream: %O', error);
@@ -1241,47 +1346,58 @@ export class OpenCodeBackend implements AgentBackend {
   private async readSubscriptionEvent({
     iterator,
     idleDeadline,
-    promptPromise,
-    promptSettled,
+    activityTimeoutPromise,
+    abortSignal,
+    promptErrorPromise,
   }: {
     iterator: AsyncIterator<unknown>;
     idleDeadline: number | null;
-    promptPromise: Promise<PromptResultEvent | null>;
-    promptSettled: boolean;
+    activityTimeoutPromise: Promise<void>;
+    abortSignal: AbortSignal;
+    promptErrorPromise: Promise<SubscriptionReadResult>;
   }): Promise<SubscriptionReadResult> {
-    if (!idleDeadline) {
-      return { type: 'event', result: await iterator.next() };
-    }
-
-    const remainingMs = idleDeadline - Date.now();
-    if (remainingMs <= 0) {
+    const now = Date.now();
+    const idleRemainingMs = idleDeadline ? idleDeadline - now : null;
+    if (idleRemainingMs !== null && idleRemainingMs <= 0) {
       return { type: 'idle-timeout' };
     }
 
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let idleTimeout: ReturnType<typeof setTimeout> | undefined;
     let settleTimeout: ReturnType<typeof setTimeout> | undefined;
+    let removeAbortListener: (() => void) | undefined;
     const eventPromise = iterator
       .next()
       .then((result): SubscriptionReadResult => ({ type: 'event', result }));
-    const promptResultPromise = promptSettled
-      ? null
-      : promptPromise.then(
-          (result): SubscriptionReadResult => ({
-            type: 'prompt-result',
-            result,
-          }),
-        );
+    const activityTimeoutResultPromise = activityTimeoutPromise.then(
+      (): SubscriptionReadResult => ({ type: 'activity-timeout' }),
+    );
+    const abortPromise = new Promise<SubscriptionReadResult>((resolve) => {
+      if (abortSignal.aborted) {
+        resolve({ type: 'aborted' });
+        return;
+      }
+      const handleAbort = () => resolve({ type: 'aborted' });
+      abortSignal.addEventListener('abort', handleAbort, { once: true });
+      removeAbortListener = () =>
+        abortSignal.removeEventListener('abort', handleAbort);
+    });
 
     try {
       const result = await Promise.race([
         eventPromise,
-        new Promise<SubscriptionReadResult>((resolve) => {
-          timeout = setTimeout(
-            () => resolve({ type: 'idle-timeout' }),
-            remainingMs,
-          );
-        }),
-        ...(promptResultPromise ? [promptResultPromise] : []),
+        promptErrorPromise,
+        activityTimeoutResultPromise,
+        abortPromise,
+        ...(idleRemainingMs === null
+          ? []
+          : [
+              new Promise<SubscriptionReadResult>((resolve) => {
+                idleTimeout = setTimeout(
+                  () => resolve({ type: 'idle-timeout' }),
+                  idleRemainingMs,
+                );
+              }),
+            ]),
       ]);
 
       if (result.type !== 'idle-timeout') {
@@ -1290,7 +1406,9 @@ export class OpenCodeBackend implements AgentBackend {
 
       return await Promise.race([
         eventPromise,
-        ...(promptResultPromise ? [promptResultPromise] : []),
+        promptErrorPromise,
+        activityTimeoutResultPromise,
+        abortPromise,
         new Promise<SubscriptionReadResult>((resolve) => {
           settleTimeout = setTimeout(
             () => resolve({ type: 'idle-timeout' }),
@@ -1299,8 +1417,9 @@ export class OpenCodeBackend implements AgentBackend {
         }),
       ]);
     } finally {
-      if (timeout) clearTimeout(timeout);
+      if (idleTimeout) clearTimeout(idleTimeout);
       if (settleTimeout) clearTimeout(settleTimeout);
+      removeAbortListener?.();
     }
   }
 
@@ -1727,7 +1846,7 @@ export class OpenCodeBackend implements AgentBackend {
           state.pendingSubtaskPartsByMessageId.delete(msg.id);
         }
 
-        // Also update the legacy messages map (used for prompt-result later)
+        // Also update the message map used to merge subsequent part deltas.
         const existing = state.messages.get(msg.id);
         state.messages.set(msg.id, {
           info: msg,

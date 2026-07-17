@@ -330,8 +330,8 @@ function upsertTaskFeedDocument(task: Task) {
   if (!items) return;
 
   const existingItem = findTaskFeedItem(items, task.id);
-  if (existingItem?.children && !nextItem.children) {
-    nextItem = { ...nextItem, children: existingItem.children };
+  if (existingItem) {
+    nextItem = { ...existingItem, ...nextItem };
   }
 
   const withoutExisting = removeTaskFeedItemFromList(items, task.id);

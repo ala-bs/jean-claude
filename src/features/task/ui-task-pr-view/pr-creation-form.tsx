@@ -3,6 +3,7 @@ import {
   type ChangeEvent,
   type ClipboardEvent,
   type DragEvent,
+  memo,
   useCallback,
   useRef,
   useState,
@@ -20,7 +21,12 @@ import {
   useCreatePullRequest,
 } from '@/hooks/use-create-pull-request';
 import { useGenerateSummary, useTaskSummary } from '@/hooks/use-task-summary';
-import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
+import {
+  MAX_FILE_SIZE,
+  MAX_IMAGES,
+  processImageFile,
+} from '@/lib/image-utils';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
@@ -53,6 +59,64 @@ type StagedPrImage = PromptImagePart & { placeholderMarkdown: string };
 function placeholderPattern(placeholderMarkdown: string) {
   return markdownImagePlaceholderPattern(placeholderMarkdown);
 }
+
+async function readFileAsBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
+  }
+  return btoa(binary);
+}
+
+export const PrImageAttachments = memo(function PrImageAttachments({
+  images,
+  previewUrls,
+  onRemove,
+}: {
+  images: StagedPrImage[];
+  previewUrls: (string | undefined)[];
+  onRemove: (index: number) => void;
+}) {
+  if (images.length === 0) return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {images.map((image, index) => (
+        <div key={`${image.filename ?? 'img'}-${index}`} className="group relative">
+          {previewUrls[index] ? (
+            <img
+              src={previewUrls[index]}
+              alt={image.filename || 'Attached image'}
+              title={image.sizeBytes ? formatBytes(image.sizeBytes) : undefined}
+              className="h-10 w-10 rounded border border-white/10 object-cover"
+            />
+          ) : (
+            <div
+              title={image.filename}
+              className="text-ink-3 border-stroke-1 flex h-10 max-w-36 items-center rounded border px-1.5 text-[9px]"
+            >
+              <span className="truncate">{image.filename ?? image.mimeType}</span>
+            </div>
+          )}
+          {image.sizeBytes && (
+            <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[8px] leading-3 text-white">
+              {formatBytes(image.sizeBytes)}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => onRemove(index)}
+            className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
+            aria-label={`Remove ${image.filename ?? 'attached image'}`}
+          >
+            <X className="h-2.5 w-2.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+});
 
 export function PrCreationForm({
   taskId,
@@ -88,11 +152,13 @@ export function PrCreationForm({
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [formFilledFromSummary, setFormFilledFromSummary] = useState(false);
   const [stagedImages, setStagedImages] = useState<StagedPrImage[]>([]);
+  const stagedImagePreviewUrls = useImagePreviewUrls(stagedImages);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const imageTokenCounterRef = useRef(0);
   const submittedRef = useRef(false);
+  const titleRef = useRef(title);
   const addToast = useToastStore((s) => s.addToast);
   const queryClient = useQueryClient();
 
@@ -101,6 +167,7 @@ export function PrCreationForm({
 
   const handleTitleChange = useCallback(
     (newTitle: string) => {
+      titleRef.current = newTitle;
       setTitle(newTitle);
       setPrDraft({ title: newTitle, description });
     },
@@ -111,11 +178,11 @@ export function PrCreationForm({
     (updater: string | ((current: string) => string)) => {
       setDescription((current) => {
         const next = typeof updater === 'function' ? updater(current) : updater;
-        setPrDraft({ title, description: next });
+        setPrDraft({ title: titleRef.current, description: next });
         return next;
       });
     },
-    [setPrDraft, title],
+    [setPrDraft],
   );
 
   const handleDescriptionChange = useCallback(
@@ -199,13 +266,26 @@ export function PrCreationForm({
 
       try {
         await Promise.all(
-          imageFiles
-            .slice(0, allowed)
-            .map((file) =>
-              processImageFile(file, stageDescriptionImage, (message) =>
-                addToast({ type: 'error', message }),
-              ),
-            ),
+          imageFiles.slice(0, allowed).map(async (file) => {
+            const gifData =
+              file.type === 'image/gif' && file.size <= MAX_FILE_SIZE
+                ? await readFileAsBase64(file)
+                : undefined;
+            await processImageFile(
+              file,
+              (image) =>
+                stageDescriptionImage(
+                  gifData
+                    ? {
+                        ...image,
+                        storageData: gifData,
+                        storageMimeType: 'image/gif',
+                      }
+                    : image,
+                ),
+              (message) => addToast({ type: 'error', message }),
+            );
+          }),
         );
         if (nextVideoFile && allowed > imageFiles.length) {
           setVideoFile(nextVideoFile);
@@ -289,6 +369,7 @@ export function PrCreationForm({
   }) {
     // Populate title
     const generatedTitle = taskName ?? taskPrompt.split('\n')[0].slice(0, 100);
+    titleRef.current = generatedTitle;
     setTitle(generatedTitle);
 
     // Populate description
@@ -598,40 +679,11 @@ export function PrCreationForm({
               rows={8}
               autoComplete="off"
             />
-            {stagedImages.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {stagedImages.map((image, index) => (
-                  <div
-                    key={`${image.filename ?? 'img'}-${index}`}
-                    className="group relative"
-                  >
-                    <img
-                      src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
-                      alt={image.filename || 'Attached image'}
-                      title={
-                        image.sizeBytes
-                          ? formatBytes(image.sizeBytes)
-                          : undefined
-                      }
-                      className="h-10 w-10 rounded border border-white/10 object-cover"
-                    />
-                    {image.sizeBytes && (
-                      <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[8px] leading-3 text-white">
-                        {formatBytes(image.sizeBytes)}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => removeStagedImage(index)}
-                      className="absolute -top-1 -right-1 hidden h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white group-hover:flex"
-                      aria-label="Remove image"
-                    >
-                      <X className="h-2.5 w-2.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <PrImageAttachments
+              images={stagedImages}
+              previewUrls={stagedImagePreviewUrls}
+              onRemove={removeStagedImage}
+            />
             <input
               ref={imageInputRef}
               type="file"

@@ -11,6 +11,10 @@ const QUESTION_OPTION_SCHEMA = z
       .optional(),
     label: z.string().min(1),
     description: z.string().optional(),
+    recommended: z
+      .boolean()
+      .describe('Whether this answer should be visually marked as recommended')
+      .optional(),
   })
   .strict();
 
@@ -55,6 +59,15 @@ export const ASK_QUESTION_TOOL_SCHEMA = {
     .min(1)
     .describe(
       'Task step id. Optional when the Jean-Claude bridge can infer a single active route; required when multiple app-scoped routes are active.',
+    )
+    .optional(),
+  contextReminder: z
+    .string()
+    .refine((contextReminder) => contextReminder.trim().length > 0, {
+      message: 'Context reminder must not be blank',
+    })
+    .describe(
+      'Optional Markdown shown immediately before all questions. Put any explanation, design, constraints, or recap needed to answer here instead of in an assistant message before this tool call, because that message may be hidden by prompt grouping. Keep it concise and do not repeat the questions.',
     )
     .optional(),
   questions: z
@@ -143,6 +156,9 @@ export async function askQuestionViaBridge({
               ...(routedStepId ? { stepId: routedStepId } : {}),
               ...(registrationId ? { registrationId } : {}),
             }),
+        ...(parsedInput.data.contextReminder
+          ? { contextReminder: parsedInput.data.contextReminder }
+          : {}),
         questions: parsedInput.data.questions,
       }),
     });

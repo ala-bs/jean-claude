@@ -59,6 +59,7 @@ export function UserAvatar({
   vote,
   variant = 'badge',
   highlight = false,
+  color,
   className,
 }: {
   name: string;
@@ -71,6 +72,7 @@ export function UserAvatar({
   /** 'badge' shows checkmark/X overlay, 'border' shows colored border */
   variant?: 'badge' | 'border';
   highlight?: boolean;
+  color?: string;
   className?: string;
 }) {
   const [imgError, setImgError] = useState(false);
@@ -92,11 +94,19 @@ export function UserAvatar({
       className={clsx(
         'relative flex shrink-0 items-center justify-center overflow-hidden rounded-full font-medium',
         SIZE_CLASSES[size],
-        !showImage &&
+        !showImage && !color &&
           (highlight ? 'bg-acc text-ink-0' : 'bg-glass-medium text-ink-1'),
         showBorder && ['border-2', VOTE_BORDER_CLASSES[vote]],
         className,
       )}
+      style={!showImage && color ? {
+        color,
+        background: `color-mix(in oklch, ${color} 24%, transparent)`,
+        border: `1px solid color-mix(in oklch, ${color} 42%, transparent)`,
+        boxShadow: highlight
+          ? '0 0 0 1px var(--color-bg-0), 0 0 0 3px var(--color-acc)'
+          : undefined,
+      } : undefined}
       title={title ?? name}
     >
       {showImage ? (

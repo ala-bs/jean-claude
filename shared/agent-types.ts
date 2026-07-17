@@ -159,6 +159,7 @@ export interface QuestionOption {
   id?: string;
   label: string;
   description: string;
+  recommended?: boolean;
 }
 
 export type AgentQuestionType = 'single_choice' | 'multi_choice' | 'text';
@@ -177,6 +178,7 @@ export interface AgentQuestion {
 export interface QuestionRequest {
   requestId: string;
   taskId: string;
+  contextReminder?: string;
   questions: AgentQuestion[];
 }
 
@@ -241,6 +243,7 @@ export const AGENT_CHANNELS = {
   // Invoke (renderer -> main) — unchanged
   START: 'agent:start',
   STOP: 'agent:stop',
+  STOP_ALL: 'agent:stopAll',
   RESPOND: 'agent:respond',
   SEND_MESSAGE: 'agent:sendMessage',
   GET_MESSAGES: 'agent:getMessages',

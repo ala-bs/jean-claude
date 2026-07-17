@@ -57,6 +57,8 @@ import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import { Textarea } from '@/common/ui/textarea';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
+import { createPromptImageUploadCache } from '@/lib/prompt-image-upload-cache';
 
 
 
@@ -68,6 +70,7 @@ import { CIInlinePanel } from '../ui-pr-ci-inline';
 import { PrChecks } from '../ui-pr-checks';
 import { PrComments } from '../ui-pr-comments';
 import { PrMetaPanel } from '../ui-pr-meta-panel';
+import { descriptionPreviewMarkdown } from './media-preview';
 
 
 
@@ -77,21 +80,6 @@ type PendingDescriptionImage = PromptImagePart & {
 
 function placeholderPattern(placeholderMarkdown: string) {
   return markdownImagePlaceholderPattern(placeholderMarkdown);
-}
-
-function descriptionPreviewMarkdown(
-  markdown: string,
-  images: PendingDescriptionImage[],
-) {
-  return images.reduce((current, image) => {
-    const dataUrl = `data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`;
-    const pattern = placeholderPattern(image.placeholderMarkdown);
-    if (!pattern) return current;
-    return current.replace(
-      pattern,
-      (match) => replaceMarkdownImageUrl(match, dataUrl),
-    );
-  }, markdown);
 }
 
 export function PrOverview({
@@ -123,7 +111,7 @@ export function PrOverview({
   repoId?: string;
   azureProjectName?: string;
   threads?: AzureDevOpsCommentThread[];
-  onAddComment?: (content: string) => void;
+  onAddComment?: (content: string) => Promise<void> | void;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   isAddingComment?: boolean;
   bottomPadding?: number;
@@ -146,6 +134,7 @@ export function PrOverview({
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(pr.description);
   const [descriptionError, setDescriptionError] = useState<string | null>(null);
+  const [isDescriptionSaving, setIsDescriptionSaving] = useState(false);
   const [pendingDescriptionImages, setPendingDescriptionImages] = useState<
     PendingDescriptionImage[]
   >([]);
@@ -156,6 +145,13 @@ export function PrOverview({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const descriptionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const descriptionImageTokenCounterRef = useRef(0);
+  const descriptionSaveInProgressRef = useRef(false);
+  const descriptionUploadedAttachmentsRef = useRef(
+    createPromptImageUploadCache(),
+  );
+  const descriptionImagePreviewUrls = useImagePreviewUrls(
+    pendingDescriptionImages,
+  );
 
   const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
   const updateDescription = useUpdatePullRequestDescription(
@@ -168,6 +164,10 @@ export function PrOverview({
     prId,
     repoInfo,
   );
+  const areDescriptionControlsLocked =
+    isDescriptionSaving ||
+    updateDescription.isPending ||
+    uploadAttachment.isPending;
 
   const currentUserEmail = currentUser?.emailAddress.toLowerCase();
   const ownerEmail = pr.createdBy.uniqueName.toLowerCase();
@@ -209,8 +209,13 @@ export function PrOverview({
       descriptionPreviewMarkdown(
         debouncedDescriptionDraft,
         pendingDescriptionImages,
+        descriptionImagePreviewUrls,
       ),
-    [debouncedDescriptionDraft, pendingDescriptionImages],
+    [
+      debouncedDescriptionDraft,
+      descriptionImagePreviewUrls,
+      pendingDescriptionImages,
+    ],
   );
 
   useEffect(() => {
@@ -218,9 +223,17 @@ export function PrOverview({
       startTransition(() => setDescriptionDraft(pr.description));
       startTransition(() => setDescriptionError(null));
       pendingDescriptionImagesRef.current = [];
+      descriptionUploadedAttachmentsRef.current.clear();
       startTransition(() => setPendingDescriptionImages([]));
     }
   }, [isEditingDescription, pr.description]);
+
+  useEffect(() => {
+    const uploadCache = descriptionUploadedAttachmentsRef.current;
+    return () => {
+      uploadCache.clear();
+    };
+  }, []);
 
   const handleExpandCheck = useCallback((buildId: number | null) => {
     setExpandedBuildId(buildId);
@@ -335,9 +348,14 @@ export function PrOverview({
     [pr.completionOptions?.autoCompleteIgnoreConfigIds],
   );
 
-  const handleIgnoreOptionalPolicy = useCallback(
-    (configId: number) => {
-      if (!pr.autoCompleteSetBy) return;
+  const handleSetPolicyIgnored = useCallback(
+    (configId: number, shouldIgnore: boolean) => {
+      if (!pr.autoCompleteSetBy || autoCompleteMutation.isAnyPending) return;
+
+      const currentIds = pr.completionOptions?.autoCompleteIgnoreConfigIds ?? [];
+      const autoCompleteIgnoreConfigIds = shouldIgnore
+        ? Array.from(new Set([...currentIds, configId]))
+        : currentIds.filter((id) => id !== configId);
 
       autoCompleteMutation.mutate({
         enabled: true,
@@ -351,12 +369,7 @@ export function PrOverview({
           transitionWorkItems:
             pr.completionOptions?.transitionWorkItems ?? false,
           mergeCommitMessage: pr.completionOptions?.mergeCommitMessage,
-          autoCompleteIgnoreConfigIds: Array.from(
-            new Set([
-              ...(pr.completionOptions?.autoCompleteIgnoreConfigIds ?? []),
-              configId,
-            ]),
-          ),
+          autoCompleteIgnoreConfigIds,
         },
       });
     },
@@ -369,8 +382,11 @@ export function PrOverview({
   );
 
   const handleSaveDescription = useCallback(async () => {
-    if (uploadAttachment.isPending) return;
+    if (descriptionSaveInProgressRef.current || uploadAttachment.isPending)
+      return;
 
+    descriptionSaveInProgressRef.current = true;
+    setIsDescriptionSaving(true);
     setDescriptionError(null);
 
     try {
@@ -380,13 +396,20 @@ export function PrOverview({
         const pattern = placeholderPattern(image.placeholderMarkdown);
         if (!pattern || !finalDescription.match(pattern)) continue;
         const fileName = image.filename || 'image.png';
-        const attachment = await uploadAttachment.mutateAsync({
+        const attachmentUrl = await descriptionUploadedAttachmentsRef.current.resolve({
+          image,
           fileName,
-          mimeType: image.mimeType || 'application/octet-stream',
-          dataBase64: image.data,
+          upload: async () => {
+            const attachment = await uploadAttachment.mutateAsync({
+              fileName,
+              mimeType: image.mimeType || 'application/octet-stream',
+              dataBase64: image.data,
+            });
+            return attachment.url;
+          },
         });
         finalDescription = finalDescription.replace(pattern, (match) =>
-          replaceMarkdownImageUrl(match, attachment.url),
+          replaceMarkdownImageUrl(match, attachmentUrl),
         );
       }
 
@@ -399,6 +422,7 @@ export function PrOverview({
 
       await updateDescription.mutateAsync(finalDescription);
       pendingDescriptionImagesRef.current = [];
+      descriptionUploadedAttachmentsRef.current.clear();
       setPendingDescriptionImages([]);
       setDescriptionDraft(finalDescription);
       setIsEditingDescription(false);
@@ -406,6 +430,9 @@ export function PrOverview({
       setDescriptionError(
         error instanceof Error ? error.message : 'Failed to save description',
       );
+    } finally {
+      descriptionSaveInProgressRef.current = false;
+      setIsDescriptionSaving(false);
     }
   }, [
     descriptionDraft,
@@ -415,6 +442,8 @@ export function PrOverview({
   ]);
 
   const insertDescriptionMarkdown = useCallback((markdown: string) => {
+    if (descriptionSaveInProgressRef.current) return;
+
     const textarea = descriptionTextareaRef.current;
     if (!textarea) {
       setDescriptionDraft((current) => {
@@ -438,6 +467,8 @@ export function PrOverview({
 
   const stageDescriptionImage = useCallback(
     (image: PromptImagePart) => {
+      if (descriptionSaveInProgressRef.current) return;
+
       if (pendingDescriptionImagesRef.current.length >= MAX_IMAGES) {
         setDescriptionError(
           `Only ${MAX_IMAGES} images or GIFs can be attached.`,
@@ -464,6 +495,8 @@ export function PrOverview({
 
   const stageDescriptionImageFiles = useCallback(
     async (files: File[]) => {
+      if (descriptionSaveInProgressRef.current) return;
+
       const imageFiles = files.filter((file) => file.type.startsWith('image/'));
       const videoFile = files.find(isVideoFile);
       if (imageFiles.length === 0 && !videoFile) return;
@@ -501,6 +534,8 @@ export function PrOverview({
 
   const handleImageSelection = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
+      if (descriptionSaveInProgressRef.current) return;
+
       const files = Array.from(event.target.files ?? []);
       await stageDescriptionImageFiles(files);
       event.target.value = '';
@@ -510,6 +545,8 @@ export function PrOverview({
 
   const handleDescriptionPaste = useCallback(
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (descriptionSaveInProgressRef.current) return;
+
       const files = Array.from(event.clipboardData.files);
       const imageFiles = files.filter((file) => file.type.startsWith('image/'));
       const hasVideo = files.some(isVideoFile);
@@ -522,6 +559,8 @@ export function PrOverview({
 
   const handleDescriptionDrop = useCallback(
     (event: DragEvent<HTMLTextAreaElement>) => {
+      if (descriptionSaveInProgressRef.current) return;
+
       const files = Array.from(event.dataTransfer.files);
       const imageFiles = files.filter((file) => file.type.startsWith('image/'));
       const hasVideo = files.some(isVideoFile);
@@ -554,6 +593,48 @@ export function PrOverview({
     },
     [handleSaveDescription],
   );
+
+  const handleDescriptionImageRemove = useCallback((index: number) => {
+    if (
+      descriptionSaveInProgressRef.current ||
+      updateDescription.isPending ||
+      uploadAttachment.isPending
+    )
+      return;
+
+    const image = pendingDescriptionImagesRef.current[index];
+    if (image) {
+      descriptionUploadedAttachmentsRef.current.delete(image);
+      const pattern = placeholderPattern(image.placeholderMarkdown);
+      setDescriptionDraft((current) =>
+        pattern ? current.replace(pattern, '') : current,
+      );
+    }
+
+    const nextImages = pendingDescriptionImagesRef.current.filter(
+      (_, imageIndex) => imageIndex !== index,
+    );
+    pendingDescriptionImagesRef.current = nextImages;
+    setPendingDescriptionImages(nextImages);
+  }, [updateDescription.isPending, uploadAttachment.isPending]);
+
+  const handleCancelDescription = useCallback(() => {
+    if (descriptionSaveInProgressRef.current) return;
+
+    pendingDescriptionImagesRef.current = [];
+    descriptionUploadedAttachmentsRef.current.clear();
+    setPendingDescriptionImages([]);
+    setIsEditingDescription(false);
+  }, []);
+
+  const handleStartDescriptionEdit = useCallback(() => {
+    descriptionUploadedAttachmentsRef.current.clear();
+    pendingDescriptionImagesRef.current = [];
+    setPendingDescriptionImages([]);
+    setDescriptionDraft(pr.description);
+    setDescriptionError(null);
+    setIsEditingDescription(true);
+  }, [pr.description]);
 
   // Merge optimistic queued state with server data
   const evaluationsWithOptimistic = useMemo(
@@ -611,12 +692,12 @@ export function PrOverview({
                 : undefined
             }
             ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
-            onIgnoreOptionalPolicy={
+            onSetPolicyIgnored={
               !readOnly && pr.autoCompleteSetBy
-                ? handleIgnoreOptionalPolicy
+                ? handleSetPolicyIgnored
                 : undefined
             }
-            isIgnoringOptionalPolicy={autoCompleteMutation.isPending}
+            isSettingPolicyIgnored={autoCompleteMutation.isAnyPending}
           />
 
           {/* Description */}
@@ -635,7 +716,7 @@ export function PrOverview({
                   variant="ghost"
                   size="sm"
                   icon={<Edit3 className="h-3.5 w-3.5" />}
-                  onClick={() => setIsEditingDescription(true)}
+                  onClick={handleStartDescriptionEdit}
                 >
                   Edit
                 </Button>
@@ -647,9 +728,10 @@ export function PrOverview({
                   <Textarea
                     ref={descriptionTextareaRef}
                     value={descriptionDraft}
-                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
-                      setDescriptionDraft(event.target.value)
-                    }
+                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
+                      if (descriptionSaveInProgressRef.current) return;
+                      setDescriptionDraft(event.target.value);
+                    }}
                     onPaste={handleDescriptionPaste}
                     onDrop={handleDescriptionDrop}
                     onDragOver={handleDescriptionDragOver}
@@ -657,9 +739,7 @@ export function PrOverview({
                     rows={10}
                     className="min-h-56 font-mono text-xs"
                     placeholder="Describe the pull request..."
-                    disabled={
-                      updateDescription.isPending || uploadAttachment.isPending
-                    }
+                    disabled={areDescriptionControlsLocked}
                   />
                   <input
                     ref={imageInputRef}
@@ -675,11 +755,11 @@ export function PrOverview({
                       variant="secondary"
                       size="sm"
                       icon={<Image className="h-3.5 w-3.5" />}
-                      onClick={() => imageInputRef.current?.click()}
-                      disabled={
-                        updateDescription.isPending ||
-                        uploadAttachment.isPending
-                      }
+                      onClick={() => {
+                        if (descriptionSaveInProgressRef.current) return;
+                        imageInputRef.current?.click();
+                      }}
+                      disabled={areDescriptionControlsLocked}
                     >
                       {uploadAttachment.isPending
                         ? 'Uploading...'
@@ -691,15 +771,8 @@ export function PrOverview({
                       variant="ghost"
                       size="sm"
                       icon={<X className="h-3.5 w-3.5" />}
-                      onClick={() => {
-                        pendingDescriptionImagesRef.current = [];
-                        setPendingDescriptionImages([]);
-                        setIsEditingDescription(false);
-                      }}
-                      disabled={
-                        updateDescription.isPending ||
-                        uploadAttachment.isPending
-                      }
+                      onClick={handleCancelDescription}
+                      disabled={areDescriptionControlsLocked}
                     >
                       Cancel
                     </Button>
@@ -708,17 +781,14 @@ export function PrOverview({
                       variant="primary"
                       size="sm"
                       icon={
-                        updateDescription.isPending ? (
+                        isDescriptionSaving || updateDescription.isPending ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : (
                           <Save className="h-3.5 w-3.5" />
                         )
                       }
                       onClick={() => void handleSaveDescription()}
-                      disabled={
-                        updateDescription.isPending ||
-                        uploadAttachment.isPending
-                      }
+                      disabled={areDescriptionControlsLocked}
                     >
                       Save <Kbd shortcut="cmd+enter" />
                     </Button>
@@ -734,6 +804,7 @@ export function PrOverview({
                         className="text-ink-1 text-sm"
                         imageClassName="max-h-[360px] object-contain"
                         enableImageModal
+                        allowBlobImages
                         mentionDisplayNames={mentionDisplayNames}
                       />
                     </div>
@@ -748,21 +819,41 @@ export function PrOverview({
                           key={`${image.filename ?? 'img'}-${index}`}
                           className="relative"
                         >
-                          <img
-                            src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
-                            alt={image.filename || 'Attached image'}
-                            title={
-                              image.sizeBytes
-                                ? formatBytes(image.sizeBytes)
-                                : undefined
-                            }
-                            className="h-8 w-8 rounded border border-white/10 object-cover"
-                          />
+                          {descriptionImagePreviewUrls[index] ? (
+                            <img
+                              src={descriptionImagePreviewUrls[index]}
+                              alt={image.filename || 'Attached image'}
+                              title={
+                                image.sizeBytes
+                                  ? formatBytes(image.sizeBytes)
+                                  : undefined
+                              }
+                              className="h-8 w-8 rounded border border-white/10 object-cover"
+                            />
+                          ) : (
+                            <div
+                              title={image.filename}
+                              className="text-ink-3 border-stroke-1 flex h-8 max-w-36 items-center rounded border px-1.5 text-[9px]"
+                            >
+                              <span className="truncate">
+                                {image.filename ?? image.mimeType}
+                              </span>
+                            </div>
+                          )}
                           {image.sizeBytes && (
                             <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
                               {formatBytes(image.sizeBytes)}
                             </span>
                           )}
+                          <button
+                            type="button"
+                            aria-label={`Remove ${image.filename ?? 'attached image'}`}
+                            onClick={() => handleDescriptionImageRemove(index)}
+                            disabled={areDescriptionControlsLocked}
+                            className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-30"
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -844,6 +935,7 @@ export function PrOverview({
                 mentionDisplayNames={mentionDisplayNames}
                 mentionOptions={mentionOptions}
                 onSearchMentions={onSearchMentions}
+                onUploadImage={onUploadImage}
                 onClose={() => setFilePreview(null)}
                 repoInfo={repoInfo}
                 readOnly={readOnly}
@@ -894,6 +986,7 @@ function PrFilePreviewPane({
   mentionDisplayNames,
   mentionOptions,
   onSearchMentions,
+  onUploadImage,
   onClose,
   repoInfo,
   readOnly,
@@ -910,6 +1003,7 @@ function PrFilePreviewPane({
   mentionDisplayNames: MentionDisplayNames;
   mentionOptions: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
+  onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   onClose: () => void;
   repoInfo?: PullRequestRepoInfo;
   readOnly: boolean;
@@ -977,6 +1071,7 @@ function PrFilePreviewPane({
               mentionDisplayNames={mentionDisplayNames}
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
+              onUploadImage={onUploadImage}
               repoInfo={repoInfo}
               readOnly={readOnly}
             />

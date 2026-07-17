@@ -257,19 +257,28 @@ contextBridge.exposeInMainWorld('api', {
       isDraft: boolean;
       deleteWorktree?: boolean;
     }) => ipcRenderer.invoke('tasks:createPullRequest', params),
-    createPrReview: (params: {
+    createPrReviewTask: (params: {
       projectId: string;
       pullRequestId: number;
-      agentBackend?: string | null;
-      modelPreference?: string | null;
-      thinkingEffort?: string | null;
-    }) => ipcRenderer.invoke('tasks:createPrReview', params),
+    }) => ipcRenderer.invoke('tasks:createPrReviewTask', params),
   },
   steps: {
     findByTaskId: (taskId: string) =>
       ipcRenderer.invoke('steps:findByTaskId', taskId),
     findById: (stepId: string) => ipcRenderer.invoke('steps:findById', stepId),
     create: (data: unknown) => ipcRenderer.invoke('steps:create', data),
+    createPrReviewChatStep: (params: {
+      taskId: string;
+      pullRequestId: number;
+      filePath: string;
+      lineStart: number;
+      lineEnd?: number;
+      side?: 'old' | 'new';
+      selectedText: string;
+      question: string;
+    }) => ipcRenderer.invoke('steps:createPrReviewChatStep', params),
+    continuePrReviewChatStep: (params: { stepId: string; question: string }) =>
+      ipcRenderer.invoke('steps:continuePrReviewChatStep', params),
     update: (stepId: string, data: unknown) =>
       ipcRenderer.invoke('steps:update', stepId, data),
     resolvePrompt: (stepId: string) =>
@@ -318,10 +327,21 @@ contextBridge.exposeInMainWorld('api', {
         excludeWorkItemTypes?: string[];
         searchText?: string;
         iterationPath?: string;
+        iterationPaths?: string[];
+        assignedTo?: string;
       };
     }) => ipcRenderer.invoke('azureDevOps:queryWorkItems', params),
+    queryWorkItemOwners: (params: {
+      providerId: string;
+      projectName: string;
+    }) => ipcRenderer.invoke('azureDevOps:queryWorkItemOwners', params),
     getWorkItemById: (params: { providerId: string; workItemId: number }) =>
       ipcRenderer.invoke('azureDevOps:getWorkItemById', params),
+    getWorkItemsByIds: (params: {
+      providerId: string;
+      projectName: string;
+      workItemIds: number[];
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemsByIds', params),
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
@@ -341,6 +361,21 @@ contextBridge.exposeInMainWorld('api', {
       workItemId: number;
       state: string;
     }) => ipcRenderer.invoke('azureDevOps:updateWorkItemState', params),
+    updateWorkItemField: (params: {
+      providerId: string;
+      workItemId: number;
+      field: string;
+      value: string | number | null;
+    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemField', params),
+    updateWorkItemBoardColumn: (params: {
+      providerId: string;
+      projectId: string;
+      projectName: string;
+      workItemId: number;
+      column: string;
+      teamId: string;
+      boardId: string;
+    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemBoardColumn', params),
     getRelatedTestCases: (params: {
       providerId: string;
       projectName: string;
@@ -771,6 +806,7 @@ contextBridge.exposeInMainWorld('api', {
   agent: {
     start: (stepId: string) => ipcRenderer.invoke(AGENT_CHANNELS.START, stepId),
     stop: (stepId: string) => ipcRenderer.invoke(AGENT_CHANNELS.STOP, stepId),
+    stopAll: () => ipcRenderer.invoke(AGENT_CHANNELS.STOP_ALL),
     respond: (stepId: string, requestId: string, response: unknown) =>
       ipcRenderer.invoke(AGENT_CHANNELS.RESPOND, stepId, requestId, response),
     sendMessage: (stepId: string, parts: unknown[]) =>
@@ -803,6 +839,11 @@ contextBridge.exposeInMainWorld('api', {
     getResourceSnapshots: () =>
       ipcRenderer.invoke('agent:resources:getSnapshots'),
     getResourceHistory: () => ipcRenderer.invoke('agent:resources:getHistory'),
+    setHighFrequencyResourceSampling: (enabled: boolean) =>
+      ipcRenderer.invoke(
+        'agent:resources:setHighFrequencySampling',
+        enabled,
+      ),
     compactRawMessages: (taskId: string) =>
       ipcRenderer.invoke(AGENT_CHANNELS.COMPACT_RAW_MESSAGES, taskId),
     reprocessNormalization: (taskId: string) =>
@@ -937,6 +978,7 @@ contextBridge.exposeInMainWorld('api', {
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>
       ipcRenderer.invoke('project:commands:run:stopCommand', params),
+    stopAll: () => ipcRenderer.invoke('project:commands:run:stopAll'),
     sendInput: (params: {
       taskId: string;
       runCommandId: string;
@@ -1079,6 +1121,21 @@ contextBridge.exposeInMainWorld('api', {
         userVariables,
         context,
       ),
+  },
+  globalMcp: {
+    findAll: () => ipcRenderer.invoke('globalMcp:findAll'),
+    findById: (id: string) => ipcRenderer.invoke('globalMcp:findById', id),
+    create: (data: import('@shared/global-mcp-types').NewGlobalMcpServer) => ipcRenderer.invoke('globalMcp:create', data),
+    update: (id: string, data: import('@shared/global-mcp-types').UpdateGlobalMcpServer) =>
+      ipcRenderer.invoke('globalMcp:update', id, data),
+    enable: (id: string, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
+      ipcRenderer.invoke('globalMcp:enable', id, backends),
+    disable: (id: string, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
+      ipcRenderer.invoke('globalMcp:disable', id, backends),
+    uninstall: (id: string) => ipcRenderer.invoke('globalMcp:uninstall', id),
+    discover: () => ipcRenderer.invoke('globalMcp:discover'),
+    import: (entry: import('@shared/global-mcp-types').DiscoveredMcpVariant, backends: import('@shared/agent-backend-types').AgentBackendType[]) =>
+      ipcRenderer.invoke('globalMcp:import', entry, backends),
   },
   claudeProjects: {
     findNonExistent: () => ipcRenderer.invoke('claudeProjects:findNonExistent'),

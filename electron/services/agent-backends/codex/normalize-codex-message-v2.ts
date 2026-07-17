@@ -170,7 +170,7 @@ function normalizeItemStarted(
     return [{ type: 'entry', entry: entryWithParent }];
   }
 
-  const entry = createToolEntry(item, itemId);
+  const entry = createToolEntry(item, itemId, dateFromParams(params));
   if (entry === undefined) return [];
 
   const entryWithParent = withParentToolId(
@@ -226,6 +226,17 @@ function normalizeItemCompleted(
 
   const itemId = itemIdFromItem(item, params);
   if (itemId === undefined) return [];
+
+  if (str(item.type) === 'contextCompaction') {
+    const entry: NormalizedEntry = {
+      id: `${itemId}-completed`,
+      date: dateFromParams(params) ?? dateFromItem(item),
+      type: 'system-status',
+      status: null,
+    };
+    ctx.itemEntries.set(entry.id, entry);
+    return [{ type: 'entry', entry }];
+  }
 
   const collabUpdate = normalizeCollabAgentCompletion(item, ctx);
   if (collabUpdate.length > 0) return collabUpdate;
@@ -287,7 +298,7 @@ function normalizeItemCompleted(
     return [{ type: 'entry-update', entry }];
   }
 
-  const entry = createToolEntry(item, itemId);
+  const entry = createToolEntry(item, itemId, dateFromParams(params));
   if (entry === undefined) return [];
 
   const entryWithResult =
@@ -335,6 +346,7 @@ function createAssistantEntry(
 function createToolEntry(
   item: Record<string, unknown>,
   itemId: string,
+  eventDate?: string,
 ): ItemEntry | undefined {
   const type = str(item.type);
   if (
@@ -431,6 +443,10 @@ function createToolEntry(
     return createCollabAgentToolEntry(item, itemId);
   }
 
+  if (type === 'subAgentActivity') {
+    return createSubAgentActivityToolEntry(item, itemId, eventDate);
+  }
+
   if (type === 'webSearch') {
     const entry = createWebSearchToolEntry(item, itemId);
     if (entry !== undefined || isEmptyWebSearchPlaceholder(item)) {
@@ -446,6 +462,37 @@ function createToolEntry(
     name: 'codex-tool',
     input: { originalType: type, item: { ...item } },
   };
+}
+
+function createSubAgentActivityToolEntry(
+  item: Record<string, unknown>,
+  itemId: string,
+  eventDate: string | undefined,
+): ToolUseEntry | undefined {
+  const kind = str(item.kind);
+  if (kind !== 'started' && kind !== 'interacted') return undefined;
+
+  const agentName = agentNameFromPath(str(item.agentPath));
+  return {
+    id: itemId,
+    date: eventDate ?? dateFromItem(item),
+    type: 'tool-use',
+    toolId: itemId,
+    name: 'sub-agent',
+    input: {
+      agentType: 'Codex',
+      description: agentName,
+      prompt: agentName,
+    },
+  };
+}
+
+function agentNameFromPath(agentPath: string | undefined): string {
+  const segments = agentPath
+    ?.trim()
+    .split(/[\\/]+/)
+    .filter((segment) => segment !== '');
+  return segments?.at(-1) ?? 'Codex subagent';
 }
 
 function createCollabAgentToolEntry(
@@ -595,9 +642,17 @@ function registerSubagentThreadIds(
 ): void {
   if (entry.type !== 'tool-use' || entry.name !== 'sub-agent') return;
 
-  for (const threadId of stringArray(item.receiverThreadIds)) {
+  for (const threadId of subagentThreadIdsFromItem(item)) {
     ctx.subagentToolIdsByThreadId.set(threadId, entry.toolId);
   }
+}
+
+function subagentThreadIdsFromItem(item: Record<string, unknown>): string[] {
+  const receiverThreadIds = stringArray(item.receiverThreadIds);
+  const agentThreadId = str(item.agentThreadId);
+  return agentThreadId === undefined
+    ? receiverThreadIds
+    : [...receiverThreadIds, agentThreadId];
 }
 
 function parentToolIdFromParams(
@@ -772,7 +827,11 @@ function dateFromItem(item: Record<string, unknown>): string {
 }
 
 function dateFromParams(params: Record<string, unknown>): string | undefined {
-  const ms = num(params.startedAtMs) ?? num(params.started_at_ms);
+  const ms =
+    num(params.startedAtMs) ??
+    num(params.started_at_ms) ??
+    num(params.completedAtMs) ??
+    num(params.completed_at_ms);
   return ms === undefined ? undefined : new Date(ms).toISOString();
 }
 

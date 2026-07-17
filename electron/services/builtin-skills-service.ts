@@ -184,9 +184,10 @@ Goal:
 - Iterate over time. Strengthen repeated signals, weaken one-offs, and preserve contradictions instead of overwriting them silently.
 
 Default memory location:
-- Use ".jean-claude/memory/user-preferences.md" in the current repository unless the user gives another path.
-- Read captured evidence from daily JSONL files in ".jean-claude/memory/user-reviews/" when present.
-- Jean-Claude tracks processed byte offsets in ".jean-claude/memory/user-reviews-state.json" for scheduled consolidation. Do not edit this state file unless explicitly asked; the app updates it after successful runs.
+- If the caller supplies a memory file or folder, use that exact location and resolve its evidence and state files within that folder.
+- Otherwise, use ".jean-claude/memory/user-preferences.md" in the current repository.
+- Read captured evidence from daily JSONL files in "user-reviews/" beside the selected memory file when present.
+- Jean-Claude tracks processed byte offsets in "user-reviews-state.json" beside the selected memory file for scheduled consolidation. Do not edit this state file unless explicitly asked; the app updates it after successful runs.
 - Create parent directories if missing.
 - Keep memory human-readable markdown.
 

@@ -246,7 +246,7 @@ async function generateWithOpenCode({
   const session = await client.session.create({
     directory,
     ...(permission.length > 0 ? { body: { permission } } : {}),
-  });
+  }, { throwOnError: true });
   const sessionId = session.data?.id;
 
   if (!sessionId) {
@@ -259,6 +259,11 @@ async function generateWithOpenCode({
   abortController.signal.addEventListener('abort', onAbort, { once: true });
 
   try {
+    if (abortController.signal.aborted) {
+      onAbort();
+      throw new Error('OpenCode generation aborted');
+    }
+
     const response = await client.session.prompt({
       sessionID: sessionId,
       directory,
@@ -327,6 +332,18 @@ async function generateWithOpenCode({
           ? `opencode-generation:${sessionId}:${info.id}`
           : null,
       });
+    }
+
+    if (info?.error) {
+      const message =
+        'data' in info.error &&
+        typeof info.error.data === 'object' &&
+        info.error.data !== null &&
+        'message' in info.error.data &&
+        typeof info.error.data.message === 'string'
+          ? info.error.data.message
+          : 'No error details returned';
+      throw new Error(`OpenCode ${info.error.name}: ${message}`);
     }
 
     return extractOpenCodeResponseOutput({
@@ -594,13 +611,31 @@ function extractOpenCodeResponseOutput({
     .trim();
 
   if (!textParts) {
+    const info = response.data?.info as Partial<OcAssistantMessage> | undefined;
     dbg.agent(
-      'OpenCode generation returned no usable output (session=%s model=%s skill=%s structured=%s parts=%d)',
+      'OpenCode generation returned no usable output (session=%s model=%s skill=%s structured=%s responseKeys=%O info=%O partTypes=%O)',
       sessionId,
       model,
       skillName ?? '(none)',
       outputSchema ? 'yes' : 'no',
-      response.data?.parts?.length ?? 0,
+      Object.keys(response.data ?? {}),
+      info
+        ? {
+            id: info.id,
+            providerID: info.providerID,
+            modelID: info.modelID,
+            mode: info.mode,
+            agent: info.agent,
+            finish: info.finish,
+            variant: info.variant,
+            time: info.time,
+            tokens: info.tokens,
+            cost: info.cost,
+            hasError: info.error !== undefined,
+            hasStructuredOutput: info.structured !== undefined,
+          }
+        : null,
+      (response.data?.parts ?? []).map((part) => part.type ?? '(unknown)'),
     );
     return null;
   }

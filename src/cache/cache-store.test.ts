@@ -45,6 +45,7 @@ function createProject(overrides: Partial<Project> = {}): Project {
     workItemProviderId: null,
     workItemProjectId: null,
     workItemProjectName: null,
+    workItemTitleParser: null,
     showWorkItemsInFeed: false,
     showPrsInFeed: false,
     defaultAgentBackend: null,
@@ -580,6 +581,9 @@ describe('cache store foundation', () => {
         id: 'task:task-1',
         taskId: 'task-1',
         hasUnread: true,
+        hasUncommittedChanges: true,
+        hasUnpushedCommits: true,
+        workItemTypes: ['Bug'],
         children: [
           createFeedItem({
             id: 'task:child-task',
@@ -600,6 +604,9 @@ describe('cache store foundation', () => {
         id: 'task:task-1',
         taskId: 'task-1',
         hasUnread: false,
+        hasUncommittedChanges: true,
+        hasUnpushedCommits: true,
+        workItemTypes: ['Bug'],
         children: [
           {
             id: 'task:child-task',
@@ -609,6 +616,51 @@ describe('cache store foundation', () => {
       },
     ]);
     expect(cache$.resources['feed:tasks'].get()?.stale).toBe(true);
+  });
+
+  it('preserves child task enrichment when child task upsert clears unread state', () => {
+    applyCacheEvent({ type: 'project.upsert', project: createProject() });
+    setDocumentResource('feed:tasks', [
+      createFeedItem({
+        id: 'task:parent',
+        taskId: 'parent',
+        children: [
+          createFeedItem({
+            id: 'task:task-1',
+            taskId: 'task-1',
+            parentTaskId: 'parent',
+            hasUnread: true,
+            hasUncommittedChanges: true,
+            hasUnpushedCommits: true,
+            workItemTypes: ['Bug'],
+          }),
+        ],
+      }),
+    ]);
+
+    applyCacheEvent({
+      type: 'task.upsert',
+      task: createTask({
+        id: 'task-1',
+        parentTaskId: 'parent',
+        hasUnread: false,
+      }),
+    });
+
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      {
+        id: 'task:parent',
+        children: [
+          {
+            id: 'task:task-1',
+            hasUnread: false,
+            hasUncommittedChanges: true,
+            hasUnpushedCommits: true,
+            workItemTypes: ['Bug'],
+          },
+        ],
+      },
+    ]);
   });
 
   it('optimistically moves child tasks to the feed root', () => {

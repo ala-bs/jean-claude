@@ -750,6 +750,13 @@ button {
     0 4px 6px -1px rgba(0, 0, 0, 0.2);
 }
 
+.prompt-input-border:focus-within {
+  box-shadow:
+    0 0 14px 0 oklch(0.72 0.2 295 / 0.25),
+    0 0 6px 0 oklch(0.6 0.22 320 / 0.15),
+    0 4px 6px -1px rgba(0, 0, 0, 0.25);
+}
+
 @utility prompt-input-border-focused {
   position: relative;
   isolation: isolate;
@@ -1160,9 +1167,19 @@ html[data-reduce-motion='false'] .feed-unread-branch {
 html[data-reduce-motion='true'] .running-border,
 html[data-reduce-motion='true'] .running-border-selected,
 html[data-reduce-motion='true'] .jobs-running-border,
+html[data-reduce-motion='true'] .permission-border,
+html[data-reduce-motion='true'] .permission-border-selected,
+html[data-reduce-motion='true'] .question-border,
+html[data-reduce-motion='true'] .question-border-selected,
+html[data-reduce-motion='true'] .prompt-input-border,
+html[data-reduce-motion='true'] .prompt-input-border-focused,
 html[data-reduce-motion='true'] .step-chip-running,
 html[data-reduce-motion='true'] .step-connector-running,
 html[data-reduce-motion='true'] .animate-command-running,
+html[data-reduce-motion='true'] .animate-activity-glow,
+html[data-reduce-motion='true'] [data-animation-target='jobs-button'] .animate-spin,
+html[data-reduce-motion='true'] [data-animation-target='jobs-button'] .animate-ping,
+html[data-reduce-motion='true'] .task-status-indicator,
 html[data-reduce-motion='true'] .task-agent-running-shell::before,
 html[data-reduce-motion='true'] .task-agent-running-shell .animate-pulse,
 html[data-reduce-motion='true'] .task-agent-running-shell .animate-spin,

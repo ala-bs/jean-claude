@@ -53,6 +53,9 @@ export function useFeedNoteById(noteId: string) {
     key: 'feed:notes',
     load: async () => api.feed.getNoteItems(),
     ingest: ingestFeedNotes,
+    // Reuse feed list cache when note editor mounts. Explicitly stale notes
+    // still refetch through useCacheResource's stale-resource effect.
+    staleTime: Infinity,
   });
 
   const note = useMemo(

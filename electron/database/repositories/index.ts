@@ -14,3 +14,4 @@ export { PrViewSnapshotRepository } from './pr-view-snapshots';
 export { UsageSnapshotRepository } from './usage-snapshots';
 export { AiUsageRepository } from './ai-usage';
 export { WorkActivityRepository } from './work-activity';
+export { GlobalMcpServerRepository } from './global-mcp-servers';

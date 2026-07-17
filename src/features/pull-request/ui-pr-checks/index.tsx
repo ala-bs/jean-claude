@@ -16,8 +16,6 @@ import { useCallback, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
-
-
 import type { AzureDevOpsPolicyEvaluation } from '@/lib/api';
 
 export type EvaluationWithOptimistic = AzureDevOpsPolicyEvaluation & {
@@ -207,8 +205,8 @@ export function PrChecks({
   onExpandCheck,
   renderExpanded,
   ignoredAutoCompletePolicyIds,
-  onIgnoreOptionalPolicy,
-  isIgnoringOptionalPolicy,
+  onSetPolicyIgnored,
+  isSettingPolicyIgnored,
 }: {
   evaluations: EvaluationWithOptimistic[];
   isLoading?: boolean;
@@ -221,8 +219,8 @@ export function PrChecks({
   onExpandCheck?: (buildId: number | null) => void;
   renderExpanded?: (buildId: number) => ReactNode;
   ignoredAutoCompletePolicyIds?: Set<number>;
-  onIgnoreOptionalPolicy?: (configId: number) => void;
-  isIgnoringOptionalPolicy?: boolean;
+  onSetPolicyIgnored?: (configId: number, shouldIgnore: boolean) => void;
+  isSettingPolicyIgnored?: boolean;
 }) {
   const visibleEvaluations = useMemo(
     () => getVisibleEvaluations(evaluations),
@@ -370,8 +368,8 @@ export function PrChecks({
                   : null
               }
               ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
-              onIgnoreOptionalPolicy={onIgnoreOptionalPolicy}
-              isIgnoringOptionalPolicy={isIgnoringOptionalPolicy}
+              onSetPolicyIgnored={onSetPolicyIgnored}
+              isSettingPolicyIgnored={isSettingPolicyIgnored}
             />
           );
         })}
@@ -429,8 +427,8 @@ export function PrChecks({
                       : null
                   }
                   ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
-                  onIgnoreOptionalPolicy={onIgnoreOptionalPolicy}
-                  isIgnoringOptionalPolicy={isIgnoringOptionalPolicy}
+                  onSetPolicyIgnored={onSetPolicyIgnored}
+                  isSettingPolicyIgnored={isSettingPolicyIgnored}
                 />
               );
             })}
@@ -451,8 +449,8 @@ function CheckRow({
   hasBorderTop,
   expandedContent,
   ignoredAutoCompletePolicyIds,
-  onIgnoreOptionalPolicy,
-  isIgnoringOptionalPolicy,
+  onSetPolicyIgnored,
+  isSettingPolicyIgnored,
 }: {
   evaluation: EvaluationWithOptimistic;
   onRequeue?: (evaluationId: string) => void;
@@ -464,8 +462,8 @@ function CheckRow({
   hasBorderTop?: boolean;
   expandedContent?: ReactNode;
   ignoredAutoCompletePolicyIds?: Set<number>;
-  onIgnoreOptionalPolicy?: (configId: number) => void;
-  isIgnoringOptionalPolicy?: boolean;
+  onSetPolicyIgnored?: (configId: number, shouldIgnore: boolean) => void;
+  isSettingPolicyIgnored?: boolean;
 }) {
   const name = getDisplayName(evaluation);
   const showQueue = canQueue(evaluation) && onRequeue;
@@ -474,11 +472,7 @@ function CheckRow({
   const isIgnoredForAutoComplete = ignoredAutoCompletePolicyIds?.has(
     evaluation.configuration.id,
   );
-  const canIgnoreForAutoComplete =
-    isOptional &&
-    isBuildPolicy(evaluation) &&
-    !!onIgnoreOptionalPolicy &&
-    !isIgnoredForAutoComplete;
+  const canSetPolicyIgnored = isOptional && !!onSetPolicyIgnored;
 
   const buildId = evaluation.context?.buildId;
   const isClickable = !!onToggleExpand || (!!buildId && !!onCheckClick);
@@ -521,33 +515,34 @@ function CheckRow({
         </span>
 
         {/* Optional badge */}
-        {isOptional && (
+        {isOptional && !canSetPolicyIgnored && (
           <span className="border-glass-border text-ink-4 shrink-0 rounded border px-1.5 py-0.5 text-[10px] tracking-wider uppercase">
             Optional
           </span>
         )}
 
-        {canIgnoreForAutoComplete && (
+        {canSetPolicyIgnored && (
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onIgnoreOptionalPolicy(evaluation.configuration.id);
+            onClick={(event) => {
+              event.stopPropagation();
+              onSetPolicyIgnored(
+                evaluation.configuration.id,
+                !isIgnoredForAutoComplete,
+              );
             }}
-            disabled={isIgnoringOptionalPolicy}
-            className="text-status-pr hover:bg-status-pr/15 shrink-0 rounded px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50"
+            disabled={isSettingPolicyIgnored}
+            className="border-glass-border text-ink-3 hover:border-status-pr/40 hover:bg-status-pr/10 hover:text-status-pr shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50"
           >
-            Ignore for auto-complete
+            {isIgnoredForAutoComplete ? 'Make required' : 'Make optional'}
           </button>
         )}
 
-        {isOptional &&
-          isBuildPolicy(evaluation) &&
-          isIgnoredForAutoComplete && (
-            <span className="text-status-done bg-status-done/10 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium">
-              Ignored
-            </span>
-          )}
+        {canSetPolicyIgnored && isIgnoredForAutoComplete && (
+          <span className="text-status-done bg-status-done/10 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium">
+            Ignored
+          </span>
+        )}
 
         {/* Status label */}
         <span

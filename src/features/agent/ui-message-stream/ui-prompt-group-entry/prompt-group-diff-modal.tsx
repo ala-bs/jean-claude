@@ -23,8 +23,6 @@ import type { PromptImagePart } from '@shared/agent-backend-types';
 
 
 
-import type { DisplayMessage } from '../message-merger';
-
 interface FileChange {
   path: string;
   /** Display path (relative or full for external) */
@@ -53,7 +51,7 @@ function relativizePath(
 }
 
 function extractFileChanges(
-  childMessages: DisplayMessage[],
+  fileChangeEntries: NormalizedEntry[],
   rootPath: string | null | undefined,
 ): FileChange[] {
   const fileMap = new Map<
@@ -155,11 +153,7 @@ function extractFileChanges(
     }
   }
 
-  for (const dm of childMessages) {
-    if (dm.kind === 'entry') processEntries([dm.entry]);
-    if (dm.kind === 'subagent') processEntries(dm.childEntries);
-    if (dm.kind === 'skill') processEntries(dm.childEntries);
-  }
+  processEntries(fileChangeEntries);
 
   const changes: FileChange[] = [];
   for (const [path, data] of fileMap) {
@@ -191,19 +185,19 @@ function extractFileChanges(
 export function PromptGroupDiffModal({
   isOpen,
   onClose,
-  childMessages,
+  fileChangeEntries,
   rootPath,
   taskId,
 }: {
   isOpen: boolean;
   onClose: () => void;
-  childMessages: DisplayMessage[];
+  fileChangeEntries: NormalizedEntry[];
   rootPath?: string | null;
   taskId?: string;
 }) {
   const fileChanges = useMemo(
-    () => extractFileChanges(childMessages, rootPath),
-    [childMessages, rootPath],
+    () => extractFileChanges(fileChangeEntries, rootPath),
+    [fileChangeEntries, rootPath],
   );
 
   const { projectFiles, externalFiles } = useMemo(() => {

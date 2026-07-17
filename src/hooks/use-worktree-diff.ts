@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+
+import { invalidateFeedResource } from '@/cache/feed-cache';
 import { useCallback } from 'react';
 
 
@@ -186,6 +188,7 @@ export function useCommitWorktree() {
       queryClient.invalidateQueries({
         queryKey: ['worktree-file-content', taskId],
       });
+      invalidateFeedResource(queryClient, 'tasks');
     },
   });
 }
@@ -253,10 +256,12 @@ export function usePushBranch() {
       }),
     onSuccess: (_, { taskId }) => {
       invalidateWorktreeQueries(taskId);
+      invalidateFeedResource(queryClient, 'tasks');
     },
     onError: (_, { taskId, commitUnstaged }) => {
       if (commitUnstaged) {
         invalidateWorktreeQueries(taskId);
+        invalidateFeedResource(queryClient, 'tasks');
       }
     },
   });

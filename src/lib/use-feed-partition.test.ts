@@ -147,4 +147,30 @@ describe('partitionFeedItems', () => {
       newerParent.id,
     ]);
   });
+
+  it('keeps PRs in review carousel when only owned by a PR review task', async () => {
+    const reviewTask = taskItem({
+      id: 'task:review-pr-1',
+      taskType: 'pr-review',
+      pullRequestId: 1,
+    });
+    const reviewedPr = prItem({ id: 'pr:project-1:1', pullRequestId: 1 });
+
+    const taskOwnedPrKeys = new Set<string>();
+    if (reviewTask.taskType !== 'pr-review') {
+      taskOwnedPrKeys.add('project-1:1');
+    }
+
+    const result = partitionFeedItems({
+      visibleFeedItems: [reviewTask, reviewedPr],
+      hiddenProjectIdSet: new Set(),
+      pinned: [],
+      pinnedIds: new Set(),
+      dismissedIds: new Set(),
+      lowPriorityIds: new Set(),
+      taskOwnedPrKeys,
+    });
+
+    expect(result.prReviewItems.map((item) => item.id)).toContain(reviewedPr.id);
+  });
 });

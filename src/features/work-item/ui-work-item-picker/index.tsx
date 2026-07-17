@@ -1,4 +1,4 @@
-import { Columns3, List, RefreshCw } from 'lucide-react';
+import { Columns3, List, Loader2, RefreshCw } from 'lucide-react';
 import {
   startTransition,
   useCallback,
@@ -247,6 +247,10 @@ export function WorkItemPicker({
   const isRefreshing =
     isFetchingWorkItems || isFetchingBoardColumns || isFetchingIterations;
 
+  // Empty cached results look identical to an empty project while refetching.
+  const isLoadingWorkItems =
+    isLoading || (isFetchingWorkItems && (workItems?.length ?? 0) === 0);
+
   const handleRefresh = useCallback(() => {
     void refetchWorkItems();
     void refetchBoardColumns();
@@ -345,10 +349,15 @@ export function WorkItemPicker({
   const isBoardBootstrapping = viewMode === 'board' && isLoadingBoardColumns;
 
   // Loading state
-  if (!canFetchWorkItems || isLoading || isBoardBootstrapping) {
+  if (!canFetchWorkItems || isLoadingWorkItems || isBoardBootstrapping) {
     return (
-      <div className="flex h-full w-full items-center justify-center">
-        <span className="text-ink-2 text-sm">
+      <div
+        className="flex h-full w-full items-center justify-center"
+        role="status"
+        aria-label="Loading work items"
+      >
+        <span className="text-ink-2 flex items-center gap-2 text-sm">
+          <Loader2 aria-hidden="true" className="text-acc-ink h-4 w-4 animate-spin" />
           {isLoadingIterations
             ? 'Loading iterations...'
             : isBoardBootstrapping

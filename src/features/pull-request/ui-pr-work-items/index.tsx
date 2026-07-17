@@ -16,7 +16,12 @@ import { useQuery } from '@tanstack/react-query';
 
 
 import { api, type AzureDevOpsWorkItem } from '@/lib/api';
+import {
+  KeyboardLayerProvider,
+  useKeyboardLayer,
+} from '@/common/context/keyboard-bindings';
 import { Modal } from '@/common/ui/modal';
+import { useCommands } from '@/common/hooks/use-commands';
 import { WorkItemPreview } from '@/features/work-item/ui-work-item-preview';
 
 
@@ -270,6 +275,27 @@ export function PrWorkItems({
   const [previewItem, setPreviewItem] = useState<AzureDevOpsWorkItem | null>(
     null,
   );
+  const previewLayer = useKeyboardLayer('dialog', {
+    exclusive: !!previewItem,
+  });
+
+  const openPreviewInAzure = useCallback(() => {
+    if (!previewItem) return false;
+    window.open(previewItem.url, '_blank', 'noopener,noreferrer');
+  }, [previewItem]);
+
+  useCommands(
+    'pr-work-item-preview',
+    [
+      previewItem && {
+        label: 'Open Work Item in Azure DevOps',
+        shortcut: 'cmd+shift+o',
+        hideInCommandPalette: true,
+        handler: openPreviewInAzure,
+      },
+    ],
+    { layer: previewLayer },
+  );
 
   const handleRowKeyDown = useCallback(
     (e: React.KeyboardEvent, wi: AzureDevOpsWorkItem) => {
@@ -454,34 +480,37 @@ export function PrWorkItems({
       )}
 
       {/* Work item preview modal */}
-      <Modal
-        isOpen={!!previewItem}
-        onClose={() => setPreviewItem(null)}
-        title={
-          previewItem ? (
-            <span className="flex items-center gap-2">
-              <WorkItemTypeIcon type={previewItem.fields.workItemType} />
-              <span className="text-ink-2 text-sm font-medium">
-                #{previewItem.id}
+      <KeyboardLayerProvider layer={previewLayer}>
+        <Modal
+          isOpen={!!previewItem}
+          onClose={() => setPreviewItem(null)}
+          title={
+            previewItem ? (
+              <span className="flex items-center gap-2">
+                <WorkItemTypeIcon type={previewItem.fields.workItemType} />
+                <span className="text-ink-2 text-sm font-medium">
+                  #{previewItem.id}
+                </span>
+                <span className="text-ink-1 text-sm">
+                  {previewItem.fields.title}
+                </span>
               </span>
-              <span className="text-ink-1 text-sm">
-                {previewItem.fields.title}
-              </span>
-            </span>
-          ) : undefined
-        }
-        size="xl"
-        panelClassName="h-[85vh]"
-        contentClassName="flex min-h-0 flex-1 overflow-hidden p-4"
-      >
-        <WorkItemPreview
-          workItem={previewItem}
-          providerId={providerId}
-          projectName={previewItem?.fields.teamProject ?? azureProjectName}
-          showCommentsAside
-          readOnly={readOnly}
-        />
-      </Modal>
+            ) : undefined
+          }
+          size="xl"
+          panelClassName="h-[85vh]"
+          contentClassName="flex min-h-0 flex-1 overflow-hidden p-4"
+        >
+          <WorkItemPreview
+            workItem={previewItem}
+            providerId={providerId}
+            projectName={previewItem?.fields.teamProject ?? azureProjectName}
+            showCommentsAside
+            readOnly={readOnly}
+            onOpenInBrowser={openPreviewInAzure}
+          />
+        </Modal>
+      </KeyboardLayerProvider>
     </div>
   );
 }

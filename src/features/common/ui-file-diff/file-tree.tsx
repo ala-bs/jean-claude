@@ -1,4 +1,5 @@
 import {
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -40,6 +41,7 @@ export function DiffFileTree({
   commentCountByFile,
   commentStatusCountByFile,
   draftCountByFile,
+  llmThreadCountByFile,
   collapsedFolders: externalCollapsedFolders,
   onToggleFolder: externalOnToggleFolder,
 }: {
@@ -57,6 +59,8 @@ export function DiffFileTree({
   >;
   /** Number of unsent draft comments per file path */
   draftCountByFile?: Record<string, number>;
+  /** Number of LLM review threads per file path */
+  llmThreadCountByFile?: Record<string, number>;
   /** Externally-managed set of collapsed folder paths (for persistence). When provided, takes precedence over local state. */
   collapsedFolders?: Set<string>;
   /** Callback when a folder is toggled. Required when collapsedFolders is provided. */
@@ -126,6 +130,10 @@ export function DiffFileTree({
     (path: string) => draftCountByFile?.[path] ?? 0,
     [draftCountByFile],
   );
+  const getLlmThreadCount = useCallback(
+    (path: string) => llmThreadCountByFile?.[path] ?? 0,
+    [llmThreadCountByFile],
+  );
 
   return (
     <div className="flex flex-col overflow-auto py-2">
@@ -142,6 +150,7 @@ export function DiffFileTree({
           getCommentCount={getCommentCount}
           getCommentStatusCount={getCommentStatusCount}
           getDraftCount={getDraftCount}
+          getLlmThreadCount={getLlmThreadCount}
         />
       ))}
     </div>
@@ -159,6 +168,7 @@ function TreeNodeRow({
   getCommentCount,
   getCommentStatusCount,
   getDraftCount,
+  getLlmThreadCount,
 }: {
   node: TreeNode;
   depth: number;
@@ -172,6 +182,7 @@ function TreeNodeRow({
     path: string,
   ) => { active: number; resolved: number } | undefined;
   getDraftCount: (path: string) => number;
+  getLlmThreadCount: (path: string) => number;
 }) {
   const isExpanded = expandedFolders.has(node.path);
   const isSelected = node.path === selectedPath;
@@ -208,6 +219,7 @@ function TreeNodeRow({
               getCommentCount={getCommentCount}
               getCommentStatusCount={getCommentStatusCount}
               getDraftCount={getDraftCount}
+              getLlmThreadCount={getLlmThreadCount}
             />
           ))}
       </>
@@ -223,6 +235,7 @@ function TreeNodeRow({
     : 0;
   const commentCount = getCommentCount(node.path);
   const draftCount = getDraftCount(node.path);
+  const llmThreadCount = getLlmThreadCount(node.path);
 
   return (
     <button
@@ -288,6 +301,16 @@ function TreeNodeRow({
         >
           <PenLine className="h-2.5 w-2.5" />
           {draftCount}
+        </span>
+      )}
+      {llmThreadCount > 0 && (
+        <span
+          className="border-acc/20 bg-acc/10 text-acc-ink ml-1 inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 font-mono text-[9.5px]"
+          aria-label={`${llmThreadCount} LLM thread${llmThreadCount !== 1 ? 's' : ''}`}
+          title="LLM threads"
+        >
+          <Bot className="h-2.5 w-2.5" />
+          {llmThreadCount}
         </span>
       )}
       <span className={`ml-auto shrink-0 text-xs ${statusIndicator.color}`}>

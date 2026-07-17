@@ -15,6 +15,12 @@ import {
 import type { PermissionScope } from './permission-types';
 import type { ProjectPriority } from './feed-types';
 import type { UsageProviderType } from './usage-types';
+import type { WorkItemTitleParserSetting } from './work-item-title-parser-types';
+
+export type {
+  WorkItemTitleParserRule,
+  WorkItemTitleParserSetting,
+} from './work-item-title-parser-types';
 
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
@@ -47,7 +53,7 @@ export interface UpdateToken {
 }
 
 export type ProjectType = 'local' | 'git-provider' | 'system';
-export type TaskType = 'agent' | 'skill-creation' | 'feature-map';
+export type TaskType = 'agent' | 'skill-creation' | 'feature-map' | 'pr-review';
 export type TaskStatus =
   | 'running'
   | 'waiting'
@@ -253,6 +259,7 @@ export interface Project {
   workItemProviderId: string | null;
   workItemProjectId: string | null;
   workItemProjectName: string | null;
+  workItemTitleParser: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed: boolean;
   showPrsInFeed: boolean;
   autoPullSourceBranch: boolean;
@@ -291,6 +298,7 @@ export interface NewProject {
   workItemProviderId?: string | null;
   workItemProjectId?: string | null;
   workItemProjectName?: string | null;
+  workItemTitleParser?: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
@@ -329,6 +337,7 @@ export interface UpdateProject {
   workItemProviderId?: string | null;
   workItemProjectId?: string | null;
   workItemProjectName?: string | null;
+  workItemTitleParser?: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
@@ -472,6 +481,17 @@ export interface PrReviewStepMeta {
   submittedCount?: number;
 }
 
+/** Meta for PR review chat steps anchored to selected diff text */
+export interface PrReviewChatStepMeta {
+  kind: 'pr-review-chat';
+  pullRequestId: number;
+  filePath: string;
+  lineStart: number;
+  lineEnd?: number;
+  side?: 'old' | 'new';
+  selectedText: string;
+}
+
 /** Config for a single reviewer in a review step */
 export interface ReviewerConfig {
   id: string;
@@ -516,10 +536,27 @@ export type TaskStepMeta =
   | CreatePullRequestStepMeta
   | ForkStepMeta
   | PrReviewStepMeta
+  | PrReviewChatStepMeta
   | ReviewStepMeta
   | SkillCreationStepMeta
   | FeatureMapStepMeta
   | Record<string, never>;
+
+export function isPrReviewChatStepMeta(
+  meta: TaskStepMeta | null | undefined,
+): meta is PrReviewChatStepMeta {
+  if (!meta) return false;
+  const m = meta as PrReviewChatStepMeta;
+  return (
+    m.kind === 'pr-review-chat' &&
+    typeof m.pullRequestId === 'number' &&
+    typeof m.filePath === 'string' &&
+    typeof m.lineStart === 'number' &&
+    (m.lineEnd === undefined || typeof m.lineEnd === 'number') &&
+    (m.side === undefined || m.side === 'old' || m.side === 'new') &&
+    typeof m.selectedText === 'string'
+  );
+}
 
 /** Type guard for SkillCreationStepMeta */
 export function isSkillCreationStepMeta(
@@ -681,6 +718,12 @@ export interface SummaryModelsSetting {
 
 export interface BackendDefaultModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
+}
+
+export interface PrReviewAgentSetting {
+  backend: AgentBackendType | null;
+  modelPreference: ModelPreference;
+  thinkingEffort: ThinkingEffort;
 }
 
 export type OpenCodeProcessMode = 'standalone' | 'shared';
@@ -953,6 +996,18 @@ function isBackendDefaultModelsSetting(
   if (!obj.models || typeof obj.models !== 'object') return false;
   const models = obj.models as Record<string, unknown>;
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
+}
+
+function isPrReviewAgentSetting(v: unknown): v is PrReviewAgentSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return (
+    (obj.backend === null ||
+      (typeof obj.backend === 'string' &&
+        VALID_BACKENDS.includes(obj.backend as AgentBackendType))) &&
+    typeof obj.modelPreference === 'string' &&
+    VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort)
+  );
 }
 
 function isOpenCodeProcessSetting(v: unknown): v is OpenCodeProcessSetting {
@@ -1299,6 +1354,14 @@ export const SETTINGS_DEFINITIONS = {
       },
     } as BackendDefaultModelsSetting,
     validate: isBackendDefaultModelsSetting,
+  },
+  prReviewAgent: {
+    defaultValue: {
+      backend: null,
+      modelPreference: 'default',
+      thinkingEffort: 'default',
+    } as PrReviewAgentSetting,
+    validate: isPrReviewAgentSetting,
   },
   opencodeProcess: {
     defaultValue: {

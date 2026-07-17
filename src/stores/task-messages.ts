@@ -76,6 +76,7 @@ export interface TaskState {
   pendingQuestion: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   } | null;
   queuedPrompts: QueuedPrompt[];
@@ -94,6 +95,7 @@ export interface PendingRequest {
   question?: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   };
 }
@@ -139,6 +141,7 @@ interface TaskMessagesStore {
     stepId: string,
     status: TaskStatus,
     error?: string | null,
+    taskId?: string,
   ) => void;
   setPermission: (
     stepId: string,
@@ -458,11 +461,31 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     });
   },
 
-  setStatus: (stepId, status, error = null) => {
+  setStatus: (stepId, status, error = null, taskId) => {
     set((state) => {
       const step = state.steps[stepId];
-      if (!step) return state;
       const shouldClearPending = clearsPendingRequests(status);
+      if (!step) {
+        if (!taskId) return state;
+        return {
+          steps: {
+            ...state.steps,
+            [stepId]: {
+              taskId,
+              messages: [],
+              status,
+              error,
+              pendingPermission: null,
+              pendingQuestion: null,
+              queuedPrompts: [],
+              lastAccessedAt: Date.now(),
+            },
+          },
+          ...(shouldClearPending && {
+            pendingRequestVersion: state.pendingRequestVersion + 1,
+          }),
+        };
+      }
       return {
         steps: {
           ...state.steps,

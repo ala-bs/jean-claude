@@ -72,7 +72,7 @@ export async function generateText({
         'generation.structured',
         provider.capabilities.generation.structured,
       );
-      const result = await capability.generate({
+      const input = {
         model: resolvedModel,
         prompt,
         skillName,
@@ -83,7 +83,25 @@ export async function generateText({
         allowedToolPatterns,
         abortController,
         usageContext,
-      });
+      };
+      let result = await capability.generate(input);
+      if (result.output === null && !abortController.signal.aborted) {
+        dbg.agent(
+          'Structured generation returned no output; retrying once (backend=%s model=%s skill=%s)',
+          resolvedBackend,
+          resolvedModel,
+          skillName ?? '(none)',
+        );
+        result = await capability.generate(input);
+        if (result.output === null) {
+          dbg.agent(
+            'Structured generation returned no output after retry (backend=%s model=%s skill=%s)',
+            resolvedBackend,
+            resolvedModel,
+            skillName ?? '(none)',
+          );
+        }
+      }
       return result.output;
     }
 

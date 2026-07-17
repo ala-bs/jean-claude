@@ -13,20 +13,25 @@ import {
   type SideBySideRow,
 } from './diff-utils';
 import {
+  type LineRangeSelectionPosition,
+  useLineRangeSelection,
+} from './use-line-range-selection';
+import {
   renderTokensWithHighlights,
   renderWithHighlights,
 } from './utils-search-highlight';
 import type { SearchMatch } from './use-diff-search';
 import { useDividerResize } from './use-divider-resize';
-import { useLineRangeSelection } from './use-line-range-selection';
 
 
 import type {
   CodeFoldingState,
+  CommentedLines,
   CommentFormEntry,
   InlineComment,
   LineRange,
 } from './index';
+import { lineAnchorKey, lineRangeKey } from './index';
 
 const EMPTY_SEARCH_MATCHES: SearchMatch[] = [];
 
@@ -47,9 +52,12 @@ export function SideBySideDiffTable({
   newString: string;
   oldTokens: ThemedToken[][];
   newTokens: ThemedToken[][];
-  onAddCommentClick?: (lineRange: LineRange) => void;
+  onAddCommentClick?: (
+    lineRange: LineRange,
+    position: LineRangeSelectionPosition,
+  ) => void;
   inlineComments?: InlineComment[];
-  commentedLines?: Set<number>;
+  commentedLines?: CommentedLines;
   commentForms?: CommentFormEntry[];
   searchMatches: SearchMatch[];
   currentMatchIndex: number;
@@ -128,26 +136,28 @@ export function SideBySideDiffTable({
   const currentMatch = searchMatches[currentMatchIndex] ?? null;
 
   const inlineCommentsByLine = useMemo(() => {
-    const map = new Map<number, InlineComment[]>();
+    const map = new Map<string, InlineComment[]>();
     for (const comment of inlineComments ?? []) {
-      const comments = map.get(comment.line);
+      const key = `${comment.side ?? 'new'}:${comment.line}`;
+      const comments = map.get(key);
       if (comments) {
         comments.push(comment);
       } else {
-        map.set(comment.line, [comment]);
+        map.set(key, [comment]);
       }
     }
     return map;
   }, [inlineComments]);
 
   const commentFormsByEndLine = useMemo(() => {
-    const map = new Map<number, CommentFormEntry[]>();
+    const map = new Map<string, CommentFormEntry[]>();
     for (const form of commentForms ?? []) {
-      const forms = map.get(form.lineRange.end);
+      const key = `${form.lineRange.side ?? 'new'}:${form.lineRange.end}`;
+      const forms = map.get(key);
       if (forms) {
         forms.push(form);
       } else {
-        map.set(form.lineRange.end, [form]);
+        map.set(key, [form]);
       }
     }
     return map;
@@ -161,18 +171,16 @@ export function SideBySideDiffTable({
   const rightPct = `${(1 - leftFraction) * 100}%`;
 
   const isLineInCommentRange = useCallback(
-    (lineNumber: number) => {
+    (lineNumber: number, side: 'old' | 'new' = 'new') => {
       if (!commentForms || commentForms.length === 0) return false;
       return commentForms.some(
         (cf) =>
+          (cf.lineRange.side ?? 'new') === side &&
           lineNumber >= cf.lineRange.start && lineNumber <= cf.lineRange.end,
       );
     },
     [commentForms],
   );
-
-  // Track which lines we've already rendered extras for
-  const renderedNewLineNumbers = new Set<number>();
 
   return (
     <table
@@ -200,34 +208,41 @@ export function SideBySideDiffTable({
       <tbody>
         {rows.map((row, rowIndex) => {
           const newLineNumber = row.right?.newLineNumber ?? row.left?.newLineNumber;
+          const oldLineNumber = row.left?.oldLineNumber;
+          const selectableLineNumber = newLineNumber ?? oldLineNumber;
 
           // Check if this line is hidden by a collapsed fold
           if (newLineNumber && folding.isLineHidden(newLineNumber)) {
             return null;
           }
 
-          const shouldRenderExtras =
-            newLineNumber !== undefined &&
-            !renderedNewLineNumbers.has(newLineNumber);
-          if (newLineNumber !== undefined) {
-            renderedNewLineNumbers.add(newLineNumber);
-          }
+          const lineComments = [
+            ...(newLineNumber
+              ? (inlineCommentsByLine.get(`new:${newLineNumber}`) ?? [])
+              : []),
+            ...(oldLineNumber
+              ? (inlineCommentsByLine.get(`old:${oldLineNumber}`) ?? [])
+              : []),
+          ];
 
-          const lineComments =
-            shouldRenderExtras && newLineNumber
-              ? inlineCommentsByLine.get(newLineNumber)
-              : undefined;
-
-          const formsForLine =
-            shouldRenderExtras && newLineNumber
-              ? commentFormsByEndLine.get(newLineNumber)
-              : undefined;
+          const formsForLine = [
+            ...(newLineNumber
+              ? (commentFormsByEndLine.get(`new:${newLineNumber}`) ?? [])
+              : []),
+            ...(oldLineNumber
+              ? (commentFormsByEndLine.get(`old:${oldLineNumber}`) ?? [])
+              : []),
+          ];
 
           const isInCommentRange = newLineNumber
-            ? isLineInCommentRange(newLineNumber)
+            ? isLineInCommentRange(newLineNumber, 'new')
+            : oldLineNumber
+              ? isLineInCommentRange(oldLineNumber, 'old')
             : false;
 
           const canComment = !!onAddCommentClick && newLineNumber !== undefined;
+          const canSelect =
+            !!onAddCommentClick && selectableLineNumber !== undefined;
 
           // Code folding state
           const isFoldable = newLineNumber
@@ -259,13 +274,18 @@ export function SideBySideDiffTable({
               onDividerMouseDown={handleDividerMouseDown}
               isDragging={isDragging}
               canComment={canComment}
+              canSelect={canSelect}
               isInCommentRange={isInCommentRange}
               hasComment={
-                !!newLineNumber && !!commentedLines?.has(newLineNumber)
+                (!!newLineNumber &&
+                  !!commentedLines?.has(lineAnchorKey('new', newLineNumber))) ||
+                (!!oldLineNumber &&
+                  !!commentedLines?.has(lineAnchorKey('old', oldLineNumber)))
               }
-              inlineComments={lineComments}
-              commentForms={formsForLine}
+              inlineComments={lineComments.length > 0 ? lineComments : undefined}
+              commentForms={formsForLine.length > 0 ? formsForLine : undefined}
               newLineNumber={newLineNumber}
+              oldLineNumber={oldLineNumber}
               isFoldable={isFoldable}
               isFoldCollapsed={isFoldCollapsed}
               foldRange={foldRange}
@@ -289,11 +309,13 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
   onDividerMouseDown,
   isDragging,
   canComment,
+  canSelect,
   isInCommentRange,
   hasComment,
   inlineComments,
   commentForms,
   newLineNumber,
+  oldLineNumber,
   isFoldable,
   isFoldCollapsed,
   foldRange,
@@ -309,11 +331,13 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
   onDividerMouseDown: (e: ReactMouseEvent) => void;
   isDragging: boolean;
   canComment: boolean;
+  canSelect: boolean;
   isInCommentRange: boolean;
   hasComment: boolean;
   inlineComments?: InlineComment[];
   commentForms?: CommentFormEntry[];
   newLineNumber?: number;
+  oldLineNumber?: number;
   isFoldable?: boolean;
   isFoldCollapsed?: boolean;
   foldRange?: { startLine: number; endLine: number };
@@ -324,11 +348,13 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
       <tr
         data-line-index={rowIndex}
         data-new-line={newLineNumber}
+        data-old-line={oldLineNumber}
+        data-line-side={newLineNumber === undefined ? 'old' : 'new'}
         className={clsx('group', {
           'bg-blue-500/10': isInCommentRange,
         })}
         style={{
-          cursor: canComment ? 'pointer' : undefined,
+          cursor: canSelect ? 'pointer' : undefined,
           ...(hasComment && !isInCommentRange
             ? {
                 background:
@@ -411,7 +437,7 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
           <td colSpan={6} className="p-0">
             <div>
               {inlineComments.map((comment, i) => (
-                <div key={i}>{comment.content}</div>
+                <div key={comment.id ?? i}>{comment.content}</div>
               ))}
             </div>
           </td>
@@ -422,7 +448,7 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
       {commentForms &&
         commentForms.length > 0 &&
         commentForms.map((cf) => (
-          <tr key={`form-${cf.lineRange.start}-${cf.lineRange.end}`}>
+          <tr key={`form-${lineRangeKey(cf.lineRange)}`}>
             <td colSpan={6} className="p-0">
               {cf.form}
             </td>
@@ -518,6 +544,7 @@ const SideBySideCell = memo(function SideBySideCell({
     <>
       {/* Line number */}
       <td
+        data-line-side={side === 'left' ? 'old' : 'new'}
         className={clsx(
           'relative pr-1 text-right align-top select-none',
           lineNumClass,
@@ -540,6 +567,7 @@ const SideBySideCell = memo(function SideBySideCell({
       </td>
       {/* Content */}
       <td
+        data-line-side={side === 'left' ? 'old' : 'new'}
         className={clsx('overflow-hidden pr-2 whitespace-pre-wrap', bgClass, {
           'select-none': canComment,
         })}

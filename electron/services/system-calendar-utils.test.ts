@@ -3,10 +3,37 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCalendarNotificationKey,
   clampCalendarLeadTimeMinutes,
+  isCalendarAccessDeniedError,
   isLikelyAllDayCalendarEvent,
   parseCalendarEventRecords,
   shouldSuppressCalendarMeetingAlert,
 } from './system-calendar-utils';
+
+describe('isCalendarAccessDeniedError', () => {
+  it('recognizes EventKit permission denial from stderr', () => {
+    expect(
+      isCalendarAccessDeniedError({
+        stderr:
+          'Fatal error: Error raised at top level: Error Domain=JeanClaudeCalendar Code=1 "Calendar access not granted"',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not classify echoed Swift source as permission denial', () => {
+    expect(
+      isCalendarAccessDeniedError({
+        stderr:
+          'main.swift: error: throw NSError(domain: "JeanClaudeCalendar", code: 1, userInfo: [NSLocalizedDescriptionKey: "Calendar access not granted"])',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not classify unrelated command failures', () => {
+    expect(isCalendarAccessDeniedError(new Error('xcrun not found'))).toBe(
+      false,
+    );
+  });
+});
 
 describe('parseCalendarEventRecords', () => {
   it('parses delimited osascript output into calendar events', () => {

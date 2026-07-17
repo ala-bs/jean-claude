@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { CopilotClient, RuntimeConnection } from '@github/copilot-sdk';
 
+import { getChildProcessEnv } from '../../../lib/child-process-env';
+
 const require = createRequire(import.meta.url);
 
 export type CopilotClientLike = {
@@ -28,6 +30,7 @@ export function createCopilotClient({ cwd }: { cwd: string }): CopilotClientLike
   return new CopilotClient({
     workingDirectory: cwd,
     useLoggedInUser: true,
+    env: getChildProcessEnv(),
     ...(cliPath ? { connection: RuntimeConnection.forStdio({ path: cliPath }) } : {}),
   }) as CopilotClientLike;
 }

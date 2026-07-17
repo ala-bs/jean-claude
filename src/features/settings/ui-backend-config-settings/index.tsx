@@ -1,7 +1,8 @@
-import { FileJson, RotateCcw, Save } from 'lucide-react';
+import { FileJson, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
 
 
 import {
@@ -1405,6 +1406,10 @@ function stripTrailingCommas(content: string): string {
   return result;
 }
 
+function parseJsonLike(content: string): unknown {
+  return JSON.parse(stripTrailingCommas(stripJsonComments(content)));
+}
+
 function hasTomlComments(content: string): boolean {
   let inString = false;
   let escaped = false;
@@ -1451,9 +1456,7 @@ function parseConfig(
   const parsed =
     backend === 'codex' || backend === 'vibe'
       ? (parseToml(content) as unknown)
-      : (JSON.parse(
-          stripTrailingCommas(stripJsonComments(content)),
-        ) as unknown);
+      : (parseJsonLike(content) as unknown);
   if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
     throw new Error('Config must be an object');
   }
@@ -1516,6 +1519,460 @@ function valueToText(value: unknown): string {
   return String(value);
 }
 
+function jsonValueToText(value: unknown): string {
+  return value === undefined ? '' : JSON.stringify(value, null, 2);
+}
+
+type OpenCodeMcpServer = {
+  type?: 'local' | 'remote';
+  command?: string[];
+  url?: string;
+  enabled?: boolean;
+  cwd?: string;
+  environment?: Record<string, string>;
+  headers?: Record<string, string>;
+  oauth?: false | Record<string, unknown>;
+  timeout?: number;
+  [key: string]: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function splitCommand(value: string): string[] {
+  const parts = value.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  return parts.map((part) => part.replace(/^(["'])(.*)\1$/, '$2'));
+}
+
+function quoteCommandPart(value: string): string {
+  if (!value) return '""';
+  if (!/\s/.test(value)) return value;
+  return `"${value.replaceAll('"', '\\"')}"`;
+}
+
+function commandToText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((part) => quoteCommandPart(String(part))).join(' ');
+  }
+  return typeof value === 'string' ? value : '';
+}
+
+function objectToLines(value: unknown): string {
+  if (!isRecord(value)) return '';
+  return Object.entries(value)
+    .map(([key, item]) => `${key}=${String(item)}`)
+    .join('\n');
+}
+
+function linesToObject(value: string): Record<string, string> | undefined {
+  const entries = value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const index = line.indexOf('=');
+      if (index === -1) return [line, ''] as const;
+      return [line.slice(0, index).trim(), line.slice(index + 1).trim()] as const;
+    })
+    .filter(([key]) => key);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function nextMcpName(servers: Record<string, OpenCodeMcpServer>): string {
+  let index = 1;
+  while (servers[`mcp_server_${index}`]) index += 1;
+  return `mcp_server_${index}`;
+}
+
+function omitMcpServer(
+  servers: Record<string, OpenCodeMcpServer>,
+  name: string,
+): Record<string, OpenCodeMcpServer> {
+  return Object.fromEntries(
+    Object.entries(servers).filter(([serverName]) => serverName !== name),
+  );
+}
+
+function renameMcpServer(
+  servers: Record<string, OpenCodeMcpServer>,
+  currentName: string,
+  nextName: string,
+): Record<string, OpenCodeMcpServer> {
+  const server = servers[currentName];
+  if (!server || servers[nextName]) return servers;
+  return { ...omitMcpServer(servers, currentName), [nextName]: server };
+}
+
+function toLocalMcpServer(server: OpenCodeMcpServer): OpenCodeMcpServer {
+  const next = {
+    ...server,
+    type: 'local' as const,
+    command: Array.isArray(server.command) ? server.command : [],
+  };
+  delete next.url;
+  delete next.headers;
+  delete next.oauth;
+  return next;
+}
+
+function toRemoteMcpServer(server: OpenCodeMcpServer): OpenCodeMcpServer {
+  const next = {
+    ...server,
+    type: 'remote' as const,
+    url: typeof server.url === 'string' ? server.url : '',
+  };
+  delete next.command;
+  delete next.cwd;
+  delete next.environment;
+  return next;
+}
+
+function OpenCodeMcpEditor({
+  value,
+  onChange,
+  onTextChange,
+}: {
+  value: unknown;
+  onChange: (value: unknown) => void;
+  onTextChange: (value: string) => void;
+}) {
+  const servers = useMemo<Record<string, OpenCodeMcpServer>>(() => {
+    if (!isRecord(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).map(([name, server]) => [
+        name,
+        isRecord(server) ? (server as OpenCodeMcpServer) : {},
+      ]),
+    );
+  }, [value]);
+  const names = useMemo(() => Object.keys(servers), [servers]);
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState('');
+  const [commandDraft, setCommandDraft] = useState('');
+  const commandDraftServerRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    startTransition(() => setSelectedName((current) => {
+      if (current && servers[current]) return current;
+      return names[0] ?? null;
+    }));
+  }, [names, servers]);
+
+  const emit = (next: Record<string, OpenCodeMcpServer>) => {
+    const nextValue = Object.keys(next).length > 0 ? next : undefined;
+    onChange(nextValue);
+    onTextChange(valueToText(nextValue));
+  };
+
+  const selectServer = (name: string | null) => {
+    setSelectedName(name);
+    setNameDraft(name ?? '');
+    commandDraftServerRef.current = name;
+    setCommandDraft(commandToText(name ? servers[name]?.command : undefined));
+  };
+
+  const updateServer = (name: string, patch: Partial<OpenCodeMcpServer>) => {
+    const current = servers[name] ?? {};
+    emit({ ...servers, [name]: { ...current, ...patch } });
+  };
+
+  const removeKey = (
+    server: OpenCodeMcpServer,
+    key: keyof OpenCodeMcpServer,
+  ) => {
+    const next = { ...server };
+    delete next[key];
+    return next;
+  };
+
+  const selectedServer = selectedName ? servers[selectedName] : null;
+  const selectedType = selectedServer?.type === 'remote' ? 'remote' : 'local';
+
+  useEffect(() => {
+    startTransition(() => setNameDraft(selectedName ?? ''));
+  }, [selectedName]);
+
+  useEffect(() => {
+    if (commandDraftServerRef.current === selectedName) return;
+    commandDraftServerRef.current = selectedName;
+    startTransition(() => setCommandDraft(commandToText(selectedServer?.command)));
+  }, [selectedName, selectedServer?.command]);
+
+  const commitNameDraft = () => {
+    if (!selectedName) return;
+    const nextName = nameDraft.trim();
+    if (!nextName) {
+      setNameDraft(selectedName);
+      return;
+    }
+    if (nextName === selectedName) return;
+    if (servers[nextName]) {
+      setNameDraft(selectedName);
+      return;
+    }
+    emit(renameMcpServer(servers, selectedName, nextName));
+    setSelectedName(nextName);
+    setNameDraft(nextName);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 md:grid-cols-[220px_1fr]">
+        <div className="border-line-soft bg-bg-1/45 rounded-lg border p-2">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-ink-2 text-xs font-semibold">Servers</div>
+            <Button
+              size="xs"
+              icon={<Plus />}
+              onClick={() => {
+                const name = nextMcpName(servers);
+                emit({
+                  ...servers,
+                  [name]: { type: 'local', command: [], enabled: true },
+                });
+                selectServer(name);
+              }}
+            >
+              Add
+            </Button>
+          </div>
+          <div className="space-y-1">
+            {names.length === 0 && (
+              <div className="text-ink-3 rounded-md border border-dashed border-white/10 px-2 py-4 text-center text-xs">
+                No MCP servers. Add local or remote server.
+              </div>
+            )}
+            {names.map((name) => {
+              const server = servers[name];
+              const type = server.type === 'remote' ? 'remote' : 'local';
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => selectServer(name)}
+                  className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
+                    selectedName === name
+                      ? 'bg-acc/15 text-acc-ink ring-1 ring-acc/40'
+                      : 'text-ink-2 hover:bg-bg-2'
+                  }`}
+                >
+                  <span className="min-w-0 truncate font-medium">{name}</span>
+                  <span className="text-ink-3 rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px]">
+                    {type}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {selectedName && selectedServer ? (
+          <div className="border-line-soft bg-bg-1/30 rounded-lg border p-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <Input
+                  value={nameDraft}
+                  className="max-w-60"
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  onBlur={commitNameDraft}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return;
+                    commitNameDraft();
+                    event.currentTarget.blur();
+                  }}
+                />
+                <Select
+                  value={selectedType}
+                  size="sm"
+                  className="w-32"
+                  options={[
+                    { value: 'local', label: 'Local' },
+                    { value: 'remote', label: 'Remote' },
+                  ]}
+                  onChange={(type) => {
+                    if (type === 'remote') {
+                      setCommandDraft('');
+                      emit({
+                        ...servers,
+                        [selectedName]: toRemoteMcpServer(selectedServer),
+                      });
+                      return;
+                    }
+                    setCommandDraft('');
+                    emit({
+                      ...servers,
+                      [selectedName]: toLocalMcpServer(selectedServer),
+                    });
+                  }}
+                />
+              </div>
+              <Button
+                size="xs"
+                variant="ghost"
+                icon={<Trash2 />}
+                onClick={() => {
+                  const rest = omitMcpServer(servers, selectedName);
+                  emit(rest);
+                  selectServer(Object.keys(rest)[0] ?? null);
+                }}
+              >
+                Remove
+              </Button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <Switch
+                checked={selectedServer.enabled !== false}
+                onChange={(enabled) => updateServer(selectedName, { enabled })}
+                label="Enabled"
+              />
+              <Input
+                type="number"
+                value={
+                  typeof selectedServer.timeout === 'number'
+                    ? String(selectedServer.timeout)
+                    : ''
+                }
+                placeholder="Timeout ms, default 5000"
+                onChange={(event) => {
+                  const text = event.target.value.trim();
+                  if (!text) {
+                    emit({
+                      ...servers,
+                      [selectedName]: removeKey(selectedServer, 'timeout'),
+                    });
+                    return;
+                  }
+                  const timeout = Number(text);
+                  if (Number.isFinite(timeout)) updateServer(selectedName, { timeout });
+                }}
+              />
+            </div>
+
+            {selectedType === 'local' ? (
+              <div className="mt-3 space-y-3">
+                <div>
+                  <div className="text-ink-2 mb-1 text-xs font-medium">
+                    Command
+                  </div>
+                  <Input
+                    value={commandDraft}
+                    placeholder="npx -y @modelcontextprotocol/server-everything"
+                    className="font-mono"
+                    onChange={(event) => {
+                      const command = event.target.value;
+                      setCommandDraft(command);
+                      updateServer(selectedName, {
+                        command: splitCommand(command),
+                      });
+                    }}
+                  />
+                </div>
+                <div>
+                  <div className="text-ink-2 mb-1 text-xs font-medium">Cwd</div>
+                  <Input
+                    value={typeof selectedServer.cwd === 'string' ? selectedServer.cwd : ''}
+                    placeholder="Optional working directory"
+                    onChange={(event) => {
+                      const cwd = event.target.value.trim();
+                      if (!cwd) {
+                        emit({
+                          ...servers,
+                          [selectedName]: removeKey(selectedServer, 'cwd'),
+                        });
+                        return;
+                      }
+                      updateServer(selectedName, { cwd });
+                    }}
+                  />
+                </div>
+                <div>
+                  <div className="text-ink-2 mb-1 text-xs font-medium">
+                    Environment
+                  </div>
+                  <Textarea
+                    value={objectToLines(selectedServer.environment)}
+                    placeholder="API_KEY={env:API_KEY}"
+                    rows={3}
+                    className="font-mono text-[11px] leading-4"
+                    onChange={(event) => {
+                      const environment = linesToObject(event.target.value);
+                      if (!environment) {
+                        emit({
+                          ...servers,
+                          [selectedName]: removeKey(selectedServer, 'environment'),
+                        });
+                        return;
+                      }
+                      updateServer(selectedName, { environment });
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 space-y-3">
+                <div>
+                  <div className="text-ink-2 mb-1 text-xs font-medium">URL</div>
+                  <Input
+                    value={typeof selectedServer.url === 'string' ? selectedServer.url : ''}
+                    placeholder="https://mcp.example.com/mcp"
+                    onChange={(event) =>
+                      updateServer(selectedName, { url: event.target.value.trim() })
+                    }
+                  />
+                </div>
+                <div>
+                  <div className="text-ink-2 mb-1 text-xs font-medium">
+                    Headers
+                  </div>
+                  <Textarea
+                    value={objectToLines(selectedServer.headers)}
+                    placeholder="Authorization=Bearer {env:MCP_TOKEN}"
+                    rows={3}
+                    className="font-mono text-[11px] leading-4"
+                    onChange={(event) => {
+                      const headers = linesToObject(event.target.value);
+                      if (!headers) {
+                        emit({
+                          ...servers,
+                          [selectedName]: removeKey(selectedServer, 'headers'),
+                        });
+                        return;
+                      }
+                      updateServer(selectedName, { headers });
+                    }}
+                  />
+                </div>
+                <Switch
+                  checked={selectedServer.oauth !== false}
+                  onChange={(enabled) =>
+                    updateServer(selectedName, { oauth: enabled ? {} : false })
+                  }
+                  label="OAuth auto-detect"
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="border-line-soft text-ink-3 bg-bg-1/30 rounded-lg border p-6 text-center text-xs">
+            Add server to edit details.
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+        <div className="text-ink-3 mb-1 text-[10px] font-semibold tracking-wide uppercase">
+          Preview JSON
+        </div>
+        <pre className="text-ink-2 max-h-44 overflow-auto font-mono text-[11px] leading-4">
+          {valueToText(Object.keys(servers).length > 0 ? servers : undefined) || '{}'}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
 function groupFields(fields: ConfigField[]): Array<[string, ConfigField[]]> {
   const groups = new Map<string, ConfigField[]>();
   for (const field of fields) {
@@ -1525,6 +1982,7 @@ function groupFields(fields: ConfigField[]): Array<[string, ConfigField[]]> {
 }
 
 function FieldCard({
+  backend,
   field,
   value,
   textValue,
@@ -1533,6 +1991,7 @@ function FieldCard({
   onChange,
   onReset,
 }: {
+  backend: AgentBackendType;
   field: ConfigField;
   value: unknown;
   textValue: string;
@@ -1542,9 +2001,15 @@ function FieldCard({
   onReset: () => void;
 }) {
   const isSet = value !== undefined;
+  const shouldFill = field.kind === 'json';
 
   return (
-    <div className="border-line-soft bg-bg-0/45 rounded-lg border px-2.5 py-2">
+    <div
+      className={clsx(
+        'border-line-soft bg-bg-0/45 w-full rounded-lg border px-2.5 py-2',
+        shouldFill && 'flex min-h-0 flex-1 flex-col',
+      )}
+    >
       <div className="mb-1.5 flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-ink-1 text-[13px] leading-tight font-medium">
@@ -1654,12 +2119,20 @@ function FieldCard({
         />
       )}
 
-      {field.kind === 'json' && (
+      {backend === 'opencode' && field.path === 'mcp' && (
+        <OpenCodeMcpEditor
+          value={value}
+          onChange={onChange}
+          onTextChange={onTextChange}
+        />
+      )}
+
+      {field.kind === 'json' && !(backend === 'opencode' && field.path === 'mcp') && (
         <Textarea
           value={textValue}
           placeholder={field.placeholder ?? '{ }'}
           error={!!error}
-          className="min-h-20 font-mono text-[11px] leading-4"
+          className="min-h-0 flex-1 overflow-auto font-mono text-[11px] leading-4"
           onChange={(event) => {
             const text = event.target.value;
             onTextChange(text);
@@ -1668,7 +2141,7 @@ function FieldCard({
               return;
             }
             try {
-              onChange(JSON.parse(text) as unknown);
+              onChange(parseJsonLike(text));
             } catch {
               // Keep invalid text visible; save stays disabled via field error.
             }
@@ -1752,6 +2225,9 @@ function StructuredBackendConfigSettings({
   const groups = useMemo(() => groupFields(visibleFields), [visibleFields]);
   const meta = BACKEND_META[backend];
   const backendBadge = getAgentBackendBadge(backend);
+  const selectedField =
+    visibleFields.find((field) => field.path === selectedFieldPath) ??
+    visibleFields[0];
 
   const query = useQuery({
     queryKey: ['backendConfig', backend],
@@ -1765,13 +2241,47 @@ function StructuredBackendConfigSettings({
     hasTomlComments(query.data.content);
 
   const saveConfig = useMutation({
-    mutationFn: () =>
-      api.backendConfig.setUserConfig(
+    mutationFn: async () => {
+      if (!query.data || !config || !selectedField) {
+        throw new Error('No selected setting to save');
+      }
+
+      const latestConfigFile = await api.backendConfig.getUserConfig(backend);
+      const baseConfig = parseConfig(backend, latestConfigFile.content);
+      const nextConfig = setPathValue(
+        baseConfig,
+        selectedField.path,
+        getPathValue(config, selectedField.path),
+      );
+      return api.backendConfig.setUserConfig(
         backend,
-        serializeConfig(backend, config ?? {}),
-      ),
+        serializeConfig(backend, nextConfig),
+      );
+    },
     onSuccess: (savedConfig) => {
       queryClient.setQueryData(['backendConfig', backend], savedConfig);
+      setBaselineConfig(savedConfig.content);
+      const parsed = parseConfig(backend, savedConfig.content);
+      setTextValues((current) => {
+        if (!selectedField) return current;
+        if (selectedField.kind === 'json') {
+          return {
+            ...current,
+            [selectedField.path]: jsonValueToText(
+              getPathValue(parsed, selectedField.path),
+            ),
+          };
+        }
+        if (selectedField.kind === 'array') {
+          return {
+            ...current,
+            [selectedField.path]: valueToText(
+              getPathValue(parsed, selectedField.path),
+            ),
+          };
+        }
+        return current;
+      });
       addToast({ message: `${meta.label} config saved`, type: 'success' });
     },
     onError: (error) => {
@@ -1788,9 +2298,9 @@ function StructuredBackendConfigSettings({
       const parsed = parseConfig(backend, query.data.content);
       const serialized = serializeConfig(backend, parsed);
       const currentSerialized = config ? serializeConfig(backend, config) : '';
-      const hasLocalEdits =
+      const hasUnsavedConfig =
         !!baselineConfig && currentSerialized !== baselineConfig;
-      if (hasLocalEdits && currentSerialized !== serialized) return;
+      if (hasUnsavedConfig && currentSerialized !== serialized) return;
 
       appliedDataRef.current = dataKey;
       startTransition(() => setConfig(parsed));
@@ -1802,7 +2312,9 @@ function StructuredBackendConfigSettings({
             .filter((field) => field.kind === 'array' || field.kind === 'json')
             .map((field) => [
               field.path,
-              valueToText(getPathValue(parsed, field.path)),
+              field.kind === 'json'
+                ? jsonValueToText(getPathValue(parsed, field.path))
+                : valueToText(getPathValue(parsed, field.path)),
             ]),
         ),
       ));
@@ -1825,29 +2337,65 @@ function StructuredBackendConfigSettings({
 
   const fieldErrors = useMemo(() => {
     const errors: Record<string, string> = {};
-    for (const field of fields) {
-      if (field.kind !== 'json') continue;
-      const text = textValues[field.path] ?? '';
-      if (!text.trim()) continue;
-      try {
-        JSON.parse(text);
-      } catch (error) {
-        errors[field.path] = formatError(error);
-      }
-    }
-    for (const field of fields) {
-      if (field.kind !== 'number' || !config) continue;
-      const value = getPathValue(config, field.path);
-      if (typeof value === 'number' && !Number.isFinite(value)) {
-        errors[field.path] = 'Value must be a finite number';
-      }
-    }
-    return errors;
-  }, [config, fields, textValues]);
+    if (!selectedField) return errors;
 
-  const serializedConfig = config ? serializeConfig(backend, config) : '';
-  const hasChanges = !!query.data && serializedConfig !== baselineConfig;
+    if (
+      selectedField.kind === 'json' &&
+      !(backend === 'opencode' && selectedField.path === 'mcp')
+    ) {
+      const text = textValues[selectedField.path] ?? '';
+      try {
+        if (text.trim()) parseJsonLike(text);
+      } catch (error) {
+        errors[selectedField.path] = formatError(error);
+      }
+    }
+
+    if (selectedField.kind === 'number' && config) {
+      const value = getPathValue(config, selectedField.path);
+      if (typeof value === 'number' && !Number.isFinite(value)) {
+        errors[selectedField.path] = 'Value must be a finite number';
+      }
+    }
+
+    return errors;
+  }, [backend, config, selectedField, textValues]);
+
+  const baselineParsedConfig = useMemo(() => {
+    if (!baselineConfig) return null;
+    try {
+      return parseConfig(backend, baselineConfig);
+    } catch {
+      return null;
+    }
+  }, [backend, baselineConfig]);
+  const selectedValue =
+    config && selectedField ? getPathValue(config, selectedField.path) : undefined;
+  const baselineSelectedValue =
+    baselineParsedConfig && selectedField
+      ? getPathValue(baselineParsedConfig, selectedField.path)
+      : undefined;
+  const hasSelectedFieldChanges =
+    !!query.data &&
+    !!selectedField &&
+    JSON.stringify(selectedValue) !== JSON.stringify(baselineSelectedValue);
+  const hasChanges = hasSelectedFieldChanges;
   const hasFieldErrors = Object.keys(fieldErrors).length > 0;
+  const saveDisabledReason = hasFieldErrors
+    ? `field errors: ${Object.entries(fieldErrors)
+        .map(([path, error]) => `${path}: ${error}`)
+        .join(', ')}`
+    : !hasChanges
+      ? 'no changes in selected setting'
+      : !config
+        ? 'config missing'
+        : hasUnsafeCodexComments
+          ? 'unsafe Codex comments'
+          : query.isLoading
+            ? 'loading config'
+            : saveConfig.isPending
+              ? 'save pending'
+              : null;
 
   const updateField = (field: ConfigField, value: unknown) => {
     setConfig((current) => {
@@ -1855,10 +2403,6 @@ function StructuredBackendConfigSettings({
       return setPathValue(current, field.path, value);
     });
   };
-
-  const selectedField =
-    visibleFields.find((field) => field.path === selectedFieldPath) ??
-    visibleFields[0];
 
   return (
     <ListDetailLayout
@@ -1957,25 +2501,25 @@ function StructuredBackendConfigSettings({
             </div>
             <Button
               icon={<Save />}
-              disabled={
-                !hasChanges ||
-                !config ||
-                hasFieldErrors ||
-                hasUnsafeCodexComments ||
-                query.isLoading ||
-                saveConfig.isPending
-              }
+              disabled={!!saveDisabledReason}
               loading={saveConfig.isPending}
+              title={saveDisabledReason ?? 'Save selected setting'}
               onClick={() => saveConfig.mutate()}
             >
               Save
             </Button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3">
+          <div className="flex min-h-0 flex-1 overflow-hidden p-3">
             {config && selectedField && (
-              <div className="max-w-3xl">
+              <div
+                className={clsx(
+                  'flex min-h-0 w-full',
+                  selectedField.kind !== 'json' && 'overflow-y-auto',
+                )}
+              >
                 <FieldCard
+                  backend={backend}
                   field={selectedField}
                   value={getPathValue(config, selectedField.path)}
                   textValue={textValues[selectedField.path] ?? ''}

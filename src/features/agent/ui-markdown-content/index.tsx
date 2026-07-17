@@ -1,9 +1,3 @@
-import {
-  decompressFrame,
-  decompressFrames,
-  type ParsedFrame,
-  parseGIF,
-} from 'gifuct-js';
 import React, {
   startTransition,
   useEffect,
@@ -19,12 +13,22 @@ import remarkGfm from 'remark-gfm';
 
 
 import {
+  decodeAzureProxyParts,
+  sanitizeMarkdownUrl,
+} from '@/lib/markdown-urls';
+import {
   type ExtractedMarkdownContent,
   extractImagesFromMarkdown,
 } from '@/lib/markdown-images';
 import { getImageDisplayWidth } from '@/lib/markdown-image-size';
+import { isGifBlobPreviewUrl } from '@/lib/blob-preview-url';
 import { Modal } from '@/common/ui/modal';
-import { sanitizeMarkdownUrl } from '@/lib/markdown-urls';
+
+import {
+  createGifFrameCache,
+  decodeGifFrameImages,
+} from './gif-frame-decoder';
+import { gifScrubberLeaseCoordinator } from './gif-scrubber-lease';
 
 
 // Pattern to match file paths like src/foo.ts:42-50 or just src/foo.ts:42 or src/foo.ts
@@ -327,8 +331,15 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   );
 }
 
-function customUrlTransform(url: string): string {
-  const sanitizedUrl = sanitizeMarkdownUrl(url);
+function customUrlTransform(
+  url: string,
+  key: string,
+  node: Readonly<{ tagName: string }>,
+  allowBlobImages: boolean,
+): string {
+  const sanitizedUrl = sanitizeMarkdownUrl(url, {
+    allowBlob: allowBlobImages && key === 'src' && node.tagName === 'img',
+  });
   if (!sanitizedUrl) {
     console.log('[MarkdownContent] Blocking URL with unsafe protocol:', url);
   }
@@ -336,39 +347,12 @@ function customUrlTransform(url: string): string {
   return sanitizedUrl;
 }
 
-function decodeAzureProxyParts(
-  src: string,
-): { providerId: string; imageUrl: string } | null {
-  if (!src.startsWith('azure-image-proxy://')) {
-    return null;
-  }
-
-  try {
-    const proxyUrl = new URL(src);
-    const encodedUrl = proxyUrl.pathname.slice(1);
-    if (!encodedUrl) {
-      return null;
-    }
-
-    const padded = encodedUrl.padEnd(
-      encodedUrl.length + ((4 - (encodedUrl.length % 4)) % 4),
-      '=',
-    );
-    return {
-      providerId: proxyUrl.hostname,
-      imageUrl: atob(padded.replace(/-/g, '+').replace(/_/g, '/')),
-    };
-  } catch {
-    return null;
-  }
-}
-
 function decodeAzureProxyUrl(src: string): string | null {
   return decodeAzureProxyParts(src)?.imageUrl ?? null;
 }
 
 function isGifSource(src: string): boolean {
-  if (src.startsWith('data:image/gif')) {
+  if (src.startsWith('data:image/gif') || isGifBlobPreviewUrl(src)) {
     return true;
   }
 
@@ -878,153 +862,9 @@ function getSizedFigureStyle(
   return { width: requestedSize.width, maxWidth: '100%' };
 }
 
-type GifFrame = Parameters<typeof decompressFrame>[0];
+const gifFrameCache = createGifFrameCache({ decode: decodeGifFrameImages });
 
-function composeGifFrameImages({
-  frames,
-  width,
-  height,
-}: {
-  frames: ParsedFrame[];
-  width: number;
-  height: number;
-}): ImageData[] {
-  const canvas = document.createElement('canvas');
-  const patchCanvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext('2d');
-  const patchContext = patchCanvas.getContext('2d');
-
-  if (!context || !patchContext) {
-    return [];
-  }
-
-  const renderedFrames: ImageData[] = [];
-
-  for (const frame of frames) {
-    const previousImage =
-      frame.disposalType === 3
-        ? context.getImageData(0, 0, width, height)
-        : null;
-
-    patchCanvas.width = frame.dims.width;
-    patchCanvas.height = frame.dims.height;
-    patchContext.clearRect(0, 0, frame.dims.width, frame.dims.height);
-    const patch = new Uint8ClampedArray(frame.patch.length);
-    patch.set(frame.patch);
-    patchContext.putImageData(
-      new ImageData(patch, frame.dims.width, frame.dims.height),
-      0,
-      0,
-    );
-    context.drawImage(patchCanvas, frame.dims.left, frame.dims.top);
-    renderedFrames.push(context.getImageData(0, 0, width, height));
-
-    if (frame.disposalType === 2) {
-      context.clearRect(
-        frame.dims.left,
-        frame.dims.top,
-        frame.dims.width,
-        frame.dims.height,
-      );
-    } else if (previousImage) {
-      context.putImageData(previousImage, 0, 0);
-    }
-  }
-
-  return renderedFrames;
-}
-
-async function loadGifArrayBuffer(src: string): Promise<ArrayBuffer> {
-  const proxyParts = decodeAzureProxyParts(src);
-
-  if (proxyParts) {
-    const data = await window.api.azureDevOps.fetchImageAsBase64(proxyParts);
-    if (!data) {
-      throw new Error('Failed to load proxied GIF');
-    }
-
-    return Uint8Array.from(atob(data.data), (char) => char.charCodeAt(0))
-      .buffer;
-  }
-
-  const response = await fetch(src);
-  if (!response.ok) {
-    throw new Error(`Failed to load GIF: ${response.status}`);
-  }
-
-  return response.arrayBuffer();
-}
-
-async function decodeGifFrameImages(src: string): Promise<{
-  images: ImageData[];
-  width: number;
-  height: number;
-}> {
-  const gif = parseGIF(await loadGifArrayBuffer(src));
-  const imageFrames = gif.frames.filter(
-    (frame): frame is GifFrame => 'image' in frame && 'gce' in frame,
-  );
-  const frameCount = imageFrames.length;
-  if (frameCount > MAX_GIF_SCRUB_FRAMES) {
-    throw new Error(`GIF has too many frames (${frameCount})`);
-  }
-
-  if (gif.lsd.width * gif.lsd.height > MAX_GIF_CANVAS_PIXELS) {
-    throw new Error('GIF is too large to scrub safely');
-  }
-
-  for (const frame of imageFrames) {
-    const framePixels =
-      frame.image.descriptor.width * frame.image.descriptor.height;
-    if (framePixels > MAX_GIF_FRAME_PATCH_PIXELS) {
-      throw new Error('GIF frame is too large to scrub safely');
-    }
-  }
-
-  const frames = decompressFrames(gif, true);
-  const images = composeGifFrameImages({
-    frames,
-    width: gif.lsd.width,
-    height: gif.lsd.height,
-  });
-
-  return { images, width: gif.lsd.width, height: gif.lsd.height };
-}
-
-const MAX_GIF_SCRUB_FRAMES = 240;
-const MAX_GIF_CANVAS_PIXELS = 10_000_000;
-const MAX_GIF_FRAME_PATCH_PIXELS = 4_000_000;
-const MAX_GIF_FRAME_CACHE_ENTRIES = 1;
-
-const gifFrameCache = new Map<
-  string,
-  Promise<{ images: ImageData[]; width: number; height: number }>
->();
-
-function getCachedGifFrameImages(src: string) {
-  const cached = gifFrameCache.get(src);
-  if (cached) {
-    return cached;
-  }
-
-  const decoded = decodeGifFrameImages(src).catch((error: unknown) => {
-    gifFrameCache.delete(src);
-    throw error;
-  });
-  gifFrameCache.set(src, decoded);
-
-  while (gifFrameCache.size > MAX_GIF_FRAME_CACHE_ENTRIES) {
-    const oldestKey = gifFrameCache.keys().next().value;
-    if (!oldestKey) break;
-    gifFrameCache.delete(oldestKey);
-  }
-
-  return decoded;
-}
-
-function GifFrameScrubber({
+export function GifFrameScrubber({
   src,
   alt,
   imageClassName,
@@ -1040,6 +880,10 @@ function GifFrameScrubber({
   onOpen: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cacheReleaseRef = useRef<(() => void) | null>(null);
+  const leaseReleaseRef = useRef<(() => void) | null>(null);
+  const leaseGenerationRef = useRef(0);
+  const hasLeaseRef = useRef(false);
   const [frameImages, setFrameImages] = useState<ImageData[]>([]);
   const [frameIndex, setFrameIndex] = useState(0);
   const [size, setSize] = useState<{ width: number; height: number } | null>(
@@ -1064,6 +908,51 @@ function GifFrameScrubber({
           ),
         };
 
+  const releaseScrubber = () => {
+    leaseGenerationRef.current += 1;
+    hasLeaseRef.current = false;
+    cacheReleaseRef.current?.();
+    cacheReleaseRef.current = null;
+    leaseReleaseRef.current?.();
+    leaseReleaseRef.current = null;
+    setFrameImages([]);
+    setFrameIndex(0);
+    setSize(null);
+    setIsDecoding(false);
+    setIsScrubbing(false);
+  };
+
+  const startScrubbing = () => {
+    if (isDecoding || isScrubbing) return;
+    leaseGenerationRef.current += 1;
+    hasLeaseRef.current = true;
+    leaseReleaseRef.current = gifScrubberLeaseCoordinator.acquire(() => {
+      leaseGenerationRef.current += 1;
+      hasLeaseRef.current = false;
+      cacheReleaseRef.current?.();
+      cacheReleaseRef.current = null;
+      leaseReleaseRef.current = null;
+      setFrameImages([]);
+      setFrameIndex(0);
+      setSize(null);
+      setIsDecoding(false);
+      setIsScrubbing(false);
+    });
+    setIsScrubbing(true);
+  };
+
+  useEffect(
+    () => () => {
+      leaseGenerationRef.current += 1;
+      hasLeaseRef.current = false;
+      cacheReleaseRef.current?.();
+      leaseReleaseRef.current?.();
+      cacheReleaseRef.current = null;
+      leaseReleaseRef.current = null;
+    },
+    [],
+  );
+
   useEffect(() => {
     let cancelled = false;
     startTransition(() => setFrameImages([]));
@@ -1080,14 +969,25 @@ function GifFrameScrubber({
     }
 
     startTransition(() => setIsDecoding(true));
-    getCachedGifFrameImages(src)
+    const leaseGeneration = leaseGenerationRef.current;
+    const cachedFrames = gifFrameCache.acquire(src);
+    cacheReleaseRef.current = cachedFrames.release;
+    cachedFrames.promise
       .then(({ images, width, height }) => {
-        if (cancelled) {
+        if (
+          cancelled ||
+          !hasLeaseRef.current ||
+          leaseGeneration !== leaseGenerationRef.current
+        ) {
           return;
         }
 
         if (images.length === 0) {
           throw new Error('GIF had no decodable frames');
+        }
+        if (images.length === 1) {
+          releaseScrubber();
+          return;
         }
 
         setSize({ width, height });
@@ -1096,16 +996,26 @@ function GifFrameScrubber({
         setIsDecoding(false);
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
+        if (
+          !cancelled &&
+          hasLeaseRef.current &&
+          leaseGeneration === leaseGenerationRef.current
+        ) {
           console.warn('[MarkdownContent] Failed to decode GIF frames', error);
           setFailed(true);
-          setIsDecoding(false);
+          releaseScrubber();
         }
       });
 
     return () => {
       cancelled = true;
-      gifFrameCache.delete(src);
+      if (leaseGeneration === leaseGenerationRef.current) {
+        leaseGenerationRef.current += 1;
+      }
+      cachedFrames.release();
+      if (cacheReleaseRef.current === cachedFrames.release) {
+        cacheReleaseRef.current = null;
+      }
     };
   }, [src, isScrubbing]);
 
@@ -1178,15 +1088,13 @@ function GifFrameScrubber({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              if (!isDecoding) {
-                setIsScrubbing(true);
-              }
+              startScrubbing();
             }}
             onKeyDown={(event) => {
               if (!isDecoding && (event.key === 'Enter' || event.key === ' ')) {
                 event.preventDefault();
                 event.stopPropagation();
-                setIsScrubbing(true);
+                startScrubbing();
               }
             }}
           >
@@ -1260,6 +1168,7 @@ export function MarkdownContent({
   imageClassName,
   enableImageModal = false,
   imagePresentation = 'inline',
+  allowBlobImages = false,
   truncateToChars,
   extractedContent,
 }: {
@@ -1272,6 +1181,7 @@ export function MarkdownContent({
   imageClassName?: string;
   enableImageModal?: boolean;
   imagePresentation?: 'inline' | 'footer-thumbnails';
+  allowBlobImages?: boolean;
   truncateToChars?: number;
   extractedContent?: ExtractedMarkdownContent;
 }) {
@@ -1324,9 +1234,9 @@ export function MarkdownContent({
   const footerImages = useMemo(
     () =>
       resolvedExtractedContent.images.filter((image) =>
-        sanitizeMarkdownUrl(image.src),
+        sanitizeMarkdownUrl(image.src, { allowBlob: allowBlobImages }),
       ),
-    [resolvedExtractedContent.images],
+    [allowBlobImages, resolvedExtractedContent.images],
   );
   return (
     <>
@@ -1343,7 +1253,9 @@ export function MarkdownContent({
             <ReactMarkdown
               key={segmentIndex}
               remarkPlugins={[remarkGfm]}
-              urlTransform={customUrlTransform}
+              urlTransform={(url, key, node) =>
+                customUrlTransform(url, key, node, allowBlobImages)
+              }
               components={{
                 p: ({ children }) => {
                   const hasLabel = startsWithSectionLabel(children);

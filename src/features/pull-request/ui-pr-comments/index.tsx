@@ -94,7 +94,7 @@ export function PrComments({
   providerId?: string;
   projectId: string;
   prId: number;
-  onAddComment?: (content: string) => void;
+  onAddComment?: (content: string) => Promise<void> | void;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   isAddingComment?: boolean;
   onOpenFilePreview?: (params: {
@@ -301,7 +301,7 @@ function StatusDropdown({
   );
 }
 
-function ThreadReplyForm({
+export function ThreadReplyForm({
   threadId,
   projectId,
   prId,
@@ -357,11 +357,9 @@ function ThreadReplyForm({
   return (
     <div className="mt-3 flex flex-col gap-2 pl-[37px]">
       <PrCommentForm
-        onSubmit={(content) => {
-          addReply.mutate(
-            { threadId, content },
-            { onSuccess: () => setIsExpanded(false) },
-          );
+        onSubmit={async (content) => {
+          await addReply.mutateAsync({ threadId, content });
+          setIsExpanded(false);
         }}
         onCancel={() => setIsExpanded(false)}
         placeholder="Write a reply..."

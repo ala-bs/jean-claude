@@ -45,6 +45,7 @@ export interface Database {
   project_command_groups: ProjectCommandGroupTable;
   mcp_templates: McpTemplateTable;
   project_mcp_overrides: ProjectMcpOverrideTable;
+  global_mcp_servers: GlobalMcpServerTable;
   task_summaries: TaskSummaryTable;
   project_todos: ProjectTodoTable;
   completion_usage: CompletionUsageTable;
@@ -102,6 +103,7 @@ export interface ProjectTable {
   workItemProviderId: string | null;
   workItemProjectId: string | null;
   workItemProjectName: string | null;
+  workItemTitleParser: string | null; // JSON text
   // Agent backend (null = use global default)
   defaultAgentBackend: string | null;
   defaultAgentModelPreference: string | null;
@@ -124,7 +126,7 @@ export interface ProjectTable {
 export interface TaskTable {
   id: Generated<string>;
   projectId: string;
-  type: Generated<string>; // TaskType: 'agent' (default) | 'skill-creation'
+  type: Generated<string>; // TaskType: 'agent' (default) | 'skill-creation' | 'feature-map' | 'pr-review'
   name: string | null;
   prompt: string;
   status: TaskStatus;
@@ -244,6 +246,10 @@ export interface ProjectCommandTable {
   name: string | null;
   command: string;
   ports: string; // JSON array stored as text
+  portConflictStrategy: string;
+  portOverrideProvider: string;
+  portOverrideEnvVar: string | null;
+  portOverrideArgs: string | null;
   envVars: string; // JSON array stored as text
   confirmBeforeRun: Generated<number>; // 0 or 1
   confirmMessage: string | null;
@@ -291,6 +297,26 @@ export type UpdateMcpTemplateRow = Updateable<McpTemplateTable>;
 
 export type ProjectMcpOverrideRow = Selectable<ProjectMcpOverrideTable>;
 export type NewProjectMcpOverrideRow = Insertable<ProjectMcpOverrideTable>;
+
+export interface GlobalMcpServerTable {
+  id: Generated<string>;
+  name: string;
+  normalizedName: string;
+  transportType: string;
+  command: string | null;
+  args: string; // JSON array
+  env: string; // JSON object
+  envManaged: number;
+  url: string | null;
+  enabledBackends: string; // JSON array of AgentBackendType
+  backendStates: string; // JSON map of backend ownership and native entries
+  createdAt: Generated<string>;
+  updatedAt: string;
+}
+
+export type GlobalMcpServerRow = Selectable<GlobalMcpServerTable>;
+export type NewGlobalMcpServerRow = Insertable<GlobalMcpServerTable>;
+export type UpdateGlobalMcpServerRow = Updateable<GlobalMcpServerTable>;
 
 export interface TaskSummaryTable {
   id: Generated<string>;

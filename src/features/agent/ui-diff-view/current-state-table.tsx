@@ -7,21 +7,32 @@ import type { ThemedToken } from 'shiki';
 
 import { computeCurrentStateLines, type DiffLine } from './diff-utils';
 import {
+  type LineRangeSelectionPosition,
+  useLineRangeSelection,
+} from './use-line-range-selection';
+import {
   renderTokensWithHighlights,
   renderWithHighlights,
 } from './utils-search-highlight';
 import type { SearchMatch } from './use-diff-search';
-import { useLineRangeSelection } from './use-line-range-selection';
 
 
 import type {
   CodeFoldingState,
+  CommentedLines,
   CommentFormEntry,
   InlineComment,
   LineRange,
 } from './index';
+import { lineAnchorKey, lineRangeKey } from './index';
 
 const EMPTY_SEARCH_MATCHES: SearchMatch[] = [];
+type CurrentStateDisplayLine = {
+  lineNumber: number;
+  content: string;
+  isChanged: boolean;
+  side: 'old' | 'new';
+};
 
 export function CurrentStateTable({
   oldString,
@@ -40,9 +51,12 @@ export function CurrentStateTable({
   newString: string;
   diffLines: DiffLine[];
   newTokens: ThemedToken[][];
-  onAddCommentClick?: (lineRange: LineRange) => void;
+  onAddCommentClick?: (
+    lineRange: LineRange,
+    position: LineRangeSelectionPosition,
+  ) => void;
   inlineComments?: InlineComment[];
-  commentedLines?: Set<number>;
+  commentedLines?: CommentedLines;
   commentForms?: CommentFormEntry[];
   searchMatches: SearchMatch[];
   currentMatchIndex: number;
@@ -50,10 +64,21 @@ export function CurrentStateTable({
 }) {
   const lineRangeSelection = useLineRangeSelection({ onAddCommentClick });
 
-  const lines = useMemo(
-    () => computeCurrentStateLines(oldString, newString),
-    [oldString, newString],
-  );
+  const lines = useMemo<CurrentStateDisplayLine[]>(() => {
+    const currentLines = computeCurrentStateLines(oldString, newString).map(
+      (line) => ({ ...line, side: 'new' as const }),
+    );
+    if (currentLines.length > 0) return currentLines;
+
+    return diffLines
+      .filter((line) => line.type === 'deletion' && line.oldLineNumber !== undefined)
+      .map((line) => ({
+        lineNumber: line.oldLineNumber!,
+        content: line.content,
+        isChanged: true,
+        side: 'old' as const,
+      }));
+  }, [diffLines, oldString, newString]);
 
   // Build reverse map: newLineNumber → DiffLine indices (for search match mapping)
   const newLineToMatchIndices = useMemo(() => {
@@ -88,26 +113,28 @@ export function CurrentStateTable({
   const currentMatch = searchMatches[currentMatchIndex] ?? null;
 
   const inlineCommentsByLine = useMemo(() => {
-    const map = new Map<number, InlineComment[]>();
+    const map = new Map<string, InlineComment[]>();
     for (const comment of inlineComments ?? []) {
-      const comments = map.get(comment.line);
+      const key = `${comment.side ?? 'new'}:${comment.line}`;
+      const comments = map.get(key);
       if (comments) {
         comments.push(comment);
       } else {
-        map.set(comment.line, [comment]);
+        map.set(key, [comment]);
       }
     }
     return map;
   }, [inlineComments]);
 
   const commentFormsByEndLine = useMemo(() => {
-    const map = new Map<number, CommentFormEntry[]>();
+    const map = new Map<string, CommentFormEntry[]>();
     for (const form of commentForms ?? []) {
-      const forms = map.get(form.lineRange.end);
+      const key = `${form.lineRange.side ?? 'new'}:${form.lineRange.end}`;
+      const forms = map.get(key);
       if (forms) {
         forms.push(form);
       } else {
-        map.set(form.lineRange.end, [form]);
+        map.set(key, [form]);
       }
     }
     return map;
@@ -142,7 +169,7 @@ export function CurrentStateTable({
           }
 
           const tokenLineIndex = line.lineNumber - 1;
-          const tokens = newTokens[tokenLineIndex] || [];
+          const tokens = line.side === 'new' ? newTokens[tokenLineIndex] || [] : [];
 
           // Map search matches: find DiffLine indices for this newLineNumber,
           // then collect all search matches referencing those DiffLine indices
@@ -158,12 +185,17 @@ export function CurrentStateTable({
             }
           }
 
-          const canComment = !!onAddCommentClick;
+          const canSelect = !!onAddCommentClick;
+          const canComment = canSelect && line.side === 'new';
           const isInCommentRange = isLineInCommentRange(lineNumber);
 
-          const lineComments = inlineCommentsByLine.get(lineNumber);
+          const lineComments = inlineCommentsByLine.get(
+            `${line.side}:${lineNumber}`,
+          );
 
-          const formsForLine = commentFormsByEndLine.get(lineNumber);
+          const formsForLine = commentFormsByEndLine.get(
+            `${line.side}:${lineNumber}`,
+          );
 
           // Code folding state
           const isFoldable = folding.isFoldStart(lineNumber);
@@ -175,6 +207,7 @@ export function CurrentStateTable({
               key={i}
               lineIndex={i}
               lineNumber={lineNumber}
+              side={line.side}
               content={line.content}
               tokens={tokens}
               searchMatches={lineMatches}
@@ -185,8 +218,9 @@ export function CurrentStateTable({
               }
               isChanged={line.isChanged}
               canComment={canComment}
+              canSelect={canSelect}
               isInCommentRange={isInCommentRange}
-              hasComment={!!commentedLines?.has(lineNumber)}
+              hasComment={!!commentedLines?.has(lineAnchorKey(line.side, lineNumber))}
               inlineComments={lineComments}
               commentForms={formsForLine}
               isFoldable={isFoldable}
@@ -204,12 +238,14 @@ export function CurrentStateTable({
 const CurrentStateRow = memo(function CurrentStateRow({
   lineIndex,
   lineNumber,
+  side,
   content,
   tokens,
   searchMatches,
   currentMatch,
   isChanged,
   canComment,
+  canSelect,
   isInCommentRange,
   hasComment,
   inlineComments,
@@ -221,12 +257,14 @@ const CurrentStateRow = memo(function CurrentStateRow({
 }: {
   lineIndex: number;
   lineNumber: number;
+  side: 'old' | 'new';
   content: string;
   tokens: ThemedToken[];
   searchMatches: SearchMatch[];
   currentMatch: SearchMatch | null;
   isChanged: boolean;
   canComment: boolean;
+  canSelect: boolean;
   isInCommentRange: boolean;
   hasComment: boolean;
   inlineComments?: InlineComment[];
@@ -258,13 +296,15 @@ const CurrentStateRow = memo(function CurrentStateRow({
     <>
       <tr
         data-line-index={lineIndex}
-        data-new-line={lineNumber}
+        data-new-line={side === 'new' ? lineNumber : undefined}
+        data-old-line={side === 'old' ? lineNumber : undefined}
+        data-line-side={side}
         className={clsx('group', {
           'bg-blue-500/10': isInCommentRange,
           'bg-green-500/15': !isInCommentRange && isChanged,
         })}
         style={{
-          cursor: canComment ? 'pointer' : undefined,
+          cursor: canSelect ? 'pointer' : undefined,
           ...(hasComment && !isInCommentRange
             ? {
                 background:
@@ -297,6 +337,7 @@ const CurrentStateRow = memo(function CurrentStateRow({
         </td>
         {/* Line number */}
         <td
+          data-line-side={side}
           className={clsx(
             'relative w-8 pr-1 text-right align-top select-none',
             hasComment && !isInCommentRange
@@ -322,6 +363,7 @@ const CurrentStateRow = memo(function CurrentStateRow({
         </td>
         {/* Change indicator */}
         <td
+          data-line-side={side}
           className={clsx(
             'w-4 text-center align-top select-none',
             isChanged ? 'text-status-done' : 'text-ink-4',
@@ -331,8 +373,9 @@ const CurrentStateRow = memo(function CurrentStateRow({
         </td>
         {/* Content */}
         <td
+          data-line-side={side}
           className={clsx('pr-2 whitespace-pre-wrap', {
-            'select-none': canComment,
+            'select-none': canSelect,
           })}
         >
           {renderedContent}
@@ -356,7 +399,7 @@ const CurrentStateRow = memo(function CurrentStateRow({
           <td colSpan={4} className="p-0">
             <div>
               {inlineComments.map((comment, ci) => (
-                <div key={ci}>{comment.content}</div>
+                <div key={comment.id ?? ci}>{comment.content}</div>
               ))}
             </div>
           </td>
@@ -367,7 +410,7 @@ const CurrentStateRow = memo(function CurrentStateRow({
       {commentForms &&
         commentForms.length > 0 &&
         commentForms.map((cf) => (
-          <tr key={`form-${cf.lineRange.start}-${cf.lineRange.end}`}>
+          <tr key={`form-${lineRangeKey(cf.lineRange)}`}>
             <td colSpan={4} className="p-0">
               {cf.form}
             </td>

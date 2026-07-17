@@ -5,6 +5,7 @@ import type { AssistantMessage, Part } from '@opencode-ai/sdk/v2';
 
 
 import type { AgentEvent, AgentTaskContext } from '@shared/agent-backend-types';
+import type { ResolvedPermissionRule } from '@shared/permission-types';
 
 const createOpencodeClientMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -130,6 +131,41 @@ describe('toOpenCodeQuestionAnswer', () => {
 });
 
 describe('OpenCodeBackend event stream', () => {
+  it('continues raw message indexes from the raw message count', async () => {
+    const client = {
+      event: { subscribe: vi.fn() },
+      permission: { reply: vi.fn() },
+      question: { reply: vi.fn() },
+      session: {
+        abort: vi.fn(async () => ({ data: null })),
+        create: vi.fn(async () => ({ data: { id: 'session-1' } })),
+      },
+    };
+    mockOpencodeServer(client);
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 3,
+      rawSessionStartIndex: 12,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+
+    const session = await backend.start(
+      {
+        type: 'opencode',
+        cwd: '/tmp/project',
+        interactionMode: 'auto',
+      },
+      [{ type: 'text', text: 'hi' }],
+    );
+    const state = (
+      backend as unknown as {
+        sessions: Map<string, { messageIndex: number }>;
+      }
+    ).sessions.get(session.sessionId);
+
+    expect(state?.messageIndex).toBe(12);
+  });
+
   it('exposes dedicated server process PID on start', async () => {
     const processKill = vi.spyOn(process, 'kill').mockReturnValue(true);
     const client = {
@@ -768,6 +804,14 @@ describe('OpenCodeBackend event stream', () => {
         type: 'message.updated',
         properties: { info: olderInfo },
       };
+      yield {
+        type: 'message.updated',
+        properties: { info: latestInfo },
+      };
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
     }
 
     const client = {
@@ -775,7 +819,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: olderMessageStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: { info: latestInfo, parts: [] } })),
+        promptAsync: vi.fn(async () => ({ data: { info: latestInfo, parts: [] } })),
       },
     };
     const backend = new OpenCodeBackend({
@@ -930,7 +974,15 @@ describe('OpenCodeBackend event stream', () => {
     async function* childMessageStream() {
       yield {
         type: 'message.updated',
+        properties: { info: parentInfo },
+      };
+      yield {
+        type: 'message.updated',
         properties: { info: childInfo },
+      };
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
       };
     }
     const client = {
@@ -938,7 +990,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: childMessageStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: { info: parentInfo, parts: [] } })),
+        promptAsync: vi.fn(async () => ({ data: { info: parentInfo, parts: [] } })),
       },
     };
     const backend = new OpenCodeBackend({
@@ -976,7 +1028,16 @@ describe('OpenCodeBackend event stream', () => {
   });
 
   it('emits token usage on completed OpenCode sessions', async () => {
-    async function* emptyStream() {}
+    async function* messageStream() {
+      yield {
+        type: 'message.updated',
+        properties: { info },
+      };
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
+    }
 
     const info = {
       id: 'msg-1',
@@ -995,10 +1056,10 @@ describe('OpenCodeBackend event stream', () => {
     } as AssistantMessage;
     const client = {
       event: {
-        subscribe: vi.fn(async () => ({ stream: emptyStream() })),
+        subscribe: vi.fn(async () => ({ stream: messageStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: { info, parts: [] } })),
+        promptAsync: vi.fn(async () => ({ data: { info, parts: [] } })),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1034,7 +1095,16 @@ describe('OpenCodeBackend event stream', () => {
   });
 
   it('emits API cost on completed zero-cost OpenCode sessions', async () => {
-    async function* emptyStream() {}
+    async function* messageStream() {
+      yield {
+        type: 'message.updated',
+        properties: { info },
+      };
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
+    }
 
     const info = {
       id: 'msg-1',
@@ -1053,10 +1123,10 @@ describe('OpenCodeBackend event stream', () => {
     } as AssistantMessage;
     const client = {
       event: {
-        subscribe: vi.fn(async () => ({ stream: emptyStream() })),
+        subscribe: vi.fn(async () => ({ stream: messageStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: { info, parts: [] } })),
+        promptAsync: vi.fn(async () => ({ data: { info, parts: [] } })),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1079,7 +1149,683 @@ describe('OpenCodeBackend event stream', () => {
     });
   });
 
-  it('completes after idle timeout if session.prompt never resolves', async () => {
+  it('submits prompts asynchronously so a blocking prompt response cannot stall the session', async () => {
+    vi.useFakeTimers();
+
+    async function* idleStream() {
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
+      await new Promise(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: idleStream() })),
+      },
+      session: {
+        prompt: vi.fn(() => new Promise(() => {})),
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(200);
+      const events = await eventsPromise;
+
+      expect(events.at(-1)).toMatchObject({
+        type: 'complete',
+        result: { isError: false },
+      });
+      expect(client.session.promptAsync).toHaveBeenCalledOnce();
+      expect(client.session.prompt).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces resolved promptAsync API errors without waiting for SSE', async () => {
+    async function* pendingStream() {
+      yield await new Promise<never>(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: pendingStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({
+          error: { name: 'NotFoundError', data: { message: 'missing session' } },
+        })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events).toMatchObject([
+      { type: 'session-id', sessionId: 'session-1' },
+      { type: 'error', error: expect.stringContaining('NotFoundError') },
+      { type: 'complete', result: { isError: true } },
+    ]);
+  });
+
+  it('reports an SSE disconnect before session idle as an error', async () => {
+    async function* emptyStream() {}
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: emptyStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events).toMatchObject([
+      { type: 'session-id', sessionId: 'session-1' },
+      { type: 'error', error: expect.stringContaining('event stream ended') },
+      { type: 'complete', result: { isError: true } },
+    ]);
+  });
+
+  it('completes when OpenCode reports idle through session status', async () => {
+    async function* statusStream() {
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'idle' } },
+      };
+      await new Promise(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: statusStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'complete',
+      result: { isError: false },
+    });
+  });
+
+  it('completes after OpenCode sends bookkeeping events after idle', async () => {
+    vi.useFakeTimers();
+
+    async function* statusStream() {
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'idle' } },
+      };
+      yield {
+        type: 'session.updated',
+        properties: {
+          sessionID: 'session-1',
+          info: {
+            id: 'session-1',
+            title: 'Completed session',
+            time: { updated: Date.now() },
+            summary: { additions: 1, deletions: 0, files: 1 },
+          },
+        },
+      };
+      yield {
+        type: 'session.diff',
+        properties: { sessionID: 'session-1', diff: [] },
+      };
+      yield {
+        type: 'message.updated',
+        properties: {
+          sessionID: 'session-1',
+          info: {
+            id: 'assistant-message-1',
+            sessionID: 'session-1',
+            role: 'user',
+            time: { created: Date.now() },
+            agent: 'build',
+            model: { providerID: 'openai', modelID: 'gpt-5.6-sol' },
+            summary: { diffs: [] },
+          },
+        },
+      };
+      await new Promise(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: statusStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(200);
+      const events = await eventsPromise;
+
+      expect(events.at(-1)).toMatchObject({
+        type: 'complete',
+        result: { isError: false },
+      });
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'entry',
+            entry: expect.objectContaining({ type: 'session-summary' }),
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels idle completion when OpenCode reports resumed work', async () => {
+    vi.useFakeTimers();
+
+    async function* statusStream() {
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'idle' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'busy' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'session-1', error: 'resumed work failed' },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: statusStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(250);
+      const events = await eventsPromise;
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'error',
+            error: expect.any(String),
+          }),
+          expect.objectContaining({
+            type: 'complete',
+            result: expect.objectContaining({ isError: true }),
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels idle completion when a new user message precedes delayed busy status', async () => {
+    vi.useFakeTimers();
+
+    async function* statusStream() {
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'idle' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield {
+        type: 'message.updated',
+        properties: {
+          sessionID: 'session-1',
+          info: {
+            id: 'new-user-message',
+            sessionID: 'session-1',
+            role: 'user',
+            time: { created: Date.now() },
+            agent: 'build',
+            model: { providerID: 'openai', modelID: 'gpt-5.6-sol' },
+          },
+        },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'busy' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'session-1', error: 'resumed work failed' },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: statusStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(350);
+      const events = await eventsPromise;
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'error' }),
+          expect.objectContaining({
+            type: 'complete',
+            result: expect.objectContaining({ isError: true }),
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a session after ten minutes without owned session activity', async () => {
+    vi.useFakeTimers();
+
+    async function* heartbeatStream() {
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
+        yield { type: 'server.heartbeat', properties: {} };
+      }
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: heartbeatStream() })),
+      },
+      session: {
+        abort: vi.fn(() => new Promise(() => {})),
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    let events: AgentEvent[] | undefined;
+
+    try {
+      void collectEvents(
+        createEventStreamForTest(backend, client, state),
+      ).then((result) => {
+        events = result;
+      });
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+      expect(events).toMatchObject([
+        { type: 'session-id', sessionId: 'session-1' },
+        { type: 'error', error: expect.stringContaining('no activity') },
+        { type: 'complete', result: { isError: true } },
+      ]);
+      expect(client.session.abort).toHaveBeenCalledWith({
+        sessionID: 'session-1',
+        directory: '/tmp/project',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets the activity watchdog when an owned session event arrives', async () => {
+    vi.useFakeTimers();
+
+    async function* activeStream() {
+      await new Promise((resolve) => setTimeout(resolve, 8 * 60 * 1000));
+      yield {
+        type: 'session.status',
+        properties: { sessionID: 'session-1', status: { type: 'busy' } },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 8 * 60 * 1000));
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
+      await new Promise(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: activeStream() })),
+      },
+      session: {
+        abort: vi.fn(async () => ({ data: true })),
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(16 * 60 * 1000 + 200);
+      const events = await eventsPromise;
+
+      expect(events.at(-1)).toMatchObject({
+        type: 'complete',
+        result: { isError: false },
+      });
+      expect(client.session.abort).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pauses the activity watchdog while waiting for user input', async () => {
+    vi.useFakeTimers();
+
+    async function* permissionStream() {
+      yield {
+        type: 'permission.asked',
+        properties: {
+          id: 'permission-1',
+          sessionID: 'session-1',
+          permission: 'bash',
+          patterns: [],
+          metadata: { command: 'pwd' },
+          always: [],
+        },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 11 * 60 * 1000));
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'session-1', error: 'request expired' },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: permissionStream() })),
+      },
+      session: {
+        abort: vi.fn(async () => ({ data: true })),
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+      permission: { reply: vi.fn() },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+      const events = await eventsPromise;
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'permission-request' }),
+          expect.objectContaining({ type: 'error' }),
+          expect.objectContaining({
+            type: 'complete',
+            result: expect.objectContaining({ isError: true }),
+          }),
+        ]),
+      );
+      expect(client.session.abort).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restarts the activity window after user input resolves', async () => {
+    vi.useFakeTimers();
+
+    async function* permissionStream() {
+      yield {
+        type: 'permission.asked',
+        properties: {
+          id: 'permission-1',
+          sessionID: 'session-1',
+          permission: 'bash',
+          patterns: [],
+          metadata: { command: 'pwd' },
+          always: [],
+        },
+      };
+      await new Promise((resolve) => setTimeout(resolve, 16 * 60 * 1000));
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
+      await new Promise(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: permissionStream() })),
+      },
+      session: {
+        abort: vi.fn(async () => ({ data: true })),
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+      permission: { reply: vi.fn(() => new Promise(() => {})) },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    try {
+      const eventsPromise = collectEvents(
+        createEventStreamForTest(backend, client, state),
+      );
+      setTimeout(() => {
+        void backend.respondToPermission('session-1', 'permission-1', {
+          behavior: 'allow',
+        });
+      }, 11 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(16 * 60 * 1000 + 200);
+      const events = await eventsPromise;
+
+      expect(events.at(-1)).toMatchObject({
+        type: 'complete',
+        result: { isError: false },
+      });
+      expect(client.session.abort).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the watchdog paused until all pending user input resolves', async () => {
+    const client = {
+      question: { reply: vi.fn(() => new Promise(() => {})) },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.pendingQuestions.add('question-1');
+    state.pendingQuestions.add('question-2');
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    await backend.respondToQuestion('session-1', 'question-1', {
+      answer: 'First',
+    });
+
+    expect(state.pendingQuestions).toEqual(new Set(['question-2']));
+    expect(state.activityWatchdog.deadline).toBeNull();
+    expect(state.activityWatchdog.timer).toBeNull();
+  });
+
+  it('stops a silent session even when the abort request never resolves', async () => {
+    async function* pendingStream() {
+      yield await new Promise<never>(() => {});
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: pendingStream() })),
+      },
+      session: {
+        abort: vi.fn(() => new Promise(() => {})),
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+    const eventsPromise = collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    const stopResult = await Promise.race([
+      backend.stop('session-1').then(() => 'stopped' as const),
+      new Promise<'timeout'>((resolve) => setTimeout(resolve, 100, 'timeout')),
+    ]);
+    const events = await eventsPromise;
+
+    expect(stopResult).toBe('stopped');
+    expect(client.session.abort).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toMatchObject({
+      type: 'complete',
+      result: { isError: true },
+    });
+  });
+
+  it('surfaces SSE exception details', async () => {
+    async function* failingStream() {
+      yield* [];
+      throw new Error('socket reset by peer');
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: failingStream() })),
+      },
+      session: {
+        promptAsync: vi.fn(async () => ({ data: undefined })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events).toMatchObject([
+      { type: 'session-id', sessionId: 'session-1' },
+      { type: 'error', error: expect.stringContaining('socket reset by peer') },
+      { type: 'complete', result: { isError: true } },
+    ]);
+  });
+
+  it('completes after idle timeout if session.promptAsync never resolves', async () => {
     vi.useFakeTimers();
 
     async function* idleStream() {
@@ -1095,7 +1841,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: idleStream() })),
       },
       session: {
-        prompt: vi.fn(() => new Promise(() => {})),
+        promptAsync: vi.fn(() => new Promise(() => {})),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1110,14 +1856,14 @@ describe('OpenCodeBackend event stream', () => {
     try {
       const eventsPromise = collectEvents(stream);
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(3 * 60 * 1000 + 250);
+      await vi.advanceTimersByTimeAsync(200);
       const events = await eventsPromise;
 
       expect(events).toMatchObject([
         { type: 'session-id', sessionId: 'session-1' },
         { type: 'complete', result: { isError: false } },
       ]);
-      expect(client.session.prompt).toHaveBeenCalledOnce();
+      expect(client.session.promptAsync).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
@@ -1151,9 +1897,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: idleThenErrorStream() })),
       },
       session: {
-        prompt: vi.fn(async () => {
-          throw new Error('prompt failed');
-        }),
+        promptAsync: vi.fn(async () => ({ data: undefined })),
       },
       permission: {
         reply: vi.fn(),
@@ -1184,7 +1928,73 @@ describe('OpenCodeBackend event stream', () => {
     ]);
   });
 
-  it('cancels idle timeout when another session event arrives', async () => {
+  it.each([
+    { action: 'allow' as const, reply: 'once' },
+    { action: 'deny' as const, reply: 'reject' },
+  ])(
+    'does not block the event stream when an auto-$action permission reply hangs',
+    async ({ action, reply }) => {
+      async function* permissionThenErrorStream() {
+        yield {
+          type: 'permission.asked',
+          properties: {
+            id: 'permission-1',
+            sessionID: 'session-1',
+            permission: 'bash',
+            patterns: [],
+            metadata: { command: 'pwd' },
+            always: [],
+          },
+        };
+        yield {
+          type: 'session.error',
+          properties: { sessionID: 'session-1', error: 'after permission' },
+        };
+      }
+
+      const client = {
+        event: {
+          subscribe: vi.fn(async () => ({
+            stream: permissionThenErrorStream(),
+          })),
+        },
+        session: {
+          promptAsync: vi.fn(async () => ({ data: undefined })),
+        },
+        permission: {
+          reply: vi.fn(() => new Promise(() => {})),
+        },
+      };
+      const backend = new OpenCodeBackend({
+        taskId: 'task-1',
+        sessionStartIndex: 0,
+        persistRaw: vi.fn(async () => 'raw-1'),
+      });
+      const state = createOpenCodeState(client);
+      state.permissionRules = [{ action, tool: 'bash', pattern: '*' }];
+
+      const events = await Promise.race([
+        collectEvents(createEventStreamForTest(backend, client, state)),
+        new Promise<'timeout'>((resolve) =>
+          setTimeout(resolve, 100, 'timeout'),
+        ),
+      ]);
+
+      expect(events).not.toBe('timeout');
+      expect(events).toMatchObject([
+        { type: 'session-id', sessionId: 'session-1' },
+        { type: 'error' },
+        { type: 'complete', result: { isError: true } },
+      ]);
+      expect(client.permission.reply).toHaveBeenCalledWith({
+        requestID: 'permission-1',
+        directory: '/tmp/project',
+        reply,
+      });
+    },
+  );
+
+  it('reports a session error that arrives during idle grace', async () => {
     vi.useFakeTimers();
 
     async function* idleThenErrorStream() {
@@ -1192,7 +2002,7 @@ describe('OpenCodeBackend event stream', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-1' },
       };
-      await new Promise((resolve) => setTimeout(resolve, 2 * 60 * 1000));
+      await new Promise((resolve) => setTimeout(resolve, 50));
       yield {
         type: 'session.error',
         properties: { sessionID: 'session-1', error: 'after idle' },
@@ -1204,7 +2014,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: idleThenErrorStream() })),
       },
       session: {
-        prompt: vi.fn(() => new Promise(() => {})),
+        promptAsync: vi.fn(() => new Promise(() => {})),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1217,7 +2027,7 @@ describe('OpenCodeBackend event stream', () => {
 
     try {
       const eventsPromise = collectEvents(stream);
-      await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(50);
       const events = await eventsPromise;
 
       expect(events).toMatchObject([
@@ -1238,7 +2048,7 @@ describe('OpenCodeBackend event stream', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-1' },
       };
-      await new Promise((resolve) => setTimeout(resolve, 3 * 60 * 1000 + 100));
+      await new Promise((resolve) => setTimeout(resolve, 150));
       yield {
         type: 'session.error',
         properties: { sessionID: 'session-1', error: 'near timeout' },
@@ -1250,7 +2060,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: idleThenGraceEventStream() })),
       },
       session: {
-        prompt: vi.fn(() => new Promise(() => {})),
+        promptAsync: vi.fn(() => new Promise(() => {})),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1263,7 +2073,7 @@ describe('OpenCodeBackend event stream', () => {
 
     try {
       const eventsPromise = collectEvents(stream);
-      await vi.advanceTimersByTimeAsync(3 * 60 * 1000 + 100);
+      await vi.advanceTimersByTimeAsync(150);
       const events = await eventsPromise;
 
       expect(events).toMatchObject([
@@ -1301,6 +2111,10 @@ describe('OpenCodeBackend event stream', () => {
           }),
         },
       };
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
     }
 
     const client = {
@@ -1308,7 +2122,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: foreignSubtaskStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: null })),
+        promptAsync: vi.fn(async () => ({ data: null })),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1368,6 +2182,10 @@ describe('OpenCodeBackend event stream', () => {
           },
         },
       };
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
     }
 
     const client = {
@@ -1375,7 +2193,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: childLifecycleStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: null })),
+        promptAsync: vi.fn(async () => ({ data: null })),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1426,6 +2244,10 @@ describe('OpenCodeBackend event stream', () => {
         },
       };
       yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
+      yield {
         type: 'message.updated',
         properties: {
           info: createAssistantMessageForTest({
@@ -1448,6 +2270,10 @@ describe('OpenCodeBackend event stream', () => {
           },
         },
       };
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
     }
 
     const client = {
@@ -1455,7 +2281,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: nestedSubtaskStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: null })),
+        promptAsync: vi.fn(async () => ({ data: null })),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1530,6 +2356,10 @@ describe('OpenCodeBackend event stream', () => {
           },
         },
       };
+      yield {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      };
     }
 
     const client = {
@@ -1537,7 +2367,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: outOfOrderSubtaskStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: null })),
+        promptAsync: vi.fn(async () => ({ data: null })),
       },
     };
     const backend = new OpenCodeBackend({
@@ -1612,7 +2442,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: completedTaskStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: null })),
+        promptAsync: vi.fn(async () => ({ data: null })),
         messages: vi.fn(async () => ({
           data: [
             {
@@ -1694,82 +2524,6 @@ describe('OpenCodeBackend event stream', () => {
     );
   });
 
-  it('fetches completed task child session messages from prompt result task output', async () => {
-    async function* emptyStream() {}
-
-    const parentInfo = createAssistantMessageForTest({
-      id: 'parent-msg',
-      sessionID: 'session-1',
-    });
-    const client = {
-      event: {
-        subscribe: vi.fn(async () => ({ stream: emptyStream() })),
-      },
-      session: {
-        prompt: vi.fn(async () => ({
-          data: {
-            info: parentInfo,
-            parts: [
-              createCompletedTaskPart({
-                id: 'task-part-1',
-                messageID: 'parent-msg',
-                sessionID: 'session-1',
-                callID: 'call-task-1',
-                childSessionID: 'child-session',
-              }),
-            ],
-          },
-        })),
-        messages: vi.fn(async () => ({
-          data: [
-            {
-              info: createAssistantMessageForTest({
-                id: 'child-assistant-msg',
-                sessionID: 'child-session',
-              }),
-              parts: [
-                {
-                  id: 'child-assistant-text',
-                  sessionID: 'child-session',
-                  messageID: 'child-assistant-msg',
-                  type: 'text',
-                  text: 'Child detail from prompt result',
-                },
-              ],
-            },
-          ],
-        })),
-      },
-    };
-    const backend = new OpenCodeBackend({
-      taskId: 'task-1',
-      sessionStartIndex: 0,
-      persistRaw: vi.fn(async () => 'raw-child'),
-    });
-    const state = createOpenCodeState(client);
-
-    const events = await collectEvents(
-      createEventStreamForTest(backend, client, state),
-    );
-
-    expect(client.session.messages).toHaveBeenCalledWith({
-      sessionID: 'child-session',
-      directory: '/tmp/project',
-    });
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: 'entry',
-          entry: expect.objectContaining({
-            parentToolId: 'call-task-1',
-            type: 'assistant-message',
-            value: 'Child detail from prompt result',
-          }),
-        }),
-      ]),
-    );
-  });
-
   it('recursively fetches nested completed task child session messages', async () => {
     async function* completedTaskStream() {
       yield {
@@ -1801,7 +2555,7 @@ describe('OpenCodeBackend event stream', () => {
         subscribe: vi.fn(async () => ({ stream: completedTaskStream() })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: null })),
+        promptAsync: vi.fn(async () => ({ data: null })),
         messages: vi.fn(async ({ sessionID }: { sessionID: string }) => {
           if (sessionID === 'child-session') {
             return {
@@ -1947,7 +2701,7 @@ describe('OpenCodeBackend event stream', () => {
         })),
       },
       session: {
-        prompt: vi.fn(async () => ({ data: null })),
+        promptAsync: vi.fn(async () => ({ data: null })),
         messages: vi.fn(async () => ({
           data: [
             {
@@ -2009,6 +2763,10 @@ describe('OpenCodeBackend event stream', () => {
 });
 
 function createOpenCodeState(client: unknown) {
+  let resolveActivityTimeout = () => {};
+  const activityTimeoutPromise = new Promise<void>((resolve) => {
+    resolveActivityTimeout = resolve;
+  });
   return {
     session: { id: 'session-1' },
     cwd: '/tmp/project',
@@ -2037,13 +2795,20 @@ function createOpenCodeState(client: unknown) {
     fetchedChildSessionIds: new Set(),
     rawDeltaRows: new Map(),
     emittedQuestionRequestIds: new Set(),
-    permissionRules: [],
+    permissionRules: [] as ResolvedPermissionRule[],
     serverHandle: {
       client,
       server: { url: 'http://127.0.0.1', close: vi.fn() },
     },
     ownsServerHandle: true,
     serverClosed: false,
+    activityWatchdog: {
+      timer: null,
+      promise: activityTimeoutPromise,
+      resolve: resolveActivityTimeout,
+      deadline: null,
+      lastEventType: 'prompt-submitted',
+    },
   };
 }
 

@@ -3236,8 +3236,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
     await onStop();
   }, [onStop, promptDraft, queuedPrompts, setPromptDraft]);
 
-  const [inputFocused, setInputFocused] = useState(false);
-
   // Responsive: detect narrow composer width.
   // Below this threshold the composer switches to a stacked layout
   // with a combined mode·model chip instead of separate selectors.
@@ -3300,10 +3298,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   return (
     <div
       ref={containerRef}
-      className={clsx(
-        'mx-3 mb-3 flex flex-col rounded-xl transition-shadow duration-300',
-        inputFocused ? 'prompt-input-border-focused' : 'prompt-input-border',
-      )}
+      className="prompt-input-border mx-3 mb-3 flex flex-col rounded-xl transition-shadow duration-300"
     >
       {/* Review comment pills */}
       <ReviewPillsQueue
@@ -3338,7 +3333,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
             supportsImages={backendSupportsImages(activeStep?.agentBackend)}
             projectId={task?.projectId}
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}
-            onFocusChange={setInputFocused}
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
             isCompact
@@ -3387,7 +3381,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
             supportsImages={backendSupportsImages(activeStep?.agentBackend)}
             projectId={task?.projectId}
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}
-            onFocusChange={setInputFocused}
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
             controlsAboveButtons={selectorGroup}

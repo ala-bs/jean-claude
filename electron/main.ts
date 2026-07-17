@@ -17,6 +17,7 @@ import {
 } from './services/local-image-protocol-service';
 import { agentService } from './services/agent-service';
 import { cleanupOrphanedWorkspaces } from './services/system-project-service';
+import { createReloadPreviewReadinessRegistrar } from './services/reload-preview-service';
 import { dbg } from './lib/debug';
 import { migrateDatabase } from './database';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
@@ -24,11 +25,10 @@ import { preferenceMemoryConsolidationService } from './services/preference-memo
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { registerIpcHandlers } from './ipc/handlers';
 import { runCommandService } from './services/run-command-service';
+import { startReloadPreviewLogLimiter } from './services/reload-preview-service';
 import { syncBuiltinSkillSymlinks } from './services/skill-management-service';
 import { systemCalendarService } from './services/system-calendar-service';
 import { upsertBuiltinSkills } from './services/builtin-skills-service';
-
-
 
 // Register custom protocol scheme before app is ready
 // This must be done synchronously before the app ready event
@@ -58,6 +58,22 @@ dbg.main(
 dbg.main('Platform: %s, Arch: %s', process.platform, process.arch);
 
 let canCreateMainWindow = false;
+const reloadPreviewReadyFilePath =
+  process.env.JC_PREVIEW_RESTART_READY_FILE;
+const reloadPreviewAckFilePath = process.env.JC_PREVIEW_RESTART_ACK_FILE;
+const reloadPreviewLogFilePath = process.env.JC_PREVIEW_RESTART_LOG_FILE;
+startReloadPreviewLogLimiter({
+  lifecycle: process,
+  logFilePath: reloadPreviewLogFilePath,
+  onError: (message, error) => dbg.main(`${message}: %O`, error),
+});
+const registerReloadPreviewReadiness = createReloadPreviewReadinessRegistrar({
+  ackFilePath: reloadPreviewAckFilePath,
+  lifecycle: process,
+  logFilePath: reloadPreviewLogFilePath,
+  onError: (message, error) => dbg.main(`${message}: %O`, error),
+  readyFilePath: reloadPreviewReadyFilePath,
+});
 
 // Prevent multiple instances — a second launch would run recoverStaleTasks()
 // and mark currently-running tasks as interrupted.
@@ -103,6 +119,8 @@ function createWindow() {
     },
   });
 
+  registerReloadPreviewReadiness(mainWindow.webContents);
+
   // Open external links in the system default browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     dbg.main('External link requested: %s', url);
@@ -132,7 +150,7 @@ function createWindow() {
 }
 
 function showDockIcon() {
-  if (process.platform !== 'darwin') return;
+  if (process.platform !== 'darwin' || !app.dock) return;
 
   app.setActivationPolicy('regular');
   void app.dock.show().catch((error) => {
@@ -194,7 +212,7 @@ function loadMigrationWindowContent({
         color: #f9fafb;
       }
       main {
-        width: 320px;
+        width: min(520px, calc(100vw - 56px));
         padding: 28px;
         text-align: center;
       }
@@ -231,7 +249,7 @@ function loadMigrationWindowContent({
         line-height: 1.5;
       }
       pre {
-        max-height: 120px;
+        max-height: 260px;
         margin: 16px 0 0;
         padding: 12px;
         overflow: auto;
@@ -261,8 +279,8 @@ function loadMigrationWindowContent({
 
 function createMigrationWindow() {
   const migrationWindow = new BrowserWindow({
-    width: 420,
-    height: 280,
+    width: 640,
+    height: 480,
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -311,7 +329,11 @@ app.whenReady().then(async () => {
     );
 
     // Stream the response directly from Azure DevOps
-    return fetchAuthenticatedImageStream({ providerId, imageUrl });
+    return fetchAuthenticatedImageStream({
+      providerId,
+      imageUrl,
+      signal: request.signal,
+    });
   });
   dbg.main('azure-image-proxy protocol handler registered');
 

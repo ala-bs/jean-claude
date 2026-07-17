@@ -74,6 +74,13 @@ import type {
   AzureDevOpsPullRequestTag,
 } from '@shared/azure-devops-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
+import type {
+  DiscoveredMcpVariant,
+  GlobalMcpDiscoveryResult,
+  GlobalMcpServer,
+  NewGlobalMcpServer,
+  UpdateGlobalMcpServer,
+} from '@shared/global-mcp-types';
 import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
 import type {
   GlobalPrompt,
@@ -269,11 +276,16 @@ export interface AzureDevOpsWorkItem {
     teamProject?: string;
     state: string;
     assignedTo?: string;
+    assignedToUniqueName?: string;
     description?: string;
+    acceptanceCriteria?: string;
     reproSteps?: string;
     changedDate?: string;
     boardColumn?: string;
     boardColumnDone?: boolean;
+    tags?: string;
+    priority?: number;
+    iterationPath?: string;
   };
   testSteps?: TestStep[];
   parentId?: number;
@@ -302,12 +314,16 @@ export interface AzureDevOpsBoardColumn {
   name: string;
   columnType?: string;
   stateMappings: Record<string, string>;
+  teamId?: string;
+  boardId?: string;
 }
 
 export interface WorkItemComment {
   id: number;
   workItemId: number;
   text: string;
+  format?: 'html' | 'markdown';
+  attachmentBaseUrl?: string;
   createdBy: string;
   createdDate: string;
 }
@@ -637,18 +653,29 @@ export interface Api {
       deleteWorktree?: boolean;
       commitUnstaged?: boolean;
     }) => Promise<{ id: number; url: string; editorCloseWarning?: string }>;
-    createPrReview: (params: {
+    createPrReviewTask: (params: {
       projectId: string;
       pullRequestId: number;
-      agentBackend?: AgentBackendType | null;
-      modelPreference?: string | null;
-      thinkingEffort?: ThinkingEffort | null;
     }) => Promise<Task>;
   };
   steps: {
     findByTaskId: (taskId: string) => Promise<TaskStep[]>;
     findById: (stepId: string) => Promise<TaskStep | undefined>;
     create: (data: NewTaskStep & { start?: boolean }) => Promise<TaskStep>;
+    createPrReviewChatStep: (params: {
+      taskId: string;
+      pullRequestId: number;
+      filePath: string;
+      lineStart: number;
+      lineEnd?: number;
+      side?: 'old' | 'new';
+      selectedText: string;
+      question: string;
+    }) => Promise<TaskStep>;
+    continuePrReviewChatStep: (params: {
+      stepId: string;
+      question: string;
+    }) => Promise<TaskStep>;
     update: (stepId: string, data: UpdateTaskStep) => Promise<TaskStep>;
 
     resolvePrompt: (stepId: string) => Promise<{
@@ -689,13 +716,24 @@ export interface Api {
         workItemTypes?: string[];
         excludeWorkItemTypes?: string[];
         searchText?: string;
-        iterationPath?: string;
+          iterationPath?: string;
+          iterationPaths?: string[];
+          assignedTo?: string;
       };
     }) => Promise<AzureDevOpsWorkItem[]>;
+    queryWorkItemOwners: (params: {
+      providerId: string;
+      projectName: string;
+    }) => Promise<Array<{ displayName: string; value: string }>>;
     getWorkItemById: (params: {
       providerId: string;
       workItemId: number;
     }) => Promise<AzureDevOpsWorkItem | null>;
+    getWorkItemsByIds: (params: {
+      providerId: string;
+      projectName: string;
+      workItemIds: number[];
+    }) => Promise<AzureDevOpsWorkItem[]>;
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
@@ -714,6 +752,21 @@ export interface Api {
       providerId: string;
       workItemId: number;
       state: string;
+    }) => Promise<void>;
+    updateWorkItemField: (params: {
+      providerId: string;
+      workItemId: number;
+      field: string;
+      value: string | number | null;
+    }) => Promise<void>;
+    updateWorkItemBoardColumn: (params: {
+      providerId: string;
+      projectId: string;
+      projectName: string;
+      workItemId: number;
+      column: string;
+      teamId: string;
+      boardId: string;
     }) => Promise<void>;
     getRelatedTestCases: (params: {
       providerId: string;
@@ -1114,6 +1167,7 @@ export interface Api {
   agent: {
     start: (stepId: string) => Promise<void>;
     stop: (stepId: string) => Promise<void>;
+    stopAll: () => Promise<void>;
     respond: (
       stepId: string,
       requestId: string,
@@ -1147,6 +1201,7 @@ export interface Api {
     ) => Promise<DebugMessageWithRawData[]>;
     getResourceSnapshots: () => Promise<AgentResourceSnapshot[]>;
     getResourceHistory: () => Promise<Record<string, AgentResourceSnapshot[]>>;
+    setHighFrequencyResourceSampling: (enabled: boolean) => Promise<void>;
     compactRawMessages: (taskId: string) => Promise<void>;
     reprocessNormalization: (taskId: string) => Promise<number>;
     getPendingRequest: (stepId: string) => Promise<
@@ -1159,6 +1214,7 @@ export interface Api {
           data: {
             taskId: string;
             requestId: string;
+            contextReminder?: string;
             questions: AgentQuestion[];
           };
         }
@@ -1261,6 +1317,7 @@ export interface Api {
       taskId: string;
       runCommandId: string;
     }) => Promise<void>;
+    stopAll: () => Promise<void>;
     sendInput: (params: {
       taskId: string;
       runCommandId: string;
@@ -1350,6 +1407,29 @@ export interface Api {
         mainRepoPath: string;
       },
     ) => Promise<string>;
+  };
+  globalMcp: {
+    findAll: () => Promise<GlobalMcpServer[]>;
+    findById: (id: string) => Promise<GlobalMcpServer | undefined>;
+    create: (data: NewGlobalMcpServer) => Promise<GlobalMcpServer>;
+    update: (
+      id: string,
+      data: UpdateGlobalMcpServer,
+    ) => Promise<GlobalMcpServer>;
+    enable: (
+      id: string,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
+    disable: (
+      id: string,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
+    uninstall: (id: string) => Promise<void>;
+    discover: () => Promise<GlobalMcpDiscoveryResult>;
+    import: (
+      entry: DiscoveredMcpVariant,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
   };
   claudeProjects: {
     findNonExistent: () => Promise<ClaudeProjectsScanResult>;
@@ -1833,7 +1913,7 @@ export const api: Api = hasWindowApi
           },
         },
         createPullRequest: async () => ({ id: 0, url: '' }),
-        createPrReview: async () => {
+        createPrReviewTask: async () => {
           throw new Error('API not available');
         },
       },
@@ -1841,6 +1921,12 @@ export const api: Api = hasWindowApi
         findByTaskId: async () => [],
         findById: async () => undefined,
         create: async () => {
+          throw new Error('API not available');
+        },
+        createPrReviewChatStep: async () => {
+          throw new Error('API not available');
+        },
+        continuePrReviewChatStep: async () => {
           throw new Error('API not available');
         },
         update: async () => {
@@ -1896,11 +1982,19 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         queryWorkItems: async () => [],
+        queryWorkItemOwners: async () => [],
         getWorkItemById: async () => null,
+        getWorkItemsByIds: async () => [],
         getPullRequestStatuses: async () => [],
         getWorkItemStates: async () => [],
         getBoardColumns: async () => [],
         updateWorkItemState: async () => {
+          throw new Error('API not available');
+        },
+        updateWorkItemField: async () => {
+          throw new Error('API not available');
+        },
+        updateWorkItemBoardColumn: async () => {
           throw new Error('API not available');
         },
         getRelatedTestCases: async () => [],
@@ -2060,6 +2154,9 @@ export const api: Api = hasWindowApi
         stop: async () => {
           throw new Error('API not available');
         },
+        stopAll: async () => {
+          throw new Error('API not available');
+        },
         respond: async () => {
           throw new Error('API not available');
         },
@@ -2081,6 +2178,7 @@ export const api: Api = hasWindowApi
         getMessagesWithRawData: async () => [],
         getResourceSnapshots: async () => [],
         getResourceHistory: async () => ({}),
+        setHighFrequencyResourceSampling: async () => {},
         compactRawMessages: async () => {},
         reprocessNormalization: async () => 0,
         getPendingRequest: async () => null,
@@ -2198,6 +2296,7 @@ export const api: Api = hasWindowApi
           commands: [],
         }),
         stopCommand: async () => {},
+        stopAll: async () => {},
         sendInput: async () => {},
         resetLogs: async () => 0,
         sendSignal: async () => {},
@@ -2248,6 +2347,27 @@ export const api: Api = hasWindowApi
         activate: async () => {},
         deactivate: async () => {},
         substituteVariables: async (commandTemplate) => commandTemplate,
+      },
+      globalMcp: {
+        findAll: async () => [],
+        findById: async () => undefined,
+        create: async () => {
+          throw new Error('API not available');
+        },
+        update: async () => {
+          throw new Error('API not available');
+        },
+        enable: async () => {
+          throw new Error('API not available');
+        },
+        disable: async () => {
+          throw new Error('API not available');
+        },
+        uninstall: async () => {},
+        discover: async () => ({ groups: [], errors: [] }),
+        import: async () => {
+          throw new Error('API not available');
+        },
       },
       claudeProjects: {
         findNonExistent: async () => ({ projects: [], contentHash: '' }),

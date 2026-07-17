@@ -18,6 +18,7 @@ import type {
   ProjectPromptPrefaceSetting,
   PromptPrefaceSetting,
   PromptSnippetsSetting,
+  PrReviewAgentSetting,
   RateLimitSwapSetting,
   RawMessageCleanupSetting,
   SummaryModelsSetting,
@@ -263,6 +264,23 @@ export function useSummaryModelsSetting() {
 
 export function useBackendDefaultModelsSetting() {
   return useSetting('backendDefaultModels');
+}
+
+export function usePrReviewAgentSetting() {
+  return useSetting('prReviewAgent');
+}
+
+export function useUpdatePrReviewAgentSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: PrReviewAgentSetting) =>
+      api.settings.set('prReviewAgent', value),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'prReviewAgent'],
+      });
+    },
+  });
 }
 
 // Convenience hooks for rate limit swap setting

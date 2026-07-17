@@ -1,12 +1,29 @@
-import { Check, Plus } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useState } from 'react';
+import { Check, Plus, Sparkles } from 'lucide-react';
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 
 import type { AgentQuestion, QuestionResponse } from '@shared/agent-types';
 import { Kbd } from '@/common/ui/kbd';
+import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import { Textarea } from '@/common/ui/textarea';
 import { useCommands } from '@/common/hooks/use-commands';
 
 type QuestionInputMode = 'text' | 'single-choice' | 'multi-choice';
+
+const DECIDE_FOR_ME = 'Decide for me';
+
+function RecommendedBadge() {
+  return (
+    <span className="rounded border border-teal-400/30 bg-teal-400/10 px-1 py-0.5 font-mono text-[9px] font-semibold uppercase leading-none tracking-wide text-teal-300">
+      Recommended
+    </span>
+  );
+}
 
 function getQuestionInputMode(question: AgentQuestion): QuestionInputMode {
   if (question.type === 'text') return 'text';
@@ -121,7 +138,7 @@ function QuestionNotes({
   );
 }
 
-function QuestionInput({
+const QuestionInput = memo(function QuestionInput({
   question,
   questionIndex,
   value,
@@ -160,9 +177,10 @@ function QuestionInput({
   const mode = getQuestionInputMode(question);
   const selectedLabels = getSelectedLabels(value);
   const allowsFreeform = question.allowFreeform ?? true;
-  const optionCount =
-    question.options.length + (question.multiSelect || !allowsFreeform ? 0 : 1);
+  const decideForMeIndex = question.options.length;
+  const otherOptionIndex = decideForMeIndex + 1;
   const isFreeformOpen = allowsFreeform && isOtherOpen;
+  const isDecideForMeSelected = value === DECIDE_FOR_ME;
   const otherPlaceholder =
     mode === 'text' ? 'Add another answer...' : 'Add other answer...';
 
@@ -170,7 +188,7 @@ function QuestionInput({
     return (
       <div className="space-y-1.5">
         <Textarea
-          value={value}
+          value={isDecideForMeSelected ? '' : value}
           onFocus={() => onActivate({ questionIndex, optionIndex: 0 })}
           onChange={(event) =>
             onTextChange({ questionIndex, value: event.currentTarget.value })
@@ -180,8 +198,25 @@ function QuestionInput({
           rows={3}
           className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
         />
+        <button
+          type="button"
+          aria-pressed={isDecideForMeSelected}
+          onFocus={() => onActivate({ questionIndex, optionIndex: 0 })}
+          onClick={() => {
+            onActivate({ questionIndex, optionIndex: 0 });
+            onSelectOption({ questionIndex, optionIndex: 0 });
+          }}
+          className={`flex items-center gap-2 rounded-lg border p-2 text-left text-[13px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+            isDecideForMeSelected
+              ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+              : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+          }`}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Decide for me
+        </button>
         {allowsFreeform ? (
-          <input
+          <Textarea
             value={otherValue}
             aria-label={`${question.question} other answer`}
             onChange={(event) =>
@@ -191,7 +226,9 @@ function QuestionInput({
               })
             }
             placeholder={otherPlaceholder}
-            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/50"
+            size="sm"
+            rows={2}
+            className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
           />
         ) : null}
         <QuestionNotes
@@ -236,7 +273,10 @@ function QuestionInput({
                   </span>
                 ) : null}
                 <span className="flex flex-col items-start gap-0.5">
-                  <span>{option.label}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span>{option.label}</span>
+                    {option.recommended ? <RecommendedBadge /> : null}
+                  </span>
                   {option.description ? (
                     <span className="text-[11px] leading-tight text-current/70">
                       {option.description}
@@ -246,9 +286,28 @@ function QuestionInput({
               </button>
             );
           })}
+          <button
+            type="button"
+            aria-pressed={isDecideForMeSelected}
+            onFocus={() =>
+              onActivate({ questionIndex, optionIndex: decideForMeIndex })
+            }
+            onClick={() => {
+              onActivate({ questionIndex, optionIndex: decideForMeIndex });
+              onSelectOption({ questionIndex, optionIndex: decideForMeIndex });
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-left text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+              isDecideForMeSelected
+                ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+                : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+            }`}
+          >
+            <Sparkles className="h-3 w-3" />
+            Decide for me
+          </button>
         </div>
         {allowsFreeform ? (
-          <input
+          <Textarea
             value={otherValue}
             aria-label={`${question.question} other answer`}
             onChange={(event) =>
@@ -258,7 +317,9 @@ function QuestionInput({
               })
             }
             placeholder={otherPlaceholder}
-            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/50"
+            size="sm"
+            rows={2}
+            className="border-white/10 bg-white/[0.04] text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/50"
           />
         ) : null}
         <QuestionNotes
@@ -306,8 +367,9 @@ function QuestionInput({
                 <Check className="h-2.5 w-2.5" />
               </span>
               <span className="min-w-0 space-y-0.5">
-                <span className="block text-[13px] font-semibold leading-tight text-ink-0">
-                  {option.label}
+                <span className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold leading-tight text-ink-0">
+                  <span>{option.label}</span>
+                  {option.recommended ? <RecommendedBadge /> : null}
                 </span>
                 {option.description ? (
                   <span className="block text-xs leading-snug text-ink-2">
@@ -318,13 +380,34 @@ function QuestionInput({
             </button>
           );
         })}
+        <button
+          type="button"
+          aria-pressed={isDecideForMeSelected}
+          onFocus={() =>
+            onActivate({ questionIndex, optionIndex: decideForMeIndex })
+          }
+          onClick={() => {
+            onActivate({ questionIndex, optionIndex: decideForMeIndex });
+            onSelectOption({ questionIndex, optionIndex: decideForMeIndex });
+          }}
+          className={`flex items-start gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+            isDecideForMeSelected
+              ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+              : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+          }`}
+        >
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span className="block text-[13px] font-semibold leading-tight text-ink-0">
+            Decide for me
+          </span>
+        </button>
         {allowsFreeform ? (
           isFreeformOpen ? (
-            <input
+            <Textarea
               value={value}
               aria-label={`${question.question} custom answer`}
               onFocus={() =>
-                onActivate({ questionIndex, optionIndex: optionCount - 1 })
+                onActivate({ questionIndex, optionIndex: otherOptionIndex })
               }
               onChange={(event) =>
                 onOtherChange({ questionIndex, value: event.currentTarget.value })
@@ -333,7 +416,9 @@ function QuestionInput({
                 if (!value.trim()) onCloseOther(questionIndex);
               }}
               placeholder="Add another answer..."
-              className="w-full rounded-lg border border-teal-400/50 bg-teal-400/10 px-2.5 py-1.5 text-[13px] text-ink-0 outline-none placeholder:text-ink-3 focus:border-teal-400/70 sm:col-span-2 xl:col-span-3 2xl:col-span-4"
+              size="sm"
+              rows={2}
+              className="border-teal-400/50 bg-teal-400/10 text-[13px] text-ink-0 placeholder:text-ink-3 focus-visible:border-teal-400/70 sm:col-span-2 xl:col-span-3 2xl:col-span-4"
               autoFocus
             />
           ) : (
@@ -341,11 +426,11 @@ function QuestionInput({
               type="button"
               aria-pressed={isOtherOpen}
               onFocus={() =>
-                onActivate({ questionIndex, optionIndex: optionCount - 1 })
+                onActivate({ questionIndex, optionIndex: otherOptionIndex })
               }
               onClick={() => {
-                onActivate({ questionIndex, optionIndex: optionCount - 1 });
-                onSelectOption({ questionIndex, optionIndex: optionCount - 1 });
+                onActivate({ questionIndex, optionIndex: otherOptionIndex });
+                onSelectOption({ questionIndex, optionIndex: otherOptionIndex });
               }}
               className={`flex items-center gap-2 rounded-lg border p-2 text-left text-[13px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none sm:col-span-2 xl:col-span-3 2xl:col-span-4 ${
                 'border-white/10 bg-white/[0.04] text-ink-2 hover:border-white/15 hover:bg-white/[0.07]'
@@ -370,6 +455,19 @@ function QuestionInput({
       />
     </div>
   );
+});
+
+export function QuestionContextReminder({ content }: { content?: string }) {
+  if (!content) return null;
+
+  return (
+    <aside className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2.5">
+      <div className="mb-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-teal-300/80">
+        Context
+      </div>
+      <MarkdownContent content={content} />
+    </aside>
+  );
 }
 
 export function QuestionOptions({
@@ -379,6 +477,7 @@ export function QuestionOptions({
   request: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   };
   onRespond: (
@@ -437,11 +536,9 @@ export function QuestionOptions({
 
   const getOptionCount = useCallback((question: AgentQuestion) => {
     const mode = getQuestionInputMode(question);
-    if (mode === 'text') return 0;
-    return (
-      question.options.length +
-      (question.multiSelect || question.allowFreeform === false ? 0 : 1)
-    );
+    if (mode === 'text') return 1;
+    if (mode === 'multi-choice') return question.options.length + 1;
+    return question.options.length + (question.allowFreeform === false ? 1 : 2);
   }, []);
 
   useEffect(() => {
@@ -484,17 +581,31 @@ export function QuestionOptions({
       const questionKey = getQuestionKey(question);
       const mode = getQuestionInputMode(question);
 
+      if (optionIndex === question.options.length) {
+        setAnswers((prev) => ({ ...prev, [questionKey]: DECIDE_FOR_ME }));
+        setOtherAnswers((prev) => ({ ...prev, [questionKey]: '' }));
+        setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: false }));
+        setWasFreeformByQuestion((prev) => ({
+          ...prev,
+          [questionKey]: true,
+        }));
+        return true;
+      }
+
       if (mode === 'text') return false;
 
       if (mode === 'multi-choice') {
         const label = question.options[optionIndex]?.label;
         if (!label) return false;
-        const current = answers[questionKey] ?? '';
-        const selected = getSelectedLabels(current);
-        const next = selected.includes(label)
-          ? selected.filter((item) => item !== label)
-          : [...selected, label];
-        setAnswers((prev) => ({ ...prev, [questionKey]: JSON.stringify(next) }));
+        setAnswers((prev) => {
+          const selected = getSelectedLabels(prev[questionKey] ?? '').filter(
+            (item) => item !== DECIDE_FOR_ME,
+          );
+          const next = selected.includes(label)
+            ? selected.filter((item) => item !== label)
+            : [...selected, label];
+          return { ...prev, [questionKey]: JSON.stringify(next) };
+        });
         setWasFreeformByQuestion((prev) => ({
           ...prev,
           [question.question]: false,
@@ -503,7 +614,8 @@ export function QuestionOptions({
       }
 
       const isOther =
-        question.allowFreeform !== false && optionIndex === question.options.length;
+        question.allowFreeform !== false &&
+        optionIndex === question.options.length + 1;
       setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: isOther }));
 
       if (isOther) {
@@ -511,13 +623,15 @@ export function QuestionOptions({
           ...prev,
           [questionKey]: true,
         }));
-        const current = answers[questionKey] ?? '';
-        const matchesOption = question.options.some(
-          (option) => option.label === current,
-        );
-        if (matchesOption) {
-          setAnswers((prev) => ({ ...prev, [questionKey]: '' }));
-        }
+        setAnswers((prev) => {
+          const current = prev[questionKey] ?? '';
+          const matchesOption = question.options.some(
+            (option) => option.label === current,
+          );
+          return matchesOption || current === DECIDE_FOR_ME
+            ? { ...prev, [questionKey]: '' }
+            : prev;
+        });
         return true;
       }
 
@@ -530,7 +644,7 @@ export function QuestionOptions({
       }));
       return true;
     },
-    [answers, request.questions],
+    [request.questions],
   );
 
   const updateTextAnswer = useCallback(
@@ -550,6 +664,13 @@ export function QuestionOptions({
       const mode = getQuestionInputMode(question);
       if (mode === 'text' || mode === 'multi-choice') {
         setOtherAnswers((prev) => ({ ...prev, [questionKey]: value }));
+        if (value.trim()) {
+          setAnswers((prev) =>
+            prev[questionKey] === DECIDE_FOR_ME
+              ? { ...prev, [questionKey]: '' }
+              : prev,
+          );
+        }
         if (mode === 'multi-choice') {
           setWasFreeformByQuestion((prev) => ({
             ...prev,
@@ -733,7 +854,9 @@ export function QuestionOptions({
   ]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-white/10 bg-bg-2/95 shadow-[0_18px_50px_-30px_rgba(0,0,0,0.8)]">
+    <div className="space-y-2">
+      <QuestionContextReminder content={request.contextReminder} />
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-bg-2/95 shadow-[0_18px_50px_-30px_rgba(0,0,0,0.8)]">
       <div className="space-y-2.5 px-3 py-2.5">
         {request.questions.map((question, index) => {
           const questionKey = getQuestionKey(question);
@@ -745,7 +868,7 @@ export function QuestionOptions({
 
           return (
             <section key={`${index}-${questionKey}`} className="space-y-1.5">
-              <header className="flex items-baseline gap-1.5">
+              <header className="flex items-center gap-1.5">
                 <span
                   className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] leading-none transition-colors ${
                     isAnswered
@@ -793,6 +916,7 @@ export function QuestionOptions({
           {request.questions.length} questions · {answeredCount} answered ·{' '}
           <Kbd shortcut="cmd+enter" />
         </span>
+      </div>
       </div>
     </div>
   );

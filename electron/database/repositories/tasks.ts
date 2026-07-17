@@ -310,6 +310,42 @@ export const TaskRepository = {
     return toTaskOrUndefined(row);
   },
 
+  findActivePrReviewTask: async ({
+    projectId,
+    pullRequestId,
+  }: {
+    projectId: string;
+    pullRequestId: string;
+  }) => {
+    const row = await db
+      .selectFrom('tasks')
+      .selectAll()
+      .where('projectId', '=', projectId)
+      .where('type', '=', 'pr-review')
+      .where('pullRequestId', '=', pullRequestId)
+      .orderBy('createdAt', 'desc')
+      .executeTakeFirst();
+    return toTaskOrUndefined(row);
+  },
+
+  findPrReviewTasksByPullRequest: async ({
+    projectId,
+    pullRequestId,
+  }: {
+    projectId: string;
+    pullRequestId: string;
+  }) => {
+    const rows = await db
+      .selectFrom('tasks')
+      .selectAll()
+      .where('projectId', '=', projectId)
+      .where('type', '=', 'pr-review')
+      .where('pullRequestId', '=', pullRequestId)
+      .orderBy('createdAt', 'desc')
+      .execute();
+    return rows.map(toTask);
+  },
+
   /** Returns the set of IDs that exist in the database from the given list. */
   findExistingIds: async (ids: string[]): Promise<Set<string>> => {
     if (ids.length === 0) return new Set();
@@ -345,11 +381,6 @@ export const TaskRepository = {
 
   update: async (id: string, data: UpdateTaskInput) => {
     dbg.db('tasks.update id=%s %o', id, Object.keys(data));
-    console.trace(
-      '[DEBUG] TaskRepository.update called',
-      id,
-      Object.keys(data),
-    );
     const changedKeys = Object.keys(data).filter((key) => key !== 'updatedAt');
     const shouldUpdateTimestamp =
       changedKeys.length !== 1 || changedKeys[0] !== 'name';
@@ -385,7 +416,6 @@ export const TaskRepository = {
   },
 
   setHasUnread: async (id: string, hasUnread: boolean) => {
-    console.log('[DEBUG] setHasUnread called', id, hasUnread);
     const hasUnreadValue = hasUnread ? 1 : 0;
     await db
       .updateTable('tasks')

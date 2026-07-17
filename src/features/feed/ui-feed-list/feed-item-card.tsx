@@ -3,6 +3,7 @@ import {
   Bot,
   Bug,
   CheckCircle2,
+  CircleDotDashed,
   CircleHelp,
   ClipboardList,
   FolderOpen,
@@ -46,6 +47,11 @@ import {
 } from '@/common/ui/dropdown';
 import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
 import {
+  getPrStateColor,
+  getPrStatusLabel,
+  resolvePrStatus,
+} from '@/lib/feed-pr-state';
+import {
   useCachedPullRequest,
   usePullRequest,
   usePullRequestPolicyEvaluations,
@@ -57,6 +63,7 @@ import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useFeedStore } from '@/stores/feed';
+import { useNavigationStore } from '@/stores/navigation';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
@@ -124,18 +131,7 @@ function FeedProjectBackgroundLogo({ item }: { item: FeedItem }) {
 const RAIL_W = 32; // rail column width in px
 const NODE_X = 16; // center X of main node
 const FEED_RAIL_COLOR = 'var(--color-ink-4)';
-
-function getPrStateColor({
-  isDraft,
-  isCompleted,
-}: {
-  isDraft: boolean | undefined;
-  isCompleted: boolean;
-}) {
-  if (isCompleted) return 'var(--color-status-done)';
-  if (isDraft) return 'var(--color-ink-3)';
-  return 'var(--color-status-azure)';
-}
+const PR_REVIEW_TASK_COLOR = 'oklch(0.74 0.19 295)';
 
 function isModifiedClick(e: React.MouseEvent): boolean {
   return e.metaKey || e.ctrlKey;
@@ -455,9 +451,13 @@ export function FeedItemCard({
       ? (cachedPr?.creationDate ?? item.timestamp)
       : item.timestamp;
   const pullRequestUrl = cachedPr?.url ?? item.pullRequestUrl;
-  const isDraft = cachedPr?.isDraft ?? item.isDraft;
+  const isDraft = isTask
+    ? (item.isDraft ?? cachedPr?.isDraft)
+    : (cachedPr?.isDraft ?? item.isDraft);
   const pullRequestMergeStatus =
-    cachedPr?.mergeStatus ?? item.pullRequestMergeStatus;
+    isTask
+      ? (item.pullRequestMergeStatus ?? cachedPr?.mergeStatus)
+      : (cachedPr?.mergeStatus ?? item.pullRequestMergeStatus);
   const approvedBy =
     cachedPr?.reviewers
       .filter(
@@ -484,15 +484,27 @@ export function FeedItemCard({
   );
   const hasChildren = !isSubtask && visibleChildren.length > 0;
   const hasPr = isTask && !!item.pullRequestId;
-  const prMerged =
-    item.workItemPrStatus === 'completed' || cachedPr?.status === 'completed';
+  const prStatus = resolvePrStatus({
+    cachedStatus: cachedPr?.status,
+    feedStatus: item.workItemPrStatus,
+  });
+  const prMerged = prStatus === 'completed';
+  const prStatusLabel = getPrStatusLabel(prStatus);
   const prHasConflicts = pullRequestMergeStatus === 'conflicts';
+  const prHasOpenComments = (item.activeThreadCount ?? 0) > 0;
   const prApprovalCount = approvedBy.length;
   const prStateColor = getPrStateColor({
+    status: prStatus,
     isDraft,
-    isCompleted: prMerged,
+    hasConflicts: prHasConflicts,
+    hasOpenComments: prHasOpenComments,
   });
-  const railColor = hasPr ? prStateColor : FEED_RAIL_COLOR;
+  const railColor =
+    hasPr
+      ? prStateColor
+      : item.taskType === 'pr-review'
+        ? PR_REVIEW_TASK_COLOR
+        : FEED_RAIL_COLOR;
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
   const canSetPrAutoComplete =
@@ -629,6 +641,21 @@ export function FeedItemCard({
       }
     },
     [navigate, item.projectId, item.pullRequestId, pullRequestUrl],
+  );
+
+  const handleUncommittedClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!item.taskId) return;
+      const navigation = useNavigationStore.getState();
+      navigation.setTaskViewMode(item.taskId, 'diff');
+      navigation.setReviewMode(item.taskId, 'changes');
+      navigate({
+        to: '/all/$taskId',
+        params: { taskId: item.taskId },
+      });
+    },
+    [item.taskId, navigate],
   );
 
   const handleWorkItemClick = useCallback(
@@ -995,7 +1022,7 @@ export function FeedItemCard({
                     )}{' '}
                     #{item.pullRequestId}
                   </span>
-                  <span>{prMerged ? 'merged' : 'open'}</span>
+                  <span>{prStatusLabel}</span>
                   {isDraft && (
                     <span className="border-glass-border text-ink-3 rounded border px-1 py-0 text-[9px]">
                       Draft
@@ -1021,6 +1048,18 @@ export function FeedItemCard({
                       <XCircle className="h-2.5 w-2.5" />
                       <span className="text-[9.5px]">Conflicts</span>
                     </span>
+                  )}
+                  {item.hasUncommittedChanges && (
+                    <button
+                      type="button"
+                      onClick={handleUncommittedClick}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      className="text-status-run hover:bg-status-run/15 flex items-center gap-0.5 rounded px-1 py-0.5 transition-colors"
+                      title="Open uncommitted worktree changes"
+                    >
+                      <CircleDotDashed className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">Uncommitted</span>
+                    </button>
                   )}
                   {(item.activeThreadCount ?? 0) > 0 && (
                     <span className="text-status-pr flex items-center gap-0.5">

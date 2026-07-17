@@ -171,4 +171,5 @@ echo ""
 
 # Start the dev server with the overridden database path
 cd "$PROJECT_ROOT"
-JEAN_CLAUDE_DB_PATH="$TMP_DB" pnpm dev
+env -u ELECTRON_EXEC_PATH -u ELECTRON_MAJOR_VER \
+  JEAN_CLAUDE_DB_PATH="$TMP_DB" pnpm dev

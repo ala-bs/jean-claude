@@ -74,6 +74,7 @@ export interface QuestionBannerProps {
   request: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   };
   onRespond: (
@@ -393,7 +394,9 @@ export const MessageStream = memo(function MessageStream({
                   <PromptGroupEntry
                     group={streamMessage}
                     isLast={index === lastPromptGroupIndex}
-                    isTaskRunning={isRunning}
+                    isTaskRunning={
+                      index === lastPromptGroupIndex && isRunning
+                    }
                     previousPromptDate={previousPromptDate}
                     onFilePathClick={onFilePathClick}
                     onToolDiffClick={onToolDiffClick}

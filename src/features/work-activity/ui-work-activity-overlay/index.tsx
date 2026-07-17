@@ -71,7 +71,6 @@ const weekLabelFormatter = new Intl.DateTimeFormat(undefined, {
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: 'numeric',
   minute: '2-digit',
-  timeZone: 'UTC',
 });
 
 function shiftWeek(date: Date, direction: -1 | 1) {
@@ -324,7 +323,7 @@ function getTimelineLaneKind(laneId: string) {
 
 function eventMinute(event: WorkActivityEvent) {
   const date = new Date(event.occurredAt);
-  return date.getUTCHours() * 60 + date.getUTCMinutes();
+  return date.getHours() * 60 + date.getMinutes();
 }
 
 function formatHour(minute: number) {

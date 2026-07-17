@@ -36,6 +36,7 @@ function createProject(overrides: Partial<Project> = {}): Project {
     workItemProviderId: null,
     workItemProjectId: null,
     workItemProjectName: null,
+    workItemTitleParser: null,
     showWorkItemsInFeed: true,
     showPrsInFeed: true,
     defaultAgentBackend: null,
@@ -188,6 +189,8 @@ describe('pull request feed identity', () => {
           pullRequestProviderId: 'github',
           pullRequestRepoId: 'repo-a',
           pullRequestId: 42,
+          workItemPrStatus: 'abandoned',
+          activeThreadCount: 4,
         }),
       ],
       [
@@ -210,8 +213,8 @@ describe('pull request feed identity', () => {
       ],
     );
 
-    expect(merged.activeThreadCount).toBe(2);
-    expect(merged.workItemPrStatus).toBe('active');
+    expect(merged.activeThreadCount).toBe(4);
+    expect(merged.workItemPrStatus).toBe('abandoned');
     expect(merged.workItemPrUrl).toBeUndefined();
   });
 

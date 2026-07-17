@@ -201,6 +201,46 @@ describe('generateText claude-code structured output', () => {
     expect(result).toBe(false);
   });
 
+  it('retries structured generation once when the provider returns null', async () => {
+    const structured = { title: 'fix: retry empty structured output' };
+    queryMock
+      .mockReturnValueOnce(
+        createClaudeQueryResponse({ type: 'result', result: null }),
+      )
+      .mockReturnValueOnce(
+        createClaudeQueryResponse({
+          type: 'result',
+          structured_output: structured,
+        }),
+      );
+
+    await expect(
+      generateText({
+        backend: 'claude-code',
+        model: 'default',
+        prompt: 'Generate a title',
+        outputSchema: { type: 'object' },
+      }),
+    ).resolves.toEqual(structured);
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops after one structured generation retry', async () => {
+    queryMock.mockImplementation(() =>
+      createClaudeQueryResponse({ type: 'result', result: null }),
+    );
+
+    await expect(
+      generateText({
+        backend: 'claude-code',
+        model: 'default',
+        prompt: 'Generate a title',
+        outputSchema: { type: 'object' },
+      }),
+    ).resolves.toBeNull();
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
   it('passes Claude Code allowed tool patterns as scoped tool permissions', async () => {
     queryMock.mockReturnValue(
       createClaudeQueryResponse({ type: 'result', result: 'done' }),
@@ -319,6 +359,135 @@ describe('generateText opencode structured output', () => {
     );
   });
 
+  it('retries when OpenCode returns no structured output or text', async () => {
+    const structured = {
+      title: 'fix: retry empty opencode response',
+      body: '- Generate merge message on second attempt',
+    };
+    const client = createMockClient(null);
+    client.session.prompt
+      .mockResolvedValueOnce({ data: { info: {}, parts: [] } })
+      .mockResolvedValueOnce({
+        data: { info: { structured }, parts: [] },
+      });
+    getOrCreateServerMock.mockResolvedValue({ client });
+
+    await expect(
+      generateText({
+        backend: 'opencode',
+        model: 'default',
+        prompt: 'Generate message',
+        outputSchema: { type: 'object' },
+      }),
+    ).resolves.toEqual(structured);
+    expect(client.session.create).toHaveBeenCalledTimes(2);
+    expect(client.session.prompt).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts an OpenCode retry whose session starts after timeout', async () => {
+    vi.useFakeTimers();
+    const client = createMockClient(null);
+    let resolveRetrySession: (value: { data: { id: string } }) => void =
+      () => {};
+    client.session.create
+      .mockResolvedValueOnce({ data: { id: 'session-1' } })
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ data: { id: string } }>((resolve) => {
+            resolveRetrySession = resolve;
+          }),
+      );
+    client.session.prompt.mockResolvedValueOnce({
+      data: { info: {}, parts: [] },
+    });
+    getOrCreateServerMock.mockResolvedValue({ client });
+
+    try {
+      const promise = generateText({
+        backend: 'opencode',
+        model: 'default',
+        prompt: 'Generate message',
+        outputSchema: { type: 'object' },
+        timeoutMs: 1_000,
+        throwOnError: true,
+      });
+      const caught = promise.catch((error: unknown) => error);
+
+      await vi.waitFor(() => {
+        expect(client.session.create).toHaveBeenCalledTimes(2);
+      });
+      await vi.advanceTimersByTimeAsync(1_001);
+      resolveRetrySession({ data: { id: 'session-2' } });
+
+      const error = await caught;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(
+        'AI generation timed out after 1000ms',
+      );
+      expect(client.session.prompt).toHaveBeenCalledTimes(1);
+      expect(client.session.abort).toHaveBeenCalledWith({
+        sessionID: 'session-2',
+        directory: expect.any(String),
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces OpenCode assistant errors instead of returning null', async () => {
+    const client = createMockClient({
+      data: {
+        info: {
+          error: {
+            name: 'StructuredOutputError',
+            data: {
+              message: 'Model failed to produce valid structured output',
+              retries: 1,
+            },
+          },
+        },
+        parts: [],
+      },
+    });
+    getOrCreateServerMock.mockResolvedValue({ client });
+
+    await expect(
+      generateText({
+        backend: 'opencode',
+        model: 'default',
+        prompt: 'Generate message',
+        outputSchema: { type: 'object' },
+        throwOnError: true,
+      }),
+    ).rejects.toThrow(
+      'AI generation failed: OpenCode StructuredOutputError: Model failed to produce valid structured output',
+    );
+  });
+
+  it('surfaces OpenCode session creation errors', async () => {
+    const client = createMockClient(null);
+    client.session.create.mockRejectedValueOnce(
+      new Error('Session directory is invalid'),
+    );
+    getOrCreateServerMock.mockResolvedValue({ client });
+
+    const result = generateText({
+      backend: 'opencode',
+      model: 'default',
+      prompt: 'Generate message',
+      outputSchema: { type: 'object' },
+      throwOnError: true,
+    });
+
+    const error = await result.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'AI generation failed: Session directory is invalid',
+    );
+    expect((error as Error).message).not.toContain('did not return a session ID');
+  });
+
   it('records one-off OpenCode requests even when token usage is absent', async () => {
     const client = createMockClient({
       data: {
@@ -379,34 +548,37 @@ describe('generateText opencode structured output', () => {
       },
     });
 
-    expect(client.session.create).toHaveBeenCalledWith({
-      directory: expect.any(String),
-      body: {
-        permission: [
-          { permission: '*', pattern: '*', action: 'deny' },
-          {
-            permission: 'read',
-            pattern: '.jean-claude/memory/**',
-            action: 'allow',
-          },
-          {
-            permission: 'write',
-            pattern: '.jean-claude/memory/**',
-            action: 'allow',
-          },
-          {
-            permission: 'edit',
-            pattern: '.jean-claude/memory/**',
-            action: 'allow',
-          },
-          {
-            permission: 'skill',
-            pattern: 'user-preference-memory',
-            action: 'allow',
-          },
-        ],
+    expect(client.session.create).toHaveBeenCalledWith(
+      {
+        directory: expect.any(String),
+        body: {
+          permission: [
+            { permission: '*', pattern: '*', action: 'deny' },
+            {
+              permission: 'read',
+              pattern: '.jean-claude/memory/**',
+              action: 'allow',
+            },
+            {
+              permission: 'write',
+              pattern: '.jean-claude/memory/**',
+              action: 'allow',
+            },
+            {
+              permission: 'edit',
+              pattern: '.jean-claude/memory/**',
+              action: 'allow',
+            },
+            {
+              permission: 'skill',
+              pattern: 'user-preference-memory',
+              action: 'allow',
+            },
+          ],
+        },
       },
-    });
+      { throwOnError: true },
+    );
   });
 
   it('does not pass OpenCode permissions when allowed tools are unset', async () => {
@@ -424,9 +596,12 @@ describe('generateText opencode structured output', () => {
       prompt: 'Generate text',
     });
 
-    expect(client.session.create).toHaveBeenCalledWith({
-      directory: expect.any(String),
-    });
+    expect(client.session.create).toHaveBeenCalledWith(
+      {
+        directory: expect.any(String),
+      },
+      { throwOnError: true },
+    );
   });
 });
 

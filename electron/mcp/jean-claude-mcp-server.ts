@@ -34,6 +34,10 @@ const THINKING_EFFORT_ENUM = z.enum([
   'xhigh',
 ]);
 
+function isAgentToolEnabled(): boolean {
+  return process.env.JC_MCP_ENABLE_AGENT_TOOL === '1';
+}
+
 function isReviewToolEnabled(): boolean {
   return process.env.JC_MCP_ENABLE_REVIEW_TOOL === '1';
 }
@@ -67,6 +71,7 @@ function buildSubAgentEnv(currentDepth: number): Record<string, string> {
   const {
     NODE_ENV: _nodeEnv,
     OPENCODE_CONFIG_CONTENT: _opencodeConfig,
+    JC_MCP_ENABLE_AGENT_TOOL: _agentTool,
     JC_MCP_ENABLE_REVIEW_TOOL: _reviewTool,
     ...rest
   } = process.env;
@@ -276,75 +281,77 @@ async function main(): Promise<void> {
     version: '1.0.0',
   });
 
-  // --- Tool: run_agent ---
-  server.tool(
-    'run_agent',
-    'Run a full agent session to complete a task. The agent can use tools (bash, read, write, etc.) to accomplish the task.',
-    {
-      prompt: z.string().describe('The task prompt for the agent'),
-      backend: BACKEND_ENUM.optional().describe(
-        'Backend to run the sub-agent with',
-      ),
-      model: z
-        .string()
-        .optional()
-        .describe("Model to use (e.g., 'sonnet', 'opus', 'haiku')"),
-    },
-    async ({ prompt, backend, model }) => {
-      const currentDepth = getCurrentDepth();
+  if (isAgentToolEnabled()) {
+    // --- Tool: run_agent ---
+    server.tool(
+      'run_agent',
+      'Run a full agent session to complete a task. The agent can use tools (bash, read, write, etc.) to accomplish the task.',
+      {
+        prompt: z.string().describe('The task prompt for the agent'),
+        backend: BACKEND_ENUM.optional().describe(
+          'Backend to run the sub-agent with',
+        ),
+        model: z
+          .string()
+          .optional()
+          .describe("Model to use (e.g., 'sonnet', 'opus', 'haiku')"),
+      },
+      async ({ prompt, backend, model }) => {
+        const currentDepth = getCurrentDepth();
 
-      if (currentDepth >= MAX_DEPTH) {
-        console.error(
-          `[jean-claude-mcp] Recursion depth ${currentDepth} exceeds max ${MAX_DEPTH}`,
-        );
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: Maximum agent nesting depth (${MAX_DEPTH}) reached. Cannot spawn another sub-agent.`,
-            },
-          ],
-          isError: true,
-        };
-      }
+        if (currentDepth >= MAX_DEPTH) {
+          console.error(
+            `[jean-claude-mcp] Recursion depth ${currentDepth} exceeds max ${MAX_DEPTH}`,
+          );
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Error: Maximum agent nesting depth (${MAX_DEPTH}) reached. Cannot spawn another sub-agent.`,
+              },
+            ],
+            isError: true,
+          };
+        }
 
-      try {
-        console.error(
-          `[jean-claude-mcp] run_agent: depth=${currentDepth}, backend=${backend ?? 'claude-code'}, model=${model ?? 'default'}, prompt="${prompt.slice(0, 100)}..."`,
-        );
+        try {
+          console.error(
+            `[jean-claude-mcp] run_agent: depth=${currentDepth}, backend=${backend ?? 'claude-code'}, model=${model ?? 'default'}, prompt="${prompt.slice(0, 100)}..."`,
+          );
 
-        const result = await runSubAgent({
-          backend: backend ?? 'claude-code',
-          prompt,
-          model,
-          currentDepth,
-          readOnly: false,
-        });
+          const result = await runSubAgent({
+            backend: backend ?? 'claude-code',
+            prompt,
+            model,
+            currentDepth,
+            readOnly: false,
+          });
 
-        console.error(
-          `[jean-claude-mcp] run_agent completed: ${result.length} chars`,
-        );
+          console.error(
+            `[jean-claude-mcp] run_agent completed: ${result.length} chars`,
+          );
 
-        return {
-          content: [{ type: 'text' as const, text: result }],
-        };
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        console.error(`[jean-claude-mcp] run_agent error: ${errorMessage}`);
+          return {
+            content: [{ type: 'text' as const, text: result }],
+          };
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          console.error(`[jean-claude-mcp] run_agent error: ${errorMessage}`);
 
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error running agent: ${errorMessage}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Error running agent: ${errorMessage}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      },
+    );
+  }
 
   if (isReviewToolEnabled()) {
     // --- Tool: run_review ---
@@ -425,7 +432,7 @@ async function main(): Promise<void> {
   // --- Tool: ask_question ---
   server.tool(
     'ask_question',
-    'Ask the user one or more questions through the Jean-Claude task UI and return their answers as plain text. stepId is optional when Jean-Claude can infer a single active route.',
+    'Ask the user one or more questions through the Jean-Claude task UI and return their answers as plain text. If the questions need preceding explanation, design, constraints, or recap, include it in contextReminder instead of sending a separate assistant message because prompt grouping may hide that message. stepId is optional when Jean-Claude can infer a single active route.',
     ASK_QUESTION_TOOL_SCHEMA,
     async (input) => {
       try {
