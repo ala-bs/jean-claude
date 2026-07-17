@@ -114,9 +114,9 @@ export function WorkItemBoard({
   const isEditorial = variant === 'editorial';
 
   const visibleColumns = useMemo(() => {
-    if (isEditorial || !search.trim()) return columns;
+    if (!search.trim()) return columns;
     return columns.filter((column) => column.items.length > 0);
-  }, [columns, isEditorial, search]);
+  }, [columns, search]);
   const navigableColumns = useMemo(
     () => visibleColumns.filter((column) => !collapsedIds.includes(column.id)),
     [collapsedIds, visibleColumns],
