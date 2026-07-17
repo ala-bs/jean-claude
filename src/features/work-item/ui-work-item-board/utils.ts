@@ -12,6 +12,18 @@ export function isAzureBacklogItemType(workItemType: string) {
   return AZURE_BACKLOG_ITEM_TYPES.has(workItemType.trim().toLocaleLowerCase());
 }
 
+export function isAzureWorkItemOutOfSprint(
+  workItem: AzureDevOpsWorkItem,
+  currentIterationPath: string | undefined,
+) {
+  return (
+    !!currentIterationPath &&
+    !!workItem.fields.iterationPath &&
+    workItem.fields.iterationPath.toLowerCase() !==
+      currentIterationPath.toLowerCase()
+  );
+}
+
 export function parseAzureWorkItemTags(tags: string | undefined) {
   if (!tags) return [];
   return tags

@@ -564,6 +564,7 @@ export function AzureBoardProjectContent({
                   selectedWorkItemIds={[]}
                   providerId={params.providerId}
                   search={filters.search}
+                  currentIterationPath={iterations.find((iteration) => iteration.isCurrent)?.path}
                   showSelection={false}
                   onHighlight={(item) => {
                     setBugsForWorkItemId(null);

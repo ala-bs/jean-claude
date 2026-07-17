@@ -12,7 +12,11 @@ import { useCurrentAzureUser } from '@/hooks/use-work-items';
 import { UserAvatar } from '@/common/ui/user-avatar';
 
 
-import { groupWorkItemsByBoardColumns, parseAzureWorkItemTags } from './utils';
+import {
+  groupWorkItemsByBoardColumns,
+  isAzureWorkItemOutOfSprint,
+  parseAzureWorkItemTags,
+} from './utils';
 import {
   HighlightedSearchText,
   SelectionCheckbox,
@@ -67,6 +71,7 @@ export function WorkItemBoard({
   selectedWorkItemIds,
   providerId,
   search,
+  currentIterationPath,
   onToggleSelect,
   onHighlight,
   showSelection = true,
@@ -86,6 +91,7 @@ export function WorkItemBoard({
   selectedWorkItemIds: string[];
   providerId?: string;
   search: string;
+  currentIterationPath?: string;
   onToggleSelect?: (workItem: AzureDevOpsWorkItem) => void;
   onHighlight: (workItem: AzureDevOpsWorkItem) => void;
   showSelection?: boolean;
@@ -302,6 +308,10 @@ export function WorkItemBoard({
             )}
           >
             {items.map((workItem) => {
+              const isOutOfSprint = isAzureWorkItemOutOfSprint(
+                workItem,
+                currentIterationPath,
+              );
               const isHighlighted =
                 workItem.id.toString() === highlightedWorkItemId;
               const isExactMatch =
@@ -347,6 +357,7 @@ export function WorkItemBoard({
                     <HighlightedSearchText text={`#${workItem.id}`} search={search} />
                   </span>
                   {isExactMatch && <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">Exact</span>}
+                  {isOutOfSprint && <span className="max-w-28 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase" title={`Iteration: ${workItem.fields.iterationPath}`}>{workItem.fields.iterationPath?.split(/[\\/]/).at(-1)}</span>}
                   {!isEditorial && <span className="text-ink-2 max-w-[80px] truncate text-[10px]">{workItem.fields.workItemType}</span>}
                 </>;
               const cardMetadata = <span className="flex items-center gap-1.5">
