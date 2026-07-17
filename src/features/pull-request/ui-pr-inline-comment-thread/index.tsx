@@ -33,6 +33,7 @@ export function PrInlineCommentThread({
 }) {
   return (
     <PrInlineCommentTimeline
+      key={isActiveThreadStatus(thread.status) ? 'active' : 'resolved'}
       threadId={thread.id}
       projectId={projectId}
       prId={prId}
@@ -78,22 +79,29 @@ export function convertPrThreadsForFile(
         stripLeadingSlash(thread.threadContext?.filePath ?? '') ===
           normalizedPath && thread.threadContext?.rightFileStart?.line,
     )
-    .map((thread) => ({
-      id: thread.id,
-      line: thread.threadContext?.rightFileStart?.line,
-      status: thread.status,
-      comments: thread.comments.map((comment) => ({
-        id: comment.id,
-        authorId: comment.author.id,
-        author: comment.author.displayName,
-        content: comment.content,
-        usersLiked: comment.usersLiked,
-        publishedDate: comment.publishedDate,
-        lastUpdatedDate: comment.lastUpdatedDate,
-        imageUrl: comment.author.imageUrl,
-        uniqueName: comment.author.uniqueName,
-      })),
-    }));
+    .map((thread) => {
+      const lineStart = thread.threadContext!.rightFileStart!.line;
+      const lineEnd = thread.threadContext?.rightFileEnd?.line ?? lineStart;
+
+      return {
+        id: thread.id,
+        line: lineEnd,
+        lineStart,
+        lineEnd,
+        status: thread.status,
+        comments: thread.comments.map((comment) => ({
+          id: comment.id,
+          authorId: comment.author.id,
+          author: comment.author.displayName,
+          content: comment.content,
+          usersLiked: comment.usersLiked,
+          publishedDate: comment.publishedDate,
+          lastUpdatedDate: comment.lastUpdatedDate,
+          imageUrl: comment.author.imageUrl,
+          uniqueName: comment.author.uniqueName,
+        })),
+      };
+    });
 }
 
 function stripLeadingSlash(value: string) {

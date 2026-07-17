@@ -249,6 +249,47 @@ describe('FileDiffContent Ask Agent selection', () => {
   });
 });
 
+describe('FileDiffContent PR thread ranges', () => {
+  it('highlights every selected line and renders thread after range', async () => {
+    renderFileDiffContent({
+      file: { path: 'src/file.ts', status: 'added' },
+      oldContent: '',
+      newContent: 'one\ntwo\nthree\nfour\nfive',
+      threads: [
+        {
+          id: 42,
+          line: 4,
+          lineStart: 2,
+          lineEnd: 4,
+          comments: [{ author: 'Ada', content: 'Review this range' }],
+        },
+      ],
+      renderThread: () =>
+        createElement('div', { 'data-testid': 'pr-thread' }, 'Review this range'),
+    });
+
+    const rows = await Promise.all(
+      [1, 2, 3, 4].map((line) =>
+        waitForElement(() =>
+          document.querySelector<HTMLTableRowElement>(
+            `tr[data-new-line="${line}"]`,
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      rows[0]?.querySelector('td.text-acc-ink'),
+    ).toBeNull();
+    for (const row of rows.slice(1)) {
+      expect(row.querySelector('td.text-acc-ink')).not.toBeNull();
+    }
+
+    const threadRow = document.querySelector('[data-testid="pr-thread"]')?.closest('tr');
+    expect(threadRow?.previousElementSibling).toBe(rows[3]);
+  });
+});
+
 describe('PrDiffView comment submission', () => {
   it('retains range and persisted draft on failure, then clears both on success', async () => {
     const onAddFileComment = vi

@@ -457,8 +457,14 @@ export function FileDiffContent({
   // Build set of all lines covered by any comment anchor range
   const commentedLines = useMemo(() => {
     const set = new Set<string>();
-    // From inline comments (thread + annotation) — single line each
-    for (const c of threadComments) set.add(lineAnchorKey(c.side, c.line));
+    // PR threads can cover a selected range while rendering after its final line.
+    for (const thread of fileThreads) {
+      const start = thread.lineStart ?? thread.line!;
+      const end = thread.lineEnd ?? start;
+      for (let line = start; line <= end; line++) {
+        set.add(lineAnchorKey('new', line));
+      }
+    }
     for (const c of annotationComments) set.add(lineAnchorKey(c.side, c.line));
     // From review comments — full lineStart..lineEnd range
     if (reviewComments) {
@@ -478,7 +484,7 @@ export function FileDiffContent({
       }
     }
     return set;
-  }, [threadComments, annotationComments, reviewComments, prReviewChatCards]);
+  }, [fileThreads, annotationComments, reviewComments, prReviewChatCards]);
 
   // Handle review comment submission for a specific range
   const handleAddReviewCommentForRange = useCallback(
