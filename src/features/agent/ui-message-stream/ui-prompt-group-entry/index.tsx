@@ -1237,6 +1237,8 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   onResultContextMenu,
   rootPath,
   taskId,
+  onOpenFileInReview,
+  onOpenFileInEditor,
 }: {
   group: PromptGroup;
   isLast?: boolean;
@@ -1260,6 +1262,8 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   rootPath?: string | null;
   /** Task ID for comment anchoring in assistant messages */
   taskId?: string;
+  onOpenFileInReview?: (filePath: string) => void;
+  onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
 }) {
   const isError = group.status === 'error';
   const isInterrupted = group.status === 'interrupted';
@@ -1630,6 +1634,8 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
           fileChangeEntries={fileChangeEntries}
           rootPath={rootPath}
           taskId={taskId}
+          onOpenFileInReview={onOpenFileInReview}
+          onOpenFileInEditor={onOpenFileInEditor}
         />
       )}
     </div>

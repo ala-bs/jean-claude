@@ -1,10 +1,22 @@
-import { Check, Copy, File, FileText } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
-
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  File,
+  FileText,
+  FolderCode,
+} from 'lucide-react';
 import type {
   DiffFile,
   DiffFileStatus,
 } from '@/features/common/ui-file-diff/types';
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useMemo,
+  useState,
+} from 'react';
 import type {
   NormalizedEntry,
   ToolUseByName,
@@ -14,12 +26,16 @@ import {
   useReviewCommentsForFile,
   useReviewCommentsStore,
 } from '@/stores/review-comments';
+import clsx from 'clsx';
 import { DiffFileTree } from '@/features/common/ui-file-diff/file-tree';
 import { FileDiffContent } from '@/features/common/ui-file-diff';
+import { FileDiffHeader } from '@/features/common/ui-file-diff/file-diff-header';
 import { getSelectedTextForRange } from '@/stores/utils-comment-prompt';
 import { Modal } from '@/common/ui/modal';
 import { parseUnifiedPatchToStrings } from '@/features/agent/ui-diff-view/diff-utils';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import { useDiffFileTreeWidth } from '@/stores/navigation';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 
 
 
@@ -38,14 +54,65 @@ interface FileChange {
   hasStructuredDiff: boolean;
 }
 
+const MAX_MODAL_FILE_TREE_WIDTH = 640;
+
+function normalizeFilePath(filePath: string): string {
+  const slashPath = filePath.replaceAll('\\', '/');
+  const prefix = slashPath.startsWith('/') ? '/' : '';
+  const segments: string[] = [];
+
+  for (const segment of slashPath.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..' && segments.length > 0 && segments.at(-1) !== '..') {
+      segments.pop();
+    } else {
+      segments.push(segment);
+    }
+  }
+
+  return prefix + segments.join('/');
+}
+
+function isAbsoluteFilePath(filePath: string): boolean {
+  return (
+    filePath.startsWith('/') ||
+    filePath.startsWith('\\') ||
+    /^[A-Za-z]:/.test(filePath)
+  );
+}
+
 function relativizePath(
   filePath: string,
   rootPath: string | null | undefined,
 ): { displayPath: string; external: boolean } {
   if (!rootPath) return { displayPath: filePath, external: false };
-  const normalized = rootPath.endsWith('/') ? rootPath : `${rootPath}/`;
-  if (filePath.startsWith(normalized)) {
-    return { displayPath: filePath.slice(normalized.length), external: false };
+  const normalizedPath = normalizeFilePath(filePath);
+  const normalizedRoot = normalizeFilePath(rootPath).replace(/\/$/, '');
+  const isAbsolute = isAbsoluteFilePath(filePath);
+  if (!isAbsolute) {
+    const external =
+      normalizedPath === '..' || normalizedPath.startsWith('../');
+    return {
+      displayPath: external ? filePath : normalizedPath,
+      external,
+    };
+  }
+  const normalizedRootPrefix = `${normalizedRoot}/`;
+  const isWindowsPath =
+    (/^[A-Za-z]:\//.test(normalizedPath) &&
+      /^[A-Za-z]:\//.test(normalizedRoot)) ||
+    rootPath.startsWith('\\');
+  const comparablePath = isWindowsPath
+    ? normalizedPath.toLowerCase()
+    : normalizedPath;
+  const comparableRootPrefix = isWindowsPath
+    ? normalizedRootPrefix.toLowerCase()
+    : normalizedRootPrefix;
+  if (comparablePath.startsWith(comparableRootPrefix)) {
+    return {
+      displayPath: normalizedPath.slice(normalizedRootPrefix.length),
+      external: false,
+    };
   }
   return { displayPath: filePath, external: true };
 }
@@ -57,6 +124,7 @@ function extractFileChanges(
   const fileMap = new Map<
     string,
     {
+      path: string;
       edits: Array<{ old: string; new: string }>;
       status: DiffFileStatus;
       rawPatches: string[];
@@ -79,7 +147,9 @@ function extractFileChanges(
           },
         ];
         for (const file of files) {
-          const existing = fileMap.get(file.filePath);
+          const pathInfo = relativizePath(file.filePath, rootPath);
+          const mapKey = `${pathInfo.external ? 'external' : 'project'}:${normalizeFilePath(pathInfo.displayPath)}`;
+          const existing = fileMap.get(mapKey);
           const status: DiffFileStatus =
             file.type === 'add'
               ? 'added'
@@ -99,7 +169,8 @@ function extractFileChanges(
             existing.hasStructuredDiff =
               existing.hasStructuredDiff || hasStructuredDiff;
           } else {
-            fileMap.set(file.filePath, {
+            fileMap.set(mapKey, {
+              path: file.filePath,
               edits: hasStructuredDiff
                 ? [{ old: oldContent, new: newContent }]
                 : [],
@@ -119,7 +190,9 @@ function extractFileChanges(
           },
         ];
         for (const file of files) {
-          const existing = fileMap.get(file.filePath);
+          const pathInfo = relativizePath(file.filePath, rootPath);
+          const mapKey = `${pathInfo.external ? 'external' : 'project'}:${normalizeFilePath(pathInfo.displayPath)}`;
+          const existing = fileMap.get(mapKey);
           const status: DiffFileStatus =
             file.type === 'delete'
               ? 'deleted'
@@ -139,7 +212,8 @@ function extractFileChanges(
             existing.hasStructuredDiff =
               existing.hasStructuredDiff || hasStructuredDiff;
           } else {
-            fileMap.set(file.filePath, {
+            fileMap.set(mapKey, {
+              path: file.filePath,
               edits: hasStructuredDiff
                 ? [{ old: oldContent, new: newContent }]
                 : [],
@@ -156,14 +230,14 @@ function extractFileChanges(
   processEntries(fileChangeEntries);
 
   const changes: FileChange[] = [];
-  for (const [path, data] of fileMap) {
+  for (const data of fileMap.values()) {
     const separator = '\n⋯\n';
     const oldContent = data.edits.map((e) => e.old).join(separator);
     const newContent = data.edits.map((e) => e.new).join(separator);
     const rawPatch = data.rawPatches.join(`\n${separator}\n`);
-    const { displayPath, external } = relativizePath(path, rootPath);
+    const { displayPath, external } = relativizePath(data.path, rootPath);
     changes.push({
-      path,
+      path: data.path,
       displayPath,
       status: data.status,
       external,
@@ -188,12 +262,16 @@ export function PromptGroupDiffModal({
   fileChangeEntries,
   rootPath,
   taskId,
+  onOpenFileInReview,
+  onOpenFileInEditor,
 }: {
   isOpen: boolean;
   onClose: () => void;
   fileChangeEntries: NormalizedEntry[];
   rootPath?: string | null;
   taskId?: string;
+  onOpenFileInReview?: (filePath: string) => void;
+  onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
 }) {
   const fileChanges = useMemo(
     () => extractFileChanges(fileChangeEntries, rootPath),
@@ -221,6 +299,17 @@ export function PromptGroupDiffModal({
   );
   const [rawDiffOpen, setRawDiffOpen] = useState(false);
   const [rawDiffCopied, setRawDiffCopied] = useState(false);
+  const {
+    width: fileTreeWidth,
+    setWidth: setFileTreeWidth,
+    minWidth,
+  } = useDiffFileTreeWidth();
+  const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
+    initialWidth: fileTreeWidth,
+    minWidth,
+    maxWidthFraction: 0.5,
+    onWidthChange: setFileTreeWidth,
+  });
 
   const selectedChange = useMemo(
     () => fileChanges.find((fc) => fc.path === selectedPath) ?? null,
@@ -249,13 +338,74 @@ export function PromptGroupDiffModal({
   }, [selectedChange]);
 
   const selectedDisplayPath = selectedChange?.displayPath ?? null;
+  const canOpenInReview =
+    !!selectedChange && !selectedChange.external && !!onOpenFileInReview;
+  const selectedEditorPath = selectedChange
+    ? !rootPath || isAbsoluteFilePath(selectedChange.path)
+      ? selectedChange.path
+      : normalizeFilePath(`${rootPath}/${selectedChange.path}`)
+    : null;
+  const headerActions = selectedChange ? (
+    <div className="flex items-center gap-1">
+      {onOpenFileInEditor && selectedEditorPath && (
+        <button
+          type="button"
+          onClick={() => void onOpenFileInEditor(selectedEditorPath)}
+          className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 flex items-center gap-1.5 rounded px-2 py-1 text-[10px] transition-colors"
+          title="Open file in editor"
+        >
+          <FolderCode className="h-3 w-3" aria-hidden />
+          Open in editor
+        </button>
+      )}
+      <button
+        type="button"
+        disabled={!canOpenInReview}
+        onClick={() => {
+          if (!canOpenInReview) return;
+          onClose();
+          onOpenFileInReview(selectedChange.displayPath);
+        }}
+        className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 flex items-center gap-1.5 rounded px-2 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+        title={
+          selectedChange.external
+            ? 'External files are unavailable in task diff'
+            : 'Open in task diff'
+        }
+      >
+        <ExternalLink className="h-3 w-3" aria-hidden />
+        Open in task diff
+      </button>
+    </div>
+  ) : undefined;
+  const handleResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const maxWidth = Math.max(
+      minWidth,
+      (containerRef.current?.offsetWidth ?? fileTreeWidth * 2) * 0.5,
+    );
+    const delta = event.key === 'ArrowRight' ? 10 : -10;
+    setFileTreeWidth(
+      Math.min(Math.max(fileTreeWidth + delta, minWidth), maxWidth),
+    );
+  };
 
   return (
     <>
       <Modal isOpen={isOpen} onClose={onClose} title="Changes" size="xl">
-        <div className="flex h-[70vh] min-h-0 gap-0">
+        <div
+          ref={containerRef}
+          className={clsx(
+            'flex h-[70vh] min-h-0 gap-0',
+            isDragging && 'select-none',
+          )}
+        >
           {/* File tree sidebar */}
-          <div className="border-glass-border w-56 shrink-0 overflow-y-auto border-r">
+          <div
+            className="border-glass-border relative shrink-0 overflow-y-auto border-r"
+            style={{ width: fileTreeWidth, maxWidth: '50%' }}
+          >
             {/* Project files tree */}
             <DiffFileTree
               files={projectDiffFiles}
@@ -288,6 +438,24 @@ export function PromptGroupDiffModal({
                 ))}
               </div>
             )}
+            <div
+              onMouseDown={handleMouseDown}
+              onKeyDown={handleResizeKeyDown}
+              role="separator"
+              aria-label="Resize file tree"
+              aria-orientation="vertical"
+              aria-valuemax={MAX_MODAL_FILE_TREE_WIDTH}
+              aria-valuemin={minWidth}
+              aria-valuenow={Math.min(
+                Math.round(fileTreeWidth),
+                MAX_MODAL_FILE_TREE_WIDTH,
+              )}
+              tabIndex={0}
+              className={clsx(
+                'hover:bg-acc/50 focus:bg-acc/50 absolute top-0 right-0 h-full w-1 cursor-col-resize transition-colors outline-none',
+                isDragging && 'bg-acc/50',
+              )}
+            />
           </div>
 
           {/* Diff content */}
@@ -327,6 +495,7 @@ export function PromptGroupDiffModal({
                   <PromptGroupFileDiffContent
                     taskId={taskId}
                     change={selectedChange}
+                    headerActions={headerActions}
                   />
                 ) : selectedPatchDiff ? (
                   <PromptGroupFileDiffContent
@@ -334,16 +503,35 @@ export function PromptGroupDiffModal({
                     change={selectedChange}
                     oldContent={selectedPatchDiff.oldString}
                     newContent={selectedPatchDiff.newString}
+                    headerActions={headerActions}
                   />
                 ) : selectedChange.rawPatch ? (
-                  <div className="h-full overflow-auto p-4">
-                    <pre className="text-ink-1 overflow-auto rounded bg-black/30 p-3 font-mono text-xs whitespace-pre-wrap">
-                      {selectedChange.rawPatch}
-                    </pre>
+                  <div className="flex h-full flex-col overflow-hidden">
+                    <FileDiffHeader
+                      file={{
+                        path: selectedChange.displayPath,
+                        status: selectedChange.status,
+                      }}
+                      actions={headerActions}
+                    />
+                    <div className="min-h-0 flex-1 overflow-auto p-4">
+                      <pre className="text-ink-1 overflow-auto rounded bg-black/30 p-3 font-mono text-xs whitespace-pre-wrap">
+                        {selectedChange.rawPatch}
+                      </pre>
+                    </div>
                   </div>
                 ) : (
-                  <div className="text-ink-3 flex h-full items-center justify-center text-sm">
-                    No structured diff available for this file
+                  <div className="flex h-full flex-col overflow-hidden">
+                    <FileDiffHeader
+                      file={{
+                        path: selectedChange.displayPath,
+                        status: selectedChange.status,
+                      }}
+                      actions={headerActions}
+                    />
+                    <div className="text-ink-3 flex min-h-0 flex-1 items-center justify-center text-sm">
+                      No structured diff available for this file
+                    </div>
                   </div>
                 )
               ) : (
@@ -395,11 +583,13 @@ function PromptGroupFileDiffContent({
   change,
   oldContent = change.oldContent,
   newContent = change.newContent,
+  headerActions,
 }: {
   taskId?: string;
   change: FileChange;
   oldContent?: string;
   newContent?: string;
+  headerActions?: ReactNode;
 }) {
   const reviewComments = useReviewCommentsForFile(
     taskId ?? '',
@@ -480,6 +670,7 @@ function PromptGroupFileDiffContent({
       file={{ path: change.displayPath, status: change.status }}
       oldContent={oldContent}
       newContent={newContent}
+      headerActions={headerActions}
       reviewComments={taskId ? reviewComments : undefined}
       onAddReviewComment={taskId ? handleAddReviewComment : undefined}
       onDeleteReviewComment={handleDeleteReviewComment}

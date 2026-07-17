@@ -55,6 +55,7 @@ export function FileDiffContent({
   isLoading,
   isBinary,
   headerClassName,
+  headerActions,
   // Optional image support
   oldImageDataUrl,
   newImageDataUrl,
@@ -90,6 +91,7 @@ export function FileDiffContent({
   isLoading?: boolean;
   isBinary?: boolean;
   headerClassName?: string;
+  headerActions?: ReactNode;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
   // Comment props - all optional
@@ -674,7 +676,11 @@ export function FileDiffContent({
     if (oldImageDataUrl || newImageDataUrl) {
       return (
         <div className="flex h-full flex-col overflow-hidden">
-          <FileDiffHeader file={file} className={headerClassName} />
+          <FileDiffHeader
+            file={file}
+            className={headerClassName}
+            actions={headerActions}
+          />
           <div className="flex min-h-0 flex-1 items-center justify-center gap-6 overflow-auto p-6">
             {oldImageDataUrl && newImageDataUrl ? (
               // Modified image: show old → new side by side
@@ -768,6 +774,7 @@ export function FileDiffContent({
             (prReviewChatCards?.length ?? 0)
           }
           hasAnnotations={hasAnnotations}
+          actions={headerActions}
         />
         <div
           ref={svgPreviewContainerRef}
@@ -850,6 +857,7 @@ export function FileDiffContent({
           (prReviewChatCards?.length ?? 0)
         }
         hasAnnotations={hasAnnotations}
+        actions={headerActions}
       />
 
       {/* Diff view with inline comments */}

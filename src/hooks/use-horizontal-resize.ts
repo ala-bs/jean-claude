@@ -27,7 +27,18 @@ export function useHorizontalResize({
     setIsDragging(true);
 
       const startX = e.clientX;
-      const startWidth = initialWidth;
+      const containerWidth = containerRef.current
+        ? containerRef.current.offsetWidth
+        : window.innerWidth;
+      const fractionMax = containerWidth * maxWidthFraction;
+      const effectiveMax =
+        maxWidthAbsolute !== undefined
+          ? Math.min(fractionMax, maxWidthAbsolute)
+          : fractionMax;
+      const startWidth = Math.min(
+        Math.max(initialWidth, minWidth),
+        effectiveMax,
+      );
       const directionMultiplier = direction === 'right' ? 1 : -1;
 
       const handleMouseMove = (moveEvent: MouseEvent | ReactMouseEvent) => {

@@ -1109,6 +1109,29 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     toggleHideUnchanged: explorerToggleHideUnchanged,
   } = useTaskFileExplorerState(taskId);
 
+  const handleOpenFileInReview = useCallback(
+    (filePath: string) => {
+      if (hasGitReviewModes) {
+        setReviewMode('changes');
+        selectDiffFile(filePath);
+      } else if (taskRootPathForExplorer) {
+        setReviewMode('files');
+        explorerSelectFile(
+          `${taskRootPathForExplorer.replace(/\/$/, '')}/${filePath}`,
+        );
+      }
+      openDiffView();
+    },
+    [
+      explorerSelectFile,
+      hasGitReviewModes,
+      openDiffView,
+      selectDiffFile,
+      setReviewMode,
+      taskRootPathForExplorer,
+    ],
+  );
+
   const agentMeta = useTaskMessageMeta(activeStepId);
   const model = useStepModel(activeStepId);
   const {
@@ -1387,6 +1410,21 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       });
     }
   }, [task, isDiffViewOpen, diffSelectedFile, modal]);
+
+  const handleOpenFileInEditor = useCallback(
+    async (filePath: string) => {
+      if (!task?.worktreePath) return;
+      try {
+        await api.shell.openInEditor(filePath, task.worktreePath);
+      } catch {
+        modal.error({
+          title: 'File Not Found',
+          content: `The file path no longer exists:\n${filePath}`,
+        });
+      }
+    },
+    [modal, task],
+  );
 
   const handleDeleteWorktree = useCallback(() => {
     if (!task?.worktreePath) return;
@@ -2493,6 +2531,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onStartStep={handleStartStep}
                   onFilePathClick={handleFilePathClick}
                   onToolDiffClick={handleToolDiffClick}
+                  onOpenFileInReview={handleOpenFileInReview}
+                  onOpenFileInEditor={
+                    task.worktreePath ? handleOpenFileInEditor : undefined
+                  }
                   onCancelQueuedPrompt={cancelQueuedPrompt}
                   onUpdateQueuedPrompt={updateQueuedPrompt}
                   onShowRawMessage={openDebugMessages}
@@ -2708,6 +2750,8 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onStartStep,
   onFilePathClick,
   onToolDiffClick,
+  onOpenFileInReview,
+  onOpenFileInEditor,
   onCancelQueuedPrompt,
   onUpdateQueuedPrompt,
   onShowRawMessage,
@@ -2744,6 +2788,8 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
     oldString: string,
     newString: string,
   ) => void;
+  onOpenFileInReview?: (filePath: string) => void;
+  onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
   onCancelQueuedPrompt?: (promptId: string) => void;
   onUpdateQueuedPrompt?: (promptId: string, content: string) => void;
   onShowRawMessage?: (entryId: string) => void;
@@ -2817,6 +2863,8 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
             queuedPrompts={agentState.queuedPrompts}
             onFilePathClick={onFilePathClick}
             onToolDiffClick={onToolDiffClick}
+            onOpenFileInReview={onOpenFileInReview}
+            onOpenFileInEditor={onOpenFileInEditor}
             onCancelQueuedPrompt={onCancelQueuedPrompt}
             onUpdateQueuedPrompt={onUpdateQueuedPrompt}
             onShowRawMessage={onShowRawMessage}
