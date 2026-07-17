@@ -955,6 +955,14 @@ export const PromptTextarea = forwardRef<
     syncScrollTop();
   }, [value, completion, adjustHeight, syncScrollTop]);
 
+  useLayoutEffect(() => {
+    if (!fillAvailableHeight || !textareaWrapperRef.current) return;
+
+    const resizeObserver = new ResizeObserver(() => adjustHeight());
+    resizeObserver.observe(textareaWrapperRef.current);
+    return () => resizeObserver.disconnect();
+  }, [adjustHeight, fillAvailableHeight]);
+
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     onChange(e.target.value);
     const nextCursorPosition = e.target.selectionStart;
@@ -1558,7 +1566,13 @@ export const PromptTextarea = forwardRef<
         )}
 
       {/* Textarea wrapper — relative for ghost overlay + absolute elements */}
-      <div ref={textareaWrapperRef} className="relative flex flex-1 items-end">
+      <div
+        ref={textareaWrapperRef}
+        className={clsx(
+          'relative flex flex-1',
+          fillAvailableHeight ? 'items-start' : 'items-end',
+        )}
+      >
         <textarea
           ref={textareaRef}
           value={value}
