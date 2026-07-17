@@ -323,6 +323,7 @@ import {
   emitCacheEvent,
   emitStepUpsert,
   emitTaskDelete,
+  emitTaskPatch,
   emitTaskUpsert,
   setCacheSubscriptions,
 } from '../services/cache-event-service';
@@ -937,10 +938,14 @@ export function registerIpcHandlers() {
     notificationService.closeForTask(taskId);
     agentService.setFocusedTask(taskId);
     void TaskRepository.setHasUnread(taskId, false)
-      .then(() => TaskRepository.findById(taskId))
       .then((task) => {
         if (task) {
-          emitTaskUpsert(task);
+          emitTaskPatch({
+            taskId,
+            projectId: task.projectId,
+            patch: { hasUnread: false, updatedAt: task.updatedAt },
+            invalidateFeed: false,
+          });
         }
       })
       .catch((err) => {

@@ -73,7 +73,10 @@ export function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
 
   const mergeItem = (item: FeedItem): FeedItem => {
     const children = item.children?.map(mergeItem);
-    const withChildren = children ? { ...item, children } : item;
+    const childrenChanged = children?.some(
+      (child, index) => child !== item.children?.[index],
+    );
+    const withChildren = childrenChanged ? { ...item, children } : item;
 
     if (item.source !== 'task' || item.pullRequestId == null)
       return withChildren;
@@ -84,13 +87,18 @@ export function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
       return withChildren;
     }
 
-    return {
-      ...withChildren,
-      activeThreadCount:
-        withChildren.activeThreadCount ?? pr.activeThreadCount,
-      unresolvedCommentCount:
-        withChildren.unresolvedCommentCount ?? pr.unresolvedCommentCount,
-    };
+    const activeThreadCount =
+      withChildren.activeThreadCount ?? pr.activeThreadCount;
+    const unresolvedCommentCount =
+      withChildren.unresolvedCommentCount ?? pr.unresolvedCommentCount;
+    if (
+      activeThreadCount === withChildren.activeThreadCount &&
+      unresolvedCommentCount === withChildren.unresolvedCommentCount
+    ) {
+      return withChildren;
+    }
+
+    return { ...withChildren, activeThreadCount, unresolvedCommentCount };
   };
 
   return taskItems.map(mergeItem);
@@ -136,7 +144,10 @@ export function refineFeedItemAttention(
 
   const refineItem = (item: FeedItem): FeedItem => {
     const children = item.children?.map(refineItem);
-    const itemWithChildren = children ? { ...item, children } : item;
+    const childrenChanged = children?.some(
+      (child, index) => child !== item.children?.[index],
+    );
+    const itemWithChildren = childrenChanged ? { ...item, children } : item;
 
     if (!item.taskId) {
       return itemWithChildren;
@@ -153,10 +164,14 @@ export function refineFeedItemAttention(
     }
 
     if (taskIdsWithQuestions.has(item.taskId)) {
+      if (itemWithChildren.attention === 'has-question') return itemWithChildren;
       return { ...itemWithChildren, attention: 'has-question' as const };
     }
 
     if (taskIdsWithPermissions.has(item.taskId)) {
+      if (itemWithChildren.attention === 'needs-permission') {
+        return itemWithChildren;
+      }
       return { ...itemWithChildren, attention: 'needs-permission' as const };
     }
 

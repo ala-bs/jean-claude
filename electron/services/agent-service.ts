@@ -69,7 +69,11 @@ import {
   readSettings,
   resolveRules,
 } from './permission-settings-service';
-import { emitStepUpsert, emitTaskUpsert } from './cache-event-service';
+import {
+  emitStepUpsert,
+  emitTaskPatch,
+  emitTaskUpsert,
+} from './cache-event-service';
 import { agentResourceMonitorService } from './agent-resource-monitor-service';
 import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { applyConfiguredPromptPreface } from './prompt-preface-service';
@@ -490,17 +494,34 @@ class AgentService {
   }
 
   private async markTaskUnreadIfBackground(taskId: string): Promise<void> {
-    const isFocused =
+    const isFocused = () =>
       this.isMainWindowAlive() &&
       this.mainWindow!.isFocused() &&
       this.focusedTaskId === taskId;
 
-    if (!isFocused) {
-      await TaskRepository.setHasUnread(taskId, true);
-      const task = await TaskRepository.findById(taskId);
-      if (task) {
-        emitTaskUpsert(task);
+    if (isFocused()) return;
+
+    const task = await TaskRepository.setHasUnread(taskId, true);
+    if (isFocused()) {
+      const focusedTask = await TaskRepository.setHasUnread(taskId, false);
+      if (focusedTask) {
+        emitTaskPatch({
+          taskId,
+          projectId: focusedTask.projectId,
+          patch: { hasUnread: false, updatedAt: focusedTask.updatedAt },
+          invalidateFeed: false,
+        });
       }
+      return;
+    }
+
+    if (task) {
+      emitTaskPatch({
+        taskId,
+        projectId: task.projectId,
+        patch: { hasUnread: true, updatedAt: task.updatedAt },
+        invalidateFeed: false,
+      });
     }
   }
 

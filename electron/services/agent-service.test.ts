@@ -24,6 +24,7 @@ const {
   buildToolPermissionConfigMock,
   claudeCompactRawMessagesForTaskMock,
   emitStepUpsertMock,
+  emitTaskPatchMock,
   emitTaskUpsertMock,
   getProviderMock,
   legacyBackendConstructorMock,
@@ -166,6 +167,7 @@ const {
     buildToolPermissionConfigMock: vi.fn(),
     claudeCompactRawMessagesForTaskMock: vi.fn(),
     emitStepUpsertMock: vi.fn(),
+    emitTaskPatchMock: vi.fn(),
     emitTaskUpsertMock: vi.fn(),
     getProviderMock: vi.fn(() => createProvider()),
     legacyBackendConstructorMock: vi.fn(() => {
@@ -300,6 +302,7 @@ vi.mock('./ai-usage-tracking-service', () => ({
 
 vi.mock('./cache-event-service', () => ({
   emitStepUpsert: emitStepUpsertMock,
+  emitTaskPatch: emitTaskPatchMock,
   emitTaskUpsert: emitTaskUpsertMock,
 }));
 
@@ -1261,6 +1264,53 @@ describe('agentService provider runtime', () => {
 
   afterEach(async () => {
     await agentService.stopAll({ reason: 'shutdown' }).catch(() => {});
+  });
+
+  it('corrects an unread write when task becomes focused while it is pending', async () => {
+    const unreadWrite = createDeferred<typeof defaultTask>();
+    let windowDestroyed = false;
+    let windowFocused = false;
+    agentService.setMainWindow({
+      isDestroyed: () => windowDestroyed,
+      isFocused: () => windowFocused,
+      webContents: { isDestroyed: () => windowDestroyed },
+    } as never);
+    agentService.setFocusedTask(null);
+    taskRepositoryMock.setHasUnread
+      .mockReturnValueOnce(unreadWrite.promise)
+      .mockResolvedValueOnce({ ...defaultTask, hasUnread: false });
+
+    const markUnread = (
+      agentService as unknown as {
+        markTaskUnreadIfBackground: (taskId: string) => Promise<void>;
+      }
+    ).markTaskUnreadIfBackground('task-1');
+    await waitForAssertion(() => {
+      expect(taskRepositoryMock.setHasUnread).toHaveBeenCalledWith(
+        'task-1',
+        true,
+      );
+    });
+
+    windowFocused = true;
+    agentService.setFocusedTask('task-1');
+    unreadWrite.resolve({ ...defaultTask, hasUnread: true });
+    await markUnread;
+
+    expect(taskRepositoryMock.setHasUnread.mock.calls).toEqual([
+      ['task-1', true],
+      ['task-1', false],
+    ]);
+    expect(emitTaskPatchMock).toHaveBeenCalledTimes(1);
+    expect(emitTaskPatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-1',
+        patch: expect.objectContaining({ hasUnread: false }),
+      }),
+    );
+
+    windowDestroyed = true;
+    agentService.setFocusedTask(null);
   });
 
   it('starts active runs through the provider without constructing legacy backend classes', async () => {

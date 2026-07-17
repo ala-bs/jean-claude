@@ -127,6 +127,18 @@ describe('getFeedQueryKeyForCacheEvent', () => {
       }),
     ).toEqual([feedQueryKeys.tasks]);
   });
+
+  it('does not invalidate task feed query for local-only task patches', () => {
+    expect(
+      getReactQueryKeysForCacheEvent({
+        type: 'task.patch',
+        taskId: 'task-1',
+        projectId: 'project-1',
+        patch: { hasUnread: false },
+        invalidateFeed: false,
+      }),
+    ).toEqual([['tasks', 'allCompleted']]);
+  });
 });
 
 describe('handleCacheEvent', () => {

@@ -179,6 +179,41 @@ describe('cache store foundation', () => {
     });
   });
 
+  it('structurally shares document snapshots by default', () => {
+    setDocumentResource('doc:1', { items: [{ id: 'item-1' }] }, 123);
+    const previous = cache$.documents['doc:1'].data.get() as {
+      items: Array<{ id: string }>;
+    };
+
+    setDocumentResource('doc:1', { items: [{ id: 'item-1' }] }, 456);
+    const current = cache$.documents['doc:1'].data.get();
+
+    expect(current).toBe(previous);
+    expect(cache$.documents['doc:1'].get()?.lastFetchedAt).toBe(456);
+  });
+
+  it('allows document structural sharing to be disabled', () => {
+    setDocumentResource('doc:1', { value: 1 }, 123);
+    const previous = cache$.documents['doc:1'].data.get();
+
+    setDocumentResource('doc:1', { value: 1 }, 456, {
+      structuralSharing: false,
+    });
+
+    expect(cache$.documents['doc:1'].data.get()).not.toBe(previous);
+  });
+
+  it('supports custom document structural sharing strategies', () => {
+    setDocumentResource('doc:1', { value: 1 }, 123);
+    const previous = cache$.documents['doc:1'].data.get() as { value: number };
+
+    setDocumentResource('doc:1', { value: 2 }, 456, {
+      structuralSharing: (current) => current ?? { value: 0 },
+    });
+
+    expect(cache$.documents['doc:1'].data.get()).toBe(previous);
+  });
+
   it('marks existing resources stale', () => {
     setDocumentResource('doc:1', { value: 1 }, 123);
     markResourceStale('doc:1');
@@ -450,6 +485,49 @@ describe('cache store foundation', () => {
       },
     ]);
     expect(cache$.resources['feed:tasks'].get()?.stale).toBe(true);
+  });
+
+  it('patches unread state without refreshing or replacing unrelated feed items', () => {
+    const focusedItem = createFeedItem({
+      id: 'task:task-1',
+      taskId: 'task-1',
+      hasUnread: true,
+    });
+    const unrelatedItem = createFeedItem({
+      id: 'task:task-2',
+      taskId: 'task-2',
+    });
+    setDocumentResource('feed:tasks', [focusedItem, unrelatedItem]);
+
+    applyCacheEvent({
+      type: 'task.patch',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      patch: { hasUnread: false },
+      invalidateFeed: false,
+    });
+
+    const items = cache$.documents['feed:tasks'].data.get() as FeedItem[];
+    expect(items[0]).toMatchObject({ taskId: 'task-1', hasUnread: false });
+    expect(items[1]).toBe(unrelatedItem);
+    expect(cache$.resources['feed:tasks'].get()?.stale).toBe(false);
+  });
+
+  it('invalidates in-flight feed loads when unread patches arrive before feed data', () => {
+    const previousVersion = getResourceChangeVersion('feed:tasks');
+
+    applyCacheEvent({
+      type: 'task.patch',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      patch: { hasUnread: false },
+      invalidateFeed: false,
+    });
+
+    expect(getResourceChangeVersion('feed:tasks')).toBeGreaterThan(
+      previousVersion,
+    );
+    expect(cache$.resources['feed:tasks'].get()?.stale).not.toBe(true);
   });
 
   it('optimistically inserts created tasks into the feed', () => {

@@ -415,9 +415,9 @@ export const TaskRepository = {
     return db.deleteFrom('tasks').where('id', '=', id).execute();
   },
 
-  setHasUnread: async (id: string, hasUnread: boolean) => {
+  setHasUnread: async (id: string, hasUnread: boolean): Promise<Task | undefined> => {
     const hasUnreadValue = hasUnread ? 1 : 0;
-    await db
+    const row = await db
       .updateTable('tasks')
       .set({
         hasUnread: hasUnreadValue,
@@ -425,7 +425,9 @@ export const TaskRepository = {
       })
       .where('id', '=', id)
       .where('hasUnread', '!=', hasUnreadValue)
-      .execute();
+      .returningAll()
+      .executeTakeFirst();
+    return row ? toTask(row) : undefined;
   },
 
   toggleUserCompleted: async (id: string): Promise<Task> => {
