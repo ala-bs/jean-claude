@@ -185,7 +185,7 @@ export function SideBySideDiffTable({
   return (
     <table
       ref={tableRef}
-      className={`w-full border-collapse ${isDragging ? 'select-none' : ''}`}
+      className={`w-full table-fixed border-collapse ${isDragging ? 'select-none' : ''}`}
       onMouseDown={lineRangeSelection.onMouseDown}
       onMouseOver={lineRangeSelection.onMouseOver}
       onMouseUp={lineRangeSelection.onMouseUp}
@@ -488,7 +488,7 @@ const SideBySideCell = memo(function SideBySideCell({
     return (
       <>
         <td className="bg-bg-1/50 text-ink-4 pr-1 text-right align-top select-none" />
-        <td className="bg-bg-1/50 overflow-hidden pr-2 whitespace-pre-wrap" />
+        <td className="bg-bg-1/50 overflow-hidden pr-2 whitespace-pre-wrap [overflow-wrap:anywhere]" />
       </>
     );
   }
@@ -568,9 +568,13 @@ const SideBySideCell = memo(function SideBySideCell({
       {/* Content */}
       <td
         data-line-side={side === 'left' ? 'old' : 'new'}
-        className={clsx('overflow-hidden pr-2 whitespace-pre-wrap', bgClass, {
-          'select-none': canComment,
-        })}
+        className={clsx(
+          'overflow-hidden pr-2 whitespace-pre-wrap [overflow-wrap:anywhere]',
+          bgClass,
+          {
+            'select-none': canComment,
+          },
+        )}
       >
         {renderedContent}
         {side === 'right' && isFoldCollapsed && foldRange && (
