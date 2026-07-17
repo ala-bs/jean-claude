@@ -1550,13 +1550,17 @@ class AgentService {
         });
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
-        await StepService.errorStep(stepId);
+        if (event.interrupted) {
+          await StepService.interruptStep(stepId);
+        } else {
+          await StepService.errorStep(stepId);
+        }
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
         await this.markTaskUnreadIfBackground(taskId);
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
         this.emitEvent(taskId, stepId, {
           type: 'status',
-          status: 'errored',
+          status: event.interrupted ? 'interrupted' : 'errored',
           error: event.error,
         });
         await this.notifyTaskEvent({

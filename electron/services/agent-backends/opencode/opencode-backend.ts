@@ -965,7 +965,7 @@ export class OpenCodeBackend implements AgentBackend {
                 abortError,
               );
             });
-          yield { type: 'error', error };
+          yield { type: 'error', error, interrupted: true };
           this.closeSubscriptionIterator(iterator);
           break;
         }

@@ -1538,7 +1538,11 @@ describe('OpenCodeBackend event stream', () => {
 
       expect(events).toMatchObject([
         { type: 'session-id', sessionId: 'session-1' },
-        { type: 'error', error: expect.stringContaining('no activity') },
+        {
+          type: 'error',
+          error: expect.stringContaining('no activity'),
+          interrupted: true,
+        },
         { type: 'complete', result: { isError: true } },
       ]);
       expect(client.session.abort).toHaveBeenCalledWith({
