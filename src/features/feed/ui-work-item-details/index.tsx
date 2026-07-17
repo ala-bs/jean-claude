@@ -59,6 +59,7 @@ import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { WorkItemBoardColumnEditor } from '@/features/work-item/ui-work-item-board-column-editor';
 import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
 import { WorkItemHistory } from '@/features/work-item/ui-work-item-history';
+import { EditableMetadataValue as WorkItemMetadataEditor } from '@/features/work-item/ui-work-item-preview';
 
 type DetailsTab = 'comments' | 'history' | 'test-cases';
 
@@ -516,6 +517,7 @@ export function WorkItemDetails({
       workItemIds: linkedWorkItemIds,
     });
   const addComment = useAddWorkItemComment();
+  const updateField = useUpdateWorkItemField();
   const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
   const [activeTab, setActiveTab] = useState<DetailsTab>('comments');
   const [linkDetailModal, setLinkDetailModal] = useState<LinkDetailModal | null>(
@@ -662,6 +664,32 @@ export function WorkItemDetails({
                 {fields.teamProject ?? project.name}
               </span>
           </div>
+          {providerId && (
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-ink-3">Story points:</span>
+              <WorkItemMetadataEditor
+                key={`${workItem.id}:story-points:${fields.storyPoints ?? ''}`}
+                value={String(fields.storyPoints ?? '')}
+                label="Story points"
+                emptyLabel="None"
+                validate={(value) => {
+                  if (value === '') return null;
+                  const points = Number(value);
+                  return Number.isInteger(points) && points >= 0
+                    ? null
+                    : 'Story points must be a non-negative integer';
+                }}
+                onSave={(value) =>
+                  updateField.mutateAsync({
+                    providerId,
+                    workItemId: workItem.id,
+                    field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+                    value: value === '' ? null : Number(value),
+                  })
+                }
+              />
+            </div>
+          )}
           {providerId && projectName && (
             <EditableIteration
               iterationPath={fields.iterationPath}

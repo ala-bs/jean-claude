@@ -285,6 +285,7 @@ export interface AzureDevOpsWorkItem {
     boardColumnDone?: boolean;
     tags?: string;
     priority?: number;
+    storyPoints?: number;
     iterationPath?: string;
   };
   testSteps?: TestStep[];

@@ -116,6 +116,7 @@ export interface AzureDevOpsWorkItem {
     boardColumnDone?: boolean;
     tags?: string;
     priority?: number;
+    storyPoints?: number;
     iterationPath?: string;
   };
   testSteps?: TestStep[];
@@ -202,6 +203,7 @@ interface WorkItemsBatchResponse {
       'System.BoardColumnDone'?: boolean;
       'System.Tags'?: string;
       'Microsoft.VSTS.Common.Priority'?: number;
+      'Microsoft.VSTS.Scheduling.StoryPoints'?: number;
       'System.IterationPath'?: string;
     };
     relations?: WorkItemRelation[];
@@ -989,6 +991,7 @@ export async function queryAssignedWorkItems(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
@@ -1061,6 +1064,7 @@ export async function getWorkItemById(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
@@ -1161,6 +1165,7 @@ export async function getWorkItemsByIds(params: {
         boardColumnDone: wi.fields['System.BoardColumnDone'],
         tags: wi.fields['System.Tags'],
         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+        storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
         iterationPath: wi.fields['System.IterationPath'],
       },
       parentId: extractParentId(wi.relations),
@@ -1443,6 +1448,7 @@ export async function getRelatedTestCases(params: {
         boardColumnDone: wi.fields['System.BoardColumnDone'],
         tags: wi.fields['System.Tags'],
         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+        storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
         iterationPath: wi.fields['System.IterationPath'],
       },
       testSteps,
@@ -1585,6 +1591,7 @@ const WORK_ITEM_FIELD_LABELS: Record<string, string> = {
   'System.WorkItemType': 'Work Item Type',
   'Microsoft.VSTS.Common.AcceptanceCriteria': 'Acceptance Criteria',
   'Microsoft.VSTS.Common.Priority': 'Priority',
+  'Microsoft.VSTS.Scheduling.StoryPoints': 'Story Points',
   'Microsoft.VSTS.Common.ResolvedReason': 'Resolved Reason',
   'Microsoft.VSTS.Scheduling.Effort': 'Effort',
   'Microsoft.VSTS.Scheduling.RemainingWork': 'Remaining Work',
@@ -3427,6 +3434,7 @@ export async function getPullRequestWorkItems(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
@@ -3856,6 +3864,7 @@ const EDITABLE_WORK_ITEM_FIELDS = new Set([
   'System.AssignedTo',
   'System.Tags',
   'Microsoft.VSTS.Common.Priority',
+  'Microsoft.VSTS.Scheduling.StoryPoints',
   'System.State',
   'System.IterationPath',
 ]);
@@ -3883,9 +3892,16 @@ export function buildWorkItemFieldPatch(params: {
       throw new Error('Work item priority must be an integer from 1 to 4');
     }
   }
+  if (params.field === 'Microsoft.VSTS.Scheduling.StoryPoints') {
+    if (value !== null && value !== '' && (!Number.isInteger(Number(value)) || Number(value) < 0)) {
+      throw new Error('Work item story points must be a non-negative integer');
+    }
+  }
 
   const removable =
-    params.field === 'System.AssignedTo' || params.field === 'System.Tags';
+    params.field === 'System.AssignedTo' ||
+    params.field === 'System.Tags' ||
+    params.field === 'Microsoft.VSTS.Scheduling.StoryPoints';
   if ((value === null || value === '') && !removable) {
     throw new Error(`Work item field cannot be empty: ${params.field}`);
   }

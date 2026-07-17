@@ -483,6 +483,34 @@ describe('buildWorkItemFieldPatch', () => {
     expect(() =>
       buildWorkItemFieldPatch({ field: 'System.State', value: '' }),
     ).toThrow('state cannot be empty');
+    expect(
+      buildWorkItemFieldPatch({
+        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+        value: '',
+      }),
+    ).toEqual({
+      op: 'remove',
+      path: '/fields/Microsoft.VSTS.Scheduling.StoryPoints',
+    });
+  });
+
+  it('validates story points as a non-negative integer', () => {
+    expect(
+      buildWorkItemFieldPatch({
+        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+        value: 3,
+      }),
+    ).toEqual({
+      op: 'add',
+      path: '/fields/Microsoft.VSTS.Scheduling.StoryPoints',
+      value: 3,
+    });
+    expect(() =>
+      buildWorkItemFieldPatch({
+        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+        value: -1,
+      }),
+    ).toThrow('non-negative integer');
   });
 
   it('builds an iteration path update', () => {

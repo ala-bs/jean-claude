@@ -305,6 +305,31 @@ export function WorkItemPreview({
                 )}
                 {canEditMetadata && providerId && (
                   <div className="border-glass-border bg-glass-light text-ink-1 focus-within:border-acc-line flex min-h-8 items-center gap-2 rounded-md border px-3 py-1 text-xs transition-colors">
+                    <span className="text-ink-3">Story points</span>
+                    <EditableMetadataValue
+                      key={`${id}:story-points:${fields.storyPoints ?? ''}`}
+                      value={String(fields.storyPoints ?? '')}
+                      label="Story points"
+                      emptyLabel="None"
+                      className="hover:text-acc-ink"
+                      validate={(value) => {
+                        if (value === '') return null;
+                        const points = Number(value);
+                        return Number.isInteger(points) && points >= 0
+                          ? null
+                          : 'Story points must be a non-negative integer';
+                      }}
+                      onSave={(value) => updateField.mutateAsync({
+                        providerId,
+                        workItemId: id,
+                        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+                        value: value === '' ? null : Number(value),
+                      })}
+                    />
+                  </div>
+                )}
+                {canEditMetadata && providerId && (
+                  <div className="border-glass-border bg-glass-light text-ink-1 focus-within:border-acc-line flex min-h-8 items-center gap-2 rounded-md border px-3 py-1 text-xs transition-colors">
                     <span className="text-ink-3">Priority</span>
                     <EditableMetadataValue
                       key={`${id}:priority:${fields.priority ?? ''}`}
@@ -857,7 +882,7 @@ function MetadataDropdown({
   );
 }
 
-function EditableMetadataValue({
+export function EditableMetadataValue({
   value,
   label,
   emptyLabel = label,
