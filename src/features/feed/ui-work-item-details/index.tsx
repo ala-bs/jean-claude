@@ -36,6 +36,7 @@ import {
 import {
   useAddWorkItemComment,
   useBoardColumns,
+  useIterations,
   useLinkedPullRequestStatuses,
   useRelatedTestCases,
   useUpdateWorkItemField,
@@ -321,6 +322,90 @@ function EditableOwner({
   );
 }
 
+function EditableIteration({
+  iterationPath,
+  options,
+  disabled,
+  providerId,
+  workItemId,
+}: {
+  iterationPath?: string;
+  options: Array<{ name: string; path: string; isCurrent: boolean }>;
+  disabled: boolean;
+  providerId: string;
+  workItemId: number;
+}) {
+  const updateField = useUpdateWorkItemField();
+  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
+  const currentPath = iterationPath ?? '';
+  const currentName =
+    options.find((option) => option.path === currentPath)?.name ??
+    currentPath.split('\\').at(-1) ??
+    'Unknown';
+
+  const handleSelect = useCallback(
+    (nextPath: string) => {
+      dropdownRef.current?.toggle();
+      if (nextPath === currentPath) return;
+      updateField.mutate({
+        providerId,
+        workItemId,
+        field: 'System.IterationPath',
+        value: nextPath,
+      });
+    },
+    [currentPath, providerId, updateField, workItemId],
+  );
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <span className="text-ink-3">Iteration:</span>
+      <Dropdown
+        dropdownRef={dropdownRef}
+        className="min-w-52"
+        trigger={
+          <button
+            type="button"
+            disabled={disabled || updateField.isPending || options.length === 0}
+            className="text-ink-1 hover:text-acc-ink flex min-w-0 max-w-56 items-center gap-1 rounded px-1 py-0.5 transition-colors disabled:cursor-default disabled:opacity-60"
+            aria-label={`Edit iteration. Current iteration: ${currentName}`}
+          >
+            <span className="truncate">{currentName}</span>
+            {updateField.isPending ? (
+              <Loader2 className="text-ink-3 h-3 w-3 shrink-0 animate-spin" />
+            ) : (
+              <ChevronDown className="text-ink-3 h-3 w-3 shrink-0" />
+            )}
+          </button>
+        }
+      >
+        {options.map((option) => (
+          <DropdownItem
+            key={option.path}
+            checked={option.path === currentPath}
+            onClick={() => handleSelect(option.path)}
+          >
+            <span
+              className={clsx(
+                'flex min-w-0 flex-col',
+                option.isCurrent && 'text-acc-ink',
+              )}
+            >
+              <span>{option.name}</span>
+              {option.name !== option.path && (
+                <span className="text-ink-3 truncate text-xs">{option.path}</span>
+              )}
+              {option.isCurrent && (
+                <span className="text-acc-ink/70 text-[10px]">Current</span>
+              )}
+            </span>
+          </DropdownItem>
+        ))}
+      </Dropdown>
+    </div>
+  );
+}
+
 export function WorkItemDetails({
   projectId,
   workItemId,
@@ -375,6 +460,25 @@ export function WorkItemDetails({
       workItem?.fields.assignedToUniqueName,
     ],
   );
+  const { data: iterations } = useIterations({
+    providerId: providerId ?? '',
+    projectName: projectName ?? '',
+  });
+  const iterationOptions = useMemo(() => {
+    const options = [...(iterations ?? [])];
+    const currentPath = workItem?.fields.iterationPath;
+    if (currentPath && !options.some((option) => option.path === currentPath)) {
+      options.unshift({
+        id: currentPath,
+        name: currentPath.split('\\').at(-1) ?? currentPath,
+        path: currentPath,
+        startDate: null,
+        finishDate: null,
+        isCurrent: false,
+      });
+    }
+    return options.reverse();
+  }, [iterations, workItem?.fields.iterationPath]);
   const {
     data: comments = [],
     isLoading: isLoadingComments,
@@ -558,6 +662,15 @@ export function WorkItemDetails({
                 {fields.teamProject ?? project.name}
               </span>
           </div>
+          {providerId && projectName && (
+            <EditableIteration
+              iterationPath={fields.iterationPath}
+              options={iterationOptions}
+              disabled={iterations === undefined}
+              providerId={providerId}
+              workItemId={workItem.id}
+            />
+          )}
         </div>
       </div>
 
