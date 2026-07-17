@@ -908,13 +908,13 @@ export function QuestionOptions({
           type="button"
           onClick={submitAnswers}
           disabled={!allAnswered}
-          className="rounded-lg bg-teal-300 px-3 py-1.5 text-[13px] font-bold text-bg-0 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-ink-3 disabled:hover:brightness-100"
+          className="flex items-center gap-2 rounded-lg bg-teal-300 px-3 py-1.5 text-[13px] font-bold text-bg-0 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-ink-3 disabled:hover:brightness-100"
         >
           Submit answers
+          <Kbd shortcut="cmd+enter" className="border-bg-0/20 bg-bg-0/10 text-bg-0" />
         </button>
         <span className="text-xs text-ink-3">
-          {request.questions.length} questions · {answeredCount} answered ·{' '}
-          <Kbd shortcut="cmd+enter" />
+          {request.questions.length} questions · {answeredCount} answered
         </span>
       </div>
       </div>
