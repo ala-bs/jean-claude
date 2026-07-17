@@ -237,6 +237,7 @@ contextBridge.exposeInMainWorld('api', {
         params: {
           worktreePath: string;
           branchName: string;
+          keepBranch?: boolean;
         },
       ) =>
         ipcRenderer.invoke(

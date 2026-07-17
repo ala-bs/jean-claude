@@ -70,7 +70,6 @@ function NewTask() {
     isLoading: branchesLoading,
     isFetching: branchesFetching,
   } = useProjectBranches(canUseWorktree ? projectId : null);
-  const branches = useMemo(() => branchInfos.map((b) => b.name), [branchInfos]);
   const { data: skills = [] } = useProjectSkills(projectId);
 
   const { data: completionSetting } = useCompletionSetting();
@@ -90,6 +89,7 @@ function NewTask() {
     name,
     prompt,
     useWorktree,
+    useExistingBranch,
     sourceBranch,
     interactionMode,
     modelPreference,
@@ -100,6 +100,13 @@ function NewTask() {
     workItemUrls,
     updateWorkItemStatus,
   } = draft;
+  const selectableBranchInfos = useMemo(
+    () =>
+      useExistingBranch
+        ? branchInfos.filter((branch) => !branch.isCheckedOut)
+        : branchInfos,
+    [branchInfos, useExistingBranch],
+  );
 
   // Sync draft backend with project→global default on mount
   const { data: backendsSetting } = useBackendsSetting();
@@ -279,7 +286,14 @@ function NewTask() {
 
   // Determine the effective source branch (draft value or project default)
   const effectiveSourceBranch =
-    sourceBranch ?? project?.defaultBranch ?? branches[0] ?? null;
+    selectableBranchInfos.some((branch) => branch.name === sourceBranch)
+      ? sourceBranch
+      : project?.defaultBranch &&
+          selectableBranchInfos.some(
+            (branch) => branch.name === project.defaultBranch,
+          )
+        ? project.defaultBranch
+        : selectableBranchInfos[0]?.name ?? null;
   const isWorktreeDataFetching =
     isGitRepositoryFetching ||
     (canUseWorktree && useWorktree && branchesFetching);
@@ -311,6 +325,7 @@ function NewTask() {
       thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
       agentBackend: submitSelection.backend,
       useWorktree: shouldUseWorktree,
+      useExistingBranch: shouldUseWorktree && useExistingBranch,
       workItemIds,
       workItemUrls,
       updateWorkItemStatus,
@@ -411,10 +426,23 @@ function NewTask() {
               {useWorktree && (
                 <div className="ml-6">
                   <label className="text-ink-2 mb-1 block text-sm font-medium">
-                    Base branch
+                    Source branch
                   </label>
-                  <BranchSelect
-                    branches={branchInfos}
+                  <div className="flex gap-2">
+                    <select
+                      value={useExistingBranch ? 'reuse' : 'new'}
+                      onChange={(event) =>
+                        setDraft({
+                          useExistingBranch: event.target.value === 'reuse',
+                        })
+                      }
+                      className="bg-bg-1 text-ink-1 border-glass-border rounded-md border px-2 text-sm"
+                    >
+                      <option value="new">New branch</option>
+                      <option value="reuse">Existing branch</option>
+                    </select>
+                    <BranchSelect
+                    branches={selectableBranchInfos}
                     branchesLoading={branchesLoading}
                     favoriteBranches={project?.favoriteBranches}
                     defaultBranch={project?.defaultBranch}
@@ -423,9 +451,10 @@ function NewTask() {
                       setDraft({ sourceBranch: value || null })
                     }
                     disabled={branchesLoading}
-                    className="w-full justify-between"
+                      className="min-w-0 flex-1 justify-between"
                     placeholder="Select branch..."
-                  />
+                    />
+                  </div>
                 </div>
               )}
             </div>

@@ -47,6 +47,8 @@ import { useToastStore } from '@/stores/toasts';
 // The IPC handler extracts interactionMode/modelPreference/agentBackend
 // to auto-create the initial TaskStep.
 type CreateTaskPayload = NewTask & {
+  useWorktree?: boolean;
+  useExistingBranch?: boolean;
   interactionMode?: InteractionMode | null;
   modelPreference?: string | null;
   thinkingEffort?: ThinkingEffort | null;

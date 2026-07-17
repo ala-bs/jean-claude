@@ -673,6 +673,15 @@ export function NewTaskOverlay({
   const fileComments = useComposerFileComments(selectedProjectId ?? '');
   const currentCreateWorktree =
     canCreateWorktree && (draft?.createWorktree ?? true);
+  const currentUseExistingBranch =
+    currentCreateWorktree && (draft?.useExistingBranch ?? false);
+  const selectableBranchInfos = useMemo(
+    () =>
+      currentUseExistingBranch
+        ? branchInfos.filter((branch) => !branch.isCheckedOut)
+        : branchInfos,
+    [branchInfos, currentUseExistingBranch],
+  );
   const isWorktreeDataFetching =
     isGitRepositoryFetching || (currentCreateWorktree && branchesFetching);
 
@@ -919,17 +928,21 @@ export function NewTaskOverlay({
   ]);
   const currentSourceBranch = useMemo(() => {
     const draftSourceBranch = draft?.sourceBranch;
-    if (draftSourceBranch && branches.includes(draftSourceBranch)) {
+    const availableBranches = selectableBranchInfos.map((branch) => branch.name);
+    if (
+      draftSourceBranch &&
+      availableBranches.includes(draftSourceBranch)
+    ) {
       return draftSourceBranch;
     }
 
     const projectDefaultBranch = selectedProject?.defaultBranch;
-    if (projectDefaultBranch && branches.includes(projectDefaultBranch)) {
+    if (projectDefaultBranch && availableBranches.includes(projectDefaultBranch)) {
       return projectDefaultBranch;
     }
 
-    return branches[0] ?? null;
-  }, [draft?.sourceBranch, selectedProject?.defaultBranch, branches]);
+    return availableBranches[0] ?? null;
+  }, [draft?.sourceBranch, selectedProject?.defaultBranch, selectableBranchInfos]);
 
   // Toggle selection of highlighted work item
   const toggleHighlightedWorkItem = useCallback(() => {
@@ -1264,8 +1277,9 @@ export function NewTaskOverlay({
             agentBackend: submitSelection.backend,
             modelPreference: submitSelection.model,
             thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
-            useWorktree: currentCreateWorktree,
-            sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
+             useWorktree: currentCreateWorktree,
+             useExistingBranch: currentUseExistingBranch,
+             sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
             workItemIds,
             workItemUrls,
             updateWorkItemStatus: currentUpdateWorkItemStatus,
@@ -1310,8 +1324,9 @@ export function NewTaskOverlay({
           modelPreference: submitSelection.model,
           thinkingEffort: submitSelection.thinkingEffort as ThinkingEffort,
           agentBackend: submitSelection.backend,
-          useWorktree: currentCreateWorktree,
-          sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
+           useWorktree: currentCreateWorktree,
+           useExistingBranch: currentUseExistingBranch,
+           sourceBranch: currentCreateWorktree ? currentSourceBranch : null,
           workItemIds,
           workItemUrls,
           updateWorkItemStatus: currentUpdateWorkItemStatus,
@@ -1352,6 +1367,7 @@ export function NewTaskOverlay({
     createTaskMutation,
     currentBackend,
     currentCreateWorktree,
+    currentUseExistingBranch,
     currentInteractionMode,
     currentModelPreference,
     currentSourceBranch,
@@ -2089,14 +2105,31 @@ export function NewTaskOverlay({
                         border: '1px solid oklch(1 0 0 / 0.07)',
                       }}
                     >
-                      <span style={{ color: 'oklch(0.55 0.01 280)' }}>
-                        {draft?.parentTaskId ? 'child of' : 'from'}
-                      </span>
+                      {draft?.parentTaskId && (
+                        <span style={{ color: 'oklch(0.55 0.01 280)' }}>
+                          child of
+                        </span>
+                      )}
+                      <select
+                        value={currentUseExistingBranch ? 'reuse' : 'new'}
+                        onChange={(event) =>
+                          updateDraft({
+                            useExistingBranch: event.target.value === 'reuse',
+                            parentTaskId: null,
+                          })
+                        }
+                        className="bg-transparent text-ink-1 max-w-[180px] rounded border-0 px-1 text-xs outline-none"
+                      >
+                        <option value="new">New branch</option>
+                        <option value="reuse">Existing branch</option>
+                      </select>
                       <BranchOrTaskSelect
-                        branches={branchInfos}
+                        branches={selectableBranchInfos}
                         favoriteBranches={selectedProject?.favoriteBranches}
                         defaultBranch={selectedProject?.defaultBranch}
-                        activeTasks={activeProjectTasks}
+                        activeTasks={
+                          currentUseExistingBranch ? [] : activeProjectTasks
+                        }
                         value={currentSourceBranch ?? undefined}
                         selectedTaskId={draft?.parentTaskId}
                         onChange={handleBranchOrTaskChange}

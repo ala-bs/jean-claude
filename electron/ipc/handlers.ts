@@ -1427,6 +1427,7 @@ export function registerIpcHandlers() {
       event,
       data: NewTask & {
         useWorktree: boolean;
+        useExistingBranch?: boolean;
         sourceBranch?: string | null;
         autoStart?: boolean;
         interactionMode?: InteractionMode | null;
@@ -1437,6 +1438,7 @@ export function registerIpcHandlers() {
     ) => {
       const {
         useWorktree,
+        useExistingBranch,
         sourceBranch,
         autoStart,
         images,
@@ -1449,8 +1451,9 @@ export function registerIpcHandlers() {
       } = data;
       const taskPromptOccurredAt = new Date().toISOString();
       dbg.ipc(
-        'tasks:createWithWorktree useWorktree=%s, sourceBranch=%s, autoStart=%s',
+        'tasks:createWithWorktree useWorktree=%s, useExistingBranch=%s, sourceBranch=%s, autoStart=%s',
         useWorktree,
+        useExistingBranch,
         sourceBranch,
         autoStart,
       );
@@ -1506,7 +1509,11 @@ export function registerIpcHandlers() {
         // Use provided sourceBranch, fall back to project defaultBranch, or undefined for current HEAD
         const effectiveSourceBranch = sourceBranch ?? project.defaultBranch;
         let worktreeStartPoint = effectiveSourceBranch ?? undefined;
-        if (project.autoPullSourceBranch && effectiveSourceBranch) {
+        if (
+          !useExistingBranch &&
+          project.autoPullSourceBranch &&
+          effectiveSourceBranch
+        ) {
           dbg.ipc(
             'Pulling source branch before worktree: %s',
             effectiveSourceBranch,
@@ -1533,6 +1540,7 @@ export function registerIpcHandlers() {
           taskName ?? undefined,
           effectiveSourceBranch ?? undefined,
           worktreeStartPoint,
+          useExistingBranch,
         );
 
         dbg.ipc('Worktree created: %s, branch: %s', worktreePath, branchName);
@@ -1713,7 +1721,8 @@ export function registerIpcHandlers() {
             worktreePath: task.worktreePath,
             projectPath: project.path,
             skipIfChanges: !options?.deleteWorktree,
-            branchCleanup: 'delete',
+            branchCleanup:
+              task.branchName === task.sourceBranch ? 'keep' : 'delete',
             force: options?.deleteWorktree ?? false,
           });
           dbg.ipc('Deleted worktree for task %s', id);
@@ -1916,6 +1925,7 @@ export function registerIpcHandlers() {
           worktreeCleanup: {
             worktreePath: task.worktreePath,
             branchName: task.branchName,
+            keepBranch: task.branchName === task.sourceBranch,
           },
         };
       }
@@ -1931,6 +1941,7 @@ export function registerIpcHandlers() {
       params: {
         worktreePath: string;
         branchName: string;
+        keepBranch?: boolean;
       },
     ) => {
       // Resolve projectPath from the database rather than trusting renderer input.
@@ -1949,9 +1960,10 @@ export function registerIpcHandlers() {
           worktreePath: params.worktreePath,
           projectPath: project.path,
           branchName: params.branchName,
+          branchCleanup: params.keepBranch ? 'keep' : undefined,
           force: true,
         });
-      } else {
+      } else if (!params.keepBranch) {
         await cleanupMissingWorktree({
           projectPath: project.path,
           branchName: params.branchName,

@@ -988,6 +988,7 @@ async function copyWorktreeFiles(
  * @param taskName - Optional task name to use for worktree naming (preferred over prompt)
  * @param sourceBranch - Optional branch to base the worktree on (defaults to current HEAD)
  * @param startPoint - Optional git ref to create the worktree from while preserving sourceBranch metadata
+ * @param useExistingBranch - Check out sourceBranch directly instead of creating a task branch
  * @returns The path to the created worktree and the starting commit hash
  */
 export async function createWorktree(
@@ -998,6 +999,7 @@ export async function createWorktree(
   taskName?: string,
   sourceBranch?: string,
   startPoint?: string,
+  useExistingBranch = false,
 ): Promise<CreateWorktreeResult> {
   dbg.worktree('createWorktree called %o', {
     projectPath,
@@ -1029,16 +1031,19 @@ export async function createWorktree(
   const actualSourceBranch =
     sourceBranch ?? (await getCurrentBranchName(projectPath));
 
-  // Create branch name with jean-claude/ prefix
-  const branchName = `jean-claude/${worktreeName}`;
+  const branchName = useExistingBranch
+    ? actualSourceBranch
+    : `jean-claude/${worktreeName}`;
   dbg.worktree('Creating worktree: %s, branch: %s', worktreePath, branchName);
 
-  // Create the worktree with a new branch
-  // If sourceBranch is provided, use it as the start point; otherwise use current HEAD
+  // Existing branch mode checks out selected branch directly. New branch mode
+  // keeps isolated-task behavior.
   try {
     const startPointArg = startPoint ?? sourceBranch;
-    const args = ['worktree', 'add', worktreePath, '-b', branchName];
-    if (startPointArg) args.push(startPointArg);
+    const args = useExistingBranch
+      ? ['worktree', 'add', worktreePath, startPointArg ?? branchName]
+      : ['worktree', 'add', worktreePath, '-b', branchName];
+    if (!useExistingBranch && startPointArg) args.push(startPointArg);
     dbg.worktree('Running: git %s', args.join(' '));
     await execFileAsync('git', args, {
       cwd: projectPath,
@@ -1113,12 +1118,23 @@ export async function getProjectBranches(
   projectPath: string,
 ): Promise<BranchInfo[]> {
   try {
-    const { stdout } = await execAsync(
+    const [{ stdout }, { stdout: worktreeList }] = await Promise.all([
+      execAsync(
       'git branch --sort=-committerdate --format="%(refname:short)\t%(committerdate:iso-strict)"',
       {
         cwd: projectPath,
         encoding: 'utf-8',
       },
+      ),
+      execAsync('git worktree list --porcelain', {
+        cwd: projectPath,
+        encoding: 'utf-8',
+      }),
+    ]);
+    const checkedOutBranches = new Set(
+      [...worktreeList.matchAll(/^branch refs\/heads\/(.+)$/gm)].map(
+        (match) => match[1],
+      ),
     );
     return stdout
       .trim()
@@ -1127,11 +1143,16 @@ export async function getProjectBranches(
       .map((line) => {
         const separatorIndex = line.indexOf('\t');
         if (separatorIndex === -1) {
-          return { name: line, lastCommitDate: '' };
+          return {
+            name: line,
+            lastCommitDate: '',
+            isCheckedOut: checkedOutBranches.has(line),
+          };
         }
         return {
           name: line.slice(0, separatorIndex),
           lastCommitDate: line.slice(separatorIndex + 1),
+          isCheckedOut: checkedOutBranches.has(line.slice(0, separatorIndex)),
         };
       });
   } catch (error) {

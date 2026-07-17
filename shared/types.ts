@@ -210,6 +210,7 @@ export interface UpdateProvider {
 export interface BranchInfo {
   name: string;
   lastCommitDate: string;
+  isCheckedOut?: boolean;
 }
 
 export interface DetectedProjectLogo {

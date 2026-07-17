@@ -527,6 +527,7 @@ export interface Api {
     createWithWorktree: (
       data: NewTask & {
         useWorktree: boolean;
+        useExistingBranch?: boolean;
         sourceBranch?: string | null;
         autoStart?: boolean;
         interactionMode?: InteractionMode | null;
@@ -553,6 +554,7 @@ export interface Api {
       worktreeCleanup?: {
         worktreePath: string;
         branchName: string;
+        keepBranch: boolean;
       };
     }>;
     clearUserCompleted: (id: string) => Promise<Task>;
@@ -640,6 +642,7 @@ export interface Api {
         params: {
           worktreePath: string;
           branchName: string;
+          keepBranch?: boolean;
         },
       ) => Promise<{ editorCloseWarning?: string }>;
     };
