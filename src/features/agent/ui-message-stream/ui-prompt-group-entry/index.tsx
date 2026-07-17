@@ -745,16 +745,20 @@ function SubagentCard({
 }
 
 /** Todo row — checkbox with accent styling */
-function TodoRow({
-  todo,
+const TodoRow = memo(function TodoRow({
+  text,
+  done,
+  current,
 }: {
-  todo: { text: string; done: boolean; current: boolean };
+  text: string;
+  done: boolean;
+  current: boolean;
 }) {
   return (
     <div
       className="flex items-center gap-2 rounded px-1.5 py-0.5 font-mono text-xs"
       style={
-        todo.current
+        current
           ? {
               background: `color-mix(in oklch, var(--color-acc) 8%, transparent)`,
             }
@@ -765,19 +769,19 @@ function TodoRow({
       <span
         className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm"
         style={{
-          border: todo.done
+          border: done
             ? '1px solid var(--color-acc)'
-            : todo.current
+            : current
               ? '1px solid color-mix(in oklch, var(--color-acc) 60%, transparent)'
               : '1px solid oklch(1 0 0 / 0.18)',
-          background: todo.done ? 'var(--color-acc)' : 'transparent',
+          background: done ? 'var(--color-acc)' : 'transparent',
           boxShadow:
-            todo.current && !todo.done
+            current && !done
               ? '0 0 8px -2px var(--color-acc)'
               : 'none',
         }}
       >
-        {todo.done && (
+        {done && (
           <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
             <path
               d="M2.5 6.5L5 9l4.5-5.5"
@@ -788,7 +792,7 @@ function TodoRow({
             />
           </svg>
         )}
-        {todo.current && !todo.done && (
+        {current && !done && (
           <span
             className="rg-pulse-glow bg-acc h-1.5 w-1.5 rounded-full"
             style={{ animation: 'rg-pulse-glow 1.4s ease-in-out infinite' }}
@@ -800,27 +804,27 @@ function TodoRow({
       <span
         className="min-w-0 flex-1 truncate"
         style={{
-          color: todo.done
+          color: done
             ? 'var(--color-ink-3)'
-            : todo.current
+            : current
               ? 'var(--color-ink-1)'
               : 'var(--color-ink-2)',
-          textDecoration: todo.done ? 'line-through' : 'none',
+          textDecoration: done ? 'line-through' : 'none',
           textDecorationColor: 'oklch(1 0 0 / 0.25)',
         }}
       >
-        {todo.text}
+        {text}
       </span>
 
       {/* NOW label */}
-      {todo.current && (
+      {current && (
         <span className="text-acc-ink shrink-0 font-mono text-[9px] font-semibold tracking-wide uppercase">
           now
         </span>
       )}
     </div>
   );
-}
+});
 
 /** Result block — ✓ checkmark + text + bullets + cost line */
 function ResultBlock({
@@ -976,7 +980,12 @@ function RunningSummary({
           </div>
           <div className="flex flex-col gap-0.5">
             {activity.todos.map((td, i) => (
-              <TodoRow key={i} todo={td} />
+              <TodoRow
+                key={i}
+                text={td.text}
+                done={td.done}
+                current={td.current}
+              />
             ))}
           </div>
         </div>
@@ -1563,7 +1572,12 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
                     </div>
                     <div className="flex flex-col gap-0.5">
                       {completedTodos.map((td, i) => (
-                        <TodoRow key={i} todo={td} />
+                          <TodoRow
+                            key={i}
+                            text={td.text}
+                            done={td.done}
+                            current={td.current}
+                          />
                       ))}
                     </div>
                   </div>
