@@ -1,0 +1,87 @@
+{
+  "runCommands": [
+    {
+      "name": null,
+      "command": "pnpm install && pnpm dev:tmp:reuse",
+      "ports": [
+        5173
+      ],
+      "envVars": [
+        {
+          "source": "taskName",
+          "name": "JC_DEV_BADGE_LABEL"
+        }
+      ],
+      "confirmBeforeRun": false,
+      "confirmMessage": null
+    },
+    {
+      "name": null,
+      "command": "pnpm install && pnpm dev:symlink",
+      "ports": [
+        5173
+      ],
+      "envVars": [
+        {
+          "source": "taskName",
+          "name": "JC_DEV_BADGE_LABEL"
+        }
+      ],
+      "confirmBeforeRun": false,
+      "confirmMessage": null
+    },
+    {
+      "name": null,
+      "command": "pnpm install && pnpm dev:symlink:update",
+      "ports": [
+        5173
+      ],
+      "envVars": [
+        {
+          "source": "taskName",
+          "name": "JC_DEV_BADGE_LABEL"
+        }
+      ],
+      "confirmBeforeRun": false,
+      "confirmMessage": null
+    },
+    {
+      "name": null,
+      "command": "pnpm install && pnpm dev:tmp:override",
+      "ports": [
+        5173
+      ],
+      "envVars": [
+        {
+          "source": "taskName",
+          "name": "JC_DEV_BADGE_LABEL"
+        }
+      ],
+      "confirmBeforeRun": false,
+      "confirmMessage": null
+    },
+    {
+      "name": "devtools",
+      "command": "pnpm exec react-devtools",
+      "ports": [],
+      "envVars": [],
+      "confirmBeforeRun": false,
+      "confirmMessage": null
+    },
+    {
+      "name": null,
+      "command": "pnpm install && pnpm dev:empty",
+      "ports": [
+        5173
+      ],
+      "envVars": [
+        {
+          "source": "taskName",
+          "name": "JC_DEV_BADGE_LABEL"
+        }
+      ],
+      "confirmBeforeRun": true,
+      "confirmMessage": null
+    }
+  ]
+}

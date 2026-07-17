@@ -123,6 +123,21 @@ function getStatusWorkflowOrder(status: string): number {
   return STATUS_WORKFLOW_ORDER[status] ?? 3;
 }
 
+function sortWorkItemsByStackRank(workItems: AzureDevOpsWorkItem[]) {
+  return [...workItems].sort((a, b) => {
+    const aRank = Number.isFinite(a.fields.stackRank)
+      ? a.fields.stackRank
+      : undefined;
+    const bRank = Number.isFinite(b.fields.stackRank)
+      ? b.fields.stackRank
+      : undefined;
+    if (aRank === undefined && bRank === undefined) return 0;
+    if (aRank === undefined) return 1;
+    if (bRank === undefined) return -1;
+    return aRank - bRank;
+  });
+}
+
 export function groupWorkItemsByBoardColumns({
   workItems,
   boardColumns,
@@ -139,7 +154,11 @@ export function groupWorkItemsByBoardColumns({
     }
     return [...groups.entries()]
       .sort(([a], [b]) => getStatusWorkflowOrder(a) - getStatusWorkflowOrder(b))
-      .map(([state, items]) => ({ id: `state:${state}`, name: state, items }));
+      .map(([state, items]) => ({
+        id: `state:${state}`,
+        name: state,
+        items: sortWorkItemsByStackRank(items),
+      }));
   }
 
   const groups = new Map(
@@ -166,10 +185,14 @@ export function groupWorkItemsByBoardColumns({
     ...boardColumns.map((column) => ({
       id: column.id,
       name: column.name,
-      items: groups.get(column.id) ?? [],
+      items: sortWorkItemsByStackRank(groups.get(column.id) ?? []),
     })),
     ...[...unmatched.entries()]
       .sort(([a], [b]) => getStatusWorkflowOrder(a) - getStatusWorkflowOrder(b))
-      .map(([state, items]) => ({ id: `state:${state}`, name: state, items })),
+      .map(([state, items]) => ({
+        id: `state:${state}`,
+        name: state,
+        items: sortWorkItemsByStackRank(items),
+      })),
   ];
 }

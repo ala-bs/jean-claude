@@ -285,6 +285,7 @@ export interface AzureDevOpsWorkItem {
     boardColumnDone?: boolean;
     tags?: string;
     priority?: number;
+    stackRank?: number;
     storyPoints?: number;
     iterationPath?: string;
   };

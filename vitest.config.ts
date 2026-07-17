@@ -33,6 +33,7 @@ export default defineConfig({
       'src/features/pull-request/**/*.test.ts',
       'src/features/task/**/*.test.ts',
       'src/features/work-item/ui-azure-board-overlay/**/*.test.tsx',
+      'src/features/work-item/ui-work-item-board/**/*.test.ts',
       'src/features/work-item/ui-parsed-work-item-title/**/*.test.tsx',
       'src/stores/**/*.test.ts',
     ],

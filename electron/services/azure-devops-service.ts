@@ -116,6 +116,7 @@ export interface AzureDevOpsWorkItem {
     boardColumnDone?: boolean;
     tags?: string;
     priority?: number;
+    stackRank?: number;
     storyPoints?: number;
     iterationPath?: string;
   };
@@ -203,6 +204,7 @@ interface WorkItemsBatchResponse {
       'System.BoardColumnDone'?: boolean;
       'System.Tags'?: string;
       'Microsoft.VSTS.Common.Priority'?: number;
+      'Microsoft.VSTS.Common.StackRank'?: number;
       'Microsoft.VSTS.Scheduling.StoryPoints'?: number;
       'System.IterationPath'?: string;
     };
@@ -991,6 +993,7 @@ export async function queryAssignedWorkItems(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
       storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
@@ -1064,6 +1067,7 @@ export async function getWorkItemById(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
       storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
@@ -1165,6 +1169,7 @@ export async function getWorkItemsByIds(params: {
         boardColumnDone: wi.fields['System.BoardColumnDone'],
         tags: wi.fields['System.Tags'],
         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+        stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
         storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
         iterationPath: wi.fields['System.IterationPath'],
       },
@@ -1446,9 +1451,10 @@ export async function getRelatedTestCases(params: {
         changedDate: wi.fields['System.ChangedDate'],
         boardColumn: wi.fields['System.BoardColumn'],
         boardColumnDone: wi.fields['System.BoardColumnDone'],
-        tags: wi.fields['System.Tags'],
-        priority: wi.fields['Microsoft.VSTS.Common.Priority'],
-        storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
+         tags: wi.fields['System.Tags'],
+         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+         stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+         storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
         iterationPath: wi.fields['System.IterationPath'],
       },
       testSteps,
@@ -3434,6 +3440,7 @@ export async function getPullRequestWorkItems(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
       storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
