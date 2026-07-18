@@ -428,7 +428,7 @@ export function WorkItemPreview({
             : 'grid-cols-1'
         }`}
       >
-        <div className="min-h-0 overflow-y-auto">
+        <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto">
           {activeTab === 'content' && (
             <div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">

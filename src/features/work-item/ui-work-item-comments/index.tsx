@@ -245,7 +245,7 @@ export function WorkItemComments({
 
   if (hideHeader) {
     return (
-      <div className="flex min-h-full flex-col">
+      <div className="flex min-h-full min-w-0 flex-col overflow-x-hidden">
         <div className="min-h-0 flex-1">
           <CommentsContent
             comments={comments}
