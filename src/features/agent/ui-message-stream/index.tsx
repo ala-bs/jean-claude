@@ -80,7 +80,7 @@ export interface QuestionBannerProps {
   onRespond: (
     requestId: string,
     response: QuestionResponse,
-  ) => void | Promise<void>;
+  ) => void | Promise<void | boolean>;
 }
 
 export const MessageStream = memo(function MessageStream({

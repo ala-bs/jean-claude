@@ -8,6 +8,11 @@ import {
 } from 'react';
 
 import type { AgentQuestion, QuestionResponse } from '@shared/agent-types';
+import {
+  getQuestionDraftKey,
+  type QuestionDraft,
+  useTaskMessagesStore,
+} from '@/stores/task-messages';
 import { Kbd } from '@/common/ui/kbd';
 import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import { Textarea } from '@/common/ui/textarea';
@@ -16,6 +21,7 @@ import { useCommands } from '@/common/hooks/use-commands';
 type QuestionInputMode = 'text' | 'single-choice' | 'multi-choice';
 
 const DECIDE_FOR_ME = 'Decide for me';
+const EMPTY_ANSWERS: Record<string, string> = {};
 
 function RecommendedBadge() {
   return (
@@ -483,11 +489,25 @@ export function QuestionOptions({
   onRespond: (
     requestId: string,
     response: QuestionResponse,
-  ) => void | Promise<void>;
+  ) => void | Promise<void | boolean>;
 }) {
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [otherAnswers, setOtherAnswers] = useState<Record<string, string>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const draftKey = getQuestionDraftKey(request.taskId, request.requestId);
+  const draft = useTaskMessagesStore((state) => state.questionDrafts[draftKey]);
+  const updateQuestionDraft = useTaskMessagesStore(
+    (state) => state.updateQuestionDraft,
+  );
+  const clearQuestionDraft = useTaskMessagesStore(
+    (state) => state.clearQuestionDraft,
+  );
+  const tryStartQuestionResponse = useTaskMessagesStore(
+    (state) => state.tryStartQuestionResponse,
+  );
+  const finishQuestionResponse = useTaskMessagesStore(
+    (state) => state.finishQuestionResponse,
+  );
+  const answers = draft?.answers ?? EMPTY_ANSWERS;
+  const otherAnswers = draft?.otherAnswers ?? EMPTY_ANSWERS;
+  const notes = draft?.notes ?? EMPTY_ANSWERS;
   const [notesOpenByQuestion, setNotesOpenByQuestion] = useState<
     Record<string, boolean>
   >({});
@@ -496,9 +516,7 @@ export function QuestionOptions({
   const [otherOpenByQuestion, setOtherOpenByQuestion] = useState<
     Record<string, boolean>
   >({});
-  const [wasFreeformByQuestion, setWasFreeformByQuestion] = useState<
-    Record<string, boolean>
-  >({});
+  const [, setWasFreeformByQuestion] = useState<Record<string, boolean>>({});
   const questionIdentity = request.questions
     .map(
       (question) =>
@@ -508,9 +526,6 @@ export function QuestionOptions({
 
   useEffect(() => {
     startTransition(() => {
-      setAnswers({});
-      setOtherAnswers({});
-      setNotes({});
       setNotesOpenByQuestion({});
       setOtherOpenByQuestion({});
       setWasFreeformByQuestion({});
@@ -518,6 +533,12 @@ export function QuestionOptions({
       setActiveOptionIndex(0);
     });
   }, [request.requestId, questionIdentity]);
+
+  const updateDraft = useCallback(
+    (update: (draft: QuestionDraft) => QuestionDraft) =>
+      updateQuestionDraft(draftKey, update),
+    [draftKey, updateQuestionDraft],
+  );
 
   useEffect(() => {
     if (request.questions.length === 0) {
@@ -582,8 +603,11 @@ export function QuestionOptions({
       const mode = getQuestionInputMode(question);
 
       if (optionIndex === question.options.length) {
-        setAnswers((prev) => ({ ...prev, [questionKey]: DECIDE_FOR_ME }));
-        setOtherAnswers((prev) => ({ ...prev, [questionKey]: '' }));
+        updateDraft((prev) => ({
+          ...prev,
+          answers: { ...prev.answers, [questionKey]: DECIDE_FOR_ME },
+          otherAnswers: { ...prev.otherAnswers, [questionKey]: '' },
+        }));
         setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: false }));
         setWasFreeformByQuestion((prev) => ({
           ...prev,
@@ -597,14 +621,17 @@ export function QuestionOptions({
       if (mode === 'multi-choice') {
         const label = question.options[optionIndex]?.label;
         if (!label) return false;
-        setAnswers((prev) => {
-          const selected = getSelectedLabels(prev[questionKey] ?? '').filter(
+        updateDraft((prev) => {
+          const selected = getSelectedLabels(prev.answers[questionKey] ?? '').filter(
             (item) => item !== DECIDE_FOR_ME,
           );
           const next = selected.includes(label)
             ? selected.filter((item) => item !== label)
             : [...selected, label];
-          return { ...prev, [questionKey]: JSON.stringify(next) };
+          return {
+            ...prev,
+            answers: { ...prev.answers, [questionKey]: JSON.stringify(next) },
+          };
         });
         setWasFreeformByQuestion((prev) => ({
           ...prev,
@@ -623,13 +650,13 @@ export function QuestionOptions({
           ...prev,
           [questionKey]: true,
         }));
-        setAnswers((prev) => {
-          const current = prev[questionKey] ?? '';
+        updateDraft((prev) => {
+          const current = prev.answers[questionKey] ?? '';
           const matchesOption = question.options.some(
             (option) => option.label === current,
           );
           return matchesOption || current === DECIDE_FOR_ME
-            ? { ...prev, [questionKey]: '' }
+            ? { ...prev, answers: { ...prev.answers, [questionKey]: '' } }
             : prev;
         });
         return true;
@@ -637,23 +664,29 @@ export function QuestionOptions({
 
       const label = question.options[optionIndex]?.label;
       if (!label) return false;
-      setAnswers((prev) => ({ ...prev, [questionKey]: label }));
+       updateDraft((prev) => ({
+         ...prev,
+         answers: { ...prev.answers, [questionKey]: label },
+       }));
       setWasFreeformByQuestion((prev) => ({
         ...prev,
         [questionKey]: false,
       }));
       return true;
     },
-    [request.questions],
+    [request.questions, updateDraft],
   );
 
   const updateTextAnswer = useCallback(
     ({ questionIndex, value }: { questionIndex: number; value: string }) => {
       const question = request.questions[questionIndex];
       if (!question) return;
-      setAnswers((prev) => ({ ...prev, [getQuestionKey(question)]: value }));
+       updateDraft((prev) => ({
+         ...prev,
+         answers: { ...prev.answers, [getQuestionKey(question)]: value },
+       }));
     },
-    [request.questions],
+    [request.questions, updateDraft],
   );
 
   const updateOtherAnswer = useCallback(
@@ -663,11 +696,14 @@ export function QuestionOptions({
       const questionKey = getQuestionKey(question);
       const mode = getQuestionInputMode(question);
       if (mode === 'text' || mode === 'multi-choice') {
-        setOtherAnswers((prev) => ({ ...prev, [questionKey]: value }));
+        updateDraft((prev) => ({
+          ...prev,
+          otherAnswers: { ...prev.otherAnswers, [questionKey]: value },
+        }));
         if (value.trim()) {
-          setAnswers((prev) =>
-            prev[questionKey] === DECIDE_FOR_ME
-              ? { ...prev, [questionKey]: '' }
+          updateDraft((prev) =>
+            prev.answers[questionKey] === DECIDE_FOR_ME
+              ? { ...prev, answers: { ...prev.answers, [questionKey]: '' } }
               : prev,
           );
         }
@@ -680,14 +716,17 @@ export function QuestionOptions({
         return;
       }
 
-      setAnswers((prev) => ({ ...prev, [questionKey]: value }));
+      updateDraft((prev) => ({
+        ...prev,
+        answers: { ...prev.answers, [questionKey]: value },
+      }));
       setWasFreeformByQuestion((prev) => ({
         ...prev,
         [questionKey]: true,
       }));
       setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: true }));
     },
-    [request.questions],
+    [request.questions, updateDraft],
   );
 
   const closeOtherAnswer = useCallback(
@@ -697,23 +736,29 @@ export function QuestionOptions({
       const questionKey = getQuestionKey(question);
       setOtherOpenByQuestion((prev) => ({ ...prev, [questionKey]: false }));
       if (getQuestionInputMode(question) === 'single-choice') {
-        setAnswers((prev) => ({ ...prev, [questionKey]: '' }));
+        updateDraft((prev) => ({
+          ...prev,
+          answers: { ...prev.answers, [questionKey]: '' },
+        }));
         setWasFreeformByQuestion((prev) => ({
           ...prev,
           [questionKey]: false,
         }));
       }
     },
-    [request.questions],
+    [request.questions, updateDraft],
   );
 
   const updateNotes = useCallback(
     ({ questionIndex, value }: { questionIndex: number; value: string }) => {
       const question = request.questions[questionIndex];
       if (!question) return;
-      setNotes((prev) => ({ ...prev, [getQuestionKey(question)]: value }));
+      updateDraft((prev) => ({
+        ...prev,
+        notes: { ...prev.notes, [getQuestionKey(question)]: value },
+      }));
     },
-    [request.questions],
+    [request.questions, updateDraft],
   );
 
   const openNotes = useCallback(
@@ -802,26 +847,46 @@ export function QuestionOptions({
     return responseAnswers;
   }, [answers, notes, otherAnswers, request.questions]);
 
-  const submitAnswers = useCallback(() => {
+  const submitAnswers = async () => {
     if (!allAnswered) return;
-    return onRespond(request.requestId, {
-      answers: buildResponseAnswers(),
-      wasFreeform: Object.values(wasFreeformByQuestion).some(Boolean),
-      wasFreeformByQuestion,
-    });
-  }, [
-    allAnswered,
-    buildResponseAnswers,
-    onRespond,
-    request.requestId,
-    wasFreeformByQuestion,
-  ]);
+    if (!tryStartQuestionResponse(request.taskId)) return;
+    try {
+      const effectiveWasFreeformByQuestion: Record<string, boolean> = {};
+      for (const question of request.questions) {
+        const key = getQuestionKey(question);
+        const value = answers[key];
+        const isCustomSingleChoice =
+          getQuestionInputMode(question) === 'single-choice' &&
+          !!value?.trim() &&
+          value !== DECIDE_FOR_ME &&
+          !question.options.some((option) => option.label === value);
+        if (
+          value === DECIDE_FOR_ME ||
+          isCustomSingleChoice ||
+          otherAnswers[key]?.trim()
+        ) {
+          effectiveWasFreeformByQuestion[key] = true;
+        }
+      }
 
-  const handleSubmit = useCallback(() => {
+      const responseResult = await onRespond(request.requestId, {
+        answers: buildResponseAnswers(),
+        wasFreeform: Object.values(effectiveWasFreeformByQuestion).some(Boolean),
+        wasFreeformByQuestion: effectiveWasFreeformByQuestion,
+      });
+      if (responseResult !== false) {
+        clearQuestionDraft(draftKey, draft ?? null);
+      }
+    } finally {
+      finishQuestionResponse(request.taskId);
+    }
+  };
+
+  const handleSubmit = () => {
     if (!allAnswered) return false;
     void submitAnswers();
     return true;
-  }, [allAnswered, submitAnswers]);
+  };
 
   useCommands('question-options', [
     {

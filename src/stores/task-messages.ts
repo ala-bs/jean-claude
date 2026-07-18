@@ -22,6 +22,45 @@ function clearsPendingRequests(status: StepExecutionStatus): boolean {
   );
 }
 
+function getQuestionTaskId(key: string): string {
+  try {
+    const parsed = JSON.parse(key);
+    if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
+      return parsed[0];
+    }
+  } catch {
+    // Support legacy keys.
+  }
+  const separatorIndex = key.indexOf(':');
+  return separatorIndex === -1 ? key : key.slice(0, separatorIndex);
+}
+
+function isQuestionStateForTask(key: string, taskId: string): boolean {
+  return key === taskId || getQuestionTaskId(key) === taskId;
+}
+
+function removeQuestionStateForTask(
+  state: TaskMessagesStore,
+  taskId: string,
+  keepDraftKey?: string,
+  keepInFlight = false,
+) {
+  const questionDrafts = Object.fromEntries(
+    Object.entries(state.questionDrafts).filter(
+      ([key]) => key === keepDraftKey || !isQuestionStateForTask(key, taskId),
+    ),
+  );
+  const questionResponsesInFlight = Object.fromEntries(
+    Object.entries(state.questionResponsesInFlight).filter(
+      ([key]) =>
+        keepInFlight && key === taskId
+          ? true
+          : !isQuestionStateForTask(key, taskId),
+    ),
+  );
+  return { questionDrafts, questionResponsesInFlight };
+}
+
 export interface RunCommandLogLine {
   stream: RunCommandLogStream;
   line: string;
@@ -41,6 +80,16 @@ export interface RunCommandLogState {
   totalLineCount: number;
   updatedAt: number;
   version: number;
+}
+
+export interface QuestionDraft {
+  answers: Record<string, string>;
+  otherAnswers: Record<string, string>;
+  notes: Record<string, string>;
+}
+
+export function getQuestionDraftKey(taskId: string, requestId: string): string {
+  return JSON.stringify([taskId, requestId]);
 }
 
 export type RunCommandLogs = Record<string, RunCommandLogState>;
@@ -112,6 +161,8 @@ interface TaskMessagesStore {
   runCommandLogGenerations: Record<string, Record<string, number>>;
   /** Keyed by taskId — running command status with command details */
   runCommandRunning: Record<string, RunStatus>;
+  questionDrafts: Record<string, QuestionDraft>;
+  questionResponsesInFlight: Record<string, boolean>;
   cacheLimit: number;
 
   // Actions (all keyed by stepId)
@@ -148,6 +199,13 @@ interface TaskMessagesStore {
     permission: TaskState['pendingPermission'],
   ) => void;
   setQuestion: (stepId: string, question: TaskState['pendingQuestion']) => void;
+  updateQuestionDraft: (
+    key: string,
+    update: (draft: QuestionDraft) => QuestionDraft,
+  ) => void;
+  clearQuestionDraft: (key: string, expected?: QuestionDraft | null) => void;
+  tryStartQuestionResponse: (key: string) => boolean;
+  finishQuestionResponse: (key: string) => void;
   setQueuedPrompts: (stepId: string, queuedPrompts: QueuedPrompt[]) => void;
   appendRunCommandLogBatch: (
     taskId: string,
@@ -325,6 +383,8 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
   runCommandLogs: {},
   runCommandLogGenerations: {},
   runCommandRunning: {},
+  questionDrafts: {},
+  questionResponsesInFlight: {},
   cacheLimit: DEFAULT_CACHE_LIMIT,
 
   loadStep: (stepId, taskId, messages, status) => {
@@ -465,6 +525,11 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     set((state) => {
       const step = state.steps[stepId];
       const shouldClearPending = clearsPendingRequests(status);
+      const resolvedTaskId = taskId ?? step?.taskId;
+      const questionState =
+        shouldClearPending && resolvedTaskId
+          ? removeQuestionStateForTask(state, resolvedTaskId)
+          : null;
       if (!step) {
         if (!taskId) return state;
         return {
@@ -484,6 +549,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
           ...(shouldClearPending && {
             pendingRequestVersion: state.pendingRequestVersion + 1,
           }),
+          ...(questionState ?? {}),
         };
       }
       return {
@@ -502,6 +568,7 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
         ...(shouldClearPending && {
           pendingRequestVersion: state.pendingRequestVersion + 1,
         }),
+        ...(questionState ?? {}),
       };
     });
   },
@@ -527,6 +594,14 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     set((state) => {
       const step = state.steps[stepId];
       if (!step) return state;
+      const questionState = question
+        ? removeQuestionStateForTask(
+            state,
+            step.taskId,
+            getQuestionDraftKey(question.taskId, question.requestId),
+            true,
+          )
+        : removeQuestionStateForTask(state, step.taskId);
       return {
         steps: {
           ...state.steps,
@@ -536,7 +611,61 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
           },
         },
         pendingRequestVersion: state.pendingRequestVersion + 1,
+        ...questionState,
       };
+    });
+  },
+
+  updateQuestionDraft: (key, update) => {
+    set((state) => {
+      const current = state.questionDrafts[key] ?? {
+        answers: {},
+        otherAnswers: {},
+        notes: {},
+      };
+      return {
+        questionDrafts: {
+          ...removeQuestionStateForTask(state, getQuestionTaskId(key), key)
+            .questionDrafts,
+          [key]: update(current),
+        },
+      };
+    });
+  },
+
+  clearQuestionDraft: (key, expected) => {
+    set((state) => {
+      if (
+        expected !== undefined &&
+        (expected === null
+          ? state.questionDrafts[key] !== undefined
+          : state.questionDrafts[key] !== expected)
+      ) {
+        return state;
+      }
+      const { [key]: _removed, ...rest } = state.questionDrafts;
+      void _removed;
+      return { questionDrafts: rest };
+    });
+  },
+
+  tryStartQuestionResponse: (key) => {
+    if (get().questionResponsesInFlight[key]) return false;
+    set((state) => ({
+      questionResponsesInFlight: {
+        ...state.questionResponsesInFlight,
+        [key]: true,
+      },
+    }));
+    return true;
+  },
+
+  finishQuestionResponse: (key) => {
+    set((state) => {
+      if (!state.questionResponsesInFlight[key]) return state;
+      const { [key]: _removed, ...rest } = state.questionResponsesInFlight;
+      void _removed;
+      return { questionResponsesInFlight: rest };
     });
   },
 
