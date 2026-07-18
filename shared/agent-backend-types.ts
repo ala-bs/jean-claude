@@ -108,6 +108,7 @@ export interface NormalizedPermissionResponse {
   allowMode?: 'session' | 'project' | 'worktree';
   toolsToAllow?: string[];
   setModeOnAllow?: InteractionMode;
+  allowedDirectory?: string;
 }
 
 /**

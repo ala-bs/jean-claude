@@ -264,6 +264,14 @@ export interface NormalizedPermissionRequest {
     toolsToAllow: string[];
     setModeOnAllow?: InteractionMode;
   };
+  directoryAccess?: {
+    requestedPath: string;
+    requestedDirectory: string;
+    parentDirectories: Array<{
+      path: string;
+      isHome?: boolean;
+    }>;
+  };
 }
 
 // --- Normalization events (shared by all backend normalizers) ---

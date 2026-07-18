@@ -53,6 +53,7 @@ import { calculateTheoreticalOpenCodeCost } from '../../backend-models-service';
 import { dbg } from '../../../lib/debug';
 import { getChildProcessEnv } from '../../../lib/child-process-env';
 import type { ResolvedPermissionRule } from '../../../../shared/permission-types';
+import { toDirectoryPermissionPattern } from '../../directory-access';
 
 
 
@@ -659,25 +660,30 @@ export class OpenCodeBackend implements AgentBackend {
     let ocResponse: 'once' | 'always' | 'reject';
     if (response.behavior === 'deny') {
       ocResponse = 'reject';
-    } else if (response.allowMode === 'session') {
+    } else if (
+      response.allowMode === 'session' &&
+      !response.allowedDirectory
+    ) {
       ocResponse = 'always';
     } else {
       ocResponse = 'once';
     }
 
-    state.serverHandle.client.permission
-      .reply({
-        requestID: requestId,
-        directory: state.cwd,
-        reply: ocResponse,
-      })
-      .catch((error) => {
-        dbg.agent(
-          'Error responding to OpenCode permission %s: %O',
-          requestId,
-          error,
-        );
-      });
+    const directoryRule = response.allowedDirectory
+      ? {
+        tool: 'external_directory',
+        pattern: toDirectoryPermissionPattern(response.allowedDirectory),
+        action: 'allow' as const,
+      }
+      : undefined;
+
+    const result = await state.serverHandle.client.permission.reply({
+      requestID: requestId,
+      directory: state.cwd,
+      reply: ocResponse,
+    });
+    this.assertSuccessfulSdkResponse(result, 'respond to permission');
+    if (directoryRule) state.permissionRules.push(directoryRule);
 
     // Resolve the pending permission promise
     const pending = state.pendingPermissions.get(requestId);
@@ -1124,46 +1130,96 @@ export class OpenCodeBackend implements AgentBackend {
               req.toolName,
               req.input,
             );
-            const permissionDecision = evaluatePermissionWithMatch(
-              state.permissionRules,
-              tool,
-              matchValue,
+            const permissionPatterns = Array.isArray(
+              req.input.permissionPatterns,
+            )
+              ? req.input.permissionPatterns.filter(
+                  (pattern): pattern is string => typeof pattern === 'string',
+                )
+              : [];
+            const matchValues =
+              tool === 'external_directory' && permissionPatterns.length > 0
+                ? permissionPatterns
+                : [matchValue];
+            const permissionDecisions = matchValues.map((value) =>
+              evaluatePermissionWithMatch(state.permissionRules, tool, value),
             );
-            const action = permissionDecision.action;
+            const permissionDecision =
+              permissionDecisions.find((decision) => decision.action === 'deny') ??
+              permissionDecisions.find((decision) => decision.action === 'ask') ??
+              permissionDecisions[0];
+            const canAutoEvaluate =
+              tool !== 'external_directory' ||
+              req.input.externalDirectoryAutoEvaluate === true;
+            const action = canAutoEvaluate ? permissionDecision.action : 'ask';
 
             if (action === 'allow') {
               dbg.agentPermission(
                 'Auto-allowing %s (pattern match)',
                 req.toolName,
               );
-              state.serverHandle.client.permission
-                .reply({
-                  requestID: req.requestId,
-                  directory: state.cwd,
-                  reply: 'once',
-                })
-                .catch((error) => {
+              let replySucceeded = true;
+              if (tool === 'external_directory') {
+                try {
+                  const result = await state.serverHandle.client.permission.reply({
+                    requestID: req.requestId,
+                    directory: state.cwd,
+                    reply: 'once',
+                  });
+                  this.assertSuccessfulSdkResponse(
+                    result,
+                    'auto-allow permission',
+                  );
+                } catch (error) {
+                  replySucceeded = false;
                   dbg.agent(
                     'Error auto-allowing OpenCode permission %s: %O',
                     req.requestId,
                     error,
                   );
-                });
-              (state.normalizationCtx.pendingToolPermissionDecisions ??=
-                []).push(
-                permissionDecision.matchedRule
-                  ? {
-                      allowedBy: 'system',
-                      tool,
-                      matchValue,
-                      rule: {
-                        tool: permissionDecision.matchedRule.tool,
-                        pattern: permissionDecision.matchedRule.pattern,
-                      },
-                    }
-                  : { allowedBy: 'system', tool, matchValue },
-              );
-              continue; // Don't yield the permission-request event
+                }
+              } else {
+                void state.serverHandle.client.permission
+                  .reply({
+                    requestID: req.requestId,
+                    directory: state.cwd,
+                    reply: 'once',
+                  })
+                  .then(
+                    (result) =>
+                      this.assertSuccessfulSdkResponse(
+                        result,
+                        'auto-allow permission',
+                      ),
+                    (error) => {
+                      throw error;
+                    },
+                  )
+                  .catch((error) => {
+                    dbg.agent(
+                      'Error auto-allowing OpenCode permission %s: %O',
+                      req.requestId,
+                      error,
+                    );
+                  });
+              }
+              if (replySucceeded) {
+                (state.normalizationCtx.pendingToolPermissionDecisions ??=
+                  []).push(
+                  permissionDecision.matchedRule
+                    ? {
+                        allowedBy: 'system',
+                        tool,
+                        matchValue,
+                        rule: {
+                          tool: permissionDecision.matchedRule.tool,
+                          pattern: permissionDecision.matchedRule.pattern,
+                        },
+                      }
+                    : { allowedBy: 'system', tool, matchValue },
+                );
+                continue; // Don't yield the permission-request event
+              }
             }
 
             if (action === 'deny') {
@@ -1171,31 +1227,52 @@ export class OpenCodeBackend implements AgentBackend {
                 'Auto-denying %s (pattern match)',
                 req.toolName,
               );
-              state.serverHandle.client.permission
-                .reply({
+              if (tool === 'external_directory') {
+                const result = await state.serverHandle.client.permission.reply({
                   requestID: req.requestId,
                   directory: state.cwd,
                   reply: 'reject',
-                })
-                .catch((error) => {
+                });
+                this.assertSuccessfulSdkResponse(
+                  result,
+                  'auto-deny permission',
+                );
+              } else {
+                void state.serverHandle.client.permission
+                  .reply({
+                    requestID: req.requestId,
+                    directory: state.cwd,
+                    reply: 'reject',
+                  })
+                  .then((result) =>
+                    this.assertSuccessfulSdkResponse(
+                      result,
+                      'auto-deny permission',
+                    ),
+                  )
+                  .catch((error) => {
                   dbg.agent(
                     'Error auto-denying OpenCode permission %s: %O',
                     req.requestId,
                     error,
                   );
                 });
+              }
               continue; // Don't yield the permission-request event
             }
 
             state.pendingPermissions.set(req.requestId, {
-              permission: {
-                id: req.requestId,
-                sessionID: sessionId,
-                permission: req.toolName,
-                patterns: [],
-                metadata: req.input,
-                always: [],
-              } as OcPermission,
+              permission:
+                ocEvent.type === 'permission.asked'
+                  ? (ocEvent.properties as OcPermission)
+                  : ({
+                      id: req.requestId,
+                      sessionID: sessionId,
+                      permission: req.toolName,
+                      patterns: [],
+                      metadata: req.input,
+                      always: [],
+                    } as OcPermission),
               resolve: () => {},
             });
           }
@@ -1325,6 +1402,20 @@ export class OpenCodeBackend implements AgentBackend {
 
   private disposeActivityWatchdog(state: OpenCodeSessionState): void {
     this.pauseActivityWatchdog(state);
+  }
+
+  private assertSuccessfulSdkResponse(
+    result: unknown,
+    operation: string,
+  ): void {
+    if (
+      result &&
+      typeof result === 'object' &&
+      'error' in result &&
+      result.error
+    ) {
+      throw new Error(`${operation}: ${this.formatRequestError(result.error)}`);
+    }
   }
 
   private formatRequestError(error: unknown): string {

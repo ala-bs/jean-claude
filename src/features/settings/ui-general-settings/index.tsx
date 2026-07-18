@@ -86,10 +86,10 @@ import {
 } from '@/hooks/use-claude-projects-cleanup';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { Button } from '@/common/ui/button';
-import { PreferenceMemoryDashboard } from '@/features/settings/ui-preference-memory-dashboard';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
+import { PreferenceMemoryDashboard } from '@/features/settings/ui-preference-memory-dashboard';
 import { PromptPrefaceList } from '@/features/settings/ui-prompt-preface-list';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';

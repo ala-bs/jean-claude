@@ -1,13 +1,13 @@
 import { ChevronDown, ChevronRight, RefreshCw, Sparkles } from 'lucide-react';
-import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import type { PreferenceEvidenceRecord, PreferenceMemoryHistoryEntry } from '@shared/preference-memory-types';
-import { Button } from '@/common/ui/button';
-import { Select } from '@/common/ui/select';
-import { MarkdownContent } from '@/features/agent/ui-markdown-content';
-import { useActiveProjects } from '@/hooks/use-projects';
 import { api } from '@/lib/api';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button } from '@/common/ui/button';
+import { MarkdownContent } from '@/features/agent/ui-markdown-content';
+import { Select } from '@/common/ui/select';
+import { useActiveProjects } from '@/hooks/use-projects';
+import { useState } from 'react';
 
 function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : 'Never';

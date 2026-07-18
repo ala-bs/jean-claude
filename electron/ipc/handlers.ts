@@ -311,6 +311,11 @@ import {
   fetchPrReviewSourceBranch,
 } from '../services/pr-review-task-service';
 import {
+  consolidatePreferenceMemoryForProject,
+  getPreferenceMemoryDashboard,
+  recordPreferenceEvidence,
+} from '../services/preference-memory-service';
+import {
   createSkill,
   deleteSkill,
   disableSkill,
@@ -345,6 +350,10 @@ import {
   saveOpenAiBaseImage,
   setOpenAiBaseImageSelection,
 } from '../services/ai-generation-settings-service';
+import {
+  mutateTaskSessionRules,
+  withTaskSessionRulesLock,
+} from '../services/task-session-rules-service';
 import {
   NewProject,
   NewProvider,
@@ -386,11 +395,6 @@ import { ProjectCommandRepository } from '../database/repositories/project-comma
 import { projectFileIndexService } from '../services/project-file-index-service';
 import { ProjectMcpOverrideRepository } from '../database/repositories/project-mcp-overrides';
 import { ProjectRunConfigRepository } from '../database/repositories/project-run-config';
-import {
-  consolidatePreferenceMemoryForProject,
-  getPreferenceMemoryDashboard,
-  recordPreferenceEvidence,
-} from '../services/preference-memory-service';
 import { regenerateProjectSummary } from '../services/project-summary-generation-service';
 import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import { runCommandService } from '../services/run-command-service';
@@ -1710,9 +1714,12 @@ export function registerIpcHandlers() {
   );
   ipcMain.handle('tasks:update', async (_, id: string, data: UpdateTask) => {
     if (data.sessionRules !== undefined) {
-      const task = await TaskRepository.findById(id);
-      if (!task) throw new Error(`Task ${id} not found`);
-      ensureSessionRulesCanBeModified(task);
+      return withTaskSessionRulesLock(id, async () => {
+        const task = await TaskRepository.findById(id);
+        if (!task) throw new Error(`Task ${id} not found`);
+        ensureSessionRulesCanBeModified(task);
+        return updateTaskAndEmit(id, data);
+      });
     }
     return updateTaskAndEmit(id, data);
   });
@@ -2031,47 +2038,37 @@ export function registerIpcHandlers() {
       input: Record<string, unknown>,
     ) => {
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
-
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error(`Task ${taskId} not found`);
-      ensureSessionRulesCanBeModified(task);
-      const current: PermissionScope = task?.sessionRules ?? {};
-      const updated: PermissionScope = { ...current };
-      updated[tool] = buildToolPermissionConfig({
-        existing: updated[tool],
-        matchValue,
+      return mutateTaskSessionRules(taskId, (rules, task) => {
+        ensureSessionRulesCanBeModified(task);
+        rules[tool] = buildToolPermissionConfig({
+          existing: rules[tool],
+          matchValue,
+        });
+        return rules;
       });
-
-      return updateTaskAndEmit(taskId, { sessionRules: updated });
     },
   );
   ipcMain.handle(
     'tasks:removeSessionAllowedTool',
-    async (_, taskId: string, toolName: string, pattern?: string) => {
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error(`Task ${taskId} not found`);
-      ensureSessionRulesCanBeModified(task);
-      const current: PermissionScope = { ...(task?.sessionRules ?? {}) };
-
-      if (pattern) {
-        const existing = current[toolName];
-        if (typeof existing === 'object' && existing !== null) {
-          const updatedPatterns = {
-            ...(existing as Record<string, 'allow'>),
-          };
-          delete updatedPatterns[pattern];
-          if (Object.keys(updatedPatterns).length > 0) {
-            current[toolName] = updatedPatterns;
-          } else {
-            delete current[toolName];
+    (_, taskId: string, toolName: string, pattern?: string) =>
+      mutateTaskSessionRules(taskId, (rules, task) => {
+        ensureSessionRulesCanBeModified(task);
+        if (pattern) {
+          const existing = rules[toolName];
+          if (typeof existing === 'object' && existing !== null) {
+            const updatedPatterns = { ...existing };
+            delete updatedPatterns[pattern];
+            if (Object.keys(updatedPatterns).length > 0) {
+              rules[toolName] = updatedPatterns;
+            } else {
+              delete rules[toolName];
+            }
           }
+        } else {
+          delete rules[toolName];
         }
-      } else {
-        delete current[toolName];
-      }
-
-      return updateTaskAndEmit(taskId, { sessionRules: current });
-    },
+        return rules;
+      }),
   );
 
   ipcMain.handle(
@@ -2093,12 +2090,14 @@ export function registerIpcHandlers() {
 
       // Also add to session rules
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      const current: PermissionScope = { ...(task.sessionRules ?? {}) };
-      current[tool] = buildToolPermissionConfig({
-        existing: current[tool],
-        matchValue,
+      return mutateTaskSessionRules(taskId, (rules, latestTask) => {
+        ensureSessionRulesCanBeModified(latestTask);
+        rules[tool] = buildToolPermissionConfig({
+          existing: rules[tool],
+          matchValue,
+        });
+        return rules;
       });
-      return updateTaskAndEmit(taskId, { sessionRules: current });
     },
   );
 
@@ -2121,12 +2120,14 @@ export function registerIpcHandlers() {
 
       // Also add to session rules
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      const current: PermissionScope = { ...(task.sessionRules ?? {}) };
-      current[tool] = buildToolPermissionConfig({
-        existing: current[tool],
-        matchValue,
+      return mutateTaskSessionRules(taskId, (rules, latestTask) => {
+        ensureSessionRulesCanBeModified(latestTask);
+        rules[tool] = buildToolPermissionConfig({
+          existing: rules[tool],
+          matchValue,
+        });
+        return rules;
       });
-      return updateTaskAndEmit(taskId, { sessionRules: current });
     },
   );
 
@@ -2372,16 +2373,15 @@ export function registerIpcHandlers() {
       }
 
       // Also add to session rules for immediate effect
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error(`Task ${taskId} not found`);
-      ensureSessionRulesCanBeModified(task);
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      const current: PermissionScope = { ...(task.sessionRules ?? {}) };
-      current[tool] = buildToolPermissionConfig({
-        existing: current[tool],
-        matchValue,
+      return mutateTaskSessionRules(taskId, (rules, task) => {
+        ensureSessionRulesCanBeModified(task);
+        rules[tool] = buildToolPermissionConfig({
+          existing: rules[tool],
+          matchValue,
+        });
+        return rules;
       });
-      return updateTaskAndEmit(taskId, { sessionRules: current });
     },
   );
 

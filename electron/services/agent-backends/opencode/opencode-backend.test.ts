@@ -1697,7 +1697,7 @@ describe('OpenCodeBackend event stream', () => {
         abort: vi.fn(async () => ({ data: true })),
         promptAsync: vi.fn(async () => ({ data: undefined })),
       },
-      permission: { reply: vi.fn(() => new Promise(() => {})) },
+      permission: { reply: vi.fn(async () => ({ data: true })) },
     };
     const backend = new OpenCodeBackend({
       taskId: 'task-1',
@@ -1754,6 +1754,214 @@ describe('OpenCodeBackend event stream', () => {
     expect(state.pendingQuestions).toEqual(new Set(['question-2']));
     expect(state.activityWatchdog.deadline).toBeNull();
     expect(state.activityWatchdog.timer).toBeNull();
+  });
+
+  it('keeps a permission pending when the OpenCode reply fails', async () => {
+    const client = {
+      permission: {
+        reply: vi.fn(async () => {
+          throw new Error('reply failed');
+        }),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.pendingPermissions.set('permission-1', {
+      permission: {
+        id: 'permission-1',
+        sessionID: 'session-1',
+        permission: 'external_directory',
+        patterns: ['/safe/repo/*'],
+        metadata: {},
+        always: ['/safe/repo/*'],
+      },
+      resolve: vi.fn(),
+    });
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    await expect(
+      backend.respondToPermission('session-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: '/safe',
+      }),
+    ).rejects.toThrow('reply failed');
+    expect(state.pendingPermissions.has('permission-1')).toBe(true);
+    expect(state.permissionRules).toEqual([]);
+  });
+
+  it('keeps a permission pending when OpenCode returns an SDK error result', async () => {
+    const client = {
+      permission: {
+        reply: vi.fn(async () => ({ error: { message: 'reply failed' } })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.pendingPermissions.set('permission-1', {
+      permission: {
+        id: 'permission-1',
+        sessionID: 'session-1',
+        permission: 'external_directory',
+        patterns: ['/safe/repo/*'],
+        metadata: {},
+        always: ['/safe/repo/*'],
+      },
+      resolve: vi.fn(),
+    });
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    await expect(
+      backend.respondToPermission('session-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: '/safe',
+      }),
+    ).rejects.toThrow('reply failed');
+    expect(state.pendingPermissions.has('permission-1')).toBe(true);
+    expect(state.permissionRules).toEqual([]);
+  });
+
+  it('does not auto-allow a concurrent request from a provisional directory rule', async () => {
+    async function* concurrentPermissionStream() {
+      yield {
+        type: 'permission.asked',
+        properties: {
+          id: 'permission-2',
+          sessionID: 'session-1',
+          permission: 'external_directory',
+          patterns: ['/safe/other/*'],
+          metadata: {
+            filepath: '/safe/other/file.ts',
+            parentDir: '/safe/other',
+          },
+          always: ['/safe/other/*'],
+        },
+      };
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'session-1', error: 'after permission' },
+      };
+    }
+
+    let resolveFirstReply!: (value: { error: { message: string } }) => void;
+    const firstReply = new Promise<{ error: { message: string } }>((resolve) => {
+      resolveFirstReply = resolve;
+    });
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: concurrentPermissionStream() })),
+      },
+      session: { promptAsync: vi.fn(async () => ({ data: undefined })) },
+      permission: {
+        reply: vi
+          .fn()
+          .mockImplementationOnce(() => firstReply)
+          .mockResolvedValue({ data: true }),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.pendingPermissions.set('permission-1', {
+      permission: {
+        id: 'permission-1',
+        sessionID: 'session-1',
+        permission: 'external_directory',
+        patterns: ['/safe/repo/*'],
+        metadata: {},
+        always: ['/safe/repo/*'],
+      },
+      resolve: vi.fn(),
+    });
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    const firstResponse = backend.respondToPermission(
+      'session-1',
+      'permission-1',
+      {
+        behavior: 'allow',
+        allowedDirectory: '/safe',
+      },
+    );
+    expect(client.permission.reply).toHaveBeenCalledTimes(1);
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+    resolveFirstReply({ error: { message: 'reply failed' } });
+    await expect(firstResponse).rejects.toThrow('reply failed');
+
+    expect(client.permission.reply).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'permission-request',
+          request: expect.objectContaining({ requestId: 'permission-2' }),
+        }),
+      ]),
+    );
+  });
+
+  it('adds selected parent to current OpenCode session after reply succeeds', async () => {
+    const client = {
+      permission: { reply: vi.fn(async () => ({ data: true })) },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    const resolve = vi.fn();
+    state.pendingPermissions.set('permission-1', {
+      permission: {
+        id: 'permission-1',
+        sessionID: 'session-1',
+        permission: 'external_directory',
+        patterns: ['/safe/repo/*'],
+        metadata: {},
+        always: ['/safe/repo/*'],
+      },
+      resolve,
+    });
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    await backend.respondToPermission('session-1', 'permission-1', {
+      behavior: 'allow',
+      allowMode: 'session',
+      allowedDirectory: '/safe',
+    });
+
+    expect(client.permission.reply).toHaveBeenCalledWith({
+      requestID: 'permission-1',
+      directory: '/tmp/project',
+      reply: 'once',
+    });
+    expect(state.permissionRules).toContainEqual({
+      tool: 'external_directory',
+      pattern: '/safe/**',
+      action: 'allow',
+    });
+    expect(resolve).toHaveBeenCalled();
+    expect(state.pendingPermissions.has('permission-1')).toBe(false);
   });
 
   it('stops a silent session even when the abort request never resolves', async () => {
@@ -1997,6 +2205,190 @@ describe('OpenCodeBackend event stream', () => {
       });
     },
   );
+
+  it('yields an external-directory request when automatic reply fails', async () => {
+    async function* permissionThenErrorStream() {
+      yield {
+        type: 'permission.asked',
+        properties: {
+          id: 'permission-1',
+          sessionID: 'session-1',
+          permission: 'external_directory',
+          patterns: ['/safe/repo/*'],
+          metadata: {
+            filepath: '/safe/repo/file.ts',
+            parentDir: '/safe/repo',
+          },
+          always: ['/safe/repo/*'],
+        },
+      };
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'session-1', error: 'after permission' },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: permissionThenErrorStream() })),
+      },
+      session: { promptAsync: vi.fn(async () => ({ data: undefined })) },
+      permission: {
+        reply: vi.fn(async () => ({ error: { message: 'reply failed' } })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.permissionRules = [
+      {
+        action: 'allow',
+        tool: 'external_directory',
+        pattern: '/safe/**',
+      },
+    ];
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'permission-request',
+          request: expect.objectContaining({ requestId: 'permission-1' }),
+        }),
+      ]),
+    );
+  });
+
+  it('requires every external-directory pattern to match before auto-allowing', async () => {
+    async function* permissionThenErrorStream() {
+      yield {
+        type: 'permission.asked',
+        properties: {
+          id: 'permission-1',
+          sessionID: 'session-1',
+          permission: 'external_directory',
+          patterns: ['/safe/repo/*', '/outside/*'],
+          metadata: {
+            filepath: '/safe/repo/file.ts',
+            parentDir: '/safe/repo',
+          },
+          always: ['/safe/repo/*', '/outside/*'],
+        },
+      };
+      yield {
+        type: 'session.error',
+        properties: { sessionID: 'session-1', error: 'after permission' },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: permissionThenErrorStream() })),
+      },
+      session: { promptAsync: vi.fn(async () => ({ data: undefined })) },
+      permission: { reply: vi.fn(async () => ({ data: true })) },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.permissionRules = [
+      {
+        action: 'allow',
+        tool: 'external_directory',
+        pattern: '/safe/**',
+      },
+    ];
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(client.permission.reply).not.toHaveBeenCalled();
+    const permissionEvent = events.find(
+      (event) => event.type === 'permission-request',
+    );
+    expect(
+      permissionEvent?.type === 'permission-request'
+        ? permissionEvent.request.directoryAccess
+        : null,
+    ).toBeUndefined();
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'permission-request',
+          request: expect.objectContaining({ requestId: 'permission-1' }),
+        }),
+      ]),
+    );
+  });
+
+  it('surfaces an external-directory auto-deny reply failure', async () => {
+    async function* permissionStream() {
+      yield {
+        type: 'permission.asked',
+        properties: {
+          id: 'permission-1',
+          sessionID: 'session-1',
+          permission: 'external_directory',
+          patterns: ['/safe/repo/*'],
+          metadata: {
+            filepath: '/safe/repo/file.ts',
+            parentDir: '/safe/repo',
+          },
+          always: ['/safe/repo/*'],
+        },
+      };
+    }
+
+    const client = {
+      event: {
+        subscribe: vi.fn(async () => ({ stream: permissionStream() })),
+      },
+      session: { promptAsync: vi.fn(async () => ({ data: undefined })) },
+      permission: {
+        reply: vi.fn(async () => ({ error: { message: 'deny failed' } })),
+      },
+    };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.permissionRules = [
+      {
+        action: 'deny',
+        tool: 'external_directory',
+        pattern: '/safe/**',
+      },
+    ];
+
+    const events = await collectEvents(
+      createEventStreamForTest(backend, client, state),
+    );
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'error',
+          error: expect.stringContaining('deny failed'),
+        }),
+        expect.objectContaining({
+          type: 'complete',
+          result: expect.objectContaining({ isError: true }),
+        }),
+      ]),
+    );
+  });
 
   it('reports a session error that arrives during idle grace', async () => {
     vi.useFakeTimers();

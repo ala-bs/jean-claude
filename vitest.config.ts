@@ -21,6 +21,7 @@ export default defineConfig({
       'src/features/agent/ui-diff-view/**/*.test.ts',
       'src/features/agent/ui-markdown-content/**/*.test.ts',
       'src/features/agent/ui-message-stream/**/*.test.ts',
+      'src/features/agent/ui-permission-bar/**/*.test.tsx',
       'src/features/agent/ui-question-options/**/*.test.tsx',
       'src/features/agent/task-message-manager/**/*.test.tsx',
       'src/features/agent/ui-worktree-actions/**/*.test.ts',

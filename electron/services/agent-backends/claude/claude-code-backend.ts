@@ -12,7 +12,8 @@
 // generator is blocked waiting for the canUseTool promise to resolve.
 
 import {
-  PermissionResult,
+  type CanUseTool,
+  type PermissionResult,
   query,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -35,6 +36,11 @@ import type {
 import type { AgentMessage, AgentQuestion } from '@shared/agent-types';
 import type { InteractionMode } from '@shared/types';
 
+import {
+  buildDirectoryAccess,
+  getAllowedDirectories,
+  toDirectoryPermissionPattern,
+} from '../../directory-access';
 import {
   buildPromptMarkdown,
   getPromptImages,
@@ -236,6 +242,11 @@ export class ClaudeCodeBackend implements AgentBackend {
     if (response.toolsToAllow) {
       session.sessionAllowedTools.push(...response.toolsToAllow);
     }
+    if (response.allowedDirectory) {
+      session.sessionAllowedTools.push(
+        `external_directory:${toDirectoryPermissionPattern(response.allowedDirectory)}`,
+      );
+    }
 
     session.pendingResolvers.delete(requestId);
 
@@ -243,6 +254,17 @@ export class ClaudeCodeBackend implements AgentBackend {
       resolver.resolve({
         behavior: 'allow',
         updatedInput: response.updatedInput,
+        ...(response.allowedDirectory
+          ? {
+              updatedPermissions: [
+                {
+                  type: 'addDirectories' as const,
+                  directories: [response.allowedDirectory],
+                  destination: 'session' as const,
+                },
+              ],
+            }
+          : {}),
       });
     } else {
       resolver.resolve({
@@ -336,13 +358,21 @@ export class ClaudeCodeBackend implements AgentBackend {
       canUseTool: async (
         toolName: string,
         input: Record<string, unknown>,
+        options: Parameters<CanUseTool>[2],
       ): Promise<PermissionResult> => {
-        return this.handleToolRequest(session, toolName, input);
+        return this.handleToolRequest(session, toolName, input, options);
       },
       permissionMode: sdkPermissionMode,
       settingSources: ['user', 'project', 'local'],
       abortController: session.abortController,
     };
+
+    const additionalDirectories = getAllowedDirectories(
+      flattenScope(config.persistedSessionRules ?? {}),
+    );
+    if (additionalDirectories.length > 0) {
+      queryOptions.additionalDirectories = additionalDirectories;
+    }
 
     if (config.model && config.model !== 'default') {
       queryOptions.model = config.model;
@@ -514,6 +544,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     session: ClaudeSession,
     toolName: string,
     input: Record<string, unknown>,
+    options: Parameters<CanUseTool>[2],
   ): Promise<PermissionResult> {
     dbg.agentPermission('Tool request: %s', toolName, input);
 
@@ -525,7 +556,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       matchValue,
     );
     const action = permissionDecision.action;
-    if (action === 'allow') {
+    if (action === 'allow' && !options.blockedPath) {
       dbg.agentPermission('Tool %s auto-allowed by permission rules', toolName);
       (session.normalizationCtx.pendingToolPermissionDecisions ??= []).push(
         permissionDecision.matchedRule
@@ -554,8 +585,9 @@ export class ClaudeCodeBackend implements AgentBackend {
     // Bare tool name (e.g., "read") acts as a wildcard — matches any "read:*" request
     const canonicalPermission = matchValue ? `${tool}:${matchValue}` : tool;
     if (
-      session.sessionAllowedTools.includes(canonicalPermission) ||
-      (matchValue && session.sessionAllowedTools.includes(tool))
+      !options.blockedPath &&
+      (session.sessionAllowedTools.includes(canonicalPermission) ||
+        (matchValue && session.sessionAllowedTools.includes(tool)))
     ) {
       dbg.agentPermission('Tool %s is session-allowed', toolName);
       (session.normalizationCtx.pendingToolPermissionDecisions ??= []).push({
@@ -603,6 +635,20 @@ export class ClaudeCodeBackend implements AgentBackend {
         });
       } else {
         const sessionAllowButton = this.getSessionAllowButton(toolName, input);
+        const directoryAccess = options.blockedPath
+          ? options.suggestions
+              ?.filter(
+                (suggestion) => suggestion.type === 'addDirectories',
+              )
+              .flatMap((suggestion) => suggestion.directories)
+              .map((requestedDirectory) =>
+                buildDirectoryAccess({
+                  requestedPath: options.blockedPath!,
+                  requestedDirectory,
+                }),
+              )
+              .find((access) => access !== undefined)
+          : undefined;
         session.eventChannel.push({
           type: 'permission-request',
           request: {
@@ -610,6 +656,7 @@ export class ClaudeCodeBackend implements AgentBackend {
             toolName,
             input,
             sessionAllowButton,
+            directoryAccess,
           } satisfies NormalizedPermissionRequest,
         });
       }
