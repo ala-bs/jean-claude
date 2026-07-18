@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, RefObject } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { createRafScheduler } from '@/lib/raf-scheduler';
 

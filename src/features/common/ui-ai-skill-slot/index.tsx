@@ -328,16 +328,18 @@ export function SlotDetail({
                 </p>
               </div>
               <div className="shrink-0">
-                 <ThinkingSelector
-                   value={localThinkingEffort}
-                   onChange={(thinkingEffort) => {
+                {!localPresetId && (
+                  <ThinkingSelector
+                    value={localThinkingEffort}
+                    onChange={(thinkingEffort) => {
                      if (thinkingEffort !== localThinkingEffort) {
                        hasLocalChangesRef.current = true;
                      }
-                     setLocalThinkingEffort(thinkingEffort);
-                   }}
-                  size="sm"
-                />
+                      setLocalThinkingEffort(thinkingEffort);
+                    }}
+                    size="sm"
+                  />
+                )}
               </div>
             </div>
 

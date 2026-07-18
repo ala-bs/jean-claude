@@ -1949,7 +1949,7 @@ export function NewTaskOverlay({
                   />
                 )}
 
-                {!isNoteMode && currentBackend && (
+                {!isNoteMode && currentBackend && !currentBackendPresetId && (
                   <ThinkingSelector
                     value={currentThinkingEffort}
                     onChange={(thinkingEffort) => {

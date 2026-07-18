@@ -787,9 +787,14 @@ export interface BackendModelPreset {
   backend: AgentBackendType;
   model: ModelPreference;
   thinkingEffort?: ThinkingEffort | null;
+  showInQuickSwitcher?: boolean;
 }
 
 export type BackendModelPresetsSetting = BackendModelPreset[];
+
+export interface ModelQuickSwitcherSetting {
+  enabled: boolean;
+}
 
 export type TaskNotificationEvent =
   | 'completed'
@@ -1146,9 +1151,21 @@ function isBackendModelPresetsSetting(
       VALID_BACKENDS.includes(obj.backend as AgentBackendType) &&
       (obj.thinkingEffort === undefined ||
         obj.thinkingEffort === null ||
-        VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort))
+        VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort)) &&
+      (obj.showInQuickSwitcher === undefined ||
+        typeof obj.showInQuickSwitcher === 'boolean')
     );
   });
+}
+
+function isModelQuickSwitcherSetting(
+  v: unknown,
+): v is ModelQuickSwitcherSetting {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    typeof (v as Record<string, unknown>).enabled === 'boolean'
+  );
 }
 
 const VALID_TASK_NOTIFICATION_EVENTS: TaskNotificationEvent[] = [
@@ -1434,6 +1451,10 @@ export const SETTINGS_DEFINITIONS = {
   backendModelPresets: {
     defaultValue: [] as BackendModelPresetsSetting,
     validate: isBackendModelPresetsSetting,
+  },
+  modelQuickSwitcher: {
+    defaultValue: { enabled: false } as ModelQuickSwitcherSetting,
+    validate: isModelQuickSwitcherSetting,
   },
   taskEventNotifications: {
     defaultValue: {

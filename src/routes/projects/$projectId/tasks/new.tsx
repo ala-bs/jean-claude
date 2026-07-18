@@ -554,15 +554,17 @@ function NewTask() {
                     });
                   }}
                 />
-                <ThinkingSelector
-                  value={effectiveThinkingEffort}
-                  options={thinkingOptions}
-                  onChange={(nextThinkingEffort) => {
-                    markUserTouchedSelection();
-                    setDraft({ thinkingEffort: nextThinkingEffort });
-                  }}
-                  disabled={thinkingOptions.length <= 1}
-                />
+                {!effectiveBackendModelPresetId && (
+                  <ThinkingSelector
+                    value={effectiveThinkingEffort}
+                    options={thinkingOptions}
+                    onChange={(nextThinkingEffort) => {
+                      markUserTouchedSelection();
+                      setDraft({ thinkingEffort: nextThinkingEffort });
+                    }}
+                    disabled={thinkingOptions.length <= 1}
+                  />
+                )}
                 <RateLimitSwapPreview
                   requestedBackend={effectiveAgentBackend}
                   model={effectiveModelPreference}

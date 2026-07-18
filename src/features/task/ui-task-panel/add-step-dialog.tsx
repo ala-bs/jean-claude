@@ -926,17 +926,19 @@ export function AddStepDialog({
                 );
               }}
             />
-            <ThinkingSelector
-              value={normalizedThinkingEffort}
-              onChange={(nextThinkingEffort) => {
-                markUserTouchedSelection();
-                setThinkingEffort(nextThinkingEffort);
-              }}
-              options={thinkingOptions}
-              disabled={thinkingOptions.length <= 1}
-              side="top"
-              layer={layer}
-            />
+            {!backendModelPresetId && (
+              <ThinkingSelector
+                value={normalizedThinkingEffort}
+                onChange={(nextThinkingEffort) => {
+                  markUserTouchedSelection();
+                  setThinkingEffort(nextThinkingEffort);
+                }}
+                options={thinkingOptions}
+                disabled={thinkingOptions.length <= 1}
+                side="top"
+                layer={layer}
+              />
+            )}
             {presetType !== 'review-changes' && (
               <RateLimitSwapPreview
                 requestedBackend={backend}

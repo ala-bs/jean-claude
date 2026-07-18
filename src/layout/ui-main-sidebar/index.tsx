@@ -1,10 +1,10 @@
 import { useCurrentVisibleProject, useSidebarWidth } from '@/stores/navigation';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
+import { createRafScheduler } from '@/lib/raf-scheduler';
 import { FeedList } from '@/features/feed/ui-feed-list';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { useEffect, useRef, useState } from 'react';
 import { TaskList } from '@/features/task/ui-task-list';
-import { createRafScheduler } from '@/lib/raf-scheduler';
 
 export const MAIN_SIDEBAR_HEADER_HEIGHT = 48;
 
