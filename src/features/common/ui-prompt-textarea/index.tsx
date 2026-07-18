@@ -36,15 +36,15 @@ import Fuse from 'fuse.js';
 
 
 import {
-  type FlatProjectFeature,
-  flattenProjectFeatures,
-  getFeatureReferenceText,
-  getReferencedFeatures,
-} from '@/lib/prompt-feature-context';
-import {
   getFilePathSuggestions,
   useProjectFilePaths,
 } from '@/hooks/use-project-file-paths';
+import {
+  getReferencedFeatures,
+  type PreparedProjectFeature,
+  type PreparedProjectFeatures,
+  prepareProjectFeatureReferences,
+} from '@/lib/prompt-feature-context';
 import {
   MAX_FILES,
   processAttachmentFile,
@@ -201,7 +201,7 @@ type DropdownItem =
   | { type: 'skill'; skill: Skill }
   | { type: 'file'; filePath: string }
   | { type: 'snippet'; snippet: PromptSnippet }
-  | { type: 'feature'; feature: FlatProjectFeature };
+  | { type: 'feature'; feature: PreparedProjectFeature };
 
 type RankedDropdownItem = DropdownItem & {
   matchScore: number | null;
@@ -304,6 +304,10 @@ export interface PromptTextareaProps extends Omit<
   enableFilePathAutocomplete?: boolean;
   /** Project feature map for #feature suggestions */
   featureMap?: ProjectFeatureMap | null;
+  /** Prepared feature references when parent shares feature matching work. */
+  preparedFeatures?: PreparedProjectFeatures;
+  /** Referenced features when parent already matched current value. */
+  referencedFeatures?: PreparedProjectFeature[];
   /** Attached images */
   images?: PromptImagePart[];
   /** Called when user attaches an image (paste, drop, or file picker) */
@@ -345,6 +349,8 @@ export const PromptTextarea = forwardRef<
     projectRoot = null,
     enableFilePathAutocomplete = false,
     featureMap = null,
+    preparedFeatures: providedPreparedFeatures,
+    referencedFeatures: providedReferencedFeatures,
     images,
     onImageAttach,
     onImageRemove,
@@ -398,10 +404,10 @@ export const PromptTextarea = forwardRef<
   );
   const activeFeatureToken = useMemo(
     () =>
-      featureMap
+      featureMap || providedPreparedFeatures
         ? getActiveFeatureToken({ text: value, cursorPosition })
         : null,
-    [featureMap, value, cursorPosition],
+    [featureMap, providedPreparedFeatures, value, cursorPosition],
   );
   const activeSlashToken = useMemo(
     () => getActiveSlashToken({ text: value, cursorPosition }),
@@ -464,30 +470,34 @@ export const PromptTextarea = forwardRef<
     });
   }, [showMentionDropdown, activeMentionToken, filePaths]);
 
-  const flatFeatures = useMemo(
-    () => flattenProjectFeatures(featureMap?.features),
-    [featureMap],
+  const preparedFeatures = useMemo(
+    () =>
+      providedPreparedFeatures ??
+      prepareProjectFeatureReferences(featureMap),
+    [featureMap, providedPreparedFeatures],
   );
 
   const referencedFeatures = useMemo(
-    () => getReferencedFeatures({ text: value, featureMap }),
-    [value, featureMap],
+    () =>
+      providedReferencedFeatures ??
+      getReferencedFeatures({ text: value, preparedFeatures }),
+    [value, preparedFeatures, providedReferencedFeatures],
   );
 
   const featureSuggestions = useMemo(() => {
     if (!showFeatureDropdown) return [];
 
     if (!featureSearchText.trim()) {
-      return flatFeatures.map((feature) => ({
+      return preparedFeatures.features.map((feature) => ({
         type: 'feature' as const,
         feature,
         matchScore: null,
       }));
     }
 
-    return flatFeatures
+    return preparedFeatures.features
       .map((feature) => {
-        const referenceText = getFeatureReferenceText(feature, flatFeatures);
+        const referenceText = feature.referenceText;
         const nameScore = getOrderedCharacterMatchScore(
           feature.name,
           featureSearchText,
@@ -512,7 +522,7 @@ export const PromptTextarea = forwardRef<
           item,
         ): item is {
           type: 'feature';
-          feature: FlatProjectFeature;
+          feature: PreparedProjectFeature;
           matchScore: number;
         } => item !== null,
       )
@@ -523,7 +533,7 @@ export const PromptTextarea = forwardRef<
         return a.feature.name.localeCompare(b.feature.name);
       })
       .slice(0, 40);
-  }, [flatFeatures, featureSearchText, showFeatureDropdown]);
+  }, [preparedFeatures, featureSearchText, showFeatureDropdown]);
 
   // Inline completion hook — paused when slash dropdown is open
   const {
@@ -760,10 +770,7 @@ export const PromptTextarea = forwardRef<
       } else if (item.type === 'feature') {
         if (!activeFeatureToken) return;
 
-        const mentionValue = `#${getFeatureReferenceText(
-          item.feature,
-          flatFeatures,
-        )}`;
+        const mentionValue = `#${item.feature.referenceText}`;
         const before = value.slice(0, activeFeatureToken.start);
         const after = value.slice(activeFeatureToken.end);
         const needsSpace = after.length === 0 || !/^\s/.test(after);
@@ -822,7 +829,6 @@ export const PromptTextarea = forwardRef<
       activeMentionToken,
       activeFeatureToken,
       activeSlashToken,
-      flatFeatures,
       onChange,
       value,
       snippetVariableContext,
@@ -858,8 +864,6 @@ export const PromptTextarea = forwardRef<
         dismiss();
         return;
       }
-      // Any other key: dismiss current completion (debounce will re-trigger)
-      dismiss();
     }
 
     // Handle dropdown navigation
@@ -900,6 +904,7 @@ export const PromptTextarea = forwardRef<
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
         const newValue = value.slice(0, start) + '\n' + value.slice(end);
+        dismiss();
         onChange(newValue);
         const newCursorPos = start + 1;
         setCursorPosition(newCursorPos);
@@ -908,7 +913,6 @@ export const PromptTextarea = forwardRef<
             textareaRef.current.selectionStart = newCursorPos;
             textareaRef.current.selectionEnd = newCursorPos;
           }
-          adjustHeight();
           syncScrollTop();
         });
       }
@@ -920,6 +924,7 @@ export const PromptTextarea = forwardRef<
       const handled = onEnterKey?.(e);
       if (handled) {
         e.preventDefault();
+        dismiss();
         return;
       }
     }
@@ -964,12 +969,12 @@ export const PromptTextarea = forwardRef<
   }, [adjustHeight, fillAvailableHeight]);
 
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    dismiss();
     onChange(e.target.value);
     const nextCursorPosition = e.target.selectionStart;
     setCursorPosition(nextCursorPosition);
     setCompletionCursorPosition(nextCursorPosition);
     setCompletionTriggerId((id) => id + 1);
-    adjustHeight();
   };
 
   const handleSelect = (e: SyntheticEvent<HTMLTextAreaElement>) => {
@@ -1005,6 +1010,7 @@ export const PromptTextarea = forwardRef<
 
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      dismiss();
       const items = Array.from(e.clipboardData.items);
       const imageItems = items.filter((item) => item.type.startsWith('image/'));
 
@@ -1074,7 +1080,6 @@ export const PromptTextarea = forwardRef<
           nextCursorPosition,
           nextCursorPosition,
         );
-        adjustHeight();
       });
     },
     [
@@ -1086,7 +1091,7 @@ export const PromptTextarea = forwardRef<
       files,
       value,
       onChange,
-      adjustHeight,
+      dismiss,
     ],
   );
 
@@ -1368,7 +1373,7 @@ export const PromptTextarea = forwardRef<
                 <span className="font-mono text-[10px]">
                   {featureSearchText.trim()
                     ? `${featureItems.length} match${featureItems.length === 1 ? '' : 'es'}`
-                    : `${flatFeatures.length} total`}
+                    : `${preparedFeatures.features.length} total`}
                 </span>
               </div>
             )}

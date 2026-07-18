@@ -47,6 +47,9 @@ import {
 import {
   expandFeatureReferencesInPrompt,
   getReferencedFeatures,
+  type PreparedProjectFeature,
+  type PreparedProjectFeatures,
+  prepareProjectFeatureReferences,
 } from '@/lib/prompt-feature-context';
 import {
   getModelsForBackend,
@@ -158,22 +161,19 @@ function projectHasWorkItems(project: Project | null): boolean {
 function FinalPromptPreviewButton({
   prompt,
   projectRoot,
-  featureMap,
+  preparedFeatures,
+  referencedFeatures,
   fileComments,
   files,
 }: {
   prompt: string;
   projectRoot: string | null | undefined;
-  featureMap: ProjectFeatureMap | null | undefined;
+  preparedFeatures: PreparedProjectFeatures;
+  referencedFeatures: PreparedProjectFeature[];
   fileComments: ComposerFileComment[];
   files: PromptFilePart[];
 }) {
   const [isOpen, setIsOpen] = useState(false);
-
-  const referencedFeatures = useMemo(
-    () => getReferencedFeatures({ text: prompt, featureMap }),
-    [prompt, featureMap],
-  );
 
   const fileContextParts = useMemo(
     () => synthesizeFileCommentsPrompt(fileComments, projectRoot ?? undefined),
@@ -186,6 +186,8 @@ function FinalPromptPreviewButton({
   }, [fileContextParts]);
 
   const finalPromptPreview = useMemo(() => {
+    if (!isOpen) return '';
+
     let finalPrompt = prompt;
     if (fileCommentText) {
       finalPrompt = finalPrompt.trim()
@@ -194,11 +196,11 @@ function FinalPromptPreviewButton({
     }
     finalPrompt = expandFeatureReferencesInPrompt({
       text: finalPrompt,
-      featureMap,
+      preparedFeatures,
     });
     finalPrompt += buildAttachedFilesXml(files);
     return finalPrompt;
-  }, [prompt, fileCommentText, featureMap, files]);
+  }, [isOpen, prompt, fileCommentText, preparedFeatures, files]);
 
   const hasGeneratedContext =
     referencedFeatures.length > 0 ||
@@ -329,6 +331,7 @@ function NewTaskPromptInput({
   projectSkills,
   completionEnabled,
   selectedProjectFeatureMap,
+  preparedFeatures,
   images,
   files,
   promptSnippets,
@@ -351,6 +354,7 @@ function NewTaskPromptInput({
   projectSkills: PromptTextareaProps['skills'];
   completionEnabled: boolean;
   selectedProjectFeatureMap: ProjectFeatureMap | null;
+  preparedFeatures: PreparedProjectFeatures;
   images: PromptImagePart[] | undefined;
   files: PromptFilePart[] | undefined;
   promptSnippets: PromptTextareaProps['promptSnippets'];
@@ -370,6 +374,10 @@ function NewTaskPromptInput({
     (state) => state.drafts[draftKey]?.prompt ?? '',
   );
   const setDraft = useNewTaskDraftStore((state) => state.setDraft);
+  const referencedFeatures = useMemo(
+    () => getReferencedFeatures({ text: prompt, preparedFeatures }),
+    [prompt, preparedFeatures],
+  );
 
   const handlePromptChange = useCallback(
     (nextPrompt: string) => {
@@ -401,6 +409,8 @@ function NewTaskPromptInput({
           enableCompletion={completionEnabled}
           projectId={selectedProject?.id}
           featureMap={selectedProjectFeatureMap}
+          preparedFeatures={preparedFeatures}
+          referencedFeatures={referencedFeatures}
           images={images}
           onImageAttach={onImageAttach}
           onImageRemove={onImageRemove}
@@ -418,7 +428,8 @@ function NewTaskPromptInput({
             <FinalPromptPreviewButton
               prompt={prompt}
               projectRoot={selectedProject.path}
-              featureMap={selectedProjectFeatureMap}
+              preparedFeatures={preparedFeatures}
+              referencedFeatures={referencedFeatures}
               fileComments={fileComments}
               files={files ?? []}
             />
@@ -555,6 +566,10 @@ export function NewTaskOverlay({
   const isNoteMode = selectedProjectId === null;
   const { data: selectedProjectFeatureMap = null } =
     useProjectFeatureMap(selectedProjectId);
+  const preparedProjectFeatures = useMemo(
+    () => prepareProjectFeatureReferences(selectedProjectFeatureMap),
+    [selectedProjectFeatureMap],
+  );
 
   // Fetch work items for the selected project (used for navigation)
   const { data: workItems = [] } = useWorkItems({
@@ -1243,7 +1258,7 @@ export function NewTaskOverlay({
       // Append file attachment references to prompt text
       finalPrompt = expandFeatureReferencesInPrompt({
         text: finalPrompt,
-        featureMap: selectedProjectFeatureMap,
+        preparedFeatures: preparedProjectFeatures,
       });
       finalPrompt += buildAttachedFilesXml(draftFiles);
 
@@ -1387,7 +1402,7 @@ export function NewTaskOverlay({
     queryClient,
     searchStep,
     selectedProject,
-    selectedProjectFeatureMap,
+    preparedProjectFeatures,
     selectedProjectId,
     selectedWorkItems,
     snippetVariableContext,
@@ -1759,6 +1774,7 @@ export function NewTaskOverlay({
                 projectSkills={projectSkills}
                 completionEnabled={completionSetting?.enabled ?? false}
                 selectedProjectFeatureMap={selectedProjectFeatureMap}
+                preparedFeatures={preparedProjectFeatures}
                 images={draft?.images}
                 files={draft?.files}
                 promptSnippets={promptSnippets}
