@@ -37,7 +37,13 @@ function renderActions() {
   document.body.appendChild(container);
   root = createRoot(container);
   flushSync(() => {
-    root?.render(<AzureWorkItemActions workItem={workItem} onCreateTask={() => {}} />);
+    root?.render(
+      <AzureWorkItemActions
+        workItem={workItem}
+        onCreateTask={() => {}}
+        onClose={() => {}}
+      />,
+    );
   });
 }
 
@@ -92,5 +98,27 @@ describe('AzureWorkItemActions', () => {
         type: 'error',
       });
     });
+  });
+
+  it('closes work item details', () => {
+    const onClose = vi.fn();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    flushSync(() => {
+      root?.render(
+        <AzureWorkItemActions
+          workItem={workItem}
+          onCreateTask={() => {}}
+          onClose={onClose}
+        />,
+      );
+    });
+
+    document
+      .querySelector<HTMLButtonElement>('[aria-label="Close details pane"]')
+      ?.click();
+
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });
