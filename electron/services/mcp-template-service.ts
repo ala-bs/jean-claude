@@ -60,7 +60,7 @@ git clone https://github.com/oraios/serena
 
 **Tools:**
 - \`run_agent\` — Run a full agent session to complete a task
-- \`ask_question\` — Ask the user questions through the Jean-Claude task UI
+- \`ask_question\` — Ask the user questions through the Jean-Claude task UI. Put all user-facing context in \`contextReminder\`, not a preceding message. Format it as well-formed Markdown.
 - \`run_review\` — Run a read-only code review, available only in review task steps
 
 **Safety:**

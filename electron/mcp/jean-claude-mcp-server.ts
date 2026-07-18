@@ -432,7 +432,7 @@ async function main(): Promise<void> {
   // --- Tool: ask_question ---
   server.tool(
     'ask_question',
-    'Ask the user one or more questions through the Jean-Claude task UI and return their answers as plain text. If the questions need preceding explanation, design, constraints, or recap, include it in contextReminder instead of sending a separate assistant message because prompt grouping may hide that message. stepId is optional when Jean-Claude can infer a single active route.',
+    'Ask the user one or more questions through the Jean-Claude task UI and return their answers as plain text. Before calling, put all context the user needs in contextReminder: goal, relevant findings, constraints, tradeoffs, and what decision is needed. Do not rely on a preceding assistant message because prompt grouping may hide it. contextReminder is shown directly to the user and MUST be well-formatted Markdown. Keep it concise and do not repeat the questions. stepId is optional when Jean-Claude can infer a single active route.',
     ASK_QUESTION_TOOL_SCHEMA,
     async (input) => {
       try {
