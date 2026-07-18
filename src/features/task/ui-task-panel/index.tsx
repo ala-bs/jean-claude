@@ -2232,6 +2232,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   {/* Picker */}
                   <div className="min-h-0 flex-1">
                     <WorkItemPicker
+                      appProjectId={project.id}
                       providerId={project.workItemProviderId!}
                       projectId={project.workItemProjectId!}
                       projectName={project.workItemProjectName!}

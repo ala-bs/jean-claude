@@ -1,4 +1,11 @@
-import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import type {
   AiSkillSlotConfig,
@@ -65,6 +72,12 @@ export const SLOT_DEFINITIONS: {
     description:
       'Map project features for selectable context in the new task overlay',
   },
+  {
+    key: 'work-item-summary',
+    label: 'Work Item Summary',
+    description:
+      'Summarize Azure work item requirements and comment history for faster review',
+  },
 ];
 
 export function SlotDetail({
@@ -128,9 +141,18 @@ export function SlotDetail({
   const [localSkillName, setLocalSkillName] = useState<string | null>(
     effectiveConfigSkillName,
   );
+  const hasLocalChangesRef = useRef(false);
 
   // Sync local state when external config changes (e.g., query refetch)
   useEffect(() => {
+    const matchesLocalState =
+      localBackend === effectiveConfigBackend &&
+      localModel === effectiveConfigModel &&
+      localThinkingEffort === (config?.thinkingEffort ?? 'default') &&
+      localSkillName === effectiveConfigSkillName;
+    if (hasLocalChangesRef.current && !matchesLocalState) return;
+
+    hasLocalChangesRef.current = false;
     startTransition(() => setLocalBackend(effectiveConfigBackend));
     startTransition(() => setLocalModel(effectiveConfigModel));
     startTransition(() => setLocalThinkingEffort(config?.thinkingEffort ?? 'default'));
@@ -141,6 +163,10 @@ export function SlotDetail({
     effectiveConfigBackend,
     effectiveConfigModel,
     effectiveConfigSkillName,
+    localBackend,
+    localModel,
+    localSkillName,
+    localThinkingEffort,
   ]);
 
   // Skills for the selected backend (enabled or builtin)
@@ -167,8 +193,22 @@ export function SlotDetail({
         value: s.name,
         label: s.name,
       }));
-    return [{ value: NO_SKILL_VALUE, label: 'None' }, ...builtin, ...other];
-  }, [enabledSkills]);
+    const available = [...builtin, ...other].filter(
+      (option, index, options) =>
+        options.findIndex((candidate) => candidate.value === option.value) ===
+        index,
+    );
+    const previousSelection =
+      localSkillName &&
+      !available.some((option) => option.value === localSkillName)
+        ? [{ value: localSkillName, label: `${localSkillName} (Previously selected)` }]
+        : [];
+    return [
+      { value: NO_SKILL_VALUE, label: 'None' },
+      ...previousSelection,
+      ...available,
+    ];
+  }, [enabledSkills, localSkillName]);
 
   const saveLocalConfig = useCallback(() => {
     onUpdate({
@@ -261,17 +301,19 @@ export function SlotDetail({
                 <BackendModelPresetPicker
                   backend={localBackend}
                   model={localModel}
-                  selectedPresetId={localPresetId}
-                  enabledBackends={enabledBackends.map((b) => b.value)}
-                  onChange={(selection) => {
-                    const backendChanged = selection.backend !== localBackend;
-                    setLocalBackend(selection.backend);
-                    setLocalModel(selection.model);
-                    setLocalPresetId(selection.presetId);
-                    if (backendChanged) {
-                      setLocalSkillName(null);
-                    }
-                  }}
+                   selectedPresetId={localPresetId}
+                   enabledBackends={enabledBackends.map((b) => b.value)}
+                   onChange={(selection) => {
+                     if (
+                       selection.backend !== localBackend ||
+                       selection.model !== localModel
+                     ) {
+                       hasLocalChangesRef.current = true;
+                     }
+                     setLocalBackend(selection.backend);
+                     setLocalModel(selection.model);
+                     setLocalPresetId(selection.presetId);
+                   }}
                 />
               </div>
             </div>
@@ -286,9 +328,14 @@ export function SlotDetail({
                 </p>
               </div>
               <div className="shrink-0">
-                <ThinkingSelector
-                  value={localThinkingEffort}
-                  onChange={setLocalThinkingEffort}
+                 <ThinkingSelector
+                   value={localThinkingEffort}
+                   onChange={(thinkingEffort) => {
+                     if (thinkingEffort !== localThinkingEffort) {
+                       hasLocalChangesRef.current = true;
+                     }
+                     setLocalThinkingEffort(thinkingEffort);
+                   }}
                   size="sm"
                 />
               </div>
@@ -305,11 +352,15 @@ export function SlotDetail({
               </div>
               <div className="shrink-0">
                 <Select
-                  value={localSkillName ?? NO_SKILL_VALUE}
-                  options={skillOptions}
-                  onChange={(v) =>
-                    setLocalSkillName(v === NO_SKILL_VALUE ? null : v)
-                  }
+                   value={localSkillName ?? NO_SKILL_VALUE}
+                   options={skillOptions}
+                   onChange={(v) => {
+                     const skillName = v === NO_SKILL_VALUE ? null : v;
+                     if (skillName !== localSkillName) {
+                       hasLocalChangesRef.current = true;
+                     }
+                     setLocalSkillName(skillName);
+                   }}
                   label="Skill"
                 />
               </div>

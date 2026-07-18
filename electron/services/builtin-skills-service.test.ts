@@ -86,4 +86,31 @@ describe('builtin skills installation', () => {
       'use that exact location and resolve its evidence and state files within that folder',
     );
   });
+
+  it('installs the work item summary editorial skill', async () => {
+    await upsertBuiltinSkills({ skillsDir: testDir });
+
+    const content = await fs.readFile(
+      path.join(testDir, 'work-item-summary', 'SKILL.md'),
+      'utf-8',
+    );
+
+    expect(content).toContain('name: work-item-summary');
+    expect(content).toContain('work item summary generation service');
+    expect(content).toContain('about 180 words');
+    expect(content).toContain('6-10 bullets as a ceiling');
+    expect(content).toContain('not a quota');
+    expect(content).toContain('Keep sparse items much shorter');
+    expect(content).toContain('sole authority');
+    expect(content).toContain('never propose implementation methods');
+    expect(content).toContain('validation mechanisms');
+    expect(content).toContain('schemas or fields');
+    expect(content).toContain('authorization policy');
+    expect(content).toContain('assumed subrequirements');
+    expect(content).toContain('latest explicit comment decision wins');
+    expect(content).toContain('Ask at most 3 source-grounded questions');
+    expect(content).toContain('Always include exactly one factual visual');
+    expect(content).toContain('at most 8 nodes');
+    expect(content).toContain('Output Markdown only');
+  });
 });

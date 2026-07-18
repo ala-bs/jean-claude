@@ -58,6 +58,7 @@ import { UserAvatar } from '@/common/ui/user-avatar';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { WorkItemBoardColumnEditor } from '@/features/work-item/ui-work-item-board-column-editor';
 import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
+import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 import { WorkItemHistory } from '@/features/work-item/ui-work-item-history';
 import { EditableMetadataValue as WorkItemMetadataEditor } from '@/features/work-item/ui-work-item-preview';
 
@@ -579,7 +580,8 @@ export function WorkItemDetails({
 
   const { fields } = workItem;
   const hasReproSteps = fields.workItemType === 'Bug' && !!fields.reproSteps;
-  const hasContent = !!fields.description || hasReproSteps;
+  const hasContent =
+    !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
   const hasLinks =
     !!workItem.parentId ||
     !!workItem.childIds?.length ||
@@ -710,6 +712,18 @@ export function WorkItemDetails({
         )}
       >
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-4">
+          {providerId && projectName && (
+            <WorkItemGeneratedSummary
+              request={{
+                projectId,
+                providerId,
+                projectName,
+                workItemId: workItem.id,
+              }}
+              workItemTitle={fields.title}
+              className="mb-5"
+            />
+          )}
           {hasContent ? (
             <div className="w-full">
               {fields.description && (
@@ -722,8 +736,29 @@ export function WorkItemDetails({
                 />
               )}
 
-              {hasReproSteps && (
+              {fields.acceptanceCriteria && (
                 <div className={fields.description ? 'mt-6' : undefined}>
+                  <h2 className="text-ink-0 mb-2 text-sm font-semibold">
+                    Acceptance Criteria
+                  </h2>
+                  <AzureHtmlContent
+                    html={fields.acceptanceCriteria}
+                    providerId={providerId ?? undefined}
+                    className="text-ink-1 text-sm"
+                    imageClassName="max-h-96 w-auto object-contain"
+                    enableImageModal
+                  />
+                </div>
+              )}
+
+              {hasReproSteps && (
+                <div
+                  className={
+                    fields.description || fields.acceptanceCriteria
+                      ? 'mt-6'
+                      : undefined
+                  }
+                >
                   <h2 className="text-ink-0 mb-2 text-sm font-semibold">
                     Repro Steps
                   </h2>

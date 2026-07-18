@@ -411,6 +411,22 @@ contextBridge.exposeInMainWorld('api', {
       projectName: string;
       workItemId: number;
     }) => ipcRenderer.invoke('azureDevOps:getWorkItemComments', params),
+    getWorkItemSummary: (params: {
+      projectId: string;
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemSummary', params),
+    generateWorkItemSummary: (params: {
+      projectId: string;
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => ipcRenderer.invoke('azureDevOps:generateWorkItemSummary', params),
+    getCachedWorkItemSummaries: (params: {
+      providerId: string;
+      workItemIds: number[];
+    }) => ipcRenderer.invoke('azureDevOps:getCachedWorkItemSummaries', params),
     getWorkItemHistory: (params: {
       providerId: string;
       projectName: string;

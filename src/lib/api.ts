@@ -132,6 +132,10 @@ import type {
   RecordPreferenceEvidenceResult,
 } from '@shared/preference-memory-types';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
+import type {
+  WorkItemSummary,
+  WorkItemSummaryRequest,
+} from '@shared/work-item-summary-types';
 import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
 import type { AgentUIEvent } from '@shared/agent-ui-events';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
@@ -805,6 +809,16 @@ export interface Api {
       projectName: string;
       workItemId: number;
     }) => Promise<WorkItemComment[]>;
+    getWorkItemSummary: (
+      params: WorkItemSummaryRequest,
+    ) => Promise<WorkItemSummary | null>;
+    generateWorkItemSummary: (
+      params: WorkItemSummaryRequest,
+    ) => Promise<WorkItemSummary>;
+    getCachedWorkItemSummaries: (params: {
+      providerId: string;
+      workItemIds: number[];
+    }) => Promise<WorkItemSummary[]>;
     getWorkItemHistory: (params: {
       providerId: string;
       projectName: string;
@@ -2045,6 +2059,11 @@ export const api: Api = hasWindowApi
         },
         getRelatedTestCases: async () => [],
         getWorkItemComments: async () => [],
+        getWorkItemSummary: async () => null,
+        generateWorkItemSummary: async () => {
+          throw new Error('API not available');
+        },
+        getCachedWorkItemSummaries: async () => [],
         getWorkItemHistory: async () => [],
         addWorkItemComment: async () => {
           throw new Error('API not available');

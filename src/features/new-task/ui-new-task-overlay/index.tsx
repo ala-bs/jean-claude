@@ -2493,6 +2493,7 @@ function SearchModeContent({
 
   return (
     <WorkItemPicker
+      appProjectId={project.id}
       providerId={project.workItemProviderId!}
       projectId={project.workItemProjectId!}
       projectName={project.workItemProjectName!}

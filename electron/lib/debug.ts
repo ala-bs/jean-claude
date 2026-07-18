@@ -55,7 +55,8 @@ function flushLogs() {
   if (pendingBatch.length === 0) return;
   const batch = pendingBatch;
   pendingBatch = [];
-  for (const win of BrowserWindow.getAllWindows()) {
+  const windows = BrowserWindow?.getAllWindows?.() ?? [];
+  for (const win of windows) {
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
       win.webContents.send('debug:log-batch', batch);
     }

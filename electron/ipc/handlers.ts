@@ -928,6 +928,31 @@ function emitProjectLogoPatch(project: {
   });
 }
 
+function validateWorkItemSummaryRequest(params: unknown) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    throw new Error('Invalid work item summary request');
+  }
+  const request = params as Record<string, unknown>;
+  for (const field of ['projectId', 'providerId', 'projectName'] as const) {
+    if (typeof request[field] !== 'string' || !request[field].trim()) {
+      throw new Error(`${field} must be a non-empty string`);
+    }
+  }
+  if (
+    typeof request.workItemId !== 'number' ||
+    !Number.isInteger(request.workItemId) ||
+    request.workItemId <= 0
+  ) {
+    throw new Error('workItemId must be a positive integer');
+  }
+  return {
+    projectId: request.projectId as string,
+    providerId: request.providerId as string,
+    projectName: request.projectName as string,
+    workItemId: request.workItemId,
+  };
+}
+
 export function registerIpcHandlers() {
   dbg.ipc('Registering IPC handlers');
   let previewReloadInProgress = false;
@@ -3102,6 +3127,53 @@ export function registerIpcHandlers() {
       const { getWorkItemComments } =
         await import('../services/azure-devops-service');
       return getWorkItemComments(params);
+    },
+  );
+
+  ipcMain.handle('azureDevOps:getWorkItemSummary', async (_event, params) => {
+    const request = validateWorkItemSummaryRequest(params);
+    const { getWorkItemSummary } =
+      await import('../services/work-item-summary-generation-service');
+    return getWorkItemSummary(request);
+  });
+
+  ipcMain.handle(
+    'azureDevOps:generateWorkItemSummary',
+    async (_event, params) => {
+      const request = validateWorkItemSummaryRequest(params);
+      const { generateWorkItemSummary } =
+        await import('../services/work-item-summary-generation-service');
+      return generateWorkItemSummary(request);
+    },
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getCachedWorkItemSummaries',
+    async (_event, params: unknown) => {
+      if (!params || typeof params !== 'object' || Array.isArray(params)) {
+        throw new Error('Invalid cached work item summaries request');
+      }
+      const input = params as Record<string, unknown>;
+      if (typeof input.providerId !== 'string' || !input.providerId.trim()) {
+        throw new Error('providerId must be a non-empty string');
+      }
+      if (!Array.isArray(input.workItemIds)) {
+        throw new Error('workItemIds must be an array');
+      }
+      const workItemIds = [...new Set(input.workItemIds)];
+      if (
+        workItemIds.some(
+          (id) => typeof id !== 'number' || !Number.isInteger(id) || id <= 0,
+        )
+      ) {
+        throw new Error('workItemIds must contain positive integers');
+      }
+      const { getCachedWorkItemSummaries } =
+        await import('../services/work-item-summary-generation-service');
+      return getCachedWorkItemSummaries({
+        providerId: input.providerId,
+        workItemIds: workItemIds as number[],
+      });
     },
   );
 

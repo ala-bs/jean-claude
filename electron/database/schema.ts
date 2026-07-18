@@ -58,6 +58,7 @@ export interface Database {
   ai_usage_task_totals: AiUsageTaskTotalTable;
   ai_usage_daily_totals: AiUsageDailyTotalTable;
   work_activity_events: WorkActivityEventTable;
+  work_item_summaries: WorkItemSummaryTable;
 }
 
 export interface TokenTable {
@@ -512,3 +513,20 @@ export interface WorkActivityEventTable {
 
 export type WorkActivityEventRow = Selectable<WorkActivityEventTable>;
 export type NewWorkActivityEventRow = Insertable<WorkActivityEventTable>;
+
+export interface WorkItemSummaryTable {
+  id: Generated<string>;
+  providerId: string;
+  workItemId: number;
+  content: string;
+  sourceHash: string;
+  sourceChangedDate: string | null;
+  sourceLatestCommentId: number | null;
+  sourceCommentCount: number;
+  generatedAt: string;
+  updatedAt: string;
+}
+
+export type WorkItemSummaryRow = Selectable<WorkItemSummaryTable>;
+export type NewWorkItemSummaryRow = Insertable<WorkItemSummaryTable>;
+export type UpdateWorkItemSummaryRow = Updateable<WorkItemSummaryTable>;

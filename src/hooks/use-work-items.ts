@@ -617,6 +617,13 @@ export function useAddWorkItemComment() {
       queryClient.invalidateQueries({
         queryKey: ['work-item-history', variables.providerId],
       });
+      queryClient.invalidateQueries({
+        queryKey: [
+          'work-item-summary',
+          variables.providerId,
+          variables.workItemId,
+        ],
+      });
     },
     onError: () => {
       addToast({ message: 'Failed to add work item comment', type: 'error' });

@@ -662,8 +662,9 @@ export function AzureBoardProjectContent({
                       )}
                       <WorkItemPreview
                       workItem={selectedWorkItem}
+                      projectId={project.id}
                       providerId={params.providerId}
-                      projectId={params.projectId}
+                      workItemProjectId={params.projectId}
                       projectName={params.projectName}
                         editableMetadata
                         assigneeOptions={assignees}

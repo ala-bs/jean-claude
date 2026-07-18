@@ -96,6 +96,64 @@ describe('resolveAiSkillSlot', () => {
     });
   });
 
+  it('preserves the selected work item summary skill on backend fallback', async () => {
+    const slot = await resolveAiSkillSlot('work-item-summary', {
+      'work-item-summary': {
+        backend: 'claude-code',
+        model: 'haiku',
+        thinkingEffort: 'high',
+        skillName: 'work-item-summary',
+      },
+    });
+
+    expect(slot).toEqual({
+      backend: 'opencode',
+      model: 'openai/gpt-5.1-codex',
+      thinkingEffort: 'default',
+      skillName: 'work-item-summary',
+    });
+  });
+
+  it('preserves a global work item summary skill on backend fallback', async () => {
+    settingsGetMock.mockImplementation((key: string) => {
+      if (key === 'backends') {
+        return Promise.resolve({
+          enabledBackends: ['opencode'],
+          defaultBackend: 'opencode',
+        });
+      }
+      if (key === 'backendDefaultModels') {
+        return Promise.resolve({
+          models: {
+            'claude-code': 'haiku',
+            opencode: 'openai/gpt-5.1-codex',
+            codex: 'gpt-5.1-codex',
+          },
+        });
+      }
+      if (key === 'aiSkillSlots') {
+        return Promise.resolve({
+          'work-item-summary': {
+            backend: 'claude-code',
+            model: 'haiku',
+            thinkingEffort: 'high',
+            skillName: 'work-item-summary',
+          },
+        });
+      }
+      throw new Error(`Unexpected setting key: ${key}`);
+    });
+
+    const slot = await resolveAiSkillSlot('work-item-summary', null);
+
+    expect(slot).toEqual({
+      backend: 'opencode',
+      model: 'openai/gpt-5.1-codex',
+      thinkingEffort: 'default',
+      skillName: 'work-item-summary',
+    });
+  });
+
   it('keeps enabled slots unchanged', async () => {
     const slot = await resolveAiSkillSlot('pr-description', {
       'pr-description': {
@@ -112,6 +170,12 @@ describe('resolveAiSkillSlot', () => {
       thinkingEffort: 'medium',
       skillName: 'shared-skill',
     });
+  });
+
+  it('keeps work item summaries disabled when no slot is configured', async () => {
+    await expect(
+      resolveAiSkillSlot('work-item-summary', null),
+    ).resolves.toBeUndefined();
   });
 
   it('falls back default project feature map slot but keeps builtin skill', async () => {

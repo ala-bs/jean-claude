@@ -836,6 +836,13 @@ export const DEFAULT_PROJECT_FEATURE_MAP_SLOT: AiSkillSlotConfig = {
   skillName: 'project-feature-mapping',
 };
 
+export const DEFAULT_WORK_ITEM_SUMMARY_SLOT: AiSkillSlotConfig = {
+  backend: 'claude-code',
+  model: 'haiku',
+  thinkingEffort: 'default',
+  skillName: 'work-item-summary',
+};
+
 export interface AiGenerationSetting {
   openAiApiKey: string; // Stored encrypted
   openAiImageGenerationEnabled?: boolean;
@@ -859,6 +866,7 @@ export type AiSkillSlotKey =
   | 'verification-note'
   | 'project-summary'
   | 'project-feature-map'
+  | 'work-item-summary'
   | 'logo-generation';
 export type AiSkillSlotsSetting = Partial<
   Record<AiSkillSlotKey, AiSkillSlotConfig>
@@ -1194,6 +1202,7 @@ const VALID_SLOT_KEYS: AiSkillSlotKey[] = [
   'verification-note',
   'project-summary',
   'project-feature-map',
+  'work-item-summary',
   'logo-generation',
 ];
 
@@ -1444,6 +1453,7 @@ export const SETTINGS_DEFINITIONS = {
   aiSkillSlots: {
     defaultValue: {
       'project-feature-map': DEFAULT_PROJECT_FEATURE_MAP_SLOT,
+      'work-item-summary': DEFAULT_WORK_ITEM_SUMMARY_SLOT,
     } as AiSkillSlotsSetting,
     validate: isAiSkillSlotsSetting,
   },

@@ -57,6 +57,7 @@ function getExactWorkItemIdSearch(filter: string | undefined): string | null {
 const DEFAULT_EXCLUDE_TYPES = ['Test Suite', 'Test Case', 'Epic', 'Feature'];
 
 export function WorkItemPicker({
+  appProjectId,
   providerId,
   projectId,
   projectName,
@@ -74,6 +75,7 @@ export function WorkItemPicker({
   excludeWorkItemTypes = DEFAULT_EXCLUDE_TYPES,
   headerRight,
 }: {
+  appProjectId?: string;
   providerId: string;
   projectId: string;
   projectName: string;
@@ -527,6 +529,7 @@ export function WorkItemPicker({
       >
         <WorkItemPreview
           workItem={highlightedWorkItem}
+          projectId={appProjectId}
           providerId={providerId}
           projectName={projectName}
         />

@@ -28,9 +28,11 @@ import {
   useWorkItemStates,
 } from '@/hooks/use-work-items';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
+import { canShowWorkItemSummary } from '@/lib/work-item-summary';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { UserAvatar } from '@/common/ui/user-avatar';
+import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 
 
 
@@ -51,8 +53,9 @@ type DetailsTab = 'content' | 'comments' | 'history' | 'test-cases';
 
 export function WorkItemPreview({
   workItem,
-  providerId,
   projectId,
+  providerId,
+  workItemProjectId,
   projectName,
   showCommentsAside = false,
   readOnly = false,
@@ -70,8 +73,9 @@ export function WorkItemPreview({
   parserSetting = null,
 }: {
   workItem: AzureDevOpsWorkItem | null;
-  providerId?: string;
   projectId?: string;
+  providerId?: string;
+  workItemProjectId?: string;
   projectName?: string;
   showCommentsAside?: boolean;
   readOnly?: boolean;
@@ -205,6 +209,19 @@ export function WorkItemPreview({
   const hasReproSteps = workItemType === 'Bug' && !!fields.reproSteps;
   const hasContent = !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
   const showTestCases = hasTestCases && !isEditorial;
+  const summaryRequest = canShowWorkItemSummary({
+    projectId,
+    providerId,
+    projectName,
+    workItemId: id,
+  })
+    ? {
+        projectId: projectId!,
+        providerId: providerId!,
+        projectName: projectName!,
+        workItemId: id,
+      }
+    : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -271,12 +288,12 @@ export function WorkItemPreview({
                   disabled={!canEditMetadata || !providerId}
                   onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.State', value })}
                 />
-                {canEditMetadata && providerId && projectId && projectName && boardColumns.length > 0 && (
+                {canEditMetadata && providerId && workItemProjectId && projectName && boardColumns.length > 0 && (
                   <WorkItemBoardColumnEditor
                     key={`${id}:column`}
                     workItem={workItem}
                     providerId={providerId}
-                    projectId={projectId}
+                    projectId={workItemProjectId}
                     projectName={projectName}
                     columns={boardColumns}
                   />
@@ -490,6 +507,14 @@ export function WorkItemPreview({
                   error={relatedWorkItemsError}
                   onOpen={onOpenRelatedWorkItem}
                   parserSetting={parserSetting}
+                />
+              )}
+
+              {summaryRequest && (
+                <WorkItemGeneratedSummary
+                  request={summaryRequest}
+                  workItemTitle={fields.title}
+                  className="mt-3"
                 />
               )}
 

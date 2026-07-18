@@ -17,6 +17,7 @@ import {
   PinOff,
   ShieldAlert,
   ShieldQuestion,
+  Sparkles,
   StickyNote,
   Terminal,
   XCircle,
@@ -831,6 +832,21 @@ export function FeedItemCard({
                   {itemTitle}
                 </span>
               </div>
+
+              {item.source === 'work-item' && item.workItemSummary && (
+                <div className="text-ink-3 flex min-w-0 items-center gap-1.5 text-[10.5px] leading-snug">
+                  <Sparkles className="text-acc h-3 w-3 shrink-0" />
+                  <span className="line-clamp-1 min-w-0">
+                    {item.workItemSummary}
+                  </span>
+                  {item.workItemSummaryStale && (
+                    <span
+                      className="bg-status-run h-1.5 w-1.5 shrink-0 rounded-full"
+                      title="Summary source updated"
+                    />
+                  )}
+                </div>
+              )}
 
               {/* Bottom row: project + time + status */}
               <div className="flex flex-wrap items-center gap-1.5">

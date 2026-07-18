@@ -777,10 +777,14 @@ describe('board column configuration and updates', () => {
   });
 });
 
-function jsonResponse(body: unknown, init: { ok: boolean; status?: number }) {
+function jsonResponse(
+  body: unknown,
+  init: { ok: boolean; status?: number; headers?: HeadersInit },
+) {
   return {
     ok: init.ok,
     status: init.status ?? (init.ok ? 200 : 400),
+    headers: new Headers(init.headers),
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response;
@@ -996,6 +1000,104 @@ describe('addWorkItemComment', () => {
     expect(vi.mocked(fetch).mock.calls[0][0]).toBe(
       'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText',
     );
+  });
+
+  it('fetches body-token pages newest-first and deduplicates comment ids', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            comments: [
+              { id: 3, workItemId: 299, text: 'Newest' },
+              { id: 2, workItemId: 299, text: 'Middle' },
+            ],
+            continuationToken: 'next token&page=2',
+          },
+          {
+            ok: true,
+            headers: { 'x-ms-continuationtoken': 'ignored-header-token' },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            comments: [
+              { id: 2, workItemId: 299, text: 'Duplicate middle' },
+              { id: 1, workItemId: 299, text: 'Oldest' },
+            ],
+          },
+          { ok: true },
+        ),
+      );
+
+    const comments = await getWorkItemComments({
+      providerId: 'provider-1',
+      projectName: 'Project Name',
+      workItemId: 299,
+    });
+
+    expect(comments.map((comment) => comment.id)).toEqual([3, 2, 1]);
+    expect(vi.mocked(fetch).mock.calls[1][0]).toBe(
+      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText&continuationToken=next+token%26page%3D2',
+    );
+  });
+
+  it('fetches the next page using a header continuation token', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { comments: [{ id: 2, workItemId: 299, text: 'Newest' }] },
+          {
+            ok: true,
+            headers: { 'x-ms-continuationtoken': 'header/token' },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { comments: [{ id: 1, workItemId: 299, text: 'Oldest' }] },
+          { ok: true },
+        ),
+      );
+
+    const comments = await getWorkItemComments({
+      providerId: 'provider-1',
+      projectName: 'Project Name',
+      workItemId: 299,
+    });
+
+    expect(comments.map((comment) => comment.id)).toEqual([2, 1]);
+    expect(vi.mocked(fetch).mock.calls[1][0]).toContain(
+      'continuationToken=header%2Ftoken',
+    );
+  });
+
+  it('throws when Azure repeats a continuation token', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { comments: [], continuationToken: 'repeated-token' },
+          { ok: true },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { comments: [], continuationToken: 'repeated-token' },
+          { ok: true },
+        ),
+      );
+
+    await expect(
+      getWorkItemComments({
+        providerId: 'provider-1',
+        projectName: 'Project Name',
+        workItemId: 299,
+      }),
+    ).rejects.toThrow(
+      'Repeated continuation token while fetching comments for work item 299',
+    );
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
   });
 
   it('expands relative work item attachment URLs in rendered comments', async () => {
