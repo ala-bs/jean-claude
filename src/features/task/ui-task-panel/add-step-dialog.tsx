@@ -28,6 +28,7 @@ import {
   type InteractionMode,
   type ModelPreference,
   normalizeInteractionModeForBackend,
+  type PromptSnippet,
   type ReviewerConfig,
   type ThinkingEffort,
 } from '@shared/types';
@@ -65,6 +66,7 @@ import {
 import { useProject, useProjectFeatureMap } from '@/hooks/use-projects';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
+import { buildWorkItemSnippetContext } from '@/features/new-task/ui-prompt-composer';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
@@ -78,8 +80,10 @@ import { Textarea } from '@/common/ui/textarea';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useCommands } from '@/common/hooks/use-commands';
+import { useRelatedTestCasesForWorkItems } from '@/hooks/use-work-items';
 import { useSkills } from '@/hooks/use-skills';
 import { useTask } from '@/hooks/use-tasks';
+import { useWorkItemsByIds } from '@/hooks/use-work-items';
 
 
 
@@ -173,6 +177,8 @@ function AddStepPromptSection({
   files,
   promptSnippets,
   snippetVariableContext,
+  onSnippetNeedsContext,
+  onPromptChange,
   onEnterKey,
   onImageAttach,
   onImageRemove,
@@ -191,6 +197,8 @@ function AddStepPromptSection({
   files: PromptFilePart[];
   promptSnippets: ReturnType<typeof usePromptSnippetsSetting>['data'];
   snippetVariableContext: SnippetVariableContext;
+  onSnippetNeedsContext: (snippet: PromptSnippet) => void;
+  onPromptChange: (value: string) => void;
   onEnterKey: (e: KeyboardEvent<HTMLTextAreaElement>) => true | undefined;
   onImageAttach: (image: PromptImagePart) => void;
   onImageRemove: (index: number) => void;
@@ -198,7 +206,7 @@ function AddStepPromptSection({
   onFileRemove: (index: number) => void;
   onAutocompleteOpenChange: (isOpen: boolean) => void;
 }) {
-  const { draft, setDraft } = useAddStepDialogDraft(taskId);
+  const { draft } = useAddStepDialogDraft(taskId);
   const { promptTemplate } = draft;
   const textareaRef = useRef<PromptTextareaRef>(null);
 
@@ -223,11 +231,15 @@ function AddStepPromptSection({
               type="button"
               className="bg-bg-2 text-ink-2 hover:bg-bg-3 hover:text-ink-1 rounded-full px-2.5 py-0.5 text-xs transition-colors"
               onClick={() => {
-                const { output } = resolvePromptSnippet(
-                  snippet,
-                  snippetVariableContext,
-                );
-                setDraft({ promptTemplate: output });
+                if (/{{[^}]*\bworkItems\b/.test(snippet.template)) {
+                  onSnippetNeedsContext(snippet);
+                } else {
+                  const { output } = resolvePromptSnippet(
+                    snippet,
+                    snippetVariableContext,
+                  );
+                  onPromptChange(output);
+                }
                 setTimeout(() => textareaRef.current?.focus(), 0);
               }}
             >
@@ -239,7 +251,7 @@ function AddStepPromptSection({
       <PromptTextarea
         ref={textareaRef}
         value={promptTemplate}
-        onChange={(value) => setDraft({ promptTemplate: value })}
+        onChange={onPromptChange}
         onEnterKey={onEnterKey}
         placeholder={
           presetType === 'review-changes'
@@ -424,6 +436,11 @@ export function AddStepDialog({
   const [includeReviewComments, setIncludeReviewComments] = useState(true);
   const [showReviewPreview, setShowReviewPreview] = useState(false);
   const [isAutocompleteOpen, setIsAutocompleteOpen] = useState(false);
+  const [shouldLoadWorkItemContext, setShouldLoadWorkItemContext] =
+    useState(false);
+  const [pendingSnippet, setPendingSnippet] = useState<PromptSnippet | null>(
+    null,
+  );
   const [reviewers, setReviewers] = useState<ReviewerConfig[]>(
     createDefaultReviewers(defaultBackend),
   );
@@ -452,9 +469,29 @@ export function AddStepDialog({
     stepId: activeStepId,
   });
   const { data: promptSnippets = [] } = usePromptSnippetsSetting();
-  const { data: stepTask } = useTask(taskId);
-  const { data: stepProject } = useProject(projectId ?? '');
+  const { data: stepTask, isLoading: isTaskLoading } = useTask(taskId);
+  const { data: stepProject, isLoading: isProjectLoading } = useProject(
+    projectId ?? '',
+  );
   const { data: featureMap = null } = useProjectFeatureMap(projectId ?? null);
+  const taskWorkItemIds = useMemo(
+    () => (stepTask?.workItemIds ?? []).map(Number).filter(Number.isFinite),
+    [stepTask?.workItemIds],
+  );
+  const { data: taskWorkItems = [], isFetched: hasFetchedWorkItems } =
+    useWorkItemsByIds({
+    providerId: stepProject?.workItemProviderId ?? null,
+    projectName: stepProject?.workItemProjectName ?? null,
+    workItemIds: taskWorkItemIds,
+    enabled: isOpen && shouldLoadWorkItemContext,
+    });
+  const { data: testCasesByWorkItem = {}, isFetched: hasFetchedTestCases } =
+    useRelatedTestCasesForWorkItems({
+      providerId: stepProject?.workItemProviderId ?? null,
+      projectName: stepProject?.workItemProjectName ?? null,
+      workItemIds: taskWorkItemIds,
+      enabled: isOpen && shouldLoadWorkItemContext,
+    });
   const { data: dynamicModels } = useBackendModels(backend);
   const reviewComments = useReviewComments(taskId);
   const openReviewComments = useMemo(
@@ -513,8 +550,66 @@ export function AddStepDialog({
       project: stepProject
         ? { name: stepProject.name, path: stepProject.path }
         : undefined,
+      workItems: buildWorkItemSnippetContext({
+        workItems: taskWorkItems,
+        testCasesByWorkItem,
+      }),
     }),
-    [stepTask, stepProject],
+    [stepProject, taskWorkItems, testCasesByWorkItem, stepTask],
+  );
+
+  const handleSnippetNeedsContext = useCallback(
+    (snippet: PromptSnippet) => {
+      setPendingSnippet(snippet);
+      setShouldLoadWorkItemContext(true);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!pendingSnippet) return;
+
+    const hasWorkItemSource =
+      taskWorkItemIds.length > 0 &&
+      !!stepProject?.workItemProviderId &&
+      !!stepProject?.workItemProjectName;
+    if (
+      isTaskLoading ||
+      isProjectLoading ||
+      (hasWorkItemSource && (!hasFetchedWorkItems || !hasFetchedTestCases))
+    ) {
+      return;
+    }
+
+    const { output } = resolvePromptSnippet(
+      pendingSnippet,
+      snippetVariableContext,
+    );
+    startTransition(() => {
+      setDraft({ promptTemplate: output });
+      setPendingSnippet(null);
+      setShouldLoadWorkItemContext(false);
+    });
+  }, [
+    hasFetchedTestCases,
+    hasFetchedWorkItems,
+    isProjectLoading,
+    isTaskLoading,
+    pendingSnippet,
+    setDraft,
+    snippetVariableContext,
+    stepProject?.workItemProviderId,
+    stepProject?.workItemProjectName,
+    taskWorkItemIds.length,
+  ]);
+
+  const handlePromptChange = useCallback(
+    (value: string) => {
+      setPendingSnippet(null);
+      setShouldLoadWorkItemContext(false);
+      setDraft({ promptTemplate: value });
+    },
+    [setDraft],
   );
 
   useEffect(() => {
@@ -527,7 +622,9 @@ export function AddStepDialog({
       startTransition(() => setThinkingEffort(defaultThinkingEffort ?? 'default'));
       startTransition(() => setBackendModelPresetId(null));
       startTransition(() => setImages([]));
-      startTransition(() => setFiles([]));
+       startTransition(() => setFiles([]));
+       startTransition(() => setShouldLoadWorkItemContext(false));
+       startTransition(() => setPendingSnippet(null));
       startTransition(() => setAutoStart(true));
       startTransition(() => setIncludeReviewComments(true));
       startTransition(() => setShowReviewPreview(false));
@@ -746,6 +843,8 @@ export function AddStepDialog({
             files={files}
             promptSnippets={promptSnippets}
             snippetVariableContext={snippetVariableContext}
+            onSnippetNeedsContext={handleSnippetNeedsContext}
+            onPromptChange={handlePromptChange}
             onEnterKey={handleEnterKey}
             onImageAttach={handleImageAttach}
             onImageRemove={handleImageRemove}
