@@ -1,6 +1,8 @@
 import type { KeyboardEvent, ReactNode, PointerEvent as ReactPointerEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 
+import { createRafScheduler } from '@/lib/raf-scheduler';
+
 import {
   clampBoardWidth,
   createBoardResize,
@@ -21,10 +23,12 @@ export function BoardSplitPane({
   onBoardWidthCommit: (width: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const boardPaneRef = useRef<HTMLDivElement>(null);
   const separatorRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     pointerId: number;
     resize: ReturnType<typeof createBoardResize>;
+    resizeScheduler: ReturnType<typeof createRafScheduler>;
   } | null>(null);
   const commitRef = useRef(onBoardWidthCommit);
   const [boardWidth, setBoardWidth] = useState(() => clampBoardWidth(initialBoardWidth));
@@ -33,13 +37,17 @@ export function BoardSplitPane({
   const finishActiveResize = () => {
     const drag = dragRef.current;
     if (!drag) return;
+    drag.resizeScheduler.flush();
     const width = drag.resize.finish();
     dragRef.current = null;
     const separator = separatorRef.current;
     if (separator?.hasPointerCapture(drag.pointerId)) {
       separator.releasePointerCapture(drag.pointerId);
     }
-    if (width !== null) commitRef.current(width);
+    if (width !== null) {
+      setBoardWidth(width);
+      commitRef.current(width);
+    }
   };
 
   useEffect(() => {
@@ -69,9 +77,29 @@ export function BoardSplitPane({
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || dragRef.current) return;
     event.preventDefault();
+    const resizeScheduler = createRafScheduler(
+      ({ clientX, containerLeft, containerWidth }: {
+        clientX: number;
+        containerLeft: number;
+        containerWidth: number;
+      }) => {
+        const activeDrag = dragRef.current;
+        if (!activeDrag) return;
+        const width = activeDrag.resize.move({
+          clientX,
+          containerLeft,
+          containerWidth,
+        });
+        if (boardPaneRef.current) {
+          boardPaneRef.current.style.width = `${width}%`;
+        }
+        separatorRef.current?.setAttribute('aria-valuenow', `${width}`);
+      },
+    );
     dragRef.current = {
       pointerId: event.pointerId,
       resize: createBoardResize(boardWidth),
+      resizeScheduler,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -80,11 +108,11 @@ export function BoardSplitPane({
     const drag = dragRef.current;
     const rect = containerRef.current?.getBoundingClientRect();
     if (!drag || drag.pointerId !== event.pointerId || !rect || rect.width === 0) return;
-    setBoardWidth(drag.resize.move({
+    drag.resizeScheduler.schedule({
       clientX: event.clientX,
       containerLeft: rect.left,
       containerWidth: rect.width,
-    }));
+    });
   };
 
   const finishResize = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -104,6 +132,7 @@ export function BoardSplitPane({
   return (
     <div ref={containerRef} className="flex min-h-0 flex-1 overflow-hidden">
       <div
+        ref={boardPaneRef}
         className={`h-full min-h-0 min-w-0 ${hasDetails ? 'shrink-0' : 'flex-1'}`}
         style={hasDetails ? { width: `${boardWidth}%` } : undefined}
       >

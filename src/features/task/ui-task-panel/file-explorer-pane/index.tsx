@@ -1,5 +1,5 @@
 import { File, FolderTree, RefreshCw, X } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 
@@ -125,11 +125,13 @@ export function FileExplorerPane({
     });
 
   // File content resize
+  const treePaneRef = useRef<HTMLDivElement>(null);
   const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
     initialWidth: treeWidth,
     minWidth: MIN_TREE_WIDTH,
     maxWidthFraction: 0.75,
     onWidthChange: setTreeWidth,
+    resizeTargetRef: treePaneRef,
   });
 
   return (
@@ -236,6 +238,7 @@ export function FileExplorerPane({
       >
         {/* Tree panel */}
         <div
+          ref={treePaneRef}
           className="relative shrink-0 overflow-x-hidden overflow-y-auto"
           style={{
             width: hasSelectedFile ? treeWidth : '100%',

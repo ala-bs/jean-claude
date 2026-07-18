@@ -2,15 +2,19 @@ import { useCurrentVisibleProject, useSidebarWidth } from '@/stores/navigation';
 import clsx from 'clsx';
 import { FeedList } from '@/features/feed/ui-feed-list';
 import type { MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { TaskList } from '@/features/task/ui-task-list';
-import { useState } from 'react';
+import { createRafScheduler } from '@/lib/raf-scheduler';
 
 export const MAIN_SIDEBAR_HEADER_HEIGHT = 48;
 
 export function MainSidebar() {
   const { projectId } = useCurrentVisibleProject();
   const { width, setWidth, minWidth, maxWidth } = useSidebarWidth();
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => () => dragCleanupRef.current?.(), []);
 
   const handleMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -18,6 +22,12 @@ export function MainSidebar() {
 
       const startX = e.clientX;
       const startWidth = width;
+      const target = e.currentTarget.parentElement;
+      let latestWidth: number | null = null;
+      const updateWidth = createRafScheduler((newWidth: number) => {
+        latestWidth = newWidth;
+        if (target) target.style.width = `${newWidth}px`;
+      });
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
         const delta = moveEvent.clientX - startX;
@@ -25,17 +35,27 @@ export function MainSidebar() {
           Math.max(startWidth + delta, minWidth),
           maxWidth,
         );
-        setWidth(newWidth);
+        updateWidth.schedule(newWidth);
       };
 
       const handleMouseUp = () => {
+        updateWidth.flush();
+        if (latestWidth !== null) setWidth(latestWidth);
         setIsDragging(false);
+        dragCleanupRef.current?.();
+      };
+      const handleWindowBlur = () => handleMouseUp();
+
+      dragCleanupRef.current = () => {
+        updateWidth.cancel();
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('blur', handleWindowBlur);
+        dragCleanupRef.current = null;
       };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('blur', handleWindowBlur);
   };
 
   return (
