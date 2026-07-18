@@ -1237,7 +1237,7 @@ export const PromptTextarea = forwardRef<
     [onImageAttach, onFileAttach],
   );
 
-  const handleItemMouseEnter = (index: number) => {
+  const handleItemMouseMove = (index: number) => {
     shouldScrollSelectionRef.current = false;
     setSelectedIndex(index);
   };
@@ -1336,7 +1336,7 @@ export const PromptTextarea = forwardRef<
                   type="button"
                   data-index={index}
                   onClick={() => selectItem(item)}
-                  onMouseEnter={() => handleItemMouseEnter(index)}
+                  onMouseMove={() => handleItemMouseMove(index)}
                   className={clsx(
                     'flex w-full items-center gap-2 px-3 py-1 text-left',
                     index === selectedIndex
@@ -1385,7 +1385,7 @@ export const PromptTextarea = forwardRef<
                   type="button"
                   data-index={index}
                   onClick={() => selectItem(item)}
-                  onMouseEnter={() => handleItemMouseEnter(index)}
+                  onMouseMove={() => handleItemMouseMove(index)}
                   className={clsx(
                     'w-full px-3 py-1 text-left',
                     index === selectedIndex
@@ -1440,7 +1440,7 @@ export const PromptTextarea = forwardRef<
                   type="button"
                   data-index={index}
                   onClick={() => selectItem(item)}
-                  onMouseEnter={() => handleItemMouseEnter(index)}
+                  onMouseMove={() => handleItemMouseMove(index)}
                   className={clsx(
                     'w-full px-3 py-1 text-left',
                     index === selectedIndex
@@ -1481,7 +1481,7 @@ export const PromptTextarea = forwardRef<
                   type="button"
                   data-index={index}
                   onClick={() => selectItem(item)}
-                  onMouseEnter={() => handleItemMouseEnter(index)}
+                  onMouseMove={() => handleItemMouseMove(index)}
                   className={clsx(
                     'w-full px-3 py-1 text-left',
                     index === selectedIndex
@@ -1535,7 +1535,7 @@ export const PromptTextarea = forwardRef<
                   type="button"
                   data-index={index}
                   onClick={() => selectItem(item)}
-                  onMouseEnter={() => handleItemMouseEnter(index)}
+                  onMouseMove={() => handleItemMouseMove(index)}
                   className={clsx(
                     'w-full px-3 py-1 text-left',
                     index === selectedIndex
