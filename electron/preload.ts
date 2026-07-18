@@ -306,6 +306,7 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('steps:continuePrReviewChatStep', params),
     update: (stepId: string, data: unknown) =>
       ipcRenderer.invoke('steps:update', stepId, data),
+    archive: (stepId: string) => ipcRenderer.invoke('steps:archive', stepId),
     resolvePrompt: (stepId: string) =>
       ipcRenderer.invoke('steps:resolvePrompt', stepId),
     setMode: (stepId: string, mode: string) =>

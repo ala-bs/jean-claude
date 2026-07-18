@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Archive,
   Check,
   Circle,
   Loader2,
@@ -12,10 +13,12 @@ import clsx from 'clsx';
 
 
 import type { TaskStep, TaskStepStatus } from '@shared/types';
+import { useArchiveStep, useSteps } from '@/hooks/use-steps';
 import { Button } from '@/common/ui/button';
 import { useCommands } from '@/common/hooks/use-commands';
-import { useSteps } from '@/hooks/use-steps';
+import { useMessageContextMenu } from '@/features/agent/ui-message-stream/ui-message-context-menu';
 import { useTaskState } from '@/stores/navigation';
+import { useToastStore } from '@/stores/toasts';
 
 
 
@@ -33,7 +36,7 @@ function getStepNodeWidth({ step, index }: { step: TaskStep; index: number }) {
   const baseWidth =
     30 +
     String(index + 1).length * estimatedCharWidth +
-    step.name.length * estimatedCharWidth;
+    (step.archivedAt ? 0 : step.name.length) * estimatedCharWidth;
   return Math.max(
     MIN_NODE_WIDTH,
     Math.min(MAX_NODE_WIDTH, Math.ceil(baseWidth)),
@@ -409,12 +412,14 @@ function StepChip({
   isActive,
   onClick,
   onAddAfter,
+  onContextMenu,
 }: {
   step: TaskStep;
   index: number;
   isActive: boolean;
   onClick: () => void;
   onAddAfter?: (stepId: string) => void;
+  onContextMenu?: (event: React.MouseEvent) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
 
@@ -434,17 +439,22 @@ function StepChip({
         ref={ref}
         variant="unstyled"
         onClick={onClick}
+        onContextMenu={onContextMenu}
         className={clsx(
           'h-full w-full gap-1 rounded-md px-1.5 py-0.5 text-[10px] leading-none transition-all duration-300 ease-out',
           CHIP_STYLES[step.status],
           isActive &&
             'ring-acc/70 ring-offset-bg-0 shadow-[0_0_10px_0_oklch(0.72_0.20_295_/_0.3),0_0_3px_0_oklch(0.72_0.20_295_/_0.2)] ring-[1.5px] ring-offset-[1.5px] brightness-125',
+          step.archivedAt && 'opacity-45 grayscale',
         )}
+        title={step.archivedAt ? `${step.name} (archived)` : step.name}
       >
         <StepTypeIcon step={step} />
         <span className="flex min-w-0 items-center gap-0.5">
           <span className="text-[9px] opacity-40">{index + 1}</span>
-          <span className="min-w-0 truncate">{step.name}</span>
+          {!step.archivedAt && (
+            <span className="min-w-0 truncate">{step.name}</span>
+          )}
         </span>
       </Button>
       {onAddAfter && (
@@ -479,11 +489,43 @@ export function StepFlowBar({
 }) {
   const { data: steps } = useSteps(taskId);
   const { activeStepId, setActiveStepId } = useTaskState(taskId);
+  const archiveStep = useArchiveStep();
+  const addToast = useToastStore((state) => state.addToast);
+  const { openMenu, portal } = useMessageContextMenu({
+    overlayId: 'step-context-menu',
+  });
   const layout = useMemo(() => buildStepGraphLayout(steps ?? []), [steps]);
 
   const handleStepClick = useCallback(
     (stepId: string) => setActiveStepId(stepId),
     [setActiveStepId],
+  );
+
+  const handleStepContextMenu = useCallback(
+    (event: React.MouseEvent, step: TaskStep) => {
+      if (step.archivedAt) return;
+      openMenu(event, [
+        {
+          label: 'Archive step',
+          icon: <Archive />,
+          onClick: () => {
+            archiveStep.mutate(step.id, {
+              onSuccess: () =>
+                addToast({ type: 'success', message: 'Step archived.' }),
+              onError: (error) =>
+                addToast({
+                  type: 'error',
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : 'Failed to archive step.',
+                }),
+            });
+          },
+        },
+      ]);
+    },
+    [addToast, archiveStep, openMenu],
   );
 
   useCommands('step-flow-bar', [
@@ -569,6 +611,7 @@ export function StepFlowBar({
                   isActive={activeStepId === step.id}
                   onClick={() => handleStepClick(step.id)}
                   onAddAfter={onAddStepAfter}
+                  onContextMenu={(event) => handleStepContextMenu(event, step)}
                 />
               </div>
             );
@@ -601,6 +644,7 @@ export function StepFlowBar({
           )}
         </div>
       </div>
+      {portal}
     </div>
   );
 }

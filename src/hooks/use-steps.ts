@@ -89,6 +89,20 @@ export function useUpdateStep() {
   });
 }
 
+export function useArchiveStep() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (stepId: string) => api.steps.archive(stepId),
+    onSuccess: (step: TaskStep) => {
+      ingestStep(step);
+      markStepListsStale(step.taskId);
+      queryClient.invalidateQueries({
+        queryKey: ['steps', { taskId: step.taskId }],
+      });
+    },
+  });
+}
+
 export function useResolveStepPrompt() {
   return useMutation({
     mutationFn: (stepId: string) => api.steps.resolvePrompt(stepId),

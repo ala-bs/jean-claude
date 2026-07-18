@@ -604,6 +604,7 @@ export interface TaskStep {
   images: PromptImagePart[] | null;
   meta: TaskStepMeta;
   autoStart: boolean;
+  archivedAt?: string | null;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -642,6 +643,7 @@ export interface UpdateTaskStep {
   images?: PromptImagePart[] | null;
   meta?: TaskStepMeta;
   autoStart?: boolean;
+  archivedAt?: string | null;
   sortOrder?: number;
 }
 

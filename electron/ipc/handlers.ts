@@ -2905,6 +2905,17 @@ export function registerIpcHandlers() {
     return StepService.update(stepId, data);
   });
 
+  ipcMain.handle('steps:archive', async (_, stepId: string) => {
+    const step = await StepService.findById(stepId);
+    if (!step) throw new Error(`Step not found: ${stepId}`);
+    return StepService.archive(stepId, {
+      beforePersist:
+        step.status === 'running'
+          ? () => agentService.stop(stepId)
+          : async () => {},
+    });
+  });
+
   ipcMain.handle('steps:resolvePrompt', (_, stepId: string) =>
     StepService.resolveAndValidate(stepId),
   );

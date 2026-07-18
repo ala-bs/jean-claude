@@ -708,6 +708,7 @@ export interface Api {
       question: string;
     }) => Promise<TaskStep>;
     update: (stepId: string, data: UpdateTaskStep) => Promise<TaskStep>;
+    archive: (stepId: string) => Promise<TaskStep>;
 
     resolvePrompt: (stepId: string) => Promise<{
       resolvedPrompt: string;
@@ -1990,6 +1991,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         update: async () => {
+          throw new Error('API not available');
+        },
+        archive: async () => {
           throw new Error('API not available');
         },
         delete: async () => {},

@@ -75,6 +75,7 @@ import * as m073 from './migrations/073_run_command_port_override';
 import * as m074 from './migrations/074_migrate_preference_memory';
 import * as m075 from './migrations/075_project_work_item_title_parser';
 import * as m076 from './migrations/076_work_item_summaries';
+import * as m077 from './migrations/077_task_step_archived_at';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -152,6 +153,7 @@ const migrations: Record<string, Migration> = {
   '074_migrate_preference_memory': m074,
   '075_project_work_item_title_parser': m075,
   '076_work_item_summaries': m076,
+  '077_task_step_archived_at': m077,
 };
 
 export const migrationProvider: MigrationProvider = {

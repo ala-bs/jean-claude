@@ -9,7 +9,9 @@ const {
   updateStepMock,
   prepareSummaryGenerationPromptMock,
   findTaskByIdMock,
+  updateTaskMock,
   summarizeNormalizedMessagesMock,
+  archiveAndDeleteRawMessagesMock,
 } = vi.hoisted(() => ({
   findMessagesByStepIdMock: vi.fn(),
   findProjectByIdMock: vi.fn(),
@@ -19,7 +21,9 @@ const {
   updateStepMock: vi.fn(),
   prepareSummaryGenerationPromptMock: vi.fn(),
   findTaskByIdMock: vi.fn(),
+  updateTaskMock: vi.fn(),
   summarizeNormalizedMessagesMock: vi.fn(),
+  archiveAndDeleteRawMessagesMock: vi.fn(),
 }));
 
 vi.mock('../database/repositories/agent-messages', () => ({
@@ -45,12 +49,14 @@ vi.mock('../database/repositories/task-steps', () => ({
     findById: findStepByIdMock,
     findByTaskId: findStepsByTaskIdMock,
     update: updateStepMock,
+    archiveAndDeleteRawMessages: archiveAndDeleteRawMessagesMock,
   },
 }));
 
 vi.mock('../database/repositories/tasks', () => ({
   TaskRepository: {
     findById: findTaskByIdMock,
+    update: updateTaskMock,
   },
 }));
 
@@ -117,7 +123,43 @@ describe('StepService.resolveAndValidate', () => {
       id: 'project-1',
       defaultAgentBackend: 'opencode',
     });
+    updateTaskMock.mockResolvedValue({ id: 'task-1' });
     findStepsByTaskIdMock.mockResolvedValue([previousStep, continueStep]);
+  });
+
+  it('blocks archiving a step used by a dependent step', async () => {
+    const beforePersist = vi.fn().mockResolvedValue(undefined);
+    findStepByIdMock.mockResolvedValue(previousStep);
+    findStepsByTaskIdMock.mockResolvedValue([
+      previousStep,
+      { ...continueStep, dependsOn: ['step-1'] },
+    ]);
+
+    await expect(
+      StepService.archive('step-1', { beforePersist }),
+    ).rejects.toThrow('depends on it');
+    expect(beforePersist).not.toHaveBeenCalled();
+    expect(archiveAndDeleteRawMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it('stops, archives, and removes raw messages atomically', async () => {
+    const beforePersist = vi.fn().mockResolvedValue(undefined);
+    const archivedStep = { ...previousStep, archivedAt: '2026-07-18T00:00:00.000Z' };
+    findStepByIdMock.mockResolvedValue(previousStep);
+    findStepsByTaskIdMock.mockResolvedValue([previousStep]);
+    archiveAndDeleteRawMessagesMock.mockResolvedValue({
+      step: archivedStep,
+      deletedRawMessageCount: 4,
+    });
+
+    const result = await StepService.archive('step-1', { beforePersist });
+
+    expect(beforePersist).toHaveBeenCalledOnce();
+    expect(archiveAndDeleteRawMessagesMock).toHaveBeenCalledWith(
+      'step-1',
+      expect.any(String),
+    );
+    expect(result.archivedAt).toBe(archivedStep.archivedAt);
   });
 
   it('falls back to captured output when continue summary generation fails', async () => {

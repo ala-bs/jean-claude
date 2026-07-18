@@ -1283,17 +1283,18 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     if (activeStepId && steps.some((s) => s.id === activeStepId)) return;
 
     // Priority: first running → first ready → last terminal → first step
-    const running = steps.find((s) => s.status === 'running');
+    const activeSteps = steps.filter((step) => !step.archivedAt);
+    const running = activeSteps.find((s) => s.status === 'running');
     if (running) {
       setActiveStepId(running.id);
       return;
     }
-    const ready = steps.find((s) => s.status === 'ready');
+    const ready = activeSteps.find((s) => s.status === 'ready');
     if (ready) {
       setActiveStepId(ready.id);
       return;
     }
-    const terminalSteps = steps.filter(
+    const terminalSteps = activeSteps.filter(
       (s) =>
         s.status === 'completed' ||
         s.status === 'interrupted' ||
@@ -1303,7 +1304,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       setActiveStepId(terminalSteps[terminalSteps.length - 1]!.id);
       return;
     }
-    setActiveStepId(steps[0]!.id);
+    setActiveStepId(activeSteps[0]?.id ?? steps[0]!.id);
   }, [steps, activeStepId, setActiveStepId]);
 
   const handleCopySessionId = useCallback(async () => {
