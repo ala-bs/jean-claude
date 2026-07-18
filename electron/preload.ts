@@ -171,6 +171,8 @@ contextBridge.exposeInMainWorld('api', {
     worktree: {
       getDiff: (taskId: string) =>
         ipcRenderer.invoke('tasks:worktree:getDiff', taskId),
+      getLocalChanges: (taskId: string) =>
+        ipcRenderer.invoke('tasks:worktree:getLocalChanges', taskId),
       getCommits: (taskId: string) =>
         ipcRenderer.invoke('tasks:worktree:getCommits', taskId),
       getCommitDiff: (taskId: string, commitHash: string) =>
@@ -198,6 +200,21 @@ contextBridge.exposeInMainWorld('api', {
           taskId,
           filePath,
           status,
+        ),
+      getLocalFileContent: (
+        taskId: string,
+        filePath: string,
+        status: 'added' | 'modified' | 'deleted',
+        scope: 'staged' | 'unstaged',
+        originalPath?: string,
+      ) =>
+        ipcRenderer.invoke(
+          'tasks:worktree:getLocalFileContent',
+          taskId,
+          filePath,
+          status,
+          scope,
+          originalPath,
         ),
       getStatus: (taskId: string) =>
         ipcRenderer.invoke('tasks:worktree:getStatus', taskId),

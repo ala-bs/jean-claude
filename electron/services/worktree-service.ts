@@ -87,7 +87,7 @@ async function getIgnoredCommitPaths({
   const { stdout } = await execFileAsync(
     'git',
     ['status', '--porcelain', '-z', '--untracked-files=all'],
-    { cwd: worktreePath, encoding: 'utf-8' },
+    { cwd: worktreePath, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 },
   );
   const entries = stdout.split('\0').filter(Boolean);
   const ignoredPaths = new Set<string>();
@@ -408,6 +408,7 @@ export function generateWorktreeNameFromTaskName(taskName: string): string {
  */
 export interface WorktreeDiffFile {
   path: string;
+  originalPath?: string;
   status: 'added' | 'modified' | 'deleted';
   additions: number;
   deletions: number;
@@ -418,12 +419,171 @@ export interface WorktreeDiffResult {
   worktreeDeleted?: boolean;
 }
 
+export interface WorktreeLocalChanges {
+  staged: WorktreeDiffFile[];
+  unstaged: WorktreeDiffFile[];
+  worktreeDeleted?: boolean;
+}
+
 export interface WorktreeFileContent {
   oldContent: string | null;
   newContent: string | null;
   isBinary: boolean;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+}
+
+function parseNameStatusOutput(output: string): WorktreeDiffFile[] {
+  const files: WorktreeDiffFile[] = [];
+  const entries = output.split('\0').filter(Boolean);
+  for (let index = 0; index < entries.length;) {
+    const inlineParts = entries[index]!.split('\t');
+    const statusCode = inlineParts[0];
+    const isRename = statusCode?.[0] === 'R' || statusCode?.[0] === 'C';
+    const originalPath = isRename && inlineParts.length === 1
+      ? entries[index + 1]
+      : undefined;
+    const filePath = inlineParts.length > 1
+      ? inlineParts.slice(1).join('\t')
+      : isRename
+        ? entries[index + 2]
+        : entries[index + 1];
+    index += inlineParts.length > 1 ? 1 : isRename ? 3 : 2;
+    const status = statusCode?.[0];
+    if (!filePath || !status) continue;
+    files.push({
+      path: filePath,
+      ...(originalPath ? { originalPath } : {}),
+      status: status === 'A' || status === 'R' || status === 'C'
+          ? status === 'A' ? 'added' : 'modified'
+        : status === 'D'
+          ? 'deleted'
+          : 'modified',
+      additions: 0,
+      deletions: 0,
+    });
+  }
+  return files;
+}
+
+async function readGitFileContent(
+  worktreePath: string,
+  ref: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['show', `${ref === ':' ? ':' : `${ref}:`}${filePath}`],
+      { cwd: worktreePath, encoding: 'utf-8', maxBuffer: 15 * 1024 * 1024 },
+    );
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
+export async function getWorktreeLocalFileContent(
+  worktreePath: string,
+  filePath: string,
+  status: 'added' | 'modified' | 'deleted',
+  scope: 'staged' | 'unstaged',
+  originalPath?: string,
+): Promise<WorktreeFileContent> {
+  const normalizedPath = path.normalize(filePath);
+  if (
+    path.isAbsolute(filePath) ||
+    normalizedPath === '..' ||
+    normalizedPath.startsWith(`..${path.sep}`)
+  ) {
+    throw new Error(`Invalid worktree file path: ${filePath}`);
+  }
+  const oldRef = scope === 'staged' ? 'HEAD' : ':';
+  const oldContent = status === 'added'
+    ? null
+    : await readGitFileContent(worktreePath, oldRef, originalPath ?? filePath);
+  let newContent: string | null = null;
+  let newIsBinary = false;
+  if (status !== 'deleted') {
+    if (scope === 'staged') {
+      newContent = await readGitFileContent(worktreePath, ':', filePath);
+    } else {
+      try {
+        const fullPath = path.join(worktreePath, filePath);
+        const [realRoot, realPath] = await Promise.all([
+          fs.realpath(worktreePath),
+          fs.realpath(fullPath),
+        ]);
+        if (realPath !== realRoot && !realPath.startsWith(`${realRoot}${path.sep}`)) {
+          throw new Error(`File path escapes worktree: ${filePath}`);
+        }
+        newIsBinary = await isBinaryFile(fullPath);
+        newContent = newIsBinary ? null : await fs.readFile(fullPath, 'utf-8');
+      } catch {
+        newContent = null;
+      }
+    }
+  }
+  const isBinary =
+    newIsBinary ||
+    (scope === 'staged' && status !== 'deleted' && newContent === null) ||
+    (oldContent?.includes('\0') ?? false) ||
+    (newContent?.includes('\0') ?? false) ||
+    (oldContent === null && newContent === null && status === 'modified');
+  return { oldContent, newContent, isBinary };
+}
+
+async function getLocalChangeFiles(
+  worktreePath: string,
+): Promise<WorktreeLocalChanges> {
+  const { stdout: statusOutput } = await execFileAsync(
+    'git',
+    ['status', '--porcelain', '-z', '--untracked-files=all'],
+    { cwd: worktreePath, encoding: 'utf-8' },
+  );
+  const staged = parseNameStatusOutput(
+    (await execFileAsync('git', ['diff', '--cached', '--name-status', '-z'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    })).stdout,
+  );
+  const unstaged = parseNameStatusOutput(
+    (await execFileAsync('git', ['diff', '--name-status', '-z'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    })).stdout,
+  );
+  const unstagedPaths = new Set(unstaged.map((file) => file.path));
+  const statusEntries = statusOutput.split('\0').filter(Boolean);
+  for (const entry of statusEntries) {
+    const status = entry.slice(0, 2);
+    const filePath = entry.slice(3);
+    if (status === '??' && filePath && !unstagedPaths.has(filePath)) {
+      unstaged.push({
+        path: filePath,
+        status: 'added',
+        additions: 0,
+        deletions: 0,
+      });
+    }
+  }
+  return { staged, unstaged };
+}
+
+export async function getWorktreeLocalChanges(
+  worktreePath: string,
+): Promise<WorktreeLocalChanges> {
+  if (!(await pathExists(worktreePath))) {
+    return { staged: [], unstaged: [], worktreeDeleted: true };
+  }
+  try {
+    return await getLocalChangeFiles(worktreePath);
+  } catch (error) {
+    if (isEnoent(error)) return { staged: [], unstaged: [], worktreeDeleted: true };
+    throw error;
+  }
 }
 
 function getSourceBranchRefs(

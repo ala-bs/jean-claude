@@ -246,6 +246,8 @@ import {
   getWorktreeCommits,
   getWorktreeDiff,
   getWorktreeFileContent,
+  getWorktreeLocalChanges,
+  getWorktreeLocalFileContent,
   getWorktreeStatus,
   getWorktreeUnifiedDiff,
   isGitRepository,
@@ -2392,6 +2394,44 @@ export function registerIpcHandlers() {
     }
     return getWorktreeCommits(task.worktreePath, task.startCommitHash);
   });
+
+  ipcMain.handle('tasks:worktree:getLocalChanges', async (_, taskId: string) => {
+    const task = await TaskRepository.findById(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    const project = task.worktreePath
+      ? null
+      : await ProjectRepository.findById(task.projectId);
+    const rootPath = task.worktreePath ?? project?.path;
+    if (!rootPath) throw new Error(`Task ${taskId} does not have a diff root`);
+    return getWorktreeLocalChanges(rootPath);
+  });
+
+  ipcMain.handle(
+    'tasks:worktree:getLocalFileContent',
+    async (
+      _,
+      taskId: string,
+      filePath: string,
+      status: 'added' | 'modified' | 'deleted',
+      scope: 'staged' | 'unstaged',
+      originalPath?: string,
+    ) => {
+      const task = await TaskRepository.findById(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      const project = task.worktreePath
+        ? null
+        : await ProjectRepository.findById(task.projectId);
+      const rootPath = task.worktreePath ?? project?.path;
+      if (!rootPath) throw new Error(`Task ${taskId} does not have a diff root`);
+      return getWorktreeLocalFileContent(
+        rootPath,
+        filePath,
+        status,
+        scope,
+        originalPath,
+      );
+    },
+  );
 
   ipcMain.handle(
     'tasks:worktree:getCommitDiff',

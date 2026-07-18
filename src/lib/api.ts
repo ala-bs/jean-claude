@@ -158,6 +158,7 @@ export interface PackageJson {
 
 export interface WorktreeDiffFile {
   path: string;
+  originalPath?: string;
   status: 'added' | 'modified' | 'deleted';
   additions: number;
   deletions: number;
@@ -368,6 +369,12 @@ export interface WorktreeStatus {
   hasUnstagedChanges: boolean;
   hasUnpushedCommits: boolean;
   currentBranch: string | null;
+  worktreeDeleted?: boolean;
+}
+
+export interface WorktreeLocalChanges {
+  staged: WorktreeDiffFile[];
+  unstaged: WorktreeDiffFile[];
   worktreeDeleted?: boolean;
 }
 
@@ -590,6 +597,7 @@ export interface Api {
     ) => Promise<Task[]>;
     worktree: {
       getDiff: (taskId: string) => Promise<WorktreeDiffResult>;
+      getLocalChanges: (taskId: string) => Promise<WorktreeLocalChanges>;
       getCommits: (taskId: string) => Promise<WorktreeCommit[]>;
       getCommitDiff: (
         taskId: string,
@@ -605,6 +613,13 @@ export interface Api {
         taskId: string,
         filePath: string,
         status: 'added' | 'modified' | 'deleted',
+      ) => Promise<WorktreeFileContent>;
+      getLocalFileContent: (
+        taskId: string,
+        filePath: string,
+        status: 'added' | 'modified' | 'deleted',
+        scope: 'staged' | 'unstaged',
+        originalPath?: string,
       ) => Promise<WorktreeFileContent>;
       getStatus: (taskId: string) => Promise<WorktreeStatus>;
       commit: (
@@ -1879,6 +1894,7 @@ export const api: Api = hasWindowApi
         reorder: async () => [],
         worktree: {
           getDiff: async () => ({ files: [] }),
+          getLocalChanges: async () => ({ staged: [], unstaged: [] }),
           getCommits: async () => [],
           getCommitDiff: async () => [],
           getCommitFileContent: async () => ({
@@ -1887,6 +1903,11 @@ export const api: Api = hasWindowApi
             isBinary: false,
           }),
           getFileContent: async () => ({
+            oldContent: null,
+            newContent: null,
+            isBinary: false,
+          }),
+          getLocalFileContent: async () => ({
             oldContent: null,
             newContent: null,
             isBinary: false,

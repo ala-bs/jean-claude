@@ -11,6 +11,7 @@ import {
   type WorktreeDiffFile,
   type WorktreeDiffResult,
   type WorktreeFileContent,
+  type WorktreeLocalChanges,
 } from '@/lib/api';
 import { invalidateFeedItems } from '@/hooks/use-tasks';
 
@@ -48,6 +49,12 @@ export function useWorktreeDiff(
     queryClient.invalidateQueries({
       queryKey: ['worktree-file-content', taskId],
     });
+    queryClient.invalidateQueries({
+      queryKey: ['worktree-local-changes', taskId],
+    });
+    queryClient.invalidateQueries({
+      queryKey: ['worktree-local-file-content', taskId],
+    });
   }, [enabled, refetchQuery, queryClient, taskId]);
 
   return {
@@ -74,6 +81,51 @@ export function useWorktreeFileContent(
     enabled: !!taskId && !!filePath && !!status,
     // Cache file content for the session
     staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useWorktreeLocalChanges(taskId: string | null, enabled = true) {
+  return useQuery<WorktreeLocalChanges>({
+    queryKey: ['worktree-local-changes', taskId],
+    queryFn: () =>
+      taskId
+        ? api.tasks.worktree.getLocalChanges(taskId)
+        : { staged: [], unstaged: [] },
+    enabled: enabled && !!taskId,
+    refetchOnWindowFocus: true,
+    staleTime: 5_000,
+  });
+}
+
+export function useWorktreeLocalFileContent(
+  taskId: string | null,
+  filePath: string | null,
+  status: 'added' | 'modified' | 'deleted' | null,
+  scope: 'staged' | 'unstaged',
+  originalPath?: string,
+) {
+  return useQuery<WorktreeFileContent>({
+    queryKey: [
+      'worktree-local-file-content',
+      taskId,
+      filePath,
+      status,
+      scope,
+      originalPath,
+    ],
+    queryFn: () =>
+      taskId && filePath && status
+        ? api.tasks.worktree.getLocalFileContent(
+            taskId,
+            filePath,
+            status,
+            scope,
+            originalPath,
+          )
+        : { oldContent: null, newContent: null, isBinary: false },
+    enabled: !!taskId && !!filePath && !!status,
+    staleTime: 5_000,
     refetchOnWindowFocus: false,
   });
 }

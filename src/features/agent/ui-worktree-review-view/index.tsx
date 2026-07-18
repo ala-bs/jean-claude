@@ -42,6 +42,8 @@ import {
   useWorktreeCommits,
   useWorktreeDiff,
   useWorktreeFileContent,
+  useWorktreeLocalChanges,
+  useWorktreeLocalFileContent,
 } from '@/hooks/use-worktree-diff';
 import { getFilesWithAnnotations } from '@/features/agent/ui-diff-annotation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
@@ -130,6 +132,12 @@ export function WorktreeReviewView({
     taskId,
     gitReviewEnabled,
   );
+  const { data: localChanges, isLoading: isLocalChangesLoading, refetch: refetchLocalChanges } =
+    useWorktreeLocalChanges(taskId, gitReviewEnabled && effectiveReviewMode === 'unstaged');
+  const [localSelection, setLocalSelection] = useState<{
+    scope: 'staged' | 'unstaged';
+    path: string;
+  } | null>(null);
 
   // Commit selection state
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(
@@ -331,6 +339,24 @@ export function WorktreeReviewView({
       status: normalizeWorktreeStatus(f.status),
     }));
   }, [data]);
+  const localFiles = useMemo(
+    () => ({
+      staged: (localChanges?.staged ?? []).map((file) => ({
+        ...file,
+        status: normalizeWorktreeStatus(file.status),
+      })),
+      unstaged: (localChanges?.unstaged ?? []).map((file) => ({
+        ...file,
+        status: normalizeWorktreeStatus(file.status),
+      })),
+    }),
+    [localChanges],
+  );
+  const selectedLocalFile = localSelection
+    ? (localChanges?.[localSelection.scope].find(
+        (file) => file.path === localSelection.path,
+      ) ?? null)
+    : null;
 
   // Build set of files that have annotations for the tree indicator
   const filesWithAnnotations = useMemo(() => {
@@ -431,6 +457,14 @@ export function WorktreeReviewView({
     );
   }
 
+  if (isLocalChangesLoading && effectiveReviewMode === 'unstaged') {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="text-ink-3 h-6 w-6 animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}
@@ -451,12 +485,16 @@ export function WorktreeReviewView({
             activeMode={effectiveReviewMode}
             onModeChange={onReviewModeChange}
             changedFilesCount={files.length}
+            localChangesCount={localFiles.staged.length + localFiles.unstaged.length}
             commitsCount={commits?.length}
             showGitModes={gitReviewEnabled}
           />
           {gitReviewEnabled && (
             <button
-              onClick={refresh}
+              onClick={() => {
+                refresh();
+                void refetchLocalChanges();
+              }}
               className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1 transition-colors"
               title="Refresh"
             >
@@ -499,6 +537,16 @@ export function WorktreeReviewView({
                 />
               )}
             </>
+          )}
+          {effectiveReviewMode === 'unstaged' && (
+            <LocalChangesSidebar
+              staged={localFiles.staged}
+              unstaged={localFiles.unstaged}
+              selected={localSelection}
+              onSelect={setLocalSelection}
+              collapsedFolders={collapsedFolders}
+              onToggleFolder={onToggleFolder}
+            />
           )}
           {effectiveReviewMode === 'files' && fileExplorerRootPath && (
             <ReviewFilesTree
@@ -575,6 +623,33 @@ export function WorktreeReviewView({
             </div>
           </>
         )}
+        {effectiveReviewMode === 'unstaged' && (
+          <div className="flex-1 overflow-auto">
+            {selectedLocalFile && localSelection ? (
+              <LocalFileDiffContent
+                taskId={taskId}
+                file={selectedLocalFile}
+                scope={localSelection.scope}
+              />
+            ) : (
+              <div className="text-ink-3 flex h-full flex-col items-center justify-center gap-2">
+                <FileX className="h-8 w-8" />
+                <p>
+                  {localFiles.staged.length + localFiles.unstaged.length === 0
+                    ? 'No staged or unstaged changes'
+                    : 'Select a file to view changes'}
+                </p>
+                <button
+                  onClick={() => void refetchLocalChanges()}
+                  className="bg-glass-medium text-ink-1 hover:bg-bg-3 flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {effectiveReviewMode === 'files' && (
           <div
             className="flex-1 overflow-auto"
@@ -635,6 +710,91 @@ export function WorktreeReviewView({
         )}
       </div>
     </div>
+  );
+}
+
+function LocalChangesSidebar({
+  staged,
+  unstaged,
+  selected,
+  onSelect,
+  collapsedFolders,
+  onToggleFolder,
+}: {
+  staged: DiffFile[];
+  unstaged: DiffFile[];
+  selected: { scope: 'staged' | 'unstaged'; path: string } | null;
+  onSelect: (selection: { scope: 'staged' | 'unstaged'; path: string }) => void;
+  collapsedFolders?: Set<string>;
+  onToggleFolder?: (path: string) => void;
+}) {
+  const renderSection = (label: string, scope: 'staged' | 'unstaged', files: DiffFile[]) => (
+    <section>
+      <div className="text-ink-3 border-glass-border bg-bg-1 border-y px-3 py-1.5 font-mono text-[10px] font-semibold tracking-wide uppercase">
+        {label} <span className="text-ink-4">{files.length}</span>
+      </div>
+      {files.length > 0 ? (
+        <DiffFileTree
+          files={files}
+          selectedPath={selected?.scope === scope ? selected.path : null}
+          onSelectFile={(path) => onSelect({ scope, path })}
+          collapsedFolders={collapsedFolders}
+          onToggleFolder={onToggleFolder}
+        />
+      ) : (
+        <div className="text-ink-4 px-3 py-2 text-xs">No {label.toLowerCase()} changes</div>
+      )}
+    </section>
+  );
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      {renderSection('Staged', 'staged', staged)}
+      {renderSection('Unstaged', 'unstaged', unstaged)}
+    </div>
+  );
+}
+
+function LocalFileDiffContent({
+  taskId,
+  file,
+  scope,
+}: {
+  taskId: string;
+  file: WorktreeDiffFile;
+  scope: 'staged' | 'unstaged';
+}) {
+  const { data, isLoading, error } = useWorktreeLocalFileContent(
+    taskId,
+    file.path,
+    file.status,
+    scope,
+    file.originalPath,
+  );
+
+  if (error) {
+    return (
+      <div className="text-ink-3 flex h-full items-center justify-center">
+        <p className="text-status-fail">Failed to load file content</p>
+      </div>
+    );
+  }
+
+  return (
+    <FileDiffContent
+      file={{
+        path: file.path,
+        status: normalizeWorktreeStatus(file.status),
+        originalPath: file.originalPath,
+      }}
+      oldContent={data?.oldContent ?? ''}
+      newContent={data?.newContent ?? ''}
+      isLoading={isLoading}
+      isBinary={data?.isBinary}
+      oldImageDataUrl={data?.oldImageDataUrl}
+      newImageDataUrl={data?.newImageDataUrl}
+      headerClassName={HEADER_HEIGHT_CLS}
+    />
   );
 }
 

@@ -1910,7 +1910,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       handler: () => {
         if (!isDiffViewOpen) return;
         const MODES: ReviewMode[] = hasGitReviewModes
-          ? ['changes', 'files', 'commits']
+          ? ['changes', 'unstaged', 'files', 'commits']
           : ['files'];
         const next = MODES[(MODES.indexOf(reviewMode) + 1) % MODES.length]!;
         setReviewMode(next);
