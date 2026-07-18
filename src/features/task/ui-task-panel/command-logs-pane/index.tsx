@@ -200,6 +200,19 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   return !!target.closest('input, textarea, select, button, [contenteditable]');
 }
 
+function selectActiveLog(pane: HTMLElement): void {
+  const log = pane.querySelector<HTMLElement>('[data-command-log-content]');
+  if (!log) return;
+
+  const selection = window.getSelection();
+  if (!selection) return;
+
+  const range = document.createRange();
+  range.selectNodeContents(log);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 export function CommandLogsPane({
   taskId,
   projectId,
@@ -345,6 +358,12 @@ export function CommandLogsPane({
           event.preventDefault();
           searchInputRef.current?.focus();
           searchInputRef.current?.select();
+          return;
+        }
+
+        if (key === 'a' && !event.shiftKey && !isInteractiveTarget(target)) {
+          event.preventDefault();
+          if (pane) selectActiveLog(pane);
           return;
         }
 
@@ -527,6 +546,7 @@ export function CommandLogsPane({
               taskId={taskId}
               runCommandId={activeCommandId}
               isRunning={isActiveRunning}
+              ignoreBrowserShortcuts
               emptyText={
                 normalizedSearchQuery
                   ? `No log lines match "${searchQuery.trim()}".`
