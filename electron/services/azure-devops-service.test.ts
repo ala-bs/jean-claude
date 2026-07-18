@@ -30,6 +30,7 @@ import {
   getPullRequestFileContent,
   getPullRequestStatuses,
   getPullRequestThreads,
+  markPullRequestDraft,
   queryWorkItemOwners,
   queryWorkItems,
   resolveWorkItemBoardColumnUpdate,
@@ -1149,6 +1150,60 @@ describe('setPullRequestAutoComplete', () => {
           },
         }),
       }),
+    );
+  });
+});
+
+describe('markPullRequestDraft', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('patches the pull request draft state', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+    await expect(
+      markPullRequestDraft({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://dev.azure.com/org/project/_apis/git/repositories/repo/pullrequests/123?api-version=7.0',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ isDraft: true }),
+      }),
+    );
+  });
+
+  it('surfaces Azure DevOps errors', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response('permission denied', { status: 403 }),
+    );
+
+    await expect(
+      markPullRequestDraft({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+      }),
+    ).rejects.toThrow(
+      'Failed to mark pull request as draft: permission denied',
     );
   });
 });

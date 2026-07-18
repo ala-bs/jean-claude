@@ -148,6 +148,7 @@ import {
   listBuilds,
   listPullRequests,
   listReleases,
+  markPullRequestDraft,
   publishPullRequest,
   queryWorkItemOwners,
   queryWorkItems,
@@ -3624,6 +3625,23 @@ export function registerIpcHandlers() {
       },
     ) => {
       const result = await publishPullRequest(params);
+      invalidatePrCache();
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    'azureDevOps:markPullRequestDraft',
+    async (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+      },
+    ) => {
+      const result = await markPullRequestDraft(params);
       invalidatePrCache();
       return result;
     },

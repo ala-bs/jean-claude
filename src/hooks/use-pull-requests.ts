@@ -1339,6 +1339,51 @@ export function usePublishPullRequest(
   });
 }
 
+export function useMarkPullRequestDraft(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
+  const queryClient = useQueryClient();
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+  const queryKey = ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)];
+
+  return useMutation({
+    mutationFn: () =>
+      api.azureDevOps.markPullRequestDraft({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+      }),
+    onSuccess: () => {
+      patchPullRequestSnapshot({
+        providerId: repoInfo!.providerId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        patch: { isDraft: true },
+      });
+      queryClient.setQueryData<AzureDevOpsPullRequestDetails | undefined>(
+        queryKey,
+        (old) => (old ? { ...old, isDraft: true } : old),
+      );
+      if (!repoInfoOverride) {
+        updateFeedPullRequest(projectId, prId, { isDraft: true });
+      }
+      queryClient.invalidateQueries({ queryKey });
+      if (!repoInfoOverride) {
+        queryClient.invalidateQueries({
+          queryKey: ['pull-requests', projectId],
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ['all-projects-pull-requests'],
+      });
+      markFeedPullRequestsStale();
+    },
+  });
+}
+
 // Policy type ID for "Limit merge types"
 const MERGE_TYPE_POLICY_ID = 'fa4e907d-c16b-4a4c-9dfa-4916e5d171ab';
 

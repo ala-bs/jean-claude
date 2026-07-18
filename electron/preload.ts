@@ -652,6 +652,12 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:publishPullRequest', params),
+    markPullRequestDraft: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+    }) => ipcRenderer.invoke('azureDevOps:markPullRequestDraft', params),
   },
   dialog: {
     openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),

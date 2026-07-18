@@ -10,6 +10,7 @@ import {
   GitMerge,
   GitPullRequest,
   Loader2,
+  MoreHorizontal,
   Plus,
   Save,
   Send,
@@ -23,9 +24,11 @@ import { useQueryClient } from '@tanstack/react-query';
 
 
 import { api, type AzureDevOpsPullRequestDetails } from '@/lib/api';
+import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
 import {
   type PullRequestRepoInfo,
+  useMarkPullRequestDraft,
   usePublishPullRequest,
   useUpdatePullRequestTitle,
 } from '@/hooks/use-pull-requests';
@@ -40,6 +43,7 @@ import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useNewTaskFormStore } from '@/stores/new-task-form';
 import { useProject } from '@/hooks/use-projects';
 import { UserAvatar } from '@/common/ui/user-avatar';
+import { useToastStore } from '@/stores/toasts';
 
 
 
@@ -115,7 +119,9 @@ export function PrHeader({
   const { setDraft: setNewTaskDraft } = useNewTaskFormStore(projectId);
   const { data: editorSetting } = useEditorSetting();
   const publishMutation = usePublishPullRequest(projectId, pr.id, repoInfo);
+  const markDraftMutation = useMarkPullRequestDraft(projectId, pr.id, repoInfo);
   const updateTitle = useUpdatePullRequestTitle(projectId, pr.id, repoInfo);
+  const addToast = useToastStore((state) => state.addToast);
   const [isCreating, setIsCreating] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(pr.title);
@@ -323,6 +329,46 @@ export function PrHeader({
           Azure DevOps
           <Kbd shortcut="cmd+shift+o" className="ml-1 text-[9px]" />
         </a>
+        {!readOnly && pr.status === 'active' && !pr.isDraft && (
+          <Dropdown
+            align="right"
+            trigger={
+              <button
+                type="button"
+                aria-label="More pull request actions"
+                className="border-glass-border bg-bg-1 hover:bg-bg-2 flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+            }
+          >
+            <DropdownItem
+              icon={
+                markDraftMutation.isPending ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <GitPullRequest />
+                )
+              }
+              disabled={markDraftMutation.isPending}
+              onClick={() =>
+                markDraftMutation.mutate(undefined, {
+                  onSuccess: () => {
+                    addToast({
+                      type: 'success',
+                      message: 'Pull request marked as draft',
+                    });
+                  },
+                  onError: (error) => {
+                    addToast({ type: 'error', message: error.message });
+                  },
+                })
+              }
+            >
+              Mark as draft
+            </DropdownItem>
+          </Dropdown>
+        )}
       </div>
 
       {/* Header — status + title + meta */}

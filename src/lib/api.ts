@@ -1047,6 +1047,12 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<void>;
+    markPullRequestDraft: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+    }) => Promise<void>;
   };
   dialog: {
     openDirectory: () => Promise<string | null>;
@@ -2098,6 +2104,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         publishPullRequest: async () => {
+          throw new Error('API not available');
+        },
+        markPullRequestDraft: async () => {
           throw new Error('API not available');
         },
       },

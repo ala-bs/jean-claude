@@ -8,7 +8,10 @@ import { createElement } from 'react';
 
 import { api } from '@/lib/api';
 
-import { useSetAutoComplete } from './use-pull-requests';
+import {
+  useMarkPullRequestDraft,
+  useSetAutoComplete,
+} from './use-pull-requests';
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
@@ -57,5 +60,60 @@ describe('useSetAutoComplete', () => {
 
     expect(Reflect.get(results[0] as object, 'isAnyPending')).toBe(true);
     expect(Reflect.get(results[1] as object, 'isAnyPending')).toBe(true);
+  });
+});
+
+describe('useMarkPullRequestDraft', () => {
+  it('updates cached PR draft state after success', async () => {
+    vi.spyOn(api.azureDevOps, 'markPullRequestDraft').mockResolvedValue();
+
+    const repoInfo = {
+      projectName: 'Project',
+      providerId: 'provider-1',
+      projectId: 'azure-project-1',
+      repoId: 'repo-1',
+    };
+    const queryKey = [
+      'pull-request',
+      'local-project-1',
+      'provider-1',
+      'azure-project-1',
+      'repo-1',
+      42,
+    ];
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKey, { id: 42, isDraft: false });
+    let mutation: ReturnType<typeof useMarkPullRequestDraft> | null = null;
+
+    function Consumer() {
+      mutation = useMarkPullRequestDraft('local-project-1', 42, repoInfo);
+      return null;
+    }
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(Consumer),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    mutation!.mutate();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(api.azureDevOps.markPullRequestDraft).toHaveBeenCalledWith({
+      providerId: 'provider-1',
+      projectId: 'azure-project-1',
+      repoId: 'repo-1',
+      pullRequestId: 42,
+    });
+    expect(queryClient.getQueryData(queryKey)).toMatchObject({
+      id: 42,
+      isDraft: true,
+    });
   });
 });

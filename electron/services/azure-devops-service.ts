@@ -3222,6 +3222,31 @@ export async function publishPullRequest(params: {
   }
 }
 
+export async function markPullRequestDraft(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ isDraft: true }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to mark pull request as draft: ${error}`);
+  }
+}
+
 export async function getPullRequestPolicyEvaluations(params: {
   providerId: string;
   projectId: string;
