@@ -107,6 +107,13 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:getSkills', projectId),
   },
   preferenceMemory: {
+    getDashboard: (params: {
+      projectId: string;
+      page?: number;
+      pageSize?: number;
+    }) => ipcRenderer.invoke('preferenceMemory:getDashboard', params),
+    consolidate: (projectId: string) =>
+      ipcRenderer.invoke('preferenceMemory:consolidate', projectId),
     recordEvidence: (params: RecordPreferenceEvidenceParams) =>
       ipcRenderer.invoke('preferenceMemory:recordEvidence', params),
   },

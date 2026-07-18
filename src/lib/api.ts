@@ -127,6 +127,7 @@ import type {
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
 import type {
+  PreferenceMemoryDashboard,
   RecordPreferenceEvidenceParams,
   RecordPreferenceEvidenceResult,
 } from '@shared/preference-memory-types';
@@ -509,6 +510,12 @@ export interface Api {
     getSkills: (projectId: string) => Promise<Skill[]>;
   };
   preferenceMemory: {
+    getDashboard: (params: {
+      projectId: string;
+      page?: number;
+      pageSize?: number;
+    }) => Promise<PreferenceMemoryDashboard>;
+    consolidate: (projectId: string) => Promise<{ processed: boolean }>;
     recordEvidence: (
       params: RecordPreferenceEvidenceParams,
     ) => Promise<RecordPreferenceEvidenceResult>;
@@ -1850,6 +1857,12 @@ export const api: Api = hasWindowApi
         getSkills: async () => [],
       },
       preferenceMemory: {
+        getDashboard: async () => {
+          throw new Error('API not available');
+        },
+        consolidate: async () => {
+          throw new Error('API not available');
+        },
         recordEvidence: async () => {
           throw new Error('API not available');
         },

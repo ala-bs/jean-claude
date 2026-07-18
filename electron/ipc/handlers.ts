@@ -386,7 +386,11 @@ import { ProjectCommandRepository } from '../database/repositories/project-comma
 import { projectFileIndexService } from '../services/project-file-index-service';
 import { ProjectMcpOverrideRepository } from '../database/repositories/project-mcp-overrides';
 import { ProjectRunConfigRepository } from '../database/repositories/project-run-config';
-import { recordPreferenceEvidence } from '../services/preference-memory-service';
+import {
+  consolidatePreferenceMemoryForProject,
+  getPreferenceMemoryDashboard,
+  recordPreferenceEvidence,
+} from '../services/preference-memory-service';
 import { regenerateProjectSummary } from '../services/project-summary-generation-service';
 import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import { runCommandService } from '../services/run-command-service';
@@ -1338,6 +1342,24 @@ export function registerIpcHandlers() {
       }));
   });
 
+  ipcMain.handle(
+    'preferenceMemory:getDashboard',
+    async (_, params: { projectId: string; page?: number; pageSize?: number }) =>
+      getPreferenceMemoryDashboard(params),
+  );
+  ipcMain.handle(
+    'preferenceMemory:consolidate',
+    async (_, projectId: string) => {
+      const project = await ProjectRepository.findById(projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      const setting = await SettingsRepository.get('preferenceMemory');
+      return consolidatePreferenceMemoryForProject(project, {
+        backend: setting.consolidationBackend,
+        model: setting.consolidationModel,
+        thinkingEffort: setting.consolidationThinkingEffort,
+      });
+    },
+  );
   ipcMain.handle(
     'preferenceMemory:recordEvidence',
     async (_, params: RecordPreferenceEvidenceParams) =>

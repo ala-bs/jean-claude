@@ -86,6 +86,7 @@ import {
 } from '@/hooks/use-claude-projects-cleanup';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { Button } from '@/common/ui/button';
+import { PreferenceMemoryDashboard } from '@/features/settings/ui-preference-memory-dashboard';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
@@ -442,6 +443,8 @@ export function PreferenceMemorySettings() {
           />
         </div>
       </div>
+
+      <PreferenceMemoryDashboard />
 
       <div className="border-glass-border bg-bg-1 mt-4 rounded-lg border px-4 py-3">
         <div className="flex items-start justify-between gap-4">
