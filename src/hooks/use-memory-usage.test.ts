@@ -42,6 +42,7 @@ describe('useMemoryUsage', () => {
           privateBytes: 150,
           cpuPercent: 3,
         },
+        gpuCpuPercent: 4,
       });
 
     function OverlayHarness() {
@@ -98,6 +99,7 @@ describe('useMemoryUsage', () => {
           privateBytes: 150,
           cpuPercent: 3,
         },
+        gpuCpuPercent: 4,
       });
 
     function Harness() {
@@ -135,6 +137,7 @@ describe('useMemoryUsage', () => {
           privateBytes: 150,
           cpuPercent: 3,
         },
+        gpuCpuPercent: 4,
       });
 
     function Harness() {

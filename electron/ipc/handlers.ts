@@ -6385,10 +6385,12 @@ export function registerIpcHandlers() {
       (rendererMetric?.memory?.workingSetSize ?? 0) * 1024;
     const rendererPrivateBytes =
       (rendererMetric?.memory?.privateBytes ?? 0) * 1024;
+    const gpuMetric = metrics.find((metric) => metric.type === 'GPU');
 
     return {
       logicalCpuCount: os.cpus().length,
       totalRssBytes: mainMem.rss + rendererRssBytes,
+      gpuCpuPercent: gpuMetric?.cpu?.percentCPUUsage ?? 0,
       mainProcess: {
         heapUsedBytes: mainMem.heapUsed,
         rssBytes: mainMem.rss,

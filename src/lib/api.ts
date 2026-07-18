@@ -1740,6 +1740,7 @@ export interface Api {
         privateBytes: number;
         cpuPercent: number;
       };
+      gpuCpuPercent: number;
     }>;
   };
   debugLogs: {
@@ -2651,6 +2652,7 @@ export const api: Api = hasWindowApi
             privateBytes: 0,
             cpuPercent: 0,
           },
+          gpuCpuPercent: 0,
         }),
       },
       debugLogs: {
