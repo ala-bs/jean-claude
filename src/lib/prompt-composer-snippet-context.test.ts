@@ -40,7 +40,21 @@ describe('buildWorkItemSnippetContext', () => {
       buildWorkItemSnippetContext({
         workItems,
         comments,
-        testCasesByWorkItem: { 123: [{ id: 99, title: 'Regression test' }] },
+        testCasesByWorkItem: {
+          123: [
+            {
+              id: 99,
+              title: 'Regression test',
+              steps: [
+                {
+                  action: '<DIV><P>Click <strong>Save</strong></P></DIV>',
+                  expectedResult:
+                    '<DIV><UL><LI>Saved</LI><LI style="margin: 0">Toast shown</LI></UL></DIV>',
+                },
+              ],
+            },
+          ],
+        },
       }),
     ).toEqual([
       {
@@ -54,7 +68,18 @@ describe('buildWorkItemSnippetContext', () => {
             body: '<p>Still shows {{project.name}}</p>',
           },
         ],
-        testCases: [{ id: 99, title: 'Regression test' }],
+        testCases: [
+          {
+            id: 99,
+            title: 'Regression test',
+            steps: [
+              {
+                action: '<p>Click <strong>Save</strong></p>',
+                expectedResult: '- Saved\n- Toast shown',
+              },
+            ],
+          },
+        ],
       },
     ]);
   });
