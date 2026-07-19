@@ -78,6 +78,42 @@ describe('message-merger', () => {
     ).toBeUndefined();
   });
 
+  it('computes interrupted group duration from next prompt', () => {
+    const entries: NormalizedEntry[] = [
+      {
+        id: 'prompt-1',
+        date: '2026-05-23T10:00:00.000Z',
+        type: 'user-prompt',
+        value: 'Start work',
+      },
+      {
+        id: 'tool-1',
+        date: '2026-05-23T10:00:03.000Z',
+        type: 'tool-use',
+        toolId: 'call-1',
+        name: 'bash',
+        input: {
+          command: 'pnpm test',
+        },
+      },
+      {
+        id: 'prompt-2',
+        date: '2026-05-23T10:00:05.000Z',
+        type: 'user-prompt',
+        value: 'Interrupt',
+      },
+    ];
+
+    const merged = mergeSkillMessages(entries);
+    const groups = groupByPrompts(merged, false);
+
+    expect(groups[0]).toMatchObject({
+      kind: 'prompt-group',
+      status: 'interrupted',
+      durationMs: 5_000,
+    });
+  });
+
   it('hides file-edited entries already covered by edit tools', () => {
     const entries: NormalizedEntry[] = [
       {
