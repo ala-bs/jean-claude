@@ -1048,6 +1048,8 @@ class AgentService {
               parts,
               projectPath: project.path,
               isInitialPrompt: options?.isInitialPrompt ?? false,
+              backend: session.backendType,
+              model: modelPreference ?? 'default',
             });
 
       if (session.backendType === 'opencode' || session.backendType === 'vibe') {
