@@ -544,7 +544,7 @@ const SideBySideCell = memo(function SideBySideCell({
       <td
         data-line-side={side === 'left' ? 'old' : 'new'}
         className={clsx(
-          'relative pr-1 text-right align-top select-none',
+          'relative pr-1 text-right align-top select-none whitespace-nowrap',
           lineNumClass,
           bgClass,
         )}
