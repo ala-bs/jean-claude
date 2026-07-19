@@ -30,6 +30,7 @@ import {
   getPullRequestFileContent,
   getPullRequestStatuses,
   getPullRequestThreads,
+  markPullRequestDraft,
   queryWorkItemOwners,
   queryWorkItems,
   resolveWorkItemBoardColumnUpdate,
@@ -483,6 +484,34 @@ describe('buildWorkItemFieldPatch', () => {
     expect(() =>
       buildWorkItemFieldPatch({ field: 'System.State', value: '' }),
     ).toThrow('state cannot be empty');
+    expect(
+      buildWorkItemFieldPatch({
+        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+        value: '',
+      }),
+    ).toEqual({
+      op: 'remove',
+      path: '/fields/Microsoft.VSTS.Scheduling.StoryPoints',
+    });
+  });
+
+  it('validates story points as a non-negative integer', () => {
+    expect(
+      buildWorkItemFieldPatch({
+        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+        value: 3,
+      }),
+    ).toEqual({
+      op: 'add',
+      path: '/fields/Microsoft.VSTS.Scheduling.StoryPoints',
+      value: 3,
+    });
+    expect(() =>
+      buildWorkItemFieldPatch({
+        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+        value: -1,
+      }),
+    ).toThrow('non-negative integer');
   });
 
   it('builds an iteration path update', () => {
@@ -748,10 +777,14 @@ describe('board column configuration and updates', () => {
   });
 });
 
-function jsonResponse(body: unknown, init: { ok: boolean; status?: number }) {
+function jsonResponse(
+  body: unknown,
+  init: { ok: boolean; status?: number; headers?: HeadersInit },
+) {
   return {
     ok: init.ok,
     status: init.status ?? (init.ok ? 200 : 400),
+    headers: new Headers(init.headers),
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response;
@@ -969,6 +1002,104 @@ describe('addWorkItemComment', () => {
     );
   });
 
+  it('fetches body-token pages newest-first and deduplicates comment ids', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            comments: [
+              { id: 3, workItemId: 299, text: 'Newest' },
+              { id: 2, workItemId: 299, text: 'Middle' },
+            ],
+            continuationToken: 'next token&page=2',
+          },
+          {
+            ok: true,
+            headers: { 'x-ms-continuationtoken': 'ignored-header-token' },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            comments: [
+              { id: 2, workItemId: 299, text: 'Duplicate middle' },
+              { id: 1, workItemId: 299, text: 'Oldest' },
+            ],
+          },
+          { ok: true },
+        ),
+      );
+
+    const comments = await getWorkItemComments({
+      providerId: 'provider-1',
+      projectName: 'Project Name',
+      workItemId: 299,
+    });
+
+    expect(comments.map((comment) => comment.id)).toEqual([3, 2, 1]);
+    expect(vi.mocked(fetch).mock.calls[1][0]).toBe(
+      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText&continuationToken=next+token%26page%3D2',
+    );
+  });
+
+  it('fetches the next page using a header continuation token', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { comments: [{ id: 2, workItemId: 299, text: 'Newest' }] },
+          {
+            ok: true,
+            headers: { 'x-ms-continuationtoken': 'header/token' },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { comments: [{ id: 1, workItemId: 299, text: 'Oldest' }] },
+          { ok: true },
+        ),
+      );
+
+    const comments = await getWorkItemComments({
+      providerId: 'provider-1',
+      projectName: 'Project Name',
+      workItemId: 299,
+    });
+
+    expect(comments.map((comment) => comment.id)).toEqual([2, 1]);
+    expect(vi.mocked(fetch).mock.calls[1][0]).toContain(
+      'continuationToken=header%2Ftoken',
+    );
+  });
+
+  it('throws when Azure repeats a continuation token', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { comments: [], continuationToken: 'repeated-token' },
+          { ok: true },
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { comments: [], continuationToken: 'repeated-token' },
+          { ok: true },
+        ),
+      );
+
+    await expect(
+      getWorkItemComments({
+        providerId: 'provider-1',
+        projectName: 'Project Name',
+        workItemId: 299,
+      }),
+    ).rejects.toThrow(
+      'Repeated continuation token while fetching comments for work item 299',
+    );
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  });
+
   it('expands relative work item attachment URLs in rendered comments', async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse(
@@ -1121,6 +1252,60 @@ describe('setPullRequestAutoComplete', () => {
           },
         }),
       }),
+    );
+  });
+});
+
+describe('markPullRequestDraft', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it('patches the pull request draft state', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 200 }));
+
+    await expect(
+      markPullRequestDraft({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://dev.azure.com/org/project/_apis/git/repositories/repo/pullrequests/123?api-version=7.0',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ isDraft: true }),
+      }),
+    );
+  });
+
+  it('surfaces Azure DevOps errors', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response('permission denied', { status: 403 }),
+    );
+
+    await expect(
+      markPullRequestDraft({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+      }),
+    ).rejects.toThrow(
+      'Failed to mark pull request as draft: permission denied',
     );
   });
 });

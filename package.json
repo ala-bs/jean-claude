@@ -83,6 +83,7 @@
     "kysely": "^0.28.10",
     "lodash-es": "^4.17.23",
     "lucide-react": "^0.562.0",
+    "mermaid": "^11.16.0",
     "monaco-editor": "^0.55.1",
     "nanoid": "^5.1.6",
     "node-pty": "^1.1.0",

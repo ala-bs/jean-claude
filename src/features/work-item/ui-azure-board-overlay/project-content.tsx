@@ -161,12 +161,14 @@ function RelatedBugsPanel({
   story,
   bugs,
   onBack,
+  onClose,
   onOpenBug,
   parserSetting,
 }: {
   story: AzureDevOpsWorkItem;
   bugs: AzureDevOpsWorkItem[];
   onBack: () => void;
+  onClose: () => void;
   onOpenBug: (bugId: number) => void;
   parserSetting: WorkItemTitleParserSetting | null;
 }) {
@@ -176,16 +178,22 @@ function RelatedBugsPanel({
         <button type="button" onClick={onBack} className="text-ink-3 hover:bg-bg-3 hover:text-ink-1 -ml-1 p-1" aria-label="Back to work item details">
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <div className="min-w-0 flex-1">
+         <div className="min-w-0 flex-1">
           <div className="text-ink-3 mb-0.5 font-mono text-[10px]">#{story.id} · related bugs</div>
           <ParsedWorkItemTitle
             title={story.fields.title}
             parserSetting={parserSetting}
             compact
             titleClassName="text-ink-0 truncate text-sm font-semibold"
-          />
-        </div>
-      </div>
+           />
+         </div>
+         <IconButton
+           size="sm"
+           icon={<X />}
+           tooltip="Close details pane"
+           onClick={onClose}
+         />
+       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-3.5">
         {bugs.map((bug) => {
           const isClosed = isWorkItemClosedState(bug.fields.state);
@@ -235,9 +243,11 @@ function RelatedBugsPanel({
 export function AzureWorkItemActions({
   workItem,
   onCreateTask,
+  onClose,
 }: {
   workItem: AzureDevOpsWorkItem;
   onCreateTask: () => void;
+  onClose: () => void;
 }) {
   const addToast = useToastStore((state) => state.addToast);
   const copyLink = async () => {
@@ -265,6 +275,12 @@ export function AzureWorkItemActions({
       tooltip="Copy work item link"
       onClick={copyLink}
     />
+    <IconButton
+      size="sm"
+      icon={<X />}
+      tooltip="Close details pane"
+      onClick={onClose}
+    />
   </>;
 }
 
@@ -286,7 +302,9 @@ export function AzureBoardProjectContent({
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const refreshingRef = useRef(false);
   const mountedRef = useRef(true);
+  const contentRef = useRef<HTMLDivElement>(null);
   const detailsPaneRef = useRef<HTMLElement>(null);
+  const workItemIdToRefocusRef = useRef<number | null>(null);
   const projectFilters = useAzureBoardStore(
     (state) => state.filtersByProject[project.id],
   );
@@ -423,6 +441,18 @@ export function AzureBoardProjectContent({
     };
   }, [itemsQuery.isFetching, rootWorkItemId, visibleItems]);
 
+  useEffect(() => {
+    const workItemId = workItemIdToRefocusRef.current;
+    if (selectedWorkItemId !== null || workItemId === null) return;
+    workItemIdToRefocusRef.current = null;
+    const card = contentRef.current?.querySelector<HTMLElement>(
+      `[data-work-item-id="${workItemId}"]`,
+    );
+    const focusTarget =
+      card?.querySelector<HTMLElement>('button, [tabindex="0"]') ?? card;
+    focusTarget?.focus({ preventScroll: true });
+  }, [selectedWorkItemId]);
+
   const refreshWorkItems = async () => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
@@ -471,8 +501,15 @@ export function AzureBoardProjectContent({
   const openRelatedWorkItem = (workItemId: number) => {
     setWorkItemStack((stack) => pushWorkItemStack(stack, workItemId));
   };
+  const closeDetailsPane = () => {
+    workItemIdToRefocusRef.current = rootWorkItemId;
+    setWorkItemStack([]);
+    setHighlightedBoardWorkItemId(null);
+    setBugsForWorkItemId(null);
+    setIsRelatedBugsPanelOpen(false);
+  };
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={contentRef} className="flex min-h-0 flex-1 flex-col">
       <header className="border-line flex min-h-12 shrink-0 items-center gap-2 border-b px-4 py-2.5">
         <div className="flex shrink-0 items-center gap-2">{headerLeading}</div>
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
@@ -564,6 +601,7 @@ export function AzureBoardProjectContent({
                   selectedWorkItemIds={[]}
                   providerId={params.providerId}
                   search={filters.search}
+                  currentIterationPath={iterations.find((iteration) => iteration.isCurrent)?.path}
                   showSelection={false}
                   onHighlight={(item) => {
                     setBugsForWorkItemId(null);
@@ -601,7 +639,8 @@ export function AzureBoardProjectContent({
                       story={bugsForWorkItem}
                        bugs={relatedBugs}
                        parserSetting={project.workItemTitleParser}
-                      onBack={() => {
+                       onClose={closeDetailsPane}
+                       onBack={() => {
                         setBugsForWorkItemId(null);
                         setIsRelatedBugsPanelOpen(false);
                        }}
@@ -623,8 +662,9 @@ export function AzureBoardProjectContent({
                       )}
                       <WorkItemPreview
                       workItem={selectedWorkItem}
+                      projectId={project.id}
                       providerId={params.providerId}
-                      projectId={params.projectId}
+                      workItemProjectId={params.projectId}
                       projectName={params.projectName}
                         editableMetadata
                         assigneeOptions={assignees}
@@ -654,18 +694,23 @@ export function AzureBoardProjectContent({
                         <ArrowLeft size={14} />
                       </button> : undefined}
                       onOpenRelatedWorkItem={openRelatedWorkItem}
-                      headerActions={selectedWorkItem && <AzureWorkItemActions workItem={selectedWorkItem} onCreateTask={() => createTask(selectedWorkItem)} />}
-                     />
-                    </div> : selectedWorkItemId !== null ? (
-                      <div className="grid h-full place-items-center px-6 text-center">
-                        {detailedWorkItemQuery.error ? <div>
-                          <p role="alert" className="text-status-fail text-xs">Failed to load work item details: {detailedWorkItemQuery.error.message}</p>
-                          <button type="button" onClick={() => void detailedWorkItemQuery.refetch()} className="border-line bg-bg-2 hover:bg-bg-3 text-ink-1 mt-2 rounded border px-2 py-1 text-xs">Retry</button>
-                        </div> : detailedWorkItemQuery.isLoading ? (
-                          <p className="text-ink-3 text-xs">Loading work item details...</p>
-                        ) : (
-                          <p role="alert" className="text-status-fail text-xs">Work item details are unavailable.</p>
-                        )}
+                      headerActions={selectedWorkItem && <AzureWorkItemActions workItem={selectedWorkItem} onCreateTask={() => createTask(selectedWorkItem)} onClose={closeDetailsPane} />}
+                      />
+                     </div> : selectedWorkItemId !== null ? (
+                      <div className="flex h-full flex-col">
+                        <div className="border-line flex justify-end border-b px-4 py-3">
+                          <IconButton size="sm" icon={<X />} tooltip="Close details pane" onClick={closeDetailsPane} />
+                        </div>
+                        <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
+                          {detailedWorkItemQuery.error ? <div>
+                            <p role="alert" className="text-status-fail text-xs">Failed to load work item details: {detailedWorkItemQuery.error.message}</p>
+                            <button type="button" onClick={() => void detailedWorkItemQuery.refetch()} className="border-line bg-bg-2 hover:bg-bg-3 text-ink-1 mt-2 rounded border px-2 py-1 text-xs">Retry</button>
+                          </div> : detailedWorkItemQuery.isLoading ? (
+                            <p className="text-ink-3 text-xs">Loading work item details...</p>
+                          ) : (
+                            <p role="alert" className="text-status-fail text-xs">Work item details are unavailable.</p>
+                          )}
+                        </div>
                       </div>
                     ) : <WorkItemPreview workItem={null} variant="editorial" />}
                 </aside>

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_WORK_ITEM_SUMMARY_SLOT,
   getInteractionModeOptions,
+  isAiSkillSlotsSetting,
   isPrReviewChatStepMeta,
   SETTINGS_DEFINITIONS,
 } from './types';
@@ -35,6 +37,34 @@ describe('SETTINGS_DEFINITIONS.thinkingSettings', () => {
         },
       }),
     ).toBe(true);
+  });
+});
+
+describe('SETTINGS_DEFINITIONS.aiSkillSlots', () => {
+  it('accepts the work item summary slot', () => {
+    expect(
+      isAiSkillSlotsSetting({
+        'work-item-summary': DEFAULT_WORK_ITEM_SUMMARY_SLOT,
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects unknown slot keys', () => {
+    expect(
+      isAiSkillSlotsSetting({
+        'unknown-slot': DEFAULT_WORK_ITEM_SUMMARY_SLOT,
+      }),
+    ).toBe(false);
+  });
+
+  it('enables the work item summary slot by default', () => {
+    expect(
+      SETTINGS_DEFINITIONS.aiSkillSlots.defaultValue['work-item-summary'],
+    ).toEqual(DEFAULT_WORK_ITEM_SUMMARY_SLOT);
+  });
+
+  it('uses the builtin work item summary skill by default', () => {
+    expect(DEFAULT_WORK_ITEM_SUMMARY_SLOT.skillName).toBe('work-item-summary');
   });
 });
 

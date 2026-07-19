@@ -57,6 +57,23 @@ describe('QuestionOptions', () => {
     );
   });
 
+  it('renders cmd+enter submit shortcut hint', () => {
+    const markup = renderToStaticMarkup(
+      <RootKeyboardBindings>
+        <QuestionOptions
+          request={{
+            taskId: 'task-1',
+            requestId: 'request-shortcut',
+            questions: [],
+          }}
+          onRespond={() => {}}
+        />
+      </RootKeyboardBindings>,
+    );
+
+    expect(markup).toContain('⌘↵');
+  });
+
   it.each(['text', 'multi_choice'] as const)(
     'renders Decide for me among %s responses',
     (type) => {

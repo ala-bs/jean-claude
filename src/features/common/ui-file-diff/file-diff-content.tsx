@@ -55,6 +55,7 @@ export function FileDiffContent({
   isLoading,
   isBinary,
   headerClassName,
+  headerActions,
   // Optional image support
   oldImageDataUrl,
   newImageDataUrl,
@@ -90,6 +91,7 @@ export function FileDiffContent({
   isLoading?: boolean;
   isBinary?: boolean;
   headerClassName?: string;
+  headerActions?: ReactNode;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
   // Comment props - all optional
@@ -457,8 +459,14 @@ export function FileDiffContent({
   // Build set of all lines covered by any comment anchor range
   const commentedLines = useMemo(() => {
     const set = new Set<string>();
-    // From inline comments (thread + annotation) — single line each
-    for (const c of threadComments) set.add(lineAnchorKey(c.side, c.line));
+    // PR threads can cover a selected range while rendering after its final line.
+    for (const thread of fileThreads) {
+      const start = thread.lineStart ?? thread.line!;
+      const end = thread.lineEnd ?? start;
+      for (let line = start; line <= end; line++) {
+        set.add(lineAnchorKey('new', line));
+      }
+    }
     for (const c of annotationComments) set.add(lineAnchorKey(c.side, c.line));
     // From review comments — full lineStart..lineEnd range
     if (reviewComments) {
@@ -478,7 +486,7 @@ export function FileDiffContent({
       }
     }
     return set;
-  }, [threadComments, annotationComments, reviewComments, prReviewChatCards]);
+  }, [fileThreads, annotationComments, reviewComments, prReviewChatCards]);
 
   // Handle review comment submission for a specific range
   const handleAddReviewCommentForRange = useCallback(
@@ -668,7 +676,11 @@ export function FileDiffContent({
     if (oldImageDataUrl || newImageDataUrl) {
       return (
         <div className="flex h-full flex-col overflow-hidden">
-          <FileDiffHeader file={file} className={headerClassName} />
+          <FileDiffHeader
+            file={file}
+            className={headerClassName}
+            actions={headerActions}
+          />
           <div className="flex min-h-0 flex-1 items-center justify-center gap-6 overflow-auto p-6">
             {oldImageDataUrl && newImageDataUrl ? (
               // Modified image: show old → new side by side
@@ -762,6 +774,7 @@ export function FileDiffContent({
             (prReviewChatCards?.length ?? 0)
           }
           hasAnnotations={hasAnnotations}
+          actions={headerActions}
         />
         <div
           ref={svgPreviewContainerRef}
@@ -844,6 +857,7 @@ export function FileDiffContent({
           (prReviewChatCards?.length ?? 0)
         }
         hasAnnotations={hasAnnotations}
+        actions={headerActions}
       />
 
       {/* Diff view with inline comments */}

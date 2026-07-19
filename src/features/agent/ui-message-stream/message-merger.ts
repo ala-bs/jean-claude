@@ -460,6 +460,71 @@ function computeGroupDuration(
   return undefined;
 }
 
+function getLatestDisplayMessageDateMs(message: DisplayMessage): number | undefined {
+  let latestMs: number | undefined;
+
+  function trackEntry(entry: NormalizedEntry): void {
+    const ms = parseDateMs(entry.date);
+    if (ms !== undefined && (latestMs === undefined || ms > latestMs)) {
+      latestMs = ms;
+    }
+  }
+
+  if (message.kind === 'entry') trackEntry(message.entry);
+  if (message.kind === 'compacting') {
+    trackEntry(message.startEntry);
+    if (message.endEntry) trackEntry(message.endEntry);
+  }
+  if (message.kind === 'skill') {
+    if ('date' in message.skillToolUse) {
+      trackEntry(message.skillToolUse as NormalizedEntry);
+    }
+    if (message.promptEntry) trackEntry(message.promptEntry);
+    for (const entry of message.childEntries) trackEntry(entry);
+    const latestChildMs = parseDateMs(message.latestChildEntryDate);
+    if (
+      latestChildMs !== undefined &&
+      (latestMs === undefined || latestChildMs > latestMs)
+    ) {
+      latestMs = latestChildMs;
+    }
+  }
+  if (message.kind === 'subagent') {
+    if ('date' in message.toolUse) {
+      trackEntry(message.toolUse as NormalizedEntry);
+    }
+    for (const entry of message.childEntries) trackEntry(entry);
+    const latestChildMs = parseDateMs(message.latestChildEntryDate);
+    if (
+      latestChildMs !== undefined &&
+      (latestMs === undefined || latestChildMs > latestMs)
+    ) {
+      latestMs = latestChildMs;
+    }
+  }
+
+  return latestMs;
+}
+
+function computeOpenGroupDuration(
+  group: PromptGroup,
+  fallbackEndDate?: string,
+): number | undefined {
+  const startMs = parseDateMs(group.promptEntry.date);
+  if (startMs === undefined) return undefined;
+
+  let latestMs = parseDateMs(fallbackEndDate);
+  for (const childMessage of group.childMessages) {
+    const childMs = getLatestDisplayMessageDateMs(childMessage);
+    if (childMs !== undefined && (latestMs === undefined || childMs > latestMs)) {
+      latestMs = childMs;
+    }
+  }
+
+  if (latestMs === undefined || latestMs < startMs) return undefined;
+  return latestMs - startMs;
+}
+
 /**
  * Group display messages by user prompts.
  * Each user-prompt starts a new PromptGroup that collects all following messages
@@ -479,8 +544,10 @@ export function groupByPrompts(
 
   function finalizeCurrentGroup({
     hasNextPrompt,
+    nextPromptDate,
   }: {
     hasNextPrompt: boolean;
+    nextPromptDate?: string;
   }): void {
     if (!currentGroup) return;
 
@@ -496,6 +563,13 @@ export function groupByPrompts(
           : isRunning
             ? 'running'
             : 'interrupted';
+
+      if (currentGroup.status !== 'running') {
+        currentGroup.durationMs = computeOpenGroupDuration(
+          currentGroup,
+          currentGroup.status === 'interrupted' ? nextPromptDate : undefined,
+        );
+      }
     }
 
     result.push(currentGroup);
@@ -506,7 +580,7 @@ export function groupByPrompts(
     // A user prompt starts a new group
     if (isUserPromptMessage(dm)) {
       // Finalize previous group if any
-      finalizeCurrentGroup({ hasNextPrompt: true });
+      finalizeCurrentGroup({ hasNextPrompt: true, nextPromptDate: dm.entry.date });
 
       currentGroup = {
         kind: 'prompt-group',

@@ -1,18 +1,24 @@
-import { Bug, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Bug, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
+import { getWorkItemSummaryExcerpt } from '@shared/work-item-summary';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
 import { getOwnerColor } from '@/features/work-item/utils-owner-color';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
+import { useCachedWorkItemSummaries } from '@/hooks/use-work-item-summary';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentAzureUser } from '@/hooks/use-work-items';
 import { UserAvatar } from '@/common/ui/user-avatar';
 
 
-import { groupWorkItemsByBoardColumns, parseAzureWorkItemTags } from './utils';
+import {
+  groupWorkItemsByBoardColumns,
+  isAzureWorkItemOutOfSprint,
+  parseAzureWorkItemTags,
+} from './utils';
 import {
   HighlightedSearchText,
   SelectionCheckbox,
@@ -67,6 +73,7 @@ export function WorkItemBoard({
   selectedWorkItemIds,
   providerId,
   search,
+  currentIterationPath,
   onToggleSelect,
   onHighlight,
   showSelection = true,
@@ -86,6 +93,7 @@ export function WorkItemBoard({
   selectedWorkItemIds: string[];
   providerId?: string;
   search: string;
+  currentIterationPath?: string;
   onToggleSelect?: (workItem: AzureDevOpsWorkItem) => void;
   onHighlight: (workItem: AzureDevOpsWorkItem) => void;
   showSelection?: boolean;
@@ -103,6 +111,17 @@ export function WorkItemBoard({
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
+  const { data: cachedSummaries = [] } = useCachedWorkItemSummaries({
+    providerId: providerId ?? null,
+    workItemIds: workItems.map((workItem) => workItem.id),
+  });
+  const summariesByWorkItemId = useMemo(
+    () =>
+      new Map(
+        cachedSummaries.map((summary) => [summary.workItemId, summary] as const),
+      ),
+    [cachedSummaries],
+  );
 
   // Group work items by Azure board column when available, then fall back to state.
   const columns = useMemo(
@@ -114,9 +133,9 @@ export function WorkItemBoard({
   const isEditorial = variant === 'editorial';
 
   const visibleColumns = useMemo(() => {
-    if (isEditorial || !search.trim()) return columns;
+    if (!search.trim()) return columns;
     return columns.filter((column) => column.items.length > 0);
-  }, [columns, isEditorial, search]);
+  }, [columns, search]);
   const navigableColumns = useMemo(
     () => visibleColumns.filter((column) => !collapsedIds.includes(column.id)),
     [collapsedIds, visibleColumns],
@@ -302,6 +321,10 @@ export function WorkItemBoard({
             )}
           >
             {items.map((workItem) => {
+              const isOutOfSprint = isAzureWorkItemOutOfSprint(
+                workItem,
+                currentIterationPath,
+              );
               const isHighlighted =
                 workItem.id.toString() === highlightedWorkItemId;
               const isExactMatch =
@@ -311,6 +334,14 @@ export function WorkItemBoard({
               );
               const isRelatedBug = relatedBugWorkItemIds.includes(workItem.id);
               const bugProgress = childBugProgressByWorkItemId?.[workItem.id];
+              const cachedSummary = summariesByWorkItemId.get(workItem.id);
+              const summaryExcerpt = cachedSummary
+                ? getWorkItemSummaryExcerpt(cachedSummary.content)
+                : null;
+              const summaryIsStale =
+                !!cachedSummary &&
+                cachedSummary.sourceChangedDate !==
+                  (workItem.fields.changedDate ?? null);
               const openWorkItem = (modified: boolean) => {
                 if (modified && onModifiedClick) {
                   onModifiedClick(workItem);
@@ -347,6 +378,7 @@ export function WorkItemBoard({
                     <HighlightedSearchText text={`#${workItem.id}`} search={search} />
                   </span>
                   {isExactMatch && <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">Exact</span>}
+                  {isOutOfSprint && <span className="max-w-28 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase" title={`Iteration: ${workItem.fields.iterationPath}`}>{workItem.fields.iterationPath?.split(/[\\/]/).at(-1)}</span>}
                   {!isEditorial && <span className="text-ink-2 max-w-[80px] truncate text-[10px]">{workItem.fields.workItemType}</span>}
                 </>;
               const cardMetadata = <span className="flex items-center gap-1.5">
@@ -418,6 +450,18 @@ export function WorkItemBoard({
                   >
                     {cardHeading}
                   </button> : cardHeading}
+                  {summaryExcerpt && (
+                    <div className="text-ink-3 flex min-w-0 items-center gap-1.5 text-[10.5px] leading-snug">
+                      <Sparkles className="text-acc h-3 w-3 shrink-0" />
+                      <span className="line-clamp-1 min-w-0">{summaryExcerpt}</span>
+                      {summaryIsStale && (
+                        <span
+                          className="bg-status-run h-1.5 w-1.5 shrink-0 rounded-full"
+                          title="Summary source updated"
+                        />
+                      )}
+                    </div>
+                  )}
                   {bugProgress && (
                     onOpenChildBugs ? <button
                       type="button"

@@ -191,6 +191,8 @@ export interface PermissionResponse {
   allowMode?: 'session' | 'project' | 'worktree';
   /** Override the tools to allow in the session (e.g., bare tool name for "allow all") */
   toolsToAllow?: string[];
+  /** Parent directory selected from trusted choices on the permission request. */
+  allowedDirectory?: string;
 }
 
 export interface QuestionResponse {

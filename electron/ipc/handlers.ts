@@ -148,6 +148,7 @@ import {
   listBuilds,
   listPullRequests,
   listReleases,
+  markPullRequestDraft,
   publishPullRequest,
   queryWorkItemOwners,
   queryWorkItems,
@@ -246,6 +247,8 @@ import {
   getWorktreeCommits,
   getWorktreeDiff,
   getWorktreeFileContent,
+  getWorktreeLocalChanges,
+  getWorktreeLocalFileContent,
   getWorktreeStatus,
   getWorktreeUnifiedDiff,
   isGitRepository,
@@ -308,6 +311,11 @@ import {
   fetchPrReviewSourceBranch,
 } from '../services/pr-review-task-service';
 import {
+  consolidatePreferenceMemoryForProject,
+  getPreferenceMemoryDashboard,
+  recordPreferenceEvidence,
+} from '../services/preference-memory-service';
+import {
   createSkill,
   deleteSkill,
   disableSkill,
@@ -323,6 +331,7 @@ import {
   emitCacheEvent,
   emitStepUpsert,
   emitTaskDelete,
+  emitTaskPatch,
   emitTaskUpsert,
   setCacheSubscriptions,
 } from '../services/cache-event-service';
@@ -341,6 +350,10 @@ import {
   saveOpenAiBaseImage,
   setOpenAiBaseImageSelection,
 } from '../services/ai-generation-settings-service';
+import {
+  mutateTaskSessionRules,
+  withTaskSessionRulesLock,
+} from '../services/task-session-rules-service';
 import {
   NewProject,
   NewProvider,
@@ -382,7 +395,6 @@ import { ProjectCommandRepository } from '../database/repositories/project-comma
 import { projectFileIndexService } from '../services/project-file-index-service';
 import { ProjectMcpOverrideRepository } from '../database/repositories/project-mcp-overrides';
 import { ProjectRunConfigRepository } from '../database/repositories/project-run-config';
-import { recordPreferenceEvidence } from '../services/preference-memory-service';
 import { regenerateProjectSummary } from '../services/project-summary-generation-service';
 import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import { runCommandService } from '../services/run-command-service';
@@ -916,6 +928,31 @@ function emitProjectLogoPatch(project: {
   });
 }
 
+function validateWorkItemSummaryRequest(params: unknown) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    throw new Error('Invalid work item summary request');
+  }
+  const request = params as Record<string, unknown>;
+  for (const field of ['projectId', 'providerId', 'projectName'] as const) {
+    if (typeof request[field] !== 'string' || !request[field].trim()) {
+      throw new Error(`${field} must be a non-empty string`);
+    }
+  }
+  if (
+    typeof request.workItemId !== 'number' ||
+    !Number.isInteger(request.workItemId) ||
+    request.workItemId <= 0
+  ) {
+    throw new Error('workItemId must be a positive integer');
+  }
+  return {
+    projectId: request.projectId as string,
+    providerId: request.providerId as string,
+    projectName: request.projectName as string,
+    workItemId: request.workItemId,
+  };
+}
+
 export function registerIpcHandlers() {
   dbg.ipc('Registering IPC handlers');
   let previewReloadInProgress = false;
@@ -937,10 +974,14 @@ export function registerIpcHandlers() {
     notificationService.closeForTask(taskId);
     agentService.setFocusedTask(taskId);
     void TaskRepository.setHasUnread(taskId, false)
-      .then(() => TaskRepository.findById(taskId))
       .then((task) => {
         if (task) {
-          emitTaskUpsert(task);
+          emitTaskPatch({
+            taskId,
+            projectId: task.projectId,
+            patch: { hasUnread: false, updatedAt: task.updatedAt },
+            invalidateFeed: false,
+          });
         }
       })
       .catch((err) => {
@@ -1331,6 +1372,24 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle(
+    'preferenceMemory:getDashboard',
+    async (_, params: { projectId: string; page?: number; pageSize?: number }) =>
+      getPreferenceMemoryDashboard(params),
+  );
+  ipcMain.handle(
+    'preferenceMemory:consolidate',
+    async (_, projectId: string) => {
+      const project = await ProjectRepository.findById(projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      const setting = await SettingsRepository.get('preferenceMemory');
+      return consolidatePreferenceMemoryForProject(project, {
+        backend: setting.consolidationBackend,
+        model: setting.consolidationModel,
+        thinkingEffort: setting.consolidationThinkingEffort,
+      });
+    },
+  );
+  ipcMain.handle(
     'preferenceMemory:recordEvidence',
     async (_, params: RecordPreferenceEvidenceParams) =>
       recordPreferenceEvidence(params),
@@ -1422,6 +1481,7 @@ export function registerIpcHandlers() {
       event,
       data: NewTask & {
         useWorktree: boolean;
+        useExistingBranch?: boolean;
         sourceBranch?: string | null;
         autoStart?: boolean;
         interactionMode?: InteractionMode | null;
@@ -1432,6 +1492,7 @@ export function registerIpcHandlers() {
     ) => {
       const {
         useWorktree,
+        useExistingBranch,
         sourceBranch,
         autoStart,
         images,
@@ -1444,8 +1505,9 @@ export function registerIpcHandlers() {
       } = data;
       const taskPromptOccurredAt = new Date().toISOString();
       dbg.ipc(
-        'tasks:createWithWorktree useWorktree=%s, sourceBranch=%s, autoStart=%s',
+        'tasks:createWithWorktree useWorktree=%s, useExistingBranch=%s, sourceBranch=%s, autoStart=%s',
         useWorktree,
+        useExistingBranch,
         sourceBranch,
         autoStart,
       );
@@ -1501,7 +1563,11 @@ export function registerIpcHandlers() {
         // Use provided sourceBranch, fall back to project defaultBranch, or undefined for current HEAD
         const effectiveSourceBranch = sourceBranch ?? project.defaultBranch;
         let worktreeStartPoint = effectiveSourceBranch ?? undefined;
-        if (project.autoPullSourceBranch && effectiveSourceBranch) {
+        if (
+          !useExistingBranch &&
+          project.autoPullSourceBranch &&
+          effectiveSourceBranch
+        ) {
           dbg.ipc(
             'Pulling source branch before worktree: %s',
             effectiveSourceBranch,
@@ -1528,6 +1594,7 @@ export function registerIpcHandlers() {
           taskName ?? undefined,
           effectiveSourceBranch ?? undefined,
           worktreeStartPoint,
+          useExistingBranch,
         );
 
         dbg.ipc('Worktree created: %s, branch: %s', worktreePath, branchName);
@@ -1672,9 +1739,12 @@ export function registerIpcHandlers() {
   );
   ipcMain.handle('tasks:update', async (_, id: string, data: UpdateTask) => {
     if (data.sessionRules !== undefined) {
-      const task = await TaskRepository.findById(id);
-      if (!task) throw new Error(`Task ${id} not found`);
-      ensureSessionRulesCanBeModified(task);
+      return withTaskSessionRulesLock(id, async () => {
+        const task = await TaskRepository.findById(id);
+        if (!task) throw new Error(`Task ${id} not found`);
+        ensureSessionRulesCanBeModified(task);
+        return updateTaskAndEmit(id, data);
+      });
     }
     return updateTaskAndEmit(id, data);
   });
@@ -1708,7 +1778,8 @@ export function registerIpcHandlers() {
             worktreePath: task.worktreePath,
             projectPath: project.path,
             skipIfChanges: !options?.deleteWorktree,
-            branchCleanup: 'delete',
+            branchCleanup:
+              task.branchName === task.sourceBranch ? 'keep' : 'delete',
             force: options?.deleteWorktree ?? false,
           });
           dbg.ipc('Deleted worktree for task %s', id);
@@ -1911,6 +1982,7 @@ export function registerIpcHandlers() {
           worktreeCleanup: {
             worktreePath: task.worktreePath,
             branchName: task.branchName,
+            keepBranch: task.branchName === task.sourceBranch,
           },
         };
       }
@@ -1926,6 +1998,7 @@ export function registerIpcHandlers() {
       params: {
         worktreePath: string;
         branchName: string;
+        keepBranch?: boolean;
       },
     ) => {
       // Resolve projectPath from the database rather than trusting renderer input.
@@ -1944,9 +2017,10 @@ export function registerIpcHandlers() {
           worktreePath: params.worktreePath,
           projectPath: project.path,
           branchName: params.branchName,
+          branchCleanup: params.keepBranch ? 'keep' : undefined,
           force: true,
         });
-      } else {
+      } else if (!params.keepBranch) {
         await cleanupMissingWorktree({
           projectPath: project.path,
           branchName: params.branchName,
@@ -1989,47 +2063,37 @@ export function registerIpcHandlers() {
       input: Record<string, unknown>,
     ) => {
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
-
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error(`Task ${taskId} not found`);
-      ensureSessionRulesCanBeModified(task);
-      const current: PermissionScope = task?.sessionRules ?? {};
-      const updated: PermissionScope = { ...current };
-      updated[tool] = buildToolPermissionConfig({
-        existing: updated[tool],
-        matchValue,
+      return mutateTaskSessionRules(taskId, (rules, task) => {
+        ensureSessionRulesCanBeModified(task);
+        rules[tool] = buildToolPermissionConfig({
+          existing: rules[tool],
+          matchValue,
+        });
+        return rules;
       });
-
-      return updateTaskAndEmit(taskId, { sessionRules: updated });
     },
   );
   ipcMain.handle(
     'tasks:removeSessionAllowedTool',
-    async (_, taskId: string, toolName: string, pattern?: string) => {
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error(`Task ${taskId} not found`);
-      ensureSessionRulesCanBeModified(task);
-      const current: PermissionScope = { ...(task?.sessionRules ?? {}) };
-
-      if (pattern) {
-        const existing = current[toolName];
-        if (typeof existing === 'object' && existing !== null) {
-          const updatedPatterns = {
-            ...(existing as Record<string, 'allow'>),
-          };
-          delete updatedPatterns[pattern];
-          if (Object.keys(updatedPatterns).length > 0) {
-            current[toolName] = updatedPatterns;
-          } else {
-            delete current[toolName];
+    (_, taskId: string, toolName: string, pattern?: string) =>
+      mutateTaskSessionRules(taskId, (rules, task) => {
+        ensureSessionRulesCanBeModified(task);
+        if (pattern) {
+          const existing = rules[toolName];
+          if (typeof existing === 'object' && existing !== null) {
+            const updatedPatterns = { ...existing };
+            delete updatedPatterns[pattern];
+            if (Object.keys(updatedPatterns).length > 0) {
+              rules[toolName] = updatedPatterns;
+            } else {
+              delete rules[toolName];
+            }
           }
+        } else {
+          delete rules[toolName];
         }
-      } else {
-        delete current[toolName];
-      }
-
-      return updateTaskAndEmit(taskId, { sessionRules: current });
-    },
+        return rules;
+      }),
   );
 
   ipcMain.handle(
@@ -2051,12 +2115,14 @@ export function registerIpcHandlers() {
 
       // Also add to session rules
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      const current: PermissionScope = { ...(task.sessionRules ?? {}) };
-      current[tool] = buildToolPermissionConfig({
-        existing: current[tool],
-        matchValue,
+      return mutateTaskSessionRules(taskId, (rules, latestTask) => {
+        ensureSessionRulesCanBeModified(latestTask);
+        rules[tool] = buildToolPermissionConfig({
+          existing: rules[tool],
+          matchValue,
+        });
+        return rules;
       });
-      return updateTaskAndEmit(taskId, { sessionRules: current });
     },
   );
 
@@ -2079,12 +2145,14 @@ export function registerIpcHandlers() {
 
       // Also add to session rules
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      const current: PermissionScope = { ...(task.sessionRules ?? {}) };
-      current[tool] = buildToolPermissionConfig({
-        existing: current[tool],
-        matchValue,
+      return mutateTaskSessionRules(taskId, (rules, latestTask) => {
+        ensureSessionRulesCanBeModified(latestTask);
+        rules[tool] = buildToolPermissionConfig({
+          existing: rules[tool],
+          matchValue,
+        });
+        return rules;
       });
-      return updateTaskAndEmit(taskId, { sessionRules: current });
     },
   );
 
@@ -2330,16 +2398,15 @@ export function registerIpcHandlers() {
       }
 
       // Also add to session rules for immediate effect
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error(`Task ${taskId} not found`);
-      ensureSessionRulesCanBeModified(task);
       const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      const current: PermissionScope = { ...(task.sessionRules ?? {}) };
-      current[tool] = buildToolPermissionConfig({
-        existing: current[tool],
-        matchValue,
+      return mutateTaskSessionRules(taskId, (rules, task) => {
+        ensureSessionRulesCanBeModified(task);
+        rules[tool] = buildToolPermissionConfig({
+          existing: rules[tool],
+          matchValue,
+        });
+        return rules;
       });
-      return updateTaskAndEmit(taskId, { sessionRules: current });
     },
   );
 
@@ -2375,6 +2442,44 @@ export function registerIpcHandlers() {
     }
     return getWorktreeCommits(task.worktreePath, task.startCommitHash);
   });
+
+  ipcMain.handle('tasks:worktree:getLocalChanges', async (_, taskId: string) => {
+    const task = await TaskRepository.findById(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    const project = task.worktreePath
+      ? null
+      : await ProjectRepository.findById(task.projectId);
+    const rootPath = task.worktreePath ?? project?.path;
+    if (!rootPath) throw new Error(`Task ${taskId} does not have a diff root`);
+    return getWorktreeLocalChanges(rootPath);
+  });
+
+  ipcMain.handle(
+    'tasks:worktree:getLocalFileContent',
+    async (
+      _,
+      taskId: string,
+      filePath: string,
+      status: 'added' | 'modified' | 'deleted',
+      scope: 'staged' | 'unstaged',
+      originalPath?: string,
+    ) => {
+      const task = await TaskRepository.findById(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      const project = task.worktreePath
+        ? null
+        : await ProjectRepository.findById(task.projectId);
+      const rootPath = task.worktreePath ?? project?.path;
+      if (!rootPath) throw new Error(`Task ${taskId} does not have a diff root`);
+      return getWorktreeLocalFileContent(
+        rootPath,
+        filePath,
+        status,
+        scope,
+        originalPath,
+      );
+    },
+  );
 
   ipcMain.handle(
     'tasks:worktree:getCommitDiff',
@@ -2800,6 +2905,17 @@ export function registerIpcHandlers() {
     return StepService.update(stepId, data);
   });
 
+  ipcMain.handle('steps:archive', async (_, stepId: string) => {
+    const step = await StepService.findById(stepId);
+    if (!step) throw new Error(`Step not found: ${stepId}`);
+    return StepService.archive(stepId, {
+      beforePersist:
+        step.status === 'running'
+          ? () => agentService.stop(stepId)
+          : async () => {},
+    });
+  });
+
   ipcMain.handle('steps:resolvePrompt', (_, stepId: string) =>
     StepService.resolveAndValidate(stepId),
   );
@@ -3022,6 +3138,53 @@ export function registerIpcHandlers() {
       const { getWorkItemComments } =
         await import('../services/azure-devops-service');
       return getWorkItemComments(params);
+    },
+  );
+
+  ipcMain.handle('azureDevOps:getWorkItemSummary', async (_event, params) => {
+    const request = validateWorkItemSummaryRequest(params);
+    const { getWorkItemSummary } =
+      await import('../services/work-item-summary-generation-service');
+    return getWorkItemSummary(request);
+  });
+
+  ipcMain.handle(
+    'azureDevOps:generateWorkItemSummary',
+    async (_event, params) => {
+      const request = validateWorkItemSummaryRequest(params);
+      const { generateWorkItemSummary } =
+        await import('../services/work-item-summary-generation-service');
+      return generateWorkItemSummary(request);
+    },
+  );
+
+  ipcMain.handle(
+    'azureDevOps:getCachedWorkItemSummaries',
+    async (_event, params: unknown) => {
+      if (!params || typeof params !== 'object' || Array.isArray(params)) {
+        throw new Error('Invalid cached work item summaries request');
+      }
+      const input = params as Record<string, unknown>;
+      if (typeof input.providerId !== 'string' || !input.providerId.trim()) {
+        throw new Error('providerId must be a non-empty string');
+      }
+      if (!Array.isArray(input.workItemIds)) {
+        throw new Error('workItemIds must be an array');
+      }
+      const workItemIds = [...new Set(input.workItemIds)];
+      if (
+        workItemIds.some(
+          (id) => typeof id !== 'number' || !Number.isInteger(id) || id <= 0,
+        )
+      ) {
+        throw new Error('workItemIds must contain positive integers');
+      }
+      const { getCachedWorkItemSummaries } =
+        await import('../services/work-item-summary-generation-service');
+      return getCachedWorkItemSummaries({
+        providerId: input.providerId,
+        workItemIds: workItemIds as number[],
+      });
     },
   );
 
@@ -3567,6 +3730,23 @@ export function registerIpcHandlers() {
       },
     ) => {
       const result = await publishPullRequest(params);
+      invalidatePrCache();
+      return result;
+    },
+  );
+
+  ipcMain.handle(
+    'azureDevOps:markPullRequestDraft',
+    async (
+      _,
+      params: {
+        providerId: string;
+        projectId: string;
+        repoId: string;
+        pullRequestId: number;
+      },
+    ) => {
+      const result = await markPullRequestDraft(params);
       invalidatePrCache();
       return result;
     },
@@ -6328,10 +6508,12 @@ export function registerIpcHandlers() {
       (rendererMetric?.memory?.workingSetSize ?? 0) * 1024;
     const rendererPrivateBytes =
       (rendererMetric?.memory?.privateBytes ?? 0) * 1024;
+    const gpuMetric = metrics.find((metric) => metric.type === 'GPU');
 
     return {
       logicalCpuCount: os.cpus().length,
       totalRssBytes: mainMem.rss + rendererRssBytes,
+      gpuCpuPercent: gpuMetric?.cpu?.percentCPUUsage ?? 0,
       mainProcess: {
         heapUsedBytes: mainMem.heapUsed,
         rssBytes: mainMem.rss,

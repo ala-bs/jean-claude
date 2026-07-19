@@ -117,6 +117,27 @@ describe('FEED_CACHE_SUBSCRIPTIONS', () => {
 });
 
 describe('refineFeedItemAttention', () => {
+  it('preserves unchanged nested task references', () => {
+    const child = createFeedItem({
+      id: 'task:child',
+      source: 'task',
+      taskId: 'child',
+      attention: 'completed',
+    });
+    const parent = createFeedItem({
+      id: 'task:parent',
+      source: 'task',
+      taskId: 'parent',
+      attention: 'completed',
+      children: [child],
+    });
+
+    const [refined] = refineFeedItemAttention([parent], {});
+
+    expect(refined).toBe(parent);
+    expect(refined.children).toBe(parent.children);
+  });
+
   it('refines nested subtasks with pending questions', () => {
     const [item] = refineFeedItemAttention(
       [
@@ -167,6 +188,27 @@ describe('refineFeedItemAttention', () => {
 });
 
 describe('pull request feed identity', () => {
+  it('preserves unchanged task and child references while merging PR data', () => {
+    const child = createFeedItem({
+      id: 'task:child',
+      source: 'task',
+      taskId: 'child',
+      attention: 'completed',
+    });
+    const parent = createFeedItem({
+      id: 'task:parent',
+      source: 'task',
+      taskId: 'parent',
+      attention: 'completed',
+      children: [child],
+    });
+
+    const [merged] = mergeTaskPrInfo([parent], []);
+
+    expect(merged).toBe(parent);
+    expect(merged.children).toBe(parent.children);
+  });
+
   it('builds canonical feed PR keys from provider, repo, and PR ID', () => {
     expect(
       getFeedPullRequestIdentityKey(

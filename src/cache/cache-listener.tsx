@@ -27,12 +27,13 @@ export function getFeedQueryKeyForCacheEvent(event: CacheEvent) {
       break;
     case 'project.delete':
     case 'task.upsert':
-    case 'task.patch':
     case 'task.delete':
     case 'step.upsert':
     case 'step.patch':
     case 'step.delete':
       return feedQueryKeys.tasks;
+    case 'task.patch':
+      return event.invalidateFeed === false ? null : feedQueryKeys.tasks;
     case 'pullRequest.upsert':
       if (event.invalidateFeed === false) {
         return null;

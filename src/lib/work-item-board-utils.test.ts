@@ -6,6 +6,7 @@ import {
   getLinkedBugCandidateIds,
   groupWorkItemsByBoardColumns,
   isAzureBacklogItemType,
+  isAzureWorkItemOutOfSprint,
   matchesAnyAzureWorkItemAssignee,
   matchesAnyAzureWorkItemTag,
   normalizeAzureWorkItemTags,
@@ -40,6 +41,28 @@ describe('isAzureBacklogItemType', () => {
 
   it.each(['Bug', 'bug', 'Task', 'task'])('excludes %s', (workItemType) => {
     expect(isAzureBacklogItemType(workItemType)).toBe(false);
+  });
+});
+
+describe('isAzureWorkItemOutOfSprint', () => {
+  it('marks work items from another iteration', () => {
+    expect(
+      isAzureWorkItemOutOfSprint(
+        item(1, { iterationPath: 'Project\\Sprint 4' }),
+        'Project\\Sprint 5',
+      ),
+    ).toBe(true);
+  });
+
+  it('matches iteration paths case-insensitively and ignores missing paths', () => {
+    expect(
+      isAzureWorkItemOutOfSprint(
+        item(1, { iterationPath: 'project\\sprint 5' }),
+        'Project\\Sprint 5',
+      ),
+    ).toBe(false);
+    expect(isAzureWorkItemOutOfSprint(item(1, {}), 'Project\\Sprint 5')).toBe(false);
+    expect(isAzureWorkItemOutOfSprint(item(1, { iterationPath: 'Other' }), undefined)).toBe(false);
   });
 });
 

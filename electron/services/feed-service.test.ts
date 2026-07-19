@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AzureDevOpsPullRequest } from '@shared/azure-devops-types';
 
-import { ProjectRepository, TaskRepository } from '../database/repositories';
+import {
+  ProjectRepository,
+  TaskRepository,
+  WorkItemSummaryRepository,
+} from '../database/repositories';
 import { PrViewSnapshotRepository } from '../database/repositories/pr-view-snapshots';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 
@@ -11,11 +15,14 @@ import {
   getPullRequestActivityMetadata,
   getPullRequestStatuses,
   listPullRequests,
+  queryAssignedWorkItems,
 } from './azure-devops-service';
 import {
   getPrFeedItems,
   getTaskFeedItems,
+  getWorkItemFeedItems,
   invalidatePrCache,
+  invalidateWorkItemCache,
 } from './feed-service';
 import {
   hasUncommittedWorktreeChanges,
@@ -34,6 +41,9 @@ vi.mock('../database/repositories', () => ({
   TaskRepository: {
     findAllActive: vi.fn(),
     findChildrenForTasks: vi.fn(),
+  },
+  WorkItemSummaryRepository: {
+    findByWorkItems: vi.fn(),
   },
 }));
 
@@ -157,6 +167,67 @@ describe('getPrFeedItems', () => {
         }),
       }),
     );
+  });
+});
+
+describe('getWorkItemFeedItems', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invalidateWorkItemCache();
+    vi.mocked(ProjectRepository.findAll).mockResolvedValue([
+      {
+        id: 'project-1',
+        name: 'Local project',
+        color: '#ff6b6b',
+        logoPath: null,
+        archivedAt: null,
+        workItemProviderId: 'provider-1',
+        workItemProjectName: 'Azure Project',
+        showWorkItemsInFeed: true,
+        workItemPriority: 'normal',
+      } as never,
+    ]);
+    vi.mocked(queryAssignedWorkItems).mockResolvedValue([
+      {
+        id: 42,
+        url: 'https://example.test/42',
+        fields: {
+          title: 'Checkout fails',
+          workItemType: 'Bug',
+          state: 'Active',
+          changedDate: '2026-07-14T01:00:00.000Z',
+        },
+      },
+    ]);
+    vi.mocked(WorkItemSummaryRepository.findByWorkItems).mockResolvedValue([
+      {
+        id: 'summary-1',
+        providerId: 'provider-1',
+        workItemId: 42,
+        content:
+          '# Checkout\n\n```mermaid\nflowchart LR\nA --> B\n```\n\nPayment fails\nfor saved cards. Retry remains available.',
+        sourceHash: 'hash',
+        sourceChangedDate: '2026-07-13T00:00:00.000Z',
+        sourceLatestCommentId: null,
+        sourceCommentCount: 0,
+        generatedAt: '2026-07-13T00:00:00.000Z',
+        updatedAt: '2026-07-13T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('batch-loads cached summaries and emits compact stale excerpts', async () => {
+    await expect(getWorkItemFeedItems()).resolves.toEqual([
+      expect.objectContaining({
+        workItemId: 42,
+        workItemSummary: 'Payment fails for saved cards.',
+        workItemSummaryStale: true,
+      }),
+    ]);
+    expect(WorkItemSummaryRepository.findByWorkItems).toHaveBeenCalledWith({
+      providerId: 'provider-1',
+      workItemIds: [42],
+    });
   });
 });
 

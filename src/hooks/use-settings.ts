@@ -14,6 +14,7 @@ import type {
   CalendarNotificationsSetting,
   EditorAutomationSetting,
   EditorSetting,
+  ModelQuickSwitcherSetting,
   PreferenceMemorySetting,
   ProjectPromptPrefaceSetting,
   PromptPrefaceSetting,
@@ -457,6 +458,38 @@ export function useUpdateBackendModelPresetsSetting() {
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ['settings', 'backendModelPresets'],
+      });
+    },
+  });
+}
+
+export function useModelQuickSwitcherSetting() {
+  return useSetting('modelQuickSwitcher');
+}
+
+export function useUpdateModelQuickSwitcherSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: ModelQuickSwitcherSetting) =>
+      api.settings.set('modelQuickSwitcher', value),
+    onMutate: async (value) => {
+      const queryKey = ['settings', 'modelQuickSwitcher'] as const;
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<ModelQuickSwitcherSetting>(queryKey);
+      queryClient.setQueryData(queryKey, value);
+      return { previous };
+    },
+    onError: (_error, _value, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ['settings', 'modelQuickSwitcher'],
+          context.previous,
+        );
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['settings', 'modelQuickSwitcher'],
       });
     },
   });

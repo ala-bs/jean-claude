@@ -382,6 +382,19 @@ function JobDetails({ job }: { job: BackgroundJob }) {
         </div>
       );
     },
+    'work-item-summary-generation': (typedJob) => {
+      if (typedJob.type !== 'work-item-summary-generation') return null;
+
+      return (
+        <div className="text-ink-2 mt-1 space-y-0.5 text-xs">
+          <p className="truncate">
+            Work item: #{typedJob.details.workItemId}{' '}
+            {typedJob.details.workItemTitle}
+          </p>
+          <p>Project: {typedJob.details.projectName}</p>
+        </div>
+      );
+    },
     'project-summary-generation': (typedJob) => {
       if (typedJob.type !== 'project-summary-generation') return null;
 

@@ -14,6 +14,8 @@ import type {
   PreferenceEvidenceFileSnapshot,
   PreferenceEvidenceMetadata,
   PreferenceEvidenceRecord,
+  PreferenceMemoryDashboard,
+  PreferenceMemoryHistoryEntry,
   RecordPreferenceEvidenceParams,
   RecordPreferenceEvidenceResult,
 } from '@shared/preference-memory-types';
@@ -28,6 +30,7 @@ import { dbg } from '../lib/debug';
 
 import {
   assertSafeProjectPreferenceMemoryTree,
+  ensureProjectPreferenceMemoryDirectory,
   getProjectPreferenceMemoryDir,
   withProjectPreferenceMemoryLock,
   writeProjectPreferenceMemoryMetadata,
@@ -327,6 +330,136 @@ async function writePreferenceMemoryState({
     `${JSON.stringify(state, null, 2)}\n`,
     'utf-8',
   );
+}
+
+async function readJsonLines(projectMemoryDir: string): Promise<PreferenceEvidenceRecord[]> {
+  const reviewsDir = getUserReviewsDir(projectMemoryDir);
+  let fileNames: string[];
+  try {
+    fileNames = (await fs.readdir(reviewsDir)).filter((name) => name.endsWith('.jsonl'));
+  } catch {
+    return [];
+  }
+
+  const records: PreferenceEvidenceRecord[] = [];
+  for (const fileName of fileNames.sort()) {
+    const content = await fs.readFile(path.join(reviewsDir, fileName), 'utf-8');
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as PreferenceEvidenceRecord;
+        if (record.id && record.projectId && record.comment) records.push(record);
+      } catch {
+        // Ignore incomplete lines while another process is appending evidence.
+      }
+    }
+  }
+  return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+async function readPreferenceHistory(projectMemoryDir: string): Promise<PreferenceMemoryHistoryEntry[]> {
+  let fileNames: string[];
+  try {
+    fileNames = (await fs.readdir(getUserPreferencesHistoryDir(projectMemoryDir)))
+      .filter((name) => name.endsWith('.json'))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+
+  const entries: PreferenceMemoryHistoryEntry[] = [];
+  for (const fileName of fileNames) {
+    try {
+      entries.push(JSON.parse(
+        await fs.readFile(path.join(getUserPreferencesHistoryDir(projectMemoryDir), fileName), 'utf-8'),
+      ) as PreferenceMemoryHistoryEntry);
+    } catch {
+      // Ignore malformed history entries instead of breaking dashboard loading.
+    }
+  }
+  return entries;
+}
+
+export async function getPreferenceMemoryDashboard({
+  projectId,
+  page = 0,
+  pageSize = 20,
+}: {
+  projectId: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<PreferenceMemoryDashboard> {
+  const project = await ProjectRepository.findById(projectId);
+  if (!project) throw new Error(`Project not found: ${projectId}`);
+  const safePage = Number.isFinite(page) ? Math.max(0, Math.floor(page)) : 0;
+  const safePageSize = Number.isFinite(pageSize)
+    ? Math.min(100, Math.max(1, Math.floor(pageSize)))
+    : 20;
+
+  const projectMemoryDir = getProjectPreferenceMemoryDir(projectId);
+  try {
+    await ensureProjectPreferenceMemoryDirectory({ projectId });
+    await assertSafeProjectPreferenceMemoryTree(projectMemoryDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return {
+      projectId,
+      preferences: { content: '', updatedAt: null },
+      evidence: { records: [], page: safePage, pageSize: safePageSize, total: 0, bySource: { 'task-review-comment': 0, 'pr-file-comment': 0 } },
+      state: { lastConsolidatedAt: null, pendingBytes: 0, totalBytes: 0 },
+      history: [],
+    };
+  }
+
+  const [records, state, history, preferencesStats] = await Promise.all([
+    readJsonLines(projectMemoryDir),
+    readPreferenceMemoryState(projectMemoryDir),
+    readPreferenceHistory(projectMemoryDir),
+    fs.stat(getUserPreferencesPath(projectMemoryDir)).catch(() => null),
+  ]);
+  const bySource = { 'task-review-comment': 0, 'pr-file-comment': 0 };
+  for (const record of records) bySource[record.source] += 1;
+  let evidenceFiles: string[] = [];
+  try {
+    evidenceFiles = (await fs.readdir(getUserReviewsDir(projectMemoryDir))).filter(
+      (fileName) => fileName.endsWith('.jsonl'),
+    );
+  } catch {
+    evidenceFiles = [];
+  }
+  const fileSizes = await Promise.all(evidenceFiles.map(async (fileName) => {
+    try {
+      return await fs.stat(path.join(getUserReviewsDir(projectMemoryDir), fileName));
+    } catch {
+      return null;
+    }
+  }));
+  const totalBytes = fileSizes.reduce((sum, stat) => sum + (stat?.size ?? 0), 0);
+  const processedBytes = evidenceFiles.reduce(
+    (sum, fileName) => sum + (state.files[fileName]?.offset ?? 0),
+    0,
+  );
+  return {
+    projectId,
+    preferences: {
+      content: await fs.readFile(getUserPreferencesPath(projectMemoryDir), 'utf-8').catch(() => ''),
+      updatedAt: preferencesStats?.mtime.toISOString() ?? null,
+    },
+    evidence: {
+      records: records.slice(safePage * safePageSize, (safePage + 1) * safePageSize),
+      page: safePage,
+      pageSize: safePageSize,
+      total: records.length,
+      bySource,
+    },
+    state: {
+      lastConsolidatedAt: state.lastConsolidatedAt ?? null,
+      pendingBytes: Math.max(0, totalBytes - processedBytes),
+      totalBytes,
+    },
+    history,
+  };
 }
 
 async function collectUnprocessedEvidence(projectMemoryDir: string): Promise<{

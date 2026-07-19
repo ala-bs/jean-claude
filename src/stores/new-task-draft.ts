@@ -44,6 +44,7 @@ export interface NewTaskDraft {
   files: PromptFilePart[];
   // Shared state
   createWorktree: boolean;
+  useExistingBranch: boolean;
   sourceBranch: string | null;
   // File explorer toggle
   showFileExplorer: boolean;
@@ -162,6 +163,7 @@ function selectDraftMetadata(
     images: draft.images,
     files: draft.files,
     createWorktree: draft.createWorktree,
+    useExistingBranch: draft.useExistingBranch,
     sourceBranch: draft.sourceBranch,
     showFileExplorer: draft.showFileExplorer,
     backlogTodoIds: draft.backlogTodoIds,

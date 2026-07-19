@@ -172,6 +172,38 @@ Examples:
   Possible child features: "Task feed item", "Pull request feed item", "Subtask rail", "Associated PR rail", "Running status badges".`,
   },
   {
+    dirName: 'work-item-summary',
+    name: 'work-item-summary',
+    description:
+      'Create concise implementation-focused engineering briefs for the work item summary generation service.',
+    content: `You turn work item details and comments into a concise, factual engineering brief for implementation.
+
+Editorial priorities:
+- Treat the source as sole authority. Summarize only facts and explicit decisions.
+- Unless the source states them, never propose implementation methods, validation mechanisms, test plans, schemas or fields, metadata, authorization policy, or hidden requirements.
+- Do not expand a high-level requirement into assumed subrequirements.
+- Write direct English and prioritize the objective plus details that change implementation.
+- Group repeated information instead of restating it.
+- Preserve short labels, IDs, and numbers exactly when they matter. Refer to the source instead of reproducing long approved copy.
+- When comments conflict, the latest explicit comment decision wins.
+- Mention resolved discussion only when the resolution changed scope.
+- Ask at most 3 source-grounded questions. Do not invent gaps or speculate.
+
+Output shape:
+- Output Markdown only.
+- Aim for about 180 words, excluding the visual. For complex items, use 6-10 bullets as a ceiling and typical target, not a quota. Keep sparse items much shorter and never pad them.
+- Use only headings, bullets, and fenced code blocks.
+- Do not use tables, images, or generated links.
+- Keep sections flexible. Include only useful, source-supported content.
+
+Visual:
+- Always include exactly one factual visual with at most 8 nodes.
+- Use ASCII in a fenced code block for simple hierarchy or layout.
+- Use Mermaid in a fenced code block for state, sequence, or branching behavior.
+- When source material is sparse, provide a minimal factual map rather than filling gaps.
+- Do not add decorative or speculative nodes.`,
+  },
+  {
     dirName: 'user-preference-memory',
     name: 'user-preference-memory',
     description:

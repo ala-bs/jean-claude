@@ -560,7 +560,13 @@ export function buildWorkItemSnippetContext({
         date: comment.createdDate,
         body: simplifyHtml(comment.text),
       })),
-    testCases: testCasesByWorkItem?.[wi.id] ?? [],
+    testCases: (testCasesByWorkItem?.[wi.id] ?? []).map((testCase) => ({
+      ...testCase,
+      steps: testCase.steps?.map((step) => ({
+        action: simplifyHtml(step.action),
+        expectedResult: simplifyHtml(step.expectedResult),
+      })),
+    })),
   }));
 }
 

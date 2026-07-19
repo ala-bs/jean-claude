@@ -56,6 +56,8 @@ export interface FeedItem {
   workItemUrl?: string;
   workItemType?: string;
   workItemState?: string;
+  workItemSummary?: string;
+  workItemSummaryStale?: boolean;
   workItemPrId?: number;
   workItemPrStatus?: 'active' | 'completed' | 'abandoned';
   workItemPrUrl?: string;

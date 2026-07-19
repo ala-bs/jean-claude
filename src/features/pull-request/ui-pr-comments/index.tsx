@@ -843,6 +843,7 @@ function ThreadComment({
   onSearchMentions,
   onUploadImage,
   readOnly,
+  onCollapse,
 }: {
   comment: AzureDevOpsCommentThread['comments'][number];
   providerId?: string;
@@ -856,6 +857,7 @@ function ThreadComment({
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   readOnly: boolean;
+  onCollapse?: () => void;
 }) {
   const avatarUrl =
     comment.author.imageUrl && providerId
@@ -1023,6 +1025,15 @@ function ThreadComment({
               )}
             </div>
           )}
+          {onCollapse && (
+            <IconButton
+              variant="ghost"
+              size="sm"
+              icon={<ChevronUp className="h-3.5 w-3.5" />}
+              tooltip="Collapse thread"
+              onClick={onCollapse}
+            />
+          )}
         </div>
         {isEditing ? (
           <div className="flex flex-col gap-2 pr-1">
@@ -1092,12 +1103,12 @@ export function PrInlineCommentTimeline({
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   readOnly?: boolean;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
   const isResolved =
     threadStatus !== undefined &&
     threadStatus !== 'active' &&
     threadStatus !== 'pending' &&
     threadStatus !== 'unknown';
+  const [collapsed, setCollapsed] = useState(isResolved);
 
   const firstComment = comments[0];
   const remainingComments = comments.slice(1);
@@ -1126,40 +1137,26 @@ export function PrInlineCommentTimeline({
         </div>
       )}
       <div className="px-4 py-3">
-        {threadId !== undefined && projectId && prId !== undefined ? (
-          comments.map((comment, index) => (
-            <ThreadComment
-              key={comment.id}
-              comment={comment}
-              providerId={providerId}
-              connect={index < comments.length - 1 || !isResolved}
-              mentionDisplayNames={mentionDisplayNames}
-              threadId={threadId}
-              projectId={projectId}
-              prId={prId}
-              repoInfo={repoInfo}
-              mentionOptions={mentionOptions}
-              onSearchMentions={onSearchMentions}
-              onUploadImage={onUploadImage}
-              readOnly={readOnly}
-            />
-          ))
-        ) : (
+        {collapsed && (
           <div
             role="button"
             tabIndex={0}
-            onClick={() => setCollapsed((value) => !value)}
+            aria-label="Expand thread"
+            aria-expanded={false}
+            onClick={() => setCollapsed(false)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                setCollapsed((value) => !value);
+                setCollapsed(false);
               }
             }}
-            className="hover:bg-glass-light -mx-1 flex w-[calc(100%+0.5rem)] items-start gap-3 rounded px-1 py-1 text-left transition-colors"
+            className="hover:bg-glass-light -mx-1 flex w-[calc(100%+0.5rem)] items-start gap-3 rounded px-1 text-left transition-colors"
           >
-            <TimelineAvatar comment={firstComment} providerId={providerId} />
+            <div className="flex w-[26px] shrink-0 justify-center">
+              <TimelineAvatar comment={firstComment} providerId={providerId} />
+            </div>
             <div className="min-w-0 flex-1">
-              <div className="mb-1 flex items-center gap-2">
+              <div className="mb-1 flex min-h-7 items-center gap-2">
                 <span className="text-ink-0 text-sm font-medium">
                   {firstComment.author.displayName}
                 </span>
@@ -1173,46 +1170,60 @@ export function PrInlineCommentTimeline({
                   </span>
                 )}
               </div>
-              <div
-                className={clsx(
-                  'text-ink-1 text-xs leading-relaxed',
-                  collapsed && 'line-clamp-2',
-                )}
-              >
-                <AzureMarkdownContent
-                  markdown={firstComment.content}
-                  providerId={providerId}
-                  mentionDisplayNames={mentionDisplayNames}
-                />
+              <div className="text-ink-1 line-clamp-2 overflow-hidden text-ellipsis break-words text-[12.5px] leading-[1.66]">
+                {plainText(firstComment.content, mentionDisplayNames)}
               </div>
             </div>
-            {remainingComments.length > 0 && (
-              <ChevronDown
-                className={clsx(
-                  'text-ink-3 mt-1 h-3.5 w-3.5 transition-transform',
-                  !collapsed && 'rotate-180',
-                )}
-              />
-            )}
+            <ChevronDown className="text-ink-3 mt-1 h-3.5 w-3.5" />
           </div>
         )}
-
-        {threadId !== undefined &&
-          projectId &&
-          prId !== undefined &&
-          !readOnly &&
-          !isResolved && (
-            <ThreadReplyForm
-              threadId={threadId}
-              projectId={projectId}
-              prId={prId}
-              repoInfo={repoInfo}
-              canResolve={canResolve}
-              mentionOptions={mentionOptions}
-              onSearchMentions={onSearchMentions}
-              onUploadImage={onUploadImage}
-            />
+        <div hidden={collapsed}>
+          {threadId !== undefined && projectId && prId !== undefined ? (
+            comments.map((comment, index) => (
+              <ThreadComment
+                key={comment.id}
+                comment={comment}
+                providerId={providerId}
+                connect={index < comments.length - 1 || !isResolved}
+                mentionDisplayNames={mentionDisplayNames}
+                threadId={threadId}
+                projectId={projectId}
+                prId={prId}
+                repoInfo={repoInfo}
+                mentionOptions={mentionOptions}
+                onSearchMentions={onSearchMentions}
+                onUploadImage={onUploadImage}
+                readOnly={readOnly}
+                onCollapse={index === 0 ? () => setCollapsed(true) : undefined}
+              />
+            ))
+          ) : (
+            <div className="text-ink-1 text-xs leading-relaxed">
+              <AzureMarkdownContent
+                markdown={firstComment.content}
+                providerId={providerId}
+                mentionDisplayNames={mentionDisplayNames}
+              />
+            </div>
           )}
+
+          {threadId !== undefined &&
+            projectId &&
+            prId !== undefined &&
+            !readOnly &&
+            !isResolved && (
+              <ThreadReplyForm
+                threadId={threadId}
+                projectId={projectId}
+                prId={prId}
+                repoInfo={repoInfo}
+                canResolve={canResolve}
+                mentionOptions={mentionOptions}
+                onSearchMentions={onSearchMentions}
+                onUploadImage={onUploadImage}
+              />
+            )}
+        </div>
       </div>
     </div>
   );

@@ -89,6 +89,7 @@ import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
+import { PreferenceMemoryDashboard } from '@/features/settings/ui-preference-memory-dashboard';
 import { PromptPrefaceList } from '@/features/settings/ui-prompt-preface-list';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
@@ -442,6 +443,8 @@ export function PreferenceMemorySettings() {
           />
         </div>
       </div>
+
+      <PreferenceMemoryDashboard />
 
       <div className="border-glass-border bg-bg-1 mt-4 rounded-lg border px-4 py-3">
         <div className="flex items-start justify-between gap-4">

@@ -4,6 +4,16 @@ import type {
   IndexResource,
   ResourceMeta,
 } from './cache-types';
+import { structurallyShare } from './structural-sharing';
+
+export type StructuralSharing<T> =
+  | boolean
+  | ((previous: T | undefined, next: T) => T);
+
+export type SetDocumentResourceOptions<T> = {
+  /** Defaults to recursive sharing. Set false or provide a custom strategy. */
+  structuralSharing?: StructuralSharing<T>;
+};
 
 const resourceChangeVersions = new Map<string, number>();
 
@@ -118,10 +128,19 @@ export function setDocumentResource<T>(
   key: string,
   data: T,
   fetchedAt = Date.now(),
+  options: SetDocumentResourceOptions<T> = {},
 ) {
+  const previousData = cache$.documents[key].data.get() as T | undefined;
+  const structuralSharing = options.structuralSharing ?? true;
+  const sharedData =
+    typeof structuralSharing === 'function'
+      ? structuralSharing(previousData, data)
+      : structuralSharing && previousData !== undefined
+        ? structurallyShare(previousData, data)
+        : data;
   const current = {
     ...getResourceMeta(key),
-    data: cache$.documents[key].data.get() as T | undefined,
+    data: previousData,
   };
   const next: DocumentResource<T> = {
     ...current,
@@ -129,7 +148,7 @@ export function setDocumentResource<T>(
     error: null,
     lastFetchedAt: fetchedAt,
     stale: false,
-    data,
+    data: sharedData,
   };
   cache$.documents[key].set(next);
   setResourceSuccess(key, fetchedAt);

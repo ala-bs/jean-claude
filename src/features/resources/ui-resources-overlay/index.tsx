@@ -22,6 +22,8 @@ import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useMemoryUsage } from '@/hooks/use-memory-usage';
 
 
+let peakTotalAgentCpu = 100;
+
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
@@ -55,6 +57,16 @@ function snapshotRootKey(snapshot: AgentResourceSnapshot): string {
   return snapshot.rootPid === null
     ? `step:${snapshot.stepId}`
     : `pid:${snapshot.rootPid}`;
+}
+
+function updatePeakTotalAgentCpu(totalCpu: number, hasSessions: boolean): number {
+  if (!hasSessions) {
+    peakTotalAgentCpu = 100;
+    return peakTotalAgentCpu;
+  }
+
+  peakTotalAgentCpu = Math.max(peakTotalAgentCpu, totalCpu, 100);
+  return peakTotalAgentCpu;
 }
 
 function getUniqueProcessSamples(snapshots: AgentResourceSnapshot[]) {
@@ -456,6 +468,10 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
     memory?.logicalCpuCount ?? window.navigator.hardwareConcurrency ?? 1;
   const totalCpuGaugePercent =
     (totalCpu / Math.max(1, logicalCpuCount * 100)) * 100;
+  const sessionLoadScale = updatePeakTotalAgentCpu(
+    totalCpu,
+    supportedSnapshots.length > 0,
+  );
   const unsupportedSnapshots = snapshots.filter(
     (snapshot) => snapshot.unsupportedReason,
   );
@@ -694,7 +710,7 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
                           stepName={
                             stepQueries[index]?.data?.name ?? snapshot.stepId
                           }
-                          totalCpu={totalCpu}
+                          totalCpu={sessionLoadScale}
                         />
                       </motion.div>
                     ))}

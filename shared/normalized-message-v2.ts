@@ -264,6 +264,14 @@ export interface NormalizedPermissionRequest {
     toolsToAllow: string[];
     setModeOnAllow?: InteractionMode;
   };
+  directoryAccess?: {
+    requestedPath: string;
+    requestedDirectory: string;
+    parentDirectories: Array<{
+      path: string;
+      isHome?: boolean;
+    }>;
+  };
 }
 
 // --- Normalization events (shared by all backend normalizers) ---
@@ -288,7 +296,7 @@ export type NormalizationEvent =
   | { type: 'permission-request'; request: NormalizedPermissionRequest }
   | { type: 'result-update'; result: NormalizedResult }
   | { type: 'complete'; result: NormalizedResult }
-  | { type: 'error'; error: string }
+  | { type: 'error'; error: string; interrupted?: boolean }
   | { type: 'rate-limit'; retryAfterMs?: number; message?: string };
 
 export const CURRENT_NORMALIZATION_VERSION = 3;

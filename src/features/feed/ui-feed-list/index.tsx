@@ -950,6 +950,17 @@ function HorizontalPrReviewStack({
   );
 }
 
+const MemoHorizontalPrReviewStack = memo(
+  HorizontalPrReviewStack,
+  (prev, next) =>
+    prev.onOpen === next.onOpen &&
+    prev.onMarkLowPriority === next.onMarkLowPriority &&
+    prev.selection.currentPrId === next.selection.currentPrId &&
+    prev.selection.currentProjectId === next.selection.currentProjectId &&
+    prev.items.length === next.items.length &&
+    prev.items.every((item, index) => item === next.items[index]),
+);
+
 function PrReviewCarouselCard({
   item,
   position,
@@ -1180,7 +1191,9 @@ export function FeedList() {
         return;
       }
 
-      const currentOrder = pinnedItems.map((item) => item.id);
+      const currentOrder = [...useFeedStore.getState().pinned]
+        .sort((a, b) => a.order - b.order)
+        .map((item) => item.id);
 
       // If dragged item is not yet pinned, pin it first
       if (!currentOrder.includes(draggedId)) {
@@ -1200,7 +1213,7 @@ export function FeedList() {
       setDragOverId(null);
       setDraggedId(null);
     },
-    [draggedId, pinnedItems, pin, reorderPinned],
+    [draggedId, pin, reorderPinned],
   );
 
   // --- Drag handlers for the pinned zone container ---
@@ -1702,7 +1715,7 @@ export function FeedList() {
 
       {/* PR review zone - horizontal stack, priority sorted */}
       {prReviewItems.length > 0 && (
-        <HorizontalPrReviewStack
+        <MemoHorizontalPrReviewStack
           items={prReviewItems}
           selection={selection}
           onOpen={navigateToFeedItem}

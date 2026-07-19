@@ -7,6 +7,7 @@ import {
   flattenProjectFeatures,
   getFeatureReferenceText,
   getReferencedFeatures,
+  prepareProjectFeatureReferences,
 } from './prompt-feature-context';
 
 const featureMap: ProjectFeatureMap = {
@@ -74,5 +75,79 @@ describe('prompt feature context', () => {
     expect(referenced.map((feature) => feature.id)).toEqual([
       'project-settings',
     ]);
+  });
+
+  it('prepares sorted reference text and reusable matchers once', () => {
+    const preparedFeatures = prepareProjectFeatureReferences(featureMap);
+
+    expect(
+      preparedFeatures.features.map((feature) => [
+        feature.id,
+        feature.referenceText,
+      ]),
+    ).toEqual([
+      ['shell', 'Shell'],
+      ['shell-settings', 'Shell > Settings'],
+      ['project', 'Project'],
+      ['project-settings', 'Project > Settings'],
+    ]);
+    expect(
+      preparedFeatures.matchOrder.map((feature) => [
+        feature.id,
+        feature.referenceText,
+      ]),
+    ).toEqual([
+      ['project-settings', 'Project > Settings'],
+      ['shell-settings', 'Shell > Settings'],
+      ['project', 'Project'],
+      ['shell', 'Shell'],
+    ]);
+
+    const input = {
+      text: 'Update #Project > Settings',
+      preparedFeatures,
+    };
+    expect(getReferencedFeatures(input).map((feature) => feature.id)).toEqual([
+      'project-settings',
+    ]);
+    expect(getReferencedFeatures(input).map((feature) => feature.id)).toEqual([
+      'project-settings',
+    ]);
+  });
+
+  it('expands refs using prepared features without rebuilding the map', () => {
+    const preparedFeatures = prepareProjectFeatureReferences(featureMap);
+    const expanded = expandFeatureReferencesInPrompt({
+      text: 'Update #Shell and #Project > Settings.',
+      preparedFeatures,
+    });
+
+    expect(expanded).toContain('Update Shell and #Project > Settings.');
+    expect(expanded).toContain('<feature name="Shell">');
+    expect(expanded).toContain('<feature name="Settings">');
+  });
+
+  it('preserves referenced-subset ordering for duplicate names', () => {
+    const mapWithLongFeature: ProjectFeatureMap = {
+      ...featureMap,
+      features: [
+        ...featureMap.features,
+        {
+          id: 'long-feature',
+          name: 'LongFeatureName',
+          summary: 'Long feature summary',
+          key_files: [],
+          children: [],
+        },
+      ],
+    };
+    const expanded = expandFeatureReferencesInPrompt({
+      text: 'Update #Project > Settings and #LongFeatureName.',
+      preparedFeatures: prepareProjectFeatureReferences(mapWithLongFeature),
+    });
+
+    expect(expanded.indexOf('<feature name="LongFeatureName">')).toBeLessThan(
+      expanded.indexOf('<feature name="Settings">'),
+    );
   });
 });

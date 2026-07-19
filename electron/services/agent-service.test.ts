@@ -1,3 +1,7 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, PromptPart } from '@shared/agent-backend-types';
@@ -7,6 +11,11 @@ import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
 import { buildSessionIdStepUpdate } from './agent-session-update';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
 import { QuestionBrokerService } from './question-broker-service';
+
+const TEST_ALLOWED_DIRECTORY = fs.realpathSync.native(os.tmpdir());
+const TEST_REQUESTED_DIRECTORY = path.join(TEST_ALLOWED_DIRECTORY, 'repo');
+const TEST_REQUESTED_PATH = path.join(TEST_REQUESTED_DIRECTORY, 'file.ts');
+const TEST_DIRECTORY_PATTERN = `${TEST_ALLOWED_DIRECTORY}/**`;
 
 const QUESTIONS = [
   {
@@ -24,6 +33,7 @@ const {
   buildToolPermissionConfigMock,
   claudeCompactRawMessagesForTaskMock,
   emitStepUpsertMock,
+  emitTaskPatchMock,
   emitTaskUpsertMock,
   getProviderMock,
   legacyBackendConstructorMock,
@@ -166,6 +176,7 @@ const {
     buildToolPermissionConfigMock: vi.fn(),
     claudeCompactRawMessagesForTaskMock: vi.fn(),
     emitStepUpsertMock: vi.fn(),
+    emitTaskPatchMock: vi.fn(),
     emitTaskUpsertMock: vi.fn(),
     getProviderMock: vi.fn(() => createProvider()),
     legacyBackendConstructorMock: vi.fn(() => {
@@ -300,6 +311,7 @@ vi.mock('./ai-usage-tracking-service', () => ({
 
 vi.mock('./cache-event-service', () => ({
   emitStepUpsert: emitStepUpsertMock,
+  emitTaskPatch: emitTaskPatchMock,
   emitTaskUpsert: emitTaskUpsertMock,
 }));
 
@@ -1263,6 +1275,53 @@ describe('agentService provider runtime', () => {
     await agentService.stopAll({ reason: 'shutdown' }).catch(() => {});
   });
 
+  it('corrects an unread write when task becomes focused while it is pending', async () => {
+    const unreadWrite = createDeferred<typeof defaultTask>();
+    let windowDestroyed = false;
+    let windowFocused = false;
+    agentService.setMainWindow({
+      isDestroyed: () => windowDestroyed,
+      isFocused: () => windowFocused,
+      webContents: { isDestroyed: () => windowDestroyed },
+    } as never);
+    agentService.setFocusedTask(null);
+    taskRepositoryMock.setHasUnread
+      .mockReturnValueOnce(unreadWrite.promise)
+      .mockResolvedValueOnce({ ...defaultTask, hasUnread: false });
+
+    const markUnread = (
+      agentService as unknown as {
+        markTaskUnreadIfBackground: (taskId: string) => Promise<void>;
+      }
+    ).markTaskUnreadIfBackground('task-1');
+    await waitForAssertion(() => {
+      expect(taskRepositoryMock.setHasUnread).toHaveBeenCalledWith(
+        'task-1',
+        true,
+      );
+    });
+
+    windowFocused = true;
+    agentService.setFocusedTask('task-1');
+    unreadWrite.resolve({ ...defaultTask, hasUnread: true });
+    await markUnread;
+
+    expect(taskRepositoryMock.setHasUnread.mock.calls).toEqual([
+      ['task-1', true],
+      ['task-1', false],
+    ]);
+    expect(emitTaskPatchMock).toHaveBeenCalledTimes(1);
+    expect(emitTaskPatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-1',
+        patch: expect.objectContaining({ hasUnread: false }),
+      }),
+    );
+
+    windowDestroyed = true;
+    agentService.setFocusedTask(null);
+  });
+
   it('starts active runs through the provider without constructing legacy backend classes', async () => {
     const handle = createHandle({ events: [completeEvent()] });
     providerState.runStartImplementation = async () => handle;
@@ -2023,6 +2082,356 @@ describe('agentService provider runtime', () => {
     );
 
     release();
+    await startPromise;
+  });
+
+  it('validates and persists selected parent directory before responding', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {
+          filepath: TEST_REQUESTED_PATH,
+          parentDir: TEST_REQUESTED_DIRECTORY,
+        },
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [
+            { path: TEST_ALLOWED_DIRECTORY },
+            { path: path.dirname(TEST_ALLOWED_DIRECTORY) },
+          ],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'permission',
+        data: { requestId: 'permission-1' },
+      });
+    });
+
+    await agentService.respond('step-1', 'permission-1', {
+      behavior: 'allow',
+      allowMode: 'session',
+      allowedDirectory: TEST_ALLOWED_DIRECTORY,
+    });
+
+    expect(buildToolPermissionConfigMock).toHaveBeenCalledWith({
+      existing: undefined,
+      matchValue: TEST_DIRECTORY_PATTERN,
+    });
+    expect(taskRepositoryMock.update).toHaveBeenCalledWith('task-1', {
+      sessionRules: {
+        external_directory: { [TEST_DIRECTORY_PATTERN]: 'allow' },
+      },
+    });
+    expect(providerCalls.permissions).toEqual([
+      {
+        handle,
+        requestId: 'permission-1',
+        response: {
+          behavior: 'allow',
+          allowMode: 'session',
+          allowedDirectory: TEST_ALLOWED_DIRECTORY,
+        },
+      },
+    ]);
+
+    release();
+    await startPromise;
+  });
+
+  it('coalesces concurrent responses for the same permission request', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+
+    await Promise.all([
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+    ]);
+
+    expect(providerCalls.permissions).toHaveLength(1);
+    expect(buildToolPermissionConfigMock).toHaveBeenCalledTimes(1);
+
+    release();
+    await startPromise;
+  });
+
+  it('clears a provider-resolved request when directory persistence fails', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+    taskRepositoryMock.update.mockImplementation(async (_id, update) => {
+      if ('sessionRules' in update) throw new Error('database unavailable');
+      return { ...defaultTask, ...update };
+    });
+
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(providerCalls.permissions).toHaveLength(1);
+    expect(agentService.getPendingRequest('step-1')).toBeNull();
+
+    release();
+    await startPromise;
+  });
+
+  it('does not restore running status when completion races directory persistence', async () => {
+    const complete = createDeferred<void>();
+    const persistenceStarted = createDeferred<void>();
+    const persistence = createDeferred<void>();
+    const handle = createHandle();
+    handle.events = (async function* () {
+      yield {
+        type: 'permission-request',
+        request: {
+          requestId: 'permission-1',
+          toolName: 'external_directory',
+          input: {},
+          directoryAccess: {
+            requestedPath: TEST_REQUESTED_PATH,
+            requestedDirectory: TEST_REQUESTED_DIRECTORY,
+            parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+          },
+        },
+      } satisfies AgentEvent;
+      await complete.promise;
+      yield completeEvent();
+    })();
+    providerState.runStartImplementation = async () => handle;
+    taskRepositoryMock.update.mockImplementation(async (_id, update) => {
+      if ('sessionRules' in update) {
+        persistenceStarted.resolve();
+        await persistence.promise;
+      }
+      return { ...defaultTask, ...update };
+    });
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+
+    const response = agentService.respond('step-1', 'permission-1', {
+      behavior: 'allow',
+      allowedDirectory: TEST_ALLOWED_DIRECTORY,
+    });
+    await persistenceStarted.promise;
+    complete.resolve();
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalledWith('step-1');
+      expect(agentService.getPendingRequest('step-1')).toBeNull();
+    });
+    persistence.resolve();
+    await response;
+
+    expect(taskRepositoryMock.update).not.toHaveBeenCalledWith('task-1', {
+      status: 'running',
+    });
+  });
+
+  it('does not restore running status when stop races directory persistence', async () => {
+    const persistenceStarted = createDeferred<void>();
+    const persistence = createDeferred<void>();
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+    taskRepositoryMock.update.mockImplementation(async (_id, update) => {
+      if ('sessionRules' in update) {
+        persistenceStarted.resolve();
+        await persistence.promise;
+      }
+      return { ...defaultTask, ...update };
+    });
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+
+    const response = agentService.respond('step-1', 'permission-1', {
+      behavior: 'allow',
+      allowedDirectory: TEST_ALLOWED_DIRECTORY,
+    });
+    await persistenceStarted.promise;
+    await agentService.stop('step-1');
+    persistence.resolve();
+    await response;
+
+    expect(taskRepositoryMock.update).not.toHaveBeenCalledWith('task-1', {
+      status: 'running',
+    });
+  });
+
+  it('rejects a directory not offered by the pending request', async () => {
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: path.dirname(TEST_ALLOWED_DIRECTORY),
+      }),
+    ).rejects.toThrow('not a valid parent choice');
+    expect(providerCalls.permissions).toEqual([]);
+    expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+
+    waiting.release();
+    await startPromise;
+  });
+
+  it('does not persist a new directory rule when provider response fails', async () => {
+    providerState.permissionResponseError = new Error('permission failed');
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+    ).rejects.toThrow('permission failed');
+
+    expect(
+      taskRepositoryMock.update.mock.calls.filter(
+        ([, update]) => 'sessionRules' in update,
+      ),
+    ).toEqual([]);
+    expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+
+    providerState.permissionResponseError = null;
+    waiting.release();
+    await startPromise;
+  });
+
+  it('leaves a prior directory deny unchanged when provider response fails', async () => {
+    providerState.permissionResponseError = new Error('permission failed');
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+    ).rejects.toThrow('permission failed');
+
+    expect(
+      taskRepositoryMock.update.mock.calls.filter(
+        ([, update]) => 'sessionRules' in update,
+      ),
+    ).toEqual([]);
+
+    providerState.permissionResponseError = null;
+    waiting.release();
     await startPromise;
   });
 

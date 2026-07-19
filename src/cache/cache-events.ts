@@ -124,7 +124,10 @@ function attentionForStepStatus(
 function patchTaskFeedItem(
   item: FeedItem,
   taskId: string,
-  patch: Pick<Partial<FeedItem>, 'attention' | 'subtitle' | 'timestamp'>,
+  patch: Pick<
+    Partial<FeedItem>,
+    'attention' | 'hasUnread' | 'subtitle' | 'timestamp'
+  >,
 ): { item: FeedItem; changed: boolean } {
   const childResults = item.children?.map((child) =>
     patchTaskFeedItem(child, taskId, patch),
@@ -150,7 +153,10 @@ function patchTaskFeedItem(
 
 function patchTaskFeedDocument(
   taskId: string,
-  patch: Pick<Partial<FeedItem>, 'attention' | 'subtitle' | 'timestamp'>,
+  patch: Pick<
+    Partial<FeedItem>,
+    'attention' | 'hasUnread' | 'subtitle' | 'timestamp'
+  >,
 ) {
   const items = cache$.documents['feed:tasks'].data.get() as
     | FeedItem[]
@@ -397,8 +403,14 @@ function removeTaskFromFeedDocument(taskId: string) {
 }
 
 function compactFeedPatch(
-  patch: Pick<Partial<FeedItem>, 'attention' | 'subtitle' | 'timestamp'>,
-): Pick<Partial<FeedItem>, 'attention' | 'subtitle' | 'timestamp'> {
+  patch: Pick<
+    Partial<FeedItem>,
+    'attention' | 'hasUnread' | 'subtitle' | 'timestamp'
+  >,
+): Pick<
+  Partial<FeedItem>,
+  'attention' | 'hasUnread' | 'subtitle' | 'timestamp'
+> {
   return Object.fromEntries(
     Object.entries(patch).filter(([, value]) => value !== undefined),
   );
@@ -499,6 +511,13 @@ export function applyCacheEvent(event: CacheEvent) {
     }
     case 'task.patch': {
       const resourceKey = taskResourceKey(event.taskId);
+      if (
+        event.invalidateFeed === false &&
+        event.patch.hasUnread !== undefined
+      ) {
+        // Prevent an older in-flight feed load from overwriting this patch.
+        markResourceChanged('feed:tasks');
+      }
       if (patchTaskSnapshot(event.taskId, event.patch)) {
         markResourceChanged(resourceKey);
       } else {
@@ -510,9 +529,10 @@ export function applyCacheEvent(event: CacheEvent) {
           : attentionForTaskStatus(event.patch.status);
       if (event.patch.userCompleted === true) {
         removeTaskFromFeedDocument(event.taskId);
-      } else if (attention) {
+      } else if (attention || event.patch.hasUnread !== undefined) {
         patchTaskFeedDocument(event.taskId, compactFeedPatch({
           attention,
+          hasUnread: event.patch.hasUnread,
           timestamp: event.patch.updatedAt,
         }));
       }
@@ -528,7 +548,9 @@ export function applyCacheEvent(event: CacheEvent) {
           markTaskListsStale(projectId);
         }
       }
-      markTaskFeedStale();
+      if (event.invalidateFeed !== false) {
+        markTaskFeedStale();
+      }
       break;
     }
     case 'task.delete': {

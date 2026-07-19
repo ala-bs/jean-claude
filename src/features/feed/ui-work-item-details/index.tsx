@@ -36,6 +36,7 @@ import {
 import {
   useAddWorkItemComment,
   useBoardColumns,
+  useIterations,
   useLinkedPullRequestStatuses,
   useRelatedTestCases,
   useUpdateWorkItemField,
@@ -57,7 +58,9 @@ import { UserAvatar } from '@/common/ui/user-avatar';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { WorkItemBoardColumnEditor } from '@/features/work-item/ui-work-item-board-column-editor';
 import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
+import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 import { WorkItemHistory } from '@/features/work-item/ui-work-item-history';
+import { EditableMetadataValue as WorkItemMetadataEditor } from '@/features/work-item/ui-work-item-preview';
 
 type DetailsTab = 'comments' | 'history' | 'test-cases';
 
@@ -321,6 +324,90 @@ function EditableOwner({
   );
 }
 
+function EditableIteration({
+  iterationPath,
+  options,
+  disabled,
+  providerId,
+  workItemId,
+}: {
+  iterationPath?: string;
+  options: Array<{ name: string; path: string; isCurrent: boolean }>;
+  disabled: boolean;
+  providerId: string;
+  workItemId: number;
+}) {
+  const updateField = useUpdateWorkItemField();
+  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
+  const currentPath = iterationPath ?? '';
+  const currentName =
+    options.find((option) => option.path === currentPath)?.name ??
+    currentPath.split('\\').at(-1) ??
+    'Unknown';
+
+  const handleSelect = useCallback(
+    (nextPath: string) => {
+      dropdownRef.current?.toggle();
+      if (nextPath === currentPath) return;
+      updateField.mutate({
+        providerId,
+        workItemId,
+        field: 'System.IterationPath',
+        value: nextPath,
+      });
+    },
+    [currentPath, providerId, updateField, workItemId],
+  );
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <span className="text-ink-3">Iteration:</span>
+      <Dropdown
+        dropdownRef={dropdownRef}
+        className="min-w-52"
+        trigger={
+          <button
+            type="button"
+            disabled={disabled || updateField.isPending || options.length === 0}
+            className="text-ink-1 hover:text-acc-ink flex min-w-0 max-w-56 items-center gap-1 rounded px-1 py-0.5 transition-colors disabled:cursor-default disabled:opacity-60"
+            aria-label={`Edit iteration. Current iteration: ${currentName}`}
+          >
+            <span className="truncate">{currentName}</span>
+            {updateField.isPending ? (
+              <Loader2 className="text-ink-3 h-3 w-3 shrink-0 animate-spin" />
+            ) : (
+              <ChevronDown className="text-ink-3 h-3 w-3 shrink-0" />
+            )}
+          </button>
+        }
+      >
+        {options.map((option) => (
+          <DropdownItem
+            key={option.path}
+            checked={option.path === currentPath}
+            onClick={() => handleSelect(option.path)}
+          >
+            <span
+              className={clsx(
+                'flex min-w-0 flex-col',
+                option.isCurrent && 'text-acc-ink',
+              )}
+            >
+              <span>{option.name}</span>
+              {option.name !== option.path && (
+                <span className="text-ink-3 truncate text-xs">{option.path}</span>
+              )}
+              {option.isCurrent && (
+                <span className="text-acc-ink/70 text-[10px]">Current</span>
+              )}
+            </span>
+          </DropdownItem>
+        ))}
+      </Dropdown>
+    </div>
+  );
+}
+
 export function WorkItemDetails({
   projectId,
   workItemId,
@@ -375,6 +462,25 @@ export function WorkItemDetails({
       workItem?.fields.assignedToUniqueName,
     ],
   );
+  const { data: iterations } = useIterations({
+    providerId: providerId ?? '',
+    projectName: projectName ?? '',
+  });
+  const iterationOptions = useMemo(() => {
+    const options = [...(iterations ?? [])];
+    const currentPath = workItem?.fields.iterationPath;
+    if (currentPath && !options.some((option) => option.path === currentPath)) {
+      options.unshift({
+        id: currentPath,
+        name: currentPath.split('\\').at(-1) ?? currentPath,
+        path: currentPath,
+        startDate: null,
+        finishDate: null,
+        isCurrent: false,
+      });
+    }
+    return options.reverse();
+  }, [iterations, workItem?.fields.iterationPath]);
   const {
     data: comments = [],
     isLoading: isLoadingComments,
@@ -412,6 +518,7 @@ export function WorkItemDetails({
       workItemIds: linkedWorkItemIds,
     });
   const addComment = useAddWorkItemComment();
+  const updateField = useUpdateWorkItemField();
   const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
   const [activeTab, setActiveTab] = useState<DetailsTab>('comments');
   const [linkDetailModal, setLinkDetailModal] = useState<LinkDetailModal | null>(
@@ -473,7 +580,8 @@ export function WorkItemDetails({
 
   const { fields } = workItem;
   const hasReproSteps = fields.workItemType === 'Bug' && !!fields.reproSteps;
-  const hasContent = !!fields.description || hasReproSteps;
+  const hasContent =
+    !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
   const hasLinks =
     !!workItem.parentId ||
     !!workItem.childIds?.length ||
@@ -558,6 +666,41 @@ export function WorkItemDetails({
                 {fields.teamProject ?? project.name}
               </span>
           </div>
+          {providerId && (
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-ink-3">Story points:</span>
+              <WorkItemMetadataEditor
+                key={`${workItem.id}:story-points:${fields.storyPoints ?? ''}`}
+                value={String(fields.storyPoints ?? '')}
+                label="Story points"
+                emptyLabel="None"
+                validate={(value) => {
+                  if (value === '') return null;
+                  const points = Number(value);
+                  return Number.isInteger(points) && points >= 0
+                    ? null
+                    : 'Story points must be a non-negative integer';
+                }}
+                onSave={(value) =>
+                  updateField.mutateAsync({
+                    providerId,
+                    workItemId: workItem.id,
+                    field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+                    value: value === '' ? null : Number(value),
+                  })
+                }
+              />
+            </div>
+          )}
+          {providerId && projectName && (
+            <EditableIteration
+              iterationPath={fields.iterationPath}
+              options={iterationOptions}
+              disabled={iterations === undefined}
+              providerId={providerId}
+              workItemId={workItem.id}
+            />
+          )}
         </div>
       </div>
 
@@ -569,6 +712,18 @@ export function WorkItemDetails({
         )}
       >
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-4">
+          {providerId && projectName && (
+            <WorkItemGeneratedSummary
+              request={{
+                projectId,
+                providerId,
+                projectName,
+                workItemId: workItem.id,
+              }}
+              workItemTitle={fields.title}
+              className="mb-5"
+            />
+          )}
           {hasContent ? (
             <div className="w-full">
               {fields.description && (
@@ -581,8 +736,29 @@ export function WorkItemDetails({
                 />
               )}
 
-              {hasReproSteps && (
+              {fields.acceptanceCriteria && (
                 <div className={fields.description ? 'mt-6' : undefined}>
+                  <h2 className="text-ink-0 mb-2 text-sm font-semibold">
+                    Acceptance Criteria
+                  </h2>
+                  <AzureHtmlContent
+                    html={fields.acceptanceCriteria}
+                    providerId={providerId ?? undefined}
+                    className="text-ink-1 text-sm"
+                    imageClassName="max-h-96 w-auto object-contain"
+                    enableImageModal
+                  />
+                </div>
+              )}
+
+              {hasReproSteps && (
+                <div
+                  className={
+                    fields.description || fields.acceptanceCriteria
+                      ? 'mt-6'
+                      : undefined
+                  }
+                >
                   <h2 className="text-ink-0 mb-2 text-sm font-semibold">
                     Repro Steps
                   </h2>

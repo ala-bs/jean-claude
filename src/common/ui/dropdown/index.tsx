@@ -367,6 +367,7 @@ export function DropdownItem({
   variant = 'default',
   checked,
   shortcut,
+  disabled = false,
 }: {
   children: ReactNode;
   onClick: () => void;
@@ -374,6 +375,7 @@ export function DropdownItem({
   variant?: 'default' | 'danger';
   checked?: boolean;
   shortcut?: BindingKey;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -381,8 +383,9 @@ export function DropdownItem({
       aria-checked={checked}
       tabIndex={-1}
       onClick={onClick}
+      disabled={disabled}
       className={clsx(
-        'hover:bg-glass-medium focus:bg-glass-medium flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors focus:outline-none',
+        'hover:bg-glass-medium focus:bg-glass-medium flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors focus:outline-none disabled:pointer-events-none disabled:opacity-50',
         variant === 'danger' ? 'text-red-400' : 'text-ink-1',
       )}
     >

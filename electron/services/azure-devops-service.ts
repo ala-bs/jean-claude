@@ -4,8 +4,6 @@ import { createHash } from 'crypto';
 import { spawn } from 'child_process';
 
 
-import TurndownService from 'turndown';
-
 import type {
   AzureBuildDefinition,
   AzureBuildDefinitionDetail,
@@ -29,20 +27,18 @@ import type {
   AzureDevOpsPullRequestTag,
   ReviewerVoteStatus,
 } from '@shared/azure-devops-types';
-
-
-import { dbg } from '../lib/debug';
-import { ProviderRepository } from '../database/repositories/providers';
-import { TokenRepository } from '../database/repositories/tokens';
-
-
 import {
   parseYamlParameters,
   validateYamlFilename,
 } from './yaml-pipeline-parser';
+
+import { azureHtmlToMarkdown } from './azure-html-to-markdown';
+import { dbg } from '../lib/debug';
+import { ProviderRepository } from '../database/repositories/providers';
 import { sendGlobalPromptToWindow } from './global-prompt-service';
+import { TokenRepository } from '../database/repositories/tokens';
 
-
+export { azureHtmlToMarkdown } from './azure-html-to-markdown';
 export type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
@@ -116,6 +112,8 @@ export interface AzureDevOpsWorkItem {
     boardColumnDone?: boolean;
     tags?: string;
     priority?: number;
+    stackRank?: number;
+    storyPoints?: number;
     iterationPath?: string;
   };
   testSteps?: TestStep[];
@@ -124,6 +122,16 @@ export interface AzureDevOpsWorkItem {
   relatedWorkItemIds?: number[];
   linkedPrs?: LinkedPr[];
   relatedTestCaseIds?: number[];
+}
+
+export interface WorkItemComment {
+  id: number;
+  workItemId: number;
+  text: string;
+  format?: 'html' | 'markdown';
+  attachmentBaseUrl?: string;
+  createdBy: string;
+  createdDate: string;
 }
 
 export interface AzureDevOpsIteration {
@@ -202,6 +210,8 @@ interface WorkItemsBatchResponse {
       'System.BoardColumnDone'?: boolean;
       'System.Tags'?: string;
       'Microsoft.VSTS.Common.Priority'?: number;
+      'Microsoft.VSTS.Common.StackRank'?: number;
+      'Microsoft.VSTS.Scheduling.StoryPoints'?: number;
       'System.IterationPath'?: string;
     };
     relations?: WorkItemRelation[];
@@ -458,32 +468,6 @@ export async function getTokenExpiration(
 }
 
 /**
- * Lowercase all HTML/XML tag names so Turndown (HTML→Markdown) can parse them.
- * Azure DevOps TCM content uses uppercase tags like <DIV>, <P>, <STRONG>.
- */
-function lowercaseHtmlTags(html: string): string {
-  return html.replace(/<\/?[A-Z][A-Z0-9]*\b[^>]*>/g, (tag) =>
-    tag.toLowerCase(),
-  );
-}
-
-/** Shared Turndown instance for converting test step HTML to Markdown. */
-const turndown = new TurndownService({
-  headingStyle: 'atx',
-  codeBlockStyle: 'fenced',
-});
-
-/**
- * Convert Azure DevOps HTML content to Markdown.
- * Lowercases tags first (Azure uses uppercase), then converts via Turndown.
- */
-function htmlToMarkdown(html: string): string {
-  if (!html) return '';
-  const lowered = lowercaseHtmlTags(html.trim());
-  return turndown.turndown(lowered).trim();
-}
-
-/**
  * Parse Azure DevOps TCM Steps XML into structured test steps.
  * Each step has two parameterizedString elements (action + expected result)
  * containing HTML content, which is converted to Markdown.
@@ -495,8 +479,8 @@ function parseTestSteps(stepsXml: string): TestStep[] {
   let match;
   while ((match = stepRegex.exec(stepsXml)) !== null) {
     steps.push({
-      action: htmlToMarkdown(match[1] || ''),
-      expectedResult: htmlToMarkdown(match[2] || ''),
+      action: azureHtmlToMarkdown(match[1] || ''),
+      expectedResult: azureHtmlToMarkdown(match[2] || ''),
     });
   }
   return steps;
@@ -989,6 +973,8 @@ export async function queryAssignedWorkItems(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
@@ -1061,6 +1047,8 @@ export async function getWorkItemById(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
@@ -1161,6 +1149,8 @@ export async function getWorkItemsByIds(params: {
         boardColumnDone: wi.fields['System.BoardColumnDone'],
         tags: wi.fields['System.Tags'],
         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+        stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+        storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
         iterationPath: wi.fields['System.IterationPath'],
       },
       parentId: extractParentId(wi.relations),
@@ -1441,8 +1431,10 @@ export async function getRelatedTestCases(params: {
         changedDate: wi.fields['System.ChangedDate'],
         boardColumn: wi.fields['System.BoardColumn'],
         boardColumnDone: wi.fields['System.BoardColumnDone'],
-        tags: wi.fields['System.Tags'],
-        priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+         tags: wi.fields['System.Tags'],
+         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+         stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+         storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
         iterationPath: wi.fields['System.IterationPath'],
       },
       testSteps,
@@ -1454,64 +1446,82 @@ export async function getWorkItemComments(params: {
   providerId: string;
   projectName: string;
   workItemId: number;
-}): Promise<
-  {
+}): Promise<WorkItemComment[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const baseUrl = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText`;
+  const comments: {
     id: number;
     workItemId: number;
     text: string;
-    format?: 'html' | 'markdown';
-    attachmentBaseUrl?: string;
-    createdBy: string;
-    createdDate: string;
-  }[]
-> {
-  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+    renderedText?: string;
+    createdBy?: { displayName?: string };
+    createdDate?: string;
+  }[] = [];
+  const seenCommentIds = new Set<number>();
+  const seenContinuationTokens = new Set<string>();
+  let continuationToken: string | undefined;
 
-  const response = await fetch(
-    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText`,
-    {
+  do {
+    const url = continuationToken
+      ? `${baseUrl}&${new URLSearchParams({ continuationToken })}`
+      : baseUrl;
+    const response = await fetch(url, {
       headers: { Authorization: authHeader },
-    },
-  );
+    });
 
-  if (!response.ok) {
-    if (response.status === 404) return [];
-    const error = await response.text();
-    throw new Error(
-      `Failed to fetch comments for work item ${params.workItemId}: ${error}`,
-    );
-  }
+    if (!response.ok) {
+      if (response.status === 404) return [];
+      const error = await response.text();
+      throw new Error(
+        `Failed to fetch comments for work item ${params.workItemId}: ${error}`,
+      );
+    }
 
-  const data = await response.json();
+    const data: {
+      comments?: typeof comments;
+      continuationToken?: string;
+    } = await response.json();
+    for (const comment of data.comments ?? []) {
+      if (typeof comment.id === 'number') {
+        if (seenCommentIds.has(comment.id)) continue;
+        seenCommentIds.add(comment.id);
+      }
+      comments.push(comment);
+    }
+
+    continuationToken =
+      typeof data.continuationToken === 'string'
+        ? data.continuationToken
+        : (response.headers.get('x-ms-continuationtoken') ?? undefined);
+    if (!continuationToken) break;
+    if (seenContinuationTokens.has(continuationToken)) {
+      throw new Error(
+        `Repeated continuation token while fetching comments for work item ${params.workItemId}`,
+      );
+    }
+    seenContinuationTokens.add(continuationToken);
+  } while (continuationToken);
+
   const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({
     orgName,
     projectName: params.projectName,
   });
 
-  return (data.comments ?? []).map(
-    (c: {
-      id: number;
-      workItemId: number;
-      text: string;
-      renderedText?: string;
-      createdBy?: { displayName?: string };
-      createdDate?: string;
-    }) => {
-      const renderedComment = getRenderedCommentText({
-        text: c.text,
-        renderedText: c.renderedText,
-        attachmentBaseUrl,
-      });
-      return {
-        id: c.id,
-        workItemId: c.workItemId,
-        ...renderedComment,
-        attachmentBaseUrl,
-        createdBy: c.createdBy?.displayName ?? 'Unknown',
-        createdDate: c.createdDate ?? '',
-      };
-    },
-  );
+  return comments.map((c) => {
+    const renderedComment = getRenderedCommentText({
+      text: c.text,
+      renderedText: c.renderedText,
+      attachmentBaseUrl,
+    });
+    return {
+      id: c.id,
+      workItemId: c.workItemId,
+      ...renderedComment,
+      attachmentBaseUrl,
+      createdBy: c.createdBy?.displayName ?? 'Unknown',
+      createdDate: c.createdDate ?? '',
+    };
+  });
 }
 
 function getRenderedCommentText(comment: {
@@ -1585,6 +1595,7 @@ const WORK_ITEM_FIELD_LABELS: Record<string, string> = {
   'System.WorkItemType': 'Work Item Type',
   'Microsoft.VSTS.Common.AcceptanceCriteria': 'Acceptance Criteria',
   'Microsoft.VSTS.Common.Priority': 'Priority',
+  'Microsoft.VSTS.Scheduling.StoryPoints': 'Story Points',
   'Microsoft.VSTS.Common.ResolvedReason': 'Resolved Reason',
   'Microsoft.VSTS.Scheduling.Effort': 'Effort',
   'Microsoft.VSTS.Scheduling.RemainingWork': 'Remaining Work',
@@ -3209,6 +3220,31 @@ export async function publishPullRequest(params: {
   }
 }
 
+export async function markPullRequestDraft(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ isDraft: true }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to mark pull request as draft: ${error}`);
+  }
+}
+
 export async function getPullRequestPolicyEvaluations(params: {
   providerId: string;
   projectId: string;
@@ -3427,6 +3463,8 @@ export async function getPullRequestWorkItems(params: {
       boardColumnDone: wi.fields['System.BoardColumnDone'],
       tags: wi.fields['System.Tags'],
       priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
       iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
@@ -3856,6 +3894,7 @@ const EDITABLE_WORK_ITEM_FIELDS = new Set([
   'System.AssignedTo',
   'System.Tags',
   'Microsoft.VSTS.Common.Priority',
+  'Microsoft.VSTS.Scheduling.StoryPoints',
   'System.State',
   'System.IterationPath',
 ]);
@@ -3883,9 +3922,16 @@ export function buildWorkItemFieldPatch(params: {
       throw new Error('Work item priority must be an integer from 1 to 4');
     }
   }
+  if (params.field === 'Microsoft.VSTS.Scheduling.StoryPoints') {
+    if (value !== null && value !== '' && (!Number.isInteger(Number(value)) || Number(value) < 0)) {
+      throw new Error('Work item story points must be a non-negative integer');
+    }
+  }
 
   const removable =
-    params.field === 'System.AssignedTo' || params.field === 'System.Tags';
+    params.field === 'System.AssignedTo' ||
+    params.field === 'System.Tags' ||
+    params.field === 'Microsoft.VSTS.Scheduling.StoryPoints';
   if ((value === null || value === '') && !removable) {
     throw new Error(`Work item field cannot be empty: ${params.field}`);
   }

@@ -107,6 +107,13 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('projects:getSkills', projectId),
   },
   preferenceMemory: {
+    getDashboard: (params: {
+      projectId: string;
+      page?: number;
+      pageSize?: number;
+    }) => ipcRenderer.invoke('preferenceMemory:getDashboard', params),
+    consolidate: (projectId: string) =>
+      ipcRenderer.invoke('preferenceMemory:consolidate', projectId),
     recordEvidence: (params: RecordPreferenceEvidenceParams) =>
       ipcRenderer.invoke('preferenceMemory:recordEvidence', params),
   },
@@ -171,6 +178,8 @@ contextBridge.exposeInMainWorld('api', {
     worktree: {
       getDiff: (taskId: string) =>
         ipcRenderer.invoke('tasks:worktree:getDiff', taskId),
+      getLocalChanges: (taskId: string) =>
+        ipcRenderer.invoke('tasks:worktree:getLocalChanges', taskId),
       getCommits: (taskId: string) =>
         ipcRenderer.invoke('tasks:worktree:getCommits', taskId),
       getCommitDiff: (taskId: string, commitHash: string) =>
@@ -198,6 +207,21 @@ contextBridge.exposeInMainWorld('api', {
           taskId,
           filePath,
           status,
+        ),
+      getLocalFileContent: (
+        taskId: string,
+        filePath: string,
+        status: 'added' | 'modified' | 'deleted',
+        scope: 'staged' | 'unstaged',
+        originalPath?: string,
+      ) =>
+        ipcRenderer.invoke(
+          'tasks:worktree:getLocalFileContent',
+          taskId,
+          filePath,
+          status,
+          scope,
+          originalPath,
         ),
       getStatus: (taskId: string) =>
         ipcRenderer.invoke('tasks:worktree:getStatus', taskId),
@@ -237,6 +261,7 @@ contextBridge.exposeInMainWorld('api', {
         params: {
           worktreePath: string;
           branchName: string;
+          keepBranch?: boolean;
         },
       ) =>
         ipcRenderer.invoke(
@@ -281,6 +306,7 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('steps:continuePrReviewChatStep', params),
     update: (stepId: string, data: unknown) =>
       ipcRenderer.invoke('steps:update', stepId, data),
+    archive: (stepId: string) => ipcRenderer.invoke('steps:archive', stepId),
     resolvePrompt: (stepId: string) =>
       ipcRenderer.invoke('steps:resolvePrompt', stepId),
     setMode: (stepId: string, mode: string) =>
@@ -386,6 +412,22 @@ contextBridge.exposeInMainWorld('api', {
       projectName: string;
       workItemId: number;
     }) => ipcRenderer.invoke('azureDevOps:getWorkItemComments', params),
+    getWorkItemSummary: (params: {
+      projectId: string;
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => ipcRenderer.invoke('azureDevOps:getWorkItemSummary', params),
+    generateWorkItemSummary: (params: {
+      projectId: string;
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+    }) => ipcRenderer.invoke('azureDevOps:generateWorkItemSummary', params),
+    getCachedWorkItemSummaries: (params: {
+      providerId: string;
+      workItemIds: number[];
+    }) => ipcRenderer.invoke('azureDevOps:getCachedWorkItemSummaries', params),
     getWorkItemHistory: (params: {
       providerId: string;
       projectName: string;
@@ -634,6 +676,12 @@ contextBridge.exposeInMainWorld('api', {
       repoId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('azureDevOps:publishPullRequest', params),
+    markPullRequestDraft: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+    }) => ipcRenderer.invoke('azureDevOps:markPullRequestDraft', params),
   },
   dialog: {
     openDirectory: () => ipcRenderer.invoke('dialog:openDirectory'),

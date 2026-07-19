@@ -16,5 +16,5 @@ function AllTaskPanel() {
     FEED_NAVIGATION_DEBOUNCE_MS,
   );
 
-  return <TaskPanel taskId={debouncedTaskId} />;
+  return <TaskPanel key={debouncedTaskId} taskId={debouncedTaskId} />;
 }

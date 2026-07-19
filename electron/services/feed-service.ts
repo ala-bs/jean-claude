@@ -5,12 +5,14 @@ import {
 import type { FeedItem, FeedItemAttention, FeedNote } from '@shared/feed-types';
 import type { TaskStatus, TaskStep, TaskStepStatus } from '@shared/types';
 import type { AzureDevOpsPullRequest } from '@shared/azure-devops-types';
+import { getWorkItemSummaryExcerpt } from '@shared/work-item-summary';
 
 
 import {
   FeedNoteRepository,
   ProjectRepository,
   TaskRepository,
+  WorkItemSummaryRepository,
 } from '../database/repositories';
 import { dbg } from '../lib/debug';
 import { PrViewSnapshotRepository } from '../database/repositories/pr-view-snapshots';
@@ -1019,8 +1021,19 @@ async function fetchWorkItemFeedItems(
         providerId: project.workItemProviderId!,
         projectName: project.workItemProjectName!,
       });
+      const summaries = await WorkItemSummaryRepository.findByWorkItems({
+        providerId: project.workItemProviderId!,
+        workItemIds: workItems.map((workItem) => workItem.id),
+      });
+      const summariesByWorkItemId = new Map(
+        summaries.map((summary) => [summary.workItemId, summary] as const),
+      );
 
       for (const wi of workItems) {
+        const cachedSummary = summariesByWorkItemId.get(wi.id);
+        const workItemSummary = cachedSummary
+          ? getWorkItemSummaryExcerpt(cachedSummary.content)
+          : null;
         // Track linked PRs — only queue unknown ones for fetching
         if (wi.linkedPrs && wi.linkedPrs.length > 0) {
           const providerId = project.workItemProviderId!;
@@ -1055,6 +1068,11 @@ async function fetchWorkItemFeedItems(
           workItemUrl: wi.url,
           workItemType: wi.fields.workItemType,
           workItemState: wi.fields.state,
+          workItemSummary: workItemSummary || undefined,
+          workItemSummaryStale:
+            !!cachedSummary &&
+            cachedSummary.sourceChangedDate !==
+              (wi.fields.changedDate ?? null),
         });
       }
     } catch (err) {

@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
-import { useTaskMessagesStore } from './task-messages';
+import {
+  getQuestionDraftKey,
+  useTaskMessagesStore,
+} from './task-messages';
 
 describe('task messages store', () => {
   beforeEach(() => {
@@ -11,7 +14,97 @@ describe('task messages store', () => {
       runCommandLogs: {},
       runCommandLogGenerations: {},
       runCommandRunning: {},
+      questionDrafts: {},
+      questionResponsesInFlight: {},
     });
+  });
+
+  it('keeps question drafts until explicitly cleared', () => {
+    const store = useTaskMessagesStore.getState();
+
+    store.updateQuestionDraft('task-1:request-1', (draft) => ({
+      ...draft,
+      answers: { choice: 'First option' },
+    }));
+
+    expect(
+      useTaskMessagesStore.getState().questionDrafts['task-1:request-1'],
+    ).toEqual({
+      answers: { choice: 'First option' },
+      otherAnswers: {},
+      notes: {},
+    });
+
+    store.clearQuestionDraft(
+      'task-1:request-1',
+      useTaskMessagesStore.getState().questionDrafts['task-1:request-1'],
+    );
+    expect(
+      useTaskMessagesStore.getState().questionDrafts['task-1:request-1'],
+    ).toBeUndefined();
+  });
+
+  it('keeps one question request draft per task', () => {
+    const store = useTaskMessagesStore.getState();
+
+    store.updateQuestionDraft('task-1:request-1', (draft) => draft);
+    store.updateQuestionDraft('task-1:request-2', (draft) => ({
+      ...draft,
+      answers: { choice: 'Second option' },
+    }));
+
+    expect(useTaskMessagesStore.getState().questionDrafts).toEqual({
+      'task-1:request-2': {
+        answers: { choice: 'Second option' },
+        otherAnswers: {},
+        notes: {},
+      },
+    });
+  });
+
+  it('prunes request drafts safely when task IDs contain colons', () => {
+    const store = useTaskMessagesStore.getState();
+    const firstKey = getQuestionDraftKey('task:one', 'request:1');
+    const secondKey = getQuestionDraftKey('task:one', 'request:2');
+
+    store.updateQuestionDraft(firstKey, (draft) => draft);
+    store.updateQuestionDraft(secondKey, (draft) => draft);
+
+    expect(Object.keys(useTaskMessagesStore.getState().questionDrafts)).toEqual([
+      secondKey,
+    ]);
+  });
+
+  it('clears question drafts when task status is interrupted', () => {
+    useTaskMessagesStore.setState({
+      steps: {
+        'step-1': {
+          taskId: 'task-1',
+          messages: [],
+          status: 'running',
+          error: null,
+          pendingPermission: null,
+          pendingQuestion: null,
+          queuedPrompts: [],
+          lastAccessedAt: 0,
+        },
+      },
+    });
+    const store = useTaskMessagesStore.getState();
+    store.updateQuestionDraft('task-1:request-1', (draft) => draft);
+
+    store.setStatus('step-1', 'interrupted');
+
+    expect(useTaskMessagesStore.getState().questionDrafts).toEqual({});
+  });
+
+  it('clears drafts for interrupted unloaded steps', () => {
+    const store = useTaskMessagesStore.getState();
+    store.updateQuestionDraft(getQuestionDraftKey('task-1', 'request-1'), (draft) => draft);
+
+    store.setStatus('step-1', 'interrupted', null, 'task-1');
+
+    expect(useTaskMessagesStore.getState().questionDrafts).toEqual({});
   });
 
   it('keeps run-command output without newline as pending line', () => {

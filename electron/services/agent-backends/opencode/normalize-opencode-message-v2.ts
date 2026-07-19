@@ -32,6 +32,12 @@ import type {
   NormalizedToolUse,
   TokenUsage,
 } from '@shared/normalized-message-v2';
+
+import {
+  buildDirectoryAccess,
+  canonicalizeDirectoryRequest,
+  toDirectoryPermissionPattern,
+} from '../../directory-access';
 import type { ResolvedPermissionRule } from '@shared/permission-types';
 import type { TodoItem } from '@shared/agent-types';
 
@@ -212,14 +218,70 @@ function normalizeEvent(
 
     case 'permission.asked': {
       const permission = event.properties as OcPermission;
+      const requestedPath = permission.metadata.filepath;
+      const requestedDirectory = permission.metadata.parentDir;
+      const canonicalRequest =
+        permission.permission === 'external_directory' &&
+        typeof requestedPath === 'string' &&
+        typeof requestedDirectory === 'string'
+          ? canonicalizeDirectoryRequest({
+              requestedPath,
+              requestedDirectory,
+            })
+          : undefined;
+      const expectedPattern =
+        typeof requestedDirectory === 'string'
+          ? `${requestedDirectory.replaceAll('\\', '/').replace(/\/$/, '')}/*`
+          : undefined;
+      const canAutoEvaluateExternalDirectory = Boolean(
+        canonicalRequest &&
+          permission.patterns.length === 1 &&
+          permission.always.length === 1 &&
+          permission.patterns[0] === expectedPattern &&
+          permission.always[0] === expectedPattern,
+      );
+      const directoryAccess =
+        canAutoEvaluateExternalDirectory &&
+        typeof requestedPath === 'string' &&
+        typeof requestedDirectory === 'string'
+          ? buildDirectoryAccess({ requestedPath, requestedDirectory })
+          : undefined;
+      const canonicalRequestedDirectory =
+        canAutoEvaluateExternalDirectory && canonicalRequest
+          ? canonicalRequest.requestedDirectory
+          : undefined;
+      let canonicalPermissionPattern: string | undefined;
+      if (canonicalRequestedDirectory && permission.patterns.length === 1) {
+        try {
+          canonicalPermissionPattern = toDirectoryPermissionPattern(
+            canonicalRequestedDirectory,
+          );
+        } catch {
+          // Unsafe path characters cannot be represented as permission globs.
+        }
+      }
+      const permissionPatterns = canonicalPermissionPattern
+        ? [canonicalPermissionPattern]
+        : permission.patterns;
       return [
         {
           type: 'permission-request',
           request: {
             requestId: permission.id,
             toolName: permission.permission,
-            input: permission.metadata,
+            input: {
+              ...permission.metadata,
+              ...(permission.permission === 'external_directory'
+                ? {
+                    externalDirectoryAutoEvaluate:
+                      canAutoEvaluateExternalDirectory,
+                  }
+                : {}),
+              permissionPatterns,
+              alwaysPatterns: permission.always,
+            },
             description: permission.permission,
+            directoryAccess,
           },
         },
       ];

@@ -270,6 +270,32 @@ describe('generateText claude-code structured output', () => {
       }),
     );
   });
+
+  it('allows a named Claude Code skill with scoped tool permissions', async () => {
+    queryMock.mockReturnValue(
+      createClaudeQueryResponse({ type: 'result', result: 'done' }),
+    );
+
+    await generateText({
+      backend: 'claude-code',
+      model: 'default',
+      prompt: 'Summarize comments',
+      skillName: 'work-item-summary',
+      allowedTools: ['Read'],
+      allowedToolPatterns: { Read: ['/tmp/comments.md'] },
+    });
+
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          allowedTools: [
+            'Read(/tmp/comments.md)',
+            'Skill(work-item-summary)',
+          ],
+        }),
+      }),
+    );
+  });
 });
 
 describe('generateText opencode structured output', () => {
@@ -613,6 +639,75 @@ describe('generateText codex structured output', () => {
       swapped: false,
     }));
   });
+
+  it.each([
+    [
+      'codex',
+      'Codex restricted generation is unsupported',
+    ],
+    ['copilot', 'Copilot restricted generation is unsupported'],
+  ] as const)(
+    'fails closed before starting %s generation with scoped tool restrictions',
+    async (backend, expectedError) => {
+      await expect(
+        generateText({
+          backend,
+          model: 'default',
+          prompt: 'Summarize comments',
+          skillName: 'work-item-summary',
+          cwd: '/tmp/work-item-summary',
+          allowedTools: ['Read'],
+          allowedToolPatterns: { Read: ['/tmp/work-item-summary/comments.md'] },
+          throwOnError: true,
+        }),
+      ).rejects.toThrow(expectedError);
+      expect(getOrCreateCodexAppServerMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { allowedTools: [] },
+    { allowedToolPatterns: {} },
+  ])('treats defined empty restrictions as restrictive: %j', async (restriction) => {
+    await expect(
+      generateText({
+        backend: 'codex',
+        model: 'default',
+        prompt: 'Generate text',
+        ...restriction,
+        throwOnError: true,
+      }),
+    ).rejects.toThrow(
+      'Codex restricted generation is unsupported',
+    );
+    expect(getOrCreateCodexAppServerMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'codex',
+      'Codex restricted generation is unsupported',
+    ],
+    ['copilot', 'Copilot restricted generation is unsupported'],
+  ] as const)(
+    'fails closed when restricted generation falls back to %s',
+    async (backend, expectedError) => {
+      rateLimitResolveBackendMock.mockResolvedValue({ backend, swapped: true });
+
+      await expect(
+        generateText({
+          backend: 'claude-code',
+          model: 'default',
+          prompt: 'Summarize inline source',
+          skillName: 'work-item-summary',
+          allowedTools: [],
+          allowedToolPatterns: {},
+          throwOnError: true,
+        }),
+      ).rejects.toThrow(expectedError);
+      expect(getOrCreateCodexAppServerMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('returns parsed JSON text from Codex assistant output', async () => {
     const client = createMockCodexClient();

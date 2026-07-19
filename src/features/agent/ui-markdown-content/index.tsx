@@ -22,6 +22,7 @@ import {
 } from '@/lib/markdown-images';
 import { getImageDisplayWidth } from '@/lib/markdown-image-size';
 import { isGifBlobPreviewUrl } from '@/lib/blob-preview-url';
+import { MermaidDiagram } from '@/features/common/ui-mermaid-diagram';
 import { Modal } from '@/common/ui/modal';
 
 import {
@@ -1171,6 +1172,7 @@ export function MarkdownContent({
   allowBlobImages = false,
   truncateToChars,
   extractedContent,
+  renderMermaid = false,
 }: {
   content: string;
   onFilePathClick?: (
@@ -1184,6 +1186,7 @@ export function MarkdownContent({
   allowBlobImages?: boolean;
   truncateToChars?: number;
   extractedContent?: ExtractedMarkdownContent;
+  renderMermaid?: boolean;
 }) {
   const [selectedImage, setSelectedImage] = useState<{
     src: string;
@@ -1298,10 +1301,20 @@ export function MarkdownContent({
                     );
                   }
 
+                  const code = String(children).replace(/\n$/, '');
+                  if (renderMermaid && matchLang?.[1].toLowerCase() === 'mermaid') {
+                    return (
+                      <MermaidDiagram
+                        source={code}
+                        className="border-line bg-surface-0 overflow-x-auto rounded-sm border p-3 text-center [&_svg]:mx-auto [&_svg]:max-w-full"
+                      />
+                    );
+                  }
+
                   return (
                     <CodeBlock
                       language={matchLang ? matchLang[1] : 'text'}
-                      code={String(children).replace(/\n$/, '')}
+                      code={code}
                     />
                   );
                 },

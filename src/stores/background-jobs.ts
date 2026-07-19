@@ -12,6 +12,7 @@ export type BackgroundJobType =
   | 'pr-creation'
   | 'pr-review-creation'
   | 'summary-generation'
+  | 'work-item-summary-generation'
   | 'project-summary-generation'
   | 'logo-generation'
   | 'verification-note'
@@ -70,6 +71,15 @@ export type BackgroundJob =
       type: 'summary-generation';
       details: {
         taskName: string | null;
+      };
+    })
+  | (BackgroundJobBase & {
+      type: 'work-item-summary-generation';
+      details: {
+        providerId: string;
+        workItemId: number;
+        workItemTitle: string;
+        projectName: string;
       };
     })
   | (BackgroundJobBase & {
@@ -191,6 +201,18 @@ type NewBackgroundJobInput =
       projectId?: string | null;
       details: {
         taskName: string | null;
+      };
+    }
+  | {
+      type: 'work-item-summary-generation';
+      title: string;
+      taskId?: string | null;
+      projectId?: string | null;
+      details: {
+        providerId: string;
+        workItemId: number;
+        workItemTitle: string;
+        projectName: string;
       };
     }
   | {
@@ -433,6 +455,8 @@ export function bgJobLabel(type: BackgroundJobType): string {
       return 'Merging…';
     case 'summary-generation':
       return 'Generating summary…';
+    case 'work-item-summary-generation':
+      return 'Generating work item summary…';
     case 'project-summary-generation':
       return 'Generating project summary…';
     case 'logo-generation':
@@ -476,6 +500,21 @@ export function useRunningBackgroundJobsForTask(taskId: string | null) {
           )
         : EMPTY_RUNNING_JOBS,
     [jobs, taskId],
+  );
+}
+
+export function useRunningWorkItemSummaryJob(
+  providerId: string,
+  workItemId: number,
+) {
+  return useBackgroundJobsStore((state) =>
+    state.jobs.find(
+      (job) =>
+        job.type === 'work-item-summary-generation' &&
+        job.status === 'running' &&
+        job.details.providerId === providerId &&
+        job.details.workItemId === workItemId,
+    ),
   );
 }
 

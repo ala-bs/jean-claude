@@ -17,6 +17,7 @@ import {
   PinOff,
   ShieldAlert,
   ShieldQuestion,
+  Sparkles,
   StickyNote,
   Terminal,
   XCircle,
@@ -156,6 +157,7 @@ function GraphNode({
   const attentionColor = statusColor(attention);
   const needsPermission = attention === 'needs-permission';
   const hasQuestion = attention === 'has-question';
+  const isInterrupted = attention === 'interrupted';
   const needsAttention = needsPermission || hasQuestion;
 
   // For attention states, render icon instead of circle
@@ -187,6 +189,29 @@ function GraphNode({
         ) : (
           <CircleHelp style={{ width: iconSize, height: iconSize }} />
         )}
+      </div>
+    );
+  }
+
+  if (isInterrupted) {
+    const iconSize = isSubtask ? 12 : 14;
+    const left = isSubtask
+      ? RAIL_W - 9 - iconSize / 2 + 4
+      : NODE_X - iconSize / 2;
+    return (
+      <div
+        className="text-status-run"
+        style={{
+          position: 'absolute',
+          left,
+          top: 14 - 1,
+          width: iconSize,
+          height: iconSize,
+          zIndex: 2,
+        }}
+        title="Interrupted"
+      >
+        <CircleDotDashed style={{ width: iconSize, height: iconSize }} />
       </div>
     );
   }
@@ -474,6 +499,7 @@ export function FeedItemCard({
     item.approvedBy ??
     [];
   const isRunning = item.attention === 'running';
+  const isInterrupted = isTask && item.attention === 'interrupted';
   const hasUnread = Boolean(item.hasUnread);
   const needsPermission = item.attention === 'needs-permission';
   const hasQuestion = item.attention === 'has-question';
@@ -721,13 +747,15 @@ export function FeedItemCard({
                       hasRunningCommand &&
                       'feed-command-running-row-focused',
                   ]
-                : needsPermission
-                  ? 'feed-permission-row border-transparent'
-                  : hasQuestion
-                    ? 'feed-question-row border-transparent'
-                    : hasUnread
-                      ? 'feed-unread-row border-transparent'
-                      : !showRail && 'border-line-soft',
+                  : needsPermission
+                    ? 'feed-permission-row border-transparent'
+                    : hasQuestion
+                      ? 'feed-question-row border-transparent'
+                      : isInterrupted
+                        ? 'bg-status-run/5 border-status-run/20'
+                        : hasUnread
+                          ? 'feed-unread-row border-transparent'
+                          : !showRail && 'border-line-soft',
               isSelected
                 ? 'border-l-[3px] border-l-[var(--color-acc)]'
                 : 'border-l-[3px] border-l-transparent',
@@ -832,12 +860,35 @@ export function FeedItemCard({
                 </span>
               </div>
 
+              {item.source === 'work-item' && item.workItemSummary && (
+                <div className="text-ink-3 flex min-w-0 items-center gap-1.5 text-[10.5px] leading-snug">
+                  <Sparkles className="text-acc h-3 w-3 shrink-0" />
+                  <span className="line-clamp-1 min-w-0">
+                    {item.workItemSummary}
+                  </span>
+                  {item.workItemSummaryStale && (
+                    <span
+                      className="bg-status-run h-1.5 w-1.5 shrink-0 rounded-full"
+                      title="Summary source updated"
+                    />
+                  )}
+                </div>
+              )}
+
               {/* Bottom row: project + time + status */}
               <div className="flex flex-wrap items-center gap-1.5">
                 {!isSubtask && <FeedProjectLabel item={item} />}
                 <span className="text-ink-3/80 ml-auto shrink-0 font-mono text-[9.5px]">
                   {formatRelativeTime(itemTimestamp)}
                 </span>
+
+                {/* Interrupted task status */}
+                {isInterrupted && (
+                  <span className="bg-status-run/10 text-status-run ring-status-run/25 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1">
+                    <CircleDotDashed className="h-2.5 w-2.5" />
+                    Interrupted
+                  </span>
+                )}
 
                 {/* PR status badges for work items (non-task) */}
                 {item.source === 'work-item' &&

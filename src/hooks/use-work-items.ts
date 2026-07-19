@@ -126,6 +126,7 @@ export function useWorkItemsByIds(params: {
   providerId: string | null;
   projectName: string | null;
   workItemIds: number[];
+  enabled?: boolean;
 }) {
   return useQuery<AzureDevOpsWorkItem[]>({
     queryKey: [
@@ -141,6 +142,7 @@ export function useWorkItemsByIds(params: {
         workItemIds: [...new Set(params.workItemIds)],
       }),
     enabled:
+      params.enabled !== false &&
       !!params.providerId && !!params.projectName && params.workItemIds.length > 0,
     staleTime: 5 * 60_000,
   });
@@ -617,6 +619,13 @@ export function useAddWorkItemComment() {
       queryClient.invalidateQueries({
         queryKey: ['work-item-history', variables.providerId],
       });
+      queryClient.invalidateQueries({
+        queryKey: [
+          'work-item-summary',
+          variables.providerId,
+          variables.workItemId,
+        ],
+      });
     },
     onError: () => {
       addToast({ message: 'Failed to add work item comment', type: 'error' });
@@ -666,23 +675,28 @@ export function useRelatedTestCasesForWorkItems(params: {
   providerId: string | null;
   projectName: string | null;
   workItemIds: number[];
+  enabled?: boolean;
 }) {
+  const workItemIds = [...new Set(params.workItemIds)].sort(
+    (left, right) => left - right,
+  );
+
   return useQuery<Record<number, TestCaseWithSteps[]>>({
     queryKey: [
       'related-test-cases-batch',
       params.providerId,
       params.projectName,
-      params.workItemIds,
+      workItemIds,
     ],
     queryFn: async () => {
       if (
         !params.providerId ||
         !params.projectName ||
-        params.workItemIds.length === 0
+        workItemIds.length === 0
       )
         return {};
       const results = await Promise.all(
-        params.workItemIds.map(async (workItemId) => {
+        workItemIds.map(async (workItemId) => {
           const testCases = await api.azureDevOps.getRelatedTestCases({
             providerId: params.providerId!,
             projectName: params.projectName!,
@@ -701,9 +715,10 @@ export function useRelatedTestCasesForWorkItems(params: {
       return Object.fromEntries(results);
     },
     enabled:
+      params.enabled !== false &&
       !!params.providerId &&
       !!params.projectName &&
-      params.workItemIds.length > 0,
+      workItemIds.length > 0,
     staleTime: 5 * 60_000,
   });
 }

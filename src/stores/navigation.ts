@@ -37,7 +37,7 @@ export type RightPane =
       selectedCommandId: string | null;
     };
 
-export type ReviewMode = 'changes' | 'files' | 'commits';
+export type ReviewMode = 'changes' | 'unstaged' | 'files' | 'commits';
 export type AddStepPresetType = 'new-session' | 'continue' | 'review-changes';
 
 interface AddStepDialogDraft {

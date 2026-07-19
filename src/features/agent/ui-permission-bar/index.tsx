@@ -1,18 +1,22 @@
 import {
   Check,
+  ChevronDown,
+  FolderTree,
   MessageSquare,
   Send,
   Shield,
   ShieldCheck,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
+import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import { Button } from '@/common/ui/button';
 import type { InteractionMode } from '@shared/types';
 import type { NormalizedPermissionRequest } from '@shared/normalized-message-v2';
 import type { PermissionResponse } from '@shared/agent-types';
 import { Textarea } from '@/common/ui/textarea';
+import { useModal } from '@/common/context/modal';
 
 
 import { MarkdownContent } from '../ui-markdown-content';
@@ -82,6 +86,18 @@ function ToolInputDisplay({
           title={isExternal ? `External path: ${filePath}` : filePath}
         >
           {displayPath}
+        </code>
+      );
+    }
+
+    case 'external_directory': {
+      const filePath = String(input.filepath || input.parentDir || '');
+      return (
+        <code
+          className="block truncate text-sm text-orange-400"
+          title={`External path: ${filePath}`}
+        >
+          {filePath}
         </code>
       );
     }
@@ -199,13 +215,17 @@ export function PermissionBar({
   onSetMode?: (mode: InteractionMode) => void;
   worktreePath?: string | null;
 }) {
+  const modal = useModal();
   const [isOtherOpen, setIsOtherOpen] = useState(false);
   const [otherMessage, setOtherMessage] = useState('');
+  const directoryDropdownRef = useRef<{ toggle: () => void } | null>(null);
 
   const input = request.input;
   const isExitPlanMode = request.toolName === 'ExitPlanMode';
   const sessionAllowButton = request.sessionAllowButton;
-  const showAllowAll = ALLOW_ALL_TOOLS.has(request.toolName);
+  const directoryAccess = request.directoryAccess;
+  const showAllowAll =
+    !directoryAccess && ALLOW_ALL_TOOLS.has(request.toolName);
 
   const handleAllow = () => {
     if (sessionAllowButton?.setModeOnAllow) {
@@ -305,6 +325,46 @@ export function PermissionBar({
     });
   };
 
+  const handleAllowDirectory = ({
+    path,
+    isHome,
+  }: {
+    path: string;
+    isHome?: boolean;
+  }) => {
+    directoryDropdownRef.current?.toggle();
+    const allow = () =>
+      onRespond(request.requestId, {
+        behavior: 'allow',
+        updatedInput: input,
+        allowMode: 'session',
+        allowedDirectory: path,
+      });
+
+    if (isHome) {
+      modal.confirm({
+        title: 'Allow Broad Directory Access?',
+        content: (
+          <div className="space-y-2 text-sm">
+            <p>
+              This grants agent access to your home directory and possibly
+              broader paths for this task session.
+            </p>
+            <code className="bg-bg-1 block break-all rounded px-2 py-1">
+              {path}
+            </code>
+          </div>
+        ),
+        confirmLabel: 'Allow Broad Access',
+        variant: 'danger',
+        onConfirm: allow,
+      });
+      return;
+    }
+
+    return allow();
+  };
+
   const handleOtherSubmit = () => {
     if (!otherMessage.trim()) return;
     const response = onRespond(request.requestId, {
@@ -380,6 +440,32 @@ export function PermissionBar({
                 worktreePath={worktreePath}
               />
             )}
+            {directoryAccess && (
+              <div
+                role="note"
+                className="border-glass-border bg-bg-1/60 mt-2 space-y-1 rounded border px-2 py-1.5 text-xs"
+              >
+                <div className="text-ink-3">External directory access</div>
+                <div className="flex min-w-0 gap-2">
+                  <span className="text-ink-3 shrink-0">Requested path:</span>
+                  <code className="text-ink-1 truncate" title={directoryAccess.requestedPath}>
+                    {directoryAccess.requestedPath}
+                  </code>
+                </div>
+                <div className="flex min-w-0 gap-2">
+                  <span className="text-ink-3 shrink-0">Containing directory:</span>
+                  <code
+                    className="text-ink-1 truncate"
+                    title={directoryAccess.requestedDirectory}
+                  >
+                    {directoryAccess.requestedDirectory}
+                  </code>
+                </div>
+                <div className="text-ink-2">
+                  Parent grants include every descendant for this task session.
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -449,7 +535,44 @@ export function PermissionBar({
               >
                 Allow
               </Button>
-              {sessionAllowButton && (
+              {directoryAccess && (
+                <Dropdown
+                  dropdownRef={directoryDropdownRef}
+                  align="right"
+                  side="top"
+                  className="max-w-[min(36rem,calc(100vw-2rem))]"
+                  trigger={
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<FolderTree />}
+                    >
+                      Allow Parent for Session
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  }
+                >
+                  <div className="text-ink-3 px-3 py-1.5 text-xs">
+                    Recursive access for this task session
+                  </div>
+                  {directoryAccess.parentDirectories.map((directory) => (
+                    <DropdownItem
+                      key={directory.path}
+                      onClick={() => handleAllowDirectory(directory)}
+                      icon={<FolderTree />}
+                    >
+                      <code
+                        className="block max-w-lg truncate text-xs"
+                        title={directory.path}
+                      >
+                        {directory.path}
+                        {directory.isHome ? ' (Includes Home)' : ''}
+                      </code>
+                    </DropdownItem>
+                  ))}
+                </Dropdown>
+              )}
+              {sessionAllowButton && !directoryAccess && (
                 <Button
                   onClick={handleAllowForSession}
                   variant="primary"
@@ -459,7 +582,7 @@ export function PermissionBar({
                   {sessionAllowButton.label}
                 </Button>
               )}
-              {sessionAllowButton && (
+              {sessionAllowButton && !directoryAccess && (
                 <Button
                   onClick={handleAllowForProject}
                   variant="primary"
@@ -470,7 +593,7 @@ export function PermissionBar({
                   Allow for Project
                 </Button>
               )}
-              {sessionAllowButton && worktreePath && (
+              {sessionAllowButton && !directoryAccess && worktreePath && (
                 <Button
                   onClick={handleAllowForProjectWorktrees}
                   variant="primary"
@@ -481,7 +604,7 @@ export function PermissionBar({
                   Allow for Project Worktrees
                 </Button>
               )}
-              {sessionAllowButton && onAllowGlobally && (
+              {sessionAllowButton && !directoryAccess && onAllowGlobally && (
                 <Button
                   onClick={handleAllowGlobally}
                   variant="primary"

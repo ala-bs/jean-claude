@@ -3,6 +3,7 @@ import type {
   VerificationTestCase,
   VerificationWorkItem,
 } from '@shared/work-item-verification-note-types';
+import { simplifyWorkItemHtml } from '@shared/work-item-html';
 
 import { dbg } from '../lib/debug';
 
@@ -79,7 +80,7 @@ function serializeTestCases(testCases: VerificationTestCase[]): string {
       const steps = (testCase.steps ?? [])
         .map(
           (step, index) =>
-            `    ${index + 1}. Action: ${sanitizeForPrompt(step.action)}\n       Expected: ${sanitizeForPrompt(step.expectedResult)}`,
+            `    ${index + 1}. Action: ${sanitizeForPrompt(simplifyWorkItemHtml(step.action))}\n       Expected: ${sanitizeForPrompt(simplifyWorkItemHtml(step.expectedResult))}`,
         )
         .join('\n');
 

@@ -110,6 +110,7 @@ export function MessageInput({
   const { data: completionSetting } = useCompletionSetting();
   const { data: featureMap = null } = useProjectFeatureMap(projectId ?? null);
   const [internalValue, setInternalValue] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const isControlled = externalValue !== undefined;
   const value = isControlled ? externalValue : internalValue;
   const setValue = useCallback(
@@ -142,8 +143,8 @@ export function MessageInput({
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  const handleSubmit = useCallback(() => {
-    if (forceDisabled) return;
+  const handleSubmit = useCallback(async () => {
+    if (forceDisabled || isSubmitting) return;
 
     const trimmed = expandFeatureReferencesInPrompt({
       text: resolveMessageInputText(value, snippetVariableContext),
@@ -173,12 +174,19 @@ export function MessageInput({
       }
     }
 
-    if (isRunning && onQueue) {
-      // Queue the message if agent is running
-      onQueue(parts);
-    } else if (!disabled) {
-      // Send normally if not running
-      onSend(parts);
+    setIsSubmitting(true);
+    try {
+      if (isRunning && onQueue) {
+        await onQueue(parts);
+      } else if (!disabled) {
+        await onSend(parts);
+      } else {
+        return;
+      }
+    } catch {
+      return;
+    } finally {
+      setIsSubmitting(false);
     }
 
     setValue('');
@@ -199,6 +207,7 @@ export function MessageInput({
     allowEmptySubmit,
     snippetVariableContext,
     featureMap,
+    isSubmitting,
   ]);
 
   const handleEnterKey = useCallback(
@@ -236,6 +245,7 @@ export function MessageInput({
 
   const isSubmitDisabled =
     forceDisabled ||
+    isSubmitting ||
     (!value.trim() &&
       images.length === 0 &&
       attachedFiles.length === 0 &&
@@ -314,7 +324,7 @@ export function MessageInput({
           ? 'Type to queue a follow-up... (Esc twice to stop)'
           : placeholder
       }
-      disabled={forceDisabled || (disabled && !isRunning)}
+      disabled={forceDisabled || isSubmitting || (disabled && !isRunning)}
       onFocus={() => onFocusChange?.(true)}
       onBlur={() => onFocusChange?.(false)}
       fillAvailableHeight={fillAvailableHeight}

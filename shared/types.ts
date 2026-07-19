@@ -210,6 +210,7 @@ export interface UpdateProvider {
 export interface BranchInfo {
   name: string;
   lastCommitDate: string;
+  isCheckedOut?: boolean;
 }
 
 export interface DetectedProjectLogo {
@@ -603,6 +604,7 @@ export interface TaskStep {
   images: PromptImagePart[] | null;
   meta: TaskStepMeta;
   autoStart: boolean;
+  archivedAt?: string | null;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -641,6 +643,7 @@ export interface UpdateTaskStep {
   images?: PromptImagePart[] | null;
   meta?: TaskStepMeta;
   autoStart?: boolean;
+  archivedAt?: string | null;
   sortOrder?: number;
 }
 
@@ -786,9 +789,14 @@ export interface BackendModelPreset {
   backend: AgentBackendType;
   model: ModelPreference;
   thinkingEffort?: ThinkingEffort | null;
+  showInQuickSwitcher?: boolean;
 }
 
 export type BackendModelPresetsSetting = BackendModelPreset[];
+
+export interface ModelQuickSwitcherSetting {
+  enabled: boolean;
+}
 
 export type TaskNotificationEvent =
   | 'completed'
@@ -835,6 +843,13 @@ export const DEFAULT_PROJECT_FEATURE_MAP_SLOT: AiSkillSlotConfig = {
   skillName: 'project-feature-mapping',
 };
 
+export const DEFAULT_WORK_ITEM_SUMMARY_SLOT: AiSkillSlotConfig = {
+  backend: 'claude-code',
+  model: 'haiku',
+  thinkingEffort: 'default',
+  skillName: 'work-item-summary',
+};
+
 export interface AiGenerationSetting {
   openAiApiKey: string; // Stored encrypted
   openAiImageGenerationEnabled?: boolean;
@@ -858,6 +873,7 @@ export type AiSkillSlotKey =
   | 'verification-note'
   | 'project-summary'
   | 'project-feature-map'
+  | 'work-item-summary'
   | 'logo-generation';
 export type AiSkillSlotsSetting = Partial<
   Record<AiSkillSlotKey, AiSkillSlotConfig>
@@ -1137,9 +1153,21 @@ function isBackendModelPresetsSetting(
       VALID_BACKENDS.includes(obj.backend as AgentBackendType) &&
       (obj.thinkingEffort === undefined ||
         obj.thinkingEffort === null ||
-        VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort))
+        VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort)) &&
+      (obj.showInQuickSwitcher === undefined ||
+        typeof obj.showInQuickSwitcher === 'boolean')
     );
   });
+}
+
+function isModelQuickSwitcherSetting(
+  v: unknown,
+): v is ModelQuickSwitcherSetting {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    typeof (v as Record<string, unknown>).enabled === 'boolean'
+  );
 }
 
 const VALID_TASK_NOTIFICATION_EVENTS: TaskNotificationEvent[] = [
@@ -1193,6 +1221,7 @@ const VALID_SLOT_KEYS: AiSkillSlotKey[] = [
   'verification-note',
   'project-summary',
   'project-feature-map',
+  'work-item-summary',
   'logo-generation',
 ];
 
@@ -1425,6 +1454,10 @@ export const SETTINGS_DEFINITIONS = {
     defaultValue: [] as BackendModelPresetsSetting,
     validate: isBackendModelPresetsSetting,
   },
+  modelQuickSwitcher: {
+    defaultValue: { enabled: false } as ModelQuickSwitcherSetting,
+    validate: isModelQuickSwitcherSetting,
+  },
   taskEventNotifications: {
     defaultValue: {
       modes: DEFAULT_TASK_NOTIFICATION_MODES,
@@ -1443,6 +1476,7 @@ export const SETTINGS_DEFINITIONS = {
   aiSkillSlots: {
     defaultValue: {
       'project-feature-map': DEFAULT_PROJECT_FEATURE_MAP_SLOT,
+      'work-item-summary': DEFAULT_WORK_ITEM_SUMMARY_SLOT,
     } as AiSkillSlotsSetting,
     validate: isAiSkillSlotsSetting,
   },

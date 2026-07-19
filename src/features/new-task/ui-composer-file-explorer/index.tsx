@@ -1,5 +1,5 @@
 import { FolderTree, Search, Trash2 } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 
@@ -113,12 +113,14 @@ export function ComposerFileExplorer({
   );
 
   const hasSelectedFile = selectedFilePath !== null;
+  const treePaneRef = useRef<HTMLDivElement>(null);
 
   const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
     initialWidth: treeWidth,
     minWidth: MIN_TREE_WIDTH,
     maxWidthFraction: 0.75,
     onWidthChange: setTreeWidth,
+    resizeTargetRef: treePaneRef,
   });
 
   const relativePath =
@@ -158,6 +160,7 @@ export function ComposerFileExplorer({
       >
         {/* Tree panel */}
         <div
+          ref={treePaneRef}
           className="relative flex shrink-0 flex-col overflow-hidden"
           style={{
             width: hasSelectedFile ? treeWidth : '100%',

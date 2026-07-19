@@ -139,9 +139,7 @@ export function TaskMessageManager() {
           break;
         case 'status':
           flushPendingEntryUpdates(stepId);
-          if (isLoaded(stepId)) {
-            setStatus(stepId, event.status, event.error);
-          }
+          setStatus(stepId, event.status, event.error, taskId);
           invalidateTaskStatusResources(taskId, stepId);
           // Clear pending requests when agent resumes or reaches terminal state.
           if (clearsTaskPendingRequest(event.status)) {

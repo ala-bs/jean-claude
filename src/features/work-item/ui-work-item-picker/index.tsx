@@ -11,6 +11,7 @@ import clsx from 'clsx';
 import Fuse from 'fuse.js';
 import type React from 'react';
 
+import { createRafScheduler } from '@/lib/raf-scheduler';
 
 import {
   useBoardColumns,
@@ -56,6 +57,7 @@ function getExactWorkItemIdSearch(filter: string | undefined): string | null {
 const DEFAULT_EXCLUDE_TYPES = ['Test Suite', 'Test Case', 'Epic', 'Feature'];
 
 export function WorkItemPicker({
+  appProjectId,
   providerId,
   projectId,
   projectName,
@@ -73,6 +75,7 @@ export function WorkItemPicker({
   excludeWorkItemTypes = DEFAULT_EXCLUDE_TYPES,
   headerRight,
 }: {
+  appProjectId?: string;
   providerId: string;
   projectId: string;
   projectName: string;
@@ -322,28 +325,47 @@ export function WorkItemPicker({
     [onPanelWidthChange],
   );
   const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => dragCleanupRef.current?.(), []);
 
   const handleDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
       isDragging.current = true;
+      let latestWidth: number | null = null;
+      const updateWidth = createRafScheduler((width: number) => {
+        latestWidth = width;
+        if (panelRef.current) panelRef.current.style.width = `${width}%`;
+      });
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
         if (!containerRef.current || !isDragging.current) return;
         const rect = containerRef.current.getBoundingClientRect();
         const x = moveEvent.clientX - rect.left;
         const pct = (x / rect.width) * 100;
-        setPanelWidth(Math.min(80, Math.max(30, pct)));
+        updateWidth.schedule(Math.min(80, Math.max(30, pct)));
       };
 
       const handleMouseUp = () => {
+        updateWidth.flush();
         isDragging.current = false;
+        if (latestWidth !== null) setPanelWidth(latestWidth);
+        dragCleanupRef.current?.();
+      };
+      const handleWindowBlur = () => handleMouseUp();
+
+      dragCleanupRef.current = () => {
+        updateWidth.cancel();
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('blur', handleWindowBlur);
+        dragCleanupRef.current = null;
       };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('blur', handleWindowBlur);
   };
 
   const isBoardBootstrapping = viewMode === 'board' && isLoadingBoardColumns;
@@ -372,6 +394,7 @@ export function WorkItemPicker({
     <div ref={containerRef} className="flex h-full w-full overflow-hidden">
       {/* Left panel */}
       <div
+        ref={panelRef}
         className="flex min-w-0 flex-col overflow-hidden"
         style={{ width: `${panelWidth}%` }}
       >
@@ -506,6 +529,7 @@ export function WorkItemPicker({
       >
         <WorkItemPreview
           workItem={highlightedWorkItem}
+          projectId={appProjectId}
           providerId={providerId}
           projectName={projectName}
         />

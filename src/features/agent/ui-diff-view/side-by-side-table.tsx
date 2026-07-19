@@ -185,7 +185,7 @@ export function SideBySideDiffTable({
   return (
     <table
       ref={tableRef}
-      className={`w-full border-collapse ${isDragging ? 'select-none' : ''}`}
+      className={`w-full table-fixed border-collapse ${isDragging ? 'select-none' : ''}`}
       onMouseDown={lineRangeSelection.onMouseDown}
       onMouseOver={lineRangeSelection.onMouseOver}
       onMouseUp={lineRangeSelection.onMouseUp}
@@ -412,8 +412,6 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
                 : 'group-hover:bg-acc/50 bg-white/[0.06] group-hover:w-0.5'
             }`}
           />
-          {/* Wide invisible hit target */}
-          <div className="absolute inset-y-0 -right-1.5 -left-1.5" />
         </td>
         {/* Right side (new/additions) */}
         <SideBySideCell
@@ -488,7 +486,7 @@ const SideBySideCell = memo(function SideBySideCell({
     return (
       <>
         <td className="bg-bg-1/50 text-ink-4 pr-1 text-right align-top select-none" />
-        <td className="bg-bg-1/50 overflow-hidden pr-2 whitespace-pre-wrap" />
+        <td className="bg-bg-1/50 overflow-hidden pr-2 whitespace-pre-wrap [overflow-wrap:anywhere]" />
       </>
     );
   }
@@ -568,9 +566,13 @@ const SideBySideCell = memo(function SideBySideCell({
       {/* Content */}
       <td
         data-line-side={side === 'left' ? 'old' : 'new'}
-        className={clsx('overflow-hidden pr-2 whitespace-pre-wrap', bgClass, {
-          'select-none': canComment,
-        })}
+        className={clsx(
+          'overflow-hidden pr-2 whitespace-pre-wrap [overflow-wrap:anywhere]',
+          bgClass,
+          {
+            'select-none': canComment,
+          },
+        )}
       >
         {renderedContent}
         {side === 'right' && isFoldCollapsed && foldRange && (

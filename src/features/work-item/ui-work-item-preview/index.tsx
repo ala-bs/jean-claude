@@ -28,9 +28,11 @@ import {
   useWorkItemStates,
 } from '@/hooks/use-work-items';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
+import { canShowWorkItemSummary } from '@/lib/work-item-summary';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { UserAvatar } from '@/common/ui/user-avatar';
+import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 
 
 
@@ -51,8 +53,9 @@ type DetailsTab = 'content' | 'comments' | 'history' | 'test-cases';
 
 export function WorkItemPreview({
   workItem,
-  providerId,
   projectId,
+  providerId,
+  workItemProjectId,
   projectName,
   showCommentsAside = false,
   readOnly = false,
@@ -70,8 +73,9 @@ export function WorkItemPreview({
   parserSetting = null,
 }: {
   workItem: AzureDevOpsWorkItem | null;
-  providerId?: string;
   projectId?: string;
+  providerId?: string;
+  workItemProjectId?: string;
   projectName?: string;
   showCommentsAside?: boolean;
   readOnly?: boolean;
@@ -205,6 +209,19 @@ export function WorkItemPreview({
   const hasReproSteps = workItemType === 'Bug' && !!fields.reproSteps;
   const hasContent = !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
   const showTestCases = hasTestCases && !isEditorial;
+  const summaryRequest = canShowWorkItemSummary({
+    projectId,
+    providerId,
+    projectName,
+    workItemId: id,
+  })
+    ? {
+        projectId: projectId!,
+        providerId: providerId!,
+        projectName: projectName!,
+        workItemId: id,
+      }
+    : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -271,12 +288,12 @@ export function WorkItemPreview({
                   disabled={!canEditMetadata || !providerId}
                   onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.State', value })}
                 />
-                {canEditMetadata && providerId && projectId && projectName && boardColumns.length > 0 && (
+                {canEditMetadata && providerId && workItemProjectId && projectName && boardColumns.length > 0 && (
                   <WorkItemBoardColumnEditor
                     key={`${id}:column`}
                     workItem={workItem}
                     providerId={providerId}
-                    projectId={projectId}
+                    projectId={workItemProjectId}
                     projectName={projectName}
                     columns={boardColumns}
                   />
@@ -302,6 +319,31 @@ export function WorkItemPreview({
                     disabled={!canEditMetadata || !providerId}
                     onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.IterationPath', value })}
                   />
+                )}
+                {canEditMetadata && providerId && (
+                  <div className="border-glass-border bg-glass-light text-ink-1 focus-within:border-acc-line flex min-h-8 items-center gap-2 rounded-md border px-3 py-1 text-xs transition-colors">
+                    <span className="text-ink-3">Story points</span>
+                    <EditableMetadataValue
+                      key={`${id}:story-points:${fields.storyPoints ?? ''}`}
+                      value={String(fields.storyPoints ?? '')}
+                      label="Story points"
+                      emptyLabel="None"
+                      className="hover:text-acc-ink"
+                      validate={(value) => {
+                        if (value === '') return null;
+                        const points = Number(value);
+                        return Number.isInteger(points) && points >= 0
+                          ? null
+                          : 'Story points must be a non-negative integer';
+                      }}
+                      onSave={(value) => updateField.mutateAsync({
+                        providerId,
+                        workItemId: id,
+                        field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+                        value: value === '' ? null : Number(value),
+                      })}
+                    />
+                  </div>
                 )}
                 {canEditMetadata && providerId && (
                   <div className="border-glass-border bg-glass-light text-ink-1 focus-within:border-acc-line flex min-h-8 items-center gap-2 rounded-md border px-3 py-1 text-xs transition-colors">
@@ -403,7 +445,7 @@ export function WorkItemPreview({
             : 'grid-cols-1'
         }`}
       >
-        <div className="min-h-0 overflow-y-auto">
+        <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto">
           {activeTab === 'content' && (
             <div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -465,6 +507,14 @@ export function WorkItemPreview({
                   error={relatedWorkItemsError}
                   onOpen={onOpenRelatedWorkItem}
                   parserSetting={parserSetting}
+                />
+              )}
+
+              {summaryRequest && (
+                <WorkItemGeneratedSummary
+                  request={summaryRequest}
+                  workItemTitle={fields.title}
+                  className="mt-3"
                 />
               )}
 
@@ -857,7 +907,7 @@ function MetadataDropdown({
   );
 }
 
-function EditableMetadataValue({
+export function EditableMetadataValue({
   value,
   label,
   emptyLabel = label,

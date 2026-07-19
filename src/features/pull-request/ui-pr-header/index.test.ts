@@ -8,8 +8,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
+import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
+import { RootOverlay } from '@/common/context/overlay';
 
-const { updateTitle } = vi.hoisted(() => ({
+const { addToast, markDraft, updateTitle } = vi.hoisted(() => ({
+  addToast: vi.fn(),
+  markDraft: vi.fn(),
   updateTitle: vi.fn(),
 }));
 
@@ -18,6 +22,7 @@ vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 vi.mock('@/hooks/use-pull-requests', () => ({
+  useMarkPullRequestDraft: () => ({ mutate: markDraft, isPending: false }),
   usePublishPullRequest: () => ({ mutate: vi.fn(), isPending: false }),
   useUpdatePullRequestTitle: () => ({
     mutate: updateTitle,
@@ -42,6 +47,10 @@ vi.mock('@/stores/background-jobs', () => ({
 vi.mock('@/stores/new-task-form', () => ({
   useNewTaskFormStore: () => ({ setDraft: vi.fn() }),
 }));
+vi.mock('@/stores/toasts', () => ({
+  useToastStore: (selector: (state: Record<string, unknown>) => unknown) =>
+    selector({ addToast }),
+}));
 vi.mock('../ui-pr-auto-complete', () => ({ PrAutoComplete: () => null }));
 vi.mock('../ui-pr-vote-dropdown', () => ({ PrVoteDropdown: () => null }));
 
@@ -65,17 +74,31 @@ const pr: AzureDevOpsPullRequestDetails = {
   reviewers: [],
 };
 
+function withProviders(child: ReturnType<typeof createElement>) {
+  return createElement(
+    RootKeyboardBindings,
+    null,
+    createElement(RootOverlay, null, child),
+  );
+}
+
 describe('PrHeader', () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
+    addToast.mockReset();
+    markDraft.mockReset();
     updateTitle.mockReset();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
     flushSync(() => {
-      root.render(createElement(PrHeader, { pr, projectId: 'project-1' }));
+      root.render(
+        withProviders(
+          createElement(PrHeader, { pr, projectId: 'project-1' }),
+        ),
+      );
     });
   });
 
@@ -115,5 +138,86 @@ describe('PrHeader', () => {
     );
 
     expect(updateTitle).toHaveBeenCalledWith('Renamed PR', expect.any(Object));
+  });
+
+  it('marks an active published PR as draft from the overflow menu', async () => {
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label="More pull request actions"]',
+    );
+    expect(trigger).not.toBeNull();
+
+    flushSync(() => {
+      trigger?.click();
+    });
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const menuItem = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Mark as draft',
+    );
+    expect(menuItem).toBeDefined();
+
+    flushSync(() => {
+      menuItem?.click();
+    });
+    expect(markDraft).toHaveBeenCalledWith(undefined, expect.any(Object));
+
+    const options = markDraft.mock.calls[0][1];
+    options.onSuccess();
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'success',
+      message: 'Pull request marked as draft',
+    });
+
+    const error = new Error('permission denied');
+    options.onError(error);
+    expect(addToast).toHaveBeenCalledWith({
+      type: 'error',
+      message: 'permission denied',
+    });
+  });
+
+  it('hides overflow action for draft, non-active, and read-only PRs', () => {
+    flushSync(() => {
+      root.render(
+        withProviders(
+          createElement(PrHeader, {
+            pr: { ...pr, isDraft: true },
+            projectId: 'project-1',
+          }),
+        ),
+      );
+    });
+    expect(
+      container.querySelector('[aria-label="More pull request actions"]'),
+    ).toBeNull();
+
+    flushSync(() => {
+      root.render(
+        withProviders(
+          createElement(PrHeader, {
+            pr: { ...pr, status: 'completed' },
+            projectId: 'project-1',
+          }),
+        ),
+      );
+    });
+    expect(
+      container.querySelector('[aria-label="More pull request actions"]'),
+    ).toBeNull();
+
+    flushSync(() => {
+      root.render(
+        withProviders(
+          createElement(PrHeader, {
+            pr,
+            projectId: 'project-1',
+            readOnly: true,
+          }),
+        ),
+      );
+    });
+    expect(
+      container.querySelector('[aria-label="More pull request actions"]'),
+    ).toBeNull();
   });
 });

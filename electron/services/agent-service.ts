@@ -69,7 +69,15 @@ import {
   readSettings,
   resolveRules,
 } from './permission-settings-service';
-import { emitStepUpsert, emitTaskUpsert } from './cache-event-service';
+import {
+  emitStepUpsert,
+  emitTaskPatch,
+  emitTaskUpsert,
+} from './cache-event-service';
+import {
+  toDirectoryPermissionPattern,
+  validateAllowedDirectory,
+} from './directory-access';
 import { agentResourceMonitorService } from './agent-resource-monitor-service';
 import { aiUsageTrackingService } from './ai-usage-tracking-service';
 import { applyConfiguredPromptPreface } from './prompt-preface-service';
@@ -83,11 +91,11 @@ import { dbg } from '../lib/debug';
 import { generateTaskName } from './name-generation-service';
 import { getAgentBackendProvider } from './agent-backends/providers';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
+import { mutateTaskSessionRules } from './task-session-rules-service';
 import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
 import { notificationService } from './notification-service';
 import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
 import { pathExists } from '../lib/fs';
-import type { PermissionScope } from '../../shared/permission-types';
 import { QuestionBrokerService } from './question-broker-service';
 import { resolveGlobalRules } from './global-permissions-service';
 import { SettingsRepository } from '../database/repositories/settings';
@@ -314,6 +322,7 @@ class AgentService {
   private runDisposePromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private runCleanupPromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private resultUpdateUsageQueues = new Map<string, Promise<void>>();
+  private requestResponsePromises = new Map<string, Promise<void>>();
   private startingSteps = new Set<string>();
   private registeringSteps = new Set<string>();
   private pendingSessionRegistrations = new Set<Promise<void>>();
@@ -490,17 +499,34 @@ class AgentService {
   }
 
   private async markTaskUnreadIfBackground(taskId: string): Promise<void> {
-    const isFocused =
+    const isFocused = () =>
       this.isMainWindowAlive() &&
       this.mainWindow!.isFocused() &&
       this.focusedTaskId === taskId;
 
-    if (!isFocused) {
-      await TaskRepository.setHasUnread(taskId, true);
-      const task = await TaskRepository.findById(taskId);
-      if (task) {
-        emitTaskUpsert(task);
+    if (isFocused()) return;
+
+    const task = await TaskRepository.setHasUnread(taskId, true);
+    if (isFocused()) {
+      const focusedTask = await TaskRepository.setHasUnread(taskId, false);
+      if (focusedTask) {
+        emitTaskPatch({
+          taskId,
+          projectId: focusedTask.projectId,
+          patch: { hasUnread: false, updatedAt: focusedTask.updatedAt },
+          invalidateFeed: false,
+        });
       }
+      return;
+    }
+
+    if (task) {
+      emitTaskPatch({
+        taskId,
+        projectId: task.projectId,
+        patch: { hasUnread: true, updatedAt: task.updatedAt },
+        invalidateFeed: false,
+      });
     }
   }
 
@@ -1428,28 +1454,23 @@ class AgentService {
             handle: session.runHandle,
           });
           if (tools.length > 0) {
-            const currentTask = await TaskRepository.findById(taskId);
-            const existing: PermissionScope = {
-              ...(currentTask?.sessionRules ?? {}),
-            };
-            // Convert accumulated string[] ("tool:matchValue" | "tool") → PermissionScope
-            for (const entry of tools) {
-              const colonIdx = entry.indexOf(':');
-              if (colonIdx !== -1) {
-                const tool = entry.slice(0, colonIdx);
-                const matchValue = entry.slice(colonIdx + 1);
-                existing[tool] = buildToolPermissionConfig({
-                  existing: existing[tool],
-                  matchValue,
-                });
-              } else {
-                existing[entry] = 'allow';
+            await mutateTaskSessionRules(taskId, (rules) => {
+              // Convert accumulated string[] ("tool:matchValue" | "tool") → PermissionScope
+              for (const entry of tools) {
+                const colonIdx = entry.indexOf(':');
+                if (colonIdx !== -1) {
+                  const tool = entry.slice(0, colonIdx);
+                  const matchValue = entry.slice(colonIdx + 1);
+                  rules[tool] = buildToolPermissionConfig({
+                    existing: rules[tool],
+                    matchValue,
+                  });
+                } else {
+                  rules[entry] = 'allow';
+                }
               }
-            }
-            const updatedTask = await TaskRepository.update(taskId, {
-              sessionRules: existing,
+              return rules;
             });
-            emitTaskUpsert(updatedTask);
           }
         }
 
@@ -1550,13 +1571,17 @@ class AgentService {
         });
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
-        await StepService.errorStep(stepId);
+        if (event.interrupted) {
+          await StepService.interruptStep(stepId);
+        } else {
+          await StepService.errorStep(stepId);
+        }
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
         await this.markTaskUnreadIfBackground(taskId);
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
         this.emitEvent(taskId, stepId, {
           type: 'status',
-          status: 'errored',
+          status: event.interrupted ? 'interrupted' : 'errored',
           error: event.error,
         });
         await this.notifyTaskEvent({
@@ -1941,6 +1966,27 @@ class AgentService {
     requestId: string,
     response: PermissionResponse | QuestionResponse,
   ): Promise<void> {
+    const responseKey = `${stepId}:${requestId}`;
+    let responsePromise = this.requestResponsePromises.get(responseKey);
+    if (!responsePromise) {
+      responsePromise = this.respondOnce(stepId, requestId, response);
+      this.requestResponsePromises.set(responseKey, responsePromise);
+    }
+
+    try {
+      await responsePromise;
+    } finally {
+      if (this.requestResponsePromises.get(responseKey) === responsePromise) {
+        this.requestResponsePromises.delete(responseKey);
+      }
+    }
+  }
+
+  private async respondOnce(
+    stepId: string,
+    requestId: string,
+    response: PermissionResponse | QuestionResponse,
+  ): Promise<void> {
     dbg.agentPermission(
       'Responding to request %s for step %s',
       requestId,
@@ -1981,6 +2027,30 @@ class AgentService {
     // Forward to the backend
     if (request.type === 'permission') {
       const permResponse = response as PermissionResponse;
+      if (!session.runHandle) {
+        throw new Error(`No active run handle for step ${stepId}`);
+      }
+      const runHandle = session.runHandle;
+      const permissionCapability = requireCapability(
+        session.provider.id,
+        'agent.permissions',
+        session.provider.capabilities.agent.permissions,
+      );
+
+      let allowedDirectory: string | undefined;
+      if (permResponse.allowedDirectory) {
+        if (permResponse.behavior !== 'allow') {
+          throw new Error('Directory access can only accompany an allow response');
+        }
+        const directoryAccess = request.permissionRequest?.directoryAccess;
+        if (!directoryAccess) {
+          throw new Error('Permission request does not support directory access');
+        }
+        allowedDirectory = validateAllowedDirectory(
+          directoryAccess,
+          permResponse.allowedDirectory,
+        );
+      }
 
       // Compute toolsToAllow from the pending request's tool name and input
       // so backends can update their in-memory session state.
@@ -1988,7 +2058,9 @@ class AgentService {
       // "Allow All" buttons), use that instead of deriving from the request.
       let toolsToAllow: string[] | undefined;
       if (permResponse.behavior === 'allow') {
-        if (permResponse.toolsToAllow) {
+        if (allowedDirectory) {
+          toolsToAllow = undefined;
+        } else if (permResponse.toolsToAllow) {
           toolsToAllow = permResponse.toolsToAllow;
         } else if (request.permissionRequest) {
           const { toolName, input } = request.permissionRequest;
@@ -1997,25 +2069,44 @@ class AgentService {
         }
       }
 
-      if (!session.runHandle) {
-        throw new Error(`No active run handle for step ${stepId}`);
+      const respondToProvider = () =>
+        permissionCapability.respond({
+          handle: runHandle,
+          requestId,
+          response: {
+            behavior: permResponse.behavior,
+            updatedInput: permResponse.updatedInput,
+            message: permResponse.message,
+            allowMode: permResponse.allowMode,
+            toolsToAllow,
+            allowedDirectory,
+          },
+        });
+
+      if (allowedDirectory) {
+        await respondToProvider();
+        try {
+          await mutateTaskSessionRules(taskId, (rules) => {
+            const directoryPattern =
+              toDirectoryPermissionPattern(allowedDirectory);
+            rules.external_directory = buildToolPermissionConfig({
+              existing: rules.external_directory,
+              matchValue: directoryPattern,
+            });
+            return rules;
+          });
+        } catch (error) {
+          // Provider already resumed; keep request resolved rather than showing
+          // a stale card that cannot be answered again.
+          dbg.agentPermission(
+            'Directory allowed for current provider session but failed to persist for task %s: %O',
+            taskId,
+            error,
+          );
+        }
+      } else {
+        await respondToProvider();
       }
-      const permissionCapability = requireCapability(
-        session.provider.id,
-        'agent.permissions',
-        session.provider.capabilities.agent.permissions,
-      );
-      await permissionCapability.respond({
-        handle: session.runHandle,
-        requestId,
-        response: {
-          behavior: permResponse.behavior,
-          updatedInput: permResponse.updatedInput,
-          message: permResponse.message,
-          allowMode: permResponse.allowMode,
-          toolsToAllow,
-        },
-      });
     } else {
       const questionResponse = response as QuestionResponse;
       if (request.source === 'jc-mcp') {
@@ -2041,12 +2132,20 @@ class AgentService {
       }
     }
 
-    const resolvedRequestIndex = session.pendingRequests.findIndex(
-      (pendingRequest) => pendingRequest.requestId === requestId,
-    );
-    if (resolvedRequestIndex !== -1) {
-      session.pendingRequests.splice(resolvedRequestIndex, 1);
+    const resolvedRequestIndex = session.pendingRequests.indexOf(request);
+    if (
+      this.sessions.get(stepId) !== session ||
+      session.stopRequested ||
+      resolvedRequestIndex === -1
+    ) {
+      dbg.agentPermission(
+        'Skipping stale response finalization for request %s on step %s',
+        requestId,
+        stepId,
+      );
+      return;
     }
+    session.pendingRequests.splice(resolvedRequestIndex, 1);
     dbg.agentPermission(
       'Resolved %s request (remaining pending: %d)',
       request.type,

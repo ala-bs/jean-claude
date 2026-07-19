@@ -10,12 +10,14 @@ export function ReviewModeTabs({
   activeMode,
   onModeChange,
   changedFilesCount,
+  localChangesCount,
   commitsCount,
   showGitModes = true,
 }: {
   activeMode: ReviewMode;
   onModeChange: (mode: ReviewMode) => void;
   changedFilesCount?: number;
+  localChangesCount?: number;
   commitsCount?: number;
   showGitModes?: boolean;
 }) {
@@ -26,6 +28,15 @@ export function ReviewModeTabs({
             value: 'changes' as const,
             label: 'Changes',
             description: formatCount(changedFilesCount, 'changed file'),
+          },
+        ]
+      : []),
+    ...(showGitModes
+      ? [
+          {
+            value: 'unstaged' as const,
+            label: 'Unstaged',
+            description: formatCount(localChangesCount, 'local file'),
           },
         ]
       : []),
