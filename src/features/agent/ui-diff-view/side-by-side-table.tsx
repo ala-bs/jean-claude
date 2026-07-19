@@ -412,8 +412,6 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
                 : 'group-hover:bg-acc/50 bg-white/[0.06] group-hover:w-0.5'
             }`}
           />
-          {/* Wide invisible hit target */}
-          <div className="absolute inset-y-0 -right-1.5 -left-1.5" />
         </td>
         {/* Right side (new/additions) */}
         <SideBySideCell

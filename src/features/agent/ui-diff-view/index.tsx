@@ -267,7 +267,7 @@ export function DiffView({
       <div
         ref={scrollContainerRef}
         className={clsx(
-          'h-full flex-1 overflow-auto bg-black/30 pb-2 font-mono text-xs',
+          'h-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-black/30 pb-2 font-mono text-xs [overflow-wrap:anywhere]',
           hasChanges ? 'pt-12' : 'pt-2',
           {
             'no-scrollbar': !!withMinimap,
