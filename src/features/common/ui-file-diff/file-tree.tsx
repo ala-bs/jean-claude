@@ -71,6 +71,15 @@ export function DiffFileTree({
   stickyFolders?: boolean;
 }) {
   const tree = useMemo(() => buildTree(files), [files]);
+  const stickyFolderBaseZIndex = useMemo(
+    () =>
+      files.reduce(
+        (maxDepth, file) =>
+          Math.max(maxDepth, file.path.split('/').length),
+        1,
+      ),
+    [files],
+  );
 
   // All folder paths in the current tree
   const allFolderPaths = useMemo(() => {
@@ -156,6 +165,7 @@ export function DiffFileTree({
       ref={treeRef}
       className={clsx(
         'flex flex-col py-2',
+        stickyFolders && 'isolate',
         !stickyFolders && 'min-h-0 flex-1 overflow-auto',
       )}
     >
@@ -174,6 +184,7 @@ export function DiffFileTree({
           getDraftCount={getDraftCount}
           getLlmThreadCount={getLlmThreadCount}
           stickyFolders={stickyFolders}
+          stickyFolderBaseZIndex={stickyFolderBaseZIndex}
         />
       ))}
     </div>
@@ -193,6 +204,7 @@ function TreeNodeRow({
   getDraftCount,
   getLlmThreadCount,
   stickyFolders,
+  stickyFolderBaseZIndex,
 }: {
   node: TreeNode;
   depth: number;
@@ -208,6 +220,7 @@ function TreeNodeRow({
   getDraftCount: (path: string) => number;
   getLlmThreadCount: (path: string) => number;
   stickyFolders: boolean;
+  stickyFolderBaseZIndex: number;
 }) {
   const isExpanded = expandedFolders.has(node.path);
   const isSelected = node.path === selectedPath;
@@ -228,7 +241,7 @@ function TreeNodeRow({
               ? {
                   paddingLeft,
                   top: depth * 28,
-                  zIndex: 10 + depth,
+                  zIndex: stickyFolderBaseZIndex - depth,
                 }
               : { paddingLeft }
           }
@@ -257,6 +270,7 @@ function TreeNodeRow({
               getDraftCount={getDraftCount}
               getLlmThreadCount={getLlmThreadCount}
               stickyFolders={stickyFolders}
+              stickyFolderBaseZIndex={stickyFolderBaseZIndex}
             />
           ))}
       </div>
