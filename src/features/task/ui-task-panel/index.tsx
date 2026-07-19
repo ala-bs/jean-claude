@@ -964,13 +964,38 @@ function TaskHeaderWorkItemChip({
   );
 }
 
+function TaskPanelState({
+  title,
+  detail,
+  action,
+}: {
+  title: string;
+  detail?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="text-ink-3 flex h-full w-full flex-1 items-center justify-center">
+      <div className="space-y-3 text-center">
+        <p>{title}</p>
+        {detail && <p className="text-ink-4 text-sm">{detail}</p>}
+        {action && <div className="flex justify-center">{action}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function TaskPanel({ taskId }: { taskId: string }) {
   const navigate = useNavigate();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
   const modal = useModal();
-  const { data: task } = useTask(taskId);
+  const {
+    data: task,
+    error: taskError,
+    isError: isTaskError,
+    isLoading: isTaskLoading,
+  } = useTask(taskId);
   const projectId = task?.projectId;
 
   // Permission modal state — hoisted here so it survives MessageStream unmount/remount cycles
@@ -982,7 +1007,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [],
   );
   const closePermissionModal = useCallback(() => setPermissionModal(null), []);
-  const { data: project } = useProject(projectId ?? '');
+  const {
+    data: project,
+    error: projectError,
+    isError: isProjectError,
+    isLoading: isProjectLoading,
+  } = useProject(projectId ?? '');
   const { data: projectIsGitRepository } = useProjectIsGitRepository(
     projectId ?? null,
   );
@@ -2067,11 +2097,67 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [activeStepId],
   );
 
-  if (!task || !project) {
+  useEffect(() => {
+    if (!isTaskLoading && !isTaskError && !task) {
+      clearTaskNavHistoryState(taskId);
+    }
+  }, [clearTaskNavHistoryState, isTaskError, isTaskLoading, task, taskId]);
+
+  if (isTaskError || isProjectError) {
     return (
-      <div className="text-ink-3 flex h-full items-center justify-center">
-        Loading...
-      </div>
+      <TaskPanelState
+        title="Failed to load task"
+        detail={taskError?.message ?? projectError?.message}
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate({ to: '/all' })}
+          >
+            Back to tasks
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (isTaskLoading || (task && isProjectLoading)) {
+    return <TaskPanelState title="Loading..." />;
+  }
+
+  if (!task) {
+    return (
+      <TaskPanelState
+        title="Task not found"
+        detail="It may have been deleted or completed."
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate({ to: '/all' })}
+          >
+            Back to tasks
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (!project) {
+    return (
+      <TaskPanelState
+        title="Project not found"
+        detail="Task loaded, but its project is missing."
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate({ to: '/all' })}
+          >
+            Back to tasks
+          </Button>
+        }
+      />
     );
   }
 
