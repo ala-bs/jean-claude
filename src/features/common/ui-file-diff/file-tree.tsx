@@ -8,7 +8,7 @@ import {
   MessageCircle,
   PenLine,
 } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { DiffFile, DiffFileStatus } from './types';
 import { getStatusIndicator } from './status-badge';
@@ -92,6 +92,18 @@ export function DiffFileTree({
     return localExpandedFolders;
   }, [externalCollapsedFolders, allFolderPaths, localExpandedFolders]);
 
+  const treeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!selectedPath) return;
+
+    const selectedRow = Array.from(
+      treeRef.current?.querySelectorAll<HTMLElement>('[data-file-path]') ?? [],
+    ).find((element) => element.dataset.filePath === selectedPath);
+
+    selectedRow?.scrollIntoView({ block: 'nearest' });
+  }, [expandedFolders, selectedPath, tree]);
+
   const toggleFolder = useCallback(
     (path: string) => {
       if (externalOnToggleFolder) {
@@ -136,7 +148,7 @@ export function DiffFileTree({
   );
 
   return (
-    <div className="flex flex-col overflow-auto py-2">
+    <div ref={treeRef} className="flex flex-col overflow-auto py-2">
       {tree.map((node) => (
         <TreeNodeRow
           key={node.path}
@@ -241,6 +253,7 @@ function TreeNodeRow({
     <button
       onClick={() => onSelectFile(node.path)}
       aria-current={isSelected ? 'true' : undefined}
+      data-file-path={node.path}
       className={`flex w-full items-center gap-1.5 px-2 py-1 text-left text-sm transition-colors ${
         isSelected
           ? 'text-ink-0 bg-glass-medium'
