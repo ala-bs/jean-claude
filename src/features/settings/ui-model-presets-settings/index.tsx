@@ -228,7 +228,7 @@ export function ModelPresetsSettings() {
         </p>
       </div>
 
-      <div className="flex items-start justify-between gap-4">
+      <div className="mt-2 flex items-start justify-between gap-4">
         <Button icon={<Plus />} onClick={handleAddPreset}>
           Add preset
         </Button>
