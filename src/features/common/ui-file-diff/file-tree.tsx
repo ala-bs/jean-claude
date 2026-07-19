@@ -9,6 +9,7 @@ import {
   PenLine,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import clsx from 'clsx';
 
 import type { DiffFile, DiffFileStatus } from './types';
 import { getStatusIndicator } from './status-badge';
@@ -44,6 +45,7 @@ export function DiffFileTree({
   llmThreadCountByFile,
   collapsedFolders: externalCollapsedFolders,
   onToggleFolder: externalOnToggleFolder,
+  stickyFolders = false,
 }: {
   files: DiffFile[];
   selectedPath: string | null;
@@ -65,6 +67,8 @@ export function DiffFileTree({
   collapsedFolders?: Set<string>;
   /** Callback when a folder is toggled. Required when collapsedFolders is provided. */
   onToggleFolder?: (path: string) => void;
+  /** Keep expanded folder ancestry visible within a parent-owned scroll area. */
+  stickyFolders?: boolean;
 }) {
   const tree = useMemo(() => buildTree(files), [files]);
 
@@ -148,7 +152,13 @@ export function DiffFileTree({
   );
 
   return (
-    <div ref={treeRef} className="flex flex-col overflow-auto py-2">
+    <div
+      ref={treeRef}
+      className={clsx(
+        'flex flex-col py-2',
+        !stickyFolders && 'min-h-0 flex-1 overflow-auto',
+      )}
+    >
       {tree.map((node) => (
         <TreeNodeRow
           key={node.path}
@@ -163,6 +173,7 @@ export function DiffFileTree({
           getCommentStatusCount={getCommentStatusCount}
           getDraftCount={getDraftCount}
           getLlmThreadCount={getLlmThreadCount}
+          stickyFolders={stickyFolders}
         />
       ))}
     </div>
@@ -181,6 +192,7 @@ function TreeNodeRow({
   getCommentStatusCount,
   getDraftCount,
   getLlmThreadCount,
+  stickyFolders,
 }: {
   node: TreeNode;
   depth: number;
@@ -195,6 +207,7 @@ function TreeNodeRow({
   ) => { active: number; resolved: number } | undefined;
   getDraftCount: (path: string) => number;
   getLlmThreadCount: (path: string) => number;
+  stickyFolders: boolean;
 }) {
   const isExpanded = expandedFolders.has(node.path);
   const isSelected = node.path === selectedPath;
@@ -202,12 +215,23 @@ function TreeNodeRow({
 
   if (node.type === 'folder') {
     return (
-      <>
+      <div>
         <button
           onClick={() => onToggleFolder(node.path)}
           aria-expanded={isExpanded}
-          className="text-ink-2 hover:bg-glass-medium/50 flex w-full items-center gap-1.5 px-2 py-1 text-left text-sm"
-          style={{ paddingLeft }}
+          className={clsx(
+            'text-ink-2 hover:bg-glass-medium/50 flex w-full items-center gap-1.5 px-2 py-1 text-left text-sm',
+            stickyFolders && 'bg-bg-0 sticky',
+          )}
+          style={
+            stickyFolders
+              ? {
+                  paddingLeft,
+                  top: depth * 28,
+                  zIndex: 10 + depth,
+                }
+              : { paddingLeft }
+          }
         >
           {isExpanded ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -232,9 +256,10 @@ function TreeNodeRow({
               getCommentStatusCount={getCommentStatusCount}
               getDraftCount={getDraftCount}
               getLlmThreadCount={getLlmThreadCount}
+              stickyFolders={stickyFolders}
             />
           ))}
-      </>
+      </div>
     );
   }
 
