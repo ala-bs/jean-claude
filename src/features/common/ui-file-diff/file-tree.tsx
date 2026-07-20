@@ -115,7 +115,7 @@ export function DiffFileTree({
     ).find((element) => element.dataset.filePath === selectedPath);
 
     selectedRow?.scrollIntoView({ block: 'nearest' });
-  }, [expandedFolders, selectedPath, tree]);
+  }, [selectedPath, tree]);
 
   const toggleFolder = useCallback(
     (path: string) => {

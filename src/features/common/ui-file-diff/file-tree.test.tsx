@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRoot, type Root } from 'react-dom/client';
+import { flushSync } from 'react-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { DiffFileTree } from './file-tree';
@@ -65,5 +67,48 @@ describe('DiffFileTree sticky folders', () => {
     );
 
     expect(Math.min(...zIndexes)).toBeGreaterThan(0);
+  });
+
+  describe('selection scrolling', () => {
+    let root: Root;
+    let container: HTMLDivElement;
+    let scrollIntoView: ReturnType<typeof vi.fn>;
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+    beforeEach(() => {
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+    });
+
+    afterEach(() => {
+      flushSync(() => root.unmount());
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+      container.remove();
+    });
+
+    it('does not scroll selected file when folder collapses', () => {
+      let collapsedFolders = new Set<string>();
+      const render = () =>
+        root.render(
+          <DiffFileTree
+            files={files}
+            selectedPath="beta/two.ts"
+            onSelectFile={() => undefined}
+            collapsedFolders={collapsedFolders}
+            onToggleFolder={() => undefined}
+          />,
+        );
+
+      flushSync(render);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+      collapsedFolders = new Set(['alpha']);
+      flushSync(render);
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    });
   });
 });
