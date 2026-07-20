@@ -672,7 +672,7 @@ const DiffLineRow = memo(function DiffLineRow({
         <td
           data-line-side="old"
           className={clsx(
-            'relative w-8 pr-1 text-right align-top select-none',
+            'relative w-8 pr-1 text-right align-top select-none whitespace-nowrap',
             hasComment && !isInCommentRange
               ? 'text-acc-ink'
               : line.type === 'deletion'
@@ -698,7 +698,7 @@ const DiffLineRow = memo(function DiffLineRow({
         <td
           data-line-side="new"
           className={clsx(
-            'w-8 pr-1 text-right align-top select-none',
+            'w-8 pr-1 text-right align-top select-none whitespace-nowrap',
             line.type === 'addition' ? 'text-status-done' : 'text-ink-4',
           )}
         >

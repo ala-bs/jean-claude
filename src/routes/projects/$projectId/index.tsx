@@ -11,12 +11,12 @@ export const Route = createFileRoute('/projects/$projectId/')({
 
 function ProjectIndex() {
   const { projectId } = Route.useParams();
-  const { data: tasks, isLoading } = useProjectTasks(projectId);
+  const { data: tasks, error, isError, isLoading } = useProjectTasks(projectId);
   const { lastTaskId, clearTaskNavHistoryState } =
     useLastTaskForProject(projectId);
 
   const lastTaskNotFound = lastTaskId
-    ? !!tasks?.find((t) => t.id === lastTaskId)
+    ? !!tasks && !tasks.some((t) => t.id === lastTaskId)
     : false;
 
   useEffect(() => {
@@ -27,8 +27,19 @@ function ProjectIndex() {
 
   if (isLoading) {
     return (
-      <div className="text-ink-3 flex h-full items-center justify-center">
+      <div className="text-ink-3 flex h-full w-full flex-1 items-center justify-center">
         Loading...
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="text-ink-3 flex h-full w-full flex-1 items-center justify-center">
+        <div className="space-y-2 text-center">
+          <p>Failed to load tasks</p>
+          {error?.message && <p className="text-ink-4 text-sm">{error.message}</p>}
+        </div>
       </div>
     );
   }

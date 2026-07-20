@@ -504,37 +504,47 @@ export function WorktreeReviewView({
         </div>
         <Separator />
         <div
-          className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+          className={clsx(
+            'flex min-h-0 flex-1 flex-col',
+            effectiveReviewMode === 'changes'
+              ? 'overflow-hidden'
+              : 'overflow-y-auto',
+          )}
           style={
             bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined
           }
         >
           {effectiveReviewMode === 'changes' && (
             <>
-              <DiffFileTree
-                files={diffFiles}
-                selectedPath={selectedFilePath}
-                onSelectFile={onSelectFile}
-                filesWithAnnotations={filesWithAnnotations}
-                commentCountByFile={commentCountByFile}
-                draftCountByFile={draftCountByFile}
-                collapsedFolders={collapsedFolders}
-                onToggleFolder={onToggleFolder}
-              />
-              {gitReviewEnabled && (
-                <WorktreeActions
-                  taskId={taskId}
-                  projectId={projectId}
-                  branchName={branchName}
-                  sourceBranch={sourceBranch}
-                  defaultBranch={defaultBranch}
-                  protectedBranches={protectedBranches}
-                  hasRepoLink={hasRepoLink}
-                  pullRequestUrl={pullRequestUrl}
-                  onMergeStarted={onMergeStarted}
-                  onOpenPrView={onOpenPrView}
-                  showBranchActions={showWorktreeActions}
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <DiffFileTree
+                  files={diffFiles}
+                  selectedPath={selectedFilePath}
+                  onSelectFile={onSelectFile}
+                  filesWithAnnotations={filesWithAnnotations}
+                  commentCountByFile={commentCountByFile}
+                  draftCountByFile={draftCountByFile}
+                  collapsedFolders={collapsedFolders}
+                  onToggleFolder={onToggleFolder}
+                  stickyFolders
                 />
+              </div>
+              {gitReviewEnabled && (
+                <div className="max-h-full min-h-0 shrink-0 overflow-y-auto">
+                  <WorktreeActions
+                    taskId={taskId}
+                    projectId={projectId}
+                    branchName={branchName}
+                    sourceBranch={sourceBranch}
+                    defaultBranch={defaultBranch}
+                    protectedBranches={protectedBranches}
+                    hasRepoLink={hasRepoLink}
+                    pullRequestUrl={pullRequestUrl}
+                    onMergeStarted={onMergeStarted}
+                    onOpenPrView={onOpenPrView}
+                    showBranchActions={showWorktreeActions}
+                  />
+                </div>
               )}
             </>
           )}

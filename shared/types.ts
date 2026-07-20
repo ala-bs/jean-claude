@@ -1512,6 +1512,7 @@ export type {
   PromptPrefaceFrequency,
   PromptPrefacePlacement,
   PromptPrefaceSetting,
+  PromptPrefaceTarget,
   ProjectPromptPrefaceSetting,
 } from './prompt-preface-types';
 export { normalizePromptPrefaceSetting } from './prompt-preface-types';

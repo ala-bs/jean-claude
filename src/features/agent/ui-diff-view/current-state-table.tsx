@@ -339,7 +339,7 @@ const CurrentStateRow = memo(function CurrentStateRow({
         <td
           data-line-side={side}
           className={clsx(
-            'relative w-8 pr-1 text-right align-top select-none',
+            'relative w-8 pr-1 text-right align-top select-none whitespace-nowrap',
             hasComment && !isInCommentRange
               ? 'text-acc-ink'
               : isChanged

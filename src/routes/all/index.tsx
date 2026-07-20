@@ -7,12 +7,28 @@ export const Route = createFileRoute('/all/')({
 });
 
 function AllIndex() {
-  const { data: activeTasks = [], isLoading } = useAllActiveTasks();
+  const {
+    data: activeTasks = [],
+    error,
+    isError,
+    isLoading,
+  } = useAllActiveTasks();
 
   if (isLoading) {
     return (
-      <div className="text-ink-3 flex h-full items-center justify-center">
+      <div className="text-ink-3 flex h-full w-full flex-1 items-center justify-center">
         Loading...
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="text-ink-3 flex h-full w-full flex-1 items-center justify-center">
+        <div className="space-y-2 text-center">
+          <p>Failed to load tasks</p>
+          {error?.message && <p className="text-ink-4 text-sm">{error.message}</p>}
+        </div>
       </div>
     );
   }
