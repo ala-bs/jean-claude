@@ -38,19 +38,17 @@ describe('DiffFileTree sticky folders', () => {
     const folderButtons = Array.from(
       tree?.querySelectorAll<HTMLButtonElement>('button[aria-expanded]') ?? [],
     );
-    const alpha = folderButtons.find((button) => button.textContent === 'alpha');
-    const nested = folderButtons.find((button) => button.textContent === 'nested');
+    const compressed = folderButtons.find(
+      (button) => button.textContent === 'alpha/nested',
+    );
     const beta = folderButtons.find((button) => button.textContent === 'beta');
 
     expect(tree?.classList.contains('overflow-auto')).toBe(false);
     expect(tree?.classList.contains('isolate')).toBe(true);
-    expect(alpha?.classList.contains('sticky')).toBe(true);
-    expect(alpha?.parentElement?.contains(nested ?? null)).toBe(true);
-    expect(alpha?.parentElement?.contains(beta ?? null)).toBe(false);
-    expect(nested?.style.top).toBe('28px');
-    expect(Number(alpha?.style.zIndex)).toBeGreaterThan(
-      Number(nested?.style.zIndex),
-    );
+    expect(compressed?.classList.contains('sticky')).toBe(true);
+    expect(compressed?.parentElement?.contains(beta ?? null)).toBe(false);
+    expect(compressed?.style.top).toBe('0px');
+    expect(Number(compressed?.style.zIndex)).toBeGreaterThan(0);
   });
 
   it('keeps sticky stacking positive for deeply nested paths', () => {
