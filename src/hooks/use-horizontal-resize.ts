@@ -41,9 +41,10 @@ export function useHorizontalResize({
         maxWidthAbsolute !== undefined
           ? Math.min(fractionMax, maxWidthAbsolute)
           : fractionMax;
+      const boundedMax = Math.max(minWidth, effectiveMax);
       const startWidth = Math.min(
         Math.max(initialWidth, minWidth),
-        effectiveMax,
+        boundedMax,
       );
       const directionMultiplier = direction === 'right' ? 1 : -1;
       const target = resizeTargetRef?.current ?? e.currentTarget.parentElement;
@@ -63,9 +64,10 @@ export function useHorizontalResize({
           maxWidthAbsolute !== undefined
             ? Math.min(fractionMax, maxWidthAbsolute)
             : fractionMax;
+        const boundedMax = Math.max(minWidth, effectiveMax);
         const newWidth = Math.min(
           Math.max(startWidth + delta, minWidth),
-          effectiveMax,
+          boundedMax,
         );
         updateWidth.schedule(newWidth);
       };
