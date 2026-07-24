@@ -20,6 +20,7 @@ import { getOwnerColor, normalizeOwnerName } from '@/features/work-item/utils-ow
 import {
   useAddWorkItemComment,
   useRelatedTestCases,
+  useUpdateWorkItemComment,
   useUpdateWorkItemField,
   useUpdateWorkItemState,
   useWorkItemComments,
@@ -150,6 +151,7 @@ export function WorkItemPreview({
       workItemType: workItem?.fields.workItemType ?? null,
     });
   const addComment = useAddWorkItemComment();
+  const updateComment = useUpdateWorkItemComment();
   const updateState = useUpdateWorkItemState();
   const updateField = useUpdateWorkItemField();
   const relatedIds = showRelatedWorkItems
@@ -582,9 +584,22 @@ export function WorkItemPreview({
               error={
                 commentsError instanceof Error ? commentsError.message : null
               }
-              providerId={providerId}
-              hideHeader
-              isAddingComment={addComment.isPending}
+               providerId={providerId}
+               projectName={projectName}
+               hideHeader
+               isAddingComment={addComment.isPending || updateComment.isPending}
+                onUpdateComment={
+                  providerId && projectName && !readOnly
+                    ? ({ commentId, text }) =>
+                        updateComment.mutateAsync({
+                          providerId,
+                          projectName,
+                          workItemId: id,
+                          commentId,
+                          text,
+                        })
+                    : undefined
+                }
               onAddComment={
                 providerId && projectName && !readOnly
                   ? (text) =>
@@ -656,9 +671,22 @@ export function WorkItemPreview({
                 error={
                   commentsError instanceof Error ? commentsError.message : null
                 }
-                providerId={providerId}
-                hideHeader
-                isAddingComment={addComment.isPending}
+                 providerId={providerId}
+                 projectName={projectName}
+                 hideHeader
+                 isAddingComment={addComment.isPending || updateComment.isPending}
+                  onUpdateComment={
+                    providerId && projectName && !readOnly
+                      ? ({ commentId, text }) =>
+                          updateComment.mutateAsync({
+                            providerId,
+                            projectName,
+                            workItemId: id,
+                            commentId,
+                            text,
+                          })
+                      : undefined
+                  }
                 onAddComment={
                   providerId && projectName && !readOnly
                     ? (text) =>

@@ -128,6 +128,7 @@ export interface WorkItemComment {
   id: number;
   workItemId: number;
   text: string;
+  rawText?: string;
   format?: 'html' | 'markdown';
   attachmentBaseUrl?: string;
   createdBy: string;
@@ -1517,6 +1518,7 @@ export async function getWorkItemComments(params: {
       id: c.id,
       workItemId: c.workItemId,
       ...renderedComment,
+      rawText: c.text,
       attachmentBaseUrl,
       createdBy: c.createdBy?.displayName ?? 'Unknown',
       createdDate: c.createdDate ?? '',
@@ -1742,6 +1744,7 @@ export async function addWorkItemComment(params: {
   id: number;
   workItemId: number;
   text: string;
+  rawText?: string;
   createdBy: string;
   createdDate: string;
   format: 'html' | 'markdown';
@@ -1791,7 +1794,96 @@ export async function addWorkItemComment(params: {
     id: c.id,
     workItemId: c.workItemId ?? params.workItemId,
     text: renderedComment.text,
+    rawText: c.text,
     format: renderedComment.format,
+    attachmentBaseUrl,
+    createdBy: c.createdBy?.displayName ?? 'Unknown',
+    createdDate: c.createdDate ?? new Date().toISOString(),
+  };
+}
+
+export async function uploadWorkItemAttachment(params: {
+  providerId: string;
+  projectName: string;
+  filename: string;
+  mimeType: string;
+  base64: string;
+}): Promise<{ url: string }> {
+  const supportedMimeTypes = new Set([
+    'image/gif',
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+  ]);
+  if (!supportedMimeTypes.has(params.mimeType)) {
+    throw new Error('Only image attachments are supported');
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(params.base64) || params.base64.length % 4 !== 0) {
+    throw new Error('Invalid image attachment data');
+  }
+  const padding = params.base64.endsWith('==')
+    ? 2
+    : params.base64.endsWith('=')
+      ? 1
+      : 0;
+  const decodedSize = (params.base64.length / 4) * 3 - padding;
+  if (decodedSize > 50 * 1024 * 1024) {
+    throw new Error('Image attachment exceeds 50 MB');
+  }
+  const content = Buffer.from(params.base64, 'base64');
+  const hasValidSignature =
+    (params.mimeType === 'image/gif' && content.toString('ascii', 0, 3) === 'GIF') ||
+    (params.mimeType === 'image/jpeg' && content[0] === 0xff && content[1] === 0xd8) ||
+    (params.mimeType === 'image/png' && content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+    (params.mimeType === 'image/webp' && content.toString('ascii', 0, 4) === 'RIFF' && content.toString('ascii', 8, 12) === 'WEBP');
+  if (!hasValidSignature || content.length === 0) {
+    throw new Error('Image attachment content does not match MIME type');
+  }
+  if (content.length > 50 * 1024 * 1024) {
+    throw new Error('Image attachment exceeds 50 MB');
+  }
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const url = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/attachments?fileName=${encodeURIComponent(params.filename)}&api-version=7.0`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: authHeader, 'Content-Type': 'application/octet-stream' },
+    body: content,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to upload work item attachment: ${await response.text()}`);
+  }
+  const result: { url?: string } = await response.json();
+  if (!result.url) throw new Error('Azure DevOps did not return an attachment URL');
+  return { url: result.url };
+}
+
+export async function updateWorkItemComment(params: {
+  providerId: string;
+  projectName: string;
+  workItemId: number;
+  commentId: number;
+  text: string;
+}): Promise<WorkItemComment> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments/${params.commentId}?format=markdown&api-version=7.0-preview.4`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: params.text }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to update comment for work item ${params.workItemId}: ${await response.text()}`);
+  }
+  const c: { id: number; workItemId?: number; text?: string; renderedText?: string; createdBy?: { displayName?: string }; createdDate?: string } = await response.json();
+  const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({ orgName, projectName: params.projectName });
+  const renderedComment = getRenderedCommentText({ text: c.text ?? params.text, renderedText: c.renderedText, attachmentBaseUrl });
+  return {
+    id: c.id,
+    workItemId: c.workItemId ?? params.workItemId,
+    ...renderedComment,
+    rawText: c.text ?? params.text,
     attachmentBaseUrl,
     createdBy: c.createdBy?.displayName ?? 'Unknown',
     createdDate: c.createdDate ?? new Date().toISOString(),

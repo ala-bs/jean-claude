@@ -1,5 +1,5 @@
-import { MessageSquare, MessagesSquare, Send } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { ImagePlus, MessageSquare, MessagesSquare, Pencil, Send, X } from 'lucide-react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { api, type WorkItemComment } from '@/lib/api';
@@ -33,6 +33,27 @@ function formatCommentDate(value: string) {
   }).format(date);
 }
 
+const MAX_COMMENT_IMAGES = 10;
+const MAX_COMMENT_IMAGE_SIZE = 50 * 1024 * 1024;
+const COMMENT_IMAGE_TYPES = new Set([
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') return reject(new Error('Unable to read image'));
+      resolve(reader.result.slice(reader.result.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to read image'));
+    reader.readAsDataURL(file);
+  });
+}
+
 function CommentsContent({
   comments,
   isLoading,
@@ -40,6 +61,7 @@ function CommentsContent({
   providerId,
   emptyMessage,
   mentionDisplayNames,
+  onEditComment,
 }: {
   comments: WorkItemComment[];
   isLoading: boolean;
@@ -47,6 +69,7 @@ function CommentsContent({
   providerId?: string;
   emptyMessage: string;
   mentionDisplayNames?: MentionDisplayNames;
+  onEditComment?: (comment: WorkItemComment) => void;
 }) {
   if (isLoading) {
     return <div className="text-ink-3 py-6 text-sm">Loading comments...</div>;
@@ -87,6 +110,11 @@ function CommentsContent({
             <span className="text-ink-3">
               {formatCommentDate(comment.createdDate)}
             </span>
+            {onEditComment && (
+              <button type="button" className="text-ink-3 hover:text-ink-1 ml-auto" aria-label="Edit comment" onClick={() => onEditComment(comment)}>
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
           </div>
           {comment.format === 'markdown' ? (
             <AzureMarkdownContent
@@ -120,10 +148,12 @@ export function WorkItemComments({
   isLoading,
   error,
   providerId,
+  projectName,
   emptyMessage = 'No comments yet.',
   title = 'Comments',
   hideHeader = false,
   onAddComment,
+  onUpdateComment,
   isAddingComment = false,
 }: {
   comments: WorkItemComment[];
@@ -134,14 +164,21 @@ export function WorkItemComments({
   title?: string;
   hideHeader?: boolean;
   onAddComment?: (text: string) => void | Promise<unknown>;
+  projectName?: string;
+  onUpdateComment?: (params: { commentId: number; text: string }) => void | Promise<unknown>;
   isAddingComment?: boolean;
 }) {
   const [draft, setDraft] = useState('');
+  const [editingComment, setEditingComment] = useState<WorkItemComment | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchedMentions, setSearchedMentions] = useState<{
     providerId?: string;
     options: MentionOption[];
   }>({ options: [] });
   const trimmedDraft = draft.trim();
+  const canAttach = !!providerId && !!projectName && !isAddingComment && !isUploading;
   const shouldLoadMentionNames = comments.some((comment) =>
     containsAzureDevOpsMention(comment.text),
   );
@@ -199,18 +236,60 @@ export function WorkItemComments({
   );
 
   async function handleSubmit() {
-    if (!trimmedDraft || !onAddComment) return;
+    if (!trimmedDraft || (!onAddComment && !onUpdateComment)) return;
     try {
-      await onAddComment(encodeMentionDisplayNames(trimmedDraft, mentionOptions));
+      const text = encodeMentionDisplayNames(trimmedDraft, mentionOptions);
+      if (editingComment && onUpdateComment) {
+        await onUpdateComment({ commentId: editingComment.id, text });
+        setEditingComment(null);
+      } else if (onAddComment) {
+        await onAddComment(text);
+      }
       setDraft('');
     } catch {
       // Mutation hook handles user-facing error toast. Keep draft for retry.
     }
   }
 
-  const editor = onAddComment ? (
+  async function attachFiles(files: FileList | File[]) {
+    if (!providerId || !projectName || isUploading) return;
+    const images = [...files].filter((file) => COMMENT_IMAGE_TYPES.has(file.type));
+    if (images.length === 0) return;
+    if (images.some((file) => file.size > MAX_COMMENT_IMAGE_SIZE)) {
+      console.error('Comment image exceeds 50 MB limit');
+      return;
+    }
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? draft.length;
+    const end = textarea?.selectionEnd ?? start;
+    setIsUploading(true);
+    try {
+      const remaining = Math.max(0, MAX_COMMENT_IMAGES - (draft.match(/!\[[^\]]*\]\(/g)?.length ?? 0));
+      const markdownParts: string[] = [];
+      for (const file of images.slice(0, remaining)) {
+        const { url } = await api.azureDevOps.uploadWorkItemAttachment({
+          providerId,
+          projectName,
+          filename: file.name,
+          mimeType: file.type,
+          base64: await readFileAsBase64(file),
+        });
+        markdownParts.push(`![${file.name}](${url})`);
+      }
+      const markdown = markdownParts.join('\n');
+      setDraft((value) => `${value.slice(0, start)}${markdown}${value.slice(end)}`);
+      requestAnimationFrame(() => textarea?.setSelectionRange(start + markdown.length, start + markdown.length));
+    } catch (error) {
+      console.error('Failed to upload comment image:', error);
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  const editor = onAddComment || onUpdateComment ? (
     <div className="border-glass-border/50 bg-bg-1/70 sticky bottom-0 -mx-5 mt-3 border-t px-5 pt-3 pb-1 backdrop-blur">
-      <MentionTextarea
+        <MentionTextarea
+         ref={textareaRef}
         value={draft}
         onChange={setDraft}
         mentionOptions={mentionOptions}
@@ -219,26 +298,40 @@ export function WorkItemComments({
         className={MENTION_TEXTAREA_MD_CLASS}
         minHeight={76}
         disabled={isAddingComment}
-        onKeyDown={(event) => {
+         onKeyDown={(event) => {
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
             event.preventDefault();
             void handleSubmit();
           }
-        }}
-      />
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="text-ink-4 text-[11px]">Cmd+Enter to post</span>
-        <Button
+         }}
+         onPaste={(event) => {
+           const files = [...event.clipboardData.files];
+           if (files.some((file) => COMMENT_IMAGE_TYPES.has(file.type)) && !event.clipboardData.getData('text/plain')) {
+             event.preventDefault();
+             void attachFiles(files);
+           }
+         }}
+       />
+       <input ref={fileInputRef} type="file" accept="image/*" multiple hidden onChange={(event) => { void attachFiles(event.target.files ?? []); event.target.value = ''; }} />
+       <div className="mt-2 flex items-center justify-between gap-2">
+         <div className="flex items-center gap-2">
+           <button type="button" className="text-ink-3 hover:text-ink-1 inline-flex items-center gap-1 text-[11px]" disabled={!canAttach} onClick={() => fileInputRef.current?.click()}>
+             <ImagePlus className="h-3.5 w-3.5" /> {isUploading ? 'Uploading...' : 'Add image/GIF'}
+           </button>
+           <span className="text-ink-4 text-[11px]">Cmd+Enter to post</span>
+         </div>
+         <Button
           type="button"
           size="sm"
           variant="primary"
           icon={<Send className="h-3.5 w-3.5" />}
-          loading={isAddingComment}
+           loading={isAddingComment || isUploading}
           disabled={!trimmedDraft}
-          onClick={handleSubmit}
-        >
-          Post
-        </Button>
+           onClick={handleSubmit}
+         >
+           {editingComment ? 'Save' : 'Post'}
+         </Button>
+         {editingComment && <button type="button" className="text-ink-3 hover:text-ink-1" onClick={() => { setEditingComment(null); setDraft(''); }} aria-label="Cancel editing"><X className="h-4 w-4" /></button>}
       </div>
     </div>
   ) : null;
@@ -254,6 +347,7 @@ export function WorkItemComments({
             providerId={providerId}
             emptyMessage={emptyMessage}
             mentionDisplayNames={mentionDisplayNames}
+            onEditComment={onUpdateComment ? (comment) => { setEditingComment(comment); setDraft(comment.rawText ?? comment.text); } : undefined}
           />
         </div>
         {editor}
@@ -285,6 +379,7 @@ export function WorkItemComments({
           providerId={providerId}
           emptyMessage={emptyMessage}
           mentionDisplayNames={mentionDisplayNames}
+          onEditComment={onUpdateComment ? (comment) => { setEditingComment(comment); setDraft(comment.rawText ?? comment.text); } : undefined}
         />
       </div>
       {editor}

@@ -3218,6 +3218,22 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:updateWorkItemComment',
+    async (_event, params: { providerId: string; projectName: string; workItemId: number; commentId: number; text: string }) => {
+      const { updateWorkItemComment } = await import('../services/azure-devops-service');
+      return updateWorkItemComment(params);
+    },
+  );
+
+  ipcMain.handle(
+    'azureDevOps:uploadWorkItemAttachment',
+    async (_event, params: { providerId: string; projectName: string; filename: string; mimeType: string; base64: string }) => {
+      const { uploadWorkItemAttachment } = await import('../services/azure-devops-service');
+      return uploadWorkItemAttachment(params);
+    },
+  );
+
+  ipcMain.handle(
     'azureDevOps:getIterations',
     (
       _,

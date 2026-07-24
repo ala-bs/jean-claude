@@ -633,6 +633,26 @@ export function useAddWorkItemComment() {
   });
 }
 
+export function useUpdateWorkItemComment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      commentId: number;
+      text: string;
+    }) => api.azureDevOps.updateWorkItemComment(params),
+    onSuccess: (comment, variables) => {
+      queryClient.setQueryData<WorkItemComment[]>(
+        ['work-item-comments', variables.providerId, variables.projectName, [variables.workItemId]],
+        (existing) => existing?.map((item) => (item.id === comment.id ? comment : item)),
+      );
+      queryClient.invalidateQueries({ queryKey: ['work-item-comments', variables.providerId, variables.projectName] });
+    },
+  });
+}
+
 export function useRelatedTestCases(params: {
   providerId: string | null;
   projectName: string | null;

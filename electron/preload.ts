@@ -439,6 +439,20 @@ contextBridge.exposeInMainWorld('api', {
       workItemId: number;
       text: string;
     }) => ipcRenderer.invoke('azureDevOps:addWorkItemComment', params),
+    updateWorkItemComment: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      commentId: number;
+      text: string;
+    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemComment', params),
+    uploadWorkItemAttachment: (params: {
+      providerId: string;
+      projectName: string;
+      filename: string;
+      mimeType: string;
+      base64: string;
+    }) => ipcRenderer.invoke('azureDevOps:uploadWorkItemAttachment', params),
     getIterations: (params: { providerId: string; projectName: string }) =>
       ipcRenderer.invoke('azureDevOps:getIterations', params),
     createPullRequest: (params: {
