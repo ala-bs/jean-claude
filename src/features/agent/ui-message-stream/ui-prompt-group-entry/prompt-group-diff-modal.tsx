@@ -14,6 +14,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
   useCallback,
+  useEffect,
   useMemo,
   useState,
 } from 'react';
@@ -26,6 +27,7 @@ import {
   useReviewCommentsForFile,
   useReviewCommentsStore,
 } from '@/stores/review-comments';
+import { api } from '@/lib/api';
 import clsx from 'clsx';
 import { DiffFileTree } from '@/features/common/ui-file-diff/file-tree';
 import { FileDiffContent } from '@/features/common/ui-file-diff';
@@ -299,6 +301,12 @@ export function PromptGroupDiffModal({
   );
   const [rawDiffOpen, setRawDiffOpen] = useState(false);
   const [rawDiffCopied, setRawDiffCopied] = useState(false);
+  const [showCurrentFile, setShowCurrentFile] = useState(false);
+  const [currentFileContent, setCurrentFileContent] = useState<{
+    path: string;
+    content: string | null;
+    loading: boolean;
+  } | null>(null);
   const {
     width: fileTreeWidth,
     setWidth: setFileTreeWidth,
@@ -327,7 +335,15 @@ export function PromptGroupDiffModal({
   const handleSelectFile = (displayPath: string) => {
     // Find original path from displayPath
     const found = fileChanges.find((fc) => fc.displayPath === displayPath);
-    if (found) setSelectedPath(found.path);
+    if (found) {
+      setSelectedPath(found.path);
+      if (showCurrentFile) {
+        const path = !rootPath || isAbsoluteFilePath(found.path)
+          ? found.path
+          : normalizeFilePath(`${rootPath}/${found.path}`);
+        setCurrentFileContent({ path, content: null, loading: true });
+      }
+    }
   };
 
   const handleCopyRawDiff = useCallback(async () => {
@@ -338,13 +354,63 @@ export function PromptGroupDiffModal({
   }, [selectedChange]);
 
   const selectedDisplayPath = selectedChange?.displayPath ?? null;
-  const canOpenInReview =
-    !!selectedChange && !selectedChange.external && !!onOpenFileInReview;
   const selectedEditorPath = selectedChange
     ? !rootPath || isAbsoluteFilePath(selectedChange.path)
       ? selectedChange.path
       : normalizeFilePath(`${rootPath}/${selectedChange.path}`)
     : null;
+
+  const handleToggleCurrentFile = useCallback(() => {
+    const nextShowCurrentFile = !showCurrentFile;
+    if (nextShowCurrentFile && selectedEditorPath) {
+      setCurrentFileContent({
+        path: selectedEditorPath,
+        content: null,
+        loading: true,
+      });
+    }
+    setShowCurrentFile(nextShowCurrentFile);
+  }, [selectedEditorPath, showCurrentFile]);
+
+  useEffect(() => {
+    if (!showCurrentFile || !selectedEditorPath) return;
+    if (currentFileContent?.path !== selectedEditorPath) return;
+    if (!currentFileContent.loading) return;
+
+    let cancelled = false;
+    void api.fs
+      .readFile(selectedEditorPath)
+      .then((result) => {
+        if (!cancelled) {
+          setCurrentFileContent({
+            path: selectedEditorPath,
+            content: result?.content ?? null,
+            loading: false,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentFileContent({
+            path: selectedEditorPath,
+            content: null,
+            loading: false,
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentFileContent?.loading,
+    currentFileContent?.path,
+    selectedEditorPath,
+    showCurrentFile,
+  ]);
+
+  const canOpenInReview =
+    !!selectedChange && !selectedChange.external && !!onOpenFileInReview;
   const headerActions = selectedChange ? (
     <div className="flex items-center gap-1">
       {onOpenFileInEditor && selectedEditorPath && (
@@ -375,6 +441,18 @@ export function PromptGroupDiffModal({
       >
         <ExternalLink className="h-3 w-3" aria-hidden />
         Open in task diff
+      </button>
+      <button
+        type="button"
+        onClick={handleToggleCurrentFile}
+        className={clsx(
+          'text-ink-3 hover:bg-glass-medium hover:text-ink-1 flex items-center gap-1.5 rounded px-2 py-1 text-[10px] transition-colors',
+          showCurrentFile && 'bg-glass-medium text-ink-1',
+        )}
+        aria-pressed={showCurrentFile}
+        title="Toggle current file content"
+      >
+        {showCurrentFile ? 'Diff' : 'Current file'}
       </button>
     </div>
   ) : undefined;
@@ -423,7 +501,7 @@ export function PromptGroupDiffModal({
                   <button
                     key={fc.path}
                     type="button"
-                    onClick={() => setSelectedPath(fc.path)}
+                    onClick={() => handleSelectFile(fc.displayPath)}
                     className={`flex w-full items-center gap-1.5 px-3 py-1 text-left text-sm transition-colors ${
                       selectedPath === fc.path
                         ? 'text-ink-0 bg-glass-medium'
@@ -491,7 +569,15 @@ export function PromptGroupDiffModal({
             )}
             <div className="min-h-0 flex-1 overflow-hidden">
               {selectedChange ? (
-                selectedChange.hasStructuredDiff ? (
+                showCurrentFile ? (
+                  <PromptGroupFileDiffContent
+                    taskId={taskId}
+                    change={selectedChange}
+                    currentContent={currentFileContent?.content ?? null}
+                    isCurrentContentLoading={currentFileContent?.loading}
+                    headerActions={headerActions}
+                  />
+                ) : selectedChange.hasStructuredDiff ? (
                   <PromptGroupFileDiffContent
                     taskId={taskId}
                     change={selectedChange}
@@ -583,12 +669,16 @@ function PromptGroupFileDiffContent({
   change,
   oldContent = change.oldContent,
   newContent = change.newContent,
+  currentContent,
+  isCurrentContentLoading,
   headerActions,
 }: {
   taskId?: string;
   change: FileChange;
   oldContent?: string;
   newContent?: string;
+  currentContent?: string | null;
+  isCurrentContentLoading?: boolean;
   headerActions?: ReactNode;
 }) {
   const reviewComments = useReviewCommentsForFile(
@@ -612,7 +702,8 @@ function PromptGroupFileDiffContent({
     }) => {
       if (!taskId) return;
       const contentForSelection =
-        change.status === 'deleted' ? oldContent : newContent;
+        currentContent ??
+        (change.status === 'deleted' ? oldContent : newContent);
       addComment(taskId, {
         commentKind: 'diff',
         anchor: {
@@ -635,7 +726,14 @@ function PromptGroupFileDiffContent({
         resolved: false,
       });
     },
-    [taskId, change.status, oldContent, newContent, addComment],
+    [
+      taskId,
+      change.status,
+      currentContent,
+      oldContent,
+      newContent,
+      addComment,
+    ],
   );
 
   const handleDeleteReviewComment = useCallback(
@@ -664,6 +762,38 @@ function PromptGroupFileDiffContent({
     },
     [taskId, resolveComment],
   );
+
+  if (currentContent !== undefined) {
+    if (isCurrentContentLoading || currentContent === null) {
+      return (
+        <div className="flex h-full flex-col overflow-hidden">
+          <FileDiffHeader
+            file={{ path: change.displayPath, status: 'unchanged' }}
+            actions={headerActions}
+          />
+          <div className="text-ink-3 flex min-h-0 flex-1 items-center justify-center text-sm">
+            {isCurrentContentLoading
+              ? 'Loading current file...'
+              : 'Current file unavailable'}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <FileDiffContent
+        file={{ path: change.displayPath, status: 'unchanged' }}
+        oldContent={currentContent}
+        newContent={currentContent}
+        headerActions={headerActions}
+        reviewComments={taskId ? reviewComments : undefined}
+        onAddReviewComment={taskId ? handleAddReviewComment : undefined}
+        onDeleteReviewComment={handleDeleteReviewComment}
+        onEditReviewComment={handleEditReviewComment}
+        onResolveReviewComment={handleResolveReviewComment}
+      />
+    );
+  }
 
   return (
     <FileDiffContent
