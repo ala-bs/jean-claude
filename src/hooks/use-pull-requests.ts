@@ -269,6 +269,27 @@ export function updateFeedPullRequest(
   );
 }
 
+export function updateFeedTaskPullRequest(
+  projectId: string,
+  prId: number,
+  patch: Partial<FeedItem>,
+) {
+  const updateTask = (item: FeedItem): FeedItem => {
+    const updatedChildren = item.children?.map(updateTask);
+    const updatedItem = updatedChildren
+      ? { ...item, children: updatedChildren }
+      : item;
+
+    return item.source === 'task' &&
+      item.projectId === projectId &&
+      item.pullRequestId === prId
+      ? { ...updatedItem, ...patch }
+      : updatedItem;
+  };
+
+  updateFeedDocument('tasks', (items) => items.map(updateTask));
+}
+
 function markFeedPullRequestsStale() {
   markDocumentStale('feed:pullRequests');
 }
@@ -1323,6 +1344,7 @@ export function usePublishPullRequest(
       if (!repoInfoOverride) {
         updateFeedPullRequest(projectId, prId, { isDraft: false });
       }
+      updateFeedTaskPullRequest(projectId, prId, { isDraft: false });
       queryClient.invalidateQueries({
         queryKey,
       });
@@ -1370,6 +1392,7 @@ export function useMarkPullRequestDraft(
       if (!repoInfoOverride) {
         updateFeedPullRequest(projectId, prId, { isDraft: true });
       }
+      updateFeedTaskPullRequest(projectId, prId, { isDraft: true });
       queryClient.invalidateQueries({ queryKey });
       if (!repoInfoOverride) {
         queryClient.invalidateQueries({

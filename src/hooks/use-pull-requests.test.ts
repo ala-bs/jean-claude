@@ -6,10 +6,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
 
+import { cache$, resetCache } from '@/cache/cache-store';
 import { api } from '@/lib/api';
 
 import {
   useMarkPullRequestDraft,
+  usePublishPullRequest,
   useSetAutoComplete,
 } from './use-pull-requests';
 
@@ -21,6 +23,7 @@ afterEach(() => {
   root = null;
   container?.remove();
   container = null;
+  resetCache();
   vi.restoreAllMocks();
 });
 
@@ -115,5 +118,65 @@ describe('useMarkPullRequestDraft', () => {
       id: 42,
       isDraft: true,
     });
+  });
+});
+
+describe('usePublishPullRequest', () => {
+  it('updates linked task feed item draft state after success', async () => {
+    vi.spyOn(api.azureDevOps, 'publishPullRequest').mockResolvedValue();
+    cache$.documents['feed:tasks'].data.set([
+      {
+        id: 'task-1',
+        source: 'task',
+        projectId: 'local-project-1',
+        pullRequestId: 42,
+        isDraft: true,
+        children: [
+          {
+            id: 'task-child-1',
+            source: 'task',
+            projectId: 'local-project-1',
+            pullRequestId: 42,
+            isDraft: true,
+          } as never,
+        ],
+      } as never,
+    ]);
+
+    const repoInfo = {
+      projectName: 'Project',
+      providerId: 'provider-1',
+      projectId: 'azure-project-1',
+      repoId: 'repo-1',
+    };
+    let mutation: ReturnType<typeof usePublishPullRequest> | null = null;
+
+    function Consumer() {
+      mutation = usePublishPullRequest('local-project-1', 42, repoInfo);
+      return null;
+    }
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client: new QueryClient() },
+        createElement(Consumer),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    mutation!.mutate();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cache$.documents['feed:tasks'].data.get()).toMatchObject([
+      {
+        pullRequestId: 42,
+        isDraft: false,
+        children: [{ pullRequestId: 42, isDraft: false }],
+      },
+    ]);
   });
 });
