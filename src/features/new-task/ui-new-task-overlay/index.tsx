@@ -901,6 +901,27 @@ export function NewTaskOverlay({
     currentBackend,
     !isNoteMode && !draft?.agentBackend && !draft?.modelPreference,
   );
+  const rateLimitSuggestedPresetId = useMemo(() => {
+    if (!rateLimitSuggestion?.swapped) return null;
+
+    const backendChanged = rateLimitSuggestion.backend !== currentBackend;
+    return findMatchingBackendModelPresetId({
+      presets: backendModelPresets,
+      backend: rateLimitSuggestion.backend,
+      model:
+        rateLimitSuggestion.model ??
+        (backendChanged ? 'default' : currentModelPreference),
+      thinkingEffort:
+        rateLimitSuggestion.thinkingEffort ??
+        (backendChanged ? 'default' : currentThinkingEffort),
+    });
+  }, [
+    backendModelPresets,
+    currentBackend,
+    currentModelPreference,
+    currentThinkingEffort,
+    rateLimitSuggestion,
+  ]);
   useEffect(() => {
     if (
       isNoteMode ||
@@ -1968,6 +1989,8 @@ export function NewTaskOverlay({
                     requestedBackend={currentBackend}
                     model={currentModelPreference}
                     thinkingEffort={currentThinkingEffort}
+                    selectedPresetId={currentBackendPresetId}
+                    suggestedPresetId={rateLimitSuggestedPresetId}
                     onApplySuggestion={(selection) => {
                       userTouchedSelectionRef.current = true;
                       updateDraft({

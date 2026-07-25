@@ -44,7 +44,7 @@ export async function generateText({
   usageContext?: AiUsageContext;
 }): Promise<unknown | null> {
   const swapResult = allowRateLimitSwap
-    ? await rateLimitSwapService.resolveBackend(backend)
+    ? await rateLimitSwapService.resolveBackend(backend, { notify: false })
     : { backend, swapped: false, model: undefined, thinkingEffort: undefined };
   const resolvedBackend = swapResult.backend;
   const backendChanged = resolvedBackend !== backend;

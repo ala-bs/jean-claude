@@ -177,6 +177,9 @@ describe('generateText claude-code structured output', () => {
       },
       allowEmptyUsage: true,
     });
+    expect(rateLimitResolveBackendMock).toHaveBeenCalledWith('claude-code', {
+      notify: false,
+    });
   });
 
   it('returns falsy structured output from Claude instead of text fallback', async () => {

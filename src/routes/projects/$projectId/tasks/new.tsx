@@ -184,6 +184,27 @@ function NewTask() {
     effectiveAgentBackend,
     !userTouchedSelection,
   );
+  const rateLimitSuggestedPresetId = useMemo(() => {
+    if (!rateLimitSuggestion?.swapped) return null;
+
+    const backendChanged = rateLimitSuggestion.backend !== effectiveAgentBackend;
+    return findMatchingBackendModelPresetId({
+      presets: backendModelPresets,
+      backend: rateLimitSuggestion.backend,
+      model:
+        rateLimitSuggestion.model ??
+        (backendChanged ? 'default' : effectiveModelPreference),
+      thinkingEffort:
+        rateLimitSuggestion.thinkingEffort ??
+        (backendChanged ? 'default' : effectiveThinkingEffort),
+    });
+  }, [
+    backendModelPresets,
+    effectiveAgentBackend,
+    effectiveModelPreference,
+    effectiveThinkingEffort,
+    rateLimitSuggestion,
+  ]);
   useEffect(() => {
     if (!rateLimitSuggestion?.swapped || userTouchedSelection) return;
 
@@ -569,6 +590,8 @@ function NewTask() {
                   requestedBackend={effectiveAgentBackend}
                   model={effectiveModelPreference}
                   thinkingEffort={effectiveThinkingEffort}
+                  selectedPresetId={effectiveBackendModelPresetId}
+                  suggestedPresetId={rateLimitSuggestedPresetId}
                   onApplySuggestion={(selection) => {
                     markUserTouchedSelection();
                     setDraft({
