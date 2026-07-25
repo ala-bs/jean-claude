@@ -413,7 +413,7 @@ export function WorkItemPreview({
                   </div>
                 )}
               </div>
-              {canEditMetadata && providerId && (
+              {providerId && canEditMetadata && (
                 <WorkItemTagEditor
                   key={`${id}:tags:${fields.tags ?? ''}`}
                   value={fields.tags ?? ''}
@@ -422,6 +422,15 @@ export function WorkItemPreview({
                 />
               )}
             </div>
+          )}
+          {!isEditorial && providerId && !canEditMetadata && (
+            <WorkItemTagEditor
+              key={`${id}:tags:${fields.tags ?? ''}`}
+              value={fields.tags ?? ''}
+              suggestions={tagOptions}
+              readOnly
+              onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })}
+            />
           )}
         </div>
         {headerActions && <div className="flex shrink-0 items-center gap-1">{headerActions}</div>}

@@ -62,6 +62,7 @@ import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
 import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 import { WorkItemHistory } from '@/features/work-item/ui-work-item-history';
 import { EditableMetadataValue as WorkItemMetadataEditor } from '@/features/work-item/ui-work-item-preview';
+import { WorkItemTagEditor } from '@/features/work-item/ui-work-item-tag-editor';
 
 type DetailsTab = 'comments' | 'history' | 'test-cases';
 
@@ -703,6 +704,21 @@ export function WorkItemDetails({
               disabled={iterations === undefined}
               providerId={providerId}
               workItemId={workItem.id}
+            />
+          )}
+          {providerId && (
+            <WorkItemTagEditor
+              key={`${workItem.id}:tags:${fields.tags ?? ''}`}
+              value={fields.tags ?? ''}
+              suggestions={[]}
+              onSave={(value) =>
+                updateField.mutateAsync({
+                  providerId,
+                  workItemId: workItem.id,
+                  field: 'System.Tags',
+                  value,
+                })
+              }
             />
           )}
         </div>

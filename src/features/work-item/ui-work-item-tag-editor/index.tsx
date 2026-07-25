@@ -20,10 +20,12 @@ export function WorkItemTagEditor({
   value,
   suggestions,
   onSave,
+  readOnly = false,
 }: {
   value: string;
   suggestions: string[];
   onSave: (value: string) => Promise<unknown>;
+  readOnly?: boolean;
 }) {
   const id = useId();
   const listboxId = `work-item-tags-${id}`;
@@ -112,6 +114,8 @@ export function WorkItemTagEditor({
     void saveTags([...tags, ...tag.split(/[;,]/)]);
   };
 
+  if (readOnly && tags.length === 0) return null;
+
   return (
     <div className="relative min-w-0">
       <div
@@ -125,18 +129,20 @@ export function WorkItemTagEditor({
             title={tag}
           >
             <span className="max-w-32 truncate">{tag}</span>
-            <button
-              type="button"
-              disabled={isSaving}
-              onClick={() => void saveTags(tags.filter((item) => item !== tag))}
-              className="text-acc-ink/60 hover:text-acc-ink disabled:opacity-40"
-              aria-label={`Remove ${tag} tag`}
-            >
-              <X className="h-2.5 w-2.5" />
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={() => void saveTags(tags.filter((item) => item !== tag))}
+                className="text-acc-ink/60 hover:text-acc-ink disabled:opacity-40"
+                aria-label={`Remove ${tag} tag`}
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            )}
           </span>
         ))}
-        {isOpen ? (
+        {!readOnly && (isOpen ? (
           <input
             ref={inputRef}
             role="combobox"
@@ -191,10 +197,10 @@ export function WorkItemTagEditor({
           >
             + tag
           </button>
-        )}
-        {isSaving && <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />}
+        ))}
+        {!readOnly && isSaving && <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />}
       </div>
-      {error && (
+      {!readOnly && error && (
         <span role="alert" className="text-status-fail absolute top-full left-0 z-10 mt-1 text-[10px]">
           {error}
         </span>
