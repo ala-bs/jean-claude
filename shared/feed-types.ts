@@ -66,6 +66,7 @@ export interface FeedItem {
   hasNewActivity?: boolean;
   activeThreadCount?: number;
   unresolvedCommentCount?: number;
+  resolvedThreadCount?: number;
   approvedBy?: Array<{
     displayName: string;
     uniqueName: string;

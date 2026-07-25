@@ -4258,6 +4258,7 @@ export async function getPullRequestActivityMetadata(params: {
   lastThreadActivityDate: string | null;
   activeThreadCount: number;
   unresolvedCommentCount: number;
+  resolvedThreadCount: number;
 }> {
   const [commits, threads] = await Promise.all([
     getPullRequestCommits(params),
@@ -4293,12 +4294,14 @@ export async function getPullRequestActivityMetadata(params: {
     lastThreadActivityDate,
     activeThreadCount: threadCounts.active,
     unresolvedCommentCount: threadCounts.unresolvedComments,
+    resolvedThreadCount: threadCounts.resolved,
   };
 }
 
 function getPullRequestThreadCounts(threads: AzureDevOpsCommentThread[]) {
   let active = 0;
   let unresolvedComments = 0;
+  let resolved = 0;
 
   for (const thread of threads) {
     const comments = thread.comments.filter(
@@ -4311,10 +4314,12 @@ function getPullRequestThreadCounts(threads: AzureDevOpsCommentThread[]) {
     if (!thread.isDeleted && comments.length > 0 && isActive) {
       active++;
       unresolvedComments += comments.length;
+    } else if (!thread.isDeleted && comments.length > 0) {
+      resolved++;
     }
   }
 
-  return { active, unresolvedComments };
+  return { active, unresolvedComments, resolved };
 }
 
 export async function addThreadReply(params: {

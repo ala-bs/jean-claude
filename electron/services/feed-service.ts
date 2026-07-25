@@ -60,6 +60,7 @@ let activityCache: {
       lastThreadActivityDate: string | null;
       activeThreadCount: number;
       unresolvedCommentCount: number;
+      resolvedThreadCount: number;
     }
   >;
   fetchedAt: number;
@@ -521,6 +522,7 @@ async function enrichTaskFeedItemsWithPrStatus({
       isWaitingForAuthor: boolean;
       activeThreadCount: FeedItem['activeThreadCount'];
       unresolvedCommentCount: FeedItem['unresolvedCommentCount'];
+      resolvedThreadCount: FeedItem['resolvedThreadCount'];
     }
   >();
   for (const prItem of prItems) {
@@ -534,6 +536,7 @@ async function enrichTaskFeedItemsWithPrStatus({
       isWaitingForAuthor: !!prItem.isWaitingForAuthor,
       activeThreadCount: prItem.activeThreadCount,
       unresolvedCommentCount: prItem.unresolvedCommentCount,
+      resolvedThreadCount: prItem.resolvedThreadCount,
     });
   }
 
@@ -845,6 +848,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
         lastThreadActivityDate: string | null;
         activeThreadCount: number;
         unresolvedCommentCount: number;
+        resolvedThreadCount: number;
       }
     >();
 
@@ -936,6 +940,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
 
     const activeThreadCount = metadata?.activeThreadCount ?? 0;
     const unresolvedCommentCount = metadata?.unresolvedCommentCount ?? 0;
+    const resolvedThreadCount = metadata?.resolvedThreadCount ?? 0;
 
     // Determine attention level
     let attention = item.attention;
@@ -953,6 +958,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
       hasNewActivity,
       activeThreadCount,
       unresolvedCommentCount,
+      resolvedThreadCount,
     };
   });
 

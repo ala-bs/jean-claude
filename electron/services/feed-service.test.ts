@@ -134,6 +134,7 @@ describe('getPrFeedItems', () => {
       lastThreadActivityDate: null,
       activeThreadCount: 0,
       unresolvedCommentCount: 0,
+      resolvedThreadCount: 0,
     });
     vi.mocked(PrViewSnapshotRepository.findByProject).mockResolvedValue([]);
     vi.mocked(emitCacheEvent).mockClear();

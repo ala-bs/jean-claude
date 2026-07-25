@@ -1,4 +1,5 @@
 import {
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -1081,6 +1082,12 @@ function PrReviewCarouselCard({
             <span className="text-status-pr flex items-center gap-0.5 font-mono text-[9.5px]">
               <MessageSquare className="h-3 w-3" />
               {item.unresolvedCommentCount}
+            </span>
+          )}
+          {(item.resolvedThreadCount ?? 0) > 0 && (
+            <span className="text-status-done flex items-center gap-0.5 font-mono text-[9.5px]">
+              <CheckCircle2 className="h-3 w-3" />
+              {item.resolvedThreadCount}
             </span>
           )}
         </div>
