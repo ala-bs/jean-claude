@@ -20,6 +20,82 @@ import {
   MentionTextarea,
 } from '@/common/ui/mention-textarea';
 import { Button } from '@/common/ui/button';
+import { Dropdown } from '@/common/ui/dropdown';
+import { useSetWorkItemCommentReaction } from '@/hooks/use-work-items';
+import type { WorkItemCommentReactionType } from '@/lib/api';
+
+const REACTIONS: Array<{ type: WorkItemCommentReactionType; label: string; icon: string }> = [
+  { type: 'like', label: 'Like', icon: '👍' },
+  { type: 'heart', label: 'Heart', icon: '❤️' },
+  { type: 'hooray', label: 'Hooray', icon: '🎉' },
+  { type: 'smile', label: 'Smile', icon: '😊' },
+  { type: 'confused', label: 'Confused', icon: '😕' },
+  { type: 'dislike', label: 'Dislike', icon: '👎' },
+];
+
+function CommentReactions({ comment, enabled, providerId, projectName }: { comment: WorkItemComment; enabled: boolean; providerId?: string; projectName?: string }) {
+  const mutation = useSetWorkItemCommentReaction();
+  const pickerRef = useRef<{ toggle: () => void } | null>(null);
+  const reactions = comment.reactions ?? [];
+  const toggleReaction = (reactionType: WorkItemCommentReactionType, engaged: boolean) => {
+    if (!providerId || !projectName) return;
+    mutation.mutate({ providerId, projectName, workItemId: comment.workItemId, commentId: comment.id, reactionType, engaged });
+    pickerRef.current?.toggle();
+  };
+  return (
+    <div className="relative mt-2 flex flex-wrap gap-1">
+      {REACTIONS.map((reaction) => {
+        const current = reactions.find((item) => item.type === reaction.type);
+        if (!current?.count) return null;
+        return (
+          <button
+            key={reaction.type}
+            type="button"
+            disabled={!enabled || mutation.isPending || !providerId || !projectName}
+            onClick={() => toggleReaction(reaction.type, !current?.isCurrentUserEngaged)}
+            className={`rounded-full border px-2 py-0.5 text-[11px] ${current?.isCurrentUserEngaged ? 'border-acc/50 bg-acc/15 text-acc-ink' : 'border-glass-border text-ink-3 hover:text-ink-1'} disabled:cursor-default disabled:opacity-70`}
+            aria-label={`${reaction.label} reaction, ${current?.count ?? 0}${current?.isCurrentUserEngaged ? ', selected' : ''}`}
+            title={enabled ? reaction.label : `${reaction.label}: ${current?.count ?? 0}`}
+          >
+            {reaction.icon} {current?.count ?? 0}
+          </button>
+        );
+      })}
+      {enabled && (
+        <Dropdown
+          dropdownRef={pickerRef}
+          className="min-w-0 max-w-[calc(100vw-16px)] p-1"
+          trigger={
+            <button
+              type="button"
+              className="text-ink-4 rounded-full px-1.5 text-[13px] hover:bg-glass-light hover:text-ink-1"
+              aria-label="Add reaction"
+            >
+              +
+            </button>
+          }
+        >
+          <div className="flex max-w-full flex-wrap gap-1">
+            {REACTIONS.map((reaction) => (
+              <button
+                key={reaction.type}
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                className="rounded p-1 text-sm hover:bg-glass-light"
+                aria-label={`Add ${reaction.label} reaction`}
+                title={reaction.label}
+                onClick={() => toggleReaction(reaction.type, true)}
+              >
+                {reaction.icon}
+              </button>
+            ))}
+          </div>
+        </Dropdown>
+      )}
+    </div>
+  );
+}
 
 function formatCommentDate(value: string) {
   if (!value) return 'Unknown date';
@@ -62,6 +138,8 @@ function CommentsContent({
   emptyMessage,
   mentionDisplayNames,
   onEditComment,
+  reactionsEnabled,
+  projectName,
 }: {
   comments: WorkItemComment[];
   isLoading: boolean;
@@ -70,6 +148,8 @@ function CommentsContent({
   emptyMessage: string;
   mentionDisplayNames?: MentionDisplayNames;
   onEditComment?: (comment: WorkItemComment) => void;
+  reactionsEnabled: boolean;
+  projectName?: string;
 }) {
   if (isLoading) {
     return <div className="text-ink-3 py-6 text-sm">Loading comments...</div>;
@@ -114,8 +194,8 @@ function CommentsContent({
               <button type="button" className="text-ink-3 hover:text-ink-1 ml-auto" aria-label="Edit comment" onClick={() => onEditComment(comment)}>
                 <Pencil className="h-3 w-3" />
               </button>
-            )}
-          </div>
+           )}
+        </div>
           {comment.format === 'markdown' ? (
             <AzureMarkdownContent
               markdown={comment.text}
@@ -136,7 +216,8 @@ function CommentsContent({
               imageClassName="max-h-72 w-auto object-contain"
               enableImageModal
             />
-          )}
+           )}
+          <CommentReactions comment={comment} enabled={reactionsEnabled} providerId={providerId} projectName={projectName} />
         </div>
       ))}
     </div>
@@ -348,6 +429,8 @@ export function WorkItemComments({
             emptyMessage={emptyMessage}
             mentionDisplayNames={mentionDisplayNames}
             onEditComment={onUpdateComment ? (comment) => { setEditingComment(comment); setDraft(comment.rawText ?? comment.text); } : undefined}
+            reactionsEnabled={!!onAddComment || !!onUpdateComment}
+            projectName={projectName}
           />
         </div>
         {editor}
@@ -380,6 +463,8 @@ export function WorkItemComments({
           emptyMessage={emptyMessage}
           mentionDisplayNames={mentionDisplayNames}
           onEditComment={onUpdateComment ? (comment) => { setEditingComment(comment); setDraft(comment.rawText ?? comment.text); } : undefined}
+          reactionsEnabled={!!onAddComment || !!onUpdateComment}
+          projectName={projectName}
         />
       </div>
       {editor}

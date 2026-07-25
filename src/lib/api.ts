@@ -335,6 +335,21 @@ export interface WorkItemComment {
   attachmentBaseUrl?: string;
   createdBy: string;
   createdDate: string;
+  reactions?: WorkItemCommentReaction[];
+}
+
+export type WorkItemCommentReactionType =
+  | 'like'
+  | 'dislike'
+  | 'heart'
+  | 'hooray'
+  | 'smile'
+  | 'confused';
+
+export interface WorkItemCommentReaction {
+  type: WorkItemCommentReactionType;
+  count: number;
+  isCurrentUserEngaged: boolean;
 }
 
 export interface WorkItemHistoryEntry {
@@ -839,6 +854,14 @@ export interface Api {
       commentId: number;
       text: string;
     }) => Promise<WorkItemComment>;
+    setWorkItemCommentReaction: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      commentId: number;
+      reactionType: WorkItemCommentReactionType;
+      engaged: boolean;
+    }) => Promise<void>;
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;
@@ -2088,6 +2111,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         updateWorkItemComment: async () => {
+          throw new Error('API not available');
+        },
+        setWorkItemCommentReaction: async () => {
           throw new Error('API not available');
         },
         uploadWorkItemAttachment: async () => {

@@ -3226,6 +3226,14 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    'azureDevOps:setWorkItemCommentReaction',
+    async (_event, params) => {
+      const { setWorkItemCommentReaction } = await import('../services/azure-devops-service');
+      return setWorkItemCommentReaction(params);
+    },
+  );
+
+  ipcMain.handle(
     'azureDevOps:uploadWorkItemAttachment',
     async (_event, params: { providerId: string; projectName: string; filename: string; mimeType: string; base64: string }) => {
       const { uploadWorkItemAttachment } = await import('../services/azure-devops-service');

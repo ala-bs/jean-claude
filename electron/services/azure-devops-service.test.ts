@@ -35,6 +35,7 @@ import {
   queryWorkItems,
   resolveWorkItemBoardColumnUpdate,
   setPullRequestAutoComplete,
+  setWorkItemCommentReaction,
   updatePullRequestTitle,
   updateWorkItemBoardColumn,
   uploadPullRequestAttachment,
@@ -998,7 +999,7 @@ describe('addWorkItemComment', () => {
       }),
     ]);
     expect(vi.mocked(fetch).mock.calls[0][0]).toBe(
-      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText',
+      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=all',
     );
   });
 
@@ -1039,7 +1040,7 @@ describe('addWorkItemComment', () => {
 
     expect(comments.map((comment) => comment.id)).toEqual([3, 2, 1]);
     expect(vi.mocked(fetch).mock.calls[1][0]).toBe(
-      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText&continuationToken=next+token%26page%3D2',
+      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=all&continuationToken=next+token%26page%3D2',
     );
   });
 
@@ -1165,6 +1166,41 @@ describe('addWorkItemComment', () => {
         format: 'markdown',
       }),
     ]);
+  });
+});
+
+describe('setWorkItemCommentReaction', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ['like', 'POST'],
+    ['heart', 'DELETE'],
+  ])('uses Azure reaction route for %s', async (reactionType, method) => {
+    await setWorkItemCommentReaction({
+      providerId: 'provider-1',
+      projectName: 'Project Name',
+      workItemId: 299,
+      commentId: 42,
+      reactionType: reactionType as 'like' | 'heart',
+      engaged: method === 'POST',
+    });
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      `https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments/42/reactions/${reactionType}?api-version=7.1-preview.4`,
+      { method, headers: { Authorization: 'Basic OnBhdA==' } },
+    );
   });
 });
 

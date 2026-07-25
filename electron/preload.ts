@@ -439,13 +439,21 @@ contextBridge.exposeInMainWorld('api', {
       workItemId: number;
       text: string;
     }) => ipcRenderer.invoke('azureDevOps:addWorkItemComment', params),
-    updateWorkItemComment: (params: {
+     updateWorkItemComment: (params: {
       providerId: string;
       projectName: string;
       workItemId: number;
       commentId: number;
       text: string;
-    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemComment', params),
+     }) => ipcRenderer.invoke('azureDevOps:updateWorkItemComment', params),
+     setWorkItemCommentReaction: (params: {
+       providerId: string;
+       projectName: string;
+       workItemId: number;
+       commentId: number;
+       reactionType: 'like' | 'dislike' | 'heart' | 'hooray' | 'smile' | 'confused';
+       engaged: boolean;
+     }) => ipcRenderer.invoke('azureDevOps:setWorkItemCommentReaction', params),
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;

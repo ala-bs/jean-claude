@@ -133,6 +133,16 @@ export interface WorkItemComment {
   attachmentBaseUrl?: string;
   createdBy: string;
   createdDate: string;
+  reactions?: WorkItemCommentReaction[];
+}
+
+export type WorkItemCommentReactionType =
+  | 'like' | 'dislike' | 'heart' | 'hooray' | 'smile' | 'confused';
+
+export interface WorkItemCommentReaction {
+  type: WorkItemCommentReactionType;
+  count: number;
+  isCurrentUserEngaged: boolean;
 }
 
 export interface AzureDevOpsIteration {
@@ -1453,7 +1463,7 @@ export async function getWorkItemComments(params: {
   workItemId: number;
 }): Promise<WorkItemComment[]> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
-  const baseUrl = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText`;
+  const baseUrl = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=all`;
   const comments: {
     id: number;
     workItemId: number;
@@ -1461,6 +1471,7 @@ export async function getWorkItemComments(params: {
     renderedText?: string;
     createdBy?: { displayName?: string };
     createdDate?: string;
+    reactions?: WorkItemCommentReaction[];
   }[] = [];
   const seenCommentIds = new Set<number>();
   const seenContinuationTokens = new Set<string>();
@@ -1526,8 +1537,28 @@ export async function getWorkItemComments(params: {
       attachmentBaseUrl,
       createdBy: c.createdBy?.displayName ?? 'Unknown',
       createdDate: c.createdDate ?? '',
+      reactions: c.reactions ?? [],
     };
   });
+}
+
+export async function setWorkItemCommentReaction(params: {
+  providerId: string;
+  projectName: string;
+  workItemId: number;
+  commentId: number;
+  reactionType: WorkItemCommentReactionType;
+  engaged: boolean;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const url = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments/${params.commentId}/reactions/${params.reactionType}?api-version=7.1-preview.4`;
+  const response = await fetch(url, {
+    method: params.engaged ? 'POST' : 'DELETE',
+    headers: { Authorization: authHeader },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to update work item comment reaction: ${await response.text()}`);
+  }
 }
 
 function getRenderedCommentText(comment: {
