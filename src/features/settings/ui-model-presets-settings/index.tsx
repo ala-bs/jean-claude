@@ -1,6 +1,30 @@
-import { Plus, Trash2 } from 'lucide-react';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import {
+  ChevronDown,
+  ChevronUp,
+  GripVertical,
+  Plus,
+  Trash2,
+} from 'lucide-react';
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import clsx from 'clsx';
+import { CSS } from '@dnd-kit/utilities';
 import { nanoid } from 'nanoid';
-import { useMemo } from 'react';
 
 
 
@@ -34,15 +58,27 @@ import { useBackendModels } from '@/hooks/use-backend-models';
 
 
 
+const EMPTY_PRESETS: BackendModelPreset[] = [];
+
 function PresetCard({
   preset,
+  index,
+  presetCount,
+  disabled,
   backendOptions,
   onChange,
+  onCommit,
+  onMove,
   onDelete,
 }: {
   preset: BackendModelPreset;
+  index: number;
+  presetCount: number;
+  disabled: boolean;
   backendOptions: SelectOption<AgentBackendType>[];
-  onChange: (update: Partial<BackendModelPreset>) => void;
+  onChange: (update: Partial<BackendModelPreset>, commit?: boolean) => void;
+  onCommit: () => void;
+  onMove: (direction: -1 | 1) => void;
   onDelete: () => void;
 }) {
   const { data: dynamicModels, isFetched } = useBackendModels(preset.backend);
@@ -78,14 +114,67 @@ function PresetCard({
     ];
   }, [dynamicModels, isFetched, preset.backend, preset.model]);
 
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: preset.id, disabled });
+
   return (
-    <div className="border-glass-border bg-bg-1 rounded-xl border p-4">
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.55 : 1,
+      }}
+      className={clsx(
+        'border-glass-border bg-bg-1 rounded-xl border p-4',
+        isDragging && 'border-acc/60 shadow-lg',
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
+        <div className="mt-1 flex items-center">
+          <button
+            ref={setActivatorNodeRef}
+            type="button"
+            disabled={disabled}
+            className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 cursor-grab rounded p-1 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={`Reorder ${preset.name || `preset ${index + 1}`}`}
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+          <div className="flex flex-col">
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<ChevronUp />}
+              disabled={disabled || index === 0}
+              onClick={() => onMove(-1)}
+              aria-label={`Move ${preset.name || `preset ${index + 1}`} up`}
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<ChevronDown />}
+              disabled={disabled || index === presetCount - 1}
+              onClick={() => onMove(1)}
+              aria-label={`Move ${preset.name || `preset ${index + 1}`} down`}
+            />
+          </div>
+        </div>
         <div className="min-w-0 flex-1">
           <div className="text-ink-1 text-sm font-medium">Preset name</div>
           <Input
             value={preset.name}
-            onChange={(event) => onChange({ name: event.target.value })}
+            onChange={(event) => onChange({ name: event.target.value }, false)}
+            onBlur={onCommit}
             placeholder="Fast review, Deep planning..."
             className="mt-2"
           />
@@ -154,10 +243,30 @@ function PresetCard({
 
 export function ModelPresetsSettings() {
   const { data: backendsSetting } = useBackendsSetting();
-  const { data: presets = [] } = useBackendModelPresetsSetting();
+  const { data: serverPresets } = useBackendModelPresetsSetting();
+  const [presets, setPresets] = useState<BackendModelPreset[]>(EMPTY_PRESETS);
+  const presetsRef = useRef<BackendModelPreset[]>(EMPTY_PRESETS);
   const { data: quickSwitcherSetting } = useModelQuickSwitcherSetting();
   const updateQuickSwitcher = useUpdateModelQuickSwitcherSetting();
   const updatePresets = useUpdateBackendModelPresetsSetting();
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  useEffect(() => {
+    if (!serverPresets) return;
+    presetsRef.current = serverPresets;
+    startTransition(() => setPresets(serverPresets));
+  }, [serverPresets]);
+
+  const commitPresets = (next: BackendModelPreset[], commit = true) => {
+    presetsRef.current = next;
+    setPresets(next);
+    if (commit) updatePresets.mutate(next);
+  };
 
   const enabledBackends = useMemo(
     () =>
@@ -183,19 +292,21 @@ export function ModelPresetsSettings() {
   const updatePreset = (
     presetId: string,
     update: Partial<BackendModelPreset>,
+    commit = true,
   ) => {
-    updatePresets.mutate(
-      presets.map((preset) =>
+    commitPresets(
+      presetsRef.current.map((preset) =>
         preset.id === presetId ? { ...preset, ...update } : preset,
       ),
+      commit,
     );
   };
 
   const handleAddPreset = () => {
     const defaultBackend: AgentBackendType =
       enabledBackends[0] ?? 'claude-code';
-    updatePresets.mutate([
-      ...presets,
+    commitPresets([
+      ...presetsRef.current,
       {
         id: nanoid(),
         name: '',
@@ -208,7 +319,28 @@ export function ModelPresetsSettings() {
   };
 
   const handleDeletePreset = (presetId: string) => {
-    updatePresets.mutate(presets.filter((preset) => preset.id !== presetId));
+    commitPresets(
+      presetsRef.current.filter((preset) => preset.id !== presetId),
+    );
+  };
+
+  const movePreset = (index: number, direction: -1 | 1) => {
+    const current = presetsRef.current;
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= current.length) return;
+    commitPresets(arrayMove(current, index, nextIndex));
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const current = presetsRef.current;
+    const oldIndex = current.findIndex((preset) => preset.id === active.id);
+    const newIndex = current.findIndex((preset) => preset.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    commitPresets(arrayMove(current, oldIndex, newIndex));
   };
 
   return (
@@ -244,17 +376,35 @@ export function ModelPresetsSettings() {
           No presets yet. Create one for common backend and model combinations.
         </div>
       ) : (
-        <div className="mt-4 space-y-3">
-          {presets.map((preset) => (
-            <PresetCard
-              key={preset.id}
-              preset={preset}
-              backendOptions={backendOptions}
-              onChange={(update) => updatePreset(preset.id, update)}
-              onDelete={() => handleDeletePreset(preset.id)}
-            />
-          ))}
-        </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={presets.map((preset) => preset.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="mt-4 space-y-3">
+              {presets.map((preset, index) => (
+                <PresetCard
+                  key={preset.id}
+                  preset={preset}
+                  index={index}
+                  presetCount={presets.length}
+                  disabled={presets.length < 2}
+                  onMove={(direction) => movePreset(index, direction)}
+                  backendOptions={backendOptions}
+                  onChange={(update, commit) =>
+                    updatePreset(preset.id, update, commit)
+                  }
+                  onCommit={() => commitPresets(presetsRef.current)}
+                  onDelete={() => handleDeletePreset(preset.id)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       )}
     </div>
   );
