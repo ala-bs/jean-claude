@@ -10,7 +10,7 @@ interface UseHorizontalResizeOptions {
   maxWidth?: number; // Absolute max width (takes precedence over maxWidthFraction if smaller)
   direction?: 'left' | 'right'; // Which direction increases width ('right' = drag right to grow, 'left' = drag left to grow)
   onWidthChange: (width: number) => void;
-  resizeTargetRef?: RefObject<HTMLDivElement | null>;
+  resizeTargetRef?: RefObject<HTMLElement | null>;
 }
 
 export function useHorizontalResize({

@@ -527,6 +527,7 @@ export function WorkItemDetails({
     null,
   );
   const [containerWidth, setContainerWidth] = useState(() => window.innerWidth);
+  const commentsPaneRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!hasTestCases && activeTab === 'test-cases') {
@@ -541,6 +542,7 @@ export function WorkItemDetails({
     maxWidthFraction: 0.6,
     direction: 'left',
     onWidthChange: setCommentsPaneWidth,
+    resizeTargetRef: commentsPaneRef,
   });
 
   useEffect(() => {
@@ -790,6 +792,7 @@ export function WorkItemDetails({
         />
 
         <aside
+          ref={commentsPaneRef}
           className="border-glass-border/50 bg-bg-1/20 flex min-w-0 shrink-0 flex-col border-l"
           style={{ width: effectiveCommentsPaneWidth }}
         >
