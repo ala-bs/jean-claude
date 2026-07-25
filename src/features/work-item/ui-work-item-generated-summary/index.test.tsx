@@ -136,6 +136,20 @@ describe('WorkItemGeneratedSummary', () => {
     });
   });
 
+  it('keeps empty state compact', async () => {
+    vi.spyOn(api.azureDevOps, 'getWorkItemSummary').mockResolvedValue(null);
+    render();
+
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain('No brief generated'),
+    );
+
+    const section = container.querySelector('section');
+    expect(section?.querySelector('p')?.textContent).toBe('No brief generated');
+    expect(container.textContent).not.toContain('Generate compact context');
+    expect(section?.querySelector('.text-center')).toBeNull();
+  });
+
   it('keeps the generate button focused while generation starts', async () => {
     let finishGeneration: ((value: WorkItemSummary) => void) | undefined;
     vi.spyOn(api.azureDevOps, 'getWorkItemSummary').mockResolvedValue(null);
