@@ -518,6 +518,7 @@ async function enrichTaskFeedItemsWithPrStatus({
       isDraft: boolean;
       mergeStatus: FeedItem['pullRequestMergeStatus'];
       approvedBy: FeedItem['approvedBy'];
+      isWaitingForAuthor: boolean;
       activeThreadCount: FeedItem['activeThreadCount'];
       unresolvedCommentCount: FeedItem['unresolvedCommentCount'];
     }
@@ -530,6 +531,7 @@ async function enrichTaskFeedItemsWithPrStatus({
       isDraft: !!prItem.isDraft,
       mergeStatus: prItem.pullRequestMergeStatus,
       approvedBy: prItem.approvedBy,
+      isWaitingForAuthor: !!prItem.isWaitingForAuthor,
       activeThreadCount: prItem.activeThreadCount,
       unresolvedCommentCount: prItem.unresolvedCommentCount,
     });
@@ -558,6 +560,7 @@ async function enrichTaskFeedItemsWithPrStatus({
         item.isDraft = activePrInfo.isDraft;
         item.pullRequestMergeStatus = activePrInfo.mergeStatus;
         item.approvedBy = activePrInfo.approvedBy;
+        item.isWaitingForAuthor = activePrInfo.isWaitingForAuthor;
         item.activeThreadCount = activePrInfo.activeThreadCount;
         item.unresolvedCommentCount = activePrInfo.unresolvedCommentCount;
       }
@@ -621,6 +624,7 @@ async function enrichTaskFeedItemsWithPrStatus({
             entry.item.isDraft = status.isDraft;
             entry.item.pullRequestMergeStatus = status.mergeStatus;
             entry.item.approvedBy = status.approvedBy;
+            entry.item.isWaitingForAuthor = !!status.isWaitingForAuthor;
             if (status.activeThreadCount !== undefined) {
               entry.item.activeThreadCount = status.activeThreadCount;
             }
@@ -802,6 +806,10 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
                   r.uniqueName.toLowerCase() ===
                     providerUserEmailMap.get(project.repoProviderId!),
               ),
+            isWaitingForAuthor: pr.reviewers.some(
+              (reviewer) =>
+                !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+            ),
           }),
         );
 

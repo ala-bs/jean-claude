@@ -9,6 +9,7 @@ import {
   FolderOpen,
   GitMerge,
   GitPullRequest,
+  Hand,
   ListTodo,
   Loader2,
   MessageSquare,
@@ -516,6 +517,13 @@ export function FeedItemCard({
   });
   const prMerged = prStatus === 'completed';
   const prStatusLabel = getPrStatusLabel(prStatus);
+  const prWaitingForAuthor =
+    item.isWaitingForAuthor ??
+    cachedPr?.reviewers.some(
+      (reviewer) =>
+        !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+    ) ??
+    false;
   const prHasConflicts = pullRequestMergeStatus === 'conflicts';
   const prHasOpenComments = (item.activeThreadCount ?? 0) > 0;
   const prApprovalCount = approvedBy.length;
@@ -1074,6 +1082,12 @@ export function FeedItemCard({
                     #{item.pullRequestId}
                   </span>
                   <span>{prStatusLabel}</span>
+                  {prWaitingForAuthor && (
+                    <span className="flex items-center gap-0.5 text-amber-400">
+                      <Hand className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">Waiting for author</span>
+                    </span>
+                  )}
                   {isDraft && (
                     <span className="border-glass-border text-ink-3 rounded border px-1 py-0 text-[9px]">
                       Draft

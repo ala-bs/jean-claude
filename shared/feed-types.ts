@@ -71,6 +71,7 @@ export interface FeedItem {
     uniqueName: string;
     imageUrl?: string;
   }>;
+  isWaitingForAuthor?: boolean;
   isApprovedByMe?: boolean;
 }
 

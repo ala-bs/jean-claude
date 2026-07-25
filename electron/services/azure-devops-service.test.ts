@@ -1615,7 +1615,15 @@ describe('getPullRequestStatuses', () => {
               name: 'repo',
               project: { name: 'project' },
             },
-            reviewers: [],
+            reviewers: [
+              {
+                id: 'reviewer-1',
+                displayName: 'Reviewer',
+                uniqueName: 'reviewer@example.com',
+                vote: -5,
+                isContainer: false,
+              },
+            ],
           },
           { ok: true },
         );
@@ -1631,6 +1639,7 @@ describe('getPullRequestStatuses', () => {
     expect(statuses.get('project:repo:123')).toMatchObject({
       status: 'active',
       activeThreadCount: 1,
+      isWaitingForAuthor: true,
     });
   });
 });

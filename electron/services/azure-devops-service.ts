@@ -598,6 +598,7 @@ type PullRequestStatusMetadata = {
     uniqueName: string;
     imageUrl?: string;
   }>;
+  isWaitingForAuthor?: boolean;
 };
 
 export async function getPullRequestStatuses(params: {
@@ -684,6 +685,9 @@ export async function getPullRequestStatuses(params: {
                   uniqueName: r.uniqueName,
                   imageUrl: r.imageUrl,
                 })),
+              isWaitingForAuthor: (pr.reviewers ?? []).some(
+                (r) => !r.isContainer && mapVoteToStatus(r.vote) === 'waiting',
+              ),
             },
           );
         } catch (err) {

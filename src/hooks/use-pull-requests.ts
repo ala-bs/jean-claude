@@ -267,6 +267,25 @@ export function updateFeedPullRequest(
         : item,
     ),
   );
+
+  if (patch.isWaitingForAuthor === undefined) return;
+
+  const updateTaskItem = (item: FeedItem): FeedItem => {
+    const children = item.children?.map(updateTaskItem);
+    const withChildren = children ? { ...item, children } : item;
+
+    if (
+      item.source !== 'task' ||
+      item.projectId !== projectId ||
+      item.pullRequestId !== prId
+    ) {
+      return withChildren;
+    }
+
+    return { ...withChildren, isWaitingForAuthor: patch.isWaitingForAuthor };
+  };
+
+  updateFeedDocument('tasks', (items) => items.map(updateTaskItem));
 }
 
 export function updateFeedTaskPullRequest(
@@ -312,6 +331,10 @@ export function updateFeedItemsForPullRequest(
               isDraft: pr.isDraft,
               pullRequestUrl: pr.url,
               pullRequestMergeStatus: pr.mergeStatus,
+              isWaitingForAuthor: pr.reviewers.some(
+                (reviewer) =>
+                  !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+              ),
             }
           : item,
       )
@@ -340,6 +363,10 @@ export function updateFeedItemsForPullRequest(
       workItemPrStatus: pr.status,
       pullRequestUrl: pr.url,
       pullRequestMergeStatus: pr.mergeStatus,
+      isWaitingForAuthor: pr.reviewers.some(
+        (reviewer) =>
+          !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+      ),
     };
   };
 
@@ -1228,10 +1255,15 @@ export function useVotePullRequest(
 
       const isApprovedByMe =
         voteStatus === 'approved' || voteStatus === 'approved-with-suggestions';
+      const isWaitingForAuthor = updatedCachedPr?.reviewers.some(
+        (reviewer) =>
+          !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+      );
       if (!repoInfoOverride) {
         updateFeedPullRequest(projectId, prId, {
           isApprovedByMe,
           attention: isApprovedByMe ? 'pr-approved-by-me' : 'review-requested',
+          isWaitingForAuthor,
         });
       }
       if (isApprovedByMe) {
