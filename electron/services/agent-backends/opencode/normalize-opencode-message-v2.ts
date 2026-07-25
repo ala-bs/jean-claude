@@ -263,6 +263,17 @@ function normalizeEvent(
       const permissionPatterns = canonicalPermissionPattern
         ? [canonicalPermissionPattern]
         : permission.patterns;
+      const normalizedRequest = normalizeToolRequest(
+        permission.permission,
+        permission.metadata,
+      );
+      const permissionEvaluation = ctx.permissionRules
+        ? evaluatePermissionWithMatch(
+            ctx.permissionRules,
+            normalizedRequest.tool,
+            normalizedRequest.matchValue,
+          )
+        : undefined;
       return [
         {
           type: 'permission-request',
@@ -281,6 +292,27 @@ function normalizeEvent(
               alwaysPatterns: permission.always,
             },
             description: permission.permission,
+            ...(permissionEvaluation
+              ? {
+                  permissionEvaluation: {
+                    action:
+                      permission.permission === 'external_directory' &&
+                      !canAutoEvaluateExternalDirectory
+                        ? 'ask'
+                        : permissionEvaluation.action,
+                    matchValue: normalizedRequest.matchValue,
+                    ...(permissionEvaluation.matchedRule
+                      ? {
+                          matchedRule: {
+                            tool: permissionEvaluation.matchedRule.tool,
+                            pattern: permissionEvaluation.matchedRule.pattern,
+                            action: permissionEvaluation.matchedRule.action,
+                          },
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
             directoryAccess,
           },
         },

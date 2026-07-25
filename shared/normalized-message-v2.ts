@@ -259,6 +259,15 @@ export interface NormalizedPermissionRequest {
   toolName: string;
   input: Record<string, unknown>;
   description?: string;
+  permissionEvaluation?: {
+    action: 'allow' | 'ask' | 'deny';
+    matchValue?: string;
+    matchedRule?: {
+      tool: string;
+      pattern: string;
+      action: 'allow' | 'ask' | 'deny';
+    };
+  };
   sessionAllowButton?: {
     label: string;
     toolsToAllow: string[];

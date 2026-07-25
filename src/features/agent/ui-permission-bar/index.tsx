@@ -1,11 +1,14 @@
 import {
   Check,
   ChevronDown,
+  Copy,
   FolderTree,
   MessageSquare,
+  MoreHorizontal,
   Send,
   Shield,
   ShieldCheck,
+  TriangleAlert,
   X,
 } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -54,16 +57,18 @@ function ToolInputDisplay({
   toolName,
   input,
   worktreePath,
+  commandExpanded = false,
 }: {
   toolName: string;
   input: Record<string, unknown>;
   worktreePath?: string | null;
+  commandExpanded?: boolean;
 }) {
   switch (toolName) {
     case 'Bash':
       return (
         <pre
-          className="bg-bg-1 text-ink-1 rounded px-2 py-1 text-sm break-all whitespace-pre-wrap"
+          className={`bg-bg-1 text-ink-1 rounded px-2 py-1 text-sm break-all whitespace-pre-wrap ${!commandExpanded ? 'max-h-24 overflow-hidden' : ''}`}
           title={String(input.command || '')}
         >
           {String(input.command || '')}
@@ -182,7 +187,7 @@ function ExitPlanModeDisplay({
 }
 
 /** Tools that support "Allow All" (blanket allow for the tool, not just this file) */
-const ALLOW_ALL_TOOLS = new Set(['Read', 'Write', 'Edit']);
+const ALLOW_ALL_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 
 export function PermissionBar({
   request,
@@ -218,14 +223,29 @@ export function PermissionBar({
   const modal = useModal();
   const [isOtherOpen, setIsOtherOpen] = useState(false);
   const [otherMessage, setOtherMessage] = useState('');
+  const [isCommandExpanded, setIsCommandExpanded] = useState(false);
   const directoryDropdownRef = useRef<{ toggle: () => void } | null>(null);
 
   const input = request.input;
+  const permissionInput =
+    request.toolName === 'Bash'
+      ? { ...input, __permissionExact: true }
+      : input;
   const isExitPlanMode = request.toolName === 'ExitPlanMode';
   const sessionAllowButton = request.sessionAllowButton;
   const directoryAccess = request.directoryAccess;
   const showAllowAll =
     !directoryAccess && ALLOW_ALL_TOOLS.has(request.toolName);
+  const command = String(input.command || '');
+  // The command block is clamped to max-h-24 (~6 lines), so the expand/copy
+  // controls must appear for tall multi-line commands too, not just long ones.
+  const isCommandClamped =
+    command.length > 180 || command.split('\n').length > 5;
+  const isRiskyCommand =
+    request.toolName === 'Bash' &&
+    /\b(rm\s+-rf|sudo|chmod\s+777|curl\b.*\|\s*(sh|bash)|mkfs|dd\s+if=)/i.test(
+      command,
+    );
 
   const handleAllow = () => {
     if (sessionAllowButton?.setModeOnAllow) {
@@ -245,7 +265,7 @@ export function PermissionBar({
       onAllowForSession?.('Edit', {});
       onAllowForSession?.('Write', {});
     } else {
-      onAllowForSession?.(request.toolName, input);
+      onAllowForSession?.(request.toolName, permissionInput);
     }
   };
 
@@ -270,7 +290,7 @@ export function PermissionBar({
       onAllowForProject?.('Edit', {});
       onAllowForProject?.('Write', {});
     } else {
-      onAllowForProject?.(request.toolName, input);
+      onAllowForProject?.(request.toolName, permissionInput);
     }
     return onRespond(request.requestId, {
       behavior: 'allow',
@@ -288,7 +308,7 @@ export function PermissionBar({
       onAllowForProjectWorktrees?.('Edit', {});
       onAllowForProjectWorktrees?.('Write', {});
     } else {
-      onAllowForProjectWorktrees?.(request.toolName, input);
+      onAllowForProjectWorktrees?.(request.toolName, permissionInput);
     }
     return onRespond(request.requestId, {
       behavior: 'allow',
@@ -306,7 +326,7 @@ export function PermissionBar({
       onAllowGlobally?.('Edit', {});
       onAllowGlobally?.('Write', {});
     } else {
-      onAllowGlobally?.(request.toolName, input);
+      onAllowGlobally?.(request.toolName, permissionInput);
     }
     // Use 'session' allowMode: global persistence is handled separately via
     // the onAllowGlobally IPC call. Sending 'session' avoids the agent backend
@@ -438,7 +458,58 @@ export function PermissionBar({
                 toolName={request.toolName}
                 input={input}
                 worktreePath={worktreePath}
+                commandExpanded={isCommandExpanded}
               />
+            )}
+            {request.permissionEvaluation && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-ink-3">Permission check:</span>
+                <span
+                  className={`rounded px-1.5 py-0.5 font-medium ${
+                    request.permissionEvaluation.action === 'deny'
+                      ? 'bg-red-400/10 text-red-300'
+                      : request.permissionEvaluation.action === 'allow'
+                        ? 'bg-green-400/10 text-green-300'
+                        : 'bg-yellow-400/10 text-yellow-300'
+                  }`}
+                >
+                  {request.permissionEvaluation.action}
+                </span>
+                {request.permissionEvaluation.matchedRule ? (
+                  <code className="text-ink-2 rounded bg-black/20 px-1.5 py-0.5">
+                    {request.permissionEvaluation.matchedRule.tool}:{' '}
+                    {request.permissionEvaluation.matchedRule.pattern}
+                  </code>
+                ) : (
+                  <span className="text-ink-3">
+                    no matching rule, defaulting to ask
+                  </span>
+                )}
+              </div>
+            )}
+            {isRiskyCommand && (
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-orange-300">
+                <TriangleAlert className="h-3.5 w-3.5" />
+                Destructive or privileged command. Review before granting.
+              </div>
+            )}
+            {request.toolName === 'Bash' && isCommandClamped && (
+              <div className="mt-1 flex gap-2 text-xs">
+                <button
+                  type="button"
+                  className="text-ink-3 hover:text-ink-1"
+                  onClick={() => setIsCommandExpanded((expanded) => !expanded)}
+                >
+                  {isCommandExpanded ? 'Collapse command' : 'Expand command'}
+                </button>
+                <button
+                  type="button"
+                  className="text-ink-3 hover:text-ink-1"
+                  onClick={() => void navigator.clipboard?.writeText(command)}
+                >
+                  <Copy className="mr-1 inline h-3 w-3" /> Copy
+                </button>
+              </div>
             )}
             {directoryAccess && (
               <div
@@ -573,47 +644,41 @@ export function PermissionBar({
                 </Dropdown>
               )}
               {sessionAllowButton && !directoryAccess && (
-                <Button
-                  onClick={handleAllowForSession}
-                  variant="primary"
-                  size="sm"
-                  icon={<ShieldCheck />}
+                <Dropdown
+                  align="right"
+                  side="top"
+                  trigger={
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<ShieldCheck />}
+                      className="bg-purple-600 hover:bg-purple-500"
+                    >
+                      Grant rule
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  }
                 >
-                  {sessionAllowButton.label}
-                </Button>
-              )}
-              {sessionAllowButton && !directoryAccess && (
-                <Button
-                  onClick={handleAllowForProject}
-                  variant="primary"
-                  size="sm"
-                  icon={<ShieldCheck />}
-                  className="bg-purple-600 hover:bg-purple-500"
-                >
-                  Allow for Project
-                </Button>
-              )}
-              {sessionAllowButton && !directoryAccess && worktreePath && (
-                <Button
-                  onClick={handleAllowForProjectWorktrees}
-                  variant="primary"
-                  size="sm"
-                  icon={<ShieldCheck />}
-                  className="bg-amber-600 hover:bg-amber-500"
-                >
-                  Allow for Project Worktrees
-                </Button>
-              )}
-              {sessionAllowButton && !directoryAccess && onAllowGlobally && (
-                <Button
-                  onClick={handleAllowGlobally}
-                  variant="primary"
-                  size="sm"
-                  icon={<ShieldCheck />}
-                  className="bg-teal-600 hover:bg-teal-500"
-                >
-                  Allow Globally
-                </Button>
+                  <div className="text-ink-3 px-3 py-1.5 text-xs">
+                    Add exact request to permissions
+                  </div>
+                  <DropdownItem onClick={handleAllowForSession} icon={<ShieldCheck />}>
+                    Session
+                  </DropdownItem>
+                  <DropdownItem onClick={handleAllowForProject} icon={<ShieldCheck />}>
+                    Project (recommended)
+                  </DropdownItem>
+                  {worktreePath && (
+                    <DropdownItem onClick={handleAllowForProjectWorktrees} icon={<FolderTree />}>
+                      Project worktrees
+                    </DropdownItem>
+                  )}
+                  {onAllowGlobally && (
+                    <DropdownItem onClick={handleAllowGlobally} icon={<MoreHorizontal />}>
+                      Global
+                    </DropdownItem>
+                  )}
+                </Dropdown>
               )}
             </div>
             {showAllowAll && sessionAllowButton && (

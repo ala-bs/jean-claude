@@ -87,6 +87,29 @@ describe('evaluatePermission', () => {
 });
 
 describe('normalizeToolRequest', () => {
+  it('escapes wildcard characters for exact Bash grants', () => {
+    const { matchValue } = normalizeToolRequest('Bash', {
+      command: 'echo * ? [x]',
+      __permissionExact: true,
+    });
+
+    expect(matchValue).toBe('echo \\* \\? [x]');
+    expect(
+      evaluatePermission(
+        [{ tool: 'bash', pattern: matchValue, action: 'allow' }],
+        'bash',
+        'echo * ? [x]',
+      ),
+    ).toBe('allow');
+    expect(
+      evaluatePermission(
+        [{ tool: 'bash', pattern: matchValue, action: 'allow' }],
+        'bash',
+        'echo anything ? [x]',
+      ),
+    ).toBe('ask');
+  });
+
   it('uses OpenCode external-directory permission pattern for matching', () => {
     expect(
       normalizeToolRequest('external_directory', {

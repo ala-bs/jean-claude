@@ -491,6 +491,19 @@ export class VibeBackend implements AgentBackend {
         requestId,
         toolName: tool.toolName,
         input: tool.input,
+        permissionEvaluation: {
+          action: permissionDecision.action,
+          matchValue: toolMatch.matchValue,
+          ...(permissionDecision.matchedRule
+            ? {
+                matchedRule: {
+                  tool: permissionDecision.matchedRule.tool,
+                  pattern: permissionDecision.matchedRule.pattern,
+                  action: permissionDecision.matchedRule.action,
+                },
+              }
+            : {}),
+        },
         description:
           stringOrUndefined(params.description) ??
           stringOrUndefined(params.title) ??

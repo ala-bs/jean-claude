@@ -398,13 +398,24 @@ function expandSubpathPlaceholders(
  * paths (e.g. `pnpm install /path/to/pkg`).
  */
 function matchBashPattern(pattern: string, value: string): boolean {
-  // Escape regex special chars except * and ?
-  const regexStr = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*+/g, '.*') // any sequence of * → match anything (including /)
-    .replace(/\?/g, '.') // ?  → match single character
-    .replace(/(\.\*)+/g, '.*'); // collapse consecutive .* to prevent ReDoS
+  let regexStr = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i];
+    if (char === '\\' && i + 1 < pattern.length) {
+      regexStr += `\\${pattern[++i]}`;
+    } else if (char === '*') {
+      regexStr += '.*';
+    } else if (char === '?') {
+      regexStr += '.';
+    } else {
+      regexStr += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
   return new RegExp(`^${regexStr}$`).test(value);
+}
+
+function escapeExactBashPattern(value: string): string {
+  return value.replace(/[\\*?]/g, '\\$&');
 }
 
 /**
@@ -511,9 +522,16 @@ function evaluateCompoundPermission(
 
   for (const subCommand of subCommands) {
     const result = evaluateSinglePermission(rules, 'bash', subCommand);
-    if (result.matchedRule) matchedRule = result.matchedRule;
     if (result.action === 'deny') return result;
-    if (result.action === 'ask') combined = 'ask';
+    if (result.action === 'ask') {
+      // Prefer the rule responsible for the final outcome: the first
+      // subcommand that forced `ask`. An allow rule from another subcommand
+      // must not be reported as the reason for the prompt.
+      if (combined !== 'ask') matchedRule = result.matchedRule;
+      combined = 'ask';
+    } else if (combined !== 'ask') {
+      matchedRule ??= result.matchedRule;
+    }
   }
 
   return { action: combined, matchedRule };
@@ -554,7 +572,12 @@ export function normalizeToolRequest(
     case 'bash':
       return {
         tool: 'bash',
-        matchValue: stripRedirections(String(input.command ?? '')),
+        matchValue:
+          input.__permissionExact === true
+            ? escapeExactBashPattern(
+                stripRedirections(String(input.command ?? '')),
+              )
+            : stripRedirections(String(input.command ?? '')),
       };
     case 'read':
       return {

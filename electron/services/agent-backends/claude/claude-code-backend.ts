@@ -656,6 +656,19 @@ export class ClaudeCodeBackend implements AgentBackend {
             toolName,
             input,
             sessionAllowButton,
+            permissionEvaluation: {
+              action: options.blockedPath ? 'ask' : action,
+              matchValue,
+              ...(permissionDecision.matchedRule
+                ? {
+                    matchedRule: {
+                      tool: permissionDecision.matchedRule.tool,
+                      pattern: permissionDecision.matchedRule.pattern,
+                      action: permissionDecision.matchedRule.action,
+                    },
+                  }
+                : {}),
+            },
             directoryAccess,
           } satisfies NormalizedPermissionRequest,
         });
