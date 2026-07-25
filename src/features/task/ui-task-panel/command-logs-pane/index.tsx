@@ -31,19 +31,19 @@ import { KillPortsModal } from '@/features/agent/ui-run-button/kill-ports-modal'
 import { Separator } from '@/common/ui/separator';
 import { useCommandLogsPaneWidth } from '@/stores/navigation';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
-import { useProjectCommands } from '@/hooks/use-project-commands';
+import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { useRunCommands } from '@/hooks/use-run-commands';
 
 
 
+import {
+  buildCommandLogTabs,
+  getCommandLogsEmptyText,
+} from './command-log-tabs';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from '../constants';
 
 const EMPTY_RUN_COMMAND_LOGS: RunCommandLogs = {};
 const RUN_COMMAND_LOG_RENDER_THROTTLE_MS = 500;
-
-function hasLogContent(log: RunCommandLogState | null | undefined): boolean {
-  return getRunCommandLogLineCount(log) > 0;
-}
 
 function shouldFlushRunCommandLogsImmediately({
   previous,
@@ -228,7 +228,8 @@ export function CommandLogsPane({
   onSelectCommand: (commandId: string | null) => void;
   onClose: () => void;
 }) {
-  const { data: commands = [] } = useProjectCommands(projectId);
+  const commandAvailability = useProjectCommandAvailability(projectId);
+  const { commands } = commandAvailability;
   const {
     status,
     isCommandStarting,
@@ -266,12 +267,13 @@ export function CommandLogsPane({
 
   const tabs = useMemo(
     () =>
-      commands.filter(
-        (command) =>
-          hasLogContent(runCommandLogs[command.id]) ||
-          runningCommandIds.has(command.id),
-      ),
-    [commands, runCommandLogs, runningCommandIds],
+      buildCommandLogTabs({
+        commands,
+        projectId,
+        runCommandLogs,
+        runningCommandIds,
+      }),
+    [commands, projectId, runCommandLogs, runningCommandIds],
   );
 
   const filteredTabs = useMemo(() => {
@@ -303,6 +305,9 @@ export function CommandLogsPane({
   const isActiveStarting = !!(
     activeCommandId && isCommandStarting(activeCommandId)
   );
+  const isActiveConfigured = commands.some(
+    (command) => command.id === activeCommandId,
+  );
 
   const restartCommand = useCallback(
     async (commandId: string) => {
@@ -319,7 +324,12 @@ export function CommandLogsPane({
   );
 
   const requestRestartActiveCommand = useCallback(() => {
-    if (!activeCommandId || isActiveStarting || restartInFlightRef.current) {
+    if (
+      !activeCommandId ||
+      !isActiveConfigured ||
+      isActiveStarting ||
+      restartInFlightRef.current
+    ) {
       return;
     }
 
@@ -334,7 +344,13 @@ export function CommandLogsPane({
     }
 
     void restartCommand(activeCommandId);
-  }, [activeCommandId, commands, isActiveStarting, restartCommand]);
+  }, [
+    activeCommandId,
+    commands,
+    isActiveConfigured,
+    isActiveStarting,
+    restartCommand,
+  ]);
 
   const handleConfirmRestart = useCallback(() => {
     if (!pendingConfirm) return;
@@ -444,7 +460,7 @@ export function CommandLogsPane({
             variant="secondary"
             icon={<RotateCw />}
             loading={isActiveStarting}
-            disabled={!activeCommandId}
+            disabled={!activeCommandId || !isActiveConfigured}
             aria-label="Restart command"
             title="Restart command (⌘⇧U)"
           >
@@ -557,9 +573,25 @@ export function CommandLogsPane({
         </>
       ) : (
         <div className="text-ink-3 flex flex-1 items-center justify-center px-4 text-sm">
-          {normalizedSearchQuery
-            ? `No command logs match "${searchQuery.trim()}".`
-            : 'Run a command to see logs.'}
+          <span>
+            {normalizedSearchQuery
+              ? `No command logs match "${searchQuery.trim()}".`
+              : getCommandLogsEmptyText({
+                  availabilityState: commandAvailability.state,
+                  hasConfiguredItems: commandAvailability.hasConfiguredItems,
+                })}
+          </span>
+          {!normalizedSearchQuery && commandAvailability.state === 'error' ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="ml-2"
+              onClick={() => void commandAvailability.retry()}
+            >
+              Retry
+            </Button>
+          ) : null}
         </div>
       )}
 

@@ -7,49 +7,33 @@ import {
 } from '@tanstack/react-router';
 import { scan, setOptions } from 'react-scan';
 import { useAppearanceSetting, useBackendsSetting } from '@/hooks/use-settings';
-import { useCallback, useEffect, useRef } from 'react';
-import {
-  useCurrentVisibleProject,
-  useNavigationStore,
-} from '@/stores/navigation';
+import { useEffect, useRef } from 'react';
 import clsx from 'clsx';
+import { useNavigationStore } from '@/stores/navigation';
 
-import { ActivityCenterOverlay } from '@/features/activity-center/ui-activity-center-overlay';
 import { api } from '@/lib/api';
-import { AzureBoardOverlay } from '@/features/work-item/ui-azure-board-overlay';
-import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
 import { Button } from '@/common/ui/button';
-import { CalendarOverlay } from '@/features/calendar/ui-calendar-overlay';
 import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
-import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-palette-overlay';
+import { ClosedPrWorkspaceModal } from '@/features/pull-request/ui-closed-pr-workspace-modal';
 import { createInterruptAllTasksCommand } from '@/lib/interrupt-all-tasks-command';
 import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
 import { Header } from '@/layout/ui-header';
-import { LearningCenterOverlay } from '@/features/onboarding/ui-learning-center-overlay';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
-import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
-import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
-import { ProjectOverlay } from '@/features/project/ui-project-overlay';
+import { OverlayHost } from '@/layout/ui-overlay-host';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
 import { resolveLastLocationRedirect } from '@/lib/navigation';
-import { ResourcesOverlay } from '@/features/resources/ui-resources-overlay';
-import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
-import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
 import { TaskMessageManager } from '@/features/agent/task-message-manager';
-import { UsageOverlay } from '@/features/usage/ui-usage-overlay';
 import { useChangelogStore } from '@/stores/changelog';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useModal } from '@/common/context/modal';
-import { useNewTaskDraft } from '@/stores/new-task-draft';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjects } from '@/hooks/use-projects';
 import { useToastStore } from '@/stores/toasts';
 import { useUISetting } from '@/stores/ui';
-import { WorkActivityOverlay } from '@/features/work-activity/ui-work-activity-overlay';
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -396,70 +380,6 @@ function PipelinesOverlayContainer() {
   return null;
 }
 
-function OverlayHost() {
-  const activeOverlay = useOverlaysStore((s) => s.activeOverlay);
-  const close = useOverlaysStore((s) => s.close);
-
-  if (activeOverlay === null) return null;
-
-  switch (activeOverlay) {
-    case 'new-task':
-      return <NewTaskOverlayContainer />;
-    case 'command-palette':
-      return <CommandPaletteOverlay onClose={() => close('command-palette')} />;
-    case 'project-switcher':
-      return <ProjectOverlay onClose={() => close('project-switcher')} />;
-    case 'activity-center':
-      return <ActivityCenterOverlay onClose={() => close('activity-center')} />;
-    case 'calendar':
-      return <CalendarOverlay onClose={() => close('calendar')} />;
-    case 'settings':
-      return <SettingsOverlay onClose={() => close('settings')} />;
-    case 'usage':
-      return <UsageOverlay onClose={() => close('usage')} />;
-    case 'work-activity':
-      return <WorkActivityOverlay onClose={() => close('work-activity')} />;
-    case 'resources':
-      return <ResourcesOverlay onClose={() => close('resources')} />;
-    case 'backlog':
-      return <BacklogOverlay onClose={() => close('backlog')} />;
-    case 'azure-board':
-      return <AzureBoardOverlay onClose={() => close('azure-board')} />;
-    case 'running-commands':
-      return (
-        <RunningCommandsOverlay onClose={() => close('running-commands')} />
-      );
-    case 'pipelines':
-      return <PipelinesOverlay onClose={() => close('pipelines')} />;
-    case 'learning-center':
-      return <LearningCenterOverlay onClose={() => close('learning-center')} />;
-    case 'keyboard-help':
-      return null;
-  }
-}
-
-function NewTaskOverlayContainer() {
-  const close = useOverlaysStore((s) => s.close);
-  const { draft, discardDraft, setSelectedProjectId } = useNewTaskDraft();
-  const { projectId } = useCurrentVisibleProject();
-
-  useEffect(() => {
-    if (projectId === 'all') return;
-    if (draft?.backlogTodoIds?.length) return;
-    setSelectedProjectId(projectId);
-  }, [draft?.backlogTodoIds?.length, projectId, setSelectedProjectId]);
-
-  const handleClose = useCallback(() => close('new-task'), [close]);
-  const handleDiscardDraft = useCallback(() => {
-    discardDraft();
-    close('new-task');
-  }, [discardDraft, close]);
-
-  return (
-    <NewTaskOverlay onClose={handleClose} onDiscardDraft={handleDiscardDraft} />
-  );
-}
-
 /** Clean up persisted store data for tasks that no longer exist or are completed */
 function useCleanupNonActiveTasks() {
   useEffect(() => {
@@ -537,6 +457,7 @@ function RootLayout() {
       <TaskMessageManager />
       <AppearanceBridge />
       <GlobalPromptFromBackModal />
+      <ClosedPrWorkspaceModal />
       <OnboardingBootstrap />
       {!isOnboardingFlowRoute && <GlobalCommands />}
       {/* <TaskCommands /> */}

@@ -13,6 +13,7 @@ import type {
   TaskStepType,
   ThinkingEffort,
 } from '@shared/types';
+import type { PermissionScope } from '@shared/permission-types';
 
 import { db } from '../index';
 import { dbg } from '../../lib/debug';
@@ -37,6 +38,9 @@ function toStep(row: TaskStepRow): TaskStep {
     output: row.output,
     images: row.images ? JSON.parse(row.images) : null,
     meta: row.meta ? (JSON.parse(row.meta) as TaskStepMeta) : {},
+    sessionRules: row.sessionRules
+      ? (JSON.parse(row.sessionRules) as PermissionScope)
+      : {},
     autoStart: row.autoStart === 1,
     archivedAt: row.archivedAt,
     sortOrder: row.sortOrder,
@@ -112,6 +116,7 @@ export const TaskStepRepository = {
     agentBackend?: AgentBackendType | null;
     images?: PromptImagePart[] | null;
     meta?: TaskStepMeta;
+    sessionRules?: PermissionScope;
     autoStart?: boolean;
     sortOrder?: number;
   }): Promise<TaskStep> => {
@@ -159,6 +164,10 @@ export const TaskStepRepository = {
           output: null,
           images: data.images ? JSON.stringify(data.images) : null,
           meta: data.meta ? JSON.stringify(data.meta) : null,
+          sessionRules:
+            data.sessionRules === undefined
+              ? null
+              : JSON.stringify(data.sessionRules),
           autoStart: data.autoStart ? 1 : 0,
           sortOrder: normalizedSortOrder,
           updatedAt: now,
@@ -187,13 +196,14 @@ export const TaskStepRepository = {
       agentBackend?: AgentBackendType | null;
       output?: string | null;
       meta?: TaskStepMeta;
+      sessionRules?: PermissionScope;
       autoStart?: boolean;
       archivedAt?: string | null;
       sortOrder?: number;
     },
   ): Promise<TaskStep> => {
     dbg.db('taskSteps.update id=%s %o', id, Object.keys(data));
-    const { dependsOn, meta, autoStart, ...rest } = data;
+    const { dependsOn, meta, sessionRules, autoStart, ...rest } = data;
     const values: Record<string, unknown> = {
       ...rest,
       updatedAt: new Date().toISOString(),
@@ -203,6 +213,9 @@ export const TaskStepRepository = {
     }
     if (meta !== undefined) {
       values.meta = JSON.stringify(meta);
+    }
+    if (sessionRules !== undefined) {
+      values.sessionRules = JSON.stringify(sessionRules);
     }
     if (autoStart !== undefined) {
       values.autoStart = autoStart ? 1 : 0;

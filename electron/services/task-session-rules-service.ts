@@ -1,9 +1,3 @@
-import type { PermissionScope } from '@shared/permission-types';
-import type { Task } from '@shared/types';
-
-import { emitTaskUpsert } from './cache-event-service';
-import { TaskRepository } from '../database/repositories';
-
 const taskSessionRuleLocks = new Map<string, Promise<void>>();
 
 export async function withTaskSessionRulesLock<T>(
@@ -26,18 +20,4 @@ export async function withTaskSessionRulesLock<T>(
       taskSessionRuleLocks.delete(taskId);
     }
   }
-}
-
-export async function mutateTaskSessionRules(
-  taskId: string,
-  mutate: (rules: PermissionScope, task: Task) => PermissionScope,
-): Promise<Task> {
-  return withTaskSessionRulesLock(taskId, async () => {
-    const task = await TaskRepository.findById(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
-    const sessionRules = mutate({ ...(task.sessionRules ?? {}) }, task);
-    const updatedTask = await TaskRepository.update(taskId, { sessionRules });
-    emitTaskUpsert(updatedTask);
-    return updatedTask;
-  });
 }

@@ -16,9 +16,9 @@ import { useState } from 'react';
 
 
 
+import { isPrReviewChatStepMeta, type TaskStep } from '@shared/types';
 import { Button } from '@/common/ui/button';
 import { IconButton } from '@/common/ui/icon-button';
-import type { PermissionScope } from '@shared/permission-types';
 import { Separator } from '@/common/ui/separator';
 import type { Skill } from '@shared/skill-types';
 import { useSkills } from '@/hooks/use-skills';
@@ -159,31 +159,31 @@ function SkillsList({ taskId, stepId }: { taskId: string; stepId?: string }) {
 }
 
 export function TaskSettingsPane({
-  sessionRules,
+  activeStep,
   sourceBranch,
   sourceCommit,
   taskId,
-  stepId,
   onRemoveTool,
   onClose,
   onOpenDebugMessages,
 }: {
-  sessionRules: PermissionScope;
+  activeStep: TaskStep | null;
   sourceBranch: string | null;
   sourceCommit: string | null;
   taskId: string;
-  stepId?: string;
   onRemoveTool: ({
     toolName,
     pattern,
   }: {
     toolName: string;
     pattern?: string;
-  }) => void;
+  }) => void | Promise<void>;
   onClose: () => void;
   onOpenDebugMessages: () => void;
 }) {
   const [copiedCommit, setCopiedCommit] = useState(false);
+  const isReviewChat = isPrReviewChatStepMeta(activeStep?.meta);
+  const sessionRules = activeStep?.sessionRules ?? {};
 
   const handleCopyCommit = async () => {
     if (sourceCommit) {
@@ -246,12 +246,32 @@ export function TaskSettingsPane({
           </section>
         )}
 
-        {/* Session Allowed Tools Section */}
+        {/* Active-step session permissions */}
         <section>
           <h4 className="text-ink-3 mb-3 text-xs font-medium tracking-wide uppercase">
-            Session Allowed Tools
+            Active Session Permissions
           </h4>
-          {Object.keys(sessionRules).length === 0 ? (
+          {!activeStep ? (
+            <p className="text-ink-4 text-xs">
+              Add or select a step to view its session permissions.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <div className="bg-bg-1 flex items-center gap-2 rounded-md px-3 py-2">
+                <span className="text-ink-1 min-w-0 flex-1 truncate text-sm">
+                  {activeStep.name}
+                </span>
+                <span className="text-ink-3 shrink-0 text-[10px] font-medium uppercase">
+                  {isReviewChat ? 'Review chat' : 'Step'}
+                </span>
+              </div>
+              {isReviewChat && (
+                <p className="text-ink-4 text-xs leading-relaxed">
+                  Review chat permissions are read-only to keep pull request
+                  review conversations safely scoped.
+                </p>
+              )}
+              {Object.keys(sessionRules).length === 0 ? (
             <p className="text-ink-4 text-xs">
               No tools are currently allowed for this session. Tools will appear
               here when you use &quot;Allow for Session&quot; on a permission
@@ -282,17 +302,21 @@ export function TaskSettingsPane({
                         {label}
                       </span>
                     </div>
-                    <IconButton
-                      onClick={() =>
-                        onRemoveTool({ toolName: toolKey, pattern })
-                      }
-                      size="sm"
-                      icon={<X />}
-                      tooltip={`Remove ${label}`}
-                    />
+                    {!isReviewChat && (
+                      <IconButton
+                        onClick={() =>
+                          onRemoveTool({ toolName: toolKey, pattern })
+                        }
+                        size="sm"
+                        icon={<X />}
+                        tooltip={`Remove ${label}`}
+                      />
+                    )}
                   </div>
                 ));
               })}
+            </div>
+              )}
             </div>
           )}
         </section>
@@ -302,7 +326,7 @@ export function TaskSettingsPane({
           <h4 className="text-ink-3 mb-2 text-xs font-medium tracking-wide uppercase">
             Available Skills
           </h4>
-          <SkillsList taskId={taskId} stepId={stepId} />
+          <SkillsList taskId={taskId} stepId={activeStep?.id} />
         </section>
 
         {/* Debug Section */}

@@ -65,6 +65,7 @@ export type BackgroundJob =
       type: 'pr-review-creation';
       details: {
         pullRequestId: number;
+        created?: boolean;
       };
     })
   | (BackgroundJobBase & {
@@ -329,6 +330,10 @@ interface BackgroundJobsState {
       warningMessage?: string | null;
     },
   ) => void;
+  markPrReviewJobSucceeded: (
+    id: string,
+    data: { taskId: string; projectId: string; created: boolean },
+  ) => void;
   markJobFailed: (id: string, errorMessage: string) => void;
   markJobRunning: (id: string) => void;
   clearFinished: () => void;
@@ -374,17 +379,35 @@ export const useBackgroundJobsStore = create<BackgroundJobsState>()(
       markJobSucceeded: (id, data) => {
         const completedAt = new Date().toISOString();
         set((state) => ({
+          jobs: state.jobs.map((job): BackgroundJob => {
+            if (job.id !== id) return job;
+            const success = {
+              status: 'succeeded' as const,
+              completedAt,
+              errorMessage: null,
+              warningMessage: data?.warningMessage ?? job.warningMessage,
+              taskId: data?.taskId ?? job.taskId,
+              projectId: data?.projectId ?? job.projectId,
+              noteId: data?.noteId ?? job.noteId,
+            };
+            return { ...job, ...success };
+          }),
+        }));
+      },
+
+      markPrReviewJobSucceeded: (id, data) => {
+        const completedAt = new Date().toISOString();
+        set((state) => ({
           jobs: state.jobs.map((job) =>
-            job.id === id
+            job.id === id && job.type === 'pr-review-creation'
               ? {
                   ...job,
                   status: 'succeeded',
                   completedAt,
                   errorMessage: null,
-                  warningMessage: data?.warningMessage ?? job.warningMessage,
-                  taskId: data?.taskId ?? job.taskId,
-                  projectId: data?.projectId ?? job.projectId,
-                  noteId: data?.noteId ?? job.noteId,
+                  taskId: data.taskId,
+                  projectId: data.projectId,
+                  details: { ...job.details, created: data.created },
                 }
               : job,
           ),

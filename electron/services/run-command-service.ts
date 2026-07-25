@@ -246,6 +246,10 @@ type LogCallback = (
   generation: number,
 ) => void;
 
+type StartOptions = {
+  afterStop?: () => void | Promise<void>;
+};
+
 interface TrackedProcess {
   commandId: string;
   name: string | null;
@@ -274,7 +278,7 @@ interface RunCommandContext {
   prUrl: string;
 }
 
-class RunCommandService {
+export class RunCommandService {
   private runningProcesses = new Map<string, Map<string, TrackedProcess>>();
   private logGenerations = new Map<string, number>();
   private commandOperationLocks = new Map<string, Promise<void>>();
@@ -320,23 +324,44 @@ class RunCommandService {
     runCommandId: string;
     operation: () => Promise<T>;
   }): Promise<T> {
-    const key = this.getCommandKey({ taskId, runCommandId });
-    const previous = this.commandOperationLocks.get(key) ?? Promise.resolve();
+    return this.withCommandLocks({
+      taskId,
+      runCommandIds: [runCommandId],
+      operation,
+    });
+  }
 
-    let release = () => {};
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
+  private async withCommandLocks<T>({
+    taskId,
+    runCommandIds,
+    operation,
+  }: {
+    taskId: string;
+    runCommandIds: string[];
+    operation: () => Promise<T>;
+  }): Promise<T> {
+    const keys = [...new Set(runCommandIds)]
+      .map((runCommandId) => this.getCommandKey({ taskId, runCommandId }))
+      .sort();
+    const locks = keys.map((key) => {
+      const previous = this.commandOperationLocks.get(key) ?? Promise.resolve();
+      let release = () => {};
+      const current = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      this.commandOperationLocks.set(key, current);
+      return { key, previous, current, release };
     });
 
-    this.commandOperationLocks.set(key, current);
-    await previous;
-
+    await Promise.all(locks.map((lock) => lock.previous));
     try {
       return await operation();
     } finally {
-      release();
-      if (this.commandOperationLocks.get(key) === current) {
-        this.commandOperationLocks.delete(key);
+      for (const lock of locks) {
+        lock.release();
+        if (this.commandOperationLocks.get(lock.key) === lock.current) {
+          this.commandOperationLocks.delete(lock.key);
+        }
       }
     }
   }
@@ -860,38 +885,42 @@ class RunCommandService {
     }
   }
 
-  async startCommand({
-    taskId,
-    projectId,
-    workingDir,
-    runCommandId,
-  }: {
-    taskId: string;
-    projectId: string;
-    workingDir: string;
-    runCommandId: string;
-  }): Promise<RunStatus | PortsInUseErrorData> {
+  async startCommand(
+    {
+      taskId,
+      projectId,
+      workingDir,
+      runCommandId,
+    }: {
+      taskId: string;
+      projectId: string;
+      workingDir: string;
+      runCommandId: string;
+    },
+    options: StartOptions = {},
+  ): Promise<RunStatus | PortsInUseErrorData> {
     return this.trackStart(() =>
-      this.startCommandAdmitted({
-        taskId,
-        projectId,
-        workingDir,
-        runCommandId,
-      }),
+      this.startCommandAdmitted(
+        { taskId, projectId, workingDir, runCommandId },
+        options,
+      ),
     );
   }
 
-  private async startCommandAdmitted({
-    taskId,
-    projectId,
-    workingDir,
-    runCommandId,
-  }: {
-    taskId: string;
-    projectId: string;
-    workingDir: string;
-    runCommandId: string;
-  }): Promise<RunStatus | PortsInUseErrorData> {
+  private async startCommandAdmitted(
+    {
+      taskId,
+      projectId,
+      workingDir,
+      runCommandId,
+    }: {
+      taskId: string;
+      projectId: string;
+      workingDir: string;
+      runCommandId: string;
+    },
+    options: StartOptions = {},
+  ): Promise<RunStatus | PortsInUseErrorData> {
     return this.withCommandLock({
       taskId,
       runCommandId,
@@ -901,6 +930,7 @@ class RunCommandService {
           projectId,
           workingDir,
           runCommandId,
+          options,
         }),
     });
   }
@@ -910,11 +940,13 @@ class RunCommandService {
     projectId,
     workingDir,
     runCommandId,
+    options,
   }: {
     taskId: string;
     projectId: string;
     workingDir: string;
     runCommandId: string;
+    options: StartOptions;
   }): Promise<RunStatus | PortsInUseErrorData> {
     dbg.runCommand(
       'Starting command %s for task %s in %s',
@@ -936,6 +968,7 @@ class RunCommandService {
     if (!didStop) {
       return this.getRunStatus(taskId);
     }
+    await options.afterStop?.();
 
     const commands = [command];
     const portsInUse = await this.getPortsInUse(commands);
@@ -974,57 +1007,94 @@ class RunCommandService {
     return this.getRunStatus(taskId);
   }
 
-  async startGroup({
-    taskId,
-    projectId,
-    workingDir,
-    runCommandIds,
-  }: {
-    taskId: string;
-    projectId: string;
-    workingDir: string;
-    runCommandIds: string[];
-  }): Promise<RunStatus | PortsInUseErrorData> {
+  async startGroup(
+    {
+      taskId,
+      projectId,
+      workingDir,
+      runCommandIds,
+    }: {
+      taskId: string;
+      projectId: string;
+      workingDir: string;
+      runCommandIds: string[];
+    },
+    options: StartOptions = {},
+  ): Promise<RunStatus | PortsInUseErrorData> {
+    const commandIds = [...new Set(runCommandIds)];
+
     return this.trackStart(() =>
-      this.startGroupAdmitted({
-        taskId,
-        projectId,
-        workingDir,
-        runCommandIds,
-      }),
+      this.startGroupAdmitted(
+        { taskId, projectId, workingDir, runCommandIds: commandIds },
+        options,
+      ),
     );
   }
 
-  private async startGroupAdmitted({
+  private async startGroupAdmitted(
+    {
+      taskId,
+      projectId,
+      workingDir,
+      runCommandIds,
+    }: {
+      taskId: string;
+      projectId: string;
+      workingDir: string;
+      runCommandIds: string[];
+    },
+    options: StartOptions = {},
+  ): Promise<RunStatus | PortsInUseErrorData> {
+    return this.withCommandLocks({
+        taskId,
+        runCommandIds,
+        operation: async () => {
+          const commands = await Promise.all(
+            runCommandIds.map((runCommandId) =>
+              ProjectCommandRepository.findById(runCommandId),
+            ),
+          );
+          const invalidIndex = commands.findIndex(
+            (command) => !command || command.projectId !== projectId,
+          );
+          if (invalidIndex !== -1) {
+            throw new Error(
+              `Command ${runCommandIds[invalidIndex]} not found for project ${projectId}`,
+            );
+          }
+          return this.startGroupWithoutLock({
+            taskId,
+            projectId,
+            workingDir,
+            validCommands: commands as ProjectCommand[],
+            options,
+          });
+        },
+      });
+  }
+
+  private async startGroupWithoutLock({
     taskId,
     projectId,
     workingDir,
-    runCommandIds,
+    validCommands,
+    options,
   }: {
     taskId: string;
     projectId: string;
     workingDir: string;
-    runCommandIds: string[];
+    validCommands: ProjectCommand[];
+    options: StartOptions;
   }): Promise<RunStatus | PortsInUseErrorData> {
-    const commandIds = [...new Set(runCommandIds)];
-    const commands = await Promise.all(
-      commandIds.map((runCommandId) =>
-        ProjectCommandRepository.findById(runCommandId),
-      ),
-    );
-    const validCommands = commands.filter(
-      (command): command is ProjectCommand =>
-        command != null && command.projectId === projectId,
-    );
-
     const stopResults = await Promise.all(
       validCommands.map((command) =>
-        this.stopCommandWithLock({ taskId, runCommandId: command.id }),
+        this.stopCommandWithoutLock({ taskId, runCommandId: command.id }),
       ),
     );
     if (stopResults.some((didStop) => !didStop)) {
       return this.getRunStatus(taskId);
     }
+    await options.afterStop?.();
 
     const portsInUse = await this.getPortsInUse(validCommands);
     const blockingPortsInUse = this.getBlockingPortsInUse(
@@ -1079,8 +1149,8 @@ class RunCommandService {
   }: {
     taskId: string;
     runCommandId: string;
-  }): Promise<void> {
-    await this.stopCommandWithLock({ taskId, runCommandId });
+  }): Promise<boolean> {
+    return this.stopCommandWithLock({ taskId, runCommandId });
   }
 
   private async stopCommandWithLock({
@@ -1340,15 +1410,19 @@ class RunCommandService {
     }
   }
 
-  async stopCommandsForTask(taskId: string): Promise<void> {
+  async stopCommandsForTask(taskId: string): Promise<boolean> {
     const taskProcesses = this.runningProcesses.get(taskId);
     if (!taskProcesses) {
-      return;
+      return true;
     }
 
+    let stopped = true;
     for (const runCommandId of [...taskProcesses.keys()]) {
-      await this.stopCommand({ taskId, runCommandId });
+      if (!(await this.stopCommandWithLock({ taskId, runCommandId }))) {
+        stopped = false;
+      }
     }
+    return stopped;
   }
 
   async getPackageScripts(projectPath: string): Promise<PackageScriptsResult> {

@@ -207,16 +207,19 @@ export function PermissionBar({
   onAllowForSession?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
+  ) => Promise<void>;
   onAllowForProject?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
+  ) => Promise<void>;
   onAllowForProjectWorktrees?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
-  onAllowGlobally?: (toolName: string, input: Record<string, unknown>) => void;
+  ) => Promise<void>;
+  onAllowGlobally?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => Promise<void>;
   onSetMode?: (mode: InteractionMode) => void;
   worktreePath?: string | null;
 }) {
@@ -259,21 +262,26 @@ export function PermissionBar({
 
   // For ExitPlanMode, the session allow is about Edit+Write, not ExitPlanMode itself.
   // For all other tools, we pass the raw toolName+input to the backend.
-  const allowForSession = () => {
+  const allowForSession = async () => {
     if (isExitPlanMode) {
-      // ExitPlanMode special case: allow Edit and Write tools
-      onAllowForSession?.('Edit', {});
-      onAllowForSession?.('Write', {});
+      await Promise.all([
+        onAllowForSession?.('Edit', {}),
+        onAllowForSession?.('Write', {}),
+      ]);
     } else {
-      onAllowForSession?.(request.toolName, permissionInput);
+      await onAllowForSession?.(request.toolName, permissionInput);
     }
   };
 
-  const handleAllowForSession = () => {
+  const handleAllowForSession = async () => {
+    try {
+      await allowForSession();
+    } catch {
+      return;
+    }
     if (sessionAllowButton?.setModeOnAllow) {
       onSetMode?.(sessionAllowButton.setModeOnAllow);
     }
-    allowForSession();
     return onRespond(request.requestId, {
       behavior: 'allow',
       updatedInput: input,
@@ -281,16 +289,21 @@ export function PermissionBar({
     });
   };
 
-  const handleAllowForProject = () => {
+  const handleAllowForProject = async () => {
+    try {
+      if (isExitPlanMode) {
+        await Promise.all([
+          onAllowForProject?.('Edit', {}),
+          onAllowForProject?.('Write', {}),
+        ]);
+      } else {
+        await onAllowForProject?.(request.toolName, input);
+      }
+    } catch {
+      return;
+    }
     if (sessionAllowButton?.setModeOnAllow) {
       onSetMode?.(sessionAllowButton.setModeOnAllow);
-    }
-    allowForSession();
-    if (isExitPlanMode) {
-      onAllowForProject?.('Edit', {});
-      onAllowForProject?.('Write', {});
-    } else {
-      onAllowForProject?.(request.toolName, permissionInput);
     }
     return onRespond(request.requestId, {
       behavior: 'allow',
@@ -299,16 +312,21 @@ export function PermissionBar({
     });
   };
 
-  const handleAllowForProjectWorktrees = () => {
+  const handleAllowForProjectWorktrees = async () => {
+    try {
+      if (isExitPlanMode) {
+        await Promise.all([
+          onAllowForProjectWorktrees?.('Edit', {}),
+          onAllowForProjectWorktrees?.('Write', {}),
+        ]);
+      } else {
+        await onAllowForProjectWorktrees?.(request.toolName, input);
+      }
+    } catch {
+      return;
+    }
     if (sessionAllowButton?.setModeOnAllow) {
       onSetMode?.(sessionAllowButton.setModeOnAllow);
-    }
-    allowForSession();
-    if (isExitPlanMode) {
-      onAllowForProjectWorktrees?.('Edit', {});
-      onAllowForProjectWorktrees?.('Write', {});
-    } else {
-      onAllowForProjectWorktrees?.(request.toolName, permissionInput);
     }
     return onRespond(request.requestId, {
       behavior: 'allow',
@@ -317,16 +335,21 @@ export function PermissionBar({
     });
   };
 
-  const handleAllowGlobally = () => {
+  const handleAllowGlobally = async () => {
+    try {
+      if (isExitPlanMode) {
+        await Promise.all([
+          onAllowGlobally?.('Edit', {}),
+          onAllowGlobally?.('Write', {}),
+        ]);
+      } else {
+        await onAllowGlobally?.(request.toolName, input);
+      }
+    } catch {
+      return;
+    }
     if (sessionAllowButton?.setModeOnAllow) {
       onSetMode?.(sessionAllowButton.setModeOnAllow);
-    }
-    allowForSession();
-    if (isExitPlanMode) {
-      onAllowGlobally?.('Edit', {});
-      onAllowGlobally?.('Write', {});
-    } else {
-      onAllowGlobally?.(request.toolName, permissionInput);
     }
     // Use 'session' allowMode: global persistence is handled separately via
     // the onAllowGlobally IPC call. Sending 'session' avoids the agent backend
@@ -406,8 +429,12 @@ export function PermissionBar({
   // requests for that tool in the current session, not just this specific file.
   const allowAllToolName = request.toolName.toLowerCase();
 
-  const handleAllowAllForSession = () => {
-    onAllowForSession?.(request.toolName, {});
+  const handleAllowAllForSession = async () => {
+    try {
+      await onAllowForSession?.(request.toolName, {});
+    } catch {
+      return;
+    }
     return onRespond(request.requestId, {
       behavior: 'allow',
       updatedInput: input,
@@ -416,9 +443,12 @@ export function PermissionBar({
     });
   };
 
-  const handleAllowAllForProject = () => {
-    onAllowForSession?.(request.toolName, {});
-    onAllowForProject?.(request.toolName, {});
+  const handleAllowAllForProject = async () => {
+    try {
+      await onAllowForProject?.(request.toolName, {});
+    } catch {
+      return;
+    }
     return onRespond(request.requestId, {
       behavior: 'allow',
       updatedInput: input,
@@ -427,9 +457,12 @@ export function PermissionBar({
     });
   };
 
-  const handleAllowAllForProjectWorktrees = () => {
-    onAllowForSession?.(request.toolName, {});
-    onAllowForProjectWorktrees?.(request.toolName, {});
+  const handleAllowAllForProjectWorktrees = async () => {
+    try {
+      await onAllowForProjectWorktrees?.(request.toolName, {});
+    } catch {
+      return;
+    }
     return onRespond(request.requestId, {
       behavior: 'allow',
       updatedInput: input,
@@ -643,7 +676,12 @@ export function PermissionBar({
                   ))}
                 </Dropdown>
               )}
-              {sessionAllowButton && !directoryAccess && (
+              {sessionAllowButton &&
+                !directoryAccess &&
+                (onAllowForSession ||
+                  onAllowForProject ||
+                  (worktreePath && onAllowForProjectWorktrees) ||
+                  onAllowGlobally) && (
                 <Dropdown
                   align="right"
                   side="top"
@@ -677,34 +715,42 @@ export function PermissionBar({
                     <DropdownItem onClick={handleAllowGlobally} icon={<MoreHorizontal />}>
                       Global
                     </DropdownItem>
-                  )}
+                 )}
                 </Dropdown>
               )}
             </div>
-            {showAllowAll && sessionAllowButton && (
+            {showAllowAll &&
+              sessionAllowButton &&
+              (onAllowForSession ||
+                onAllowForProject ||
+                (worktreePath && onAllowForProjectWorktrees)) && (
               <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-yellow-700/30 pt-2">
                 <span className="text-ink-2 text-xs">
                   Allow all {request.toolName}:
                 </span>
                 <div className="flex-1" />
-                <Button
-                  onClick={handleAllowAllForSession}
-                  variant="secondary"
-                  size="sm"
-                  icon={<ShieldCheck />}
-                >
-                  Session
-                </Button>
-                <Button
-                  onClick={handleAllowAllForProject}
-                  variant="secondary"
-                  size="sm"
-                  icon={<ShieldCheck />}
-                  className="bg-purple-600/30 hover:bg-purple-500/30"
-                >
-                  Project
-                </Button>
-                {worktreePath && (
+                {onAllowForSession && (
+                  <Button
+                    onClick={handleAllowAllForSession}
+                    variant="secondary"
+                    size="sm"
+                    icon={<ShieldCheck />}
+                  >
+                    Session
+                  </Button>
+                )}
+                {onAllowForProject && (
+                  <Button
+                    onClick={handleAllowAllForProject}
+                    variant="secondary"
+                    size="sm"
+                    icon={<ShieldCheck />}
+                    className="bg-purple-600/30 hover:bg-purple-500/30"
+                  >
+                    Project
+                  </Button>
+                )}
+                {worktreePath && onAllowForProjectWorktrees && (
                   <Button
                     onClick={handleAllowAllForProjectWorktrees}
                     variant="secondary"

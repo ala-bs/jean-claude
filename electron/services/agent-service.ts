@@ -4,6 +4,7 @@
 // Handles session lifecycle, message persistence, IPC forwarding,
 // prompt queueing, notifications, and session allow tools.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { BrowserWindow } from 'electron';
 import { nanoid } from 'nanoid';
 
@@ -91,7 +92,6 @@ import { dbg } from '../lib/debug';
 import { generateTaskName } from './name-generation-service';
 import { getAgentBackendProvider } from './agent-backends/providers';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
-import { mutateTaskSessionRules } from './task-session-rules-service';
 import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
 import { notificationService } from './notification-service';
 import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
@@ -99,6 +99,8 @@ import { pathExists } from '../lib/fs';
 import { QuestionBrokerService } from './question-broker-service';
 import { resolveGlobalRules } from './global-permissions-service';
 import { SettingsRepository } from '../database/repositories/settings';
+import { startAgentWithPrReviewLifecycle } from './pr-review-task-service';
+import { stepPermissionService } from './step-permission-service';
 import { StepService } from './step-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 
@@ -289,18 +291,16 @@ function assertPrReviewAgentRunAllowed({
   step: TaskStep;
   provider: AgentBackendProvider;
 }) {
-  if (task.type !== 'pr-review' && !isPrReviewChatStepMeta(step.meta)) {
-    return;
-  }
+  if (!isPrReviewChatStepMeta(step.meta)) return;
 
   if (task.type !== 'pr-review') {
     throw new Error('PR review chat steps can only run under PR review tasks');
   }
-  if (!isPrReviewChatStepMeta(step.meta)) {
-    throw new Error('PR review tasks can only run PR review chat steps');
-  }
   if (task.pullRequestId !== String(step.meta.pullRequestId)) {
     throw new Error('PR review chat step pull request does not match review task');
+  }
+  if (step.interactionMode !== 'ask') {
+    throw new Error('PR review chat steps must use ask interaction mode');
   }
   if (!provider.capabilities.agent.permissions.supported) {
     throw new Error(
@@ -308,16 +308,32 @@ function assertPrReviewAgentRunAllowed({
     );
   }
 
-  const actualRules = JSON.stringify(task.sessionRules ?? {});
-  const expectedRules = JSON.stringify(buildReadOnlyPrReviewSessionRules());
+  const canonicalizeRules = (rules: TaskStep['sessionRules']) =>
+    flattenScope(rules)
+      .map(({ tool, pattern, action }) => ({ tool, pattern, action }))
+      .sort(
+        (left, right) =>
+          left.tool.localeCompare(right.tool) ||
+          left.pattern.localeCompare(right.pattern) ||
+          left.action.localeCompare(right.action),
+      );
+  const actualRules = JSON.stringify(canonicalizeRules(step.sessionRules ?? {}));
+  const expectedRules = JSON.stringify(
+    canonicalizeRules(buildReadOnlyPrReviewSessionRules()),
+  );
   if (actualRules !== expectedRules) {
-    throw new Error('PR review tasks must use read-only session rules');
+    throw new Error('PR review chat steps must use read-only session rules');
   }
 }
 
 class AgentService {
   private sessions: Map<string, ActiveSession> = new Map(); // key is stepId
   private stepStopPromises = new Map<string, Promise<void>>();
+  private backendRunCompletions = new Map<
+    string,
+    { owner: symbol; promise: Promise<void> }
+  >();
+  private backendRunContext = new AsyncLocalStorage<symbol>();
   private runStopPromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private runDisposePromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private runCleanupPromises = new WeakMap<AgentRunHandle, Promise<void>>();
@@ -328,6 +344,7 @@ class AgentService {
   private pendingSessionRegistrations = new Set<Promise<void>>();
   private stopAllActive = false;
   private stopAllPromise: Promise<void> | null = null;
+  private stepStartPromises = new Map<string, Promise<void>>();
   private mainWindow: BrowserWindow | null = null;
   private focusedTaskId: string | null = null;
   private pendingImageAttachments = new Map<string, PromptImagePart[]>();
@@ -819,6 +836,51 @@ class AgentService {
     return session;
   }
 
+  private trackBackendRun(
+    stepId: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const owner = Symbol(stepId);
+    const promise = this.backendRunContext.run(owner, operation);
+    const trackedRun = { owner, promise };
+    this.backendRunCompletions.set(stepId, trackedRun);
+    void promise.then(
+      () => {
+        if (this.backendRunCompletions.get(stepId) === trackedRun) {
+          this.backendRunCompletions.delete(stepId);
+        }
+      },
+      () => {
+        if (this.backendRunCompletions.get(stepId) === trackedRun) {
+          this.backendRunCompletions.delete(stepId);
+        }
+      },
+    );
+    return promise;
+  }
+
+  private async waitForBackendRun(
+    stepId: string,
+    trackedRun = this.backendRunCompletions.get(stepId),
+  ): Promise<void> {
+    if (!trackedRun || this.backendRunContext.getStore() === trackedRun.owner) {
+      return;
+    }
+    await trackedRun.promise;
+  }
+
+  private async waitForPreviousBackendRun(stepId: string): Promise<void> {
+    try {
+      await this.waitForBackendRun(stepId);
+    } catch (error) {
+      dbg.agentSession(
+        'Previous backend run for step %s failed before replacement: %O',
+        stepId,
+        error,
+      );
+    }
+  }
+
   private async stopRunHandle(runHandle: AgentRunHandle): Promise<void> {
     const existingStop = this.runStopPromises.get(runHandle);
     if (existingStop) {
@@ -914,6 +976,7 @@ class AgentService {
       generateNameOnInit?: boolean;
       initialPrompt?: string;
       isInitialPrompt?: boolean;
+      onRunStarting?: () => void;
     },
   ): Promise<void> {
     if (session.stopRequested) return;
@@ -986,9 +1049,12 @@ class AgentService {
     const isWorktree = !!task.worktreePath;
     const globalRules = await resolveGlobalRules();
     const settings = await readSettings(project.path);
+    const sessionRules = isPrReviewChatStepMeta(step.meta)
+      ? buildReadOnlyPrReviewSessionRules()
+      : (step.sessionRules ?? {});
     const rules = [
       ...resolveRules(settings, isWorktree, globalRules, workingDir),
-      ...flattenScope(task.sessionRules ?? {}),
+      ...flattenScope(sessionRules),
     ];
 
     const backendChanged = session.backendType !== session.requestedBackendType;
@@ -1007,6 +1073,7 @@ class AgentService {
 
     let jcMcpRegistrationId: string | null = null;
     let runHandle: AgentRunHandle | null = null;
+    let resourceMonitorOwner: symbol | undefined;
     try {
       let mcpServers: AgentBackendConfig['mcpServers'];
       if (session.backendType !== 'codex') {
@@ -1085,7 +1152,7 @@ class AgentService {
             ? normalizedThinkingEffort
             : undefined,
         sessionId: session.sdkSessionId ?? undefined,
-        persistedSessionRules: task.sessionRules ?? {},
+        persistedSessionRules: sessionRules,
         permissionRules: rules,
         mcpServers,
       };
@@ -1102,12 +1169,13 @@ class AgentService {
         config,
         parts: effectiveParts,
       });
+      options?.onRunStarting?.();
       runHandle = await session.runStartPromise;
 
       session.runHandle = runHandle;
       session.runStartPromise = undefined;
 
-      agentResourceMonitorService.start({
+      resourceMonitorOwner = agentResourceMonitorService.start({
         taskId,
         stepId,
         backend: session.backendType,
@@ -1126,7 +1194,9 @@ class AgentService {
       if (jcMcpRegistrationId) {
         await this.jcMcpBridgeService.unregisterStep(stepId, jcMcpRegistrationId);
       }
-      await agentResourceMonitorService.stop(stepId);
+      if (resourceMonitorOwner) {
+        await agentResourceMonitorService.stop(stepId, resourceMonitorOwner);
+      }
       if (runHandle) {
         await this.cleanupRunHandle(runHandle);
       }
@@ -1448,7 +1518,7 @@ class AgentService {
           });
         }
 
-        // Sync session-allowed tools back to the task
+        // Sync provider-reported session tools back to the current step.
         const sessionAllowedToolsCapability =
           session.provider.capabilities.agent.sessionAllowedTools;
         if (sessionAllowedToolsCapability.supported && session.runHandle) {
@@ -1456,23 +1526,7 @@ class AgentService {
             handle: session.runHandle,
           });
           if (tools.length > 0) {
-            await mutateTaskSessionRules(taskId, (rules) => {
-              // Convert accumulated string[] ("tool:matchValue" | "tool") → PermissionScope
-              for (const entry of tools) {
-                const colonIdx = entry.indexOf(':');
-                if (colonIdx !== -1) {
-                  const tool = entry.slice(0, colonIdx);
-                  const matchValue = entry.slice(colonIdx + 1);
-                  rules[tool] = buildToolPermissionConfig({
-                    existing: rules[tool],
-                    matchValue,
-                  });
-                } else {
-                  rules[entry] = 'allow';
-                }
-              }
-              return rules;
-            });
+            await stepPermissionService.syncSessionAllowedTools({ stepId, tools });
           }
         }
 
@@ -1535,7 +1589,14 @@ class AgentService {
             autoStepId,
             taskId,
           );
-          this.start(autoStepId).catch((err) => {
+          startAgentWithPrReviewLifecycle(
+            autoStepId,
+            (authoritativeStepId) => this.start(authoritativeStepId),
+            {
+              findStepById: TaskStepRepository.findById,
+              findTaskById: TaskRepository.findById,
+            },
+          ).catch((err) => {
             void this.handleAutoStartFailure(autoStepId, err);
           });
         }
@@ -1622,6 +1683,23 @@ class AgentService {
       }
 
       case 'mode-change': {
+        const step = await TaskStepRepository.findById(stepId);
+        if (step && isPrReviewChatStepMeta(step.meta)) {
+          if (event.mode !== 'ask') {
+            const modeCapability =
+              session.provider.capabilities.agent.runtimeModeSwitch;
+            if (!modeCapability.supported || !session.runHandle) {
+              throw new Error(
+                'PR review chat backend changed mode and cannot restore read-only mode',
+              );
+            }
+            await modeCapability.implementation.setMode({
+              handle: session.runHandle,
+              mode: 'ask',
+            });
+          }
+          break;
+        }
         const updatedStep = await TaskStepRepository.update(stepId, {
           interactionMode: event.mode,
         });
@@ -1642,6 +1720,11 @@ class AgentService {
   async start(stepId: string): Promise<void> {
     const completeRegistration = this.admitSessionRegistration(stepId, 'ignore');
     if (!completeRegistration) return;
+    const pendingStop = this.stepStopPromises.get(stepId);
+    if (pendingStop) {
+      await pendingStop;
+    }
+
     // Check if already running
     if (this.sessions.has(stepId)) {
       dbg.agentSession('Ignoring duplicate start for running step %s', stepId);
@@ -1658,11 +1741,17 @@ class AgentService {
     }
 
     this.startingSteps.add(stepId);
+    let finishStart!: () => void;
+    const startPromise = new Promise<void>((resolve) => {
+      finishStart = resolve;
+    });
+    this.stepStartPromises.set(stepId, startPromise);
 
     let session: ActiveSession | null = null;
     let runningStep: Awaited<ReturnType<typeof TaskStepRepository.findById>>;
 
     try {
+      await this.waitForPreviousBackendRun(stepId);
       runningStep = await TaskStepRepository.findById(stepId);
       if (!runningStep) {
         throw new Error(`Step ${stepId} not found`);
@@ -1768,13 +1857,28 @@ class AgentService {
 
       dbg.agentSession('Starting agent for step %s', stepId);
       const activeSession = session;
-      void this.runBackend(stepId, parts, activeSession, {
-        generateNameOnInit: isFirstStep,
-        initialPrompt: step.promptTemplate,
-        isInitialPrompt: true,
-      })
-        .catch(async (error: unknown) => {
-          if (activeSession.stopRequested) return;
+      let markRunStarting!: () => void;
+      const runStarting = new Promise<void>((resolve) => {
+        markRunStarting = resolve;
+      });
+      this.trackBackendRun(stepId, () =>
+        this.runBackend(stepId, parts, activeSession, {
+          generateNameOnInit: isFirstStep,
+          initialPrompt: step.promptTemplate,
+          isInitialPrompt: true,
+          onRunStarting: markRunStarting,
+        })
+          .catch(async (error: unknown) => {
+            const isCurrentSession = () =>
+              this.sessions.get(stepId) === activeSession;
+            if (!isCurrentSession()) {
+              dbg.agent(
+                'Ignoring stale start failure for replaced step %s: %O',
+                stepId,
+                error,
+              );
+              return;
+            }
           const errorMessage =
             error instanceof Error ? error.message : 'Unknown error';
           dbg.agent('Step %s start failed: %s', stepId, errorMessage);
@@ -1788,13 +1892,16 @@ class AgentService {
             value: errorMessage,
             isError: true,
           });
+          if (!isCurrentSession()) return;
 
           await StepService.errorStep(stepId);
+          if (!isCurrentSession()) return;
           this.emitEvent(activeSession.taskId, stepId, {
             type: 'status',
             status: 'errored',
             error: errorMessage,
           });
+          if (!isCurrentSession()) return;
           await this.notifyTaskEvent({
             taskId: activeSession.taskId,
             stepId,
@@ -1803,13 +1910,25 @@ class AgentService {
             title: 'Task Failed',
             body: 'Task "{taskName}" encountered an error',
           });
-        })
-        .finally(() => {
-          this.deleteSession(stepId, activeSession);
-        });
+          })
+          .finally(() => {
+            markRunStarting();
+            this.deleteSession(stepId, activeSession);
+          }),
+      );
+      await runStarting;
     } catch (error) {
       if (!session) {
         throw error;
+      }
+      const isCurrentSession = () => this.sessions.get(stepId) === session;
+      if (!isCurrentSession()) {
+        dbg.agent(
+          'Ignoring stale startup failure for replaced step %s: %O',
+          stepId,
+          error,
+        );
+        return;
       }
 
       if (session.stopRequested) return;
@@ -1826,13 +1945,16 @@ class AgentService {
         value: errorMessage,
         isError: true,
       });
+      if (!isCurrentSession()) return;
 
       await StepService.errorStep(stepId);
+      if (!isCurrentSession()) return;
       this.emitEvent(session.taskId, stepId, {
         type: 'status',
         status: 'errored',
         error: errorMessage,
       });
+      if (!isCurrentSession()) return;
       await this.notifyTaskEvent({
         taskId: session.taskId,
         stepId,
@@ -1844,7 +1966,11 @@ class AgentService {
       this.deleteSession(stepId, session);
     } finally {
       completeRegistration();
-      this.startingSteps.delete(stepId);
+      if (this.stepStartPromises.get(stepId) === startPromise) {
+        this.startingSteps.delete(stepId);
+        this.stepStartPromises.delete(stepId);
+      }
+      finishStart();
     }
   }
 
@@ -1854,12 +1980,21 @@ class AgentService {
   ): Promise<void> {
     const existingStop = this.stepStopPromises.get(stepId);
     if (existingStop) {
+      const backendRun = this.backendRunCompletions.get(stepId);
+      if (
+        backendRun &&
+        this.backendRunContext.getStore() === backendRun.owner
+      ) {
+        return;
+      }
       await existingStop;
       return;
     }
 
     const stopPromise = this.performStop(stepId, options).finally(() => {
-      this.stepStopPromises.delete(stepId);
+      if (this.stepStopPromises.get(stepId) === stopPromise) {
+        this.stepStopPromises.delete(stepId);
+      }
     });
     this.stepStopPromises.set(stepId, stopPromise);
     await stopPromise;
@@ -1871,8 +2006,15 @@ class AgentService {
   ): Promise<void> {
     dbg.agentSession('Stopping step %s', stepId);
 
-    const session = this.sessions.get(stepId);
+    let session = this.sessions.get(stepId);
     if (!session) {
+      await this.stepStartPromises.get(stepId);
+      session = this.sessions.get(stepId);
+    }
+
+    const backendRun = this.backendRunCompletions.get(stepId);
+    if (!session) {
+      await this.waitForBackendRun(stepId, backendRun);
       dbg.agentSession('No session found for step %s, nothing to stop', stepId);
       return;
     }
@@ -1900,6 +2042,9 @@ class AgentService {
 
     // Stop the provider run even if stop races with backend startup completing.
     await this.stopCurrentRunHandle(stepId, session);
+    if (!this.stopAllActive) {
+      await this.waitForBackendRun(stepId, backendRun);
+    }
     await agentResourceMonitorService.stop(stepId);
 
     if (options.reason !== 'shutdown') {
@@ -2088,21 +2233,23 @@ class AgentService {
       if (allowedDirectory) {
         await respondToProvider();
         try {
-          await mutateTaskSessionRules(taskId, (rules) => {
-            const directoryPattern =
-              toDirectoryPermissionPattern(allowedDirectory);
-            rules.external_directory = buildToolPermissionConfig({
-              existing: rules.external_directory,
-              matchValue: directoryPattern,
-            });
-            return rules;
+          const step = await TaskStepRepository.findById(stepId);
+          if (!step) throw new Error(`Step ${stepId} not found`);
+          const sessionRules = { ...(step.sessionRules ?? {}) };
+          sessionRules.external_directory = buildToolPermissionConfig({
+            existing: sessionRules.external_directory,
+            matchValue: toDirectoryPermissionPattern(allowedDirectory),
           });
+          const updatedStep = await TaskStepRepository.update(stepId, {
+            sessionRules,
+          });
+          emitStepUpsert(updatedStep);
         } catch (error) {
           // Provider already resumed; keep request resolved rather than showing
           // a stale card that cannot be answered again.
           dbg.agentPermission(
-            'Directory allowed for current provider session but failed to persist for task %s: %O',
-            taskId,
+            'Directory allowed for current provider session but failed to persist for step %s: %O',
+            stepId,
             error,
           );
         }
@@ -2179,16 +2326,62 @@ class AgentService {
     this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
   }
 
-  async sendMessage(stepId: string, parts: PromptPart[]): Promise<void> {
+  async beginSendMessage(
+    stepId: string,
+    parts: PromptPart[],
+  ): Promise<{ started: Promise<void>; completion: Promise<void> }> {
     const completeRegistration = this.admitSessionRegistration(stepId, 'reject');
-    if (!completeRegistration) return;
-    let session: ActiveSession | null = null;
+    if (!completeRegistration) {
+      throw new Error(`Failed to register session for step ${stepId}`);
+    }
+
     try {
-      // If session exists and running, stop it first
-      if (this.sessions.has(stepId)) {
+      if (this.isRunningOrStarting(stepId)) {
         await this.stop(stepId);
       }
 
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      this.startingSteps.add(stepId);
+      this.stepStartPromises.set(stepId, started);
+      await this.waitForPreviousBackendRun(stepId);
+      const completion = this.trackBackendRun(stepId, () =>
+        this.performSendMessage(
+          stepId,
+          parts,
+          markStarted,
+          completeRegistration,
+        ).finally(() => {
+          completeRegistration();
+          markStarted();
+          if (this.stepStartPromises.get(stepId) === started) {
+            this.startingSteps.delete(stepId);
+            this.stepStartPromises.delete(stepId);
+          }
+        }),
+      );
+      return { started, completion };
+    } catch (error) {
+      completeRegistration();
+      throw error;
+    }
+  }
+
+  async sendMessage(stepId: string, parts: PromptPart[]): Promise<void> {
+    const { completion } = await this.beginSendMessage(stepId, parts);
+    await completion;
+  }
+
+  private async performSendMessage(
+    stepId: string,
+    parts: PromptPart[],
+    markStarted: () => void,
+    completeRegistration: () => void,
+  ): Promise<void> {
+    let session: ActiveSession | null = null;
+    try {
       // Create new session (will pick up existing sessionId for resume)
       session = await this.createSession(stepId);
       const { taskId } = session;
@@ -2200,11 +2393,22 @@ class AgentService {
       completeRegistration();
 
       dbg.agentSession('Sending follow-up message for step %s', stepId);
-      await this.runBackend(stepId, parts, session);
+      await this.runBackend(stepId, parts, session, {
+        onRunStarting: markStarted,
+      });
     } catch (error) {
       if (!session) throw error;
       if (session.stopRequested) return;
       const { taskId } = session;
+      const isCurrentSession = () => this.sessions.get(stepId) === session;
+      if (!isCurrentSession()) {
+        dbg.agent(
+          'Ignoring stale follow-up failure for replaced step %s: %O',
+          stepId,
+          error,
+        );
+        return;
+      }
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
       dbg.agent('Step %s sendMessage failed: %s', stepId, errorMessage);
@@ -2218,13 +2422,16 @@ class AgentService {
         value: errorMessage,
         isError: true,
       });
+      if (!isCurrentSession()) return;
 
       await StepService.errorStep(stepId);
+      if (!isCurrentSession()) return;
       this.emitEvent(taskId, stepId, {
         type: 'status',
         status: 'errored',
         error: errorMessage,
       });
+      if (!isCurrentSession()) return;
       await this.notifyTaskEvent({
         taskId,
         stepId,
@@ -2412,6 +2619,9 @@ class AgentService {
     const session = this.sessions.get(stepId);
     const step = await TaskStepRepository.findById(stepId);
     if (!step) return;
+    if (isPrReviewChatStepMeta(step.meta)) {
+      throw new Error('PR review chat steps are read-only and cannot change mode');
+    }
 
     const backend = session?.backendType ?? step.agentBackend ?? 'claude-code';
     const normalizedMode = normalizeInteractionModeForBackend({
@@ -2440,6 +2650,10 @@ class AgentService {
 
   isRunning(stepId: string): boolean {
     return this.sessions.has(stepId);
+  }
+
+  isRunningOrStarting(stepId: string): boolean {
+    return this.sessions.has(stepId) || this.startingSteps.has(stepId);
   }
 
   async getMessages(stepId: string): Promise<NormalizedEntry[]> {
@@ -2524,16 +2738,18 @@ class AgentService {
    * Should be called on app startup before the main window is shown.
    */
   async recoverStaleTasks(): Promise<void> {
-    // Recover stale tasks — mark as interrupted (status sync happens via steps below)
+    // PR workspaces are containers that remain available after restart. Generic
+    // agent tasks represent an interrupted run when their process disappears.
     const staleTasks = await TaskRepository.findByStatuses([
       'running',
       'waiting',
+      'interrupted',
     ]);
 
     for (const task of staleTasks) {
       try {
         const updatedTask = await TaskRepository.update(task.id, {
-          status: 'interrupted',
+          status: task.type === 'pr-review' ? 'waiting' : 'interrupted',
         });
         emitTaskUpsert(updatedTask);
       } catch (error) {
@@ -2574,7 +2790,14 @@ class AgentService {
           status: 'interrupted',
         });
         emitStepUpsert(updatedStep);
-        await StepService.syncTaskStatus(step.taskId);
+        if (staleTasks.some((task) => task.id === step.taskId && task.type === 'pr-review')) {
+          const updatedTask = await TaskRepository.update(step.taskId, {
+            status: 'waiting',
+          });
+          emitTaskUpsert(updatedTask);
+        } else {
+          await StepService.syncTaskStatus(step.taskId);
+        }
         staleStepCount++;
       } catch (error) {
         dbg.agent('Failed to recover stale step %s: %O', step.id, error);
@@ -2584,7 +2807,14 @@ class AgentService {
             status: 'interrupted',
           });
           emitStepUpsert(updatedStep);
-          await StepService.syncTaskStatus(step.taskId);
+          if (staleTasks.some((task) => task.id === step.taskId && task.type === 'pr-review')) {
+            const updatedTask = await TaskRepository.update(step.taskId, {
+              status: 'waiting',
+            });
+            emitTaskUpsert(updatedTask);
+          } else {
+            await StepService.syncTaskStatus(step.taskId);
+          }
         } catch {
           dbg.agent('Failed to update status for stale step %s', step.id);
         }

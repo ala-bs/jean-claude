@@ -375,6 +375,7 @@ export function AddStepDialog({
   activeStepId,
   projectRoot,
   projectId,
+  canContinue = true,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -398,11 +399,15 @@ export function AddStepDialog({
   activeStepId?: string;
   projectRoot?: string | null;
   projectId?: string;
+  canContinue?: boolean;
 }) {
   const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
   const presetType = useNavigationStore(
     (state) => state.addStepDrafts[taskId]?.presetType ?? 'new-session',
   );
+  const presetOptions = canContinue
+    ? STEP_PRESET_OPTIONS
+    : STEP_PRESET_OPTIONS.filter((option) => option.value !== 'continue');
   const setDraftAction = useNavigationStore((state) => state.setAddStepDraft);
   const clearDraftAction = useNavigationStore(
     (state) => state.clearAddStepDraft,
@@ -420,6 +425,13 @@ export function AddStepDialog({
     () => clearDraftAction(taskId),
     [taskId, clearDraftAction],
   );
+
+  useEffect(() => {
+    if (isOpen && !canContinue && presetType === 'continue') {
+      setDraft({ presetType: 'new-session' });
+    }
+  }, [canContinue, isOpen, presetType, setDraft]);
+
   const [interactionMode, setInteractionMode] =
     useState<InteractionMode>('ask');
   const [backend, setBackend] = useState<AgentBackendType>(defaultBackend);
@@ -684,7 +696,11 @@ export function AddStepDialog({
   const handleSubmit = useCallback(async () => {
     const currentDraft = useNavigationStore.getState().addStepDrafts[taskId];
     const promptTemplate = currentDraft?.promptTemplate ?? '';
-    const submitPresetType = currentDraft?.presetType ?? 'new-session';
+    const draftPresetType = currentDraft?.presetType ?? 'new-session';
+    const submitPresetType =
+      !canContinue && draftPresetType === 'continue'
+        ? 'new-session'
+        : draftPresetType;
     const canSubmit =
       submitPresetType === 'review-changes'
         ? reviewersValid
@@ -750,6 +766,7 @@ export function AddStepDialog({
     if (didConfirm) clearDraft();
   }, [
     taskId,
+    canContinue,
     onConfirm,
     interactionMode,
     backend,
@@ -826,7 +843,7 @@ export function AddStepDialog({
               onChange={(value) =>
                 setDraft({ presetType: value as AddStepPresetType })
               }
-              options={[...STEP_PRESET_OPTIONS]}
+              options={[...presetOptions]}
               shortcut="cmd+t"
               side="top"
             />

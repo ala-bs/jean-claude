@@ -23,6 +23,15 @@ function parseRow(row: {
 }
 
 export const ProjectCommandGroupRepository = {
+  findById: async (id: string): Promise<ProjectCommandGroup | undefined> => {
+    const row = await db
+      .selectFrom('project_command_groups')
+      .selectAll()
+      .where('id', '=', id)
+      .executeTakeFirst();
+    return row ? parseRow(row) : undefined;
+  },
+
   findByProjectId: async (
     projectId: string,
   ): Promise<ProjectCommandGroup[]> => {

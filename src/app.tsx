@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { CacheListener } from './cache/cache-listener';
 import { DetectKeyboardLayout } from './common/context/keyboard-layout';
+import { ModalArbitrationProvider } from './common/context/modal-arbitration';
 import { ModalProvider } from './common/context/modal';
 import { RootKeyboardBindings } from './common/context/keyboard-bindings';
 import { RootOverlay } from './common/context/overlay';
@@ -36,12 +37,14 @@ export default function App() {
       <DetectKeyboardLayout />
       <RootKeyboardBindings>
         <RootOverlay>
-          <QueryClientProvider client={queryClient}>
-            <CacheListener />
-            <ModalProvider>
-              <RouterProvider router={router} />
-            </ModalProvider>
-          </QueryClientProvider>
+          <ModalArbitrationProvider>
+            <QueryClientProvider client={queryClient}>
+              <CacheListener />
+              <ModalProvider>
+                <RouterProvider router={router} />
+              </ModalProvider>
+            </QueryClientProvider>
+          </ModalArbitrationProvider>
         </RootOverlay>
       </RootKeyboardBindings>
       <Toaster />

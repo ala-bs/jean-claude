@@ -56,16 +56,19 @@ export interface PermissionBannerProps {
   onAllowForSession?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
+  ) => Promise<void>;
   onAllowForProject?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
+  ) => Promise<void>;
   onAllowForProjectWorktrees?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
-  onAllowGlobally?: (toolName: string, input: Record<string, unknown>) => void;
+  ) => Promise<void>;
+  onAllowGlobally?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => Promise<void>;
   onSetMode?: (mode: InteractionMode) => void;
   worktreePath?: string | null;
 }

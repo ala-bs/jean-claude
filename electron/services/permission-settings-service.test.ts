@@ -1,10 +1,129 @@
-import { describe, expect, it } from 'vitest';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('write-file-atomic', async () => {
+  const mockedFs = await import('fs/promises');
+  return {
+    default: (filePath: string, content: string) =>
+      mockedFs.writeFile(filePath, content, 'utf-8'),
+  };
+});
 
 import {
+  addWorktreePermission,
+  addProjectPermissionRule,
   compileForOpenCode,
   evaluatePermission,
   normalizeToolRequest,
+  isUnrestrictedBashPattern,
+  readProjectPermissions,
+  readSettings,
 } from './permission-settings-service';
+
+const tempDirs: string[] = [];
+
+async function createTempProject(): Promise<string> {
+  await fs.mkdir(os.tmpdir(), { recursive: true });
+  const projectPath = await fs.mkdtemp(
+    path.join(os.tmpdir(), 'jc-permissions-'),
+  );
+  tempDirs.push(projectPath);
+  return projectPath;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
+
+describe('addWorktreePermission', () => {
+  it('reports rejection for bare Bash without writing settings', async () => {
+    await expect(addWorktreePermission('/repo', 'Bash', {})).resolves.toBe(false);
+  });
+
+  it.each(['***', '?*', '*?', ' * ? '])(
+    'rejects wildcard-only Bash pattern %j at worktree boundary',
+    async (command) => {
+      await expect(
+        addWorktreePermission('/repo', 'Bash', { command }),
+      ).resolves.toBe(false);
+    },
+  );
+
+  it('serializes concurrent grants without losing either rule', async () => {
+    const projectPath = await createTempProject();
+
+    await Promise.all([
+      addWorktreePermission(projectPath, 'Bash', { command: 'pnpm test' }),
+      addWorktreePermission(projectPath, 'Bash', { command: 'pnpm lint' }),
+    ]);
+
+    const settings = await readSettings(projectPath);
+    expect(settings.permissions.worktrees?.bash).toEqual({
+      'pnpm test': 'allow',
+      'pnpm lint': 'allow',
+    });
+  });
+
+  it('rolls back targeted worktree rule when step persistence fails', async () => {
+    const projectPath = await createTempProject();
+
+    await expect(
+      addWorktreePermission(
+        projectPath,
+        'Read',
+        {},
+        async () => {
+          throw new Error('step write failed');
+        },
+      ),
+    ).rejects.toThrow('step write failed');
+
+    expect((await readSettings(projectPath)).permissions.worktrees).toBeUndefined();
+  });
+});
+
+describe('addProjectPermissionRule', () => {
+  it.each(['***', '?*', '*?', ' * ? '])(
+    'rejects wildcard-only Bash pattern %j at project boundary',
+    async (command) => {
+      await expect(
+        addProjectPermissionRule({
+          projectPath: '/repo',
+          toolName: 'Bash',
+          input: { command },
+        }),
+      ).resolves.toBe(false);
+    },
+  );
+
+  it('rolls back targeted project rule when step persistence fails', async () => {
+    const projectPath = await createTempProject();
+
+    await expect(
+      addProjectPermissionRule({
+        projectPath,
+        toolName: 'Read',
+        input: {},
+        afterPersisted: async () => {
+          throw new Error('step write failed');
+        },
+      }),
+    ).rejects.toThrow('step write failed');
+
+    expect(await readProjectPermissions(projectPath)).toEqual({});
+  });
+});
+
+describe('isUnrestrictedBashPattern', () => {
+  it('allows Bash patterns containing literal command content', () => {
+    expect(isUnrestrictedBashPattern('bash', 'git *')).toBe(false);
+  });
+});
 
 describe('compileForOpenCode', () => {
   it('adds an ask baseline before explicit rules', () => {

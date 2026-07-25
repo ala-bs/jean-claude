@@ -6,6 +6,7 @@ import { X } from 'lucide-react';
 
 
 
+import { useModalArbitration } from '@/common/context/modal-arbitration';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 
 const modalSizeClasses = {
@@ -28,12 +29,15 @@ export function Modal({
   size = 'md',
   closeOnClickOutside = true,
   closeOnEscape = true,
+  closeDisabled = false,
   contentRef,
   showHeader = true,
   contentClassName = 'min-h-0 overflow-y-auto p-4',
   overlayClassName = 'z-50',
   panelClassName = '',
   ariaLabel,
+  ariaDescribedBy,
+  arbitrationPriority = 50,
   children,
 }: {
   isOpen: boolean;
@@ -42,18 +46,23 @@ export function Modal({
   size?: 'sm' | 'md' | 'lg' | 'xl';
   closeOnClickOutside?: boolean;
   closeOnEscape?: boolean;
+  closeDisabled?: boolean;
   contentRef?: RefObject<HTMLDivElement | null>;
   showHeader?: boolean;
   contentClassName?: string;
   overlayClassName?: string;
   panelClassName?: string;
   ariaLabel?: string;
+  ariaDescribedBy?: string;
+  arbitrationPriority?: number;
   children: ReactNode;
 }) {
   const id = useId();
+  const ownsArbitration = useModalArbitration(isOpen, arbitrationPriority);
+  const isActuallyOpen = isOpen && ownsArbitration;
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isActuallyOpen) return;
     openModalIds.push(id);
     return () => {
       const index = openModalIds.lastIndexOf(id);
@@ -61,11 +70,11 @@ export function Modal({
         openModalIds.splice(index, 1);
       }
     };
-  }, [id, isOpen]);
+  }, [id, isActuallyOpen]);
 
   useRegisterKeyboardBindings(
     `modal-${id}`,
-    isOpen && closeOnEscape
+    isActuallyOpen && closeOnEscape && !closeDisabled
       ? {
           escape: () => {
             if (!isTopModal(id)) return false;
@@ -77,7 +86,7 @@ export function Modal({
   );
 
   useEffect(() => {
-    if (!isOpen || !closeOnEscape) return;
+    if (!isActuallyOpen || !closeOnEscape || closeDisabled) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -91,12 +100,12 @@ export function Modal({
 
     document.addEventListener('keydown', handleKeyDown, true);
     return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [id, isOpen, closeOnEscape, onClose]);
+  }, [id, isActuallyOpen, closeDisabled, closeOnEscape, onClose]);
 
-  if (!isOpen) return null;
+  if (!isActuallyOpen) return null;
 
   const handleBackdropClick = () => {
-    if (closeOnClickOutside) {
+    if (closeOnClickOutside && !closeDisabled) {
       onClose();
     }
   };
@@ -113,6 +122,7 @@ export function Modal({
             role="dialog"
             aria-modal="true"
             aria-label={ariaLabel}
+            aria-describedby={ariaDescribedBy}
             className={`flex max-h-[85vh] w-full ${modalSizeClasses[size]} bg-bg-1 flex-col rounded-lg shadow-xl ${panelClassName}`}
             onClick={(e) => e.stopPropagation()}
           >
@@ -123,13 +133,15 @@ export function Modal({
                 ) : (
                   <div />
                 )}
-                <button
-                  onClick={onClose}
-                  aria-label="Close dialog"
-                  className="text-ink-2 hover:bg-glass-medium hover:text-ink-1 rounded p-1"
-                >
-                  <X className="h-5 w-5" aria-hidden />
-                </button>
+                {!closeDisabled && (
+                  <button
+                    onClick={onClose}
+                    aria-label="Close dialog"
+                    className="text-ink-2 hover:bg-glass-medium hover:text-ink-1 rounded p-1"
+                  >
+                    <X className="h-5 w-5" aria-hidden />
+                  </button>
+                )}
               </div>
             )}
             <div className={contentClassName}>{children}</div>

@@ -73,7 +73,9 @@ export function DeleteTaskDialog({
     <KeyboardLayerProvider layer={layer}>
       <Modal
         isOpen={isOpen}
-        onClose={onClose}
+        onClose={() => {
+          if (!isPending) onClose();
+        }}
         title="Delete Task"
         closeOnClickOutside={!isPending}
         closeOnEscape={!isPending}

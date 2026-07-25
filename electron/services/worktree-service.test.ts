@@ -27,11 +27,14 @@ const execFileAsync = promisify(execFile);
 const fs =
   await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 const {
+  cleanupMissingWorktree,
+  cleanupWorktree,
   getWorktreeDiff,
   getWorktreeFileContent,
   getWorktreeUnifiedDiff,
   hasUncommittedWorktreeChanges,
   hasUnpushedWorktreeCommits,
+  mergeWorktree,
 } = await import('./worktree-service');
 
 let testDir: string;
@@ -139,6 +142,117 @@ describe('hasUnpushedWorktreeCommits', () => {
     await expect(hasUnpushedWorktreeCommits(testDir)).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+});
+
+describe('worktree cleanup branch safety', () => {
+  beforeEach(async () => {
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-worktree-cleanup-'));
+    await git(['init', '-b', 'main']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test User']);
+    await writeFile('base.txt', 'base\n');
+    await commit('base');
+  });
+
+  afterEach(async () => {
+    if (testDir) await fs.rm(testDir, { force: true, recursive: true });
+  });
+
+  it('rejects persisted branch mismatch before removing worktree', async () => {
+    const worktreePath = path.join(testDir, 'review-worktree');
+    await git(['branch', 'actual-review']);
+    await git(['branch', 'persisted-wrong']);
+    await git(['worktree', 'add', worktreePath, 'actual-review']);
+
+    await expect(
+      cleanupWorktree({
+        worktreePath,
+        projectPath: testDir,
+        branchName: 'persisted-wrong',
+        branchCleanup: 'delete',
+        force: true,
+      }),
+    ).rejects.toThrow('branch');
+
+    await expect(fs.stat(worktreePath)).resolves.toBeDefined();
+    const { stdout } = await git(['branch', '--list', 'persisted-wrong']);
+    expect(stdout).toContain('persisted-wrong');
+  });
+
+  it('does not delete arbitrary branch for missing registered worktree mismatch', async () => {
+    const worktreePath = path.join(testDir, 'missing-review-worktree');
+    await git(['branch', 'actual-review']);
+    await git(['branch', 'persisted-wrong']);
+    await git(['worktree', 'add', worktreePath, 'actual-review']);
+    await fs.rm(worktreePath, { recursive: true });
+
+    await expect(
+      cleanupMissingWorktree({
+        worktreePath,
+        projectPath: testDir,
+        branchName: 'persisted-wrong',
+        throwOnError: true,
+      }),
+    ).rejects.toThrow('branch');
+
+    const { stdout } = await git(['branch', '--list', 'persisted-wrong']);
+    expect(stdout).toContain('persisted-wrong');
+  });
+
+  it('deletes matching branch for a missing registered worktree', async () => {
+    const worktreePath = path.join(testDir, 'missing-matching-worktree');
+    await git(['branch', 'actual-review']);
+    await git(['worktree', 'add', worktreePath, 'actual-review']);
+    await fs.rm(worktreePath, { recursive: true });
+
+    await cleanupMissingWorktree({
+      worktreePath,
+      projectPath: testDir,
+      branchName: 'actual-review',
+      throwOnError: true,
+    });
+
+    const { stdout } = await git(['branch', '--list', 'actual-review']);
+    expect(stdout).toBe('');
+  });
+
+  it('retries branch deletion after verified worktree removal', async () => {
+    const worktreePath = path.join(testDir, 'removed-review-worktree');
+    await git(['branch', 'verified-review']);
+    await git(['worktree', 'add', worktreePath, 'verified-review']);
+    await git(['worktree', 'remove', '--force', worktreePath]);
+
+    await cleanupMissingWorktree({
+      worktreePath,
+      projectPath: testDir,
+      branchName: 'verified-review',
+      throwOnError: true,
+      allowUnregistered: true,
+    });
+
+    const { stdout } = await git(['branch', '--list', 'verified-review']);
+    expect(stdout).toBe('');
+  });
+
+  it('successfully merges and deletes worktree branch', async () => {
+    const worktreePath = path.join(testDir, 'merge-worktree');
+    await git(['branch', 'feature-merge']);
+    await git(['worktree', 'add', worktreePath, 'feature-merge']);
+    await fs.writeFile(path.join(worktreePath, 'feature.txt'), 'feature\n');
+    await git(['add', '.'], worktreePath);
+    await git(['commit', '-m', 'feature'], worktreePath);
+
+    await expect(
+      mergeWorktree({
+        worktreePath,
+        projectPath: testDir,
+        targetBranch: 'main',
+      }),
+    ).resolves.toEqual({ success: true });
+    await expect(fs.stat(worktreePath)).rejects.toThrow();
+    const { stdout } = await git(['branch', '--list', 'feature-merge']);
+    expect(stdout).toBe('');
   });
 });
 

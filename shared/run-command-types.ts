@@ -1,5 +1,7 @@
 // shared/run-command-types.ts
 
+import type { Task } from './types';
+
 export type CommandStatus = 'running' | 'stopped' | 'errored';
 
 export type RunCommandEnvSource =
@@ -102,6 +104,25 @@ export type UpdateProjectCommandGroup = Partial<
 export type RunCommandConfigItem =
   | ({ type: 'command' } & Pick<ProjectCommand, 'id' | 'sortOrder'>)
   | ({ type: 'group' } & Pick<ProjectCommandGroup, 'id' | 'sortOrder'>);
+
+export type PrRunTarget =
+  | { type: 'command'; id: string }
+  | { type: 'group'; id: string };
+
+export interface StartPrCommandParams {
+  projectId: string;
+  pullRequestId: number;
+  target: PrRunTarget;
+}
+
+export interface StartPrCommandResult {
+  task: Task;
+  created: boolean;
+  runCommandIds: string[];
+  runResult: RunStatus | PortsInUseErrorData;
+}
+
+export const START_PR_COMMAND_CHANNEL = 'tasks:startPrCommand';
 
 export interface CommandRunStatus {
   id: string;

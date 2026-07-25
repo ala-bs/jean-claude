@@ -39,6 +39,7 @@ import type {
   ProjectLogoHistoryItem,
   ProjectTodo,
   Provider,
+  PrWorkspaceResolutionResult,
   Task,
   TaskStep,
   ThinkingEffort,
@@ -114,6 +115,8 @@ import type {
   ProjectSuggestions,
   RunCommandConfigItem,
   RunStatus,
+  StartPrCommandParams,
+  StartPrCommandResult,
   UpdateProjectCommand,
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
@@ -543,6 +546,9 @@ export interface Api {
   tasks: {
     focused: (taskId: string) => void;
     findAll: () => Promise<Task[]>;
+    listPendingPrWorkspaceDecisions: () => Promise<
+      Array<{ projectId: string; pullRequestId: number; taskIds: string[] }>
+    >;
     findByProjectId: (projectId: string) => Promise<Task[]>;
     findAllActive: () => Promise<TaskWithProject[]>;
     findAllCompleted: (params: {
@@ -579,44 +585,26 @@ export interface Api {
       id: string,
       options?: { deleteWorktree?: boolean },
     ) => Promise<void>;
+    deletePrWorkspaceTask: (params: {
+      taskId: string;
+    }) => Promise<PrWorkspaceResolutionResult>;
+    deleteAllPrWorkspaces: (params: {
+      projectId: string;
+      pullRequestId: number;
+    }) => Promise<PrWorkspaceResolutionResult>;
+    resolveClosedPrWorkspace: (params: {
+      projectId: string;
+      pullRequestId: number;
+      action: 'keep' | 'delete';
+    }) => Promise<PrWorkspaceResolutionResult>;
     toggleUserCompleted: (id: string) => Promise<Task>;
     complete: (
       id: string,
       options: { cleanupWorktree?: boolean },
     ) => Promise<{
       task: Task;
-      worktreeCleanup?: {
-        worktreePath: string;
-        branchName: string;
-        keepBranch: boolean;
-      };
     }>;
     clearUserCompleted: (id: string) => Promise<Task>;
-    addSessionAllowedTool: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => Promise<Task>;
-    removeSessionAllowedTool: (
-      id: string,
-      toolName: string,
-      pattern?: string,
-    ) => Promise<Task>;
-    allowForProject: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => Promise<Task>;
-    allowForProjectWorktrees: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => Promise<Task>;
-    allowGlobally: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => Promise<Task>;
     reorder: (
       projectId: string,
       activeIds: string[],
@@ -679,14 +667,6 @@ export interface Api {
         taskId: string,
         options?: { keepBranch?: boolean },
       ) => Promise<{ editorCloseWarning?: string }>;
-      cleanupAfterCompletion: (
-        taskId: string,
-        params: {
-          worktreePath: string;
-          branchName: string;
-          keepBranch?: boolean;
-        },
-      ) => Promise<{ editorCloseWarning?: string }>;
     };
     summary: {
       get: (taskId: string) => Promise<TaskSummary | undefined>;
@@ -704,6 +684,7 @@ export interface Api {
       projectId: string;
       pullRequestId: number;
     }) => Promise<Task>;
+    startPrCommand: (params: StartPrCommandParams) => Promise<StartPrCommandResult>;
   };
   steps: {
     findByTaskId: (taskId: string) => Promise<TaskStep[]>;
@@ -733,6 +714,31 @@ export interface Api {
     }>;
     setMode: (stepId: string, mode: InteractionMode) => Promise<TaskStep>;
     submitPrReview: (stepId: string) => Promise<TaskStep>;
+    addSessionAllowedTool: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => Promise<TaskStep>;
+    removeSessionAllowedTool: (params: {
+      stepId: string;
+      toolName: string;
+      pattern?: string;
+    }) => Promise<TaskStep>;
+    allowForProject: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => Promise<TaskStep>;
+    allowForProjectWorktrees: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => Promise<TaskStep>;
+    allowGlobally: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => Promise<TaskStep>;
   };
   providers: {
     findAll: () => Promise<Provider[]>;
@@ -1389,14 +1395,10 @@ export interface Api {
   runCommands: {
     startCommand: (params: {
       taskId: string;
-      projectId: string;
-      workingDir: string;
       runCommandId: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
     startGroup: (params: {
       taskId: string;
-      projectId: string;
-      workingDir: string;
       runCommandIds: string[];
     }) => Promise<RunStatus | PortsInUseErrorData>;
     stopCommand: (params: {
@@ -1923,6 +1925,7 @@ export const api: Api = hasWindowApi
       tasks: {
         focused: () => {},
         findAll: async () => [],
+        listPendingPrWorkspaceDecisions: async () => [],
         findByProjectId: async () => [],
         findAllActive: async () => [],
         findAllCompleted: async () => ({ tasks: [], total: 0 }),
@@ -1940,6 +1943,18 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         delete: async () => {},
+        deletePrWorkspaceTask: async ({ taskId }) => ({
+          action: 'deleted',
+          taskIds: [taskId],
+        }),
+        deleteAllPrWorkspaces: async () => ({
+          action: 'deleted',
+          taskIds: [],
+        }),
+        resolveClosedPrWorkspace: async ({ action }) => ({
+          action: action === 'delete' ? 'deleted' : 'kept',
+          taskIds: [],
+        }),
         toggleUserCompleted: async () => {
           throw new Error('API not available');
         },
@@ -1947,21 +1962,6 @@ export const api: Api = hasWindowApi
           throw new Error('API not available') as never;
         },
         clearUserCompleted: async () => {
-          throw new Error('API not available');
-        },
-        addSessionAllowedTool: async () => {
-          throw new Error('API not available');
-        },
-        removeSessionAllowedTool: async () => {
-          throw new Error('API not available');
-        },
-        allowForProject: async () => {
-          throw new Error('API not available');
-        },
-        allowForProjectWorktrees: async () => {
-          throw new Error('API not available');
-        },
-        allowGlobally: async () => {
           throw new Error('API not available');
         },
         reorder: async () => [],
@@ -2003,7 +2003,6 @@ export const api: Api = hasWindowApi
           getBranches: async () => [],
           pushBranch: async () => {},
           delete: async () => ({}),
-          cleanupAfterCompletion: async () => ({}),
         },
         summary: {
           get: async () => undefined,
@@ -2013,6 +2012,9 @@ export const api: Api = hasWindowApi
         },
         createPullRequest: async () => ({ id: 0, url: '' }),
         createPrReviewTask: async () => {
+          throw new Error('API not available');
+        },
+        startPrCommand: async () => {
           throw new Error('API not available');
         },
       },
@@ -2043,6 +2045,21 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         submitPrReview: async () => {
+          throw new Error('API not available');
+        },
+        addSessionAllowedTool: async () => {
+          throw new Error('API not available');
+        },
+        removeSessionAllowedTool: async () => {
+          throw new Error('API not available');
+        },
+        allowForProject: async () => {
+          throw new Error('API not available');
+        },
+        allowForProjectWorktrees: async () => {
+          throw new Error('API not available');
+        },
+        allowGlobally: async () => {
           throw new Error('API not available');
         },
       },

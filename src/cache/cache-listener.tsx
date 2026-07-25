@@ -6,7 +6,11 @@ import type { CacheEvent } from '@shared/cache-events';
 import { feedQueryKeys } from '@/lib/feed-query-keys';
 
 
-import { applyCacheEvent } from './cache-events';
+import {
+  applyCacheEvent,
+  isPrWorkspaceDecisionTaskEvent,
+  PR_WORKSPACE_DECISIONS_QUERY_KEY,
+} from './cache-events';
 import { shouldApplyCacheEvent } from './cache-subscriptions';
 import { startCacheGarbageCollector } from './cache-gc';
 
@@ -65,7 +69,11 @@ export function getReactQueryKeysForCacheEvent(event: CacheEvent) {
   }
 
   if (event.type === 'project.delete') {
-    queryKeys.push(feedQueryKeys.pullRequests, feedQueryKeys.workItems);
+    queryKeys.push(
+      feedQueryKeys.pullRequests,
+      feedQueryKeys.workItems,
+      PR_WORKSPACE_DECISIONS_QUERY_KEY,
+    );
   }
 
   if (event.type === 'pullRequest.threadsChanged') {
@@ -87,20 +95,52 @@ export function getReactQueryKeysForCacheEvent(event: CacheEvent) {
     queryKeys.push(['tasks', 'allCompleted']);
   }
 
+  if (isPrWorkspaceDecisionTaskEvent(event)) {
+    queryKeys.push(PR_WORKSPACE_DECISIONS_QUERY_KEY);
+  }
+
   return queryKeys;
 }
 
 export function handleCacheEvent(
   event: CacheEvent,
-  queryClient: Pick<QueryClient, 'invalidateQueries'>,
+  queryClient: Pick<QueryClient, 'invalidateQueries'> &
+    Partial<Pick<QueryClient, 'getQueryData'>>,
 ) {
-  if (!shouldApplyCacheEvent(event)) {
+  const queuedDecisions = queryClient.getQueryData?.<
+    Array<{ taskIds: string[] }>
+  >(PR_WORKSPACE_DECISIONS_QUERY_KEY);
+  const deletesQueuedPrWorkspaceTask =
+    event.type === 'task.delete' &&
+    queuedDecisions?.some((decision) =>
+      decision.taskIds.includes(event.taskId),
+    ) === true;
+  const invalidatesPrWorkspaceDecisions =
+    event.type === 'project.delete' ||
+    deletesQueuedPrWorkspaceTask ||
+    isPrWorkspaceDecisionTaskEvent(event);
+  const mustApplyPrWorkspaceDeletion =
+    invalidatesPrWorkspaceDecisions && event.type === 'task.delete';
+
+  if (!shouldApplyCacheEvent(event) && !mustApplyPrWorkspaceDeletion) {
+    if (invalidatesPrWorkspaceDecisions) {
+      void queryClient.invalidateQueries({
+        queryKey: PR_WORKSPACE_DECISIONS_QUERY_KEY,
+      });
+    }
     return;
   }
 
+  const queryKeys = getReactQueryKeysForCacheEvent(event);
+  if (
+    invalidatesPrWorkspaceDecisions &&
+    !queryKeys.includes(PR_WORKSPACE_DECISIONS_QUERY_KEY)
+  ) {
+    queryKeys.push(PR_WORKSPACE_DECISIONS_QUERY_KEY);
+  }
   applyCacheEvent(event);
 
-  for (const queryKey of getReactQueryKeysForCacheEvent(event)) {
+  for (const queryKey of queryKeys) {
     void queryClient.invalidateQueries({ queryKey });
   }
 }

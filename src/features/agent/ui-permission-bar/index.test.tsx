@@ -53,10 +53,10 @@ function permissionBarElement({
               },
             }}
             onRespond={onRespond}
-            onAllowForSession={() => {}}
-            onAllowForProject={() => {}}
-            onAllowForProjectWorktrees={() => {}}
-            onAllowGlobally={() => {}}
+            onAllowForSession={async () => {}}
+            onAllowForProject={async () => {}}
+            onAllowForProjectWorktrees={async () => {}}
+            onAllowGlobally={async () => {}}
             worktreePath="/worktree"
           />
         </ModalProvider>

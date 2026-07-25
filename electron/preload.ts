@@ -22,6 +22,10 @@ import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
+import {
+  START_PR_COMMAND_CHANNEL,
+  type StartPrCommandParams,
+} from '@shared/run-command-types';
 import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
@@ -120,6 +124,8 @@ contextBridge.exposeInMainWorld('api', {
   tasks: {
     focused: (taskId: string) => ipcRenderer.send('tasks:focused', taskId),
     findAll: () => ipcRenderer.invoke('tasks:findAll'),
+    listPendingPrWorkspaceDecisions: () =>
+      ipcRenderer.invoke('tasks:listPendingPrWorkspaceDecisions'),
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('tasks:findByProjectId', projectId),
     findAllActive: () => ipcRenderer.invoke('tasks:findAllActive'),
@@ -135,44 +141,23 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tasks:updatePendingMessage', id, pendingMessage),
     delete: (id: string, options?: { deleteWorktree?: boolean }) =>
       ipcRenderer.invoke('tasks:delete', id, options),
+    deletePrWorkspaceTask: (params: { taskId: string }) =>
+      ipcRenderer.invoke('tasks:deletePrWorkspaceTask', params),
+    deleteAllPrWorkspaces: (params: {
+      projectId: string;
+      pullRequestId: number;
+    }) => ipcRenderer.invoke('tasks:deleteAllPrWorkspaces', params),
+    resolveClosedPrWorkspace: (params: {
+      projectId: string;
+      pullRequestId: number;
+      action: 'keep' | 'delete';
+    }) => ipcRenderer.invoke('tasks:resolveClosedPrWorkspace', params),
     toggleUserCompleted: (id: string) =>
       ipcRenderer.invoke('tasks:toggleUserCompleted', id),
     complete: (id: string, options: { cleanupWorktree?: boolean }) =>
       ipcRenderer.invoke('tasks:complete', id, options),
     clearUserCompleted: (id: string) =>
       ipcRenderer.invoke('tasks:clearUserCompleted', id),
-    addSessionAllowedTool: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => ipcRenderer.invoke('tasks:addSessionAllowedTool', id, toolName, input),
-    removeSessionAllowedTool: (
-      id: string,
-      toolName: string,
-      pattern?: string,
-    ) =>
-      ipcRenderer.invoke(
-        'tasks:removeSessionAllowedTool',
-        id,
-        toolName,
-        pattern,
-      ),
-    allowForProject: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => ipcRenderer.invoke('tasks:allowForProject', id, toolName, input),
-    allowForProjectWorktrees: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) =>
-      ipcRenderer.invoke('tasks:allowForProjectWorktrees', id, toolName, input),
-    allowGlobally: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => ipcRenderer.invoke('tasks:allowGlobally', id, toolName, input),
     reorder: (projectId: string, activeIds: string[], completedIds: string[]) =>
       ipcRenderer.invoke('tasks:reorder', projectId, activeIds, completedIds),
     worktree: {
@@ -256,19 +241,6 @@ contextBridge.exposeInMainWorld('api', {
         ipcRenderer.invoke('tasks:worktree:pushBranch', taskId, params),
       delete: (taskId: string, options?: { keepBranch?: boolean }) =>
         ipcRenderer.invoke('tasks:worktree:delete', taskId, options),
-      cleanupAfterCompletion: (
-        taskId: string,
-        params: {
-          worktreePath: string;
-          branchName: string;
-          keepBranch?: boolean;
-        },
-      ) =>
-        ipcRenderer.invoke(
-          'tasks:worktree:cleanupAfterCompletion',
-          taskId,
-          params,
-        ),
     },
     summary: {
       get: (taskId: string) => ipcRenderer.invoke('tasks:summary:get', taskId),
@@ -286,6 +258,8 @@ contextBridge.exposeInMainWorld('api', {
       projectId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('tasks:createPrReviewTask', params),
+    startPrCommand: (params: StartPrCommandParams) =>
+      ipcRenderer.invoke(START_PR_COMMAND_CHANNEL, params),
   },
   steps: {
     findByTaskId: (taskId: string) =>
@@ -313,6 +287,31 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('steps:setMode', stepId, mode),
     submitPrReview: (stepId: string) =>
       ipcRenderer.invoke('steps:submitPrReview', stepId),
+    addSessionAllowedTool: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => ipcRenderer.invoke('steps:addSessionAllowedTool', params),
+    removeSessionAllowedTool: (params: {
+      stepId: string;
+      toolName: string;
+      pattern?: string;
+    }) => ipcRenderer.invoke('steps:removeSessionAllowedTool', params),
+    allowForProject: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => ipcRenderer.invoke('steps:allowForProject', params),
+    allowForProjectWorktrees: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => ipcRenderer.invoke('steps:allowForProjectWorktrees', params),
+    allowGlobally: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => ipcRenderer.invoke('steps:allowGlobally', params),
   },
   providers: {
     findAll: () => ipcRenderer.invoke('providers:findAll'),
@@ -1024,26 +1023,18 @@ contextBridge.exposeInMainWorld('api', {
   runCommands: {
     startCommand: (params: {
       taskId: string;
-      projectId: string;
-      workingDir: string;
       runCommandId: string;
     }) =>
       ipcRenderer.invoke('project:commands:run:startCommand', {
         taskId: params.taskId,
-        projectId: params.projectId,
-        workingDir: params.workingDir,
         runCommandId: params.runCommandId,
       }),
     startGroup: (params: {
       taskId: string;
-      projectId: string;
-      workingDir: string;
       runCommandIds: string[];
     }) =>
       ipcRenderer.invoke('project:commands:run:startGroup', {
         taskId: params.taskId,
-        projectId: params.projectId,
-        workingDir: params.workingDir,
         runCommandIds: params.runCommandIds,
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>

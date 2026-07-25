@@ -54,6 +54,7 @@ import { isPrReviewChatStepMeta } from '@shared/types';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PrDetailTab } from '@/stores/navigation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import { selectNewestPrReviewTask } from '@/lib/select-pr-review-task';
 import type { TaskStep } from '@shared/types';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
@@ -61,6 +62,7 @@ import { useLatestRef } from '@/hooks/use-latest-ref';
 import { usePrDetailState } from '@/stores/navigation';
 import { usePrDraftCountByFile } from '@/stores/pr-comment-drafts';
 import { useProject } from '@/hooks/use-projects';
+import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { useRecordPrView } from '@/hooks/use-pr-view-snapshot';
 import { useSteps } from '@/hooks/use-steps';
 import { useTaskMessages } from '@/hooks/use-task-messages';
@@ -68,6 +70,7 @@ import { useToastStore } from '@/stores/toasts';
 
 
 
+import { DeletePrWorkspaceDialog } from '../ui-delete-pr-workspace-dialog';
 import { getCommentStatusCountByPrFile } from '../utils-pr-comment-counts';
 import { getPrThreadImageUploader } from './utils-pr-thread-image-uploader';
 import { PrCommitDiffView } from '../ui-pr-commit-diff-view';
@@ -114,6 +117,7 @@ export function PrDetail({
   >([]);
   const [commentMode, setCommentMode] = useState<CommentMode | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { data: project } = useProject(projectId);
   const { data: pr, isLoading: isPrLoading } = usePullRequest(
     projectId,
@@ -278,14 +282,17 @@ export function PrDetail({
       if (task.pullRequestId !== pullRequestId) continue;
       if (task.type === 'agent' && !result.agentTask) {
         result.agentTask = task;
-      } else if (task.type === 'pr-review' && !result.prReviewTask) {
-        result.prReviewTask = task;
       }
-      if (result.agentTask && result.prReviewTask) break;
     }
 
+    result.prReviewTask = selectNewestPrReviewTask({
+      tasks: projectTasks,
+      projectId,
+      pullRequestId,
+    });
+
     return result;
-  }, [projectTasks, prId]);
+  }, [projectId, projectTasks, prId]);
   const taskCommentTask = associatedTasks.agentTask;
   const taskCommentTaskId = taskCommentTask?.id ?? '';
   const associatedPrReviewTask = associatedTasks.prReviewTask;
@@ -294,6 +301,7 @@ export function PrDetail({
   const createOrGetPrReviewTask = useCreateOrGetPrReviewTask();
   const createPrReviewChatStep = useCreatePrReviewChatStep();
   const deleteWorktree = useDeleteWorktree();
+  const { deleteAll } = usePrWorkspaceActions();
   const addToast = useToastStore((state) => state.addToast);
 
   const isPrAuthor = useMemo(() => {
@@ -515,6 +523,15 @@ export function PrDetail({
     }
   }, [addToast, associatedPrReviewTask, deleteWorktree]);
 
+  const handleDeletePrWorkspaces = useCallback(async () => {
+    try {
+      await deleteAll.mutateAsync({ projectId, pullRequestId: prId });
+      setIsDeleteDialogOpen(false);
+    } catch {
+      // Mutation error remains visible in the confirmation dialog for retry.
+    }
+  }, [deleteAll, prId, projectId]);
+
   // Convert PR files to unified DiffFile format for the tree
   const diffFiles: DiffFile[] = useMemo(() => {
     return files.map((f) => ({
@@ -676,6 +693,7 @@ export function PrDetail({
         readOnly={readOnly}
         onRefresh={handleRefresh}
         isRefreshing={isRefreshing}
+        associatedPrReviewTask={associatedPrReviewTask}
         onCleanReviewWorkspace={
           !readOnly && associatedPrReviewTask?.worktreePath
             ? handleCleanReviewWorkspace
@@ -685,6 +703,22 @@ export function PrDetail({
           deleteWorktree.isPending &&
           deleteWorktree.variables?.taskId === associatedPrReviewTask?.id
         }
+        onDeletePrWorkspaces={
+          !readOnly && associatedPrReviewTask
+            ? () => {
+                deleteAll.reset();
+                setIsDeleteDialogOpen(true);
+              }
+            : undefined
+        }
+      />
+      <DeletePrWorkspaceDialog
+        isOpen={isDeleteDialogOpen}
+        scope="all"
+        isPending={deleteAll.isPending}
+        error={deleteAll.error}
+        onClose={() => setIsDeleteDialogOpen(false)}
+        onConfirm={handleDeletePrWorkspaces}
       />
 
       {/* Tab bar */}

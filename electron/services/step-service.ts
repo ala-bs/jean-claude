@@ -529,7 +529,7 @@ export const StepService = {
   }): Promise<TaskStep> => {
     debug('create step taskId=%s name=%s', data.taskId, data.name);
     const createdStep = await TaskStepRepository.create(
-      data as Parameters<typeof TaskStepRepository.create>[0],
+      { ...data, sessionRules: {} },
     );
     debug(
       'created step id=%s status=%s dependsOn=%d autoStart=%s',

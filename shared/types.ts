@@ -54,6 +54,11 @@ export interface UpdateToken {
 
 export type ProjectType = 'local' | 'git-provider' | 'system';
 export type TaskType = 'agent' | 'skill-creation' | 'feature-map' | 'pr-review';
+export type PrWorkspaceState = 'active' | 'cleanup-pending' | 'kept';
+export type PrWorkspaceResolutionResult = {
+  action: 'deleted' | 'kept';
+  taskIds: string[];
+};
 export type TaskStatus =
   | 'running'
   | 'waiting'
@@ -367,9 +372,9 @@ export interface Task {
   startCommitHash: string | null;
   sourceBranch: string | null;
   branchName: string | null;
+  prWorkspaceState: PrWorkspaceState | null;
   hasUnread: boolean;
   userCompleted: boolean;
-  sessionRules: PermissionScope;
   workItemIds: string[] | null;
   workItemUrls: string[] | null;
   pullRequestId: string | null;
@@ -394,9 +399,9 @@ export interface NewTask {
   startCommitHash?: string | null;
   sourceBranch?: string | null;
   branchName?: string | null;
+  prWorkspaceState?: PrWorkspaceState | null;
   hasUnread?: boolean;
   userCompleted?: boolean;
-  sessionRules?: PermissionScope;
   workItemIds?: string[] | null;
   workItemUrls?: string[] | null;
   updateWorkItemStatus?: boolean;
@@ -418,9 +423,9 @@ export interface UpdateTask {
   startCommitHash?: string | null;
   sourceBranch?: string | null;
   branchName?: string | null;
+  prWorkspaceState?: PrWorkspaceState | null;
   hasUnread?: boolean;
   userCompleted?: boolean;
-  sessionRules?: PermissionScope;
   workItemIds?: string[] | null;
   workItemUrls?: string[] | null;
   pullRequestId?: string | null;
@@ -603,6 +608,7 @@ export interface TaskStep {
   output: string | null;
   images: PromptImagePart[] | null;
   meta: TaskStepMeta;
+  sessionRules: PermissionScope;
   autoStart: boolean;
   archivedAt?: string | null;
   sortOrder: number;
@@ -623,6 +629,7 @@ export interface NewTaskStep {
   agentBackend?: AgentBackendType | null;
   images?: PromptImagePart[] | null;
   meta?: TaskStepMeta;
+  sessionRules?: PermissionScope;
   autoStart?: boolean;
   sortOrder?: number;
 }
@@ -642,6 +649,7 @@ export interface UpdateTaskStep {
   output?: string | null;
   images?: PromptImagePart[] | null;
   meta?: TaskStepMeta;
+  sessionRules?: PermissionScope;
   autoStart?: boolean;
   archivedAt?: string | null;
   sortOrder?: number;

@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
 
 
-import type { TaskStep, TaskStepStatus } from '@shared/types';
+import { isPrReviewChatStepMeta, type TaskStep, type TaskStepStatus } from '@shared/types';
 import { useArchiveStep, useSteps } from '@/hooks/use-steps';
 import { Button } from '@/common/ui/button';
 import { useCommands } from '@/common/hooks/use-commands';
@@ -503,7 +503,7 @@ export function StepFlowBar({
 
   const handleStepContextMenu = useCallback(
     (event: React.MouseEvent, step: TaskStep) => {
-      if (step.archivedAt) return;
+      if (step.archivedAt || isPrReviewChatStepMeta(step.meta)) return;
       openMenu(event, [
         {
           label: 'Archive step',

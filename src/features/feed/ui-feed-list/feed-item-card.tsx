@@ -854,6 +854,14 @@ export function FeedItemCard({
                 {item.taskType === 'skill-creation' && (
                   <Bot className="text-status-pr mt-0.5 h-3.5 w-3.5 shrink-0" />
                 )}
+                {item.taskType === 'pr-review' && (
+                  <span
+                    aria-label="PR Workspace"
+                    className="border-status-pr/30 bg-status-pr/10 text-status-pr mt-px shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium leading-none uppercase"
+                  >
+                    PR Workspace
+                  </span>
+                )}
                 <span
                   className={clsx(
                     'min-w-0 flex-1 truncate leading-snug',

@@ -13,6 +13,7 @@ import {
 } from './process-resource-sampler';
 
 type TrackedSession = {
+  owner: symbol;
   taskId: string;
   stepId: string;
   backend: AgentBackendType;
@@ -64,11 +65,13 @@ export class AgentResourceMonitorService {
     stepId: string;
     backend: AgentBackendType;
     rootPid: number | null;
-  }): void {
+  }): symbol {
     void this.stop(params.stepId);
 
+    const owner = Symbol(params.stepId);
     const session: TrackedSession = {
       ...params,
+      owner,
       startedAt: this.now(),
       timer: null,
       sampleCount: 0,
@@ -84,6 +87,7 @@ export class AgentResourceMonitorService {
 
     this.queueSample(session);
     this.scheduleTimer(session);
+    return owner;
   }
 
   setHighFrequencySampling(enabled: boolean): void {
@@ -113,9 +117,13 @@ export class AgentResourceMonitorService {
     return Object.fromEntries(this.historyByStepId.entries());
   }
 
-  async stop(stepId: string): Promise<AgentResourceSummary | null> {
+  async stop(
+    stepId: string,
+    expectedOwner?: symbol,
+  ): Promise<AgentResourceSummary | null> {
     const session = this.sessions.get(stepId);
     if (!session) return null;
+    if (expectedOwner && session.owner !== expectedOwner) return null;
 
     if (session.timer) clearInterval(session.timer);
     session.pendingImmediateSample = false;

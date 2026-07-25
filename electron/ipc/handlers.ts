@@ -35,7 +35,6 @@ import {
   isAiSkillSlotsSetting,
   isFeatureMapStepMeta,
   isOpenAiImageModel,
-  isPrReviewChatStepMeta,
   isSkillCreationStepMeta,
   type NewTaskStep,
   type NewToken,
@@ -184,12 +183,8 @@ import {
   writeGlobalPermissions,
 } from '../services/global-permissions-service';
 import {
-  addProjectPermission,
   addProjectPermissionRule,
-  addWorktreePermission,
-  buildToolPermissionConfig,
   editProjectPermissionRule,
-  normalizeToolRequest,
   readProjectPermissions,
   readProjectPromptPreface,
   readSettings,
@@ -306,15 +301,31 @@ import {
 } from '../services/pr-review-agent-service';
 // eslint-disable-next-line sort-imports
 import {
-  completePrReviewTasksForMergedPr,
+  cleanPrReviewWorkspace,
+  cleanPrReviewWorkspaceUnlocked,
   createOrGetPrReviewTask,
   fetchPrReviewSourceBranch,
+  listPendingPrWorkspaceDecisions,
+  reconcilePrWorkspaceState,
+  runCommandWithPrReviewLifecycle,
+  runTaskDestructiveWithPrReviewLifecycle,
+  sendMessageWithPrReviewLifecycle,
+  startAgentWithPrReviewLifecycle,
+  startPrCommand,
 } from '../services/pr-review-task-service';
 import {
   consolidatePreferenceMemoryForProject,
   getPreferenceMemoryDashboard,
   recordPreferenceEvidence,
 } from '../services/preference-memory-service';
+// eslint-disable-next-line sort-imports
+import {
+  cleanupTaskForDeletion,
+  cleanupTaskWorktree,
+  completeTaskWithWorktreeCleanup,
+  ensureTaskCommandsStopped,
+  shouldUsePrReviewWorkspaceCleanup,
+} from '../services/task-worktree-cleanup-service';
 import {
   createSkill,
   deleteSkill,
@@ -327,6 +338,12 @@ import {
   previewLegacySkillMigration,
   updateSkill,
 } from '../services/skill-management-service';
+import {
+  deleteAllPrWorkspaces,
+  deletePrWorkspaceTask,
+  resolveClosedPrWorkspace,
+  routeTaskDeletion,
+} from '../services/pr-workspace-deletion-service';
 import {
   emitCacheEvent,
   emitStepUpsert,
@@ -350,10 +367,6 @@ import {
   saveOpenAiBaseImage,
   setOpenAiBaseImageSelection,
 } from '../services/ai-generation-settings-service';
-import {
-  mutateTaskSessionRules,
-  withTaskSessionRulesLock,
-} from '../services/task-session-rules-service';
 import {
   NewProject,
   NewProvider,
@@ -399,6 +412,7 @@ import { regenerateProjectSummary } from '../services/project-summary-generation
 import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import { runCommandService } from '../services/run-command-service';
 import { runReloadPreviewCommand } from '../services/reload-preview-service';
+import { stepPermissionService } from '../services/step-permission-service';
 import { StepService } from '../services/step-service';
 import { stopReloadPreviewActivities } from '../services/reload-preview-service';
 import { systemCalendarService } from '../services/system-calendar-service';
@@ -413,6 +427,20 @@ import {
   prepareUsageDisplaySettingForSave,
   redactUsageDisplaySetting,
 } from './usage-display-settings';
+import {
+  registerStartPrCommandHandler,
+  resetRunCommandLogs,
+  resolveRunCommandStart,
+} from './start-pr-command';
+import {
+  sanitizeRendererTaskCreate,
+  validateRendererStepArchive,
+  validateRendererStepCreate,
+  validateRendererStepModeChange,
+  validateRendererStepUpdate,
+  validateRendererTaskUpdate,
+} from './task-update-validation';
+import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
 
 function redactAiGenerationSetting(
   setting: AiGenerationSetting,
@@ -424,6 +452,29 @@ function redactAiGenerationSetting(
 }
 
 const execAsync = promisify(exec);
+
+function resetRunCommandLogsAndBroadcast(params: {
+  taskId: string;
+  runCommandId: string;
+  generation: number;
+}): number {
+  return resetRunCommandLogs({
+    params,
+    resetLogs: (resetParams) => runCommandService.resetLogs(resetParams),
+    broadcast: (taskId, runCommandId, generation) => {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+          win.webContents.send(
+            'project:commands:run:logsReset',
+            taskId,
+            runCommandId,
+            generation,
+          );
+        }
+      });
+    },
+  });
+}
 
 async function pullSourceBranch({
   repoPath,
@@ -551,36 +602,98 @@ async function updateTaskAndEmit(
   return task;
 }
 
-function ensureSessionRulesCanBeModified(task: Task) {
-  if (task.type === 'pr-review') {
-    throw new Error('PR review tasks are read-only and cannot allow tools');
-  }
-}
-
 async function ensureGenericStepCanBeCreated(data: NewTaskStep) {
   const task = await TaskRepository.findById(data.taskId);
   if (!task) throw new Error(`Task ${data.taskId} not found`);
-  if (task.type === 'pr-review') {
-    throw new Error('Use the PR review chat API to create PR review steps');
-  }
+  validateRendererStepCreate(task, data);
 }
 
-async function ensureGenericStepCanBeUpdated(stepId: string) {
+async function ensureGenericStepCanBeUpdated(
+  stepId: string,
+  data: UpdateTaskStep,
+) {
   const step = await TaskStepRepository.findById(stepId);
   if (!step) throw new Error(`Step ${stepId} not found`);
   const task = await TaskRepository.findById(step.taskId);
   if (!task) throw new Error(`Task ${step.taskId} not found`);
-  if (task.type === 'pr-review') {
-    throw new Error('PR review chat steps cannot be updated through generic step APIs');
+  validateRendererStepUpdate(step, data);
+}
+
+function validateStepPermissionParams(params: unknown): {
+  stepId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+} {
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+    throw new Error('Invalid step permission payload');
   }
-  if (isPrReviewChatStepMeta(step.meta)) {
-    throw new Error('PR review chat steps cannot be updated through generic step APIs');
+  const { stepId, toolName, input } = params as Record<string, unknown>;
+  if (typeof stepId !== 'string' || !stepId.trim()) {
+    throw new Error('Invalid stepId: must be a non-empty string');
   }
+  if (typeof toolName !== 'string' || !toolName.trim()) {
+    throw new Error('Invalid toolName: must be a non-empty string');
+  }
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new Error('Invalid input: must be a plain object');
+  }
+  return { stepId, toolName, input: input as Record<string, unknown> };
+}
+
+function validateRemoveStepPermissionParams(params: unknown): {
+  stepId: string;
+  toolName: string;
+  pattern?: string;
+} {
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+    throw new Error('Invalid step permission payload');
+  }
+  const { stepId, toolName, pattern } = params as Record<string, unknown>;
+  if (typeof stepId !== 'string' || !stepId.trim()) {
+    throw new Error('Invalid stepId: must be a non-empty string');
+  }
+  if (typeof toolName !== 'string' || !toolName.trim()) {
+    throw new Error('Invalid toolName: must be a non-empty string');
+  }
+  if (pattern !== undefined && typeof pattern !== 'string') {
+    throw new Error('Invalid pattern: must be a string if provided');
+  }
+  return {
+    stepId,
+    toolName,
+    ...(pattern === undefined ? {} : { pattern }),
+  };
 }
 
 async function deleteTaskAndEmit(task: Task, stepIds?: string[]) {
   await TaskRepository.delete(task.id);
   emitTaskDelete({ taskId: task.id, projectId: task.projectId, stepIds });
+}
+
+function startAgentForStep(stepId: string): Promise<void> {
+  return startAgentWithPrReviewLifecycle(
+    stepId,
+    (authoritativeStepId) => agentService.start(authoritativeStepId),
+    {
+      findStepById: TaskStepRepository.findById,
+      findTaskById: TaskRepository.findById,
+    },
+  );
+}
+
+function sendMessageForStep(
+  stepId: string,
+  parts: PromptPart[],
+): Promise<void> {
+  return sendMessageWithPrReviewLifecycle(
+    stepId,
+    (authoritativeStepId) =>
+      agentService.beginSendMessage(authoritativeStepId, parts),
+    {
+      findStepById: TaskStepRepository.findById,
+      findTaskById: TaskRepository.findById,
+    },
+  );
 }
 
 async function updateStepAndEmit(
@@ -957,6 +1070,40 @@ export function registerIpcHandlers() {
   dbg.ipc('Registering IPC handlers');
   let previewReloadInProgress = false;
 
+  registerPrWorkspaceIpcHandlers({
+    ipcMain,
+    getPullRequest,
+    findProjects: ProjectRepository.findAll,
+    reconcilePrWorkspaceState,
+    listPendingPrWorkspaceDecisions,
+    createPrReviewTask: async ({ projectId, pullRequestId }) => {
+      dbg.ipc(
+        'tasks:createPrReviewTask projectId=%s prId=%d',
+        projectId,
+        pullRequestId,
+      );
+      const { task } = await createOrGetPrReviewTask(
+        { projectId, pullRequestId },
+        {
+          findActivePrReviewTask: TaskRepository.findActivePrReviewTask,
+          findProjectById: ProjectRepository.findById,
+          getPullRequest,
+          fetchSourceBranch: fetchPrReviewSourceBranch,
+          createWorktree,
+          cleanupWorktree,
+          createTask: TaskRepository.create,
+          updateTask: TaskRepository.update,
+          setPrWorkspaceState: TaskRepository.setPrWorkspaceState,
+          emitTaskUpsert,
+        },
+      );
+      return task;
+    },
+    deletePrWorkspaceTask,
+    deleteAllPrWorkspaces,
+    resolveClosedPrWorkspace,
+  });
+
   ipcMain.handle(
     'cache:setSubscriptions',
     (event, update: CacheSubscriptionUpdateInput) => {
@@ -1169,7 +1316,7 @@ export function registerIpcHandlers() {
           meta,
         });
 
-        agentService.start(step.id).catch((err) => {
+        startAgentForStep(step.id).catch((err) => {
           dbg.ipc(
             'Error auto-starting feature map agent for step %s: %O',
             step.id,
@@ -1427,8 +1574,9 @@ export function registerIpcHandlers() {
         agentBackend,
         images,
         updateWorkItemStatus,
-        ...taskData
+        ...rendererTaskData
       } = data;
+      const taskData = sanitizeRendererTaskCreate(rendererTaskData);
       const taskPromptOccurredAt = new Date().toISOString();
       const project = await ProjectRepository.findById(taskData.projectId);
       if (!project) {
@@ -1442,7 +1590,7 @@ export function registerIpcHandlers() {
 
       const task = await createTaskAndEmit({
         ...taskData,
-        startCommitHash: taskData.startCommitHash ?? startCommitHash,
+        startCommitHash,
       });
 
       // Auto-create a single step for the task
@@ -1501,8 +1649,9 @@ export function registerIpcHandlers() {
         thinkingEffort,
         agentBackend,
         updateWorkItemStatus,
-        ...taskData
+        ...rendererTaskData
       } = data;
+      const taskData = sanitizeRendererTaskCreate(rendererTaskData);
       const taskPromptOccurredAt = new Date().toISOString();
       dbg.ipc(
         'tasks:createWithWorktree useWorktree=%s, useExistingBranch=%s, sourceBranch=%s, autoStart=%s',
@@ -1529,7 +1678,7 @@ export function registerIpcHandlers() {
 
         task = await createTaskAndEmit({
           ...taskData,
-          startCommitHash: taskData.startCommitHash ?? startCommitHash,
+          startCommitHash,
         });
       } else {
         // Get the project to access its path and name
@@ -1700,7 +1849,7 @@ export function registerIpcHandlers() {
           agentService.setPendingImages(task.id, images);
         }
         // Start agent in background (don't await to return task immediately)
-        agentService.start(step.id).catch((err) => {
+        startAgentForStep(step.id).catch((err) => {
           dbg.ipc('Error auto-starting agent for step %s: %O', step.id, err);
         });
       }
@@ -1708,45 +1857,52 @@ export function registerIpcHandlers() {
       return task;
     },
   );
-  ipcMain.handle(
-    'tasks:createPrReviewTask',
-    async (
-      _,
-      params: {
-        projectId: string;
-        pullRequestId: number;
+  registerStartPrCommandHandler({
+    ipcMain,
+    startPrCommand,
+    deps: {
+      findActivePrReviewTask: TaskRepository.findActivePrReviewTask,
+      findProjectById: ProjectRepository.findById,
+      getPullRequest,
+      fetchSourceBranch: fetchPrReviewSourceBranch,
+      createWorktree,
+      cleanupWorktree,
+      createTask: TaskRepository.create,
+      updateTask: TaskRepository.update,
+      setPrWorkspaceState: TaskRepository.setPrWorkspaceState,
+      emitTaskUpsert,
+      findCommandById: ProjectCommandRepository.findById,
+      findCommandGroupById: ProjectCommandGroupRepository.findById,
+      resetLogs: (taskId, runCommandIds) => {
+        runCommandIds.forEach((runCommandId) => {
+          resetRunCommandLogsAndBroadcast({
+            taskId,
+            runCommandId,
+            generation: 0,
+          });
+        });
       },
-    ) => {
-      const { projectId, pullRequestId } = params;
-      dbg.ipc(
-        'tasks:createPrReviewTask projectId=%s prId=%d',
-        projectId,
-        pullRequestId,
-      );
-
-      const { task } = await createOrGetPrReviewTask(params, {
-        findActivePrReviewTask: TaskRepository.findActivePrReviewTask,
-        findProjectById: ProjectRepository.findById,
-        getPullRequest,
-        fetchSourceBranch: fetchPrReviewSourceBranch,
-        createWorktree,
-        createTask: createTaskAndEmit,
-        updateTask: updateTaskAndEmit,
-      });
-
-      return task;
+      startCommand: (startParams, options) =>
+        runCommandService.startCommand(startParams, options),
+      startGroup: (startParams, options) =>
+        runCommandService.startGroup(startParams, options),
     },
-  );
+  });
   ipcMain.handle('tasks:update', async (_, id: string, data: UpdateTask) => {
-    if (data.sessionRules !== undefined) {
-      return withTaskSessionRulesLock(id, async () => {
-        const task = await TaskRepository.findById(id);
-        if (!task) throw new Error(`Task ${id} not found`);
-        ensureSessionRulesCanBeModified(task);
-        return updateTaskAndEmit(id, data);
-      });
+    const task = await TaskRepository.findById(id);
+    if (task) validateRendererTaskUpdate(task, data);
+
+    if (data.status === undefined && data.userCompleted === undefined) {
+      return updateTaskAndEmit(id, data);
     }
-    return updateTaskAndEmit(id, data);
+
+    return task
+      ? runTaskDestructiveWithPrReviewLifecycle(
+          task,
+          () => updateTaskAndEmit(id, data),
+          { findTaskById: TaskRepository.findById },
+        )
+      : updateTaskAndEmit(id, data);
   });
   ipcMain.handle(
     'tasks:updatePendingMessage',
@@ -1765,68 +1921,100 @@ export function registerIpcHandlers() {
         deleteWorktree?: boolean;
       },
     ) => {
-      await runCommandService.stopCommandsForTask(id);
-      dbg.ipc('Stopped commands for task %s', id);
-
-      const task = await TaskRepository.findById(id);
-
-      if (task?.worktreePath) {
-        await closeEditorWindowsForTaskWorktree(task);
-        const project = await ProjectRepository.findById(task.projectId);
-        if (project) {
-          await cleanupWorktree({
-            worktreePath: task.worktreePath,
-            projectPath: project.path,
-            skipIfChanges: !options?.deleteWorktree,
-            branchCleanup:
-              task.branchName === task.sourceBranch ? 'keep' : 'delete',
-            force: options?.deleteWorktree ?? false,
-          });
-          dbg.ipc('Deleted worktree for task %s', id);
+      const deleteOperation = async (task: Task | undefined) => {
+        if (task?.worktreePath) {
+          const project = await ProjectRepository.findById(task.projectId);
+          if (project) {
+            await cleanupTaskForDeletion(
+              {
+                task,
+                projectPath: project.path,
+                force: options?.deleteWorktree ?? false,
+              },
+              {
+                stopCommandsForTask: (taskId) =>
+                  runCommandService.stopCommandsForTask(taskId),
+                closeEditorWindowsForTaskWorktree,
+                pathExists,
+                cleanupWorktree,
+                cleanupMissingWorktree,
+                getVerifiedCleanupIdentity:
+                  TaskRepository.getVerifiedCleanupIdentity,
+                markCleanupIdentityVerified:
+                  TaskRepository.markCleanupIdentityVerified,
+              },
+            );
+            dbg.ipc('Deleted worktree for task %s', id);
+          } else {
+            await ensureTaskCommandsStopped(id, (taskId) =>
+              runCommandService.stopCommandsForTask(taskId),
+            );
+          }
+        } else {
+          await ensureTaskCommandsStopped(id, (taskId) =>
+            runCommandService.stopCommandsForTask(taskId),
+          );
         }
-      }
+        dbg.ipc('Stopped commands for task %s', id);
 
-      // Clean up task-scoped temporary workspaces (in parallel)
-      const steps = await TaskStepRepository.findByTaskId(id);
-      await Promise.all(
-        steps
-          .filter(
-            (step) =>
-              (step.type === 'skill-creation' &&
-                isSkillCreationStepMeta(step.meta)) ||
-              (step.type === 'feature-map' && isFeatureMapStepMeta(step.meta)),
-          )
-          .map((step) => {
-            const cleanup =
-              step.type === 'feature-map' && isFeatureMapStepMeta(step.meta)
-                ? cleanupFeatureMapTempDir(step.meta.tempDir)
-                : cleanupSkillWorkspace(
-                    (step.meta as SkillCreationStepMeta).workspacePath,
-                  );
-            return cleanup.catch((err) => {
-              dbg.ipc(
-                'Failed to cleanup temp workspace for step %s: %O',
-                step.id,
-                err,
-              );
-            });
-          }),
-      );
-
-      if (task) {
-        await deleteTaskAndEmit(
-          task,
-          steps.map((step) => step.id),
+        // Clean up task-scoped temporary workspaces (in parallel)
+        const steps = await TaskStepRepository.findByTaskId(id);
+        await Promise.all(
+          steps
+            .filter(
+              (step) =>
+                (step.type === 'skill-creation' &&
+                  isSkillCreationStepMeta(step.meta)) ||
+                (step.type === 'feature-map' && isFeatureMapStepMeta(step.meta)),
+            )
+            .map((step) => {
+              const cleanup =
+                step.type === 'feature-map' && isFeatureMapStepMeta(step.meta)
+                  ? cleanupFeatureMapTempDir(step.meta.tempDir)
+                  : cleanupSkillWorkspace(
+                      (step.meta as SkillCreationStepMeta).workspacePath,
+                    );
+              return cleanup.catch((err) => {
+                dbg.ipc(
+                  'Failed to cleanup temp workspace for step %s: %O',
+                  step.id,
+                  err,
+                );
+              });
+            }),
         );
-      } else {
-        await TaskRepository.delete(id);
-      }
-      dbg.ipc('Deleted task %s', id);
+
+        if (task) {
+          await deleteTaskAndEmit(
+            task,
+            steps.map((step) => step.id),
+          );
+        } else {
+          await TaskRepository.delete(id);
+        }
+        dbg.ipc('Deleted task %s', id);
+      };
+
+      return routeTaskDeletion(
+        { taskId: id },
+        {
+          findTaskById: TaskRepository.findById,
+          deletePrWorkspaceTask,
+          deleteGenericTask: (task) =>
+            task
+              ? runTaskDestructiveWithPrReviewLifecycle(task, deleteOperation, {
+                  findTaskById: TaskRepository.findById,
+                })
+              : deleteOperation(undefined),
+        },
+      );
     },
   );
   ipcMain.handle(
     'steps:setMode',
     async (_, stepId: string, mode: InteractionMode) => {
+      const step = await TaskStepRepository.findById(stepId);
+      if (step) validateRendererStepModeChange(step);
       await agentService.setMode(stepId, mode);
       return TaskStepRepository.findById(stepId);
     },
@@ -1928,113 +2116,151 @@ export function registerIpcHandlers() {
     return TaskStepRepository.findById(stepId);
   });
   ipcMain.handle('tasks:toggleUserCompleted', async (_, id: string) => {
-    // Fetch task before toggling to know the current state
-    const taskBefore = await TaskRepository.findById(id);
-    const isCompleting = taskBefore && !taskBefore.userCompleted;
+    const initialTask = await TaskRepository.findById(id);
+    const toggleOperation = async (taskBefore: Task | undefined) => {
+      const isCompleting = taskBefore && !taskBefore.userCompleted;
 
-    if (isCompleting) {
-      await runCommandService.stopCommandsForTask(id);
-      await closeEditorWindowsForTaskWorktree(taskBefore);
-    }
+      if (isCompleting) {
+        await ensureTaskCommandsStopped(id, (taskId) =>
+          runCommandService.stopCommandsForTask(taskId),
+        );
+        await closeEditorWindowsForTaskWorktree(taskBefore);
+      }
 
-    // Perform the toggle
-    const updatedTask = await TaskRepository.toggleUserCompleted(id);
-    emitTaskUpsert(updatedTask);
+      const updatedTask = await TaskRepository.toggleUserCompleted(id);
+      emitTaskUpsert(updatedTask);
 
-    if (isCompleting) {
-      await cleanupFeatureMapTempDirsForTask(id);
-      await agentService.compactRawMessages(id);
-    }
-
-    return updatedTask;
-  });
-  ipcMain.handle(
-    'tasks:complete',
-    async (_, id: string, options: { cleanupWorktree?: boolean }) => {
-      const task = await TaskRepository.findById(id);
-      if (!task) throw new Error('Task not found');
-
-      let updatedTask: Task = task;
-
-      if (!task.userCompleted) {
-        // Stop running commands and compact messages
-        await runCommandService.stopCommandsForTask(id);
-        await closeEditorWindowsForTaskWorktree(task);
-
-        updatedTask = await TaskRepository.markUserCompleted(id);
-        emitTaskUpsert(updatedTask);
+      if (isCompleting) {
         await cleanupFeatureMapTempDirsForTask(id);
         await agentService.compactRawMessages(id);
       }
 
-      // If worktree cleanup requested, eagerly clear worktree fields so the
-      // task appears "deworktree'd" immediately. The actual git cleanup runs
-      // as a renderer-side background job via tasks:worktree:cleanupAfterCompletion.
-      if (options.cleanupWorktree && task.worktreePath && task.branchName) {
-        const clearedTask = await updateTaskAndEmit(id, {
-          worktreePath: null,
-          branchName: null,
-          startCommitHash: null,
-          sourceBranch: null,
-        });
-        return {
-          task: clearedTask,
-          worktreeCleanup: {
-            worktreePath: task.worktreePath,
-            branchName: task.branchName,
-            keepBranch: task.branchName === task.sourceBranch,
-          },
-        };
-      }
+      return updatedTask;
+    };
 
-      return { task: updatedTask };
-    },
-  );
+    return initialTask
+      ? runTaskDestructiveWithPrReviewLifecycle(
+          initialTask,
+          toggleOperation,
+          { findTaskById: TaskRepository.findById },
+        )
+      : toggleOperation(undefined);
+  });
   ipcMain.handle(
-    'tasks:worktree:cleanupAfterCompletion',
-    async (
-      _,
-      taskId: string,
-      params: {
-        worktreePath: string;
-        branchName: string;
-        keepBranch?: boolean;
-      },
-    ) => {
-      // Resolve projectPath from the database rather than trusting renderer input.
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error('Task not found');
-      const project = await ProjectRepository.findById(task.projectId);
-      if (!project) throw new Error('Project not found');
+    'tasks:complete',
+    async (_, id: string, options: { cleanupWorktree?: boolean }) => {
+      const initialTask = await TaskRepository.findById(id);
+      if (!initialTask) throw new Error('Task not found');
 
-      const worktreeExists = await pathExists(params.worktreePath);
-      const editorCloseWarning = await closeEditorWindowsForTaskWorktree({
-        id: taskId,
-        worktreePath: params.worktreePath,
-      });
-      if (worktreeExists) {
-        await cleanupWorktree({
-          worktreePath: params.worktreePath,
-          projectPath: project.path,
-          branchName: params.branchName,
-          branchCleanup: params.keepBranch ? 'keep' : undefined,
-          force: true,
-        });
-      } else if (!params.keepBranch) {
-        await cleanupMissingWorktree({
-          projectPath: project.path,
-          branchName: params.branchName,
-        });
-      }
-      return { editorCloseWarning };
+      return runTaskDestructiveWithPrReviewLifecycle(
+        initialTask,
+        (task) =>
+          completeTaskWithWorktreeCleanup(
+            { task, cleanupWorktree: options.cleanupWorktree ?? false },
+            {
+              stopCommandsForTask: (taskId) =>
+                runCommandService.stopCommandsForTask(taskId),
+              closeEditorWindowsForTaskWorktree,
+              cleanupPrReviewWorkspace: (prReviewTask) =>
+                cleanPrReviewWorkspaceUnlocked(prReviewTask, {
+                  findTaskById: TaskRepository.findById,
+                  findProjectById: ProjectRepository.findById,
+                  stopCommandsForTask: (taskId) =>
+                    runCommandService.stopCommandsForTask(taskId),
+                  closeEditorWindowsForTaskWorktree,
+                  pathExists,
+                  cleanupWorktree,
+                  cleanupMissingWorktree,
+                  getVerifiedCleanupIdentity:
+                    TaskRepository.getVerifiedCleanupIdentity,
+                  markCleanupIdentityVerified:
+                    TaskRepository.markCleanupIdentityVerified,
+                  clearCleanupIdentity: TaskRepository.clearCleanupIdentity,
+                  clearWorktreeMetadata: (taskId) =>
+                    TaskRepository.update(taskId, {
+                      worktreePath: null,
+                      branchName: null,
+                      startCommitHash: null,
+                      sourceBranch: null,
+                    }),
+                  emitTaskUpsert,
+                }),
+              cleanupTaskWorktree: async (cleanupTask) => {
+                const project = await ProjectRepository.findById(
+                  cleanupTask.projectId,
+                );
+                if (!project || !cleanupTask.worktreePath) {
+                  throw new Error('Task worktree project not found');
+                }
+                await cleanupTaskWorktree(
+                  {
+                    task: {
+                      ...cleanupTask,
+                      worktreePath: cleanupTask.worktreePath,
+                    },
+                    projectPath: project.path,
+                    keepBranch: false,
+                  },
+                  {
+                    stopCommandsForTask: (taskId) =>
+                      runCommandService.stopCommandsForTask(taskId),
+                    pathExists,
+                    closeEditorWindowsForTaskWorktree,
+                    cleanupWorktree,
+                    cleanupMissingWorktree,
+                    getVerifiedCleanupIdentity:
+                      TaskRepository.getVerifiedCleanupIdentity,
+                    markCleanupIdentityVerified:
+                      TaskRepository.markCleanupIdentityVerified,
+                    clearCleanupIdentity: TaskRepository.clearCleanupIdentity,
+                    clearWorktreeMetadata: (taskId) =>
+                      updateTaskAndEmit(taskId, {
+                        worktreePath: null,
+                        branchName: null,
+                        startCommitHash: null,
+                        sourceBranch: null,
+                      }),
+                  },
+                );
+                const updatedTask = await TaskRepository.findById(
+                  cleanupTask.id,
+                );
+                if (!updatedTask) throw new Error('Task not found after cleanup');
+                return { task: updatedTask };
+              },
+              markUserCompleted: TaskRepository.markUserCompleted,
+              clearWorktreeMetadata: (taskId) =>
+                updateTaskAndEmit(taskId, {
+                  worktreePath: null,
+                  branchName: null,
+                  startCommitHash: null,
+                  sourceBranch: null,
+                }),
+              cleanupFeatureMapTempDirs: cleanupFeatureMapTempDirsForTask,
+              compactRawMessages: (taskId) =>
+                agentService.compactRawMessages(taskId),
+              emitTaskUpsert,
+            },
+          ),
+        { findTaskById: TaskRepository.findById },
+      );
     },
   );
-  ipcMain.handle('tasks:clearUserCompleted', (_, id: string) =>
-    TaskRepository.clearUserCompleted(id).then((task) => {
-      emitTaskUpsert(task);
-      return task;
-    }),
-  );
+  ipcMain.handle('tasks:clearUserCompleted', async (_, id: string) => {
+    const initialTask = await TaskRepository.findById(id);
+    const clearOperation = () =>
+      TaskRepository.clearUserCompleted(id).then((task) => {
+        emitTaskUpsert(task);
+        return task;
+      });
+    return initialTask
+      ? runTaskDestructiveWithPrReviewLifecycle(
+          initialTask,
+          clearOperation,
+          { findTaskById: TaskRepository.findById },
+        )
+      : clearOperation();
+  });
   ipcMain.handle(
     'tasks:reorder',
     async (
@@ -2055,105 +2281,32 @@ export function registerIpcHandlers() {
     },
   );
   ipcMain.handle(
-    'tasks:addSessionAllowedTool',
-    async (
-      _,
-      taskId: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => {
-      const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      return mutateTaskSessionRules(taskId, (rules, task) => {
-        ensureSessionRulesCanBeModified(task);
-        rules[tool] = buildToolPermissionConfig({
-          existing: rules[tool],
-          matchValue,
-        });
-        return rules;
-      });
-    },
+    'steps:addSessionAllowedTool',
+    (_, payload: unknown) =>
+      stepPermissionService.addSessionAllowedTool(
+        validateStepPermissionParams(payload),
+      ),
   );
   ipcMain.handle(
-    'tasks:removeSessionAllowedTool',
-    (_, taskId: string, toolName: string, pattern?: string) =>
-      mutateTaskSessionRules(taskId, (rules, task) => {
-        ensureSessionRulesCanBeModified(task);
-        if (pattern) {
-          const existing = rules[toolName];
-          if (typeof existing === 'object' && existing !== null) {
-            const updatedPatterns = { ...existing };
-            delete updatedPatterns[pattern];
-            if (Object.keys(updatedPatterns).length > 0) {
-              rules[toolName] = updatedPatterns;
-            } else {
-              delete rules[toolName];
-            }
-          }
-        } else {
-          delete rules[toolName];
-        }
-        return rules;
-      }),
+    'steps:removeSessionAllowedTool',
+    (_, payload: unknown) =>
+      stepPermissionService.removeSessionAllowedTool(
+        validateRemoveStepPermissionParams(payload),
+      ),
   );
-
   ipcMain.handle(
-    'tasks:allowForProject',
-    async (
-      _,
-      taskId: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => {
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error(`Task ${taskId} not found`);
-      ensureSessionRulesCanBeModified(task);
-      const project = await ProjectRepository.findById(task.projectId);
-      if (!project) throw new Error(`Project ${task.projectId} not found`);
-
-      // Write to .jean-claude/settings.local.json (project scope)
-      await addProjectPermission(project.path, toolName, input);
-
-      // Also add to session rules
-      const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      return mutateTaskSessionRules(taskId, (rules, latestTask) => {
-        ensureSessionRulesCanBeModified(latestTask);
-        rules[tool] = buildToolPermissionConfig({
-          existing: rules[tool],
-          matchValue,
-        });
-        return rules;
-      });
-    },
+    'steps:allowForProject',
+    (_, payload: unknown) =>
+      stepPermissionService.allowForProject(
+        validateStepPermissionParams(payload),
+      ),
   );
-
   ipcMain.handle(
-    'tasks:allowForProjectWorktrees',
-    async (
-      _,
-      taskId: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => {
-      const task = await TaskRepository.findById(taskId);
-      if (!task) throw new Error(`Task ${taskId} not found`);
-      ensureSessionRulesCanBeModified(task);
-      const project = await ProjectRepository.findById(task.projectId);
-      if (!project) throw new Error(`Project ${task.projectId} not found`);
-
-      // Write to .jean-claude/settings.local.json (worktrees scope)
-      await addWorktreePermission(project.path, toolName, input);
-
-      // Also add to session rules
-      const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      return mutateTaskSessionRules(taskId, (rules, latestTask) => {
-        ensureSessionRulesCanBeModified(latestTask);
-        rules[tool] = buildToolPermissionConfig({
-          existing: rules[tool],
-          matchValue,
-        });
-        return rules;
-      });
-    },
+    'steps:allowForProjectWorktrees',
+    (_, payload: unknown) =>
+      stepPermissionService.allowForProjectWorktrees(
+        validateStepPermissionParams(payload),
+      ),
   );
 
   // Global permissions
@@ -2374,40 +2527,11 @@ export function registerIpcHandlers() {
   );
 
   ipcMain.handle(
-    'tasks:allowGlobally',
-    async (
-      _,
-      taskId: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => {
-      if (typeof taskId !== 'string' || !taskId.trim()) {
-        throw new Error('Invalid taskId: must be a non-empty string');
-      }
-      if (typeof toolName !== 'string' || !toolName.trim()) {
-        throw new Error('Invalid toolName: must be a non-empty string');
-      }
-      if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-        throw new Error('Invalid input: must be a plain object');
-      }
-      const added = await addGlobalPermission({ toolName, input });
-      if (!added) {
-        throw new Error(
-          'Bare "bash" without a command pattern is not allowed globally',
-        );
-      }
-
-      // Also add to session rules for immediate effect
-      const { tool, matchValue } = normalizeToolRequest(toolName, input);
-      return mutateTaskSessionRules(taskId, (rules, task) => {
-        ensureSessionRulesCanBeModified(task);
-        rules[tool] = buildToolPermissionConfig({
-          existing: rules[tool],
-          matchValue,
-        });
-        return rules;
-      });
-    },
+    'steps:allowGlobally',
+    (_, payload: unknown) =>
+      stepPermissionService.allowGlobally(
+        validateStepPermissionParams(payload),
+      ),
   );
 
   // Task worktree operations - resolve paths internally from taskId
@@ -2676,85 +2800,97 @@ export function registerIpcHandlers() {
         commitAllUnstaged?: boolean;
       },
     ) => {
-      const task = await TaskRepository.findById(taskId);
-      if (!task?.worktreePath) {
+      const initialTask = await TaskRepository.findById(taskId);
+      if (!initialTask?.worktreePath) {
         throw new Error(`Task ${taskId} does not have a worktree`);
       }
 
-      const project = await ProjectRepository.findById(task.projectId);
-      if (!project) {
-        throw new Error(`Project ${task.projectId} not found`);
-      }
+      return runTaskDestructiveWithPrReviewLifecycle(
+        initialTask,
+        async (task) => {
+          if (!task.worktreePath) {
+            throw new Error(`Task ${taskId} does not have a worktree`);
+          }
 
-      // Block merges into protected branches (case-insensitive for macOS HFS+)
-      if (
-        project.protectedBranches?.some(
-          (b) => b.toLowerCase() === params.targetBranch.toLowerCase(),
-        )
-      ) {
-        return {
-          success: false,
-          error: `Branch "${params.targetBranch}" is protected. Direct merges into this branch are not allowed.`,
-        };
-      }
+          const project = await ProjectRepository.findById(task.projectId);
+          if (!project) {
+            throw new Error(`Project ${task.projectId} not found`);
+          }
 
-      // Auto-generate commit message if squash merge with no user-provided message
-      let commitMessage = params.commitMessage;
-      if (params.squash && !commitMessage?.trim()) {
-        commitMessage = await generateMergeMessageForTask(
-          task,
-          project,
-          params.targetBranch,
-        );
-      }
+          // Block merges into protected branches (case-insensitive for macOS HFS+)
+          if (
+            project.protectedBranches?.some(
+              (b) => b.toLowerCase() === params.targetBranch.toLowerCase(),
+            )
+          ) {
+            return {
+              success: false,
+              error: `Branch "${params.targetBranch}" is protected. Direct merges into this branch are not allowed.`,
+            };
+          }
 
-      await runCommandService.stopCommandsForTask(taskId);
+          // Auto-generate commit message if squash merge with no user-provided message
+          let commitMessage = params.commitMessage;
+          if (params.squash && !commitMessage?.trim()) {
+            commitMessage = await generateMergeMessageForTask(
+              task,
+              project,
+              params.targetBranch,
+            );
+          }
 
-      if (params.commitAllUnstaged) {
-        const status = await getWorktreeStatus(task.worktreePath);
-        if (status.hasUnstagedChanges) {
-          await commitWorktreeChanges({
+          await ensureTaskCommandsStopped(taskId, (id) =>
+            runCommandService.stopCommandsForTask(id),
+          );
+
+          if (params.commitAllUnstaged) {
+            const status = await getWorktreeStatus(task.worktreePath);
+            if (status.hasUnstagedChanges) {
+              await commitWorktreeChanges({
+                worktreePath: task.worktreePath,
+                projectPath: project.path,
+                message: 'chore: commit unstaged changes before merge',
+                stageAll: true,
+                noVerify: project.commitWithNoVerify,
+              });
+            }
+          }
+
+          const result = await mergeWorktree({
             worktreePath: task.worktreePath,
             projectPath: project.path,
-            message: 'chore: commit unstaged changes before merge',
-            stageAll: true,
+            targetBranch: params.targetBranch,
+            squash: params.squash,
+            commitMessage,
             noVerify: project.commitWithNoVerify,
           });
-        }
-      }
 
-      const result = await mergeWorktree({
-        worktreePath: task.worktreePath,
-        projectPath: project.path,
-        targetBranch: params.targetBranch,
-        squash: params.squash,
-        commitMessage,
-        noVerify: project.commitWithNoVerify,
-      });
+          // On successful merge, clear worktree fields and mark the task as
+          // completed atomically. Doing this here (rather than from the
+          // renderer) avoids a race where toggleUserCompleted sees stale
+          // worktree fields, detects the directory as missing, and
+          // incorrectly prompts the user for orphan cleanup.
+          if (result.success) {
+            await closeEditorWindowsForTaskWorktree(task);
+            await updateTaskAndEmit(taskId, {
+              worktreePath: null,
+              branchName: null,
+              startCommitHash: null,
+              sourceBranch: null,
+            });
+            const updatedTask = await TaskRepository.toggleUserCompleted(taskId);
+            emitTaskUpsert(updatedTask);
+            if (task.parentTaskId) {
+              await updateTaskAndEmit(task.parentTaskId, {
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          }
 
-      // On successful merge, clear worktree fields and mark the task as
-      // completed atomically.  Doing this here (rather than from the
-      // renderer) avoids a race where toggleUserCompleted sees stale
-      // worktree fields, detects the directory as missing, and
-      // incorrectly prompts the user for orphan cleanup.
-      if (result.success) {
-        await closeEditorWindowsForTaskWorktree(task);
-        await updateTaskAndEmit(taskId, {
-          worktreePath: null,
-          branchName: null,
-          startCommitHash: null,
-          sourceBranch: null,
-        });
-        const updatedTask = await TaskRepository.toggleUserCompleted(taskId);
-        emitTaskUpsert(updatedTask);
-        if (task.parentTaskId) {
-          await updateTaskAndEmit(task.parentTaskId, {
-            updatedAt: new Date().toISOString(),
-          });
-        }
-      }
-
-      return result;
+          return result;
+        },
+        { findTaskById: TaskRepository.findById },
+      );
     },
   );
 
@@ -2813,7 +2949,7 @@ export function registerIpcHandlers() {
         if (step.images?.length) {
           agentService.setPendingImages(step.taskId, step.images);
         }
-        agentService.start(step.id).catch((err) => {
+        startAgentForStep(step.id).catch((err) => {
           dbg.ipc('Error auto-starting step %s: %O', step.id, err);
           StepService.errorStep(step.id).catch((stepErr) => {
             dbg.ipc(
@@ -2846,7 +2982,7 @@ export function registerIpcHandlers() {
         getPrReviewAgentSetting: () => SettingsRepository.get('prReviewAgent'),
         getBackendsSetting: () => SettingsRepository.get('backends'),
         createStep: StepService.create,
-        startAgent: (stepId) => agentService.start(stepId),
+        startAgent: startAgentForStep,
         onStartError: (step, error) => {
           dbg.ipc('Error starting PR review chat step %s: %O', step.id, error);
           StepService.errorStep(step.id).catch((stepErr) => {
@@ -2885,7 +3021,7 @@ export function registerIpcHandlers() {
             prompt,
             occurredAt: new Date().toISOString(),
           });
-          await agentService.sendMessage(stepId, textPrompt(prompt));
+          await sendMessageForStep(stepId, textPrompt(prompt));
         },
         onContinueError: (step, error) => {
           dbg.ipc('Error continuing PR review chat step %s: %O', step.id, error);
@@ -2901,13 +3037,14 @@ export function registerIpcHandlers() {
     },
   );
   ipcMain.handle('steps:update', async (_, stepId: string, data: UpdateTaskStep) => {
-    await ensureGenericStepCanBeUpdated(stepId);
+    await ensureGenericStepCanBeUpdated(stepId, data);
     return StepService.update(stepId, data);
   });
 
   ipcMain.handle('steps:archive', async (_, stepId: string) => {
     const step = await StepService.findById(stepId);
     if (!step) throw new Error(`Step not found: ${stepId}`);
+    validateRendererStepArchive(step);
     return StepService.archive(stepId, {
       beforePersist:
         step.status === 'running'
@@ -3286,41 +3423,6 @@ export function registerIpcHandlers() {
         status?: 'active' | 'completed' | 'abandoned' | 'all';
       },
     ) => listPullRequests(params),
-  );
-
-  ipcMain.handle(
-    'azureDevOps:getPullRequest',
-    async (
-      _,
-      params: {
-        providerId: string;
-        projectId: string;
-        repoId: string;
-        pullRequestId: number;
-      },
-    ) => {
-      const pullRequest = await getPullRequest(params);
-      if (pullRequest.status === 'completed') {
-        const projects = await ProjectRepository.findAll();
-        await Promise.all(
-          projects
-            .filter(
-              (project) =>
-                project.repoProviderId === params.providerId &&
-                project.repoProjectId === params.projectId &&
-                project.repoId === params.repoId,
-            )
-            .map((project) =>
-              completePrReviewTasksForMergedPr({
-                projectId: project.id,
-                pullRequestId: params.pullRequestId,
-              }),
-            ),
-        );
-      }
-
-      return pullRequest;
-    },
   );
 
   ipcMain.handle(
@@ -3841,37 +3943,47 @@ export function registerIpcHandlers() {
     'tasks:worktree:delete',
     async (_, taskId: string, options?: { keepBranch?: boolean }) => {
       const task = await TaskRepository.findById(taskId);
-      if (!task?.worktreePath) return {};
+      if (task && shouldUsePrReviewWorkspaceCleanup(task)) {
+        return cleanPrReviewWorkspace({
+          projectId: task.projectId,
+          pullRequestId: task.pullRequestId,
+          taskId,
+        });
+      }
+      const worktreePath = task?.worktreePath;
+      if (!task || !worktreePath) return {};
 
       const project = await ProjectRepository.findById(task.projectId);
       if (!project) return {};
 
       const shouldKeepBranch = options?.keepBranch ?? false;
-      const worktreeExists = await pathExists(task.worktreePath);
-      const editorCloseWarning = await closeEditorWindowsForTaskWorktree(task);
-
-      if (worktreeExists) {
-        await cleanupWorktree({
-          worktreePath: task.worktreePath,
+      return cleanupTaskWorktree(
+        {
+          task: { ...task, worktreePath },
           projectPath: project.path,
-          branchName: task.branchName,
-          branchCleanup: shouldKeepBranch ? 'keep' : 'delete',
-          force: true,
-        });
-      } else if (!shouldKeepBranch && task.branchName) {
-        await cleanupMissingWorktree({
-          projectPath: project.path,
-          branchName: task.branchName,
-        });
-      }
-
-      await updateTaskAndEmit(taskId, {
-        worktreePath: null,
-        branchName: null,
-        startCommitHash: null,
-        sourceBranch: null,
-      });
-      return { editorCloseWarning };
+          keepBranch: shouldKeepBranch,
+        },
+        {
+          stopCommandsForTask: (id) =>
+            runCommandService.stopCommandsForTask(id),
+          pathExists,
+          closeEditorWindowsForTaskWorktree,
+          cleanupWorktree,
+          cleanupMissingWorktree,
+          getVerifiedCleanupIdentity:
+            TaskRepository.getVerifiedCleanupIdentity,
+          markCleanupIdentityVerified:
+            TaskRepository.markCleanupIdentityVerified,
+          clearCleanupIdentity: TaskRepository.clearCleanupIdentity,
+          clearWorktreeMetadata: (id) =>
+            updateTaskAndEmit(id, {
+              worktreePath: null,
+              branchName: null,
+              startCommitHash: null,
+              sourceBranch: null,
+            }),
+        },
+      );
     },
   );
 
@@ -4202,7 +4314,7 @@ export function registerIpcHandlers() {
     if (window) {
       agentService.setMainWindow(window);
     }
-    agentService.start(stepId).catch((err) => {
+    startAgentForStep(stepId).catch((err) => {
       dbg.ipc('Error starting step %s: %O', stepId, err);
     });
     return;
@@ -4240,7 +4352,7 @@ export function registerIpcHandlers() {
         prompt: buildPromptActivityText(parts),
         occurredAt: new Date().toISOString(),
       });
-      return agentService.sendMessage(stepId, parts);
+      return sendMessageForStep(stepId, parts);
     },
   );
 
@@ -4788,27 +4900,47 @@ export function registerIpcHandlers() {
   // Run Commands
   ipcMain.handle(
     'project:commands:run:startCommand',
-    (
+    async (
       _,
       params: {
         taskId: string;
-        projectId: string;
-        workingDir: string;
         runCommandId: string;
       },
-    ) => runCommandService.startCommand(params),
+    ) => {
+      const resolved = await resolveRunCommandStart(params, {
+        findTaskById: TaskRepository.findById,
+        findProjectById: ProjectRepository.findById,
+        findCommandById: ProjectCommandRepository.findById,
+      });
+      return (
+      runCommandWithPrReviewLifecycle(
+        resolved,
+        (resolvedParams) => runCommandService.startCommand(resolvedParams),
+        { findTaskById: TaskRepository.findById },
+      )
+      );
+    },
   );
   ipcMain.handle(
     'project:commands:run:startGroup',
-    (
+    async (
       _,
       params: {
         taskId: string;
-        projectId: string;
-        workingDir: string;
         runCommandIds: string[];
       },
-    ) => runCommandService.startGroup(params),
+    ) => {
+      const resolved = await resolveRunCommandStart(params, {
+        findTaskById: TaskRepository.findById,
+        findProjectById: ProjectRepository.findById,
+        findCommandById: ProjectCommandRepository.findById,
+      });
+      return runCommandWithPrReviewLifecycle(
+        resolved,
+        (resolvedParams) => runCommandService.startGroup(resolvedParams),
+        { findTaskById: TaskRepository.findById },
+      );
+    },
   );
   ipcMain.handle(
     'project:commands:run:stopCommand',
@@ -4828,20 +4960,7 @@ export function registerIpcHandlers() {
     (
       _,
       params: { taskId: string; runCommandId: string; generation: number },
-    ) => {
-      const generation = runCommandService.resetLogs(params);
-      BrowserWindow.getAllWindows().forEach((win) => {
-        if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-          win.webContents.send(
-            'project:commands:run:logsReset',
-            params.taskId,
-            params.runCommandId,
-            generation,
-          );
-        }
-      });
-      return generation;
-    },
+    ) => resetRunCommandLogsAndBroadcast(params),
   );
   ipcMain.handle(
     'project:commands:run:sendSignal',
@@ -5894,7 +6013,7 @@ export function registerIpcHandlers() {
         });
 
         // Auto-start
-        agentService.start(step.id).catch((err) => {
+        startAgentForStep(step.id).catch((err) => {
           dbg.ipc(
             'Error auto-starting skill creation agent for step %s: %O',
             step.id,

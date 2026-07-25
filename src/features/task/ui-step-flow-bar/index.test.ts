@@ -38,6 +38,7 @@ function makeStep({
     output: null,
     images: null,
     meta: {},
+    sessionRules: {},
     autoStart: false,
     sortOrder,
     createdAt,

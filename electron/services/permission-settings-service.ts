@@ -107,7 +107,7 @@ function legacyArraysToScope(allow: string[], deny: string[]): PermissionScope {
   const applyAction = (entry: string, action: PermissionAction): void => {
     const normalized = parseLegacyPermissionEntry(entry);
     if (!normalized) return;
-    if (isBareBash(normalized.tool, normalized.pattern ?? '*')) return;
+    if (isUnrestrictedBashPattern(normalized.tool, normalized.pattern ?? '*')) return;
 
     if (!normalized.pattern) {
       scope[normalized.tool] = action;
@@ -545,10 +545,10 @@ function evaluateCompoundPermission(
  * Returns true if a permission string represents bare "bash" without a
  * specific command. Bare bash must never be allowed.
  */
-function isBareBash(tool: string, pattern: string): boolean {
-  const t = tool.toLowerCase();
-  const p = pattern.trim();
-  return t === 'bash' && (p === '*' || p === '' || p === '**');
+export function isUnrestrictedBashPattern(tool: string, pattern: string): boolean {
+  return (
+    tool.toLowerCase() === 'bash' && pattern.replaceAll(/[*?]/g, '').trim() === ''
+  );
 }
 
 /**
@@ -681,7 +681,7 @@ export async function addProjectPermission(
 ): Promise<void> {
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
 
-  if (isBareBash(tool, matchValue || '*')) {
+  if (isUnrestrictedBashPattern(tool, matchValue)) {
     dbg.agentPermission(
       'Refusing to allow bare "bash" — a specific command pattern is required',
     );
@@ -703,36 +703,65 @@ export async function addProjectPermission(
  *
  * Security: refuses to add bare bash (no command pattern).
  */
-export async function addWorktreePermission(
+export function addWorktreePermission(
   projectPath: string,
   toolName: string,
   input: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean>;
+export function addWorktreePermission<T>(
+  projectPath: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  afterPersisted: () => Promise<T>,
+): Promise<T | false>;
+export async function addWorktreePermission<T>(
+  projectPath: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  afterPersisted?: () => Promise<T>,
+): Promise<boolean | T> {
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
 
-  if (isBareBash(tool, matchValue || '*')) {
+  if (isUnrestrictedBashPattern(tool, matchValue)) {
     dbg.agentPermission(
       'Refusing to allow bare "bash" — a specific command pattern is required',
     );
-    return;
+    return false;
   }
 
-  const settings = await readSettings(projectPath);
+  return withProjectWriteLock(projectPath, async () => {
+    const settings = await readSettings(projectPath);
+    const hadWorktreeScope = settings.permissions.worktrees !== undefined;
+    if (!settings.permissions.worktrees) {
+      settings.permissions.worktrees = { extends: 'project' };
+    }
 
-  if (!settings.permissions.worktrees) {
-    settings.permissions.worktrees = { extends: 'project' };
-  }
+    const previous = settings.permissions.worktrees[tool];
+    settings.permissions.worktrees[tool] = buildToolPermissionConfig({
+      existing:
+        previous === 'project' || previous === undefined
+          ? undefined
+          : (previous as ToolPermissionConfig),
+      matchValue,
+    });
 
-  const existing = settings.permissions.worktrees[tool];
-  settings.permissions.worktrees[tool] = buildToolPermissionConfig({
-    existing:
-      existing === 'project' || existing === undefined
-        ? undefined
-        : (existing as ToolPermissionConfig),
-    matchValue,
+    await writeSettings(projectPath, settings);
+    try {
+      return afterPersisted ? await afterPersisted() : true;
+    } catch (error) {
+      const current = await readSettings(projectPath);
+      const worktrees = current.permissions.worktrees;
+      if (worktrees) {
+        if (previous === undefined) delete worktrees[tool];
+        else worktrees[tool] = previous;
+        if (!hadWorktreeScope && Object.keys(worktrees).every((key) => key === 'extends')) {
+          delete current.permissions.worktrees;
+        }
+        await writeSettings(projectPath, current);
+      }
+      throw error;
+    }
   });
-
-  await writeSettings(projectPath, settings);
 }
 
 // ---------------------------------------------------------------------------
@@ -797,20 +826,33 @@ async function writeProjectPermissions(
  *
  * @returns `true` if added, `false` if rejected (bare bash).
  */
-export async function addProjectPermissionRule({
-  projectPath,
-  toolName,
-  input,
-  action = 'allow',
-}: {
+type AddProjectPermissionRuleParams = {
   projectPath: string;
   toolName: string;
   input: Record<string, unknown>;
   action?: PermissionAction;
-}): Promise<boolean> {
+};
+
+export function addProjectPermissionRule(
+  params: AddProjectPermissionRuleParams,
+): Promise<boolean>;
+export function addProjectPermissionRule<T>(
+  params: AddProjectPermissionRuleParams & {
+    afterPersisted: () => Promise<T>;
+  },
+): Promise<T | false>;
+export async function addProjectPermissionRule<T>({
+  projectPath,
+  toolName,
+  input,
+  action = 'allow',
+  afterPersisted,
+}: AddProjectPermissionRuleParams & {
+  afterPersisted?: () => Promise<T>;
+}): Promise<boolean | T> {
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
 
-  if (isBareBash(tool, matchValue || '*') && action === 'allow') {
+  if (isUnrestrictedBashPattern(tool, matchValue) && action === 'allow') {
     dbg.agentPermission(
       'Refusing to allow bare "bash" at project level — a specific command pattern is required',
     );
@@ -819,14 +861,23 @@ export async function addProjectPermissionRule({
 
   return withProjectWriteLock(projectPath, async () => {
     const permissions = await readProjectPermissions(projectPath);
+    const previous = permissions[tool];
     permissions[tool] = buildToolPermissionConfig({
-      existing: permissions[tool],
+      existing: previous,
       matchValue,
       action,
     });
 
     await writeProjectPermissions(projectPath, permissions);
-    return true;
+    try {
+      return afterPersisted ? await afterPersisted() : true;
+    } catch (error) {
+      const current = await readProjectPermissions(projectPath);
+      if (previous === undefined) delete current[tool];
+      else current[tool] = previous;
+      await writeProjectPermissions(projectPath, current);
+      throw error;
+    }
   });
 }
 
@@ -887,7 +938,7 @@ export async function editProjectPermissionRule({
 }): Promise<void> {
   const newMatchValue = newPattern?.trim() || '';
 
-  if (isBareBash(tool, newMatchValue || '*') && action === 'allow') {
+  if (isUnrestrictedBashPattern(tool, newMatchValue) && action === 'allow') {
     throw new Error(
       'Bare "bash" without a command pattern is not allowed at project level',
     );

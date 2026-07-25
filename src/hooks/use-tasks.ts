@@ -351,7 +351,6 @@ export function useCompleteTask() {
   const addRunningJob = useBackgroundJobsStore((s) => s.addRunningJob);
   const markJobSucceeded = useBackgroundJobsStore((s) => s.markJobSucceeded);
   const markJobFailed = useBackgroundJobsStore((s) => s.markJobFailed);
-  const addToast = useToastStore((s) => s.addToast);
 
   return useMutation({
     mutationFn: ({
@@ -371,7 +370,7 @@ export function useCompleteTask() {
         },
       }),
     onSuccess: (result, { id }, jobId) => {
-      const { task, worktreeCleanup } = result;
+      const { task } = result;
 
       ingestTask(task);
       markTaskListsStale(task.projectId);
@@ -388,44 +387,6 @@ export function useCompleteTask() {
       queryClient.invalidateQueries({ queryKey: ['tasks', 'allActive'] });
       queryClient.invalidateQueries({ queryKey: ['tasks', 'allCompleted'] });
       invalidateFeedItems(queryClient);
-
-      // Run worktree cleanup as a background job
-      if (worktreeCleanup) {
-        const jobId = addRunningJob({
-          type: 'worktree-cleanup',
-          title: `Cleaning up worktree ${worktreeCleanup.branchName}`,
-          taskId: id,
-          projectId: task.projectId,
-          details: {
-            branchName: worktreeCleanup.branchName,
-            worktreePath: worktreeCleanup.worktreePath,
-          },
-        });
-
-        void api.tasks.worktree
-          .cleanupAfterCompletion(id, worktreeCleanup)
-          .then((cleanupResult) => {
-            if (cleanupResult.editorCloseWarning) {
-              addToast({
-                type: 'error',
-                message: cleanupResult.editorCloseWarning,
-              });
-            }
-            markJobSucceeded(jobId, {
-              warningMessage: cleanupResult.editorCloseWarning ?? null,
-            });
-            markTaskListsStale(task.projectId);
-            queryClient.invalidateQueries({ queryKey: ['tasks', id] });
-            invalidateFeedItems(queryClient);
-          })
-          .catch((error) => {
-            const message =
-              error instanceof Error
-                ? error.message
-                : 'Worktree cleanup failed';
-            markJobFailed(jobId, message);
-          });
-      }
     },
     onError: (error, _variables, jobId) => {
       if (!jobId) return;
@@ -452,125 +413,6 @@ export function useClearTaskUserCompleted() {
       queryClient.invalidateQueries({ queryKey: ['tasks', 'allCompleted'] });
       invalidateFeedItems(queryClient);
     },
-  });
-}
-
-export function useAddSessionAllowedTool() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      toolName,
-      input,
-    }: {
-      id: string;
-      toolName: string;
-      input: Record<string, unknown>;
-    }) => api.tasks.addSessionAllowedTool(id, toolName, input),
-    onSuccess: (task, { id }) => {
-      ingestTask(task);
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['tasks', id] });
-      queryClient.invalidateQueries({
-        queryKey: ['tasks', { projectId: task.projectId }],
-      });
-    },
-  });
-}
-
-export function useRemoveSessionAllowedTool() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      toolName,
-      pattern,
-    }: {
-      id: string;
-      toolName: string;
-      pattern?: string;
-    }) => api.tasks.removeSessionAllowedTool(id, toolName, pattern),
-    onSuccess: (task, { id }) => {
-      ingestTask(task);
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['tasks', id] });
-      queryClient.invalidateQueries({
-        queryKey: ['tasks', { projectId: task.projectId }],
-      });
-    },
-  });
-}
-
-export function useAllowForProject() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      toolName,
-      input,
-    }: {
-      id: string;
-      toolName: string;
-      input: Record<string, unknown>;
-    }) => api.tasks.allowForProject(id, toolName, input),
-    onSuccess: (task, { id }) => {
-      ingestTask(task);
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['tasks', id] });
-      queryClient.invalidateQueries({
-        queryKey: ['tasks', { projectId: task.projectId }],
-      });
-    },
-  });
-}
-
-export function useAllowForProjectWorktrees() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      toolName,
-      input,
-    }: {
-      id: string;
-      toolName: string;
-      input: Record<string, unknown>;
-    }) => api.tasks.allowForProjectWorktrees(id, toolName, input),
-    onSuccess: (task, { id }) => {
-      ingestTask(task);
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['tasks', id] });
-      queryClient.invalidateQueries({
-        queryKey: ['tasks', { projectId: task.projectId }],
-      });
-    },
-  });
-}
-
-export function useAllowGlobally({
-  onError,
-}: { onError?: (error: Error) => void } = {}) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      id,
-      toolName,
-      input,
-    }: {
-      id: string;
-      toolName: string;
-      input: Record<string, unknown>;
-    }) => api.tasks.allowGlobally(id, toolName, input),
-    onSuccess: (task, { id }) => {
-      ingestTask(task);
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['tasks', id] });
-      queryClient.invalidateQueries({
-        queryKey: ['tasks', { projectId: task.projectId }],
-      });
-      queryClient.invalidateQueries({ queryKey: ['globalPermissions'] });
-    },
-    onError,
   });
 }
 

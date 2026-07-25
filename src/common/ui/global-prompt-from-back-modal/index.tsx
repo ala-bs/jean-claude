@@ -1,9 +1,12 @@
 import { AlertTriangle, KeyRound, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import FocusLock from 'react-focus-lock';
+import { RemoveScroll } from 'react-remove-scroll';
 
 import { api } from '@/lib/api';
 import type { GlobalPrompt } from '@shared/global-prompt-types';
 import { Kbd } from '@/common/ui/kbd';
+import { useModalArbitration } from '@/common/context/modal-arbitration';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 
 
@@ -11,16 +14,22 @@ export function GlobalPromptFromBackModal() {
   const [promptQueue, setPromptQueue] = useState<GlobalPrompt[]>([]);
   const [inputValue, setInputValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const id = useId();
 
   useEffect(() => {
     const unsubscribe = api.globalPrompt.onShow((prompt) => {
+      returnFocusRef.current ??=
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
       setPromptQueue((queue) => [...queue, prompt]);
     });
     return unsubscribe;
   }, []);
 
   const currentPrompt = promptQueue[0] ?? null;
+  const ownsArbitration = useModalArbitration(currentPrompt !== null, 100);
   const hasInput = !!currentPrompt?.inputType;
 
   // Auto-focus input when a prompt with input appears
@@ -43,7 +52,15 @@ export function GlobalPromptFromBackModal() {
           ...(currentPrompt.inputType ? { inputValue } : {}),
         });
         setInputValue('');
-        setPromptQueue((queue) => queue.slice(1));
+        setPromptQueue((queue) => {
+          const remaining = queue.slice(1);
+          if (remaining.length === 0) {
+            const returnFocus = returnFocusRef.current;
+            returnFocusRef.current = null;
+            setTimeout(() => returnFocus?.focus(), 0);
+          }
+          return remaining;
+        });
       }
     },
     [currentPrompt, inputValue],
@@ -51,7 +68,7 @@ export function GlobalPromptFromBackModal() {
 
   useRegisterKeyboardBindings(
     `global-prompt-modal-${id}`,
-    currentPrompt
+    currentPrompt && ownsArbitration
       ? {
           escape: () => {
             handleResponse(false);
@@ -70,7 +87,7 @@ export function GlobalPromptFromBackModal() {
       : {},
   );
 
-  if (!currentPrompt) return null;
+  if (!currentPrompt || !ownsArbitration) return null;
 
   const IconComponent = hasInput ? KeyRound : AlertTriangle;
   const iconColorClass = hasInput ? 'text-blue-500' : 'text-yellow-500';
@@ -78,8 +95,16 @@ export function GlobalPromptFromBackModal() {
   const defaultAcceptLabel = hasInput ? 'Submit' : 'Accept';
 
   return (
-    <div className="bg-bg-0/50 fixed inset-0 z-50 flex items-center justify-center">
-      <div className="bg-bg-1 w-full max-w-md rounded-lg shadow-xl">
+    <FocusLock returnFocus>
+      <RemoveScroll>
+        <div className="bg-bg-0/50 fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="bg-bg-1 w-full max-w-md rounded-lg shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label={currentPrompt.title}
+            tabIndex={-1}
+          >
         {/* Header */}
         <div className="border-glass-border flex items-center gap-3 border-b px-4 py-3">
           <div
@@ -124,6 +149,7 @@ export function GlobalPromptFromBackModal() {
             >
               <input
                 ref={inputRef}
+                autoFocus
                 type={currentPrompt.inputType}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
@@ -145,13 +171,16 @@ export function GlobalPromptFromBackModal() {
           </button>
           <button
             onClick={() => handleResponse(true)}
+            autoFocus={!hasInput}
             className="bg-acc text-ink-0 flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium hover:bg-blue-500"
           >
             {currentPrompt.acceptLabel ?? defaultAcceptLabel}
             {!hasInput && <Kbd shortcut="cmd+enter" className="text-[9px]" />}
           </button>
+          </div>
         </div>
-      </div>
-    </div>
+        </div>
+      </RemoveScroll>
+    </FocusLock>
   );
 }

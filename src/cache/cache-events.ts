@@ -40,7 +40,45 @@ import {
 import { applyEntityPatch } from './entity-merge';
 import { cache$ } from './cache-store';
 
+export const PR_WORKSPACE_DECISIONS_QUERY_KEY = [
+  'pr-workspace-decisions',
+] as const;
 
+export function isPrWorkspaceDecisionTaskEvent(event: CacheEvent) {
+  if (event.type === 'task.upsert') {
+    if (event.task.type !== 'pr-review' || event.task.pullRequestId === null) {
+      return false;
+    }
+
+    const previousState = cache$.tasks[event.task.id].get()?.prWorkspaceState;
+    const nextState = event.task.prWorkspaceState;
+    return (
+      previousState !== nextState &&
+      (previousState === 'cleanup-pending' || nextState === 'cleanup-pending')
+    );
+  }
+
+  if (event.type !== 'task.patch' && event.type !== 'task.delete') {
+    return false;
+  }
+
+  const cachedTask = cache$.tasks[event.taskId].get();
+  if (event.type === 'task.patch') {
+    const previousState = cachedTask?.prWorkspaceState;
+    const nextState =
+      event.patch.prWorkspaceState === undefined
+        ? previousState
+        : event.patch.prWorkspaceState;
+    return (
+      (event.patch.type ?? cachedTask?.type) === 'pr-review' &&
+      (event.patch.pullRequestId ?? cachedTask?.pullRequestId) != null &&
+      previousState !== nextState &&
+      (previousState === 'cleanup-pending' || nextState === 'cleanup-pending')
+    );
+  }
+
+  return cachedTask?.type === 'pr-review' && cachedTask.pullRequestId !== null;
+}
 
 const PULL_REQUEST_STATUSES = [
   'active',

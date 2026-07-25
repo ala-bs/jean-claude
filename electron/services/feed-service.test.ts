@@ -28,8 +28,8 @@ import {
   hasUncommittedWorktreeChanges,
   hasUnpushedWorktreeCommits,
 } from './worktree-service';
-import { completePrReviewTasksForMergedPr } from './pr-review-task-service';
 import { emitCacheEvent } from './cache-event-service';
+import { reconcilePrWorkspaceState } from './pr-review-task-service';
 
 
 
@@ -40,6 +40,7 @@ vi.mock('../database/repositories', () => ({
   },
   TaskRepository: {
     findAllActive: vi.fn(),
+    findPrWorkspaceTasksForFeed: vi.fn(),
     findChildrenForTasks: vi.fn(),
   },
   WorkItemSummaryRepository: {
@@ -73,7 +74,7 @@ vi.mock('./cache-event-service', () => ({
 }));
 
 vi.mock('./pr-review-task-service', () => ({
-  completePrReviewTasksForMergedPr: vi.fn(),
+  reconcilePrWorkspaceState: vi.fn(),
 }));
 
 vi.mock('./worktree-service', () => ({
@@ -248,6 +249,7 @@ describe('getTaskFeedItems', () => {
     ]);
     vi.mocked(TaskStepRepository.findByTaskIds).mockResolvedValue({});
     vi.mocked(TaskRepository.findChildrenForTasks).mockResolvedValue({});
+    vi.mocked(TaskRepository.findPrWorkspaceTasksForFeed).mockResolvedValue([]);
     vi.mocked(getPullRequestStatuses).mockResolvedValue(
       new Map([
         [
@@ -262,12 +264,12 @@ describe('getTaskFeedItems', () => {
         ],
       ]),
     );
-    vi.mocked(completePrReviewTasksForMergedPr).mockResolvedValue([
+    vi.mocked(reconcilePrWorkspaceState).mockResolvedValue([
       { id: 'review-task' } as never,
     ]);
   });
 
-  it('omits a pr-review task completed by merged PR status from the current feed response', async () => {
+  it('keeps a cleanup-pending PR workspace visible after merged PR reconciliation', async () => {
     vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
       {
         id: 'review-task',
@@ -292,15 +294,82 @@ describe('getTaskFeedItems', () => {
       } as never,
     ]);
 
-    await expect(getTaskFeedItems()).resolves.toEqual([]);
+    await expect(getTaskFeedItems()).resolves.toEqual([
+      expect.objectContaining({ taskId: 'review-task' }),
+    ]);
 
-    expect(completePrReviewTasksForMergedPr).toHaveBeenCalledWith({
+    expect(reconcilePrWorkspaceState).toHaveBeenCalledWith({
       projectId: 'project-1',
       pullRequestId: 12,
     });
   });
 
-  it('adds active PR thread count to linked task items', async () => {
+  it.each(['completed', 'abandoned'] as const)(
+    'reconciles review tasks when PR status is %s',
+    async (status) => {
+      vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+        {
+          id: 'review-task',
+          projectId: 'project-1',
+          type: 'pr-review',
+          name: 'Review PR #12',
+          prompt: 'Review PR #12',
+          status: 'waiting',
+          hasUnread: false,
+          userCompleted: false,
+          pullRequestId: '12',
+          updatedAt: '2026-07-05T00:00:00.000Z',
+          projectName: 'oes-v2',
+          projectColor: '#ff6b6b',
+          projectLogoPath: null,
+          repoProviderId: 'provider-1',
+          repoId: 'repo-1',
+        } as never,
+      ]);
+      vi.mocked(getPullRequestStatuses).mockResolvedValue(
+        new Map([
+          [
+            'ado-project-1:repo-1:12',
+            {
+              status,
+              isDraft: false,
+              mergeStatus: 'succeeded',
+              approvedBy: [],
+              url: 'https://example.com/pr/12',
+            },
+          ],
+        ]),
+      );
+
+      await getTaskFeedItems();
+
+      expect(reconcilePrWorkspaceState).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        pullRequestId: 12,
+      });
+    },
+  );
+
+  it('reconciles active PR review tasks so reopened workspaces reactivate', async () => {
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      {
+        id: 'review-task',
+        projectId: 'project-1',
+        type: 'pr-review',
+        name: 'Review PR #12',
+        prompt: 'Review PR #12',
+        status: 'waiting',
+        hasUnread: false,
+        userCompleted: false,
+        pullRequestId: '12',
+        updatedAt: '2026-07-05T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: 'provider-1',
+        repoId: 'repo-1',
+      } as never,
+    ]);
     vi.mocked(getPullRequestStatuses).mockResolvedValue(
       new Map([
         [
@@ -310,12 +379,19 @@ describe('getTaskFeedItems', () => {
             isDraft: false,
             mergeStatus: 'succeeded',
             approvedBy: [],
-            activeThreadCount: 2,
             url: 'https://example.com/pr/12',
           },
         ],
       ]),
     );
+    await getTaskFeedItems();
+    expect(reconcilePrWorkspaceState).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      pullRequestId: 12,
+    });
+  });
+
+  it('adds active PR thread count to linked task items', async () => {
     vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
       {
         id: 'task-1',
@@ -339,6 +415,21 @@ describe('getTaskFeedItems', () => {
         repoId: 'repo-1',
       } as never,
     ]);
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(
+      new Map([
+        [
+          'ado-project-1:repo-1:12',
+          {
+            status: 'active',
+            isDraft: false,
+            mergeStatus: 'succeeded',
+            approvedBy: [],
+            activeThreadCount: 2,
+            url: 'https://example.com/pr/12',
+          },
+        ],
+      ]),
+    );
 
     await expect(getTaskFeedItems()).resolves.toEqual([
       expect.objectContaining({
@@ -347,6 +438,115 @@ describe('getTaskFeedItems', () => {
         activeThreadCount: 2,
       }),
     ]);
+  });
+
+  it.each(['cleanup-pending', 'kept'] as const)(
+    'includes completed %s PR workspaces in feed status reconciliation',
+    async (prWorkspaceState) => {
+      vi.mocked(TaskRepository.findAllActive).mockResolvedValue([]);
+      vi.mocked(TaskRepository.findPrWorkspaceTasksForFeed).mockResolvedValue([
+        {
+          id: `completed-${prWorkspaceState}`,
+          projectId: 'project-1',
+          type: 'pr-review',
+          name: 'Completed review workspace',
+          prompt: 'Review PR #12',
+          status: 'completed',
+          prWorkspaceState,
+          hasUnread: false,
+          userCompleted: true,
+          pullRequestId: '12',
+          updatedAt: '2026-07-05T00:00:00.000Z',
+          projectName: 'oes-v2',
+          projectColor: '#ff6b6b',
+          projectLogoPath: null,
+          repoProviderId: 'provider-1',
+          repoId: 'repo-1',
+        } as never,
+      ]);
+
+      await expect(getTaskFeedItems()).resolves.toEqual([
+        expect.objectContaining({ taskId: `completed-${prWorkspaceState}` }),
+      ]);
+      expect(reconcilePrWorkspaceState).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        pullRequestId: 12,
+      });
+    },
+  );
+
+  it('keeps a completed workspace visible while reopened reconciliation returns it active', async () => {
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([]);
+    vi.mocked(TaskRepository.findPrWorkspaceTasksForFeed).mockResolvedValue([
+      {
+        id: 'migration-completed',
+        projectId: 'project-1',
+        type: 'pr-review',
+        name: 'Migration workspace',
+        prompt: 'Review PR #12',
+        status: 'completed',
+        prWorkspaceState: 'cleanup-pending',
+        hasUnread: false,
+        userCompleted: true,
+        pullRequestId: '12',
+        updatedAt: '2026-07-05T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: 'provider-1',
+        repoId: 'repo-1',
+      } as never,
+    ]);
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(
+      new Map([
+        ['ado-project-1:repo-1:12', { status: 'active', isDraft: false }],
+      ]) as never,
+    );
+    vi.mocked(reconcilePrWorkspaceState).mockResolvedValue([
+      { id: 'migration-completed', prWorkspaceState: 'active' } as never,
+    ]);
+
+    await expect(getTaskFeedItems()).resolves.toEqual([
+      expect.objectContaining({ taskId: 'migration-completed' }),
+    ]);
+    expect(reconcilePrWorkspaceState).toHaveBeenCalled();
+  });
+
+  it('isolates cleanup failure per feed entry', async () => {
+    const task = (id: string, pullRequestId: string) =>
+      ({
+        id,
+        projectId: 'project-1',
+        type: 'pr-review',
+        name: id,
+        prompt: id,
+        status: 'waiting',
+        hasUnread: false,
+        userCompleted: false,
+        pullRequestId,
+        updatedAt: '2026-07-05T00:00:00.000Z',
+        projectName: 'oes-v2',
+        projectColor: '#ff6b6b',
+        projectLogoPath: null,
+        repoProviderId: 'provider-1',
+        repoId: 'repo-1',
+      }) as never;
+    vi.mocked(TaskRepository.findAllActive).mockResolvedValue([
+      task('first', '12'),
+      task('second', '13'),
+    ]);
+    vi.mocked(getPullRequestStatuses).mockResolvedValue(
+      new Map([
+        ['ado-project-1:repo-1:12', { status: 'abandoned', isDraft: false }],
+        ['ado-project-1:repo-1:13', { status: 'completed', isDraft: false }],
+      ]) as never,
+    );
+    vi.mocked(reconcilePrWorkspaceState)
+      .mockRejectedValueOnce(new Error('reconciliation failed'))
+      .mockResolvedValueOnce([{ id: 'second' } as never]);
+
+    await expect(getTaskFeedItems()).resolves.toHaveLength(2);
+    expect(reconcilePrWorkspaceState).toHaveBeenCalledTimes(2);
   });
 
   it('marks a PR-linked task when its worktree has uncommitted changes', async () => {

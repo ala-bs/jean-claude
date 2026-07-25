@@ -39,8 +39,8 @@ import { canShowWorkItemSummary } from '@/lib/work-item-summary';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
-import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { UserAvatar } from '@/common/ui/user-avatar';
+import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 
 

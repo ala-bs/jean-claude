@@ -6,7 +6,12 @@ import type {
   AiUsageFeature,
   AiUsagePricingStatus,
 } from '@shared/ai-usage-types';
-import type { ProjectType, ProviderType, TaskStatus } from '@shared/types';
+import type {
+  ProjectType,
+  ProviderType,
+  PrWorkspaceState,
+  TaskStatus,
+} from '@shared/types';
 
 // Re-export shared types for convenience
 export type {
@@ -135,9 +140,12 @@ export interface TaskTable {
   startCommitHash: string | null;
   sourceBranch: string | null;
   branchName: string | null;
+  cleanupWorktreePath: Generated<string | null>;
+  cleanupBranchName: Generated<string | null>;
+  prWorkspaceState: Generated<PrWorkspaceState | null>;
+  prWorkspacePendingAt: Generated<string | null>;
   hasUnread: number; // SQLite boolean: 0 = read, 1 = unread
   userCompleted: number; // SQLite stores booleans as 0/1
-  sessionRules: string | null; // JSON PermissionScope object (e.g. {"bash": {"git status": "allow"}, "read": "allow"})
   sortOrder: number;
   // Provider integration tracking (JSON arrays)
   workItemIds: string | null; // JSON array: ["123", "456"]
@@ -198,6 +206,7 @@ export interface TaskStepTable {
   output: string | null;
   images: string | null; // JSON stringified PromptImagePart[]
   meta: string | null; // JSON, shape depends on type
+  sessionRules: string | null; // JSON PermissionScope object
   autoStart: number; // 0 or 1 (boolean stored as integer)
   archivedAt: string | null;
   sortOrder: number;

@@ -1595,6 +1595,7 @@ export interface CleanupWorktreeParams {
   skipIfChanges?: boolean;
   branchCleanup?: WorktreeBranchCleanupBehavior;
   force?: boolean;
+  onVerified?: () => void | Promise<void>;
 }
 
 /**
@@ -1610,6 +1611,7 @@ export async function cleanupWorktree(
     skipIfChanges = false,
     branchCleanup = 'delete',
     force = false,
+    onVerified,
   } = params;
 
   if (!(await pathExists(worktreePath))) {
@@ -1629,22 +1631,34 @@ export async function cleanupWorktree(
     }
   }
 
-  let worktreeBranch = branchName?.trim() || null;
-
-  if (!worktreeBranch) {
-    try {
-      const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', {
-        cwd: worktreePath,
-        encoding: 'utf-8',
+  let worktreeBranch: string | null = null;
+  try {
+    const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+    worktreeBranch = stdout.trim();
+  } catch (error) {
+    if (branchCleanup === 'delete') {
+      throw new Error('Failed to verify worktree branch before delete', {
+        cause: error,
       });
-      worktreeBranch = stdout.trim();
-    } catch (error) {
-      dbg.worktree(
-        'Failed to resolve worktree branch before delete: %O',
-        error,
-      );
     }
   }
+  const persistedBranch = branchName?.trim() || null;
+  if (branchCleanup === 'delete' && !persistedBranch) {
+    throw new Error('Cannot delete worktree branch without persisted branch metadata');
+  }
+  if (
+    branchCleanup === 'delete' &&
+    persistedBranch &&
+    worktreeBranch !== persistedBranch
+  ) {
+    throw new Error(
+      `Worktree branch mismatch: expected ${persistedBranch}, found ${worktreeBranch ?? 'unknown'}`,
+    );
+  }
+  if (branchCleanup === 'delete') await onVerified?.();
 
   const forceFlag = force ? ' --force' : '';
   await execAsync(
@@ -1669,10 +1683,61 @@ export async function cleanupWorktree(
  * then deletes the branch if requested.
  */
 export async function cleanupMissingWorktree(params: {
+  worktreePath?: string;
   projectPath: string;
   branchName: string;
+  throwOnError?: boolean;
+  allowUnregistered?: boolean;
+  onVerified?: () => void | Promise<void>;
 }): Promise<void> {
-  const { projectPath, branchName } = params;
+  const {
+    worktreePath,
+    projectPath,
+    branchName,
+    throwOnError = false,
+    allowUnregistered = false,
+    onVerified,
+  } = params;
+
+  try {
+    if (!worktreePath) {
+      throw new Error('Cannot verify missing worktree branch without its path');
+    }
+    const { stdout } = await execAsync('git worktree list --porcelain', {
+      cwd: projectPath,
+      encoding: 'utf-8',
+    });
+    const canonicalWorktreePath = path.join(
+      await fs.realpath(path.dirname(worktreePath)),
+      path.basename(worktreePath),
+    );
+    const registered = stdout
+      .trim()
+      .split(/\n\s*\n/)
+      .map((block) => {
+        const lines = block.split('\n');
+        return {
+          path: lines.find((line) => line.startsWith('worktree '))?.slice(9),
+          branch: lines
+            .find((line) => line.startsWith('branch refs/heads/'))
+            ?.slice('branch refs/heads/'.length),
+        };
+      })
+      .find((entry) => entry.path === canonicalWorktreePath);
+    if (
+      (registered && registered.branch !== branchName) ||
+      (!registered && !allowUnregistered)
+    ) {
+      throw new Error(
+        `Missing worktree branch mismatch: expected ${branchName}, found ${registered?.branch ?? 'unregistered'}`,
+      );
+    }
+    await onVerified?.();
+  } catch (error) {
+    dbg.worktree('Failed to verify missing worktree branch: %O', error);
+    if (throwOnError) throw error;
+    return;
+  }
 
   // Prune stale worktree entries (removes references to deleted directories)
   try {
@@ -1683,10 +1748,20 @@ export async function cleanupMissingWorktree(params: {
     dbg.worktree('Pruned stale worktree references in %s', projectPath);
   } catch (error) {
     dbg.worktree('Failed to prune worktrees in %s: %O', projectPath, error);
+    if (throwOnError) throw error;
   }
 
   // Delete the orphaned branch
   try {
+    const { stdout } = await execAsync(
+      `git branch --list ${JSON.stringify(branchName)}`,
+      {
+        cwd: projectPath,
+        encoding: 'utf-8',
+      },
+    );
+    if (!stdout.trim()) return;
+
     await execAsync(`git branch -D ${JSON.stringify(branchName)}`, {
       cwd: projectPath,
       encoding: 'utf-8',
@@ -1699,6 +1774,7 @@ export async function cleanupMissingWorktree(params: {
       projectPath,
       error,
     );
+    if (throwOnError) throw error;
   }
 }
 
@@ -1905,6 +1981,7 @@ async function mergeWorktreeInner(
     await cleanupWorktree({
       worktreePath,
       projectPath,
+      branchName: worktreeBranch,
       branchCleanup: 'delete',
       force: true,
     });

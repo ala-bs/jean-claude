@@ -9,6 +9,8 @@ import {
 } from '@shared/cache-events';
 import type { Task, TaskStep } from '@shared/types';
 
+import { dbg } from '../lib/debug';
+
 const subscriptionsByWebContentsId = new Map<number, CacheSubscription[]>();
 const subscriptionRevisionByWebContentsId = new Map<number, number>();
 const trackedWebContentsIds = new Set<number>();
@@ -64,7 +66,16 @@ export function emitCacheEvent(event: CacheEvent): CacheEvent {
 
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
       if (subscriptions && shouldSendCacheEvent(subscriptions, event)) {
-        win.webContents.send('cache:event', event);
+        try {
+          win.webContents.send('cache:event', event);
+        } catch (error) {
+          dbg.ipc(
+            'Failed sending cache event %s to web contents %s: %O',
+            event.type,
+            win.webContents.id,
+            error,
+          );
+        }
       }
     }
   }
