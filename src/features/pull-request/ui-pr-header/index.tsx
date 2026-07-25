@@ -12,6 +12,7 @@ import {
   Loader2,
   MoreHorizontal,
   Plus,
+  RefreshCw,
   Save,
   Send,
   Trash2,
@@ -99,6 +100,8 @@ export function PrHeader({
   providerId,
   repoInfo,
   readOnly = false,
+  onRefresh,
+  isRefreshing = false,
   onCleanReviewWorkspace,
   isCleaningReviewWorkspace = false,
 }: {
@@ -107,6 +110,8 @@ export function PrHeader({
   providerId?: string;
   repoInfo?: PullRequestRepoInfo;
   readOnly?: boolean;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
   onCleanReviewWorkspace?: () => void;
   isCleaningReviewWorkspace?: boolean;
 }) {
@@ -269,6 +274,21 @@ export function PrHeader({
         <div className="flex-1" />
 
         {/* Actions */}
+        {onRefresh && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            aria-label="Refresh pull request"
+            title="Refresh pull request"
+            icon={
+              <RefreshCw
+                className={isRefreshing ? 'animate-spin' : undefined}
+              />
+            }
+          />
+        )}
         {onCleanReviewWorkspace && (
           <button
             onClick={onCleanReviewWorkspace}

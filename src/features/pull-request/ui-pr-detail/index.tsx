@@ -1,7 +1,13 @@
 import { FileCode, FileText, GitCommit, Loader2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import clsx from 'clsx';
-import type { ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
 
 
@@ -107,11 +113,54 @@ export function PrDetail({
     MentionOption[]
   >([]);
   const [commentMode, setCommentMode] = useState<CommentMode | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const { data: project } = useProject(projectId);
   const { data: pr, isLoading: isPrLoading } = usePullRequest(
     projectId,
     prId,
     repoInfo,
   );
+  const queryClient = useQueryClient();
+  const refreshQueryPrefix = useMemo(
+    () =>
+      repoInfo
+        ? [
+            projectId,
+            repoInfo.providerId,
+            repoInfo.projectId,
+            repoInfo.repoId,
+            prId,
+          ]
+        : project?.repoProviderId && project.repoProjectId && project.repoId
+          ? [
+              projectId,
+              project.repoProviderId,
+              project.repoProjectId,
+              project.repoId,
+              prId,
+            ]
+          : [projectId, prId],
+    [prId, project, projectId, repoInfo],
+  );
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await queryClient.invalidateQueries({
+        predicate: (query) => {
+          const rootKey = query.queryKey[0];
+          return (
+            typeof rootKey === 'string' &&
+            rootKey.startsWith('pull-request') &&
+            refreshQueryPrefix.every(
+              (value, index) => query.queryKey[index + 1] === value,
+            )
+          );
+        },
+      });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
@@ -165,7 +214,6 @@ export function PrDetail({
     } : false,
   ]);
 
-  const { data: project } = useProject(projectId);
   const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
   const { data: projectTasks = [] } = useProjectTasks(projectId);
   const addReviewComment = useReviewCommentsStore((state) => state.addComment);
@@ -626,6 +674,8 @@ export function PrDetail({
         providerId={repoInfo?.providerId}
         repoInfo={repoInfo}
         readOnly={readOnly}
+        onRefresh={handleRefresh}
+        isRefreshing={isRefreshing}
         onCleanReviewWorkspace={
           !readOnly && associatedPrReviewTask?.worktreePath
             ? handleCleanReviewWorkspace
