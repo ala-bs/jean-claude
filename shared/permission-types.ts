@@ -100,4 +100,13 @@ export type PermissionEvalResult = PermissionAction;
 export interface PermissionEvalDetails {
   action: PermissionEvalResult;
   matchedRule?: ResolvedPermissionRule;
+  /** Per-subcommand breakdown, present only for compound bash commands. */
+  subCommands?: PermissionSubCommandEval[];
+}
+
+/** Evaluation outcome for a single subcommand of a compound bash command. */
+export interface PermissionSubCommandEval {
+  command: string;
+  action: PermissionEvalResult;
+  matchedRule?: ResolvedPermissionRule;
 }

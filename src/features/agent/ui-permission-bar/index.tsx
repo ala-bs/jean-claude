@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 
+import { buildBashSuggestions, type PermissionSuggestion } from '@shared/permission-suggestions';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import { Button } from '@/common/ui/button';
 import type { InteractionMode } from '@shared/types';
@@ -186,6 +187,71 @@ function ExitPlanModeDisplay({
   );
 }
 
+type SubCommandEval = NonNullable<
+  NonNullable<NormalizedPermissionRequest['permissionEvaluation']>['subCommands']
+>[number];
+
+/**
+ * Render a compound bash command as one row per sub-command so it is obvious
+ * which part is blocked and which rule (if any) already covers the rest.
+ */
+function SubCommandBreakdown({
+  subCommands,
+  expanded,
+}: {
+  subCommands: SubCommandEval[];
+  expanded: boolean;
+}) {
+  return (
+    <div className="bg-bg-1 divide-glass-border/60 divide-y rounded">
+      {subCommands.map((sub, index) => {
+        const isAllowed = sub.action === 'allow';
+        const isDenied = sub.action === 'deny';
+        return (
+          <div
+            key={`${index}-${sub.command}`}
+            className="flex items-start gap-2 px-2 py-1.5"
+          >
+            <span className="mt-0.5 shrink-0" title={sub.action}>
+              {isAllowed ? (
+                <Check className="h-3.5 w-3.5 text-green-400" />
+              ) : isDenied ? (
+                <X className="h-3.5 w-3.5 text-red-400" />
+              ) : (
+                <TriangleAlert className="h-3.5 w-3.5 text-yellow-400" />
+              )}
+            </span>
+            <code
+              className={`text-ink-1 min-w-0 flex-1 text-sm break-all whitespace-pre-wrap ${
+                expanded ? '' : 'max-h-10 overflow-hidden'
+              }`}
+              title={sub.command}
+            >
+              {sub.command}
+            </code>
+            <span
+              className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[11px] ${
+                isAllowed
+                  ? 'bg-green-400/10 text-green-300'
+                  : isDenied
+                    ? 'bg-red-400/10 text-red-300'
+                    : 'bg-yellow-400/10 text-yellow-300'
+              }`}
+              title={
+                sub.matchedRule
+                  ? `${sub.matchedRule.tool}: ${sub.matchedRule.pattern}`
+                  : 'no matching rule'
+              }
+            >
+              {sub.matchedRule ? sub.matchedRule.pattern : 'no rule'}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Tools that support "Allow All" (blanket allow for the tool, not just this file) */
 const ALLOW_ALL_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 
@@ -249,6 +315,78 @@ export function PermissionBar({
     /\b(rm\s+-rf|sudo|chmod\s+777|curl\b.*\|\s*(sh|bash)|mkfs|dd\s+if=)/i.test(
       command,
     );
+
+  const subCommands = request.permissionEvaluation?.subCommands ?? [];
+  const showBreakdown = request.toolName === 'Bash' && subCommands.length > 1;
+  const unmatchedCount = subCommands.filter(
+    (sub) => sub.action !== 'allow',
+  ).length;
+
+  // Parts that must be covered for this command to stop prompting.
+  //
+  // Backends other than claude-code don't send a breakdown. The evaluator
+  // still splits compound commands, so a rule holding the whole `a && b`
+  // string could never match — suggest nothing rather than a dead rule.
+  //
+  // Directory-access prompts are about workspace roots (a Bash pattern would
+  // not unblock them) and risky commands should be reviewed, never one-click
+  // persisted — both suppress suggestions entirely.
+  const blockingParts =
+    request.toolName !== 'Bash' || !command || directoryAccess || isRiskyCommand
+      ? []
+      : subCommands.length > 0
+        ? subCommands
+            .filter((sub) => sub.action !== 'allow')
+            .map((sub) => sub.command)
+        : /[;|&]/.test(command)
+          ? []
+          : [command];
+
+  /**
+   * One chip per breadth level, each covering EVERY blocking part — granting
+   * a chip must actually stop the prompt, otherwise "auto-allow next time"
+   * would be a lie for multi-part commands.
+   */
+  const suggestionGroups = (() => {
+    if (blockingParts.length === 0) return [];
+    const perPart = blockingParts.map(buildBashSuggestions);
+    if (perPart.some((list) => list.length === 0)) return [];
+
+    const groups: Array<{ key: string; label: string; patterns: string[] }> = [];
+    const seenKeys = new Set<string>();
+    for (const breadth of [0, 1, 2]) {
+      const picked = perPart.map((list) =>
+        list.find((suggestion) => suggestion.breadth === breadth),
+      );
+      if (picked.some((suggestion) => suggestion === undefined)) continue;
+      const chosen = picked as PermissionSuggestion[];
+      const patterns = [...new Set(chosen.map((s) => s.pattern))];
+      const key = patterns.join(' ');
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      groups.push({
+        key,
+        label: [...new Set(chosen.map((s) => s.label))].join(' + '),
+        patterns,
+      });
+    }
+    return groups;
+  })();
+
+  const handleGrantSuggestion = async (patterns: string[]) => {
+    try {
+      for (const pattern of patterns) {
+        await onAllowForProject?.('Bash', { command: pattern });
+      }
+    } catch {
+      return;
+    }
+    return onRespond(request.requestId, {
+      behavior: 'allow',
+      updatedInput: input,
+      allowMode: 'project',
+    });
+  };
 
   const handleAllow = () => {
     if (sessionAllowButton?.setModeOnAllow) {
@@ -494,6 +632,19 @@ export function PermissionBar({
                 commandExpanded={isCommandExpanded}
               />
             )}
+            {/* Annotation only — the raw command above stays the source of
+                truth, since parsed parts drop redirections and whitespace. */}
+            {showBreakdown && (
+              <div className="mt-2">
+                <div className="text-ink-3 mb-1 text-xs">
+                  Command parts checked separately:
+                </div>
+                <SubCommandBreakdown
+                  subCommands={subCommands}
+                  expanded={isCommandExpanded}
+                />
+              </div>
+            )}
             {request.permissionEvaluation && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
                 <span className="text-ink-3">Permission check:</span>
@@ -508,7 +659,12 @@ export function PermissionBar({
                 >
                   {request.permissionEvaluation.action}
                 </span>
-                {request.permissionEvaluation.matchedRule ? (
+                {showBreakdown && unmatchedCount > 0 ? (
+                  <span className="text-ink-3">
+                    {unmatchedCount} of {subCommands.length} command parts need
+                    approval
+                  </span>
+                ) : request.permissionEvaluation.matchedRule ? (
                   <code className="text-ink-2 rounded bg-black/20 px-1.5 py-0.5">
                     {request.permissionEvaluation.matchedRule.tool}:{' '}
                     {request.permissionEvaluation.matchedRule.pattern}
@@ -526,7 +682,25 @@ export function PermissionBar({
                 Destructive or privileged command. Review before granting.
               </div>
             )}
-            {request.toolName === 'Bash' && isCommandClamped && (
+            {suggestionGroups.length > 0 && onAllowForProject && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="text-ink-3">Auto-allow next time:</span>
+                {suggestionGroups.map((group) => (
+                  <button
+                    key={group.key}
+                    type="button"
+                    className="border-glass-border text-ink-2 hover:border-purple-400/60 hover:text-ink-1 rounded border bg-black/20 px-1.5 py-0.5 font-mono"
+                    title={`Add ${group.patterns
+                      .map((pattern) => `Bash(${pattern})`)
+                      .join(', ')} to project permissions and allow`}
+                    onClick={() => void handleGrantSuggestion(group.patterns)}
+                  >
+                    + {group.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {request.toolName === 'Bash' && (isCommandClamped || showBreakdown) && (
               <div className="mt-1 flex gap-2 text-xs">
                 <button
                   type="button"

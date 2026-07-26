@@ -146,3 +146,197 @@ describe('PermissionBar directory access', () => {
     }
   });
 });
+
+function compoundBarElement({
+  onRespond = () => {},
+  onAllowForProject = async () => {},
+}: {
+  onRespond?: ComponentProps<typeof PermissionBar>['onRespond'];
+  onAllowForProject?: ComponentProps<
+    typeof PermissionBar
+  >['onAllowForProject'];
+} = {}) {
+  return (
+    <RootKeyboardBindings>
+      <RootOverlay>
+        <ModalProvider>
+          <PermissionBar
+            request={{
+              taskId: 'task-1',
+              requestId: 'permission-2',
+              toolName: 'Bash',
+              input: { command: 'cd /worktree && git status | grep foo src' },
+              permissionEvaluation: {
+                action: 'ask',
+                subCommands: [
+                  {
+                    command: 'cd /worktree',
+                    action: 'allow',
+                    matchedRule: {
+                      tool: 'bash',
+                      pattern: 'cd *',
+                      action: 'allow',
+                    },
+                  },
+                  {
+                    command: 'git status',
+                    action: 'allow',
+                    matchedRule: {
+                      tool: 'bash',
+                      pattern: 'git status *',
+                      action: 'allow',
+                    },
+                  },
+                  { command: 'grep foo src', action: 'ask' },
+                ],
+              },
+            }}
+            onRespond={onRespond}
+            onAllowForProject={onAllowForProject}
+            worktreePath="/worktree"
+          />
+        </ModalProvider>
+      </RootOverlay>
+    </RootKeyboardBindings>
+  );
+}
+
+describe('PermissionBar compound bash breakdown', () => {
+  it('renders one row per subcommand with its matched rule', () => {
+    const markup = renderToStaticMarkup(compoundBarElement());
+
+    expect(markup).toContain('cd /worktree');
+    expect(markup).toContain('git status *');
+    expect(markup).toContain('no rule');
+    expect(markup).toContain('1 of 3 command parts need approval');
+    // The raw command stays visible — parsed parts drop redirections.
+    expect(markup).toContain('cd /worktree &amp;&amp; git status | grep foo src');
+  });
+
+  it('suggests rules only for the blocking subcommand', () => {
+    const markup = renderToStaticMarkup(compoundBarElement());
+
+    expect(markup).toContain('Auto-allow next time:');
+    expect(markup).toContain('grep *');
+    expect(markup).not.toContain('+ git *');
+  });
+
+  it('grants the chosen suggestion at project scope and allows', async () => {
+    const onRespond = vi.fn();
+    const onAllowForProject = vi.fn(async () => {});
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(compoundBarElement({ onRespond, onAllowForProject }));
+      });
+      await act(async () => findButton('+ grep *')?.click());
+
+      expect(onAllowForProject).toHaveBeenCalledWith('Bash', {
+        command: 'grep *',
+      });
+      expect(onRespond).toHaveBeenCalledWith('permission-2', {
+        behavior: 'allow',
+        updatedInput: {
+          command: 'cd /worktree && git status | grep foo src',
+        },
+        allowMode: 'project',
+      });
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+});
+
+function bashBarElement({
+  command,
+  subCommands,
+  onRespond = () => {},
+  onAllowForProject = async () => {},
+}: {
+  command: string;
+  subCommands?: NonNullable<
+    ComponentProps<typeof PermissionBar>['request']['permissionEvaluation']
+  >['subCommands'];
+  onRespond?: ComponentProps<typeof PermissionBar>['onRespond'];
+  onAllowForProject?: ComponentProps<
+    typeof PermissionBar
+  >['onAllowForProject'];
+}) {
+  return (
+    <RootKeyboardBindings>
+      <RootOverlay>
+        <ModalProvider>
+          <PermissionBar
+            request={{
+              taskId: 'task-1',
+              requestId: 'permission-3',
+              toolName: 'Bash',
+              input: { command },
+              permissionEvaluation: { action: 'ask', subCommands },
+            }}
+            onRespond={onRespond}
+            onAllowForProject={onAllowForProject}
+            worktreePath="/worktree"
+          />
+        </ModalProvider>
+      </RootOverlay>
+    </RootKeyboardBindings>
+  );
+}
+
+describe('PermissionBar suggestion safety', () => {
+  it('suppresses suggestions for risky commands', () => {
+    const markup = renderToStaticMarkup(
+      bashBarElement({ command: 'sudo rm -rf /tmp/x' }),
+    );
+
+    expect(markup).toContain('Destructive or privileged command');
+    expect(markup).not.toContain('Auto-allow next time');
+  });
+
+  it('suppresses suggestions for compound commands with no breakdown', () => {
+    const markup = renderToStaticMarkup(
+      bashBarElement({ command: 'cat a.ts && cat b.ts' }),
+    );
+
+    expect(markup).not.toContain('Auto-allow next time');
+  });
+
+  it('grants a rule for every blocking part in one click', async () => {
+    const onRespond = vi.fn();
+    const onAllowForProject = vi.fn(async () => {});
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          bashBarElement({
+            command: 'grep foo src | jq .',
+            subCommands: [
+              { command: 'grep foo src', action: 'ask' },
+              { command: 'jq .', action: 'ask' },
+            ],
+            onRespond,
+            onAllowForProject,
+          }),
+        );
+      });
+      await act(async () => findButton('+ grep * + jq *')?.click());
+
+      expect(onAllowForProject.mock.calls).toEqual([
+        ['Bash', { command: 'grep *' }],
+        ['Bash', { command: 'jq *' }],
+      ]);
+      expect(onRespond).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+});

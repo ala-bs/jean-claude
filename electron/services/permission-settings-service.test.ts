@@ -12,11 +12,14 @@ vi.mock('write-file-atomic', async () => {
   };
 });
 
+import { buildBashSuggestions } from '@shared/permission-suggestions';
+
 import {
   addWorktreePermission,
   addProjectPermissionRule,
   compileForOpenCode,
   evaluatePermission,
+  evaluatePermissionWithMatch,
   normalizeToolRequest,
   isUnrestrictedBashPattern,
   readProjectPermissions,
@@ -240,5 +243,100 @@ describe('normalizeToolRequest', () => {
       tool: 'external_directory',
       matchValue: '/safe/shared/repo/*',
     });
+  });
+});
+
+describe('compound command breakdown', () => {
+  const rules = [
+    { tool: 'bash', pattern: 'cd *', action: 'allow' as const },
+    { tool: 'bash', pattern: 'git status *', action: 'allow' as const },
+  ];
+
+  it('reports every subcommand with the rule that matched it', () => {
+    const result = evaluatePermissionWithMatch(
+      rules,
+      'bash',
+      'cd /repo && git status --short | sed -n 1p',
+    );
+
+    expect(result.action).toBe('ask');
+    expect(result.subCommands).toEqual([
+      {
+        command: 'cd /repo',
+        action: 'allow',
+        matchedRule: rules[0],
+      },
+      {
+        command: 'git status --short',
+        action: 'allow',
+        matchedRule: rules[1],
+      },
+      { command: 'sed -n 1p', action: 'ask', matchedRule: undefined },
+    ]);
+  });
+
+  it('keeps the breakdown complete when a subcommand is denied', () => {
+    const result = evaluatePermissionWithMatch(
+      [{ tool: 'bash', pattern: 'rm *', action: 'deny' }],
+      'bash',
+      'rm -rf build && ls',
+    );
+
+    expect(result.action).toBe('deny');
+    expect(result.subCommands?.map((sub) => sub.command)).toEqual([
+      'rm -rf build',
+      'ls',
+    ]);
+  });
+
+  it('omits the breakdown for a simple command', () => {
+    expect(
+      evaluatePermissionWithMatch(rules, 'bash', 'cd /repo').subCommands,
+    ).toBeUndefined();
+  });
+});
+
+describe('suggested rules round-trip', () => {
+  /**
+   * The chips in the permission bar pass their pattern back through
+   * `onAllowForProject('Bash', { command: pattern })`, which runs
+   * `normalizeToolRequest`. A suggestion is only useful if the stored rule
+   * then actually matches the original command.
+   */
+  const grant = (pattern: string) => ({
+    tool: normalizeToolRequest('Bash', { command: pattern }).tool,
+    pattern: normalizeToolRequest('Bash', { command: pattern }).matchValue,
+    action: 'allow' as const,
+  });
+
+  it.each([
+    ['sed -n 1,5p file.ts', 'sed -n 1,5p file.ts'],
+    ['grep -rn foo src', 'grep *'],
+    ['git show HEAD:a.ts', 'git show *'],
+    ['ls *.ts', 'ls \\*.ts'],
+    // Redirections survive into the suggestion but normalizeToolRequest
+    // strips them before storing, so the rule still matches.
+    ['pnpm lint --fix 2>&1', 'pnpm lint --fix 2>&1'],
+  ])('granting a suggestion for %s stops the prompt', (command, pattern) => {
+    expect(buildBashSuggestions(command).map((s) => s.pattern)).toContain(
+      pattern,
+    );
+    expect(evaluatePermission([grant(pattern)], 'bash', command)).toBe('allow');
+  });
+
+  it('grants every blocking part of a compound command', () => {
+    const command = 'grep foo src | sed -n 1p';
+    const parts = ['grep foo src', 'sed -n 1p'];
+    const granted = parts.map(
+      (part) => grant(buildBashSuggestions(part)[0].pattern),
+    );
+
+    expect(evaluatePermission(granted, 'bash', command)).toBe('allow');
+  });
+
+  it('an exact pattern never widens to a different command', () => {
+    const granted = grant(buildBashSuggestions('ls *.ts')[0].pattern);
+
+    expect(evaluatePermission([granted], 'bash', 'ls secrets.env')).toBe('ask');
   });
 });

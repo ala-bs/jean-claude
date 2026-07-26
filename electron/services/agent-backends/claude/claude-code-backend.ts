@@ -668,6 +668,23 @@ export class ClaudeCodeBackend implements AgentBackend {
                     },
                   }
                 : {}),
+              ...(permissionDecision.subCommands
+                ? {
+                    subCommands: permissionDecision.subCommands.map((sub) => ({
+                      command: sub.command,
+                      action: sub.action,
+                      ...(sub.matchedRule
+                        ? {
+                            matchedRule: {
+                              tool: sub.matchedRule.tool,
+                              pattern: sub.matchedRule.pattern,
+                              action: sub.matchedRule.action,
+                            },
+                          }
+                        : {}),
+                    })),
+                  }
+                : {}),
             },
             directoryAccess,
           } satisfies NormalizedPermissionRequest,

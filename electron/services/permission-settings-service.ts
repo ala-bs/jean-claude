@@ -21,6 +21,7 @@ import type {
   PermissionEvalDetails,
   PermissionEvalResult,
   PermissionScope,
+  PermissionSubCommandEval,
   ResolvedPermissionRule,
   ToolPermissionConfig,
   WorktreePermissionScope,
@@ -519,10 +520,22 @@ function evaluateCompoundPermission(
 ): PermissionEvalDetails {
   let combined: PermissionEvalResult = 'allow';
   let matchedRule: ResolvedPermissionRule | undefined;
+  let denied: PermissionEvalDetails | undefined;
+  const breakdown: PermissionSubCommandEval[] = [];
 
+  // Every subcommand is evaluated even after a deny so `subCommands` is always
+  // a complete breakdown — the UI renders it as the full command.
   for (const subCommand of subCommands) {
     const result = evaluateSinglePermission(rules, 'bash', subCommand);
-    if (result.action === 'deny') return result;
+    breakdown.push({
+      command: subCommand,
+      action: result.action,
+      matchedRule: result.matchedRule,
+    });
+    if (result.action === 'deny') {
+      denied ??= result;
+      continue;
+    }
     if (result.action === 'ask') {
       // Prefer the rule responsible for the final outcome: the first
       // subcommand that forced `ask`. An allow rule from another subcommand
@@ -534,7 +547,8 @@ function evaluateCompoundPermission(
     }
   }
 
-  return { action: combined, matchedRule };
+  if (denied) return { ...denied, subCommands: breakdown };
+  return { action: combined, matchedRule, subCommands: breakdown };
 }
 
 // ---------------------------------------------------------------------------

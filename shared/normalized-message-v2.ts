@@ -267,6 +267,16 @@ export interface NormalizedPermissionRequest {
       pattern: string;
       action: 'allow' | 'ask' | 'deny';
     };
+    /** Per-subcommand breakdown for compound bash commands (`&&`, `;`, `|`, `||`). */
+    subCommands?: Array<{
+      command: string;
+      action: 'allow' | 'ask' | 'deny';
+      matchedRule?: {
+        tool: string;
+        pattern: string;
+        action: 'allow' | 'ask' | 'deny';
+      };
+    }>;
   };
   sessionAllowButton?: {
     label: string;
