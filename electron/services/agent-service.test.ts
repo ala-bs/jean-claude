@@ -98,6 +98,7 @@ const {
     questions: [] as unknown[],
     modes: [] as unknown[],
     sessionAllowedTools: [] as unknown[],
+    permissionRuleUpdates: [] as unknown[],
     stops: [] as string[],
   };
 
@@ -170,6 +171,11 @@ const {
                 },
               })
             : unsupported('session tools unsupported'),
+          permissionRuleUpdates: supported({
+            update: async (input: unknown) => {
+              providerCalls.permissionRuleUpdates.push(input);
+            },
+          }),
           resourceTracking: supported({
             getRootPid: ({ handle }: { handle: AgentRunHandle }) =>
               handle.rootPid ?? null,
@@ -185,6 +191,7 @@ const {
     providerCalls.questions.length = 0;
     providerCalls.modes.length = 0;
     providerCalls.sessionAllowedTools.length = 0;
+    providerCalls.permissionRuleUpdates.length = 0;
     providerCalls.stops.length = 0;
     providerState.permissionsSupported = true;
     providerState.questionsSupported = true;
@@ -415,6 +422,7 @@ vi.mock('./system-project-service', () => ({
 }));
 
 import { agentService } from './agent-service';
+import { emitPermissionsChanged } from './permission-event-service';
 import { buildReadOnlyPrReviewSessionRules } from './pr-review-agent-service';
 
 const defaultStep = {
@@ -3539,6 +3547,128 @@ describe('agentService provider runtime', () => {
     expect(outerHandle.dispose).toHaveBeenCalledTimes(1);
     expect(nested.handle.dispose).toHaveBeenCalledTimes(1);
     expect(providerCalls.stops.sort()).toEqual(['nested-run', 'outer-run']);
+  });
+
+  it('pushes refreshed permission rules to live sessions when project rules change', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    resolveRulesMock.mockReturnValue([
+      { tool: 'bash', pattern: 'npm test', action: 'allow' },
+    ]);
+
+    // Unrelated project — must be ignored.
+    emitPermissionsChanged({ scope: 'project', projectPath: '/other/project' });
+    emitPermissionsChanged({
+      scope: 'project',
+      projectPath: defaultProject.path,
+    });
+
+    await waitForAssertion(() => {
+      expect(providerCalls.permissionRuleUpdates).toEqual([
+        {
+          handle,
+          rules: [{ tool: 'bash', pattern: 'npm test', action: 'allow' }],
+        },
+      ]);
+    });
+
+    release();
+    await startPromise;
+  });
+
+  it('refreshes only the named step on session-scoped permission changes', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    // Session grant persisted by step-permission-service.
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      sessionRules: { bash: { 'npm test': 'allow' } },
+    });
+
+    // Another step's session change must not touch this one.
+    emitPermissionsChanged({ scope: 'session', stepId: 'step-2' });
+    emitPermissionsChanged({ scope: 'session', stepId: 'step-1' });
+
+    await waitForAssertion(() => {
+      expect(providerCalls.permissionRuleUpdates).toEqual([
+        {
+          handle,
+          rules: [{ tool: 'bash', pattern: 'npm test', action: 'allow' }],
+        },
+      ]);
+    });
+
+    release();
+    await startPromise;
+  });
+
+  it('pushes refreshed permission rules to live sessions on global changes', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    resolveGlobalRulesMock.mockResolvedValue([
+      { tool: 'read', pattern: '*', action: 'allow' },
+    ]);
+    resolveRulesMock.mockReturnValue([
+      { tool: 'read', pattern: '*', action: 'allow' },
+    ]);
+
+    emitPermissionsChanged({ scope: 'global' });
+
+    await waitForAssertion(() => {
+      expect(providerCalls.permissionRuleUpdates).toHaveLength(1);
+    });
+    expect(providerCalls.permissionRuleUpdates[0]).toMatchObject({
+      handle,
+      rules: [{ tool: 'read', pattern: '*', action: 'allow' }],
+    });
+
+    release();
+    await startPromise;
+  });
+
+  it('ignores permission changes when no session is active', async () => {
+    emitPermissionsChanged({ scope: 'global' });
+    await Promise.resolve();
+    expect(providerCalls.permissionRuleUpdates).toEqual([]);
   });
 
   it('routes permission responses through the provider permission capability', async () => {

@@ -62,6 +62,11 @@ import {
   type TaskStepType,
   type ThinkingEffort,
 } from '@shared/types';
+import type {
+  PermissionsChangedEvent,
+  PermissionScope,
+  ResolvedPermissionRule,
+} from '@shared/permission-types';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { AiUsageFeature } from '@shared/ai-usage-types';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
@@ -88,6 +93,10 @@ import {
   captureAgentMemoryEventSafe,
   captureAgentMemoryPromptSubmissionSafe,
 } from './agent-memory-capture-service';
+import {
+  emitPermissionsChanged,
+  onPermissionsChanged,
+} from './permission-event-service';
 import {
   emitStepUpsert,
   emitTaskPatch,
@@ -502,6 +511,12 @@ interface ActiveSession {
   }>;
   hasTerminalError: boolean;
   stopRequested: boolean;
+  /** Context needed to re-resolve permission rules while the run is live. */
+  permissionContext?: {
+    projectPath: string;
+    workingDir: string;
+    isWorktree: boolean;
+  };
   agentMemoryCaptureEligible: boolean;
   previousResultFallback: string | null;
   queuedPromptIdsBySubmissionId: Map<string, string>;
@@ -642,6 +657,33 @@ function assertPrReviewAgentRunAllowed({
   }
 }
 
+/**
+ * Resolve the backend-agnostic permission rules for a run: global rules,
+ * project/worktree rules from `.jean-claude/settings.local.json`, and the
+ * step's own session rules, in precedence order.
+ *
+ * Used both when a run starts and whenever persisted rules change while the
+ * run is live.
+ */
+export async function resolvePermissionRulesForStep({
+  projectPath,
+  workingDir,
+  isWorktree,
+  sessionRules,
+}: {
+  projectPath: string;
+  workingDir: string;
+  isWorktree: boolean;
+  sessionRules: PermissionScope;
+}): Promise<ResolvedPermissionRule[]> {
+  const globalRules = await resolveGlobalRules();
+  const settings = await readSettings(projectPath);
+  return [
+    ...resolveRules(settings, isWorktree, globalRules, workingDir),
+    ...flattenScope(sessionRules),
+  ];
+}
+
 class AgentService {
   private sessions: Map<string, ActiveSession> = new Map(); // key is stepId
   private stepStopPromises = new Map<string, Promise<void>>();
@@ -670,12 +712,94 @@ class AgentService {
   );
 
   constructor() {
+    onPermissionsChanged((event) => {
+      void this.refreshPermissionRules(event).catch((error) => {
+        dbg.agentPermission(
+          'Failed refreshing permission rules for live sessions: %O',
+          error,
+        );
+      });
+    });
     agentResourceMonitorService.setSnapshotListener((snapshot) => {
       this.emitEvent(snapshot.taskId, snapshot.stepId, {
         type: 'resource-snapshot',
         snapshot,
       });
     });
+  }
+
+  /**
+   * Re-resolve permission rules for every live session affected by a
+   * persisted permission change and push the fresh snapshot into its backend.
+   *
+   * Global changes affect every active session; project/worktree changes only
+   * affect sessions whose project matches `projectPath`; session changes affect
+   * the single step they name.
+   */
+  private async refreshPermissionRules(
+    event: PermissionsChangedEvent,
+  ): Promise<void> {
+    const entries =
+      event.scope === 'session'
+        ? ([[event.stepId, this.sessions.get(event.stepId)]] as Array<
+            [string, ActiveSession | undefined]
+          >)
+        : ([...this.sessions.entries()] as Array<
+            [string, ActiveSession | undefined]
+          >);
+    if (entries.length === 0) return;
+
+    await Promise.all(
+      entries.map(async ([stepId, session]) => {
+        if (!session) return;
+        const context = session.permissionContext;
+        if (!context || !session.runHandle) return;
+        if (
+          (event.scope === 'project' || event.scope === 'worktree') &&
+          (!event.projectPath || event.projectPath !== context.projectPath)
+        ) {
+          return;
+        }
+
+        const capability =
+          session.provider.capabilities.agent.permissionRuleUpdates;
+        if (!capability?.supported) return;
+
+        const step = await TaskStepRepository.findById(stepId);
+        if (!step) return;
+        const sessionRules = isPrReviewChatStepMeta(step.meta)
+          ? buildReadOnlyPrReviewSessionRules()
+          : (step.sessionRules ?? {});
+
+        const rules = await resolvePermissionRulesForStep({
+          projectPath: context.projectPath,
+          workingDir: context.workingDir,
+          isWorktree: context.isWorktree,
+          sessionRules,
+        });
+
+        // The run may have finished while we were resolving.
+        if (this.sessions.get(stepId) !== session || !session.runHandle) return;
+
+        try {
+          await capability.implementation.update({
+            handle: session.runHandle,
+            rules,
+          });
+          dbg.agentPermission(
+            'Refreshed permission rules for live step %s (%d rules)',
+            stepId,
+            rules.length,
+          );
+        } catch (error) {
+          dbg.agentPermission(
+            'Failed pushing refreshed permission rules to step %s: %O',
+            stepId,
+            error,
+          );
+        }
+      }),
+    );
   }
 
   setMainWindow(window: BrowserWindow) {
@@ -1353,15 +1477,20 @@ class AgentService {
 
     // Load backend-agnostic permissions and compile for the target backend.
     const isWorktree = !!task.worktreePath;
-    const globalRules = await resolveGlobalRules();
-    const settings = await readSettings(project.path);
     const sessionRules = isPrReviewChatStepMeta(step.meta)
       ? buildReadOnlyPrReviewSessionRules()
       : (step.sessionRules ?? {});
-    const rules = [
-      ...resolveRules(settings, isWorktree, globalRules, workingDir),
-      ...flattenScope(sessionRules),
-    ];
+    session.permissionContext = {
+      projectPath: project.path,
+      workingDir,
+      isWorktree,
+    };
+    const rules = await resolvePermissionRulesForStep({
+      projectPath: project.path,
+      workingDir,
+      isWorktree,
+      sessionRules,
+    });
 
     const backendChanged = session.backendType !== session.requestedBackendType;
     const modelPreference =
@@ -2574,6 +2703,9 @@ class AgentService {
             sessionRules,
           });
           emitStepUpsert(updatedStep);
+          // Keep the live session's rule snapshot in step with the DB, like
+          // every other sessionRules write.
+          emitPermissionsChanged({ scope: 'session', stepId });
         } catch (error) {
           // Provider already resumed; keep request resolved rather than showing
           // a stale card that cannot be answered again.

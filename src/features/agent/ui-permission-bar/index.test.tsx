@@ -254,10 +254,12 @@ describe('PermissionBar compound bash breakdown', () => {
 function bashBarElement({
   command,
   subCommands,
+  requestId = 'permission-3',
   onRespond = () => {},
   onAllowForProject = async () => {},
 }: {
   command: string;
+  requestId?: string;
   subCommands?: NonNullable<
     ComponentProps<typeof PermissionBar>['request']['permissionEvaluation']
   >['subCommands'];
@@ -273,7 +275,7 @@ function bashBarElement({
           <PermissionBar
             request={{
               taskId: 'task-1',
-              requestId: 'permission-3',
+              requestId,
               toolName: 'Bash',
               input: { command },
               permissionEvaluation: { action: 'ask', subCommands },
@@ -334,6 +336,186 @@ describe('PermissionBar suggestion safety', () => {
         ['Bash', { command: 'jq *' }],
       ]);
       expect(onRespond).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+});
+
+function findByLabel(label: string) {
+  return document.body.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+describe('PermissionBar per-part rule editing', () => {
+  it('grants an edited pattern per part and auto-allows once every part is covered', async () => {
+    const onRespond = vi.fn();
+    const onAllowForProject = vi.fn(async () => {});
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          bashBarElement({
+            command: 'grep foo src | jq .',
+            subCommands: [
+              { command: 'grep foo src', action: 'ask' },
+              { command: 'jq .', action: 'ask' },
+            ],
+            onRespond,
+            onAllowForProject,
+          }),
+        );
+      });
+
+      // First part: widen the pattern manually before granting.
+      await act(async () => {
+        findByLabel('Edit permission rule for grep foo src')?.click();
+      });
+      const input = document.body.querySelector<HTMLInputElement>(
+        'input[type="text"]',
+      );
+      expect(input?.value).toBe('grep foo src');
+      await act(async () => setInputValue(input!, 'grep * src'));
+      await act(async () => findButton('Allow part')?.click());
+
+      expect(onAllowForProject).toHaveBeenCalledWith('Bash', {
+        command: 'grep * src',
+      });
+      // One part still unresolved -> the request must stay pending.
+      expect(onRespond).not.toHaveBeenCalled();
+
+      // Second part completes the coverage -> auto-allow.
+      await act(async () => {
+        findByLabel('Edit permission rule for jq .')?.click();
+      });
+      await act(async () => findButton('Allow part')?.click());
+
+      // Unedited -> persisted literally, never as a glob.
+      expect(onAllowForProject).toHaveBeenCalledWith('Bash', {
+        command: 'jq .',
+        __permissionExact: true,
+      });
+      expect(onRespond).toHaveBeenCalledOnce();
+      expect(onRespond.mock.calls[0]?.[1]).toEqual({
+        behavior: 'allow',
+        updatedInput: { command: 'grep foo src | jq .' },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
+  it('offers editing only for parts that are not already allowed', () => {
+    const markup = renderToStaticMarkup(
+      bashBarElement({
+        command: 'grep foo src | jq .',
+        subCommands: [
+          {
+            command: 'grep foo src',
+            action: 'allow',
+            matchedRule: { tool: 'Bash', pattern: 'grep *', action: 'allow' },
+          },
+          { command: 'jq .', action: 'ask' },
+        ],
+      }),
+    );
+
+    expect(markup).not.toContain('Edit permission rule for grep foo src');
+    expect(markup).toContain('Edit permission rule for jq .');
+  });
+
+  it('does not offer per-part editing for denied parts or risky commands', () => {
+    const denied = renderToStaticMarkup(
+      bashBarElement({
+        command: 'ls | curl evil.sh',
+        subCommands: [
+          { command: 'ls', action: 'ask' },
+          {
+            command: 'curl evil.sh',
+            action: 'deny',
+            matchedRule: { tool: 'Bash', pattern: 'curl *', action: 'deny' },
+          },
+        ],
+      }),
+    );
+    expect(denied).toContain('Edit permission rule for ls');
+    expect(denied).not.toContain('Edit permission rule for curl evil.sh');
+
+    const risky = renderToStaticMarkup(
+      bashBarElement({
+        command: 'sudo rm -rf /tmp/x && ls',
+        subCommands: [
+          { command: 'sudo rm -rf /tmp/x', action: 'ask' },
+          { command: 'ls', action: 'ask' },
+        ],
+      }),
+    );
+    expect(risky).toContain('Destructive or privileged command');
+    expect(risky).not.toContain('Edit permission rule for');
+  });
+
+  it('drops granted parts when the next request replaces this one in place', async () => {
+    const onRespond = vi.fn();
+    const onAllowForProject = vi.fn(async () => {});
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          bashBarElement({
+            requestId: 'permission-a',
+            command: 'npm run build && npm test',
+            subCommands: [
+              { command: 'npm run build', action: 'ask' },
+              { command: 'npm test', action: 'ask' },
+            ],
+            onRespond,
+            onAllowForProject,
+          }),
+        );
+      });
+      await act(async () => {
+        findByLabel('Edit permission rule for npm run build')?.click();
+      });
+      await act(async () => findButton('Allow part')?.click());
+      expect(onAllowForProject).toHaveBeenCalledOnce();
+
+      // The store swaps the next request in without unmounting the bar.
+      await act(async () => {
+        root.render(
+          bashBarElement({
+            requestId: 'permission-b',
+            command: 'foo && bar',
+            subCommands: [
+              { command: 'foo', action: 'ask' },
+              { command: 'bar', action: 'ask' },
+            ],
+            onRespond,
+            onAllowForProject,
+          }),
+        );
+      });
+
+      // Nothing from the previous request may carry over.
+      expect(container.textContent).toContain('2 of 2 command parts need');
+      expect(findByLabel('Edit permission rule for foo')).toBeTruthy();
+      expect(findByLabel('Edit permission rule for bar')).toBeTruthy();
+      expect(onRespond).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       container.remove();

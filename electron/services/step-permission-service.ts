@@ -10,6 +10,7 @@ import { ProjectRepository, TaskRepository } from '../database/repositories';
 import type { Task, TaskStep } from '../../shared/types';
 import { addGlobalPermission } from './global-permissions-service';
 import { dbg } from '../lib/debug';
+import { emitPermissionsChanged } from './permission-event-service';
 import { emitStepUpsert } from './cache-event-service';
 import { isPrReviewChatStepMeta } from '@shared/types';
 import { TaskStepRepository } from '../database/repositories/task-steps';
@@ -20,6 +21,7 @@ type Dependencies = {
   findProject: typeof ProjectRepository.findById;
   updateStep: typeof TaskStepRepository.update;
   emitStep: typeof emitStepUpsert;
+  emitPermissionsChanged: typeof emitPermissionsChanged;
   addProjectPermission: (params: {
     projectPath: string;
     toolName: string;
@@ -87,6 +89,7 @@ export function createStepPermissionService(overrides: Partial<Dependencies> = {
     findProject: ProjectRepository.findById,
     updateStep: TaskStepRepository.update,
     emitStep: emitStepUpsert,
+    emitPermissionsChanged,
     addProjectPermission: addProjectPermissionRule,
     addWorktreePermission,
     addGlobalPermission,
@@ -135,6 +138,9 @@ export function createStepPermissionService(overrides: Partial<Dependencies> = {
       matchValue,
     });
     const updated = await dependencies.updateStep(step.id, { sessionRules });
+    // Session rules feed the live run's permission snapshot — tell the agent
+    // service so it re-resolves rules for this step immediately.
+    dependencies.emitPermissionsChanged({ scope: 'session', stepId: step.id });
     return updated;
   };
 
@@ -172,6 +178,10 @@ export function createStepPermissionService(overrides: Partial<Dependencies> = {
             params.toolName,
             params.pattern,
           ),
+        });
+        dependencies.emitPermissionsChanged({
+          scope: 'session',
+          stepId: step.id,
         });
         dependencies.emitStep(updated);
         return updated;
@@ -272,6 +282,10 @@ export function createStepPermissionService(overrides: Partial<Dependencies> = {
         }
         if (!hasValidTool) return step;
         const updated = await dependencies.updateStep(step.id, { sessionRules });
+        dependencies.emitPermissionsChanged({
+          scope: 'session',
+          stepId: step.id,
+        });
         dependencies.emitStep(updated);
         return updated;
       }),

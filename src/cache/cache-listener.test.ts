@@ -5,8 +5,10 @@ import { feedQueryKeys } from '@/lib/feed-query-keys';
 import { cache$, resetCache } from './cache-store';
 import {
   getFeedQueryKeyForCacheEvent,
+  getPermissionQueryKeysForEvent,
   getReactQueryKeysForCacheEvent,
   handleCacheEvent,
+  handlePermissionsChangedEvent,
 } from './cache-listener';
 import { resetCacheResourceSubscriptionsForTests } from './cache-subscriptions';
 import { retainResource } from './cache-actions';
@@ -382,3 +384,53 @@ function applyPrTaskForDecisionTest() {
     prWorkspaceState: 'cleanup-pending',
   });
 }
+
+
+describe('permissions:changed handling', () => {
+  it('invalidates the project permissions key for project and worktree scopes', () => {
+    expect(
+      getPermissionQueryKeysForEvent({
+        scope: 'project',
+        projectPath: '/repo',
+      }),
+    ).toEqual([['projectPermissions', '/repo']]);
+
+    expect(
+      getPermissionQueryKeysForEvent({
+        scope: 'worktree',
+        projectPath: '/repo',
+      }),
+    ).toEqual([['projectPermissions', '/repo']]);
+  });
+
+  it('falls back to the whole prefix when no project path is known', () => {
+    expect(getPermissionQueryKeysForEvent({ scope: 'project' })).toEqual([
+      ['projectPermissions'],
+    ]);
+  });
+
+  it('invalidates nothing for session scope (step events carry those rules)', () => {
+    expect(
+      getPermissionQueryKeysForEvent({ scope: 'session', stepId: 'step-1' }),
+    ).toEqual([]);
+  });
+
+  it('invalidates global and project permissions for global scope', () => {
+    expect(getPermissionQueryKeysForEvent({ scope: 'global' })).toEqual([
+      ['globalPermissions'],
+      ['projectPermissions'],
+    ]);
+  });
+
+  it('invalidates every resolved key on the query client', () => {
+    const invalidateQueries = vi.fn();
+    handlePermissionsChangedEvent(
+      { scope: 'project', projectPath: '/repo' },
+      { invalidateQueries },
+    );
+
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ['projectPermissions', '/repo'],
+    });
+  });
+});

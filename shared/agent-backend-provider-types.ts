@@ -10,6 +10,7 @@ import type { InteractionMode, ThinkingEffort } from './types';
 import type { AgentBackendBadge } from './agent-backend-metadata';
 import type { AiUsageContext } from './ai-usage-types';
 import type { QuestionResponseMetadata } from './agent-types';
+import type { ResolvedPermissionRule } from './permission-types';
 
 export type CapabilityValidation =
   | { ok: true }
@@ -77,6 +78,14 @@ export interface RuntimeModeSwitchCapability {
   setMode(input: {
     handle: AgentRunHandle;
     mode: InteractionMode;
+  }): Promise<void>;
+}
+
+export interface PermissionRuleUpdateCapability {
+  /** Swap the runtime permission-rule snapshot of an active run. */
+  update(input: {
+    handle: AgentRunHandle;
+    rules: ResolvedPermissionRule[];
   }): Promise<void>;
 }
 
@@ -153,6 +162,8 @@ export interface AgentCapabilityGroup {
   questions: Capability<QuestionCapability>;
   runtimeModeSwitch: Capability<RuntimeModeSwitchCapability>;
   sessionAllowedTools: Capability<SessionAllowedToolsCapability>;
+  /** Optional so provider mocks/tests without this capability still typecheck. */
+  permissionRuleUpdates?: Capability<PermissionRuleUpdateCapability>;
   resourceTracking: Capability<ResourceTrackingCapability>;
 }
 

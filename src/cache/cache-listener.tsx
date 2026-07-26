@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { api } from '@/lib/api';
 import type { CacheEvent } from '@shared/cache-events';
 import { feedQueryKeys } from '@/lib/feed-query-keys';
+import type { PermissionsChangedEvent } from '@shared/permission-types';
 
 
 import {
@@ -145,6 +146,37 @@ export function handleCacheEvent(
   }
 }
 
+/**
+ * Query keys to invalidate when persisted permission rules change anywhere.
+ * Project-scoped changes invalidate that project's key; global changes (or a
+ * change without a known project path) invalidate the whole prefix.
+ */
+export function getPermissionQueryKeysForEvent(
+  event: PermissionsChangedEvent,
+): Array<readonly unknown[]> {
+  if (event.scope === 'global') {
+    return [['globalPermissions'], ['projectPermissions']];
+  }
+  // Session rules live on the step itself and arrive through step cache events.
+  if (event.scope === 'session') {
+    return [];
+  }
+  return [
+    event.projectPath
+      ? ['projectPermissions', event.projectPath]
+      : ['projectPermissions'],
+  ];
+}
+
+export function handlePermissionsChangedEvent(
+  event: PermissionsChangedEvent,
+  queryClient: Pick<QueryClient, 'invalidateQueries'>,
+) {
+  for (const queryKey of getPermissionQueryKeysForEvent(event)) {
+    void queryClient.invalidateQueries({ queryKey });
+  }
+}
+
 export function CacheListener() {
   const queryClient = useQueryClient();
 
@@ -152,6 +184,13 @@ export function CacheListener() {
     () =>
       api.cache.onEvent((event) => {
         handleCacheEvent(event, queryClient);
+      }),
+    [queryClient],
+  );
+  useEffect(
+    () =>
+      api.permissionEvents.onChanged((event) => {
+        handlePermissionsChangedEvent(event, queryClient);
       }),
     [queryClient],
   );

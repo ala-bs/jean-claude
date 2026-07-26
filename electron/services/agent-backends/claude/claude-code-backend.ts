@@ -314,6 +314,22 @@ export class ClaudeCodeBackend implements AgentBackend {
   }
 
   /**
+   * Replace the permission-rule snapshot used by `canUseTool` evaluation.
+   * Safe to call while a run is in flight.
+   */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.permissionRules = rules;
+  }
+
+  /**
    * Get the accumulated session-allowed tools for a session.
    * Used by agent-service to persist back to the task.
    */

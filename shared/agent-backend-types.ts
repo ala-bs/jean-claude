@@ -153,6 +153,17 @@ export interface AgentBackend {
   ): Promise<void>;
   setMode(sessionId: string, mode: InteractionMode): Promise<void>;
   getSessionAllowedTools?(sessionId: string): string[];
+  /**
+   * Replace the resolved permission-rule snapshot used for runtime evaluation.
+   *
+   * Safe to call mid-run: it only swaps the array consulted by the next
+   * permission evaluation. Optional so backends without runtime permission
+   * evaluation keep type-checking.
+   */
+  updatePermissionRules?(params: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void;
   dispose(): Promise<void>;
 }
 

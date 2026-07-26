@@ -829,6 +829,20 @@ contextBridge.exposeInMainWorld('api', {
         action,
       ),
   },
+  permissionEvents: {
+    onChanged: (
+      callback: (
+        event: import('@shared/permission-types').PermissionsChangedEvent,
+      ) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        event: import('@shared/permission-types').PermissionsChangedEvent,
+      ) => callback(event);
+      ipcRenderer.on('permissions:changed', handler);
+      return () => ipcRenderer.removeListener('permissions:changed', handler);
+    },
+  },
   projectPermissions: {
     get: (projectPath: string) =>
       ipcRenderer.invoke('projectPermissions:get', projectPath),

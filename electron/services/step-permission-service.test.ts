@@ -73,6 +73,7 @@ function setup(initialSteps: TaskStep[], parentTask: Task | null = task) {
       runPersisted('global', params.afterPersisted),
   );
   const queueSizes: number[] = [];
+  const emitPermissionsChanged = vi.fn();
   const service = createStepPermissionService({
     findStep: vi.fn(async (stepId) => steps.get(stepId)),
     findTask: vi.fn(async (taskId) =>
@@ -81,6 +82,7 @@ function setup(initialSteps: TaskStep[], parentTask: Task | null = task) {
     findProject: vi.fn(async () => project as never),
     updateStep,
     emitStep,
+    emitPermissionsChanged,
     addProjectPermission,
     addWorktreePermission,
     addGlobalPermission,
@@ -91,6 +93,7 @@ function setup(initialSteps: TaskStep[], parentTask: Task | null = task) {
     steps,
     updateStep,
     emitStep,
+    emitPermissionsChanged,
     addProjectPermission,
     addWorktreePermission,
     addGlobalPermission,
@@ -420,5 +423,88 @@ describe('stepPermissionService', () => {
     });
     expect(updated.sessionRules).toEqual({ read: 'allow' });
     expect(queueSizes).toEqual([1, 0, 1, 0]);
+  });
+});
+
+describe('session rule changes notify live agent sessions', () => {
+  it.each([
+    [
+      'addSessionAllowedTool',
+      (service: ReturnType<typeof setup>['service']) =>
+        service.addSessionAllowedTool({
+          stepId: 'step-1',
+          toolName: 'Bash',
+          input: { command: 'pnpm test' },
+        }),
+    ],
+    [
+      'allowForProject',
+      (service: ReturnType<typeof setup>['service']) =>
+        service.allowForProject({
+          stepId: 'step-1',
+          toolName: 'Bash',
+          input: { command: 'pnpm test' },
+        }),
+    ],
+    [
+      'allowForProjectWorktrees',
+      (service: ReturnType<typeof setup>['service']) =>
+        service.allowForProjectWorktrees({
+          stepId: 'step-1',
+          toolName: 'Bash',
+          input: { command: 'pnpm test' },
+        }),
+    ],
+    [
+      'allowGlobally',
+      (service: ReturnType<typeof setup>['service']) =>
+        service.allowGlobally({
+          stepId: 'step-1',
+          toolName: 'Bash',
+          input: { command: 'pnpm test' },
+        }),
+    ],
+    [
+      'syncSessionAllowedTools',
+      (service: ReturnType<typeof setup>['service']) =>
+        service.syncSessionAllowedTools({
+          stepId: 'step-1',
+          tools: ['bash:pnpm test'],
+        }),
+    ],
+  ])('emits a session-scoped permissions change from %s', async (_name, run) => {
+    const { service, emitPermissionsChanged } = setup([makeStep('step-1')]);
+
+    await run(service);
+
+    expect(emitPermissionsChanged).toHaveBeenCalledWith({
+      scope: 'session',
+      stepId: 'step-1',
+    });
+  });
+
+  it('emits a session-scoped permissions change when a rule is removed', async () => {
+    const { service, emitPermissionsChanged } = setup([
+      makeStep('step-1', { bash: { 'pnpm test': 'allow' } }),
+    ]);
+
+    await service.removeSessionAllowedTool({
+      stepId: 'step-1',
+      toolName: 'bash',
+      pattern: 'pnpm test',
+    });
+
+    expect(emitPermissionsChanged).toHaveBeenCalledWith({
+      scope: 'session',
+      stepId: 'step-1',
+    });
+  });
+
+  it('does not emit when a sync reports no usable tools', async () => {
+    const { service, emitPermissionsChanged } = setup([makeStep('step-1')]);
+
+    await service.syncSessionAllowedTools({ stepId: 'step-1', tools: ['bash'] });
+
+    expect(emitPermissionsChanged).not.toHaveBeenCalled();
   });
 });

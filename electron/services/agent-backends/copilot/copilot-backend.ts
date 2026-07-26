@@ -104,6 +104,8 @@ interface CopilotSessionState {
   cwd: string;
   mode: InteractionMode;
   permissionRules: ResolvedPermissionRule[];
+  /** Rules derived from persisted session tools; re-applied on rule refresh. */
+  persistedPermissionRules: ResolvedPermissionRule[];
   sessionAllowedTools: string[];
   pendingPermissions: Map<
     string,
@@ -251,6 +253,7 @@ export class CopilotBackend implements AgentBackend {
       cwd: config.cwd,
       mode: config.interactionMode,
       permissionRules: [...(config.permissionRules ?? []), ...persistedRules],
+      persistedPermissionRules: persistedRules,
       sessionAllowedTools: [...new Set(persistedAllow)],
       pendingPermissions: new Map(),
       pendingQuestions: new Map(),
@@ -498,6 +501,22 @@ export class CopilotBackend implements AgentBackend {
       }
       await this.ignoreCleanupError(client.stop?.());
     }
+  }
+
+  /**
+   * Replace the permission-rule snapshot used for runtime evaluation.
+   * Session-persisted rules are re-appended so they survive the refresh.
+   */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.permissionRules = [...rules, ...session.persistedPermissionRules];
   }
 
   getSessionAllowedTools(sessionId: string): string[] {

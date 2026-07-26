@@ -271,6 +271,20 @@ export class VibeBackend implements AgentBackend {
     _metadata: QuestionResponseMetadata,
   ): Promise<void> {}
 
+  /** Replace the permission-rule snapshot used for runtime evaluation. */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.permissionRules = rules;
+    session.normalizationCtx.permissionRules = rules;
+  }
+
   async setMode(
     sessionId: string,
     mode: InteractionMode,

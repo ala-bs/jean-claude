@@ -18,6 +18,7 @@ import {
   isUnrestrictedBashPattern,
   normalizeToolRequest,
 } from './permission-settings-service';
+import { emitPermissionsChanged } from './permission-event-service';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -184,6 +185,9 @@ export async function writeGlobalPermissions(
 
   // Invalidate cache after write
   cachedPermissions = null;
+
+  // Single choke point: every add/remove/edit path writes through here.
+  emitPermissionsChanged({ scope: 'global' });
 }
 
 // ---------------------------------------------------------------------------

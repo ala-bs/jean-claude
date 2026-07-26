@@ -1290,6 +1290,13 @@ export interface Api {
       action: import('@shared/permission-types').PermissionAction,
     ) => Promise<import('@shared/permission-types').PermissionScope>;
   };
+  permissionEvents: {
+    onChanged: (
+      callback: (
+        event: import('@shared/permission-types').PermissionsChangedEvent,
+      ) => void,
+    ) => () => void;
+  };
   projectPermissions: {
     get: (
       projectPath: string,
@@ -2487,6 +2494,9 @@ export const api: Api = hasWindowApi
         addRule: async () => ({}),
         removeRule: async () => ({}),
         editRule: async () => ({}),
+      },
+      permissionEvents: {
+        onChanged: () => () => {},
       },
       projectPermissions: {
         get: async () => ({}),

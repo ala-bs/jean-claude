@@ -6,12 +6,13 @@ import {
   MessageSquare,
   MoreHorizontal,
   Send,
+  Settings2,
   Shield,
   ShieldCheck,
   TriangleAlert,
   X,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { buildBashSuggestions, type PermissionSuggestion } from '@shared/permission-suggestions';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
@@ -22,7 +23,10 @@ import type { PermissionResponse } from '@shared/agent-types';
 import { Textarea } from '@/common/ui/textarea';
 import { useModal } from '@/common/context/modal';
 
-
+import {
+  PermissionPartModal,
+  type PermissionPartScope,
+} from '../ui-permission-part-modal';
 import { MarkdownContent } from '../ui-markdown-content';
 
 /**
@@ -198,15 +202,21 @@ type SubCommandEval = NonNullable<
 function SubCommandBreakdown({
   subCommands,
   expanded,
+  grantedParts,
+  onEditPart,
 }: {
   subCommands: SubCommandEval[];
   expanded: boolean;
+  /** Index of the command part -> pattern granted for it in this prompt. */
+  grantedParts: Record<number, string>;
+  onEditPart?: (index: number) => void;
 }) {
   return (
     <div className="bg-bg-1 divide-glass-border/60 divide-y rounded">
       {subCommands.map((sub, index) => {
-        const isAllowed = sub.action === 'allow';
         const isDenied = sub.action === 'deny';
+        const grantedPattern = isDenied ? undefined : grantedParts[index];
+        const isAllowed = sub.action === 'allow' || grantedPattern !== undefined;
         return (
           <div
             key={`${index}-${sub.command}`}
@@ -238,13 +248,28 @@ function SubCommandBreakdown({
                     : 'bg-yellow-400/10 text-yellow-300'
               }`}
               title={
-                sub.matchedRule
-                  ? `${sub.matchedRule.tool}: ${sub.matchedRule.pattern}`
-                  : 'no matching rule'
+                grantedPattern
+                  ? `Granted: Bash(${grantedPattern})`
+                  : sub.matchedRule
+                    ? `${sub.matchedRule.tool}: ${sub.matchedRule.pattern}`
+                    : 'no matching rule'
               }
             >
-              {sub.matchedRule ? sub.matchedRule.pattern : 'no rule'}
+              {grantedPattern ?? sub.matchedRule?.pattern ?? 'no rule'}
             </span>
+            {/* Denied parts are never editable: an allow rule can never
+                override a deny, so granting one would be cosmetic. */}
+            {onEditPart && !isAllowed && !isDenied && (
+              <button
+                type="button"
+                aria-label={`Edit permission rule for ${sub.command}`}
+                title="Edit rule and scope for this part"
+                className="text-ink-3 hover:text-ink-1 hover:bg-glass-medium mt-0.5 shrink-0 rounded p-0.5"
+                onClick={() => onEditPart(index)}
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         );
       })}
@@ -294,6 +319,24 @@ export function PermissionBar({
   const [otherMessage, setOtherMessage] = useState('');
   const [isCommandExpanded, setIsCommandExpanded] = useState(false);
   const directoryDropdownRef = useRef<{ toggle: () => void } | null>(null);
+  // Command part index -> pattern granted from the per-part modal during THIS
+  // request. The bar is not remounted between consecutive requests on the same
+  // step (the store swaps the request in place), so this must be reset when the
+  // request changes — otherwise the next command's parts would inherit these
+  // grants and render as allowed without any rule covering them.
+  const [grantedParts, setGrantedParts] = useState<Record<number, string>>({});
+  const [editingPartIndex, setEditingPartIndex] = useState<number | null>(null);
+  const [grantedRequestId, setGrantedRequestId] = useState(request.requestId);
+  if (grantedRequestId !== request.requestId) {
+    setGrantedRequestId(request.requestId);
+    setGrantedParts({});
+    setEditingPartIndex(null);
+  }
+  // Read after an await to detect a request swapped in mid-grant.
+  const currentRequestIdRef = useRef(request.requestId);
+  useEffect(() => {
+    currentRequestIdRef.current = request.requestId;
+  }, [request.requestId]);
 
   const input = request.input;
   const permissionInput =
@@ -318,8 +361,11 @@ export function PermissionBar({
 
   const subCommands = request.permissionEvaluation?.subCommands ?? [];
   const showBreakdown = request.toolName === 'Bash' && subCommands.length > 1;
+  const isPartAllowed = (sub: SubCommandEval, index: number) =>
+    sub.action === 'allow' ||
+    (sub.action !== 'deny' && grantedParts[index] !== undefined);
   const unmatchedCount = subCommands.filter(
-    (sub) => sub.action !== 'allow',
+    (sub, index) => !isPartAllowed(sub, index),
   ).length;
 
   // Parts that must be covered for this command to stop prompting.
@@ -336,7 +382,7 @@ export function PermissionBar({
       ? []
       : subCommands.length > 0
         ? subCommands
-            .filter((sub) => sub.action !== 'allow')
+            .filter((sub, index) => !isPartAllowed(sub, index))
             .map((sub) => sub.command)
         : /[;|&]/.test(command)
           ? []
@@ -386,6 +432,79 @@ export function PermissionBar({
       updatedInput: input,
       allowMode: 'project',
     });
+  };
+
+  const partScopeHandlers: Record<
+    PermissionPartScope,
+    ((toolName: string, input: Record<string, unknown>) => Promise<void>) | undefined
+  > = {
+    session: onAllowForSession,
+    project: onAllowForProject,
+    worktree: worktreePath ? onAllowForProjectWorktrees : undefined,
+    global: onAllowGlobally,
+  };
+
+  const availablePartScopes = (
+    ['session', 'project', 'worktree', 'global'] as const
+  ).filter((scope) => Boolean(partScopeHandlers[scope]));
+
+  // Risky and directory-access prompts must be reviewed, never one-click
+  // persisted — the same policy that suppresses the suggestion chips.
+  const canEditParts =
+    showBreakdown &&
+    !isRiskyCommand &&
+    !directoryAccess &&
+    availablePartScopes.length > 0;
+
+  /**
+   * Persist a rule for one command part. Once every part of the compound
+   * command is covered there is nothing left to ask about, so the request is
+   * allowed automatically — persistence already happened per part, so the
+   * response itself carries no allowMode (no whole-command rule is written).
+   */
+  const handleGrantPart = async ({
+    pattern,
+    scope,
+  }: {
+    pattern: string;
+    scope: PermissionPartScope;
+  }) => {
+    const index = editingPartIndex;
+    const part = index === null ? undefined : subCommands[index];
+    if (index === null || !part) return;
+    const requestId = request.requestId;
+    const handler = partScopeHandlers[scope];
+    if (!handler) throw new Error(`Scope "${scope}" is unavailable here`);
+    // An unedited pattern must stay literal: `*`/`?` inside a real command
+    // would otherwise silently widen the rule past what the modal displayed.
+    await handler('Bash', {
+      command: pattern,
+      ...(pattern === part.command ? { __permissionExact: true } : {}),
+    });
+
+    // The rule is persisted regardless, but a request that was swapped in while
+    // the grant was in flight must not inherit this part's state or be answered.
+    if (currentRequestIdRef.current !== requestId) return;
+
+    const next = { ...grantedParts, [index]: pattern };
+    setGrantedParts(next);
+
+    const allCovered = subCommands.every(
+      (sub, i) =>
+        sub.action === 'allow' ||
+        (sub.action !== 'deny' && next[i] !== undefined),
+    );
+    // The grant itself succeeded; a failing auto-allow must not be reported
+    // as "failed to add permission", so it is awaited outside the modal's
+    // error boundary.
+    if (allCovered) {
+      void Promise.resolve(
+        onRespond(requestId, {
+          behavior: 'allow',
+          updatedInput: input,
+        }),
+      ).catch(() => {});
+    }
   };
 
   const handleAllow = () => {
@@ -611,6 +730,16 @@ export function PermissionBar({
 
   return (
     <div className="border border-yellow-700/50 bg-yellow-900/20 px-4 py-3">
+      {editingPartIndex !== null && subCommands[editingPartIndex] && (
+        <PermissionPartModal
+          key={editingPartIndex}
+          isOpen
+          onClose={() => setEditingPartIndex(null)}
+          part={subCommands[editingPartIndex].command}
+          scopes={availablePartScopes}
+          onGrant={handleGrantPart}
+        />
+      )}
       <div className="flex flex-col gap-3">
         {/* Header + Content */}
         <div className="flex items-start gap-3">
@@ -637,11 +766,14 @@ export function PermissionBar({
             {showBreakdown && (
               <div className="mt-2">
                 <div className="text-ink-3 mb-1 text-xs">
-                  Command parts checked separately:
+                  Command parts checked separately
+                  {canEditParts ? ' — edit a part to allow it:' : ':'}
                 </div>
                 <SubCommandBreakdown
                   subCommands={subCommands}
                   expanded={isCommandExpanded}
+                  grantedParts={grantedParts}
+                  onEditPart={canEditParts ? setEditingPartIndex : undefined}
                 />
               </div>
             )}

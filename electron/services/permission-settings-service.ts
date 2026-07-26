@@ -28,6 +28,8 @@ import type {
 } from '../../shared/permission-types';
 import { dbg } from '../lib/debug';
 
+import { emitPermissionsChanged } from './permission-event-service';
+
 // Re-export types for convenience
 export type { JeanClaudeSettings, PermissionAction, PermissionEvalResult };
 
@@ -709,6 +711,7 @@ export async function addProjectPermission(
   });
 
   await writeSettings(projectPath, settings);
+  emitPermissionsChanged({ scope: 'project', projectPath });
 }
 
 /**
@@ -760,6 +763,7 @@ export async function addWorktreePermission<T>(
     });
 
     await writeSettings(projectPath, settings);
+    emitPermissionsChanged({ scope: 'worktree', projectPath });
     try {
       return afterPersisted ? await afterPersisted() : true;
     } catch (error) {
@@ -772,6 +776,7 @@ export async function addWorktreePermission<T>(
           delete current.permissions.worktrees;
         }
         await writeSettings(projectPath, current);
+        emitPermissionsChanged({ scope: 'worktree', projectPath });
       }
       throw error;
     }
@@ -833,6 +838,9 @@ async function writeProjectPermissions(
   const settings = await readSettings(projectPath);
   settings.permissions.project = projectScope;
   await writeSettings(projectPath, settings);
+  // Single choke point for the UI-driven project CRUD paths (add/remove/edit
+  // rule, plus their rollbacks) — every one of them writes through here.
+  emitPermissionsChanged({ scope: 'project', projectPath });
 }
 
 /**

@@ -131,6 +131,7 @@ const CAPABILITY_KEYS = {
     'questions',
     'runtimeModeSwitch',
     'sessionAllowedTools',
+    'permissionRuleUpdates',
     'resourceTracking',
   ],
   generation: ['text', 'structured'],
@@ -224,6 +225,15 @@ describe('agent backend providers', () => {
           provider.capabilities[groupName as keyof AgentBackendCapabilities];
         expect(Object.keys(group).sort()).toEqual([...expectedKeys].sort());
       }
+    }
+  });
+
+  it('only supports permission rule refresh where the backend can honor it', () => {
+    for (const type of BACKEND_TYPES) {
+      const provider = getAgentBackendProvider(type);
+      expect(
+        provider.capabilities.agent.permissionRuleUpdates?.supported,
+      ).toBe(type !== 'codex');
     }
   });
 

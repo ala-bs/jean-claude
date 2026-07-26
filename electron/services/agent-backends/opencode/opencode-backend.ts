@@ -443,6 +443,8 @@ interface OpenCodeSessionState {
   emittedQuestionRequestIds: Set<string>;
   /** Resolved permission rules for runtime evaluation */
   permissionRules: ResolvedPermissionRule[];
+  /** Rules granted at runtime (e.g. directory approvals); survive refreshes. */
+  runtimePermissionRules: ResolvedPermissionRule[];
   /** Server/client handle used by this session */
   serverHandle: ServerHandle;
   /** Whether this session owns a dedicated server instance */
@@ -602,6 +604,7 @@ export class OpenCodeBackend implements AgentBackend {
       rawDeltaRows: new Map(),
       emittedQuestionRequestIds: new Set(),
       permissionRules: config.permissionRules ?? [],
+      runtimePermissionRules: [],
       serverHandle,
       ownsServerHandle: !useSharedServer,
       serverClosed: false,
@@ -684,7 +687,13 @@ export class OpenCodeBackend implements AgentBackend {
       reply: ocResponse,
     });
     this.assertSuccessfulSdkResponse(result, 'respond to permission');
-    if (directoryRule) state.permissionRules.push(directoryRule);
+    if (directoryRule) {
+      state.permissionRules.push(directoryRule);
+      state.runtimePermissionRules = [
+        ...(state.runtimePermissionRules ?? []),
+        directoryRule,
+      ];
+    }
 
     // Resolve the pending permission promise
     const pending = state.pendingPermissions.get(requestId);
@@ -695,6 +704,24 @@ export class OpenCodeBackend implements AgentBackend {
         this.resetActivityWatchdog(state, 'user-input-resolved');
       }
     }
+  }
+
+  /**
+   * Replace the permission-rule snapshot used for runtime evaluation.
+   * Runtime-granted rules (directory approvals) are preserved.
+   */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    const next = [...rules, ...(state.runtimePermissionRules ?? [])];
+    state.permissionRules = next;
+    state.normalizationCtx.permissionRules = next;
   }
 
   async respondToQuestion(

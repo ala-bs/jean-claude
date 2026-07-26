@@ -10,7 +10,11 @@ function useStepPermissionMutation(
     input?: Record<string, unknown>;
     pattern?: string;
   }) => ReturnType<typeof api.steps.addSessionAllowedTool>,
-  options: { invalidateGlobal?: boolean; onError?: (error: Error) => void } = {},
+  options: {
+    invalidateGlobal?: boolean;
+    invalidateProject?: boolean;
+    onError?: (error: Error) => void;
+  } = {},
 ) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -24,6 +28,12 @@ function useStepPermissionMutation(
       });
       if (options.invalidateGlobal) {
         queryClient.invalidateQueries({ queryKey: ['globalPermissions'] });
+      }
+      if (options.invalidateProject) {
+        // The step response carries no project path, so invalidate the whole
+        // prefix — otherwise the project permissions view goes stale after
+        // granting from the permission bar.
+        queryClient.invalidateQueries({ queryKey: ['projectPermissions'] });
       }
     },
     onError: options.onError,
@@ -43,14 +53,18 @@ export function useRemoveSessionAllowedTool() {
 }
 
 export function useAllowForProject() {
-  return useStepPermissionMutation(({ stepId, toolName, input = {} }) =>
-    api.steps.allowForProject({ stepId, toolName, input }),
+  return useStepPermissionMutation(
+    ({ stepId, toolName, input = {} }) =>
+      api.steps.allowForProject({ stepId, toolName, input }),
+    { invalidateProject: true },
   );
 }
 
 export function useAllowForProjectWorktrees() {
-  return useStepPermissionMutation(({ stepId, toolName, input = {} }) =>
-    api.steps.allowForProjectWorktrees({ stepId, toolName, input }),
+  return useStepPermissionMutation(
+    ({ stepId, toolName, input = {} }) =>
+      api.steps.allowForProjectWorktrees({ stepId, toolName, input }),
+    { invalidateProject: true },
   );
 }
 

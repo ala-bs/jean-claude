@@ -478,6 +478,46 @@ describe('CopilotBackend', () => {
     ).resolves.toEqual({ kind: 'approve-once' });
   });
 
+  it('swaps the rule snapshot mid-run and keeps persisted session rules', async () => {
+    const backend = createBackend();
+
+    const session = await backend.start(
+      createConfig({
+        permissionRules: [
+          { tool: 'bash', pattern: 'pnpm test', action: 'allow' },
+        ],
+        persistedSessionRules: { read: { 'src/**': 'allow' } },
+      }),
+      [{ type: 'text', text: 'hello' }],
+    );
+
+    backend.updatePermissionRules({
+      sessionId: session.sessionId,
+      rules: [{ tool: 'bash', pattern: 'pnpm test', action: 'deny' }],
+    });
+
+    await expect(
+      Promise.resolve(
+        getPermissionHandler()({
+          kind: 'shell',
+          toolCallId: 'perm-1',
+          fullCommandText: 'pnpm test',
+        }),
+      ),
+    ).resolves.toMatchObject({ kind: 'reject' });
+
+    // Persisted session rules survive the refresh.
+    await expect(
+      Promise.resolve(
+        getPermissionHandler()({
+          kind: 'read',
+          toolCallId: 'perm-2',
+          path: '/repo/src/a.ts',
+        }),
+      ),
+    ).resolves.toEqual({ kind: 'approve-once' });
+  });
+
   it('auto-denies permission requests denied by existing rules', async () => {
     const backend = createBackend();
 
