@@ -5,7 +5,11 @@ import { createPortal } from 'react-dom';
 
 
 
-import type { NormalizedEntry } from '@shared/normalized-message-v2';
+import type {
+  NormalizedEntry,
+  NormalizedToolUse,
+  ToolUseByName,
+} from '@shared/normalized-message-v2';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useRegisterOverlay } from '@/common/context/overlay';
 
@@ -179,4 +183,73 @@ export function copyToClipboardItem(
       navigator.clipboard.writeText(text).catch(() => {});
     },
   };
+}
+
+function formatToolInput(toolUse: NormalizedToolUse): string {
+  switch (toolUse.name) {
+    case 'bash':
+      return (toolUse as ToolUseByName<'bash'>).input.command;
+    case 'read':
+      return (toolUse as ToolUseByName<'read'>).input.filePath;
+    case 'write': {
+      const input = toolUse as ToolUseByName<'write'>;
+      return input.input.files && input.input.files.length > 1
+        ? input.input.files.map((file) => file.filePath).join('\n')
+        : `${input.input.filePath}\n${input.input.value}`;
+    }
+    case 'edit': {
+      const input = toolUse as ToolUseByName<'edit'>;
+      return input.input.files && input.input.files.length > 1
+        ? input.input.files.map((file) => file.filePath).join('\n')
+        : `${input.input.filePath}\n-${input.input.oldString}\n+${input.input.newString}`;
+    }
+    case 'grep':
+      return (toolUse as ToolUseByName<'grep'>).input.pattern;
+    case 'glob':
+      return (toolUse as ToolUseByName<'glob'>).input.pattern;
+    case 'web-search':
+      return (toolUse as ToolUseByName<'web-search'>).input.query;
+    case 'web-fetch':
+      return (toolUse as ToolUseByName<'web-fetch'>).input.url;
+    case 'skill':
+      return (toolUse as ToolUseByName<'skill'>).skillName;
+    default:
+      return JSON.stringify(toolUse.input, null, 2) ?? '';
+  }
+}
+
+function formatToolResult(toolUse: NormalizedToolUse): string {
+  const result = toolUse.result;
+  if (result === undefined || result === null) return '';
+  if (
+    toolUse.name === 'bash' &&
+    typeof result === 'object' &&
+    'content' in result &&
+    typeof result.content === 'string'
+  ) {
+    return result.content;
+  }
+  return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+}
+
+function copyTextItem(label: string, text: string): ContextMenuItem | null {
+  const trimmedText = text.trim();
+  if (!trimmedText) return null;
+  return {
+    label,
+    icon: <Clipboard />,
+    onClick: () => navigator.clipboard.writeText(trimmedText).catch(() => {}),
+  };
+}
+
+export function copyToolInputItem(
+  toolUse: NormalizedToolUse,
+): ContextMenuItem | null {
+  return copyTextItem('Copy input', formatToolInput(toolUse));
+}
+
+export function copyToolResultItem(
+  toolUse: NormalizedToolUse,
+): ContextMenuItem | null {
+  return copyTextItem('Copy result', formatToolResult(toolUse));
 }

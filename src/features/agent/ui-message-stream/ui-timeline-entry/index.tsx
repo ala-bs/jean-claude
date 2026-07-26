@@ -255,6 +255,21 @@ function DotEntry({
 }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const hasExpandedContent = !!expandedContent;
+  const handleClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (!hasExpandedContent) return;
+    const selection = window.getSelection();
+    if (
+      selection &&
+      !selection.isCollapsed &&
+      selection.toString().trim() &&
+      [selection.anchorNode, selection.focusNode].some(
+        (node) => node && event.currentTarget.contains(node),
+      )
+    ) {
+      return;
+    }
+    setIsExpanded((current) => !current);
+  }, [hasExpandedContent]);
 
   // Dot colors: blue for tools, yellow for system, amber for thinking, gray for text/result, purple for user
   const dotColor = isError
@@ -291,7 +306,7 @@ function DotEntry({
       {/* Content */}
       <div
         className={`py-1.5 pr-3 ${hasExpandedContent ? 'cursor-pointer hover:bg-white/5' : ''}`}
-        onClick={() => hasExpandedContent && setIsExpanded(!isExpanded)}
+        onClick={handleClick}
       >
         {/* Summary row */}
         <div className="flex items-center gap-2">

@@ -608,7 +608,10 @@ const AgentHeader = memo(function AgentHeader({
           : 'none',
         background: 'oklch(1 0 0 / 0.02)',
       }}
-      onClick={onToggleDetails}
+      onClick={(event) => {
+        if (hasActiveTextSelectionWithin(event.currentTarget)) return;
+        onToggleDetails();
+      }}
       onContextMenu={onContextMenu}
     >
       {detailsExpanded ? (

@@ -1,6 +1,8 @@
 import {
   addBashToPermissionsItem,
   copyToClipboardItem,
+  copyToolInputItem,
+  copyToolResultItem,
   showRawMessageItem,
   useMessageContextMenu,
 } from './ui-message-context-menu';
@@ -47,6 +49,16 @@ import type { ToolUseByName } from '@shared/normalized-message-v2';
 
 // Threshold in pixels - if user is within this distance from bottom, auto-scroll
 const SCROLL_THRESHOLD = 10;
+
+function addToolCopyItems(
+  items: ContextMenuItem[],
+  toolUse: NormalizedToolUse,
+): void {
+  const copyInputItem = copyToolInputItem(toolUse);
+  if (copyInputItem) items.push(copyInputItem);
+  const copyResultItem = copyToolResultItem(toolUse);
+  if (copyResultItem) items.push(copyResultItem);
+}
 
 export interface PermissionBannerProps {
   request: NormalizedPermissionRequest & { taskId: string };
@@ -246,8 +258,18 @@ export const MessageStream = memo(function MessageStream({
 
       // "Copy to clipboard" for entries with copyable text
       if (streamMessage.kind === 'entry') {
-        const copyItem = copyToClipboardItem(streamMessage.entry);
-        if (copyItem) items.push(copyItem);
+        if (streamMessage.entry.type === 'tool-use') {
+          addToolCopyItems(items, streamMessage.entry);
+        } else {
+          const copyItem = copyToClipboardItem(streamMessage.entry);
+          if (copyItem) items.push(copyItem);
+        }
+      }
+
+      if (streamMessage.kind === 'skill') {
+        addToolCopyItems(items, streamMessage.skillToolUse);
+      } else if (streamMessage.kind === 'subagent') {
+        addToolCopyItems(items, streamMessage.toolUse);
       }
 
       // "Add to permissions" for bash tool entries
@@ -293,8 +315,15 @@ export const MessageStream = memo(function MessageStream({
     (entry: NormalizedEntry): ContextMenuItem[] => {
       const items: ContextMenuItem[] = [];
 
-      const copyItem = copyToClipboardItem(entry);
-      if (copyItem) items.push(copyItem);
+      if (entry.type === 'tool-use') {
+        const copyInputItem = copyToolInputItem(entry);
+        if (copyInputItem) items.push(copyInputItem);
+        const copyResultItem = copyToolResultItem(entry);
+        if (copyResultItem) items.push(copyResultItem);
+      } else {
+        const copyItem = copyToClipboardItem(entry);
+        if (copyItem) items.push(copyItem);
+      }
 
       if (
         onAddBashToPermissions &&
@@ -317,6 +346,11 @@ export const MessageStream = memo(function MessageStream({
   const buildToolUseContextMenuItems = useCallback(
     (toolUse: NormalizedToolUse): ContextMenuItem[] => {
       const items: ContextMenuItem[] = [];
+
+      const copyInputItem = copyToolInputItem(toolUse);
+      if (copyInputItem) items.push(copyInputItem);
+      const copyResultItem = copyToolResultItem(toolUse);
+      if (copyResultItem) items.push(copyResultItem);
 
       if (onAddBashToPermissions && toolUse.name === 'bash') {
         const command = (toolUse as ToolUseByName<'bash'>).input.command;
