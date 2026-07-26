@@ -9,8 +9,14 @@ import {
   Loader2,
   MessagesSquare,
 } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import {
+  type ReactNode,
+  startTransition,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
 
@@ -20,6 +26,7 @@ import { getOwnerColor, normalizeOwnerName } from '@/features/work-item/utils-ow
 import {
   useAddWorkItemComment,
   useRelatedTestCases,
+  useUpdateWorkItemComment,
   useUpdateWorkItemField,
   useUpdateWorkItemState,
   useWorkItemComments,
@@ -31,6 +38,8 @@ import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { canShowWorkItemSummary } from '@/lib/work-item-summary';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
+import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { UserAvatar } from '@/common/ui/user-avatar';
 import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 
@@ -100,8 +109,25 @@ export function WorkItemPreview({
   const [currentState, setCurrentState] = useState(
     workItem?.fields.state ?? '',
   );
+  const {
+    width: commentsPaneWidth,
+    setWidth: setCommentsPaneWidth,
+    minWidth: minCommentsPaneWidth,
+    maxWidth: maxCommentsPaneWidth,
+  } = useWorkItemCommentsPaneWidth();
+  const [containerWidth, setContainerWidth] = useState(() => window.innerWidth);
+  const commentsPaneRef = useRef<HTMLDivElement>(null);
   const workItemIdRef = useRef(workItemId);
   const isEditorial = variant === 'editorial';
+  const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
+    initialWidth: commentsPaneWidth,
+    minWidth: minCommentsPaneWidth,
+    maxWidth: maxCommentsPaneWidth,
+    maxWidthFraction: 0.6,
+    direction: 'left',
+    onWidthChange: setCommentsPaneWidth,
+    resizeTargetRef: commentsPaneRef,
+  });
   const queryPolicy = getWorkItemPreviewQueryPolicy({
     variant,
     showCommentsAside,
@@ -150,6 +176,7 @@ export function WorkItemPreview({
       workItemType: workItem?.fields.workItemType ?? null,
     });
   const addComment = useAddWorkItemComment();
+  const updateComment = useUpdateWorkItemComment();
   const updateState = useUpdateWorkItemState();
   const updateField = useUpdateWorkItemField();
   const relatedIds = showRelatedWorkItems
@@ -196,6 +223,19 @@ export function WorkItemPreview({
     workItemIdRef.current = workItem?.id ?? null;
   }, [workItem?.id, workItem?.fields.state]);
 
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateWidth = () => setContainerWidth(container.offsetWidth);
+    updateWidth();
+
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, [containerRef]);
+
   if (!workItem) {
     return (
       <div className="flex h-full min-h-37.5 items-center justify-center px-6">
@@ -222,6 +262,14 @@ export function WorkItemPreview({
         workItemId: id,
       }
     : null;
+  const commentsPaneMaxWidth = Math.max(
+    minCommentsPaneWidth,
+    Math.min(maxCommentsPaneWidth, Math.floor(containerWidth * 0.6)),
+  );
+  const effectiveCommentsPaneWidth = Math.min(
+    Math.max(commentsPaneWidth, minCommentsPaneWidth),
+    commentsPaneMaxWidth,
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -438,14 +486,15 @@ export function WorkItemPreview({
           ))}
       </div>
 
-       <div
-         className={`${isEditorial ? 'grid px-4 py-3' : 'mt-3 grid'} min-h-0 flex-1 gap-4 overflow-hidden ${
-          showCommentsAside
-            ? 'xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]'
-            : 'grid-cols-1'
-        }`}
-      >
-        <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto">
+        <div
+          ref={containerRef}
+          className={`${isEditorial ? 'grid px-4 py-3' : 'mt-3 grid'} min-h-0 flex-1 gap-0 overflow-hidden ${
+           showCommentsAside
+             ? 'xl:grid-cols-[minmax(0,1fr)_4px_auto]'
+             : 'grid-cols-1'
+         } ${isDragging ? 'select-none' : ''}`}
+        >
+        <div className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto xl:pr-4">
           {activeTab === 'content' && (
             <div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -582,9 +631,22 @@ export function WorkItemPreview({
               error={
                 commentsError instanceof Error ? commentsError.message : null
               }
-              providerId={providerId}
-              hideHeader
-              isAddingComment={addComment.isPending}
+               providerId={providerId}
+               projectName={projectName}
+               hideHeader
+               isAddingComment={addComment.isPending || updateComment.isPending}
+                onUpdateComment={
+                  providerId && projectName && !readOnly
+                    ? ({ commentId, text }) =>
+                        updateComment.mutateAsync({
+                          providerId,
+                          projectName,
+                          workItemId: id,
+                          commentId,
+                          text,
+                        })
+                    : undefined
+                }
               onAddComment={
                 providerId && projectName && !readOnly
                   ? (text) =>
@@ -639,7 +701,50 @@ export function WorkItemPreview({
         </div>
 
         {showCommentsAside && (
-          <aside className="border-glass-border flex min-h-0 flex-col border-t pt-3 xl:border-t-0 xl:border-l xl:pt-0 xl:pl-4">
+          <>
+            <div
+              role="separator"
+              aria-label="Resize comments pane"
+              aria-orientation="vertical"
+              aria-valuemin={minCommentsPaneWidth}
+              aria-valuemax={commentsPaneMaxWidth}
+              aria-valuenow={effectiveCommentsPaneWidth}
+              tabIndex={0}
+              onMouseDown={handleMouseDown}
+              onKeyDown={(event) => {
+                const step = 16;
+                const direction =
+                  event.key === 'ArrowLeft'
+                    ? 1
+                    : event.key === 'ArrowRight'
+                      ? -1
+                      : 0;
+                if (event.key === 'Home') {
+                  event.preventDefault();
+                  setCommentsPaneWidth(minCommentsPaneWidth);
+                } else if (event.key === 'End') {
+                  event.preventDefault();
+                  setCommentsPaneWidth(commentsPaneMaxWidth);
+                } else if (direction !== 0) {
+                  event.preventDefault();
+                  setCommentsPaneWidth(
+                    Math.min(
+                      Math.max(
+                        effectiveCommentsPaneWidth + direction * step,
+                        minCommentsPaneWidth,
+                      ),
+                      commentsPaneMaxWidth,
+                    ),
+                  );
+                }
+              }}
+              className={`hover:bg-acc/30 hidden h-full w-1 cursor-col-resize transition-colors outline-none focus-visible:bg-acc/30 xl:block ${isDragging ? 'bg-acc/30' : ''}`}
+            />
+            <aside
+              ref={commentsPaneRef}
+              className="border-glass-border flex min-h-0 min-w-0 max-w-full flex-col border-t pt-3 xl:max-w-none xl:border-t-0 xl:border-l xl:pt-0 xl:pl-4"
+              style={{ width: effectiveCommentsPaneWidth }}
+            >
             <div className="text-ink-1 mb-2 flex shrink-0 items-center gap-1.5 text-xs font-medium">
               <MessagesSquare className="h-3.5 w-3.5" />
               Comments
@@ -656,9 +761,22 @@ export function WorkItemPreview({
                 error={
                   commentsError instanceof Error ? commentsError.message : null
                 }
-                providerId={providerId}
-                hideHeader
-                isAddingComment={addComment.isPending}
+                 providerId={providerId}
+                 projectName={projectName}
+                 hideHeader
+                 isAddingComment={addComment.isPending || updateComment.isPending}
+                  onUpdateComment={
+                    providerId && projectName && !readOnly
+                      ? ({ commentId, text }) =>
+                          updateComment.mutateAsync({
+                            providerId,
+                            projectName,
+                            workItemId: id,
+                            commentId,
+                            text,
+                          })
+                      : undefined
+                  }
                 onAddComment={
                   providerId && projectName && !readOnly
                     ? (text) =>
@@ -672,7 +790,8 @@ export function WorkItemPreview({
                 }
               />
             </div>
-          </aside>
+            </aside>
+          </>
         )}
       </div>
     </div>

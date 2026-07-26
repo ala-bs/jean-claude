@@ -330,6 +330,7 @@ export interface WorkItemComment {
   id: number;
   workItemId: number;
   text: string;
+  rawText?: string;
   format?: 'html' | 'markdown';
   attachmentBaseUrl?: string;
   createdBy: string;
@@ -831,6 +832,20 @@ export interface Api {
       workItemId: number;
       text: string;
     }) => Promise<WorkItemComment>;
+    updateWorkItemComment: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      commentId: number;
+      text: string;
+    }) => Promise<WorkItemComment>;
+    uploadWorkItemAttachment: (params: {
+      providerId: string;
+      projectName: string;
+      filename: string;
+      mimeType: string;
+      base64: string;
+    }) => Promise<{ url: string }>;
     getIterations: (params: {
       providerId: string;
       projectName: string;
@@ -2070,6 +2085,12 @@ export const api: Api = hasWindowApi
         getCachedWorkItemSummaries: async () => [],
         getWorkItemHistory: async () => [],
         addWorkItemComment: async () => {
+          throw new Error('API not available');
+        },
+        updateWorkItemComment: async () => {
+          throw new Error('API not available');
+        },
+        uploadWorkItemAttachment: async () => {
           throw new Error('API not available');
         },
         getIterations: async () => [],

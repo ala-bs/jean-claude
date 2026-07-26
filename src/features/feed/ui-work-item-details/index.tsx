@@ -39,6 +39,7 @@ import {
   useIterations,
   useLinkedPullRequestStatuses,
   useRelatedTestCases,
+  useUpdateWorkItemComment,
   useUpdateWorkItemField,
   useUpdateWorkItemState,
   useWorkItemById,
@@ -518,6 +519,7 @@ export function WorkItemDetails({
       workItemIds: linkedWorkItemIds,
     });
   const addComment = useAddWorkItemComment();
+  const updateComment = useUpdateWorkItemComment();
   const updateField = useUpdateWorkItemField();
   const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
   const [activeTab, setActiveTab] = useState<DetailsTab>('comments');
@@ -841,9 +843,11 @@ export function WorkItemDetails({
                   commentsError instanceof Error ? commentsError.message : null
                 }
                 providerId={providerId ?? undefined}
+                projectName={projectName ?? undefined}
                 emptyMessage="No comments on this work item yet."
                 hideHeader
-                isAddingComment={addComment.isPending}
+                isAddingComment={addComment.isPending || updateComment.isPending}
+                onUpdateComment={({ commentId, text }) => updateComment.mutateAsync({ providerId: providerId!, projectName: projectName!, workItemId, commentId, text })}
                 onAddComment={
                   providerId && projectName
                     ? (text) =>
