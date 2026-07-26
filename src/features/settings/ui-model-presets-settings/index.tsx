@@ -6,13 +6,6 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import {
-  ChevronDown,
-  ChevronUp,
-  GripVertical,
-  Plus,
-  Trash2,
-} from 'lucide-react';
-import {
   closestCenter,
   DndContext,
   type DragEndEvent,
@@ -21,6 +14,7 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
+import { GripVertical, Plus, Star, Trash2 } from 'lucide-react';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { CSS } from '@dnd-kit/utilities';
@@ -50,7 +44,6 @@ import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { BackendModelPreset } from '@shared/types';
 import { BackendsSettings } from '@/features/settings/ui-general-settings';
 import { Button } from '@/common/ui/button';
-import { Input } from '@/common/ui/input';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
 import { Switch } from '@/common/ui/switch';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
@@ -60,25 +53,29 @@ import { useBackendModels } from '@/hooks/use-backend-models';
 
 const EMPTY_PRESETS: BackendModelPreset[] = [];
 
-function PresetCard({
+const BACKEND_DOT_CLASS: Record<AgentBackendType, string> = {
+  'claude-code': 'bg-acc',
+  opencode: 'bg-status-azure',
+  codex: 'bg-status-done',
+  copilot: 'bg-status-pr',
+  vibe: 'bg-status-run',
+};
+
+function PresetRow({
   preset,
   index,
-  presetCount,
   disabled,
   backendOptions,
   onChange,
   onCommit,
-  onMove,
   onDelete,
 }: {
   preset: BackendModelPreset;
   index: number;
-  presetCount: number;
   disabled: boolean;
   backendOptions: SelectOption<AgentBackendType>[];
   onChange: (update: Partial<BackendModelPreset>, commit?: boolean) => void;
   onCommit: () => void;
-  onMove: (direction: -1 | 1) => void;
   onDelete: () => void;
 }) {
   const { data: dynamicModels, isFetched } = useBackendModels(preset.backend);
@@ -124,6 +121,8 @@ function PresetCard({
     isDragging,
   } = useSortable({ id: preset.id, disabled });
 
+  const pinned = preset.showInQuickSwitcher !== false;
+
   return (
     <div
       ref={setNodeRef}
@@ -133,65 +132,35 @@ function PresetCard({
         opacity: isDragging ? 0.55 : 1,
       }}
       className={clsx(
-        'border-glass-border bg-bg-1 rounded-xl border p-4',
-        isDragging && 'border-acc/60 shadow-lg',
+        'group border-line-soft hover:bg-glass-medium/40 relative flex items-center gap-2 border-b py-2 pr-2 pl-1 last:border-b-0',
+        isDragging && 'bg-bg-2',
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="mt-1 flex items-center">
-          <button
-            ref={setActivatorNodeRef}
-            type="button"
-            disabled={disabled}
-            className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 cursor-grab rounded p-1 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label={`Reorder ${preset.name || `preset ${index + 1}`}`}
-            {...attributes}
-            {...listeners}
-          >
-            <GripVertical className="h-4 w-4" />
-          </button>
-          <div className="flex flex-col">
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<ChevronUp />}
-              disabled={disabled || index === 0}
-              onClick={() => onMove(-1)}
-              aria-label={`Move ${preset.name || `preset ${index + 1}`} up`}
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<ChevronDown />}
-              disabled={disabled || index === presetCount - 1}
-              onClick={() => onMove(1)}
-              aria-label={`Move ${preset.name || `preset ${index + 1}`} down`}
-            />
-          </div>
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-ink-1 text-sm font-medium">Preset name</div>
-          <Input
-            value={preset.name}
-            onChange={(event) => onChange({ name: event.target.value }, false)}
-            onBlur={onCommit}
-            placeholder="Fast review, Deep planning..."
-            className="mt-2"
-          />
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          icon={<Trash2 />}
-          onClick={onDelete}
-          aria-label={`Delete ${preset.name || 'preset'}`}
-        >
-          Delete
-        </Button>
-      </div>
+      <button
+        ref={setActivatorNodeRef}
+        type="button"
+        disabled={disabled}
+        className="text-ink-4 hover:text-ink-2 shrink-0 cursor-grab rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-0"
+        aria-label={`Reorder ${preset.name || `preset ${index + 1}`}`}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical className="h-4 w-4" />
+      </button>
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <input
+        value={preset.name}
+        onChange={(event) => onChange({ name: event.target.value }, false)}
+        onBlur={onCommit}
+        placeholder="Untitled"
+        title={preset.name || undefined}
+        aria-label={`Name for ${preset.name || `preset ${index + 1}`}`}
+        className="text-ink-1 placeholder:text-ink-4 hover:border-line-soft focus:bg-bg-2 focus:border-acc w-32 shrink-0 truncate rounded-md border border-transparent bg-transparent px-2 py-1 text-[13px] font-medium outline-none"
+      />
+
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
         <Select
+          size="sm"
           value={preset.backend}
           onChange={(backend) =>
             onChange({
@@ -201,9 +170,9 @@ function PresetCard({
             })
           }
           options={backendOptions}
-          label="Backend"
         />
         <ModelSelector
+          size="sm"
           value={preset.model}
           onChange={(model) => {
             const capabilities = getModelThinkingCapabilities(
@@ -223,6 +192,7 @@ function PresetCard({
           models={modelOptions}
         />
         <ThinkingSelector
+          size="sm"
           value={thinkingEffort}
           onChange={(nextThinkingEffort) =>
             onChange({ thinkingEffort: nextThinkingEffort })
@@ -231,12 +201,32 @@ function PresetCard({
           disabled={thinkingOptions.length <= 1}
         />
       </div>
-      <Switch
-        checked={preset.showInQuickSwitcher !== false}
-        onChange={(showInQuickSwitcher) => onChange({ showInQuickSwitcher })}
-        label="Show in quick switcher"
-        className="mt-4"
-      />
+
+      <div className="flex shrink-0 items-center gap-0.5">
+        <button
+          type="button"
+          onClick={() => onChange({ showInQuickSwitcher: !pinned })}
+          title={
+            pinned ? 'Shown in quick switcher' : 'Hidden from quick switcher'
+          }
+          aria-pressed={pinned}
+          aria-label={`Toggle quick switcher for ${preset.name || 'preset'}`}
+          className={clsx(
+            'hover:bg-bg-3 grid h-7 w-7 place-items-center rounded-md',
+            pinned ? 'text-acc-ink' : 'text-ink-4 hover:text-ink-1',
+          )}
+        >
+          <Star className={clsx('h-3.5 w-3.5', pinned && 'fill-current')} />
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          aria-label={`Delete ${preset.name || 'preset'}`}
+          className="text-ink-4 hover:bg-status-fail/15 hover:text-status-fail grid h-7 w-7 place-items-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -289,6 +279,13 @@ export function ModelPresetsSettings() {
     [enabledBackends],
   );
 
+  const quickSwitcherEnabled = quickSwitcherSetting?.enabled ?? false;
+
+  const pinnedPresets = useMemo(
+    () => presets.filter((preset) => preset.showInQuickSwitcher !== false),
+    [presets],
+  );
+
   const updatePreset = (
     presetId: string,
     update: Partial<BackendModelPreset>,
@@ -324,13 +321,6 @@ export function ModelPresetsSettings() {
     );
   };
 
-  const movePreset = (index: number, direction: -1 | 1) => {
-    const current = presetsRef.current;
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= current.length) return;
-    commitPresets(arrayMove(current, index, nextIndex));
-  };
-
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -349,63 +339,108 @@ export function ModelPresetsSettings() {
 
       <div className="border-line-soft my-8 border-t" />
 
-      <div className="border-glass-border bg-bg-1 rounded-xl border p-4">
-        <Switch
-          checked={quickSwitcherSetting?.enabled ?? false}
-          onChange={(enabled) => updateQuickSwitcher.mutate({ enabled })}
-          label="Use quick model switcher"
-        />
-        <p className="text-ink-3 mt-1 text-sm">
-          Replace model dropdown with quick-switch presets in task forms.
-        </p>
-      </div>
-
-      <div className="mt-2 flex items-start justify-between gap-4">
-        <Button icon={<Plus />} onClick={handleAddPreset}>
-          Add preset
-        </Button>
-      </div>
+      <h2 className="text-ink-1 text-lg font-semibold">Model presets</h2>
+      <p className="text-ink-3 mt-1 max-w-[460px] text-sm">
+        Backend, model and thinking level in one shot. Starred presets appear in
+        the task composer&rsquo;s quick switcher.
+      </p>
 
       {backendOptions.length === 0 ? (
         <div className="border-line-soft bg-bg-0 text-ink-3 mt-4 rounded-xl border px-4 py-3 text-sm">
           Enable at least one backend in Coding Agents before creating model
           presets.
         </div>
-      ) : presets.length === 0 ? (
-        <div className="border-line-soft bg-bg-0 text-ink-3 mt-4 rounded-xl border px-4 py-8 text-center text-sm">
-          No presets yet. Create one for common backend and model combinations.
-        </div>
       ) : (
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext
-            items={presets.map((preset) => preset.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="mt-4 space-y-3">
-              {presets.map((preset, index) => (
-                <PresetCard
-                  key={preset.id}
-                  preset={preset}
-                  index={index}
-                  presetCount={presets.length}
-                  disabled={presets.length < 2}
-                  onMove={(direction) => movePreset(index, direction)}
-                  backendOptions={backendOptions}
-                  onChange={(update, commit) =>
-                    updatePreset(preset.id, update, commit)
-                  }
-                  onCommit={() => commitPresets(presetsRef.current)}
-                  onDelete={() => handleDeletePreset(preset.id)}
-                />
-              ))}
+        <>
+          <div className="border-glass-border bg-bg-1 mt-4 overflow-hidden rounded-xl border">
+            {presets.length === 0 ? (
+              <div className="text-ink-3 px-4 py-8 text-center text-sm">
+                No presets yet. Create one for common backend and model
+                combinations.
+              </div>
+            ) : (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={presets.map((preset) => preset.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {presets.map((preset, index) => (
+                    <PresetRow
+                      key={preset.id}
+                      preset={preset}
+                      index={index}
+                      disabled={presets.length < 2}
+                      backendOptions={backendOptions}
+                      onChange={(update, commit) =>
+                        updatePreset(preset.id, update, commit)
+                      }
+                      onCommit={() => commitPresets(presetsRef.current)}
+                      onDelete={() => handleDeletePreset(preset.id)}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
+            )}
+
+            <div className="border-line-soft flex items-center justify-between gap-3 border-t px-2 py-1.5">
+              <Button variant="ghost" size="sm" icon={<Plus />} onClick={handleAddPreset}>
+                Add preset
+              </Button>
+              <span className="text-ink-4 font-mono text-[10.5px] tracking-wide">
+                ★ = quick switcher · drag to reorder
+              </span>
             </div>
-          </SortableContext>
-        </DndContext>
+          </div>
+
+        </>
       )}
+
+      <div className="border-glass-border bg-bg-1 mt-4 rounded-xl border p-4">
+        <Switch
+          checked={quickSwitcherEnabled}
+          onChange={(enabled) => updateQuickSwitcher.mutate({ enabled })}
+          label="Use quick model switcher"
+        />
+        <p className="text-ink-3 mt-1 text-sm">
+          Replace model dropdown with quick-switch presets in task forms.
+        </p>
+        <div
+          role="group"
+          aria-label="Quick switcher preview"
+          className={clsx(
+            'border-line-soft bg-bg-0 mt-3 flex flex-wrap gap-1.5 rounded-lg border px-2.5 py-2',
+            !quickSwitcherEnabled && 'opacity-45',
+          )}
+        >
+          {pinnedPresets.length === 0 ? (
+            <span className="text-ink-4 font-mono text-[10.5px]">
+              No starred presets
+            </span>
+          ) : (
+            pinnedPresets.map((preset) => (
+              <span
+                key={preset.id}
+                className="border-line-soft bg-bg-2 text-ink-2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs"
+              >
+                <span
+                  className={clsx(
+                    'h-1.5 w-1.5 rounded-full',
+                    BACKEND_DOT_CLASS[preset.backend],
+                  )}
+                />
+                {preset.name || 'Untitled'}
+              </span>
+            ))
+          )}
+          <span className="border-line-soft bg-bg-2 text-ink-4 inline-flex items-center rounded-full border px-2.5 py-1 text-xs">
+            Custom…
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
