@@ -3,29 +3,140 @@ import * as path from 'path';
 import { parse as shellParse } from 'shell-quote';
 
 /**
+ * Redirection operators that take no target (fd duplication/close):
+ * `2>&1`, `>&2`, `2>&-`.
+ */
+const FD_DUP = /\d*>&[-\d]+/y;
+
+/**
+ * Redirection operators that are followed by a target. Ordered longest-first
+ * so `&>>` wins over `&>`, `<<<` over `<<`, etc.
+ */
+const REDIRECT_OPS = [
+  /&>>/y,
+  /&>/y,
+  /\d*>>/y,
+  /\d*>/y,
+  /<<</y,
+  /<</y,
+  /</y,
+];
+
+/** Whitespace after a redirection operator, before its target. */
+const SPACE = /\s*/y;
+
+/**
+ * Consume a redirection target starting at `index`, returning the index just
+ * past it. Quoted targets (`> 'a b'`) are consumed as a whole so the closing
+ * quote is never orphaned; unquoted targets stop at whitespace, at a shell
+ * operator (`;`, `|`, `&`) so `>/dev/null; echo` keeps its `;`, and at `)` so
+ * `$(cat >/tmp/x)` keeps its closing paren.
+ */
+function skipRedirectTarget(command: string, index: number): number {
+  let i = index;
+  const quote = command[i];
+  if (quote === "'" || quote === '"') {
+    i += 1;
+    while (i < command.length && command[i] !== quote) {
+      if (command[i] === '\\' && quote === '"') i += 1;
+      i += 1;
+    }
+    // Consume the closing quote when present (unterminated => end of string).
+    return i < command.length ? i + 1 : i;
+  }
+  while (i < command.length && !/[\s;|&)]/.test(command[i])) {
+    if (command[i] === '\\') i += 1;
+    i += 1;
+  }
+  return i;
+}
+
+/**
  * Strip shell output redirections (e.g. `2>&1`, `>/dev/null`) from a command
  * so that `shell-quote` can parse the remaining operators cleanly.
  *
- * The target-file portion uses `[^\s;|&]+` instead of `\S+` so that shell
- * operators (`;`, `|`, `&&`, `||`) adjacent to the target are preserved.
+ * Quote-aware: redirection-looking text inside single quotes, double quotes,
+ * or backticks (e.g. a perl regex containing `<<<<<<<`) is left untouched.
  */
 export function stripRedirections(command: string): string {
-  // Match a redirection target: one or more chars that are NOT whitespace,
-  // semicolons, pipes, or ampersands.  This ensures operators like `;` and
-  // `&&` that follow a target (e.g. `>/dev/null; echo`) are not consumed.
-  const T = '[^\\s;|&]+';
+  let out = '';
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBacktick = false;
 
-  return command
-    .replace(/\d*>&\d+/g, '') // 2>&1, >&2
-    .replace(new RegExp(`&>>\\s*${T}`, 'g'), '') // &>>/dev/null
-    .replace(new RegExp(`&>\\s*${T}`, 'g'), '') // &>/dev/null
-    .replace(new RegExp(`\\d*>>\\s*${T}`, 'g'), '') // 2>>/tmp/err, >>file
-    .replace(new RegExp(`\\d*>\\s*${T}`, 'g'), '') // 2>/dev/null, >/dev/null
-    .replace(new RegExp(`<<<\\s*${T}`, 'g'), '') // <<<string
-    .replace(new RegExp(`<<\\s*${T}`, 'g'), '') // <<EOF
-    .replace(new RegExp(`<\\s*${T}`, 'g'), '') // <input
-    .replace(/\s+/g, ' ') // collapse whitespace
-    .trim();
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+
+    // Preserve escapes verbatim (and whatever they escape).
+    if (char === '\\' && !inSingleQuote && i + 1 < command.length) {
+      out += char + command[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (inSingleQuote) {
+      out += char;
+      if (char === "'") inSingleQuote = false;
+      continue;
+    }
+    if (inDoubleQuote) {
+      out += char;
+      if (char === '"') inDoubleQuote = false;
+      continue;
+    }
+    if (inBacktick) {
+      out += char;
+      if (char === '`') inBacktick = false;
+      continue;
+    }
+
+    if (char === "'") {
+      inSingleQuote = true;
+      out += char;
+      continue;
+    }
+    if (char === '"') {
+      inDoubleQuote = true;
+      out += char;
+      continue;
+    }
+    if (char === '`') {
+      inBacktick = true;
+      out += char;
+      continue;
+    }
+
+    // Unquoted: try to consume a redirection starting here.
+    FD_DUP.lastIndex = i;
+    const dup = FD_DUP.exec(command);
+    if (dup) {
+      i += dup[0].length - 1;
+      continue;
+    }
+
+    let matched = false;
+    for (const re of REDIRECT_OPS) {
+      re.lastIndex = i;
+      const m = re.exec(command);
+      if (!m) continue;
+      SPACE.lastIndex = i + m[0].length;
+      SPACE.exec(command);
+      i = skipRedirectTarget(command, SPACE.lastIndex) - 1;
+      matched = true;
+      break;
+    }
+    if (matched) continue;
+
+    // Collapse runs of unquoted whitespace to a single space.
+    if (/\s/.test(char)) {
+      if (!out.endsWith(' ')) out += ' ';
+      continue;
+    }
+
+    out += char;
+  }
+
+  return out.trim();
 }
 
 function isEscaped(command: string, index: number): boolean {
