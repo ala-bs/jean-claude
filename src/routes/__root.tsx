@@ -215,6 +215,28 @@ function ActivityCenterContainer() {
   return null;
 }
 
+function UsageContainer() {
+  const layer = useKeyboardLayer('global-nav');
+  const toggle = useOverlaysStore((s) => s.toggle);
+
+  useCommands(
+    'usage-trigger',
+    [
+      {
+        shortcut: 'cmd+shift+u',
+        label: 'AI Usage',
+        section: 'General',
+        handler: () => {
+          toggle('usage');
+        },
+      },
+    ],
+    { layer },
+  );
+
+  return null;
+}
+
 function CalendarContainer() {
   const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
@@ -505,6 +527,7 @@ function RootLayout() {
           <BacklogContainer />
           <AzureBoardContainer />
           <ActivityCenterContainer />
+          <UsageContainer />
           <CalendarContainer />
           <WorkActivityContainer />
           <RunningCommandsContainer />
