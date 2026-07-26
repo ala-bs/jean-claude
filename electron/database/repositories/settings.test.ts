@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
       callback({
         column: () => ({
           doUpdateSet: () => ({}),
+          doNothing: () => ({}),
         }),
       });
       return {
@@ -30,11 +31,17 @@ const mocks = vi.hoisted(() => {
     where,
   }));
 
+  const dbMock = {
+    insertInto,
+    selectFrom,
+    transaction: vi.fn(() => ({
+      execute: (operation: (trx: unknown) => Promise<unknown>) =>
+        operation(dbMock),
+    })),
+  };
+
   return {
-    dbMock: {
-      insertInto,
-      selectFrom,
-    },
+    dbMock,
     executeTakeFirst,
     insertExecute,
     insertInto,
@@ -202,5 +209,107 @@ describe('SettingsRepository legacy normalization', () => {
     });
 
     expect(insertInto).not.toHaveBeenCalled();
+  });
+
+  it('maps shipped Preference Memory persistence to Agent Memory', async () => {
+    executeTakeFirst
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        key: 'preferenceMemory',
+        value: JSON.stringify({
+          enabled: true,
+          consolidationEnabled: false,
+          consolidationIntervalMinutes: 45,
+          consolidationBackend: 'opencode',
+          consolidationModel: 'openai/gpt-5',
+          consolidationThinkingEffort: 'high',
+        }),
+        updatedAt: '2026-07-01T00:00:00.000Z',
+      });
+    insertExecute.mockResolvedValue(undefined);
+
+    await expect(SettingsRepository.get('agentMemory')).resolves.toEqual({
+      enabled: true,
+      extractionIntervalMinutes: 45,
+      extractionBackend: 'opencode',
+      extractionModel: 'openai/gpt-5',
+      extractionThinkingEffort: 'high',
+    });
+
+    expect(insertInto).toHaveBeenCalledWith('settings');
+  });
+
+  it('returns mapped Agent Memory when persisting the migration fails', async () => {
+    executeTakeFirst
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        key: 'preferenceMemory',
+        value: JSON.stringify({
+          enabled: true,
+          consolidationEnabled: false,
+          consolidationIntervalMinutes: 90,
+          consolidationBackend: 'opencode',
+          consolidationModel: 'openai/gpt-5',
+          consolidationThinkingEffort: 'high',
+        }),
+        updatedAt: '2026-07-01T00:00:00.000Z',
+      });
+    insertExecute.mockRejectedValue(new Error('settings write failed'));
+
+    await expect(SettingsRepository.get('agentMemory')).resolves.toEqual({
+      enabled: true,
+      extractionIntervalMinutes: 90,
+      extractionBackend: 'opencode',
+      extractionModel: 'openai/gpt-5',
+      extractionThinkingEffort: 'high',
+    });
+  });
+
+  it('does not overwrite a concurrent Agent Memory update during lazy migration', async () => {
+    const concurrent = {
+      enabled: false,
+      extractionIntervalMinutes: 30,
+      extractionBackend: 'claude-code',
+      extractionModel: 'sonnet',
+      extractionThinkingEffort: 'high',
+    };
+    executeTakeFirst
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        key: 'preferenceMemory',
+        value: JSON.stringify({
+          enabled: true,
+          consolidationIntervalMinutes: 90,
+          consolidationBackend: 'opencode',
+          consolidationModel: 'openai/gpt-5',
+          consolidationThinkingEffort: 'low',
+        }),
+        updatedAt: '2026-07-01T00:00:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        key: 'agentMemory',
+        value: JSON.stringify(concurrent),
+        updatedAt: '2026-07-19T00:00:00.000Z',
+      });
+
+    await expect(SettingsRepository.get('agentMemory')).resolves.toEqual(
+      concurrent,
+    );
+
+    expect(mocks.dbMock.transaction).toHaveBeenCalledOnce();
+    expect(insertInto).not.toHaveBeenCalled();
+  });
+
+  it('does not accept the retired consolidation flag in Agent Memory', async () => {
+    await expect(
+      SettingsRepository.set('agentMemory', {
+        enabled: true,
+        extractionIntervalMinutes: 30,
+        extractionBackend: 'claude-code',
+        extractionModel: 'haiku',
+        extractionThinkingEffort: 'default',
+        consolidationEnabled: true,
+      } as never),
+    ).rejects.toThrow('Invalid value for setting "agentMemory"');
   });
 });

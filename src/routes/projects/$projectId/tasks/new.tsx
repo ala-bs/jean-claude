@@ -40,6 +40,7 @@ import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
 import { getDefaultModelForBackend } from '@/lib/default-models';
 import { getModelThinkingCapabilities } from '@/features/agent/ui-backend-selector';
+import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Input } from '@/common/ui/input';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { PromptTextarea } from '@/features/common/ui-prompt-textarea';
@@ -337,6 +338,11 @@ function NewTask() {
       projectId,
       name: taskName,
       prompt: expandFeatureReferencesInPrompt({ text: prompt, featureMap }),
+      agentMemoryPrompt: getOriginalTaskAgentMemoryPrompt({
+        inputMode: 'prompt',
+        prompt,
+        workItemTemplate: '',
+      }),
       status: 'waiting',
       interactionMode: normalizeInteractionModeForBackend({
         backend: submitSelection.backend,

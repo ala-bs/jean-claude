@@ -102,6 +102,7 @@ export function FileDiffContent({
     filePath: string;
     line: number;
     lineEnd?: number;
+    selectedLines?: string;
     content: string;
   }) => Promise<void> | void;
   isAddingComment?: boolean;
@@ -168,6 +169,7 @@ export function FileDiffContent({
     filePath: string;
     line: number;
     lineEnd?: number;
+    selectedLines?: string;
     body: string;
     images: PromptImagePart[];
     uploadCache: PromptImageUploadCache;
@@ -241,11 +243,16 @@ export function FileDiffContent({
         filePath: file.path,
         line: range.start,
         lineEnd: range.end !== range.start ? range.end : undefined,
+        selectedLines: getSelectedTextForRange(
+          newContent,
+          range.start,
+          range.end !== range.start ? range.end : undefined,
+        ),
         content,
       });
       removeRange(range);
     },
-    [file.path, onAddComment, removeRange],
+    [file.path, newContent, onAddComment, removeRange],
   );
 
   const handleAddCommentClick = useCallback(
@@ -536,6 +543,11 @@ export function FileDiffContent({
         filePath: file.path,
         line: range.start,
         lineEnd: range.end !== range.start ? range.end : undefined,
+        selectedLines: getSelectedTextForRange(
+          newContent,
+          range.start,
+          range.end !== range.start ? range.end : undefined,
+        ),
         body,
         images,
         uploadCache,
@@ -549,6 +561,7 @@ export function FileDiffContent({
     },
     [
       file.path,
+      newContent,
       onAddReviewCommentAsPrComment,
       onReviewCommentDraftBodyChange,
       removeRange,

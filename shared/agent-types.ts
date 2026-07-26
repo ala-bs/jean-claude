@@ -1,5 +1,9 @@
 // Agent-related types shared between main and renderer processes
 
+import type {
+  AgentMemoryPromptCapture,
+  AgentMemoryQuestionResponseDetail,
+} from './agent-memory-types';
 import type { InteractionMode } from './types';
 
 // SDK message types (simplified for our use case)
@@ -163,8 +167,10 @@ export interface QuestionOption {
 }
 
 export type AgentQuestionType = 'single_choice' | 'multi_choice' | 'text';
+export const DECIDE_FOR_ME = 'Decide for me';
 
 export interface AgentQuestion {
+  key: string;
   id?: string;
   type?: AgentQuestionType;
   question: string;
@@ -199,6 +205,40 @@ export interface QuestionResponse {
   answers: Record<string, string>;
   wasFreeform?: boolean;
   wasFreeformByQuestion?: Record<string, boolean>;
+  memoryDetails: AgentMemoryQuestionResponseDetail[];
+}
+
+export type QuestionResponseMetadata = Pick<
+  QuestionResponse,
+  'wasFreeform' | 'wasFreeformByQuestion'
+> & {
+  questionKeys: string[];
+};
+
+export function getStableQuestionKeys(
+  questions: Array<{ id?: string; question: string }>,
+): string[] {
+  const candidates = questions.map((question) => question.id || question.question);
+  const counts = new Map<string, number>();
+  for (const candidate of candidates) {
+    counts.set(candidate, (counts.get(candidate) ?? 0) + 1);
+  }
+
+  const reserved = new Set(
+    candidates.filter((candidate) => counts.get(candidate) === 1),
+  );
+  const used = new Set<string>();
+  return candidates.map((candidate, index) => {
+    if (counts.get(candidate) === 1) {
+      used.add(candidate);
+      return candidate;
+    }
+
+    let key = `${candidate}#${index + 1}`;
+    while (reserved.has(key) || used.has(key)) key += '#';
+    used.add(key);
+    return key;
+  });
 }
 
 export interface SessionAllowButton {
@@ -212,6 +252,7 @@ export interface QueuedPrompt {
   id: string;
   content: string;
   createdAt: number;
+  agentMemoryCapture?: AgentMemoryPromptCapture;
 }
 
 export function isSkillToolUseResult(

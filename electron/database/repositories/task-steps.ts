@@ -104,6 +104,28 @@ export const TaskStepRepository = {
     return row ? toStep(row) : undefined;
   },
 
+  findTaskIdById: async (id: string): Promise<string | undefined> => {
+    const row = await db
+      .selectFrom('task_steps')
+      .select('taskId')
+      .where('id', '=', id)
+      .executeTakeFirst();
+    return row?.taskId;
+  },
+
+  findOutputByIdAndTaskId: async (
+    id: string,
+    taskId: string,
+  ): Promise<string | null | undefined> => {
+    const row = await db
+      .selectFrom('task_steps')
+      .select('output')
+      .where('id', '=', id)
+      .where('taskId', '=', taskId)
+      .executeTakeFirst();
+    return row?.output;
+  },
+
   create: async (data: {
     taskId: string;
     name: string;

@@ -6,6 +6,14 @@ import type {
 } from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
+  AgentMemoryCaptureWarning,
+  AgentMemoryDashboard,
+  AgentMemoryExtractionRun,
+  AgentMemoryFollowUpCapture,
+  AgentMemoryPromptCapture,
+  AgentMemoryQueuedPromptCapture,
+} from '@shared/agent-memory-types';
+import type {
   AgentMigrationExecuteResult,
   AgentMigrationPreviewResult,
   ManagedAgent,
@@ -129,11 +137,6 @@ import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
-import type {
-  PreferenceMemoryDashboard,
-  RecordPreferenceEvidenceParams,
-  RecordPreferenceEvidenceResult,
-} from '@shared/preference-memory-types';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
 import type {
   WorkItemSummary,
@@ -532,16 +535,24 @@ export interface Api {
     detectLogos: (projectPath: string) => Promise<DetectedProjectLogo[]>;
     getSkills: (projectId: string) => Promise<Skill[]>;
   };
-  preferenceMemory: {
+  agentMemory: {
     getDashboard: (params: {
-      projectId: string;
-      page?: number;
+      projectId?: string;
+      evidencePage?: number;
+      extractionRunPage?: number;
       pageSize?: number;
-    }) => Promise<PreferenceMemoryDashboard>;
-    consolidate: (projectId: string) => Promise<{ processed: boolean }>;
-    recordEvidence: (
-      params: RecordPreferenceEvidenceParams,
-    ) => Promise<RecordPreferenceEvidenceResult>;
+    }) => Promise<AgentMemoryDashboard>;
+    extractNow: (
+      projectId: string,
+    ) => Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }>;
+    retryRun: (params: {
+      projectId?: string;
+      runId: string;
+      scope: 'project' | 'global';
+    }) => Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }>;
+    onCaptureWarning: (
+      callback: (warning: AgentMemoryCaptureWarning) => void,
+    ) => UnsubscribeFn;
   };
   tasks: {
     focused: (taskId: string) => void;
@@ -562,6 +573,7 @@ export interface Api {
         modelPreference?: string | null;
         thinkingEffort?: ThinkingEffort | null;
         agentBackend?: AgentBackendType | null;
+        agentMemoryPrompt?: string;
       },
     ) => Promise<Task>;
     createWithWorktree: (
@@ -574,6 +586,7 @@ export interface Api {
         modelPreference?: string | null;
         thinkingEffort?: ThinkingEffort | null;
         agentBackend?: AgentBackendType | null;
+        agentMemoryPrompt?: string;
       },
     ) => Promise<Task>;
     update: (id: string, data: UpdateTask) => Promise<Task>;
@@ -689,7 +702,14 @@ export interface Api {
   steps: {
     findByTaskId: (taskId: string) => Promise<TaskStep[]>;
     findById: (stepId: string) => Promise<TaskStep | undefined>;
-    create: (data: NewTaskStep & { start?: boolean }) => Promise<TaskStep>;
+    create: (
+      data: NewTaskStep & {
+        start?: boolean;
+        agentMemoryCapture?: AgentMemoryPromptCapture & {
+          contextStepId?: string | null;
+        };
+      },
+    ) => Promise<TaskStep>;
     createPrReviewChatStep: (params: {
       taskId: string;
       pullRequestId: number;
@@ -1008,6 +1028,7 @@ export interface Api {
       workItemId: number;
     }) => Promise<void>;
     addPullRequestComment: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -1015,6 +1036,7 @@ export interface Api {
       content: string;
     }) => Promise<AzureDevOpsCommentThread>;
     addPullRequestFileComment: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -1022,9 +1044,11 @@ export interface Api {
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) => Promise<AzureDevOpsCommentThread>;
     addThreadReply: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -1265,15 +1289,21 @@ export interface Api {
       requestId: string,
       response: PermissionResponse | QuestionResponse,
     ) => Promise<void>;
-    sendMessage: (stepId: string, parts: PromptPart[]) => Promise<void>;
+    sendMessage: (
+      stepId: string,
+      parts: PromptPart[],
+      capture?: AgentMemoryFollowUpCapture,
+    ) => Promise<void>;
     queuePrompt: (
       stepId: string,
       parts: PromptPart[],
+      capture?: AgentMemoryQueuedPromptCapture,
     ) => Promise<{ promptId: string }>;
     updateQueuedPrompt: (
       stepId: string,
       promptId: string,
       content: string,
+      capture?: AgentMemoryPromptCapture,
     ) => Promise<void>;
     cancelQueuedPrompt: (stepId: string, promptId: string) => Promise<void>;
     getBackendModels: (backend: AgentBackendType) => Promise<
@@ -1911,16 +1941,17 @@ export const api: Api = hasWindowApi
         detectLogos: async () => [],
         getSkills: async () => [],
       },
-      preferenceMemory: {
+      agentMemory: {
         getDashboard: async () => {
           throw new Error('API not available');
         },
-        consolidate: async () => {
+        extractNow: async () => {
           throw new Error('API not available');
         },
-        recordEvidence: async () => {
+        retryRun: async () => {
           throw new Error('API not available');
         },
+        onCaptureWarning: () => () => {},
       },
       tasks: {
         focused: () => {},

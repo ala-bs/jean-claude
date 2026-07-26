@@ -6,11 +6,14 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { BrowserWindow } from 'electron';
+import { createHash } from 'node:crypto';
 import { nanoid } from 'nanoid';
 
 import {
   AGENT_CHANNELS,
   type AgentQuestion,
+  DECIDE_FOR_ME,
+  getStableQuestionKeys,
   type PermissionResponse,
   type QuestionResponse,
   type QueuedPrompt,
@@ -33,6 +36,17 @@ import {
   requireCapability,
   type RunAgentCapability,
 } from '@shared/agent-backend-provider-types';
+import {
+  type AgentMemoryFollowUpCapture,
+  type AgentMemoryPromptCapture,
+  type AgentMemoryQuestionResponseDetail,
+  agentMemoryQuestionResponseDetailInputSchema,
+  type AgentMemoryQueuedPromptCapture,
+} from '@shared/agent-memory-types';
+import {
+  deriveAgentMemoryPromptCaptureFromSubmittedContent,
+  reconcileAgentMemoryPromptCaptureWithDiagnostics,
+} from '@shared/agent-memory-review-reconciliation';
 import {
   getDefaultInteractionModeForBackend,
   normalizeInteractionModeForBackend,
@@ -71,6 +85,10 @@ import {
   resolveRules,
 } from './permission-settings-service';
 import {
+  captureAgentMemoryEventSafe,
+  captureAgentMemoryPromptSubmissionSafe,
+} from './agent-memory-capture-service';
+import {
   emitStepUpsert,
   emitTaskPatch,
   emitTaskUpsert,
@@ -108,6 +126,181 @@ import { TaskStepRepository } from '../database/repositories/task-steps';
  *  Keeps full PromptPart[] (with image base64) out of the QueuedPrompt.content
  *  field which crosses IPC to the renderer for display. */
 const queuedPromptParts = new Map<string, PromptPart[]>();
+const queuedPromptCaptures = new Map<string, AgentMemoryPromptCapture>();
+const MAX_PENDING_QUEUED_PROMPT_SUBMISSIONS = 256;
+const MAX_QUEUED_PROMPT_TOMBSTONES = 2_048;
+const queuedPromptSubmissionTombstones = new Map<string, string>();
+
+type CanonicalQuestionMemoryDetail = AgentMemoryQuestionResponseDetail & {
+  question: string;
+};
+
+class QuestionResponseValidationError extends Error {
+  // `reason` is a fixed internal enum string, never user or agent content, so
+  // it is safe to surface. Without it the toast is unactionable and the real
+  // cause is only visible with DEBUG enabled.
+  constructor(requestId: string, reason?: string) {
+    super(
+      reason
+        ? `Invalid question response for request ${requestId} (${reason})`
+        : `Invalid question response for request ${requestId}`,
+    );
+    this.name = 'QuestionResponseValidationError';
+  }
+}
+
+function questionMemoryAnswerFromDetail({
+  question,
+  detail,
+}: {
+  question: NormalizedQuestion;
+  detail: AgentMemoryQuestionResponseDetail;
+}): { answer: string } | { error: string } {
+  const optionLabels = new Set(question.options.map((option) => option.label));
+  if (detail.selectedLabels.some((label) => !optionLabels.has(label))) {
+    return { error: 'invalid-selected-label' };
+  }
+  if (
+    detail.customAnswer &&
+    question.allowFreeform === false &&
+    detail.customAnswer !== DECIDE_FOR_ME
+  ) {
+    return { error: 'custom-answer-disabled' };
+  }
+
+  const note = detail.notes ? `Notes: ${detail.notes}` : null;
+  const isMulti = question.type === 'multi_choice' || question.multiSelect;
+  const isText =
+    question.type === 'text' ||
+    (!question.type && question.options.length === 0);
+
+  if (isMulti) {
+    const parts = [...detail.selectedLabels, detail.customAnswer, note]
+      .map((part) => part?.trim())
+      .filter((part): part is string => Boolean(part));
+    return { answer: JSON.stringify(parts) };
+  }
+
+  if (isText) {
+    if (detail.selectedLabels.length > 0) {
+      return { error: 'text-question-has-selected-labels' };
+    }
+  } else if (
+    detail.selectedLabels.length > 1 ||
+    (detail.selectedLabels.length === 1 && detail.customAnswer)
+  ) {
+    return { error: 'invalid-single-choice-detail' };
+  }
+
+  return {
+    answer: [detail.selectedLabels[0], detail.customAnswer, note]
+      .map((part) => part?.trim())
+      .filter((part): part is string => Boolean(part))
+      .join(', '),
+  };
+}
+
+function canonicalizeQuestionResponse({
+  request,
+  response,
+}: {
+  request: NormalizedQuestionRequest;
+  response: QuestionResponse;
+}): {
+  answers: Record<string, string>;
+  memoryDetails: CanonicalQuestionMemoryDetail[];
+  questionKeys: string[];
+} {
+  const reject = (reason: string, questionIndex?: number): never => {
+    dbg.agent(
+      questionIndex === undefined
+        ? 'Rejecting question response request=%s reason=%s'
+        : 'Rejecting question response request=%s questionIndex=%d reason=%s',
+      request.requestId,
+      ...(questionIndex === undefined
+        ? [reason]
+        : [questionIndex, reason]),
+    );
+    throw new QuestionResponseValidationError(request.requestId, reason);
+  };
+
+  if (!Array.isArray(response.memoryDetails)) {
+    return reject('invalid-details');
+  }
+  if (
+    !response.answers ||
+    typeof response.answers !== 'object' ||
+    Array.isArray(response.answers)
+  ) {
+    return reject('invalid-answer-map');
+  }
+
+  const questionKeys = getStableQuestionKeys(request.questions);
+  const questionIndexByKey = new Map(
+    questionKeys.map((questionKey, index) => [questionKey, index]),
+  );
+  const parsedDetails = response.memoryDetails.map((detail) => {
+    const parsed =
+      agentMemoryQuestionResponseDetailInputSchema.safeParse(detail);
+    if (!parsed.success) {
+      return reject('invalid-detail-shape');
+    }
+    return parsed.data;
+  });
+  const detailByKey = new Map<string, AgentMemoryQuestionResponseDetail>();
+  for (const detail of parsedDetails) {
+    if (!questionIndexByKey.has(detail.questionKey)) {
+      return reject('unknown-question-key');
+    }
+    if (detailByKey.has(detail.questionKey)) {
+      return reject('duplicate-detail');
+    }
+    detailByKey.set(detail.questionKey, detail);
+  }
+
+  const answers: Record<string, string> = {};
+  const memoryDetails: CanonicalQuestionMemoryDetail[] = [];
+  for (const [questionIndex, question] of request.questions.entries()) {
+    const questionKey = questionKeys[questionIndex];
+    const rendererAnswer = response.answers[questionKey];
+    const detail = detailByKey.get(questionKey);
+    if (rendererAnswer === undefined) {
+      if (detail) return reject('detail-without-answer', questionIndex);
+      if (question.required ?? true) {
+        return reject('missing-required-answer', questionIndex);
+      }
+      continue;
+    }
+    if (!detail) return reject('answer-without-detail', questionIndex);
+
+    const expected = questionMemoryAnswerFromDetail({
+      question,
+      detail,
+    });
+    if ('error' in expected) {
+      return reject(expected.error, questionIndex);
+    }
+    if (rendererAnswer !== expected.answer) {
+      return reject('delivered-answer-mismatch', questionIndex);
+    }
+
+    answers[questionKey] = expected.answer;
+    memoryDetails.push({
+      ...detail,
+      questionKey,
+      question: question.question,
+    });
+  }
+  return {
+    answers,
+    memoryDetails,
+    // Every question key in the backend's original order, including skipped
+    // optional questions. Backends (e.g. OpenCode) map answers positionally, so
+    // omitting a skipped question would shift later answers onto the wrong
+    // questions.
+    questionKeys,
+  };
+}
 
 function appendPromptParts(
   existingParts: PromptPart[],
@@ -136,6 +329,56 @@ function appendPromptParts(
   }
 
   return combinedParts;
+}
+
+function capturesMatch(
+  rendererCapture: AgentMemoryPromptCapture,
+  serverCapture: AgentMemoryPromptCapture,
+): boolean {
+  return JSON.stringify(rendererCapture) === JSON.stringify(serverCapture);
+}
+
+function diagnosticIdHash(id: string): string {
+  return createHash('sha256').update(id).digest('hex').slice(0, 12);
+}
+
+function admitAgentMemoryPromptCapture({
+  capture,
+  content,
+  source,
+  stepId,
+}: {
+  capture: AgentMemoryPromptCapture;
+  content: string;
+  source: 'immediate' | 'queued';
+  stepId: string;
+}): AgentMemoryPromptCapture {
+  const admission = deriveAgentMemoryPromptCaptureFromSubmittedContent(
+    capture,
+    content,
+  );
+  const diagnostics = admission.diagnostics;
+  if (
+    diagnostics.rejectedCommentIds.length > 0 ||
+    diagnostics.rejectedCommentsWithoutId > 0 ||
+    diagnostics.metadataMismatchCommentIds.length > 0 ||
+    diagnostics.unrepresentedRendererCommentIds.length > 0
+  ) {
+    dbg.agent('Agent Memory prompt admission metadata mismatch: %O', {
+      event: 'agent-memory-prompt-admission-mismatch',
+      source,
+      stepId,
+      hasReviewXml: diagnostics.hasReviewXml,
+      rejectedXmlCommentIdHashes:
+        diagnostics.rejectedCommentIds.map(diagnosticIdHash),
+      rejectedCommentsWithoutId: diagnostics.rejectedCommentsWithoutId,
+      metadataMismatchCommentIdHashes:
+        diagnostics.metadataMismatchCommentIds.map(diagnosticIdHash),
+      unrepresentedRendererCommentIdHashes:
+        diagnostics.unrepresentedRendererCommentIds.map(diagnosticIdHash),
+    });
+  }
+  return admission.capture;
 }
 
 function replacePromptText(parts: PromptPart[], content: string): PromptPart[] {
@@ -259,6 +502,79 @@ interface ActiveSession {
   }>;
   hasTerminalError: boolean;
   stopRequested: boolean;
+  agentMemoryCaptureEligible: boolean;
+  previousResultFallback: string | null;
+  queuedPromptIdsBySubmissionId: Map<string, string>;
+}
+
+function queuedPromptTombstoneKey(stepId: string, submissionId: string): string {
+  return `${stepId}\0${submissionId}`;
+}
+
+function rememberQueuedPromptTombstone(
+  stepId: string,
+  submissionId: string,
+  promptId: string,
+): void {
+  const tombstoneKey = queuedPromptTombstoneKey(stepId, submissionId);
+  queuedPromptSubmissionTombstones.delete(tombstoneKey);
+  queuedPromptSubmissionTombstones.set(tombstoneKey, promptId);
+  while (queuedPromptSubmissionTombstones.size > MAX_QUEUED_PROMPT_TOMBSTONES) {
+    const oldestTombstoneKey = queuedPromptSubmissionTombstones.keys().next()
+      .value;
+    if (!oldestTombstoneKey) break;
+    queuedPromptSubmissionTombstones.delete(oldestTombstoneKey);
+  }
+}
+
+function tombstoneQueuedPromptSubmissionIds(
+  session: ActiveSession,
+  promptId: string,
+): void {
+  for (const [submissionId, queuedPromptId] of
+    session.queuedPromptIdsBySubmissionId) {
+    if (queuedPromptId === promptId) {
+      session.queuedPromptIdsBySubmissionId.delete(submissionId);
+      rememberQueuedPromptTombstone(session.stepId, submissionId, promptId);
+    }
+  }
+}
+
+function tombstoneAllQueuedPromptSubmissionIds(session: ActiveSession): void {
+  for (const [submissionId, promptId] of
+    session.queuedPromptIdsBySubmissionId) {
+    rememberQueuedPromptTombstone(session.stepId, submissionId, promptId);
+  }
+  session.queuedPromptIdsBySubmissionId.clear();
+}
+
+function rememberPendingQueuedPromptSubmission(
+  session: ActiveSession,
+  submissionId: string,
+  promptId: string,
+): void {
+  session.queuedPromptIdsBySubmissionId.delete(submissionId);
+  session.queuedPromptIdsBySubmissionId.set(submissionId, promptId);
+  while (
+    session.queuedPromptIdsBySubmissionId.size >
+    MAX_PENDING_QUEUED_PROMPT_SUBMISSIONS
+  ) {
+    const oldestSubmissionId = session.queuedPromptIdsBySubmissionId
+      .keys()
+      .next().value;
+    if (!oldestSubmissionId) break;
+    const oldestPromptId = session.queuedPromptIdsBySubmissionId.get(
+      oldestSubmissionId,
+    );
+    session.queuedPromptIdsBySubmissionId.delete(oldestSubmissionId);
+    if (oldestPromptId) {
+      rememberQueuedPromptTombstone(
+        session.stepId,
+        oldestSubmissionId,
+        oldestPromptId,
+      );
+    }
+  }
 }
 
 function getUsageFeatureForStep(type: TaskStepType): AiUsageFeature {
@@ -409,6 +725,7 @@ class AgentService {
   }
 
   private deleteSession(stepId: string, session: ActiveSession): void {
+    tombstoneAllQueuedPromptSubmissionIds(session);
     if (this.sessions.get(stepId) === session) {
       this.sessions.delete(stepId);
     }
@@ -465,28 +782,13 @@ class AgentService {
     this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
 
     if (request.type === 'question' && request.questionRequest) {
-      const questions: AgentQuestion[] = request.questionRequest.questions.map(
-        (q: NormalizedQuestion) => ({
-          question: q.question,
-          header: q.header,
-          options: q.options.map((o) => ({
-            label: o.label,
-            description: o.description,
-            ...(o.recommended !== undefined
-              ? { recommended: o.recommended }
-              : {}),
-          })),
-          multiSelect: q.multiSelect,
-          allowFreeform: q.allowFreeform,
-        }),
-      );
       this.emitEvent(taskId, stepId, {
         type: 'question',
         requestId: request.requestId,
         ...(request.questionRequest.contextReminder
           ? { contextReminder: request.questionRequest.contextReminder }
           : {}),
-        questions,
+        questions: this.toAgentQuestions(request.questionRequest.questions),
       });
       await this.notifyTaskEvent({
         taskId,
@@ -822,6 +1124,10 @@ class AgentService {
       pendingRequests: [],
       hasTerminalError: false,
       stopRequested: false,
+      agentMemoryCaptureEligible:
+        task.type === 'agent' && (step.type === 'agent' || step.type === 'fork'),
+      previousResultFallback: step.output,
+      queuedPromptIdsBySubmissionId: new Map(),
     };
 
     this.sessions.set(stepId, session);
@@ -1278,7 +1584,9 @@ class AgentService {
   }
 
   private toAgentQuestions(questions: NormalizedQuestion[]): AgentQuestion[] {
-    return questions.map((q) => ({
+    const questionKeys = getStableQuestionKeys(questions);
+    return questions.map((q, index) => ({
+      key: questionKeys[index],
       ...(q.id !== undefined ? { id: q.id } : {}),
       ...(q.type !== undefined ? { type: q.type } : {}),
       question: q.question,
@@ -1532,6 +1840,11 @@ class AgentService {
 
         // Check for queued prompts
         const nextPrompt = session.queuedPrompts.shift();
+        if (nextPrompt && result.isError) {
+          queuedPromptParts.delete(nextPrompt.id);
+          queuedPromptCaptures.delete(nextPrompt.id);
+          tombstoneQueuedPromptSubmissionIds(session, nextPrompt.id);
+        }
         if (nextPrompt && !result.isError) {
           dbg.agentSession('Step %s processing next queued prompt', stepId);
           this.emitEvent(taskId, stepId, {
@@ -1542,7 +1855,22 @@ class AgentService {
           const queuedParts =
             queuedPromptParts.get(nextPrompt.id) ??
             textPrompt(nextPrompt.content);
+          const capture = queuedPromptCaptures.get(nextPrompt.id);
           queuedPromptParts.delete(nextPrompt.id);
+          queuedPromptCaptures.delete(nextPrompt.id);
+          tombstoneQueuedPromptSubmissionIds(session, nextPrompt.id);
+          if (capture && session.agentMemoryCaptureEligible) {
+            void captureAgentMemoryPromptSubmissionSafe({
+              source: 'queued-prompt',
+              sourceId: `queued-prompt:${nextPrompt.id}`,
+              projectId: session.projectId,
+              taskId,
+              stepId,
+              userText: capture.userText,
+              previousAgentResult: result.text ?? null,
+              reviews: capture.reviews,
+            });
+          }
           return await this.runBackend(stepId, queuedParts, session);
         }
 
@@ -2024,8 +2352,10 @@ class AgentService {
     const { taskId } = session;
 
     // Clear queued prompts and their stored parts
+    tombstoneAllQueuedPromptSubmissionIds(session);
     for (const prompt of session.queuedPrompts) {
       queuedPromptParts.delete(prompt.id);
+      queuedPromptCaptures.delete(prompt.id);
     }
     session.queuedPrompts = [];
     this.emitEvent(taskId, stepId, {
@@ -2258,8 +2588,15 @@ class AgentService {
       }
     } else {
       const questionResponse = response as QuestionResponse;
+      if (!request.questionRequest) {
+        throw new QuestionResponseValidationError(requestId);
+      }
+      const canonicalResponse = canonicalizeQuestionResponse({
+        request: request.questionRequest,
+        response: questionResponse,
+      });
       if (request.source === 'jc-mcp') {
-        this.questionBroker.answerRequest(requestId, questionResponse.answers);
+        this.questionBroker.answerRequest(requestId, canonicalResponse.answers);
       } else {
         if (!session.runHandle) {
           throw new Error(`No active run handle for step ${stepId}`);
@@ -2272,12 +2609,48 @@ class AgentService {
         await questionCapability.respond({
           handle: session.runHandle,
           requestId,
-          answer: questionResponse.answers,
+          answer: canonicalResponse.answers,
           metadata: {
             wasFreeform: questionResponse.wasFreeform,
             wasFreeformByQuestion: questionResponse.wasFreeformByQuestion,
+            questionKeys: canonicalResponse.questionKeys,
           },
         });
+      }
+
+      if (session.agentMemoryCaptureEligible) {
+        const createdAt = new Date().toISOString();
+        for (const detail of canonicalResponse.memoryDetails) {
+          // "Decide for me" is an explicit deferral, not a stated preference.
+          // It still has to reach the agent, so it stays in the delivered
+          // answer, but recording it would teach memory a preference the user
+          // never expressed.
+          const capturedCustomAnswer =
+            detail.customAnswer === DECIDE_FOR_ME ? null : detail.customAnswer;
+          const text = [
+            ...detail.selectedLabels,
+            capturedCustomAnswer,
+            detail.notes,
+          ]
+            .filter((value): value is string => Boolean(value))
+            .join('\n');
+          if (!text) continue;
+          void captureAgentMemoryEventSafe({
+            source: 'question-answer',
+            sourceId: `question:${requestId}:${detail.questionKey}`,
+            projectId: session.projectId,
+            taskId,
+            stepId,
+            text,
+            context: {
+              question: detail.question,
+              selectedLabels: detail.selectedLabels,
+              customAnswer: capturedCustomAnswer,
+              notes: detail.notes,
+            },
+            createdAt,
+          });
+        }
       }
     }
 
@@ -2329,12 +2702,60 @@ class AgentService {
   async beginSendMessage(
     stepId: string,
     parts: PromptPart[],
+    capture?: AgentMemoryFollowUpCapture,
   ): Promise<{ started: Promise<void>; completion: Promise<void> }> {
     const completeRegistration = this.admitSessionRegistration(stepId, 'reject');
     if (!completeRegistration) {
       throw new Error(`Failed to register session for step ${stepId}`);
     }
 
+    // Agent Memory capture context is resolved before the session is replaced:
+    // the previous result must be read against the OLD session state.
+    const admittedCapture = capture
+      ? {
+          ...admitAgentMemoryPromptCapture({
+            capture,
+            content: getPromptText(parts),
+            source: 'immediate',
+            stepId,
+          }),
+          submissionId: capture.submissionId,
+        }
+      : undefined;
+    const activeSession = this.sessions.get(stepId);
+    const previousResultFallback = activeSession?.previousResultFallback ?? null;
+    let previousResultSnapshot: Promise<string | null> | undefined;
+    if (
+      admittedCapture &&
+      (!activeSession || activeSession.agentMemoryCaptureEligible)
+    ) {
+      try {
+        previousResultSnapshot = Promise.resolve(
+          AgentMessageRepository.findLatestResultByStepId(stepId),
+        ).catch((error) => {
+          dbg.agent(
+            'Failed to load previous Agent Memory context for step %s: %O',
+            stepId,
+            error,
+          );
+          return null;
+        });
+      } catch (error) {
+        dbg.agent(
+          'Failed to load previous Agent Memory context for step %s: %O',
+          stepId,
+          error,
+        );
+        previousResultSnapshot = Promise.resolve(null);
+      }
+    }
+    const captureContext = admittedCapture
+      ? {
+          admittedCapture,
+          previousResultFallback,
+          previousResultSnapshot,
+        }
+      : undefined;
     try {
       if (this.isRunningOrStarting(stepId)) {
         await this.stop(stepId);
@@ -2353,6 +2774,7 @@ class AgentService {
           parts,
           markStarted,
           completeRegistration,
+          captureContext,
         ).finally(() => {
           completeRegistration();
           markStarted();
@@ -2369,8 +2791,12 @@ class AgentService {
     }
   }
 
-  async sendMessage(stepId: string, parts: PromptPart[]): Promise<void> {
-    const { completion } = await this.beginSendMessage(stepId, parts);
+  async sendMessage(
+    stepId: string,
+    parts: PromptPart[],
+    capture?: AgentMemoryFollowUpCapture,
+  ): Promise<void> {
+    const { completion } = await this.beginSendMessage(stepId, parts, capture);
     await completion;
   }
 
@@ -2379,6 +2805,13 @@ class AgentService {
     parts: PromptPart[],
     markStarted: () => void,
     completeRegistration: () => void,
+    captureContext?: {
+      admittedCapture: ReturnType<typeof admitAgentMemoryPromptCapture> & {
+        submissionId: string;
+      };
+      previousResultFallback: string | null;
+      previousResultSnapshot?: Promise<string | null>;
+    },
   ): Promise<void> {
     let session: ActiveSession | null = null;
     try {
@@ -2391,6 +2824,33 @@ class AgentService {
       await StepService.syncTaskStatus(taskId);
       this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
       completeRegistration();
+
+      if (captureContext && session.agentMemoryCaptureEligible) {
+        const {
+          admittedCapture,
+          previousResultFallback,
+          previousResultSnapshot,
+        } = captureContext;
+        const captureProjectId = session.projectId;
+        const capturedSession = session;
+        void (previousResultSnapshot ?? Promise.resolve(null)).then(
+          (previousAgentResult) =>
+            captureAgentMemoryPromptSubmissionSafe({
+              source: 'follow-up-prompt',
+              sourceId: `follow-up-prompt:${admittedCapture.submissionId}`,
+              projectId: captureProjectId,
+              taskId,
+              stepId,
+              userText: admittedCapture.userText,
+              previousAgentResult:
+                previousAgentResult ??
+                previousResultFallback ??
+                capturedSession.previousResultFallback ??
+                null,
+              reviews: admittedCapture.reviews,
+            }),
+        );
+      }
 
       dbg.agentSession('Sending follow-up message for step %s', stepId);
       await this.runBackend(stepId, parts, session, {
@@ -2449,11 +2909,53 @@ class AgentService {
   /**
    * Queue a prompt to be sent after the current agent work completes.
    */
-  queuePrompt(stepId: string, parts: PromptPart[]): { promptId: string } {
+  queuePrompt(
+    stepId: string,
+    parts: PromptPart[],
+    capture?: AgentMemoryQueuedPromptCapture,
+  ): { promptId: string } {
     const session = this.sessions.get(stepId);
     if (!session) {
       throw new Error(`No active session for step ${stepId}`);
     }
+
+    if (capture) {
+      const pendingPromptId = session.queuedPromptIdsBySubmissionId.get(
+        capture.submissionId,
+      );
+      const tombstoneKey = queuedPromptTombstoneKey(
+        stepId,
+        capture.submissionId,
+      );
+      const tombstonedPromptId =
+        queuedPromptSubmissionTombstones.get(tombstoneKey);
+      const retriedPromptId = pendingPromptId ?? tombstonedPromptId;
+      if (retriedPromptId) {
+        if (tombstonedPromptId) {
+          queuedPromptSubmissionTombstones.delete(tombstoneKey);
+          queuedPromptSubmissionTombstones.set(
+            tombstoneKey,
+            tombstonedPromptId,
+          );
+        }
+        dbg.agent('Deduplicated queued prompt submission: %O', {
+          event: 'agent-memory-queue-submission-deduplicated',
+          stepId,
+          promptId: retriedPromptId,
+          submissionIdHash: diagnosticIdHash(capture.submissionId),
+        });
+        return { promptId: retriedPromptId };
+      }
+    }
+
+    const admittedCapture = capture
+      ? admitAgentMemoryPromptCapture({
+          capture,
+          content: getPromptText(parts),
+          source: 'queued',
+          stepId,
+        })
+      : undefined;
 
     const existingPrompt = session.queuedPrompts[0];
     if (existingPrompt) {
@@ -2463,6 +2965,31 @@ class AgentService {
       const combinedParts = appendPromptParts(existingParts, parts);
       existingPrompt.content = getPromptText(combinedParts);
       queuedPromptParts.set(existingPrompt.id, combinedParts);
+      if (admittedCapture && session.agentMemoryCaptureEligible) {
+        const existingCapture = queuedPromptCaptures.get(existingPrompt.id);
+        const reviews = [
+          ...(existingCapture?.reviews ?? []),
+          ...(admittedCapture.reviews ?? []),
+        ];
+        queuedPromptCaptures.set(existingPrompt.id, {
+          userText: [existingCapture?.userText, admittedCapture.userText]
+            .filter((text): text is string => !!text?.trim())
+            .join('\n\n'),
+          reviews: [
+            ...new Map(reviews.map((review) => [review.commentId, review])).values(),
+          ],
+        });
+        existingPrompt.agentMemoryCapture = queuedPromptCaptures.get(
+          existingPrompt.id,
+        );
+      }
+      if (capture) {
+        rememberPendingQueuedPromptSubmission(
+          session,
+          capture.submissionId,
+          existingPrompt.id,
+        );
+      }
 
       this.emitEvent(session.taskId, stepId, {
         type: 'queue-update',
@@ -2479,14 +3006,24 @@ class AgentService {
 
     const id = nanoid();
     queuedPromptParts.set(id, parts);
+    if (admittedCapture && session.agentMemoryCaptureEligible) {
+      queuedPromptCaptures.set(id, admittedCapture);
+    }
 
     const queuedPrompt: QueuedPrompt = {
       id,
       content: getPromptText(parts),
       createdAt: Date.now(),
+      agentMemoryCapture:
+        admittedCapture && session.agentMemoryCaptureEligible
+          ? admittedCapture
+          : undefined,
     };
 
     session.queuedPrompts.push(queuedPrompt);
+    if (capture) {
+      rememberPendingQueuedPromptSubmission(session, capture.submissionId, id);
+    }
     this.emitEvent(session.taskId, stepId, {
       type: 'queue-update',
       queuedPrompts: session.queuedPrompts,
@@ -2499,7 +3036,12 @@ class AgentService {
   /**
    * Update a queued prompt before it is sent.
    */
-  updateQueuedPrompt(stepId: string, promptId: string, content: string): void {
+  updateQueuedPrompt(
+    stepId: string,
+    promptId: string,
+    content: string,
+    nextCapture?: AgentMemoryPromptCapture,
+  ): void {
     const session = this.sessions.get(stepId);
     if (!session) {
       throw new Error(`No active session for step ${stepId}`);
@@ -2516,6 +3058,72 @@ class AgentService {
 
     queuedPrompt.content = content;
     queuedPromptParts.set(promptId, updatedParts);
+    const previousCapture =
+      queuedPromptCaptures.get(promptId) ?? queuedPrompt.agentMemoryCapture;
+    const reconciliation = previousCapture
+      ? reconcileAgentMemoryPromptCaptureWithDiagnostics(
+          previousCapture,
+          content,
+        )
+      : undefined;
+    const capture = reconciliation?.capture;
+    const authoritativeReviewCount = previousCapture?.reviews?.length ?? 0;
+    if (
+      reconciliation &&
+      authoritativeReviewCount > 0 &&
+      !reconciliation.diagnostics.hasReviewXml
+    ) {
+      dbg.agent('Agent Memory queued review XML missing: %O', {
+        event: 'agent-memory-queue-review-xml-missing',
+        stepId,
+        promptId,
+        authoritativeReviewCount,
+      });
+    }
+    if (
+      reconciliation &&
+      (reconciliation.diagnostics.rejectedCommentIds.length > 0 ||
+        reconciliation.diagnostics.rejectedCommentsWithoutId > 0)
+    ) {
+      dbg.agent('Agent Memory queued review IDs rejected: %O', {
+        event: 'agent-memory-queue-review-ids-rejected',
+        stepId,
+        promptId,
+        rejectedCommentIdHashes:
+          reconciliation.diagnostics.rejectedCommentIds.map(diagnosticIdHash),
+        rejectedCommentCount:
+          reconciliation.diagnostics.rejectedCommentIds.length,
+        rejectedCommentsWithoutId:
+          reconciliation.diagnostics.rejectedCommentsWithoutId,
+      });
+    }
+    if (
+      (previousCapture && !nextCapture) ||
+      (nextCapture && (!capture || !capturesMatch(nextCapture, capture)))
+    ) {
+      dbg.agent('Agent Memory queued renderer metadata mismatch: %O', {
+        event: 'agent-memory-queue-renderer-mismatch',
+        stepId,
+        promptId,
+        rendererMetadataProvided: !!nextCapture,
+        rendererReviewIdHashes: (nextCapture?.reviews ?? []).map(
+          (review) => diagnosticIdHash(review.commentId),
+        ),
+        authoritativeReviewIdHashes: (capture?.reviews ?? []).map(
+          (review) => diagnosticIdHash(review.commentId),
+        ),
+        rendererUserTextMatchesContent: nextCapture
+          ? nextCapture.userText === content
+          : null,
+      });
+    }
+    if (session.agentMemoryCaptureEligible && capture) {
+      queuedPromptCaptures.set(promptId, capture);
+      queuedPrompt.agentMemoryCapture = capture;
+    } else {
+      queuedPromptCaptures.delete(promptId);
+      delete queuedPrompt.agentMemoryCapture;
+    }
     this.emitEvent(session.taskId, stepId, {
       type: 'queue-update',
       queuedPrompts: session.queuedPrompts,
@@ -2539,6 +3147,8 @@ class AgentService {
     }
 
     queuedPromptParts.delete(promptId);
+    queuedPromptCaptures.delete(promptId);
+    tombstoneQueuedPromptSubmissionIds(session, promptId);
     session.queuedPrompts.splice(index, 1);
     this.emitEvent(session.taskId, stepId, {
       type: 'queue-update',

@@ -53,6 +53,7 @@ type CreateTaskPayload = NewTask & {
   modelPreference?: string | null;
   thinkingEffort?: ThinkingEffort | null;
   agentBackend?: AgentBackendType | null;
+  agentMemoryPrompt?: string;
 };
 
 export function invalidateFeedItems(

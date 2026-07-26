@@ -33,7 +33,11 @@ import type {
   NormalizedQuestionRequest,
   PromptPart,
 } from '@shared/agent-backend-types';
-import type { AgentMessage, AgentQuestion } from '@shared/agent-types';
+import type {
+  AgentMessage,
+  AgentQuestion,
+  QuestionResponseMetadata,
+} from '@shared/agent-types';
 import type { InteractionMode } from '@shared/types';
 
 import {
@@ -278,6 +282,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
+    _metadata: QuestionResponseMetadata,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {

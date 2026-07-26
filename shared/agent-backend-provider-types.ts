@@ -9,7 +9,7 @@ import type {
 import type { InteractionMode, ThinkingEffort } from './types';
 import type { AgentBackendBadge } from './agent-backend-metadata';
 import type { AiUsageContext } from './ai-usage-types';
-import type { QuestionResponse } from './agent-types';
+import type { QuestionResponseMetadata } from './agent-types';
 
 export type CapabilityValidation =
   | { ok: true }
@@ -69,7 +69,7 @@ export interface QuestionCapability {
     handle: AgentRunHandle;
     requestId: string;
     answer: Record<string, string>;
-    metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>;
+    metadata: QuestionResponseMetadata;
   }): Promise<void>;
 }
 
@@ -96,6 +96,7 @@ export interface TextGenerationInput {
   cwd?: string;
   allowedTools?: string[];
   allowedToolPatterns?: Record<string, string[]>;
+  toolPolicy?: 'default' | 'none';
   abortController: AbortController;
   usageContext?: AiUsageContext;
 }

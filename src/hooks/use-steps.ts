@@ -11,6 +11,7 @@ import {
   taskStepsResourceKey,
 } from '@/cache/domains/steps';
 import type { NewTaskStep, TaskStep, UpdateTaskStep } from '@shared/types';
+import type { AgentMemoryPromptCapture } from '@shared/agent-memory-types';
 import { api } from '@/lib/api';
 import { useCacheResource } from '@/cache/use-cache-resource';
 
@@ -43,7 +44,14 @@ export function useStep(stepId: string) {
 export function useCreateStep() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: NewTaskStep & { start?: boolean }) =>
+    mutationFn: (
+      data: NewTaskStep & {
+        start?: boolean;
+        agentMemoryCapture?: AgentMemoryPromptCapture & {
+          contextStepId?: string | null;
+        };
+      },
+    ) =>
       api.steps.create(data),
     onSuccess: (step: TaskStep) => {
       ingestStep(step);

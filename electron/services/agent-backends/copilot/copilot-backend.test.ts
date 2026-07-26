@@ -1178,6 +1178,7 @@ describe('CopilotBackend', () => {
       {
         'Which branch?': 'dev',
       },
+      { questionKeys: ['Which branch?'] },
     );
 
     await expect(response).resolves.toEqual({
@@ -1213,6 +1214,7 @@ describe('CopilotBackend', () => {
       {
         wasFreeform: false,
         wasFreeformByQuestion: { 'Which branch?': false },
+        questionKeys: ['Which branch?'],
       },
     );
 
@@ -1222,7 +1224,42 @@ describe('CopilotBackend', () => {
     });
   });
 
-  it('infers fixed-choice answers as not freeform when metadata is absent', async () => {
+  it('resolves Decide for me for fixed-choice questions', async () => {
+    const backend = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'hello' },
+    ]);
+    const iterator = session.events[Symbol.asyncIterator]();
+
+    await iterator.next();
+    const response = getUserInputHandler()({
+      question: 'Which branch?',
+      choices: ['main', 'dev'],
+      allowFreeform: false,
+    });
+    const event = await iterator.next();
+    if (event.value?.type !== 'question') {
+      throw new Error('Expected question event');
+    }
+
+    await backend.respondToQuestion(
+      session.sessionId,
+      event.value.request.requestId,
+      { 'Which branch?': 'Decide for me' },
+      {
+        wasFreeform: true,
+        wasFreeformByQuestion: { 'Which branch?': true },
+        questionKeys: ['Which branch?'],
+      },
+    );
+
+    await expect(response).resolves.toEqual({
+      answer: 'Decide for me',
+      wasFreeform: true,
+    });
+  });
+
+  it('infers fixed-choice answers when optional metadata fields are absent', async () => {
     const backend = createBackend();
     const session = await backend.start(createConfig(), [
       { type: 'text', text: 'hello' },
@@ -1246,6 +1283,7 @@ describe('CopilotBackend', () => {
       {
         'Which branch?': 'dev',
       },
+      { questionKeys: ['Which branch?'] },
     );
 
     await expect(response).resolves.toEqual({
@@ -1281,6 +1319,7 @@ describe('CopilotBackend', () => {
       {
         wasFreeform: true,
         wasFreeformByQuestion: { 'Which branch?': true },
+        questionKeys: ['Which branch?'],
       },
     );
 
@@ -1315,6 +1354,7 @@ describe('CopilotBackend', () => {
         Environment: 'production',
         Confirm: 'yes',
       },
+      { questionKeys: ['Deploy details?'] },
     );
 
     await expect(response).resolves.toEqual({

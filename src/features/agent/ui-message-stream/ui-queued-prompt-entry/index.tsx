@@ -1,7 +1,9 @@
 import { Check, Pencil, X } from 'lucide-react';
 import { useState } from 'react';
 
+import type { AgentMemoryPromptCapture } from '@shared/agent-memory-types';
 import type { QueuedPrompt } from '@shared/agent-types';
+import { reconcileAgentMemoryPromptCapture } from '@shared/agent-memory-review-reconciliation';
 import { Textarea } from '@/common/ui/textarea';
 
 
@@ -12,7 +14,11 @@ export function QueuedPromptEntry({
 }: {
   prompt: QueuedPrompt;
   onCancel: (promptId: string) => void;
-  onUpdate: (promptId: string, content: string) => void;
+  onUpdate: (
+    promptId: string,
+    content: string,
+    capture?: AgentMemoryPromptCapture,
+  ) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(prompt.content);
@@ -20,7 +26,16 @@ export function QueuedPromptEntry({
   const save = () => {
     const nextContent = draft.trim();
     if (!nextContent) return;
-    onUpdate(prompt.id, nextContent);
+    onUpdate(
+      prompt.id,
+      nextContent,
+      prompt.agentMemoryCapture
+        ? reconcileAgentMemoryPromptCapture(
+            prompt.agentMemoryCapture,
+            nextContent,
+          )
+        : undefined,
+    );
     setIsEditing(false);
   };
 

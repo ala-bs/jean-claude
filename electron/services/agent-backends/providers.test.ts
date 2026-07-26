@@ -59,8 +59,9 @@ const { backendCalls, resetBackendCalls, TestBackend } = vi.hoisted(() => {
       sessionId: string,
       requestId: string,
       answer: unknown,
+      metadata: unknown,
     ) {
-      backendCalls.questions.push({ sessionId, requestId, answer });
+      backendCalls.questions.push({ sessionId, requestId, answer, metadata });
     }
     async setMode(sessionId: string, mode: string) {
       backendCalls.modes.push({ sessionId, mode });
@@ -351,6 +352,7 @@ describe('agent backend providers', () => {
       handle,
       requestId: 'question-request',
       answer: { answer: 'yes' },
+      metadata: { questionKeys: ['answer'] },
     });
     await modeCapability.implementation.setMode({
       handle,
@@ -372,6 +374,7 @@ describe('agent backend providers', () => {
         sessionId: 'session-id',
         requestId: 'question-request',
         answer: { answer: 'yes' },
+        metadata: { questionKeys: ['answer'] },
       },
     ]);
     expect(backendCalls.modes).toEqual([

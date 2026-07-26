@@ -6,6 +6,14 @@ import type {
   UpdateSourceInstallParams,
 } from '@shared/source-management-types';
 import type {
+  AgentMemoryCaptureWarning,
+  AgentMemoryDashboard,
+  AgentMemoryExtractionRun,
+  AgentMemoryFollowUpCapture,
+  AgentMemoryPromptCapture,
+  AgentMemoryQueuedPromptCapture,
+} from '@shared/agent-memory-types';
+import type {
   AppNotification,
   TaskNotificationTarget,
 } from '@shared/notification-types';
@@ -30,7 +38,6 @@ import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { DebugLogEntry } from '@shared/debug-log-types';
-import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 
 
 
@@ -110,16 +117,33 @@ contextBridge.exposeInMainWorld('api', {
     getSkills: (projectId: string) =>
       ipcRenderer.invoke('projects:getSkills', projectId),
   },
-  preferenceMemory: {
+  agentMemory: {
     getDashboard: (params: {
-      projectId: string;
-      page?: number;
+      projectId?: string;
+      evidencePage?: number;
+      extractionRunPage?: number;
       pageSize?: number;
-    }) => ipcRenderer.invoke('preferenceMemory:getDashboard', params),
-    consolidate: (projectId: string) =>
-      ipcRenderer.invoke('preferenceMemory:consolidate', projectId),
-    recordEvidence: (params: RecordPreferenceEvidenceParams) =>
-      ipcRenderer.invoke('preferenceMemory:recordEvidence', params),
+    }): Promise<AgentMemoryDashboard> =>
+      ipcRenderer.invoke('agentMemory:getDashboard', params),
+    extractNow: (
+      projectId: string,
+    ): Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }> =>
+      ipcRenderer.invoke('agentMemory:extractNow', projectId),
+    retryRun: (params: {
+      projectId?: string;
+      runId: string;
+      scope: 'project' | 'global';
+    }): Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }> =>
+      ipcRenderer.invoke('agentMemory:retryRun', params),
+    onCaptureWarning: (
+      callback: (warning: AgentMemoryCaptureWarning) => void,
+    ) => {
+      const handler = (_: unknown, warning: AgentMemoryCaptureWarning) =>
+        callback(warning);
+      ipcRenderer.on('agentMemory:captureWarning', handler);
+      return () =>
+        ipcRenderer.removeListener('agentMemory:captureWarning', handler);
+    },
   },
   tasks: {
     focused: (taskId: string) => ipcRenderer.send('tasks:focused', taskId),
@@ -595,6 +619,7 @@ contextBridge.exposeInMainWorld('api', {
       workItemId: number;
     }) => ipcRenderer.invoke('azureDevOps:unlinkWorkItemFromPr', params),
     addPullRequestComment: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -602,6 +627,7 @@ contextBridge.exposeInMainWorld('api', {
       content: string;
     }) => ipcRenderer.invoke('azureDevOps:addPullRequestComment', params),
     addPullRequestFileComment: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -609,9 +635,11 @@ contextBridge.exposeInMainWorld('api', {
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) => ipcRenderer.invoke('azureDevOps:addPullRequestFileComment', params),
     addThreadReply: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -878,16 +906,30 @@ contextBridge.exposeInMainWorld('api', {
     stopAll: () => ipcRenderer.invoke(AGENT_CHANNELS.STOP_ALL),
     respond: (stepId: string, requestId: string, response: unknown) =>
       ipcRenderer.invoke(AGENT_CHANNELS.RESPOND, stepId, requestId, response),
-    sendMessage: (stepId: string, parts: unknown[]) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.SEND_MESSAGE, stepId, parts),
-    queuePrompt: (stepId: string, parts: unknown[]) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.QUEUE_PROMPT, stepId, parts),
-    updateQueuedPrompt: (stepId: string, promptId: string, content: string) =>
+    sendMessage: (
+      stepId: string,
+      parts: unknown[],
+      capture?: AgentMemoryFollowUpCapture,
+    ) =>
+      ipcRenderer.invoke(AGENT_CHANNELS.SEND_MESSAGE, stepId, parts, capture),
+    queuePrompt: (
+      stepId: string,
+      parts: unknown[],
+      capture?: AgentMemoryQueuedPromptCapture,
+    ) =>
+      ipcRenderer.invoke(AGENT_CHANNELS.QUEUE_PROMPT, stepId, parts, capture),
+    updateQueuedPrompt: (
+      stepId: string,
+      promptId: string,
+      content: string,
+      capture?: AgentMemoryPromptCapture,
+    ) =>
       ipcRenderer.invoke(
         AGENT_CHANNELS.UPDATE_QUEUED_PROMPT,
         stepId,
         promptId,
         content,
+        capture,
       ),
     cancelQueuedPrompt: (stepId: string, promptId: string) =>
       ipcRenderer.invoke(AGENT_CHANNELS.CANCEL_QUEUED_PROMPT, stepId, promptId),

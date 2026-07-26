@@ -32,6 +32,7 @@ import type {
   NormalizedPermissionRequest,
   NormalizedToolUse,
 } from '@shared/normalized-message-v2';
+import type { AgentMemoryPromptCapture } from '@shared/agent-memory-types';
 import type { ContextMenuItem } from './ui-message-context-menu';
 import type { InteractionMode } from '@shared/types';
 import { PermissionBar } from '../ui-permission-bar';
@@ -120,7 +121,11 @@ export const MessageStream = memo(function MessageStream({
     newString: string,
   ) => void;
   onCancelQueuedPrompt?: (promptId: string) => void;
-  onUpdateQueuedPrompt?: (promptId: string, content: string) => void;
+  onUpdateQueuedPrompt?: (
+    promptId: string,
+    content: string,
+    capture?: AgentMemoryPromptCapture,
+  ) => void;
   /** Callback when user wants to see a message's raw data in the debug pane */
   onShowRawMessage?: (entryId: string) => void;
   /** Extra bottom padding (px) so content can scroll behind a floating footer */

@@ -24,10 +24,12 @@ export async function generateText({
   cwd,
   allowedTools,
   allowedToolPatterns,
+  toolPolicy,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   throwOnError = false,
   allowRateLimitSwap = true,
   usageContext,
+  signal,
 }: {
   backend: AgentBackendType;
   model: string;
@@ -38,11 +40,14 @@ export async function generateText({
   cwd?: string;
   allowedTools?: string[];
   allowedToolPatterns?: Record<string, string[]>;
+  toolPolicy?: 'default' | 'none';
   timeoutMs?: number;
   throwOnError?: boolean;
   allowRateLimitSwap?: boolean;
   usageContext?: AiUsageContext;
+  signal?: AbortSignal;
 }): Promise<unknown | null> {
+  signal?.throwIfAborted();
   const swapResult = allowRateLimitSwap
     ? await rateLimitSwapService.resolveBackend(backend, { notify: false })
     : { backend, swapped: false, model: undefined, thinkingEffort: undefined };
@@ -59,11 +64,17 @@ export async function generateText({
   }
 
   const abortController = new AbortController();
+  const abortFromCaller = () => abortController.abort(signal?.reason);
+  if (signal?.aborted) abortFromCaller();
+  else signal?.addEventListener('abort', abortFromCaller, { once: true });
+  let timedOut = false;
   const timeout = setTimeout(() => {
+    timedOut = true;
     abortController.abort();
   }, timeoutMs);
 
   try {
+    signal?.throwIfAborted();
     const provider = getAgentBackendProvider(resolvedBackend);
 
     if (outputSchema) {
@@ -81,10 +92,13 @@ export async function generateText({
         cwd,
         allowedTools,
         allowedToolPatterns,
+        toolPolicy,
         abortController,
         usageContext,
       };
       let result = await capability.generate(input);
+      signal?.throwIfAborted();
+      if (timedOut) throw new Error('AI generation timed out');
       if (result.output === null && !abortController.signal.aborted) {
         dbg.agent(
           'Structured generation returned no output; retrying once (backend=%s model=%s skill=%s)',
@@ -93,6 +107,8 @@ export async function generateText({
           skillName ?? '(none)',
         );
         result = await capability.generate(input);
+        signal?.throwIfAborted();
+        if (timedOut) throw new Error('AI generation timed out');
         if (result.output === null) {
           dbg.agent(
             'Structured generation returned no output after retry (backend=%s model=%s skill=%s)',
@@ -118,12 +134,30 @@ export async function generateText({
       cwd,
       allowedTools,
       allowedToolPatterns,
+      toolPolicy,
       abortController,
       usageContext,
     });
+    signal?.throwIfAborted();
+    if (timedOut) throw new Error('AI generation timed out');
     return result.output;
   } catch (error) {
-    if (abortController.signal.aborted) {
+    if (signal?.aborted) {
+      dbg.agent(
+        'generateText canceled (backend=%s model=%s skill=%s structured=%s)',
+        backend,
+        model,
+        skillName ?? '(none)',
+        outputSchema ? 'yes' : 'no',
+      );
+      if (throwOnError) {
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new Error(`AI generation canceled (backend=${backend}, model=${model})`);
+      }
+      return null;
+    }
+    if (timedOut) {
       dbg.agent(
         'generateText timed out after %dms (backend=%s model=%s skill=%s structured=%s)',
         timeoutMs,
@@ -154,5 +188,6 @@ export async function generateText({
     return null;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
 }

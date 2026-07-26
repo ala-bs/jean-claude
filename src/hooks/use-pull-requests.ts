@@ -930,6 +930,7 @@ export function useAddPullRequestComment(
   return useMutation({
     mutationFn: (content: string) =>
       api.azureDevOps.addPullRequestComment({
+        localProjectId: projectId,
         providerId: repoInfo!.providerId,
         projectId: repoInfo!.projectId,
         repoId: repoInfo!.repoId,
@@ -968,9 +969,11 @@ export function useAddPullRequestFileComment(
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) =>
       api.azureDevOps.addPullRequestFileComment({
+        localProjectId: projectId,
         providerId: repoInfo!.providerId,
         projectId: repoInfo!.projectId,
         repoId: repoInfo!.repoId,
@@ -1011,6 +1014,7 @@ export function useAddThreadReply(
   >({
     mutationFn: (params) =>
       api.azureDevOps.addThreadReply({
+        localProjectId: projectId,
         providerId: repoInfo!.providerId,
         projectId: repoInfo!.projectId,
         repoId: repoInfo!.repoId,

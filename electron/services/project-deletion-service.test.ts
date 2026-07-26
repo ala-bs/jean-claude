@@ -6,53 +6,32 @@ const repositories = vi.hoisted(() => ({
   },
 }));
 
-const debug = vi.hoisted(() => ({
-  dbg: {
-    ipc: vi.fn(),
-  },
-}));
-
 const storage = vi.hoisted(() => ({
-  removeProjectPreferenceMemory: vi.fn(),
-  withProjectPreferenceMemoryLock: vi.fn(
-    async (_projectId: string, operation: () => Promise<unknown>) => operation(),
-  ),
+  removeProjectAgentMemory: vi.fn(),
 }));
 
 vi.mock('../database/repositories', () => repositories);
-vi.mock('../lib/debug', () => debug);
-vi.mock('./preference-memory-storage', () => storage);
+vi.mock('./agent-memory-storage', () => storage);
 
-import { deleteProjectWithPreferenceMemoryCleanup } from './project-deletion-service';
+import { deleteProjectRetainingMemory } from './project-deletion-service';
 
-describe('deleteProjectWithPreferenceMemoryCleanup', () => {
+describe('deleteProjectRetainingMemory', () => {
   beforeEach(() => {
     repositories.ProjectRepository.delete.mockReset();
-    storage.removeProjectPreferenceMemory.mockReset();
-    storage.withProjectPreferenceMemoryLock.mockClear();
-    debug.dbg.ipc.mockReset();
+    storage.removeProjectAgentMemory.mockReset();
   });
 
-  it('returns successful deletion when preference memory cleanup fails', async () => {
+  it('deletes the project without removing retained Agent Memory', async () => {
     const deletionResult = [{ numDeletedRows: 1n }];
-    const cleanupError = new Error('cleanup failed');
     repositories.ProjectRepository.delete.mockResolvedValue(deletionResult);
-    storage.removeProjectPreferenceMemory.mockRejectedValue(cleanupError);
 
     await expect(
-      deleteProjectWithPreferenceMemoryCleanup('project-1'),
+      deleteProjectRetainingMemory('project-1'),
     ).resolves.toBe(deletionResult);
 
     expect(repositories.ProjectRepository.delete).toHaveBeenCalledWith(
       'project-1',
     );
-    expect(storage.removeProjectPreferenceMemory).toHaveBeenCalledWith({
-      projectId: 'project-1',
-    });
-    expect(debug.dbg.ipc).toHaveBeenCalledWith(
-      'Failed to clean preference memory for project %s: %O',
-      'project-1',
-      cleanupError,
-    );
+    expect(storage.removeProjectAgentMemory).not.toHaveBeenCalled();
   });
 });

@@ -465,6 +465,7 @@ function RootLayout() {
       <ReactScanBridge />
       <NotificationTaskOpenBridge />
       <RateLimitSwapBridge />
+      <AgentMemoryCaptureWarningBridge />
       <TaskMessageManager />
       <AppearanceBridge />
       <GlobalPromptFromBackModal />
@@ -598,6 +599,21 @@ function RateLimitSwapBridge() {
       addToast({
         message: `Rate limit approaching for ${data.from} — routing new tasks to ${data.to}`,
         type: 'success',
+      });
+    });
+  }, [addToast]);
+
+  return null;
+}
+
+function AgentMemoryCaptureWarningBridge() {
+  const addToast = useToastStore((state) => state.addToast);
+
+  useEffect(() => {
+    return api.agentMemory.onCaptureWarning((warning) => {
+      addToast({
+        type: 'error',
+        message: `Agent Memory could not save this ${warning.source}: ${warning.message}`,
       });
     });
   }, [addToast]);

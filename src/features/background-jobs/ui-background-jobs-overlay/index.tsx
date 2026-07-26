@@ -14,6 +14,7 @@ import {
   useBackgroundJobsStore,
 } from '@/stores/background-jobs';
 import { api } from '@/lib/api';
+import { buildTaskCreationRetryInput } from '@/lib/agent-memory-prompt-input';
 import { Button } from '@/common/ui/button';
 import { formatRelativeTime } from '@/lib/time';
 import { IconButton } from '@/common/ui/icon-button';
@@ -125,10 +126,11 @@ export function BackgroundJobsOverlay({ onClose }: { onClose: () => void }) {
                       markJobRunning(targetJob.id);
 
                       try {
-                        const task = await api.tasks.createWithWorktree({
-                          ...targetJob.details.creationInput,
-                          updatedAt: new Date().toISOString(),
-                        });
+                        const task = await api.tasks.createWithWorktree(
+                          buildTaskCreationRetryInput(
+                            targetJob.details.creationInput,
+                          ),
+                        );
 
                         markJobSucceeded(targetJob.id, {
                           taskId: task.id,

@@ -270,6 +270,8 @@ vi.mock('./add-step-dialog', () => ({
               images: [],
               start: true,
               includedReviewCommentIds: [],
+              agentMemoryUserText: '',
+              agentMemoryReviews: [],
             })
           }
         >

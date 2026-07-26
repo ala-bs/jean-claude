@@ -122,6 +122,7 @@ import { Button } from '@/common/ui/button';
 import { compressImage } from '@/lib/image-compression';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
 import { getDefaultModelForBackend } from '@/lib/default-models';
+import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
@@ -1249,7 +1250,14 @@ export function NewTaskOverlay({
       } else {
         finalPrompt = submissionDraft.prompt ?? '';
       }
-
+      const agentMemoryPrompt = getOriginalTaskAgentMemoryPrompt({
+        inputMode:
+          inputMode === 'search' && searchStep === 'compose'
+            ? 'work-item'
+            : 'prompt',
+        prompt: submissionDraft.prompt ?? '',
+        workItemTemplate: promptTemplate,
+      });
       let draftImages: PromptImagePart[] | undefined =
         submissionDraft.images && submissionDraft.images.length > 0
           ? submissionDraft.images
@@ -1306,6 +1314,7 @@ export function NewTaskOverlay({
           creationInput: {
             projectId: selectedProjectId,
             prompt: finalPrompt,
+            agentMemoryPrompt,
             interactionMode: normalizeInteractionModeForBackend({
               backend: submitSelection.backend,
               mode: currentInteractionMode,
@@ -1352,6 +1361,7 @@ export function NewTaskOverlay({
         .mutateAsync({
           projectId: selectedProjectId,
           prompt: finalPrompt,
+          agentMemoryPrompt,
           images: draftImages,
           interactionMode: normalizeInteractionModeForBackend({
             backend: submitSelection.backend,

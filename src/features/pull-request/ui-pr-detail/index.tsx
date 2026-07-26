@@ -377,6 +377,7 @@ export function PrDetail({
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) => {
       await addFileComment.mutateAsync(params);

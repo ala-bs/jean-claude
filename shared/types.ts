@@ -765,25 +765,23 @@ export interface RawMessageCleanupSetting {
   retentionHours: number;
 }
 
-export interface PreferenceMemorySetting {
+export interface AgentMemorySetting {
   enabled: boolean;
-  consolidationEnabled: boolean;
-  consolidationIntervalMinutes: number;
-  consolidationBackend: AgentBackendType;
-  consolidationModel: ModelPreference;
-  consolidationThinkingEffort: ThinkingEffort;
+  extractionIntervalMinutes: number;
+  extractionBackend: AgentBackendType;
+  extractionModel: ModelPreference;
+  extractionThinkingEffort: ThinkingEffort;
 }
 
-export const DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_INTERVAL_MINUTES = 24 * 60;
-export const PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS = [
+export const DEFAULT_AGENT_MEMORY_EXTRACTION_INTERVAL_MINUTES = 24 * 60;
+export const AGENT_MEMORY_EXTRACTION_BACKENDS = [
   'claude-code',
   'opencode',
 ] as const satisfies readonly AgentBackendType[];
-export const DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_BACKEND: AgentBackendType =
+export const DEFAULT_AGENT_MEMORY_EXTRACTION_BACKEND: AgentBackendType =
   'claude-code';
-export const DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL: ModelPreference =
-  'haiku';
-export const DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT: ThinkingEffort =
+export const DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL: ModelPreference = 'haiku';
+export const DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT: ThinkingEffort =
   'default';
 
 export interface ThinkingSettingsSetting {
@@ -1084,23 +1082,36 @@ function isRawMessageCleanupSetting(v: unknown): v is RawMessageCleanupSetting {
   );
 }
 
-function isPreferenceMemorySetting(v: unknown): v is PreferenceMemorySetting {
-  if (!v || typeof v !== 'object') return false;
+function isAgentMemorySetting(v: unknown): v is AgentMemorySetting {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const obj = v as Record<string, unknown>;
+  if (
+    Object.keys(obj).some(
+      (key) =>
+        ![
+          'enabled',
+          'extractionIntervalMinutes',
+          'extractionBackend',
+          'extractionModel',
+          'extractionThinkingEffort',
+        ].includes(key),
+    )
+  ) {
+    return false;
+  }
   return (
     typeof obj.enabled === 'boolean' &&
-    typeof obj.consolidationEnabled === 'boolean' &&
-    typeof obj.consolidationIntervalMinutes === 'number' &&
-    Number.isFinite(obj.consolidationIntervalMinutes) &&
-    obj.consolidationIntervalMinutes >= 15 &&
-    typeof obj.consolidationBackend === 'string' &&
-    PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS.includes(
-      obj.consolidationBackend as (typeof PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS)[number],
+    typeof obj.extractionIntervalMinutes === 'number' &&
+    Number.isFinite(obj.extractionIntervalMinutes) &&
+    obj.extractionIntervalMinutes >= 15 &&
+    typeof obj.extractionBackend === 'string' &&
+    AGENT_MEMORY_EXTRACTION_BACKENDS.includes(
+      obj.extractionBackend as (typeof AGENT_MEMORY_EXTRACTION_BACKENDS)[number],
     ) &&
-    typeof obj.consolidationModel === 'string' &&
-    typeof obj.consolidationThinkingEffort === 'string' &&
+    typeof obj.extractionModel === 'string' &&
+    typeof obj.extractionThinkingEffort === 'string' &&
     VALID_THINKING_EFFORTS.includes(
-      obj.consolidationThinkingEffort as ThinkingEffort,
+      obj.extractionThinkingEffort as ThinkingEffort,
     )
   );
 }
@@ -1426,18 +1437,17 @@ export const SETTINGS_DEFINITIONS = {
     } as RawMessageCleanupSetting,
     validate: isRawMessageCleanupSetting,
   },
-  preferenceMemory: {
+  agentMemory: {
     defaultValue: {
       enabled: false,
-      consolidationEnabled: false,
-      consolidationIntervalMinutes:
-        DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_INTERVAL_MINUTES,
-      consolidationBackend: DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_BACKEND,
-      consolidationModel: DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL,
-      consolidationThinkingEffort:
-        DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT,
-    } as PreferenceMemorySetting,
-    validate: isPreferenceMemorySetting,
+      extractionIntervalMinutes:
+        DEFAULT_AGENT_MEMORY_EXTRACTION_INTERVAL_MINUTES,
+      extractionBackend: DEFAULT_AGENT_MEMORY_EXTRACTION_BACKEND,
+      extractionModel: DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL,
+      extractionThinkingEffort:
+        DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT,
+    } as AgentMemorySetting,
+    validate: isAgentMemorySetting,
   },
   thinkingSettings: {
     defaultValue: {

@@ -15,6 +15,23 @@ import { useQueryClient } from '@tanstack/react-query';
 
 
 import {
+  AGENT_MEMORY_EXTRACTION_BACKENDS,
+  type CalendarNotificationsSetting,
+  DEFAULT_AGENT_MEMORY_EXTRACTION_BACKEND,
+  DEFAULT_AGENT_MEMORY_EXTRACTION_INTERVAL_MINUTES,
+  DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL,
+  DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT,
+  DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
+  DEFAULT_TASK_NOTIFICATION_MODES,
+  type ModelPreference,
+  PRESET_EDITORS,
+  type PrReviewAgentSetting,
+  type RawMessageCleanupSetting,
+  type TaskNotificationEvent,
+  type TaskNotificationMode,
+  type ThinkingEffort,
+} from '@shared/types';
+import {
   api,
   type DesktopNotificationStatus,
   type NonExistentClaudeProject,
@@ -25,24 +42,8 @@ import {
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
 import {
-  type CalendarNotificationsSetting,
-  DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
-  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_BACKEND,
-  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_INTERVAL_MINUTES,
-  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL,
-  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT,
-  DEFAULT_TASK_NOTIFICATION_MODES,
-  type ModelPreference,
-  PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS,
-  PRESET_EDITORS,
-  type PrReviewAgentSetting,
-  type RawMessageCleanupSetting,
-  type TaskNotificationEvent,
-  type TaskNotificationMode,
-  type ThinkingEffort,
-} from '@shared/types';
-import {
   getEditorLabel,
+  useAgentMemorySetting,
   useAppearanceSetting,
   useAvailableEditors,
   useBackendDefaultModelsSetting,
@@ -50,7 +51,6 @@ import {
   useCalendarNotificationsSetting,
   useEditorAutomationSetting,
   useEditorSetting,
-  usePreferenceMemorySetting,
   usePromptPrefaceSetting,
   usePrReviewAgentSetting,
   useRawMessageCleanupSetting,
@@ -58,13 +58,13 @@ import {
   useSummaryModelsSetting,
   useTaskEventNotificationsSetting,
   useThinkingSettingsSetting,
+  useUpdateAgentMemorySetting,
   useUpdateAppearanceSetting,
   useUpdateBackendDefaultModelsSetting,
   useUpdateBackendsSetting,
   useUpdateCalendarNotificationsSetting,
   useUpdateEditorAutomationSetting,
   useUpdateEditorSetting,
-  useUpdatePreferenceMemorySetting,
   useUpdatePromptPrefaceSetting,
   useUpdatePrReviewAgentSetting,
   useUpdateRawMessageCleanupSetting,
@@ -85,11 +85,11 @@ import {
   useScanNonExistentProjects,
 } from '@/hooks/use-claude-projects-cleanup';
 import type { AgentBackendType } from '@shared/agent-backend-types';
+import { AgentMemoryDashboard } from '@/features/settings/ui-agent-memory-dashboard';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Input } from '@/common/ui/input';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
-import { PreferenceMemoryDashboard } from '@/features/settings/ui-preference-memory-dashboard';
 import { PromptPrefaceList } from '@/features/settings/ui-prompt-preface-list';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
@@ -362,40 +362,37 @@ function BetaBadge() {
   );
 }
 
-export function PreferenceMemorySettings() {
-  const { data: preferenceMemorySetting } = usePreferenceMemorySetting();
-  const updatePreferenceMemory = useUpdatePreferenceMemorySetting();
-  const setting = preferenceMemorySetting ?? {
+export function AgentMemorySettings() {
+  const { data: agentMemorySetting } = useAgentMemorySetting();
+  const updateAgentMemory = useUpdateAgentMemorySetting();
+  const setting = agentMemorySetting ?? {
     enabled: false,
-    consolidationEnabled: false,
-    consolidationIntervalMinutes:
-      DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_INTERVAL_MINUTES,
-    consolidationBackend: DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_BACKEND,
-    consolidationModel: DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL,
-    consolidationThinkingEffort:
-      DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT,
+    extractionIntervalMinutes: DEFAULT_AGENT_MEMORY_EXTRACTION_INTERVAL_MINUTES,
+    extractionBackend: DEFAULT_AGENT_MEMORY_EXTRACTION_BACKEND,
+    extractionModel: DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL,
+    extractionThinkingEffort: DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT,
   };
   const { data: dynamicModels } = useBackendModels(
-    setting.consolidationBackend,
+    setting.extractionBackend,
   );
   const thinkingCapabilities = getModelThinkingCapabilities(
-    setting.consolidationModel,
+    setting.extractionModel,
     dynamicModels,
   );
   const thinkingOptions = getThinkingEffortOptions({
-    backend: setting.consolidationBackend,
-    model: setting.consolidationModel,
+    backend: setting.extractionBackend,
+    model: setting.extractionModel,
     capabilities: thinkingCapabilities,
   });
   const normalizedThinkingEffort = normalizeThinkingEffortForModel({
-    backend: setting.consolidationBackend,
-    model: setting.consolidationModel,
-    effort: setting.consolidationThinkingEffort,
+    backend: setting.extractionBackend,
+    model: setting.extractionModel,
+    effort: setting.extractionThinkingEffort,
     capabilities: thinkingCapabilities,
   });
 
   const updateSetting = (next: typeof setting) => {
-    updatePreferenceMemory.mutate(next);
+    updateAgentMemory.mutate(next);
   };
 
   return (
@@ -410,8 +407,8 @@ export function PreferenceMemorySettings() {
             <BetaBadge />
           </div>
           <p className="text-ink-3 mt-1 text-sm">
-            Capture review and PR comments as local evidence, then periodically
-            consolidate them into reusable coding preferences.
+            Learn durable project context and working preferences from interactions
+            you author in Jean-Claude.
           </p>
         </div>
       </div>
@@ -420,15 +417,13 @@ export function PreferenceMemorySettings() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-ink-1 text-sm font-medium">
-              Capture preference evidence
+              Enable Agent Memory
             </div>
             <p className="text-ink-3 mt-1 text-xs">
-              When enabled, Jean-Claude writes review/PR comments, selected
-              code, task context, and bounded file snapshots to daily files in{' '}
-              <span className="font-mono">
-                ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-reviews/
-              </span>
-              .
+              With your consent, Jean-Claude stores user-authored prompts, question
+              answers, task reviews, and locally posted PR comments as evidence.
+              Turning this off pauses both capture and model extraction without
+              deleting stored memory.
             </p>
           </div>
           <Switch
@@ -439,43 +434,17 @@ export function PreferenceMemorySettings() {
                 enabled: nextEnabled,
               })
             }
-            label="Capture preference evidence"
+            label="Enable Agent Memory"
           />
         </div>
       </div>
 
-      <PreferenceMemoryDashboard />
-
       <div className="border-glass-border bg-bg-1 mt-4 rounded-lg border px-4 py-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-ink-1 text-sm font-medium">
-              Consolidate preferences
-            </div>
-            <p className="text-ink-3 mt-1 text-xs">
-              When enabled, Jean-Claude regularly processes new review evidence
-              from byte offsets tracked in{' '}
-              <span className="font-mono">
-                ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-reviews-state.json
-              </span>{' '}
-              and updates{' '}
-              <span className="font-mono">
-                ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-preferences.md
-              </span>
-              .
-            </p>
-          </div>
-          <Switch
-            checked={setting.consolidationEnabled}
-            onChange={(consolidationEnabled) =>
-              updateSetting({
-                ...setting,
-                consolidationEnabled,
-              })
-            }
-            label="Consolidate preferences"
-          />
-        </div>
+        <div className="text-ink-1 text-sm font-medium">Extraction model</div>
+        <p className="text-ink-3 mt-1 text-xs">
+          New evidence is extracted daily and at this interval. Evidence is sent
+          only to the backend and model configured here.
+        </p>
         <div className="mt-4 max-w-xs">
           <label className="text-ink-2 block text-xs font-medium">
             Interval (minutes)
@@ -483,13 +452,14 @@ export function PreferenceMemorySettings() {
           <Input
             type="number"
             min={15}
-            value={setting.consolidationIntervalMinutes}
+            value={setting.extractionIntervalMinutes}
+            disabled={!setting.enabled}
             onChange={(event) => {
               const nextValue = Number(event.target.value);
               if (!Number.isFinite(nextValue)) return;
               updateSetting({
                 ...setting,
-                consolidationIntervalMinutes: Math.max(15, nextValue),
+                extractionIntervalMinutes: Math.max(15, nextValue),
               });
             }}
             className="mt-2"
@@ -497,10 +467,10 @@ export function PreferenceMemorySettings() {
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <Select
-            value={setting.consolidationBackend}
+            value={setting.extractionBackend}
             options={AVAILABLE_BACKENDS.filter((backend) =>
-              PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS.includes(
-                backend.value as (typeof PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS)[number],
+              AGENT_MEMORY_EXTRACTION_BACKENDS.includes(
+                backend.value as (typeof AGENT_MEMORY_EXTRACTION_BACKENDS)[number],
               ),
             ).map((backend) => ({
               value: backend.value,
@@ -509,95 +479,94 @@ export function PreferenceMemorySettings() {
               badge: backend.badge,
             }))}
             onChange={(backendValue) => {
-              const consolidationBackend = backendValue as AgentBackendType;
-              const consolidationModel =
-                consolidationBackend === 'claude-code'
-                  ? DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL
+              const extractionBackend = backendValue as AgentBackendType;
+              const extractionModel =
+                extractionBackend === 'claude-code'
+                  ? DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL
                   : 'default';
               updateSetting({
                 ...setting,
-                consolidationBackend,
-                consolidationModel,
-                consolidationThinkingEffort:
-                  DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT,
+                extractionBackend,
+                extractionModel,
+                extractionThinkingEffort:
+                  DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT,
               });
             }}
             label="Backend"
+            disabled={!setting.enabled}
           />
           <ModelSelector
-            value={setting.consolidationModel}
+            value={setting.extractionModel}
             models={getModelsForBackend(
-              setting.consolidationBackend,
+              setting.extractionBackend,
               dynamicModels,
             )}
-            onChange={(consolidationModel) => {
+            onChange={(extractionModel) => {
               const nextCapabilities = getModelThinkingCapabilities(
-                consolidationModel,
+                extractionModel,
                 dynamicModels,
               );
               updateSetting({
                 ...setting,
-                consolidationModel,
-                consolidationThinkingEffort: normalizeThinkingEffortForModel({
-                  backend: setting.consolidationBackend,
-                  model: consolidationModel,
-                  effort: setting.consolidationThinkingEffort,
+                extractionModel,
+                extractionThinkingEffort: normalizeThinkingEffortForModel({
+                  backend: setting.extractionBackend,
+                  model: extractionModel,
+                  effort: setting.extractionThinkingEffort,
                   capabilities: nextCapabilities,
                 }),
               });
             }}
+            disabled={!setting.enabled}
           />
           <ThinkingSelector
             value={normalizedThinkingEffort}
             options={thinkingOptions}
-            onChange={(consolidationThinkingEffort) =>
+            onChange={(extractionThinkingEffort) =>
               updateSetting({
                 ...setting,
-                consolidationThinkingEffort: normalizeThinkingEffortForModel({
-                  backend: setting.consolidationBackend,
-                  model: setting.consolidationModel,
-                  effort: consolidationThinkingEffort,
+                extractionThinkingEffort: normalizeThinkingEffortForModel({
+                  backend: setting.extractionBackend,
+                  model: setting.extractionModel,
+                  effort: extractionThinkingEffort,
                   capabilities: thinkingCapabilities,
                 }),
               })
             }
-            disabled={thinkingOptions.length <= 1}
+            disabled={!setting.enabled || thinkingOptions.length <= 1}
           />
         </div>
       </div>
 
+      <AgentMemoryDashboard />
+
       <div className="border-glass-border bg-bg-1 mt-4 rounded-lg border px-4 py-3">
         <div className="text-ink-1 text-sm font-medium">How it works</div>
         <ol className="text-ink-3 mt-2 list-decimal space-y-1 pl-4 text-xs">
-          <li>Enable capture here.</li>
-          <li>Leave task review comments or PR file comments.</li>
+          <li>Enable Agent Memory to consent to local capture and extraction.</li>
+          <li>Work normally through prompts, answers, reviews, and PR comments.</li>
           <li>
             Jean-Claude appends evidence to daily JSONL files under{' '}
             <span className="font-mono">
-              ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-reviews/
+              ~/.jean-claude/memory/projects/&lt;project-id&gt;/events/
             </span>
             .
           </li>
           <li>
-            If consolidation is enabled, Jean-Claude runs the{' '}
-            <span className="font-mono">user-preference-memory</span> skill to
-            update{' '}
-            <span className="font-mono">
-              ~/.jean-claude/memory/projects/&lt;project-id&gt;/user-preferences.md
-            </span>
-            .
+            Structured extraction promotes recurring project knowledge and sends
+            only validated project nominations to global memory.
           </li>
-          <li>Future agents can read that markdown memory before working.</li>
+          <li>Generated Markdown gives future agents read-only project context.</li>
         </ol>
       </div>
 
       <div className="border-glass-border bg-bg-1 mt-4 rounded-lg border px-4 py-3">
         <div className="text-ink-1 text-sm font-medium">Evidence retention</div>
         <p className="text-ink-3 mt-1 text-xs">
-          Evidence is kept indefinitely in project JSONL files until you delete
-          it. Jean-Claude does not prune or upload it. Evidence can include
-          comments, selected code, task context, and bounded file excerpts
-          around commented lines.
+          Evidence and extracted memory are kept indefinitely until you delete
+          them. Common credential patterns are redacted before disk writes. During
+          extraction, pending evidence is transmitted to your configured backend;
+          raw project evidence is never sent to global merge.
         </p>
       </div>
     </div>

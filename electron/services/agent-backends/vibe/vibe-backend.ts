@@ -10,6 +10,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
+import type { QuestionResponseMetadata } from '@shared/agent-types';
 import type { ResolvedPermissionRule } from '@shared/permission-types';
 
 import {
@@ -267,6 +268,7 @@ export class VibeBackend implements AgentBackend {
     _sessionId: string,
     _requestId: string,
     _answer: Record<string, string>,
+    _metadata: QuestionResponseMetadata,
   ): Promise<void> {}
 
   async setMode(

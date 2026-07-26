@@ -21,6 +21,7 @@ import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useStat
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
+import { nanoid } from 'nanoid';
 import { useShallow } from 'zustand/react/shallow';
 
 
@@ -39,6 +40,12 @@ import type {
   PromptImagePart,
   PromptPart,
 } from '@shared/agent-backend-types';
+import type {
+  AgentMemoryFollowUpCapture,
+  AgentMemoryPromptCapture,
+  AgentMemoryQueuedPromptCapture,
+  AgentMemoryTaskReviewCapture,
+} from '@shared/agent-memory-types';
 import {
   AVAILABLE_BACKENDS,
   getModelsForBackend,
@@ -76,15 +83,16 @@ import {
   ReviewProvider,
 } from '@/common/context/review-context';
 import {
-  reviewCommentToPill,
-  ReviewPillsQueue,
-} from '@/features/common/ui-review-pills';
-import {
+  reviewCommentToAgentMemoryCapture,
   type ReviewPresetId,
   synthesizeReviewPrompt,
   useReviewComments,
   useReviewCommentsStore,
 } from '@/stores/review-comments';
+import {
+  reviewCommentToPill,
+  ReviewPillsQueue,
+} from '@/features/common/ui-review-pills';
 import {
   useAddSessionAllowedTool,
   useAllowForProject,
@@ -1789,6 +1797,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       images: PromptImagePart[];
       start: boolean;
       includedReviewCommentIds: string[];
+      agentMemoryUserText: string;
+      agentMemoryReviews: AgentMemoryTaskReviewCapture[];
       reviewers?: import('@shared/types').ReviewerConfig[];
       preferredStepId?: string | null;
     }) => {
@@ -1873,6 +1883,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           dependsOn,
           sortOrder: insertionSortOrder,
           start: data.start,
+          agentMemoryCapture:
+            data.agentMemoryUserText || (data.agentMemoryReviews?.length ?? 0) > 0
+              ? {
+                  userText: data.agentMemoryUserText,
+                  reviews: data.agentMemoryReviews ?? [],
+                  contextStepId: referenceStep?.id ?? null,
+                }
+              : undefined,
           ...(isReview && reviewers
             ? {
                 type: 'review' as const,
@@ -3126,7 +3144,11 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onOpenFileInReview?: (filePath: string) => void;
   onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
   onCancelQueuedPrompt?: (promptId: string) => void;
-  onUpdateQueuedPrompt?: (promptId: string, content: string) => void;
+  onUpdateQueuedPrompt?: (
+    promptId: string,
+    content: string,
+    capture?: AgentMemoryPromptCapture,
+  ) => void;
   onShowRawMessage?: (entryId: string) => void;
   bottomPadding: number;
   pendingPermission: ComponentProps<typeof MessageStream>['pendingPermission'];
@@ -3367,8 +3389,11 @@ const TaskInputFooter = memo(function TaskInputFooter({
   isRunning: boolean;
   isStopping: boolean;
   canSendMessage: boolean;
-  onSend: (parts: PromptPart[]) => void;
-  onQueue: (parts: PromptPart[]) => void;
+  onSend: (parts: PromptPart[], capture?: AgentMemoryFollowUpCapture) => void;
+  onQueue: (
+    parts: PromptPart[],
+    capture?: AgentMemoryQueuedPromptCapture,
+  ) => void;
   queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
   projectRoot: string | null;
@@ -3605,33 +3630,12 @@ const TaskInputFooter = memo(function TaskInputFooter({
           clearUserCompleted.mutate(taskId);
         }
 
-        // Append synthesized review comments to prompt
         let finalParts = parts;
         if (openReviewComments.length > 0) {
           const reviewParts = synthesizeReviewPrompt(openReviewComments);
           if (reviewParts) {
             finalParts = [...parts, ...reviewParts];
           }
-          void api.preferenceMemory
-            .recordEvidence({
-            source: 'task-review-comment',
-            taskId,
-            comments: openReviewComments.map((comment) => ({
-              body: comment.body,
-              filePath: comment.anchor.filePath,
-              lineStart: comment.anchor.lineStart,
-              lineEnd: comment.anchor.lineEnd,
-              presets: comment.presets,
-              selectedText: comment.anchor.selectedText,
-            })),
-            context: {
-              targetStepId: activeStepId,
-            },
-            })
-            .catch((error: unknown) => {
-              console.warn('Failed to record preference evidence', error);
-            });
-          // Resolve and clear all open comments after send
           for (const comment of openReviewComments) {
             resolveComment(taskId, comment.id);
           }
@@ -3639,7 +3643,14 @@ const TaskInputFooter = memo(function TaskInputFooter({
         }
 
         clearPromptDraft();
-        onSend(finalParts);
+        onSend(finalParts, {
+          submissionId: nanoid(),
+          userText: parts
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n'),
+          reviews: openReviewComments.map(reviewCommentToAgentMemoryCapture),
+        });
       } finally {
         setIsSubmittingPrompt(false);
       }
@@ -3662,7 +3673,14 @@ const TaskInputFooter = memo(function TaskInputFooter({
         }
 
         clearPromptDraft();
-        onQueue(finalParts);
+        onQueue(finalParts, {
+          submissionId: nanoid(),
+          userText: parts
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n'),
+          reviews: openReviewComments.map(reviewCommentToAgentMemoryCapture),
+        });
       } finally {
         setIsSubmittingPrompt(false);
       }

@@ -14,7 +14,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type { InteractionMode, ThinkingEffort } from '@shared/types';
-import type { QuestionResponse } from '@shared/agent-types';
+import type { QuestionResponseMetadata } from '@shared/agent-types';
 
 import {
   evaluatePermission,
@@ -419,7 +419,7 @@ export class CopilotBackend implements AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
-    metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
+    metadata: QuestionResponseMetadata,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -1023,7 +1023,7 @@ function getUniqueRequestId(
 function toCopilotUserInputResponse(
   answer: Record<string, string>,
   request: CopilotUserInputRequest,
-  metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
+  metadata: QuestionResponseMetadata,
 ): CopilotUserInputResponse {
   const entries = Object.entries(answer);
 
@@ -1039,7 +1039,7 @@ function toCopilotUserInputResponse(
 function getWasFreeform(
   entries: [string, string][],
   request: CopilotUserInputRequest,
-  metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
+  metadata: QuestionResponseMetadata,
 ): boolean {
   if (entries.length === 1) {
     const [question, value] = entries[0];

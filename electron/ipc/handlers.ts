@@ -26,6 +26,11 @@ import {
   QuestionResponse,
 } from '@shared/agent-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
+import type {
+  AgentMemoryFollowUpCapture,
+  AgentMemoryPromptCapture,
+  AgentMemoryQueuedPromptCapture,
+} from '@shared/agent-memory-types';
 import {
   type AiGenerationSetting,
   type AppSettings,
@@ -40,6 +45,7 @@ import {
   type NewToken,
   PRESET_EDITORS,
   type Project,
+  SETTINGS_DEFINITIONS,
   type SkillCreationStepMeta,
   type Task,
   type ThinkingEffort,
@@ -77,7 +83,6 @@ import { getImageMimeType } from '@shared/image-types';
 import type { GlobalPromptResponse } from '@shared/global-prompt-types';
 import { isValidTeamsJoinUrl } from '@shared/teams-url';
 import { parseAzureRemoteUrl } from '@shared/azure-remote-utils';
-import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
 import type { UsageProviderType } from '@shared/usage-types';
 
 
@@ -91,6 +96,15 @@ import {
   MCP_PRESETS,
   substituteVariables,
 } from '../services/mcp-template-service';
+import {
+  addPullRequestCommentWithAgentMemory,
+  addPullRequestFileCommentWithAgentMemory,
+  addThreadReplyWithAgentMemory,
+} from '../services/pr-agent-memory-capture-service';
+import {
+  captureCreatedStepPromptBoundary,
+  captureCreatedTaskPromptBoundary,
+} from './agent-memory-capture-boundaries';
 import {
   createGlobalMcpServer,
   disableGlobalMcpServer,
@@ -107,13 +121,12 @@ import type {
   NewGlobalMcpServer,
   UpdateGlobalMcpServer,
 } from '@shared/global-mcp-types';
+import { agentMemoryDashboardService } from '../services/agent-memory-dashboard-service';
 
 import {
   activateWorkItem,
-  addPullRequestComment,
   addPullRequestFileComment,
   addPullRequestTag,
-  addThreadReply,
   cancelBuild,
   cloneRepository,
   type CloneRepositoryParams,
@@ -314,12 +327,6 @@ import {
   startPrCommand,
 } from '../services/pr-review-task-service';
 import {
-  consolidatePreferenceMemoryForProject,
-  getPreferenceMemoryDashboard,
-  recordPreferenceEvidence,
-} from '../services/preference-memory-service';
-// eslint-disable-next-line sort-imports
-import {
   cleanupTaskForDeletion,
   cleanupTaskWorktree,
   completeTaskWithWorktreeCleanup,
@@ -385,7 +392,7 @@ import { agentService } from '../services/agent-service';
 import { agentUsageService } from '../services/agent-usage-service';
 import { closeEditorWindowsForTaskWorktree } from '../services/editor-automation-service';
 import { dbg } from '../lib/debug';
-import { deleteProjectWithPreferenceMemoryCleanup } from '../services/project-deletion-service';
+import { deleteProjectRetainingMemory } from '../services/project-deletion-service';
 import { detectProjectLogos } from '../services/project-logo-detection-service';
 import { detectProjects } from '../services/project-detection-service';
 import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
@@ -606,6 +613,7 @@ async function ensureGenericStepCanBeCreated(data: NewTaskStep) {
   const task = await TaskRepository.findById(data.taskId);
   if (!task) throw new Error(`Task ${data.taskId} not found`);
   validateRendererStepCreate(task, data);
+  return task;
 }
 
 async function ensureGenericStepCanBeUpdated(
@@ -684,11 +692,12 @@ function startAgentForStep(stepId: string): Promise<void> {
 function sendMessageForStep(
   stepId: string,
   parts: PromptPart[],
+  capture?: AgentMemoryFollowUpCapture,
 ): Promise<void> {
   return sendMessageWithPrReviewLifecycle(
     stepId,
     (authoritativeStepId) =>
-      agentService.beginSendMessage(authoritativeStepId, parts),
+      agentService.beginSendMessage(authoritativeStepId, parts, capture),
     {
       findStepById: TaskStepRepository.findById,
       findTaskById: TaskRepository.findById,
@@ -1413,7 +1422,7 @@ export function registerIpcHandlers() {
   ipcMain.handle('projects:delete', async (_, id: string) => {
     dbg.ipc('projects:delete %s', id);
     const project = await ProjectRepository.findById(id);
-    const result = await deleteProjectWithPreferenceMemoryCleanup(id);
+    const result = await deleteProjectRetainingMemory(id);
     if (project) {
       await cleanupProjectLogos(id);
       await cleanupProjectLogoPath(project.logoPath);
@@ -1519,27 +1528,31 @@ export function registerIpcHandlers() {
   });
 
   ipcMain.handle(
-    'preferenceMemory:getDashboard',
-    async (_, params: { projectId: string; page?: number; pageSize?: number }) =>
-      getPreferenceMemoryDashboard(params),
+    'agentMemory:getDashboard',
+    async (
+      _,
+      params: {
+        projectId?: string;
+        evidencePage?: number;
+        extractionRunPage?: number;
+        pageSize?: number;
+      },
+    ) => agentMemoryDashboardService.getDashboard(params),
   );
   ipcMain.handle(
-    'preferenceMemory:consolidate',
-    async (_, projectId: string) => {
-      const project = await ProjectRepository.findById(projectId);
-      if (!project) throw new Error(`Project not found: ${projectId}`);
-      const setting = await SettingsRepository.get('preferenceMemory');
-      return consolidatePreferenceMemoryForProject(project, {
-        backend: setting.consolidationBackend,
-        model: setting.consolidationModel,
-        thinkingEffort: setting.consolidationThinkingEffort,
-      });
-    },
+    'agentMemory:extractNow',
+    async (_, projectId: string) => agentMemoryDashboardService.extractNow(projectId),
   );
   ipcMain.handle(
-    'preferenceMemory:recordEvidence',
-    async (_, params: RecordPreferenceEvidenceParams) =>
-      recordPreferenceEvidence(params),
+    'agentMemory:retryRun',
+    async (
+      _,
+      params: {
+        projectId?: string;
+        runId: string;
+        scope: 'project' | 'global';
+      },
+    ) => agentMemoryDashboardService.retryRun(params),
   );
 
   // Tasks
@@ -1565,6 +1578,8 @@ export function registerIpcHandlers() {
         modelPreference?: string | null;
         thinkingEffort?: ThinkingEffort | null;
         agentBackend?: AgentBackendType | null;
+        agentMemoryPrompt?: string;
+        agentMemoryReviews?: unknown;
       },
     ) => {
       const {
@@ -1574,6 +1589,8 @@ export function registerIpcHandlers() {
         agentBackend,
         images,
         updateWorkItemStatus,
+        agentMemoryPrompt,
+        agentMemoryReviews: _agentMemoryReviews,
         ...rendererTaskData
       } = data;
       const taskData = sanitizeRendererTaskCreate(rendererTaskData);
@@ -1603,6 +1620,13 @@ export function registerIpcHandlers() {
         thinkingEffort: thinkingEffort ?? null,
         agentBackend: agentBackend ?? null,
         images: images ?? null,
+      });
+      captureCreatedTaskPromptBoundary({
+        task,
+        stepId: step.id,
+        originalUserText: agentMemoryPrompt,
+        submittedPrompt: step.promptTemplate,
+        createdAt: taskPromptOccurredAt,
       });
       void workActivityService.recordTaskPrompt({
         stepId: step.id,
@@ -1636,6 +1660,8 @@ export function registerIpcHandlers() {
         modelPreference?: string | null;
         thinkingEffort?: ThinkingEffort | null;
         agentBackend?: AgentBackendType | null;
+        agentMemoryPrompt?: string;
+        agentMemoryReviews?: unknown;
       },
     ) => {
       const {
@@ -1649,6 +1675,8 @@ export function registerIpcHandlers() {
         thinkingEffort,
         agentBackend,
         updateWorkItemStatus,
+        agentMemoryPrompt,
+        agentMemoryReviews: _agentMemoryReviews,
         ...rendererTaskData
       } = data;
       const taskData = sanitizeRendererTaskCreate(rendererTaskData);
@@ -1820,6 +1848,13 @@ export function registerIpcHandlers() {
         thinkingEffort: thinkingEffort ?? null,
         agentBackend: agentBackend ?? null,
         images: images ?? null,
+      });
+      captureCreatedTaskPromptBoundary({
+        task,
+        stepId: step.id,
+        originalUserText: agentMemoryPrompt,
+        submittedPrompt: step.promptTemplate,
+        createdAt: taskPromptOccurredAt,
       });
       void workActivityService.recordTaskPrompt({
         stepId: step.id,
@@ -2915,9 +2950,17 @@ export function registerIpcHandlers() {
   );
   ipcMain.handle(
     'steps:create',
-    async (event, data: NewTaskStep & { start?: boolean }) => {
-      const { start, ...stepData } = data;
-      await ensureGenericStepCanBeCreated(stepData);
+    async (
+      event,
+      data: NewTaskStep & {
+        start?: boolean;
+        agentMemoryCapture?: AgentMemoryPromptCapture & {
+          contextStepId?: string | null;
+        };
+      },
+    ) => {
+      const { start, agentMemoryCapture, ...stepData } = data;
+      const task = await ensureGenericStepCanBeCreated(stepData);
       const stepPromptOccurredAt = new Date().toISOString();
 
       // If auto-start is requested but step has dependencies, defer the start
@@ -2927,6 +2970,13 @@ export function registerIpcHandlers() {
       }
 
       let step = await StepService.create(stepData);
+      captureCreatedStepPromptBoundary({
+        task,
+        stepId: step.id,
+        capture: agentMemoryCapture,
+        submittedPrompt: stepData.promptTemplate,
+        createdAt: stepPromptOccurredAt,
+      });
       void workActivityService.recordTaskPrompt({
         stepId: step.id,
         prompt: buildTaskCreationActivityText({
@@ -3638,6 +3688,7 @@ export function registerIpcHandlers() {
     async (
       _,
       params: {
+        localProjectId?: string;
         providerId: string;
         projectId: string;
         repoId: string;
@@ -3645,7 +3696,7 @@ export function registerIpcHandlers() {
         content: string;
       },
     ) => {
-      const result = await addPullRequestComment(params);
+      const result = await addPullRequestCommentWithAgentMemory(params);
       invalidatePrCache();
       return result;
     },
@@ -3656,6 +3707,7 @@ export function registerIpcHandlers() {
     async (
       _,
       params: {
+        localProjectId?: string;
         providerId: string;
         projectId: string;
         repoId: string;
@@ -3663,10 +3715,11 @@ export function registerIpcHandlers() {
         filePath: string;
         line: number;
         lineEnd?: number;
+        selectedLines?: string;
         content: string;
       },
     ) => {
-      const result = await addPullRequestFileComment(params);
+      const result = await addPullRequestFileCommentWithAgentMemory(params);
       invalidatePrCache();
       return result;
     },
@@ -3677,6 +3730,7 @@ export function registerIpcHandlers() {
     async (
       _,
       params: {
+        localProjectId?: string;
         providerId: string;
         projectId: string;
         repoId: string;
@@ -3685,7 +3739,7 @@ export function registerIpcHandlers() {
         content: string;
       },
     ) => {
-      const result = await addThreadReply(params);
+      const result = await addThreadReplyWithAgentMemory(params);
       invalidatePrCache();
       return result;
     },
@@ -4345,35 +4399,56 @@ export function registerIpcHandlers() {
 
   ipcMain.handle(
     AGENT_CHANNELS.SEND_MESSAGE,
-    (_, stepId: string, parts: PromptPart[]) => {
+    (
+      _,
+      stepId: string,
+      parts: PromptPart[],
+      capture?: AgentMemoryFollowUpCapture,
+    ) => {
       dbg.ipc('agent:sendMessage %s (parts: %d)', stepId, parts.length);
       void workActivityService.recordTaskPrompt({
         stepId,
         prompt: buildPromptActivityText(parts),
         occurredAt: new Date().toISOString(),
       });
-      return sendMessageForStep(stepId, parts);
+      return sendMessageForStep(stepId, parts, capture);
     },
   );
 
   ipcMain.handle(
     AGENT_CHANNELS.QUEUE_PROMPT,
-    (_, stepId: string, parts: PromptPart[]) => {
+    (
+      _,
+      stepId: string,
+      parts: PromptPart[],
+      capture?: AgentMemoryQueuedPromptCapture,
+    ) => {
       dbg.ipc('agent:queuePrompt %s', stepId);
       void workActivityService.recordTaskPrompt({
         stepId,
         prompt: buildPromptActivityText(parts),
         occurredAt: new Date().toISOString(),
       });
-      return agentService.queuePrompt(stepId, parts);
+      return agentService.queuePrompt(stepId, parts, capture);
     },
   );
 
   ipcMain.handle(
     AGENT_CHANNELS.UPDATE_QUEUED_PROMPT,
-    (_, stepId: string, promptId: string, content: string) => {
+    (
+      _,
+      stepId: string,
+      promptId: string,
+      content: string,
+      capture?: AgentMemoryPromptCapture,
+    ) => {
       dbg.ipc('agent:updateQueuedPrompt step=%s, prompt=%s', stepId, promptId);
-      return agentService.updateQueuedPrompt(stepId, promptId, content);
+      return agentService.updateQueuedPrompt(
+        stepId,
+        promptId,
+        content,
+        capture,
+      );
     },
   );
 
@@ -4438,7 +4513,7 @@ export function registerIpcHandlers() {
   );
   ipcMain.handle(
     'settings:set',
-    <K extends keyof AppSettings>(
+    async <K extends keyof AppSettings>(
       _: unknown,
       key: K,
       value: AppSettings[K],
@@ -4451,7 +4526,42 @@ export function registerIpcHandlers() {
           'Use usageDisplay:saveSettings for usage display settings',
         );
       }
-      return SettingsRepository.set(key, value);
+      // Validate BEFORE acting on the payload: cancelling in-flight extraction
+      // is a side effect that must not be triggered by a value the repository
+      // will go on to reject.
+      if (key === 'agentMemory' && !SETTINGS_DEFINITIONS.agentMemory.validate(value)) {
+        throw new Error('Invalid agentMemory settings');
+      }
+      if (
+        key === 'agentMemory' &&
+        !(value as AppSettings['agentMemory']).enabled
+      ) {
+        const [scheduler, extraction] = await Promise.all([
+          import('../services/agent-memory-scheduler-service'),
+          import('../services/agent-memory-extraction-service'),
+        ]);
+        await Promise.all([
+          scheduler.agentMemorySchedulerService.cancelCurrent(),
+          extraction.suspendAndCancelAgentMemoryExtractions(),
+        ]);
+        try {
+          await SettingsRepository.set(key, value);
+        } catch (error) {
+          extraction.resumeAgentMemoryExtractions();
+          throw error;
+        }
+        return;
+      }
+      await SettingsRepository.set(key, value);
+      if (
+        key === 'agentMemory' &&
+        (value as AppSettings['agentMemory']).enabled
+      ) {
+        const extraction = await import(
+          '../services/agent-memory-extraction-service'
+        );
+        extraction.resumeAgentMemoryExtractions();
+      }
     },
   );
 

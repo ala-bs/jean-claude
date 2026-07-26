@@ -10,6 +10,7 @@ import type {
   AgentTaskContext,
   PromptPart,
 } from '@shared/agent-backend-types';
+import type { AgentMemoryTaskReviewCapture } from '@shared/agent-memory-types';
 import type { AgentRunHandle } from '@shared/agent-backend-provider-types';
 import type { Task } from '@shared/types';
 
@@ -33,12 +34,39 @@ const QUESTIONS = [
   },
 ];
 
+function submittedReviewPrompt(
+  text: string,
+  reviews: AgentMemoryTaskReviewCapture[],
+): string {
+  const comments = reviews.map((review, index) => {
+    const type = review.filePath ? 'file' : 'message';
+    const lineRange = review.lineStart
+      ? ` line_range="L${review.lineStart}${
+          review.lineEnd && review.lineEnd !== review.lineStart
+            ? `-L${review.lineEnd}`
+            : ''
+        }"`
+      : '';
+    const filePath = review.filePath ? ` file_path="${review.filePath}"` : '';
+    const selectedTag = type === 'file' ? 'selected_lines' : 'quoted_text';
+    return `<comment index="${index + 1}" comment_id="${review.commentId}" type="${type}"${filePath}${lineRange}>
+${review.presets.length ? `  <tags>${review.presets.join(', ')}</tags>\n` : ''}${review.selectedText ? `  <${selectedTag}>\n${review.selectedText}\n  </${selectedTag}>\n` : ''}  <instruction>
+${review.body}
+  </instruction>
+</comment>`;
+  });
+  return `${text}\n\n<user_review>\n${comments.join('\n')}\n</user_review>`;
+}
+
 const {
   agentMessageRepositoryMock,
+  captureAgentMemoryEventSafeMock,
+  captureAgentMemoryPromptSubmissionSafeMock,
   applyConfiguredPromptPrefaceMock,
   browserWindowGetAllWindowsMock,
   buildToolPermissionConfigMock,
   claudeCompactRawMessagesForTaskMock,
+  debugAgentMock,
   emitStepUpsertMock,
   emitTaskPatchMock,
   emitTaskUpsertMock,
@@ -175,13 +203,17 @@ const {
       updateEntry: vi.fn(),
       updateToolResult: vi.fn(),
       findByStepId: vi.fn(),
+      findLatestResultByStepId: vi.fn(),
       findWithRawDataByTaskId: vi.fn(),
       reprocessNormalization: vi.fn(),
     },
+    captureAgentMemoryPromptSubmissionSafeMock: vi.fn(),
+    captureAgentMemoryEventSafeMock: vi.fn(),
     applyConfiguredPromptPrefaceMock: vi.fn(),
     browserWindowGetAllWindowsMock: vi.fn(() => []),
     buildToolPermissionConfigMock: vi.fn(),
     claudeCompactRawMessagesForTaskMock: vi.fn(),
+    debugAgentMock: vi.fn(),
     emitStepUpsertMock: vi.fn(),
     emitTaskPatchMock: vi.fn(),
     emitTaskUpsertMock: vi.fn(),
@@ -275,7 +307,8 @@ vi.mock('../lib/debug', () => ({
   dbg: new Proxy(
     {},
     {
-      get: () => vi.fn(),
+      get: (_, property) =>
+        property === 'agent' ? debugAgentMock : vi.fn(),
     },
   ),
 }));
@@ -310,6 +343,12 @@ vi.mock('./agent-backends/providers', () => ({
 
 vi.mock('./agent-resource-monitor-service', () => ({
   agentResourceMonitorService: resourceMonitorMock,
+}));
+
+vi.mock('./agent-memory-capture-service', () => ({
+  captureAgentMemoryEventSafe: captureAgentMemoryEventSafeMock,
+  captureAgentMemoryPromptSubmissionSafe:
+    captureAgentMemoryPromptSubmissionSafeMock,
 }));
 
 vi.mock('./ai-usage-tracking-service', () => ({
@@ -612,6 +651,7 @@ function setDefaultMocks(): void {
   agentMessageRepositoryMock.updateEntry.mockResolvedValue(undefined);
   agentMessageRepositoryMock.updateToolResult.mockResolvedValue(undefined);
   agentMessageRepositoryMock.findByStepId.mockResolvedValue([]);
+  agentMessageRepositoryMock.findLatestResultByStepId.mockResolvedValue(null);
   agentMessageRepositoryMock.findWithRawDataByTaskId.mockResolvedValue([]);
   agentMessageRepositoryMock.reprocessNormalization.mockResolvedValue(0);
 
@@ -642,6 +682,8 @@ function setDefaultMocks(): void {
   applyConfiguredPromptPrefaceMock.mockImplementation(
     async ({ parts }: { parts: PromptPart[] }) => parts,
   );
+  captureAgentMemoryPromptSubmissionSafeMock.mockResolvedValue(undefined);
+  captureAgentMemoryEventSafeMock.mockResolvedValue(undefined);
   normalizeToolRequestMock.mockReturnValue({
     tool: 'bash',
     matchValue: 'npm test',
@@ -1994,6 +2036,254 @@ describe('agentService provider runtime', () => {
     expect(stepServiceMock.interruptStep).toHaveBeenCalledTimes(1);
   });
 
+  it('captures an admitted immediate follow-up with the previous result snapshot', async () => {
+    agentMessageRepositoryMock.findLatestResultByStepId.mockResolvedValue(
+      'previous result',
+    );
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.sendMessage(
+      'step-1',
+      [{ type: 'text', text: 'fix this' }],
+      {
+        submissionId: 'submission-1',
+        userText: 'fix this',
+        reviews: [],
+      },
+    );
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith({
+      source: 'follow-up-prompt',
+      sourceId: 'follow-up-prompt:submission-1',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      stepId: 'step-1',
+      userText: 'fix this',
+      previousAgentResult: 'previous result',
+      reviews: [],
+    });
+    expect(
+      agentMessageRepositoryMock.findLatestResultByStepId,
+    ).toHaveBeenCalledWith('step-1');
+  });
+
+  it('starts the backend while the admitted previous-result snapshot is unresolved', async () => {
+    const previousResult = createDeferred<string | null>();
+    agentMessageRepositoryMock.findLatestResultByStepId.mockReturnValue(
+      previousResult.promise,
+    );
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    const sendPromise = agentService.sendMessage(
+      'step-1',
+      [{ type: 'text', text: 'fix this' }],
+      {
+        submissionId: 'submission-deferred',
+        userText: 'fix this',
+        reviews: [],
+      },
+    );
+
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    expect(captureAgentMemoryPromptSubmissionSafeMock).not.toHaveBeenCalled();
+
+    previousResult.resolve('snapshot before new run');
+    await sendPromise;
+    await waitForAssertion(() => {
+      expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceId: 'follow-up-prompt:submission-deferred',
+          previousAgentResult: 'snapshot before new run',
+        }),
+      );
+    });
+  });
+
+  it('snapshots an active session result before stopping without delaying the next backend', async () => {
+    const activeRun = createIdleHandle('active-prior-run');
+    const previousResult = createDeferred<string | null>();
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(activeRun.handle)
+      .mockResolvedValueOnce(createHandle({ events: [completeEvent()] }));
+
+    const activeStart = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    agentMessageRepositoryMock.findLatestResultByStepId.mockImplementation(() => {
+      expect(activeRun.handle.stop).not.toHaveBeenCalled();
+      return previousResult.promise;
+    });
+
+    const sendPromise = agentService.sendMessage(
+      'step-1',
+      [{ type: 'text', text: 'follow up active run' }],
+      {
+        submissionId: 'active-session-submission',
+        userText: 'follow up active run',
+      },
+    );
+
+    await waitForAssertion(() => {
+      expect(activeRun.handle.stop).toHaveBeenCalledTimes(1);
+      expect(providerCalls.runStarts).toHaveLength(2);
+    });
+    expect(captureAgentMemoryPromptSubmissionSafeMock).not.toHaveBeenCalled();
+
+    previousResult.resolve('actual prior agent result');
+    await Promise.all([activeStart, sendPromise]);
+    await waitForAssertion(() => {
+      expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceId: 'follow-up-prompt:active-session-submission',
+          previousAgentResult: 'actual prior agent result',
+        }),
+      );
+    });
+  });
+
+  it('falls back to captured step output when no result row exists', async () => {
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      output: 'persisted step output',
+    });
+    agentMessageRepositoryMock.findLatestResultByStepId.mockResolvedValue(null);
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.sendMessage(
+      'step-1',
+      [{ type: 'text', text: 'follow up' }],
+      {
+        submissionId: 'submission-output',
+        userText: 'follow up',
+      },
+    );
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ previousAgentResult: 'persisted step output' }),
+    );
+  });
+
+  it('captures only explicit user text when backend preface and images are present', async () => {
+    applyConfiguredPromptPrefaceMock.mockImplementation(
+      async ({ parts }: { parts: PromptPart[] }) => [
+        { type: 'text', text: 'Generated automation preface' },
+        ...parts,
+      ],
+    );
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.sendMessage(
+      'step-1',
+      [
+        { type: 'text', text: 'User instruction' },
+        { type: 'image', data: 'base64-secret', mimeType: 'image/png' },
+      ],
+      {
+        submissionId: 'submission-user-only',
+        userText: 'User instruction',
+      },
+    );
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userText: 'User instruction' }),
+    );
+    expect(
+      JSON.stringify(captureAgentMemoryPromptSubmissionSafeMock.mock.calls),
+    ).not.toContain('Generated automation preface');
+    expect(
+      JSON.stringify(captureAgentMemoryPromptSubmissionSafeMock.mock.calls),
+    ).not.toContain('base64-secret');
+  });
+
+  it('does not capture generated follow-ups without submission metadata', async () => {
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.sendMessage('step-1', [
+      { type: 'text', text: 'continue' },
+    ]);
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects immediate review metadata not represented in submitted prompt XML', async () => {
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+    const fabricatedReview = {
+      commentId: 'Bearer immediate-id-secret',
+      body: 'immediate body secret',
+      selectedText: 'immediate selected secret',
+      filePath: 'src/forged.ts',
+      lineStart: 40,
+      lineEnd: 50,
+      presets: ['refactor'],
+    };
+
+    await agentService.sendMessage(
+      'step-1',
+      [{ type: 'text', text: 'Actual prompt without review XML' }],
+      {
+        submissionId: 'immediate-forged-metadata',
+        userText: 'renderer replacement prompt',
+        reviews: [fabricatedReview],
+      },
+    );
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userText: 'Actual prompt without review XML',
+        reviews: [],
+      }),
+    );
+    const logs = JSON.stringify(debugAgentMock.mock.calls);
+    expect(logs).toContain('agent-memory-prompt-admission-mismatch');
+    expect(logs).not.toContain('immediate-id-secret');
+    expect(logs).not.toContain('immediate body secret');
+    expect(logs).not.toContain('immediate selected secret');
+    expect(logs).not.toContain('renderer replacement prompt');
+  });
+
+  it('admits immediate review evidence only from matching submitted XML', async () => {
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+    const rendererReview = {
+      commentId: 'immediate-stable-review',
+      body: 'Renderer draft body',
+      selectedText: 'value',
+      filePath: 'src/value.ts',
+      lineStart: 7,
+      lineEnd: 7,
+      presets: ['tests'],
+    };
+    const finalReview = { ...rendererReview, body: 'Final XML body' };
+    const content = submittedReviewPrompt('Immediate review prompt', [
+      finalReview,
+    ]);
+
+    await agentService.sendMessage(
+      'step-1',
+      [{ type: 'text', text: content }],
+      {
+        submissionId: 'immediate-valid-review',
+        userText: 'Immediate review prompt',
+        reviews: [rendererReview],
+      },
+    );
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userText: content,
+        reviews: [finalReview],
+      }),
+    );
+  });
+
   it('restores interruption when completion wins a terminal status race', async () => {
     const terminalMutation = createDeferred<void>();
     const ordering: string[] = [];
@@ -2541,6 +2831,672 @@ describe('agentService provider runtime', () => {
     expect(providerCalls.stops).toEqual(['nested-run', 'outer-run']);
   });
 
+  it('captures final queued text only when dequeued with current completion context', async () => {
+    const outerComplete = createDeferred<void>();
+    const outerHandle = createCompleteThenWaitHandle({
+      runId: 'outer-run',
+      waitBeforeComplete: outerComplete.promise,
+    });
+    const nestedHandle = createHandle({
+      runId: 'nested-run',
+      events: [completeEvent()],
+    });
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(outerHandle)
+      .mockResolvedValueOnce(nestedHandle);
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const { promptId } = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'draft queued text' }],
+      {
+        submissionId: 'queue-final-text',
+        userText: 'draft queued text',
+        reviews: [],
+      },
+    );
+    agentService.updateQueuedPrompt('step-1', promptId, 'edited queued text');
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).not.toHaveBeenCalled();
+    outerComplete.resolve();
+    await startPromise;
+    await waitForAssertion(() => {
+      expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalled();
+    });
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith({
+      source: 'queued-prompt',
+      sourceId: `queued-prompt:${promptId}`,
+      projectId: 'project-1',
+      taskId: 'task-1',
+      stepId: 'step-1',
+      userText: 'edited queued text',
+      previousAgentResult: 'done',
+      reviews: [],
+    });
+  });
+
+  it('rejects queued review metadata not represented in submitted prompt XML', async () => {
+    const outerComplete = createDeferred<void>();
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createCompleteThenWaitHandle({
+          runId: 'outer-forged-queue-review',
+          waitBeforeComplete: outerComplete.promise,
+        }),
+      )
+      .mockResolvedValueOnce(createHandle({ events: [completeEvent()] }));
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+
+    agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'Queued prompt without review XML' }],
+      {
+        submissionId: 'queued-forged-metadata',
+        userText: 'renderer queued replacement',
+        reviews: [
+          {
+            commentId: 'Bearer queued-id-secret',
+            body: 'queued body secret',
+            selectedText: 'queued selected secret',
+            filePath: 'src/forged.ts',
+            lineStart: 4,
+            lineEnd: 5,
+            presets: ['tests'],
+          },
+        ],
+      },
+    );
+    outerComplete.resolve();
+    await startPromise;
+
+    await waitForAssertion(() => {
+      expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userText: 'Queued prompt without review XML',
+          reviews: [],
+        }),
+      );
+    });
+    const logs = JSON.stringify(debugAgentMock.mock.calls);
+    expect(logs).toContain('agent-memory-prompt-admission-mismatch');
+    expect(logs).not.toContain('queued-id-secret');
+    expect(logs).not.toContain('queued body secret');
+    expect(logs).not.toContain('queued selected secret');
+    expect(logs).not.toContain('renderer queued replacement');
+  });
+
+  it('clears queued review capture when an edit omits review metadata', async () => {
+    const outerComplete = createDeferred<void>();
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createCompleteThenWaitHandle({
+          runId: 'outer-remove-review',
+          waitBeforeComplete: outerComplete.promise,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createHandle({
+          runId: 'nested-remove-review',
+          events: [completeEvent()],
+        }),
+    );
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const removedReview = {
+      commentId: 'removed-review',
+      body: 'Remove this review',
+      selectedText: 'x',
+      filePath: 'src/a.ts',
+      lineStart: 1,
+      lineEnd: 1,
+      presets: [],
+    };
+    const { promptId } = agentService.queuePrompt(
+      'step-1',
+      [
+        {
+          type: 'text',
+          text: submittedReviewPrompt('draft with review', [removedReview]),
+        },
+      ],
+      {
+        submissionId: 'queue-remove-review',
+        userText: 'draft with review',
+        reviews: [removedReview],
+      },
+    );
+
+    agentService.updateQueuedPrompt('step-1', promptId, 'edited without review');
+    outerComplete.resolve();
+    await startPromise;
+    await waitForAssertion(() => {
+      expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userText: 'edited without review',
+          reviews: [],
+        }),
+      );
+    });
+    const logs = JSON.stringify(debugAgentMock.mock.calls);
+    expect(logs).toContain('agent-memory-queue-review-xml-missing');
+    expect(logs).toContain('agent-memory-queue-renderer-mismatch');
+    expect(logs).not.toContain('Remove this review');
+    expect(logs).not.toContain('edited without review');
+  });
+
+  it('drops queued review context omitted from final stable-ID XML', async () => {
+    const outerComplete = createDeferred<void>();
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createCompleteThenWaitHandle({
+          runId: 'outer-reconcile-review',
+          waitBeforeComplete: outerComplete.promise,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createHandle({
+          runId: 'nested-reconcile-review',
+          events: [completeEvent()],
+        }),
+      );
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const firstReview = {
+      commentId: 'review-first',
+      body: 'Keep first',
+      selectedText: 'first',
+      filePath: 'src/first.ts',
+      lineStart: 1,
+      lineEnd: 1,
+      presets: [],
+    };
+    const removedReview = {
+      commentId: 'review-removed',
+      body: 'Remove middle',
+      selectedText: 'middle',
+      filePath: 'src/middle.ts',
+      lineStart: 2,
+      lineEnd: 2,
+      presets: [],
+    };
+    const lastReview = {
+      commentId: 'review-last',
+      body: 'Keep last',
+      selectedText: 'last',
+      filePath: 'src/last.ts',
+      lineStart: 3,
+      lineEnd: 3,
+      presets: [],
+    };
+    const { promptId } = agentService.queuePrompt(
+      'step-1',
+      [
+        {
+          type: 'text',
+          text: submittedReviewPrompt('draft reviews', [
+            firstReview,
+            removedReview,
+            lastReview,
+          ]),
+        },
+      ],
+      {
+        submissionId: 'queue-reconcile-review',
+        userText: 'draft reviews',
+        reviews: [firstReview, removedReview, lastReview],
+      },
+    );
+    const finalContent = `<user_review>
+<comment index="1" comment_id="review-first"><instruction>Keep first</instruction></comment>
+<comment index="3" comment_id="review-last"><instruction>Updated last</instruction></comment>
+</user_review>`;
+
+    agentService.updateQueuedPrompt('step-1', promptId, finalContent);
+    outerComplete.resolve();
+    await startPromise;
+    await waitForAssertion(() => {
+      expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userText: finalContent,
+          reviews: [
+            {
+              ...firstReview,
+              selectedText: null,
+              filePath: null,
+              lineStart: null,
+              lineEnd: null,
+            },
+            {
+              ...lastReview,
+              body: 'Updated last',
+              selectedText: null,
+              filePath: null,
+              lineStart: null,
+              lineEnd: null,
+            },
+          ],
+        }),
+      );
+    });
+  });
+
+  it('treats renderer queued review metadata as advisory', async () => {
+    const outerComplete = createDeferred<void>();
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createCompleteThenWaitHandle({
+          runId: 'outer-replace-review',
+          waitBeforeComplete: outerComplete.promise,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createHandle({
+          runId: 'nested-replace-review',
+          events: [completeEvent()],
+        }),
+      );
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const oldReview = {
+      commentId: 'old-review',
+      body: 'Old body',
+      selectedText: null,
+      filePath: null,
+      lineStart: null,
+      lineEnd: null,
+      presets: [],
+    };
+    const { promptId } = agentService.queuePrompt(
+      'step-1',
+      [
+        {
+          type: 'text',
+          text: submittedReviewPrompt('draft', [oldReview]),
+        },
+      ],
+      {
+        submissionId: 'queue-advisory-review',
+        userText: 'draft',
+        reviews: [oldReview],
+      },
+    );
+    const fabricatedReview = {
+      commentId: 'Bearer renderer-id-secret',
+      body: 'renderer secret body',
+      selectedText: 'renderer selected secret',
+      filePath: 'src/fabricated.ts',
+      lineStart: 400,
+      lineEnd: 500,
+      presets: ['refactor'],
+    };
+    const finalContent = `<user_review>
+<comment index="1" comment_id="old-review"><instruction>Edited old body</instruction></comment>
+<comment index="2" comment_id="Bearer renderer-id-secret"><instruction>renderer secret body</instruction></comment>
+</user_review>`;
+
+    agentService.updateQueuedPrompt(
+      'step-1',
+      promptId,
+      finalContent,
+      {
+        userText: 'renderer replacement text',
+        reviews: [fabricatedReview],
+      },
+    );
+    outerComplete.resolve();
+    await startPromise;
+    await waitForAssertion(() => {
+      expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userText: finalContent,
+          reviews: [
+            {
+              commentId: 'old-review',
+              body: 'Edited old body',
+              selectedText: null,
+              filePath: null,
+              lineStart: null,
+              lineEnd: null,
+              presets: [],
+            },
+          ],
+        }),
+      );
+    });
+    const logs = JSON.stringify(debugAgentMock.mock.calls);
+    expect(logs).toContain('agent-memory-queue-review-ids-rejected');
+    expect(logs).toContain('agent-memory-queue-renderer-mismatch');
+    expect(logs).not.toContain('renderer secret body');
+    expect(logs).not.toContain('renderer selected secret');
+    expect(logs).not.toContain('renderer-id-secret');
+  });
+
+  it('captures coalesced queued user text and deduplicated reviews under the first queue id', async () => {
+    const outerComplete = createDeferred<void>();
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createCompleteThenWaitHandle({
+          runId: 'outer-coalesced',
+          waitBeforeComplete: outerComplete.promise,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createHandle({ runId: 'nested-coalesced', events: [completeEvent()] }),
+      );
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const review = {
+      commentId: 'review-1',
+      body: 'Rename this',
+      selectedText: 'x',
+      filePath: 'src/a.ts',
+      lineStart: 1,
+      lineEnd: 1,
+      presets: ['rename'],
+    };
+    const first = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: submittedReviewPrompt('first', [review]) }],
+      { submissionId: 'queue-coalesce-first', userText: 'first', reviews: [review] },
+    );
+    const second = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: submittedReviewPrompt('second', [review]) }],
+      {
+        submissionId: 'queue-coalesce-second',
+        userText: 'second',
+        reviews: [review],
+      },
+    );
+    expect(second.promptId).toBe(first.promptId);
+
+    outerComplete.resolve();
+    await startPromise;
+    await waitForAssertion(() => {
+      expect(captureAgentMemoryPromptSubmissionSafeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceId: `queued-prompt:${first.promptId}`,
+          userText: expect.stringContaining('first'),
+          reviews: [review],
+        }),
+      );
+    });
+  });
+
+  it('deduplicates queued retries by submission id but keeps identical new submissions', async () => {
+    const idle = createIdleHandle('queue-retry-run');
+    providerState.runStartImplementation = async () => idle.handle;
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const capture = {
+      submissionId: 'stable-queued-submission',
+      userText: 'same prompt',
+      reviews: [],
+    };
+
+    const first = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'same prompt' }],
+      capture,
+    );
+    const retry = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'retry payload must be ignored' }],
+      capture,
+    );
+    expect(retry).toEqual(first);
+    expect(agentService.getQueuedPrompts('step-1')[0].content).toBe(
+      'same prompt',
+    );
+
+    agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'same prompt' }],
+      { ...capture, submissionId: 'distinct-queued-submission' },
+    );
+    expect(agentService.getQueuedPrompts('step-1')[0].content).toBe(
+      'same prompt\n\nsame prompt',
+    );
+
+    agentService.cancelQueuedPrompt('step-1', first.promptId);
+    const delayedRetry = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'same prompt' }],
+      capture,
+    );
+    expect(delayedRetry).toEqual(first);
+    expect(agentService.getQueuedPrompts('step-1')).toEqual([]);
+
+    const intentionalResubmission = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'same prompt' }],
+      { ...capture, submissionId: 'intentional-resubmission' },
+    );
+    expect(intentionalResubmission.promptId).not.toBe(first.promptId);
+    agentService.cancelQueuedPrompt(
+      'step-1',
+      intentionalResubmission.promptId,
+    );
+    await agentService.stop('step-1');
+    await startPromise;
+
+    const restarted = createIdleHandle('queue-retry-restarted-run');
+    providerState.runStartImplementation = async () => restarted.handle;
+    const restartedPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(2));
+    expect(
+      agentService.queuePrompt(
+        'step-1',
+        [{ type: 'text', text: 'late retry after session replacement' }],
+        capture,
+      ),
+    ).toEqual(first);
+    expect(agentService.getQueuedPrompts('step-1')).toEqual([]);
+    await agentService.stop('step-1');
+    await restartedPromise;
+  });
+
+  it('keeps queued submission tombstones after dequeue', async () => {
+    const outerComplete = createDeferred<void>();
+    const nested = createIdleHandle('dequeued-retry-run');
+    providerState.runStartImplementation = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createCompleteThenWaitHandle({
+          runId: 'dequeued-retry-outer',
+          waitBeforeComplete: outerComplete.promise,
+        }),
+      )
+      .mockResolvedValueOnce(nested.handle);
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const capture = {
+      submissionId: 'dequeued-stable-submission',
+      userText: 'dequeue once',
+      reviews: [],
+    };
+    const first = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'dequeue once' }],
+      capture,
+    );
+
+    outerComplete.resolve();
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(2));
+    const delayedRetry = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'must not resurrect' }],
+      capture,
+    );
+
+    expect(delayedRetry).toEqual(first);
+    expect(agentService.getQueuedPrompts('step-1')).toEqual([]);
+    await agentService.stop('step-1');
+    await startPromise;
+  });
+
+  it('keeps queued submission tombstones when stop clears the queue', async () => {
+    const idle = createIdleHandle('stopped-queue-retry-run');
+    providerState.runStartImplementation = async () => idle.handle;
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const capture = {
+      submissionId: 'stopped-queue-stable-submission',
+      userText: 'stop before dequeue',
+      reviews: [],
+    };
+    const first = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'stop before dequeue' }],
+      capture,
+    );
+
+    await agentService.stop('step-1');
+    await startPromise;
+
+    const restarted = createIdleHandle('stopped-queue-restarted-run');
+    providerState.runStartImplementation = async () => restarted.handle;
+    const restartedPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(2));
+    expect(
+      agentService.queuePrompt(
+        'step-1',
+        [{ type: 'text', text: 'delayed retry must not resurrect' }],
+        capture,
+      ),
+    ).toEqual(first);
+    expect(agentService.getQueuedPrompts('step-1')).toEqual([]);
+    await agentService.stop('step-1');
+    await restartedPromise;
+  });
+
+  it('tombstones pending submission ids evicted by the per-session cap', async () => {
+    const idle = createIdleHandle('queue-cap-run');
+    providerState.runStartImplementation = async () => idle.handle;
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const firstCapture = {
+      submissionId: 'queue-cap-first',
+      userText: 'capped prompt',
+      reviews: [],
+    };
+    const first = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'capped prompt' }],
+      firstCapture,
+    );
+    for (let index = 0; index < 256; index += 1) {
+      agentService.queuePrompt(
+        'step-1',
+        [{ type: 'text', text: `prompt ${index}` }],
+        {
+          submissionId: `queue-cap-${index}`,
+          userText: `prompt ${index}`,
+          reviews: [],
+        },
+      );
+    }
+    const contentBeforeRetry = agentService.getQueuedPrompts('step-1')[0].content;
+
+    expect(
+      agentService.queuePrompt(
+        'step-1',
+        [{ type: 'text', text: 'evicted retry must not append' }],
+        firstCapture,
+      ),
+    ).toEqual(first);
+    expect(agentService.getQueuedPrompts('step-1')[0].content).toBe(
+      contentBeforeRetry,
+    );
+
+    agentService.cancelQueuedPrompt('step-1', first.promptId);
+    await agentService.stop('step-1');
+    await startPromise;
+  });
+
+  it('evicts the oldest process-wide queued submission tombstone at the cap', async () => {
+    const idle = createIdleHandle('tombstone-cap-run');
+    providerState.runStartImplementation = async () => idle.handle;
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+
+    let oldestPromptId = '';
+    let newestPromptId = '';
+    for (let index = 0; index <= 2_048; index += 1) {
+      const { promptId } = agentService.queuePrompt(
+        'step-1',
+        [{ type: 'text', text: '' }],
+        {
+          submissionId: `global-tombstone-cap-${index}`,
+          userText: '',
+          reviews: [],
+        },
+      );
+      if (index === 0) oldestPromptId = promptId;
+      if (index === 2_048) newestPromptId = promptId;
+      agentService.cancelQueuedPrompt('step-1', promptId);
+    }
+
+    const evictedRetry = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'oldest tombstone was evicted' }],
+      {
+        submissionId: 'global-tombstone-cap-0',
+        userText: 'oldest tombstone was evicted',
+        reviews: [],
+      },
+    );
+    expect(evictedRetry.promptId).not.toBe(oldestPromptId);
+    expect(
+      agentService.queuePrompt(
+        'step-1',
+        [{ type: 'text', text: 'newest tombstone remains' }],
+        {
+          submissionId: 'global-tombstone-cap-2048',
+          userText: 'newest tombstone remains',
+          reviews: [],
+        },
+      ),
+    ).toEqual({ promptId: newestPromptId });
+    expect(agentService.getQueuedPrompts('step-1')).toEqual([
+      expect.objectContaining({ id: evictedRetry.promptId }),
+    ]);
+
+    await agentService.stop('step-1');
+    await startPromise;
+  });
+
+  it('never captures a cancelled queued prompt', async () => {
+    const idle = createIdleHandle();
+    providerState.runStartImplementation = async () => idle.handle;
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => expect(providerCalls.runStarts).toHaveLength(1));
+    const { promptId } = agentService.queuePrompt(
+      'step-1',
+      [{ type: 'text', text: 'cancel me' }],
+      {
+        submissionId: 'queue-cancel',
+        userText: 'cancel me',
+        reviews: [],
+      },
+    );
+
+    agentService.cancelQueuedPrompt('step-1', promptId);
+    await agentService.stop('step-1');
+    await startPromise;
+
+    expect(captureAgentMemoryPromptSubmissionSafeMock).not.toHaveBeenCalled();
+  });
+
   it('stops a queued run handle when stop races with nested startup', async () => {
     const outerComplete = createDeferred<void>();
     const nestedStart = createDeferred<AgentRunHandle>();
@@ -3074,7 +4030,18 @@ describe('agentService provider runtime', () => {
             question: 'Which option?',
             header: 'Choice',
             multiSelect: false,
-            options: [{ label: 'A', description: 'Pick A' }],
+            options: [
+              { label: 'A', description: 'Pick A' },
+              { label: 'B', description: 'Do not pick B' },
+            ],
+          },
+          {
+            id: 'context',
+            type: 'text',
+            question: 'Anything else?',
+            header: 'Context',
+            multiSelect: false,
+            options: [],
           },
         ],
       },
@@ -3087,17 +4054,41 @@ describe('agentService provider runtime', () => {
         status: 'waiting',
       });
     });
+    captureAgentMemoryEventSafeMock.mockReturnValue(new Promise(() => {}));
 
-    await agentService.respond('step-1', 'question-1', {
-      answers: { 'Which option?': 'A' },
-    });
+    await withTimeout(
+      agentService.respond('step-1', 'question-1', {
+        answers: {
+          'Which option?': 'A, Notes: Keep scope narrow',
+          context: 'Preserve APIs',
+        },
+        memoryDetails: [
+          {
+            questionKey: 'Which option?',
+            selectedLabels: ['A'],
+            customAnswer: null,
+            notes: 'Keep scope narrow',
+          },
+          {
+            questionKey: 'context',
+            selectedLabels: [],
+            customAnswer: 'Preserve APIs',
+            notes: null,
+          },
+        ],
+      }),
+    );
 
     expect(providerCalls.questions).toEqual([
       {
         handle,
         requestId: 'question-1',
-        answer: { 'Which option?': 'A' },
+        answer: {
+          'Which option?': 'A, Notes: Keep scope narrow',
+          context: 'Preserve APIs',
+        },
         metadata: {
+          questionKeys: ['Which option?', 'context'],
           wasFreeform: undefined,
           wasFreeformByQuestion: undefined,
         },
@@ -3106,6 +4097,40 @@ describe('agentService provider runtime', () => {
     expect(notificationServiceMock.close).toHaveBeenCalledWith(
       'task-1:question',
     );
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledWith({
+      source: 'question-answer',
+      sourceId: 'question:question-1:Which option?',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      stepId: 'step-1',
+      text: 'A\nKeep scope narrow',
+      context: {
+        question: 'Which option?',
+        selectedLabels: ['A'],
+        customAnswer: null,
+        notes: 'Keep scope narrow',
+      },
+      createdAt: expect.any(String),
+    });
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledWith({
+      source: 'question-answer',
+      sourceId: 'question:question-1:context',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      stepId: 'step-1',
+      text: 'Preserve APIs',
+      context: {
+        question: 'Anything else?',
+        selectedLabels: [],
+        customAnswer: 'Preserve APIs',
+        notes: null,
+      },
+      createdAt: expect.any(String),
+    });
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.stringify(captureAgentMemoryEventSafeMock.mock.calls),
+    ).not.toContain('Do not pick B');
 
     release();
     await startPromise;
@@ -3149,6 +4174,14 @@ describe('agentService provider runtime', () => {
     await expect(
       agentService.respond('step-1', 'question-1', {
         answers: { 'Which option?': 'A' },
+        memoryDetails: [
+          {
+            questionKey: 'Which option?',
+            selectedLabels: ['A'],
+            customAnswer: null,
+            notes: null,
+          },
+        ],
       }),
     ).rejects.toThrow('Unsupported backend capability');
 
@@ -3156,6 +4189,357 @@ describe('agentService provider runtime', () => {
       type: 'question',
       data: { requestId: 'question-1' },
     });
+
+    release();
+    await startPromise;
+  });
+
+  it.each([
+    {
+      name: 'forged question text',
+      sensitiveValue: 'SENSITIVE_FORGED_QUESTION',
+      memoryDetails: [
+        {
+          questionKey: 'choice',
+          question: 'SENSITIVE_FORGED_QUESTION',
+          selectedLabels: ['A'],
+          customAnswer: null,
+          notes: null,
+        },
+      ],
+    },
+    {
+      name: 'extra selected option',
+      sensitiveValue: 'SENSITIVE_UNSELECTED_OPTION',
+      memoryDetails: [
+        {
+          questionKey: 'choice',
+          selectedLabels: ['A', 'SENSITIVE_UNSELECTED_OPTION'],
+          customAnswer: null,
+          notes: null,
+        },
+      ],
+    },
+    {
+      name: 'notes absent from delivered answer',
+      sensitiveValue: 'SENSITIVE_FORGED_NOTES',
+      memoryDetails: [
+        {
+          questionKey: 'choice',
+          selectedLabels: ['A'],
+          customAnswer: null,
+          notes: 'SENSITIVE_FORGED_NOTES',
+        },
+      ],
+    },
+    {
+      name: 'custom answer absent from delivered answer',
+      sensitiveValue: 'SENSITIVE_FORGED_CUSTOM',
+      memoryDetails: [
+        {
+          questionKey: 'choice',
+          selectedLabels: [],
+          customAnswer: 'SENSITIVE_FORGED_CUSTOM',
+          notes: null,
+        },
+      ],
+    },
+  ])(
+    'rejects $name from question memory capture',
+    async ({ memoryDetails, sensitiveValue }) => {
+      const { handle, release } = createWaitingHandle({
+        type: 'question',
+        request: {
+          requestId: 'question-forged',
+          questions: [
+            {
+              id: 'choice',
+              question: 'Which option?',
+              header: 'Choice',
+              multiSelect: false,
+              options: [
+                { label: 'A', description: 'Pick A' },
+                { label: 'B', description: 'Pick B' },
+              ],
+            },
+          ],
+        },
+      });
+      providerState.runStartImplementation = async () => handle;
+
+      const startPromise = agentService.start('step-1');
+      await waitForAssertion(() => {
+        expect(agentService.getPendingRequest('step-1')).toMatchObject({
+          type: 'question',
+          data: { requestId: 'question-forged' },
+        });
+      });
+
+      await expect(
+        agentService.respond('step-1', 'question-forged', {
+          answers: { choice: 'A' },
+          memoryDetails,
+        }),
+      ).rejects.toThrow('Invalid question response');
+
+      expect(providerCalls.questions).toEqual([]);
+      expect(captureAgentMemoryEventSafeMock).not.toHaveBeenCalled();
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-forged' },
+      });
+      expect(
+        debugAgentMock.mock.calls.some(([message]) =>
+          String(message).includes('Rejecting question response'),
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(debugAgentMock.mock.calls)).not.toContain(
+        sensitiveValue,
+      );
+
+      release();
+      await startPromise;
+    },
+  );
+
+  it('assigns distinct keys and captures duplicate ID-less questions', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-duplicates',
+        questions: [
+          {
+            question: 'Choose one',
+            header: 'First',
+            multiSelect: false,
+            options: [{ label: 'A', description: '' }],
+          },
+          {
+            question: 'Choose one',
+            header: 'Second',
+            multiSelect: false,
+            options: [{ label: 'B', description: '' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-duplicates' },
+      });
+    });
+    const pending = agentService.getPendingRequest('step-1');
+    expect(pending?.type).toBe('question');
+    if (pending?.type !== 'question') throw new Error('Expected question');
+    expect(pending.data.questions.map((question) => question.key)).toEqual([
+      'Choose one#1',
+      'Choose one#2',
+    ]);
+
+    const rendererAnswers = {
+      'Choose one#2': 'B',
+      untrusted: 'SENSITIVE_EXTRA_ANSWER',
+      'Choose one#1': 'A',
+    };
+    const canonicalAnswers = {
+      'Choose one#1': 'A',
+      'Choose one#2': 'B',
+    };
+    await agentService.respond('step-1', 'question-duplicates', {
+      answers: rendererAnswers,
+      memoryDetails: [
+        {
+          questionKey: 'Choose one#2',
+          selectedLabels: ['B'],
+          customAnswer: null,
+          notes: null,
+        },
+        {
+          questionKey: 'Choose one#1',
+          selectedLabels: ['A'],
+          customAnswer: null,
+          notes: null,
+        },
+      ],
+    });
+
+    expect(providerCalls.questions).toEqual([
+      expect.objectContaining({
+        answer: canonicalAnswers,
+        metadata: expect.objectContaining({
+          questionKeys: ['Choose one#1', 'Choose one#2'],
+        }),
+      }),
+    ]);
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledTimes(2);
+    expect(
+      captureAgentMemoryEventSafeMock.mock.calls.map(
+        ([event]) => [event.sourceId, event.context.selectedLabels],
+      ),
+    ).toEqual([
+      ['question:question-duplicates:Choose one#1', ['A']],
+      ['question:question-duplicates:Choose one#2', ['B']],
+    ]);
+
+    release();
+    await startPromise;
+  });
+
+  // "Decide for me" is a deferral, not a stated preference. It must still reach
+  // the agent, but recording it would teach memory something the user never said.
+  it('delivers Decide for me without capturing it as a preference', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-decide',
+        questions: [
+          {
+            id: 'choice',
+            question: 'Which option?',
+            header: 'Choice',
+            multiSelect: false,
+            allowFreeform: false,
+            options: [{ label: 'A', description: '' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-decide' },
+      });
+    });
+
+    await agentService.respond('step-1', 'question-decide', {
+      answers: { choice: 'Decide for me' },
+      wasFreeform: true,
+      wasFreeformByQuestion: { choice: true },
+      memoryDetails: [
+        {
+          questionKey: 'choice',
+          selectedLabels: [],
+          customAnswer: 'Decide for me',
+          notes: null,
+        },
+      ],
+    });
+
+    expect(providerCalls.questions).toEqual([
+      expect.objectContaining({
+        answer: { choice: 'Decide for me' },
+      }),
+    ]);
+    expect(captureAgentMemoryEventSafeMock).not.toHaveBeenCalled();
+
+    release();
+    await startPromise;
+  });
+
+  it('still captures the note attached to a Decide for me answer', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-decide-note',
+        questions: [
+          {
+            id: 'choice',
+            question: 'Which option?',
+            header: 'Choice',
+            multiSelect: false,
+            allowFreeform: false,
+            options: [{ label: 'A', description: '' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-decide-note' },
+      });
+    });
+
+    await agentService.respond('step-1', 'question-decide-note', {
+      answers: { choice: 'Decide for me, Notes: prefer the cheap path' },
+      wasFreeform: true,
+      wasFreeformByQuestion: { choice: true },
+      memoryDetails: [
+        {
+          questionKey: 'choice',
+          selectedLabels: [],
+          customAnswer: 'Decide for me',
+          notes: 'prefer the cheap path',
+        },
+      ],
+    });
+
+    // The deferral is dropped, the user's actual note survives.
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledOnce();
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceId: 'question:question-decide-note:choice',
+        text: 'prefer the cheap path',
+        context: expect.objectContaining({ customAnswer: null }),
+      }),
+    );
+
+    release();
+    await startPromise;
+  });
+
+  it('rejects arbitrary custom answers for fixed-choice questions', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-fixed-custom',
+        questions: [
+          {
+            id: 'choice',
+            question: 'Which option?',
+            header: 'Choice',
+            multiSelect: false,
+            allowFreeform: false,
+            options: [{ label: 'A', description: '' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-fixed-custom' },
+      });
+    });
+
+    await expect(
+      agentService.respond('step-1', 'question-fixed-custom', {
+        answers: { choice: 'Fabricated custom' },
+        memoryDetails: [
+          {
+            questionKey: 'choice',
+            selectedLabels: [],
+            customAnswer: 'Fabricated custom',
+            notes: null,
+          },
+        ],
+      }),
+    ).rejects.toThrow('Invalid question response');
+    expect(providerCalls.questions).toEqual([]);
+    expect(captureAgentMemoryEventSafeMock).not.toHaveBeenCalled();
 
     release();
     await startPromise;
@@ -3190,8 +4574,18 @@ describe('agentService provider runtime', () => {
     await expect(
       agentService.respond('step-1', 'question-1', {
         answers: { 'Which option?': 'A' },
+        memoryDetails: [
+          {
+            questionKey: 'Which option?',
+            selectedLabels: ['A'],
+            customAnswer: null,
+            notes: null,
+          },
+        ],
       }),
     ).rejects.toThrow('question failed');
+
+    expect(captureAgentMemoryEventSafeMock).not.toHaveBeenCalled();
 
     expect(agentService.getPendingRequest('step-1')).toMatchObject({
       type: 'question',
@@ -3201,6 +4595,14 @@ describe('agentService provider runtime', () => {
     providerState.questionResponseError = null;
     await agentService.respond('step-1', 'question-1', {
       answers: { 'Which option?': 'A' },
+      memoryDetails: [
+        {
+          questionKey: 'Which option?',
+          selectedLabels: ['A'],
+          customAnswer: null,
+          notes: null,
+        },
+      ],
     });
 
     expect(providerCalls.questions).toEqual([
@@ -3209,14 +4611,99 @@ describe('agentService provider runtime', () => {
         requestId: 'question-1',
         answer: { 'Which option?': 'A' },
         metadata: {
+          questionKeys: ['Which option?'],
           wasFreeform: undefined,
           wasFreeformByQuestion: undefined,
         },
       },
     ]);
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledTimes(1);
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceId: 'question:question-1:Which option?',
+      }),
+    );
     expect(agentService.getPendingRequest('step-1')).toBeNull();
 
     release();
+    await startPromise;
+  });
+
+  it('captures structured question answers after the MCP broker accepts them', async () => {
+    const idle = createIdleHandle();
+    providerState.runStartImplementation = async () => idle.handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    const runInput = providerCalls.runStarts[0] as {
+      config: {
+        mcpServers: Record<
+          string,
+          { env: Record<string, string> }
+        >;
+      };
+    };
+    const env = runInput.config.mcpServers['jean-claude-mcp'].env;
+    const config = {
+      serverUrl: env.JC_MCP_BRIDGE_URL,
+      token: env.JC_MCP_AUTH_TOKEN,
+      registrationId: env.JC_MCP_REGISTRATION_ID,
+    };
+    const submission = await submitQuestion({ config, stepId: 'step-1' });
+    const { requestId } = (await submission.json()) as { requestId: string };
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId },
+      });
+    });
+
+    await expect(
+      agentService.respond('step-1', requestId, {
+        answers: { approach: '' },
+        memoryDetails: [
+          {
+            questionKey: 'approach',
+            selectedLabels: [],
+            customAnswer: 'Invalid draft',
+            notes: null,
+          },
+        ],
+      }),
+    ).rejects.toThrow('Invalid question response');
+    expect(captureAgentMemoryEventSafeMock).not.toHaveBeenCalled();
+
+    await agentService.respond('step-1', requestId, {
+      answers: { approach: 'Small' },
+      memoryDetails: [
+        {
+          questionKey: 'approach',
+          selectedLabels: ['Small'],
+          customAnswer: null,
+          notes: null,
+        },
+      ],
+    });
+
+    expect(captureAgentMemoryEventSafeMock).toHaveBeenCalledWith({
+      source: 'question-answer',
+      sourceId: `question:${requestId}:approach`,
+      projectId: 'project-1',
+      taskId: 'task-1',
+      stepId: 'step-1',
+      text: 'Small',
+      context: {
+        question: 'Which approach?',
+        selectedLabels: ['Small'],
+        customAnswer: null,
+        notes: null,
+      },
+      createdAt: expect.any(String),
+    });
+
+    idle.release();
     await startPromise;
   });
 

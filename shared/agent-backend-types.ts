@@ -11,7 +11,7 @@ import type {
   ResolvedPermissionRule,
 } from './permission-types';
 import type { NormalizationEvent } from './normalized-message-v2';
-import type { QuestionResponse } from './agent-types';
+import type { QuestionResponseMetadata } from './agent-types';
 
 
 
@@ -149,7 +149,7 @@ export interface AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
-    metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
+    metadata: QuestionResponseMetadata,
   ): Promise<void>;
   setMode(sessionId: string, mode: InteractionMode): Promise<void>;
   getSessionAllowedTools?(sessionId: string): string[];

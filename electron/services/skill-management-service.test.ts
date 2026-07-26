@@ -362,6 +362,22 @@ describe('skill management project skill discovery', () => {
 });
 
 describe('skill management safety', () => {
+  it('does not discover a retained retired builtin skill', async () => {
+    const retiredName = 'user-preference-memory';
+    const retiredPath = await writeSkill({
+      projectPath: JC_BUILTIN_SKILLS_DIR,
+      relativeDir: '',
+      dirName: retiredName,
+      name: retiredName,
+    });
+
+    const skills = await getAllManagedSkillsUnified({});
+
+    expect(skills).not.toContainEqual(
+      expect.objectContaining({ skillPath: retiredPath }),
+    );
+  });
+
   it('does not treat a foreign backend symlink as enabled, overwrite it, or remove it', async () => {
     const canonicalPath = path.join(
       os.homedir(),

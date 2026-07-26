@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useStore } from 'zustand';
 
 import type { PromptImagePart, PromptPart } from '@shared/agent-backend-types';
+import type { AgentMemoryTaskReviewCapture } from '@shared/agent-memory-types';
 
 import {
   createCommentSelectors,
@@ -300,6 +301,22 @@ export function useReviewCommentsByCommitFile({
   }, [comments, commitHash]);
 }
 
+export function reviewCommentToAgentMemoryCapture(
+  comment: ReviewComment,
+): AgentMemoryTaskReviewCapture {
+  const isFileComment = comment.commentKind === 'diff';
+  const lineStart = isFileComment ? comment.anchor.lineStart : null;
+  return {
+    commentId: comment.id,
+    body: comment.body,
+    selectedText: comment.anchor.selectedText ?? null,
+    filePath: isFileComment ? comment.anchor.filePath : null,
+    lineStart,
+    lineEnd: lineStart === null ? null : (comment.anchor.lineEnd ?? lineStart),
+    presets: comment.presets,
+  };
+}
+
 /** Synthesize a single comment into XML lines based on its kind. */
 function synthesizeComment(
   c: ReviewComment,
@@ -310,7 +327,9 @@ function synthesizeComment(
 
   if (c.commentKind === 'message') {
     // Message comment — quote-based anchor
-    textLines.push(`<comment index="${index}" type="message">`);
+    textLines.push(
+      `<comment index="${index}" comment_id="${escapePromptTagContent(c.id)}" type="message">`,
+    );
     if (c.anchor.selectedText?.trim()) {
       textLines.push('  <quoted_text>');
       textLines.push(escapePromptTagContent(c.anchor.selectedText));
@@ -326,7 +345,7 @@ function synthesizeComment(
       : '';
     const lineRangeAttr = lineLabel ? ` line_range="${lineLabel}"` : '';
     textLines.push(
-      `<comment index="${index}" type="file" file_path="${escapePromptTagContent(c.anchor.filePath)}"${lineRangeAttr}${commitAttr}>`,
+      `<comment index="${index}" comment_id="${escapePromptTagContent(c.id)}" type="file" file_path="${escapePromptTagContent(c.anchor.filePath)}"${lineRangeAttr}${commitAttr}>`,
     );
     if (c.presets.length > 0) {
       textLines.push(

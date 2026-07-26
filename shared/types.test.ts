@@ -68,6 +68,40 @@ describe('SETTINGS_DEFINITIONS.aiSkillSlots', () => {
   });
 });
 
+describe('SETTINGS_DEFINITIONS.agentMemory', () => {
+  it('defaults Agent Memory to disabled with extraction defaults', () => {
+    expect(SETTINGS_DEFINITIONS.agentMemory.defaultValue).toEqual({
+      enabled: false,
+      extractionIntervalMinutes: 24 * 60,
+      extractionBackend: 'claude-code',
+      extractionModel: 'haiku',
+      extractionThinkingEffort: 'default',
+    });
+  });
+
+  it('validates Agent Memory without the retired consolidation flag', () => {
+    expect(
+      SETTINGS_DEFINITIONS.agentMemory.validate({
+        enabled: true,
+        extractionIntervalMinutes: 30,
+        extractionBackend: 'opencode',
+        extractionModel: 'openai/gpt-5',
+        extractionThinkingEffort: 'high',
+      }),
+    ).toBe(true);
+    expect(
+      SETTINGS_DEFINITIONS.agentMemory.validate({
+        enabled: true,
+        consolidationEnabled: true,
+        extractionIntervalMinutes: 30,
+        extractionBackend: 'opencode',
+        extractionModel: 'openai/gpt-5',
+        extractionThinkingEffort: 'high',
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('isPrReviewChatStepMeta', () => {
   it('recognizes valid anchored metadata', () => {
     expect(

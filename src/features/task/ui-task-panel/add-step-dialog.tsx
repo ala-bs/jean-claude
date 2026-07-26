@@ -50,20 +50,22 @@ import {
   type SnippetVariableContext,
 } from '@/lib/resolve-snippet-template';
 import {
+  reviewCommentToAgentMemoryCapture,
+  synthesizeReviewPrompt,
+  useReviewComments,
+} from '@/stores/review-comments';
+import {
   reviewCommentToPill,
   ReviewPillsQueue,
 } from '@/features/common/ui-review-pills';
 import { Select, type SelectOption } from '@/common/ui/select';
-import {
-  synthesizeReviewPrompt,
-  useReviewComments,
-} from '@/stores/review-comments';
 import {
   useBackendDefaultModelsSetting,
   useBackendsSetting,
   usePromptSnippetsSetting,
 } from '@/hooks/use-settings';
 import { useProject, useProjectFeatureMap } from '@/hooks/use-projects';
+import type { AgentMemoryTaskReviewCapture } from '@shared/agent-memory-types';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
 import { buildWorkItemSnippetContext } from '@/features/new-task/ui-prompt-composer';
@@ -390,6 +392,8 @@ export function AddStepDialog({
     images: PromptImagePart[];
     start: boolean;
     includedReviewCommentIds: string[];
+    agentMemoryUserText: string;
+    agentMemoryReviews: AgentMemoryTaskReviewCapture[];
     reviewers?: ReviewerConfig[];
   }) => boolean | Promise<boolean>;
   defaultBackend?: AgentBackendType;
@@ -753,6 +757,10 @@ export function AddStepDialog({
       start: autoStart,
       includedReviewCommentIds: shouldIncludeReviewComments
         ? openReviewComments.map((comment) => comment.id)
+        : [],
+      agentMemoryUserText: promptTemplate.trim(),
+      agentMemoryReviews: shouldIncludeReviewComments
+        ? openReviewComments.map(reviewCommentToAgentMemoryCapture)
         : [],
       reviewers:
         submitPresetType === 'review-changes'

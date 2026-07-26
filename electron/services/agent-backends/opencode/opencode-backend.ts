@@ -37,6 +37,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
+import type { QuestionResponseMetadata } from '@shared/agent-types';
 import type { TokenUsage } from '@shared/normalized-message-v2';
 
 
@@ -700,36 +701,41 @@ export class OpenCodeBackend implements AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
+    metadata: QuestionResponseMetadata,
   ): Promise<void> {
     const state = this.sessions.get(sessionId);
     if (!state) {
-      dbg.agent('OpenCodeBackend.respondToQuestion — no session %s', sessionId);
-      return;
+      throw new Error(`No OpenCode session: ${sessionId}`);
     }
 
     dbg.agent(
-      'OpenCodeBackend.respondToQuestion sending reply for %s with answer %O',
+      'OpenCodeBackend.respondToQuestion sending reply session=%s request=%s',
       sessionId,
-      answer,
+      requestId,
     );
 
     // Map Record<string, string> answers to Array<QuestionAnswer>
     // QuestionAnswer = Array<string> — each answer is the selected option(s)
-    const answers = Object.values(answer).map(toOpenCodeQuestionAnswer);
+    if (!metadata) {
+      throw new Error('OpenCode question response is missing server question order');
+    }
+    // questionKeys is the full, ordered question list. Skipped optional
+    // questions have no answer and must still occupy their positional slot.
+    const answers = metadata.questionKeys.map((questionKey) => {
+      const value = answer[questionKey];
+      return value === undefined ? [] : toOpenCodeQuestionAnswer(value);
+    });
 
-    state.serverHandle.client.question
-      .reply({
-        requestID: requestId,
-        directory: state.cwd,
-        answers,
-      })
-      .catch((error) => {
-        dbg.agent(
-          'OpenCodeBackend.respondToQuestion reply error for %s: %O',
-          sessionId,
-          error,
-        );
-      });
+    const result = await state.serverHandle.client.question.reply({
+      requestID: requestId,
+      directory: state.cwd,
+      answers,
+    });
+    if (result.error) {
+      throw new Error(
+        `OpenCode question reply failed: ${this.formatRequestError(result.error)}`,
+      );
+    }
     if (
       state.pendingQuestions.delete(requestId) &&
       !this.hasPendingUserInput(state)

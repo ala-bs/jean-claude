@@ -1,37 +1,39 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useMemo } from 'react';
 
-
-
-import type {
-  AiGenerationSetting,
-  AiSkillSlotsSetting,
-  AppearanceSetting,
-  AppSettings,
-  BackendDefaultModelsSetting,
-  BackendModelPresetsSetting,
-  BackendsSetting,
-  CalendarNotificationsSetting,
-  EditorAutomationSetting,
-  EditorSetting,
-  ModelQuickSwitcherSetting,
-  PreferenceMemorySetting,
-  ProjectPromptPrefaceSetting,
-  PromptPrefaceSetting,
-  PromptSnippetsSetting,
-  PrReviewAgentSetting,
-  RateLimitSwapSetting,
-  RawMessageCleanupSetting,
-  SummaryModelsSetting,
-  TaskEventNotificationsSetting,
-  ThinkingSettingsSetting,
-  UsageDisplaySetting,
+import {
+  type AgentMemorySetting,
+  type AiGenerationSetting,
+  type AiSkillSlotsSetting,
+  type AppearanceSetting,
+  type AppSettings,
+  type BackendDefaultModelsSetting,
+  type BackendModelPresetsSetting,
+  type BackendsSetting,
+  type CalendarNotificationsSetting,
+  type EditorAutomationSetting,
+  type EditorSetting,
+  type ModelQuickSwitcherSetting,
+  PRESET_EDITORS,
+  type ProjectPromptPrefaceSetting,
+  type PromptPrefaceSetting,
+  type PromptSnippetsSetting,
+  type PrReviewAgentSetting,
+  type RateLimitSwapSetting,
+  type RawMessageCleanupSetting,
+  type SummaryModelsSetting,
+  type TaskEventNotificationsSetting,
+  type ThinkingSettingsSetting,
+  type UsageDisplaySetting,
 } from '@shared/types';
 import { BUILTIN_SNIPPET_IDS, BUILTIN_SNIPPETS } from '@/lib/builtin-snippets';
 import { api } from '@/lib/api';
-import { PRESET_EDITORS } from '@shared/types';
-
-
+import { useToastStore } from '@/stores/toasts';
 
 export function useSetting<K extends keyof AppSettings>(key: K) {
   return useQuery({
@@ -85,20 +87,36 @@ export function useRawMessageCleanupSetting() {
   return useSetting('rawMessageCleanup');
 }
 
-export function usePreferenceMemorySetting() {
-  return useSetting('preferenceMemory');
+export function useAgentMemorySetting() {
+  return useSetting('agentMemory');
 }
 
-export function useUpdatePreferenceMemorySetting() {
+export async function invalidateAgentMemorySettingQueries(
+  queryClient: Pick<QueryClient, 'invalidateQueries'>,
+): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['settings', 'agentMemory'] }),
+    queryClient.invalidateQueries({ queryKey: ['agent-memory-dashboard'] }),
+  ]);
+}
+
+export function showAgentMemorySettingUpdateError(
+  addToast: (toast: { message: string; type: 'error' | 'success' }) => void,
+): void {
+  addToast({
+    type: 'error',
+    message: 'Failed to update Agent Memory setting',
+  });
+}
+
+export function useUpdateAgentMemorySetting() {
   const queryClient = useQueryClient();
+  const addToast = useToastStore((state) => state.addToast);
   return useMutation({
-    mutationFn: (value: PreferenceMemorySetting) =>
-      api.settings.set('preferenceMemory', value),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['settings', 'preferenceMemory'],
-      });
-    },
+    mutationFn: (value: AgentMemorySetting) =>
+      api.settings.set('agentMemory', value),
+    onSuccess: () => invalidateAgentMemorySettingQueries(queryClient),
+    onError: () => showAgentMemorySettingUpdateError(addToast),
   });
 }
 

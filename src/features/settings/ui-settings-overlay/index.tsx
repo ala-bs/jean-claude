@@ -31,12 +31,12 @@ import FocusLock from 'react-focus-lock';
 import { RemoveScroll } from 'react-remove-scroll';
 
 import {
+  AgentMemorySettings,
   AppearanceSettings,
   CalendarSettings,
   EditorSettings,
   MaintenanceSettings,
   NotificationsSettings,
-  PreferenceMemorySettings,
   PromptPrefaceSettings,
   UsageDisplaySettings,
   WorkActivitySettings,
@@ -526,7 +526,7 @@ const SETTINGS_SEARCH_ALIASES: Record<string, string> = {
   'global:general:work-activity': 'activity logging retention history',
   'global:general:calendar': 'meetings reminders macos events',
   'global:general:usage': 'rate limit status title bar tokens usage',
-  'global:general:agent-memory': 'preference memory evidence learning beta',
+  'global:general:agent-memory': 'agent memory evidence extraction learning beta',
   'global:general:maintenance': 'cleanup gitignore housekeeping cache',
   'global:coding-agents:presets': 'models defaults thinking effort agent model presets',
   'global:coding-agents:process-mode': 'opencode server managed process lifecycle',
@@ -761,7 +761,7 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
       case 'general:usage':
         return <UsageDisplaySettings />;
       case 'general:agent-memory':
-        return <PreferenceMemorySettings />;
+        return <AgentMemorySettings />;
       case 'general:maintenance':
         return <MaintenanceSettings />;
       case 'skills-agents:skills':

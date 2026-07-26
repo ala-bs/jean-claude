@@ -15,13 +15,13 @@ import {
   fetchLocalImage,
   LOCAL_IMAGE_PROTOCOL,
 } from './services/local-image-protocol-service';
+import { agentMemorySchedulerService } from './services/agent-memory-scheduler-service';
 import { agentService } from './services/agent-service';
 import { cleanupOrphanedWorkspaces } from './services/system-project-service';
 import { createReloadPreviewReadinessRegistrar } from './services/reload-preview-service';
 import { dbg } from './lib/debug';
 import { migrateDatabase } from './database';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
-import { preferenceMemoryConsolidationService } from './services/preference-memory-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { registerIpcHandlers } from './ipc/handlers';
 import { runCommandService } from './services/run-command-service';
@@ -395,7 +395,7 @@ app.whenReady().then(async () => {
   systemCalendarService.start();
   pipelineTrackingService.start();
   rawMessageCleanupService.start();
-  preferenceMemoryConsolidationService.start();
+  agentMemorySchedulerService.start();
 
   dbg.main('Registering IPC handlers...');
   registerIpcHandlers();
@@ -473,7 +473,7 @@ app.on('before-quit', (event) => {
   systemCalendarService.stop();
   pipelineTrackingService.stop();
   rawMessageCleanupService.stop();
-  preferenceMemoryConsolidationService.stop();
+  agentMemorySchedulerService.stop();
 });
 
 // Synchronous last-resort cleanup: kill all process groups when the Node.js
