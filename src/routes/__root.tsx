@@ -20,6 +20,7 @@ import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-m
 import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { OverlayHost } from '@/layout/ui-overlay-host';
+import { pruneOrphanedDiffReviewState } from '@/stores/diff-review';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
@@ -384,9 +385,16 @@ function PipelinesOverlayContainer() {
 function useCleanupNonActiveTasks() {
   useEffect(() => {
     void api.tasks.findAll().then((tasks) => {
+      // Never prune from an empty list: a transient failure would wipe every
+      // persisted per-task store (drafts, comments, review state).
+      if (tasks.length === 0) return;
+
       const activeIds = new Set(
         tasks.filter((t) => t.status !== 'completed').map((t) => t.id),
       );
+      // Reviewing usually happens *after* a task completes, so diff review
+      // state is kept for every task that still exists — not just active ones.
+      const existingIds = new Set(tasks.map((t) => t.id));
 
       // Prune review comments
       pruneOrphanedReviewComments(activeIds);
@@ -396,6 +404,9 @@ function useCleanupNonActiveTasks() {
 
       // Prune task review comment drafts
       pruneOrphanedTaskReviewDrafts(activeIds);
+
+      // Prune diff review state (reviewed files, tabs, groups)
+      pruneOrphanedDiffReviewState(existingIds);
 
       // Prune navigation task state
       // Note: clearTaskNavHistoryState also calls clearReviewCommentsForTask

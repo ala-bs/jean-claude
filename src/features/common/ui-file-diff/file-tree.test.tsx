@@ -109,4 +109,148 @@ describe('DiffFileTree sticky folders', () => {
       expect(scrollIntoView).toHaveBeenCalledTimes(1);
     });
   });
+  describe('multi-select', () => {
+    let root: Root;
+    let container: HTMLDivElement;
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    const multiFiles = [
+      { path: 'alpha/nested/one.ts', status: 'modified' as const },
+      { path: 'beta/three.ts', status: 'modified' as const },
+      { path: 'beta/two.ts', status: 'modified' as const },
+    ];
+
+    beforeEach(() => {
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+
+    afterEach(() => {
+      flushSync(() => root.unmount());
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+      container.remove();
+    });
+
+    const rowFor = (path: string) =>
+      container.querySelector<HTMLElement>(`[data-file-path="${path}"]`);
+    const checkboxIn = (row: HTMLElement | null) =>
+      row?.querySelector<HTMLElement>('[role="checkbox"]');
+    const click = (element: Element | null | undefined, init?: MouseEventInit) =>
+      flushSync(() =>
+        element?.dispatchEvent(
+          new MouseEvent('click', { bubbles: true, ...init }),
+        ),
+      );
+
+    function renderMulti(onToggleReviewed: (paths: string[], reviewed: boolean) => void) {
+      flushSync(() =>
+        root.render(
+          <DiffFileTree
+            files={multiFiles}
+            selectedPath={null}
+            onSelectFile={() => undefined}
+            reviewedPaths={new Set<string>()}
+            onToggleReviewed={onToggleReviewed}
+          />,
+        ),
+      );
+    }
+
+    it('marks every file in a shift-selected range from one checkbox click', () => {
+      const onToggleReviewed = vi.fn();
+      renderMulti(onToggleReviewed);
+
+      click(rowFor('alpha/nested/one.ts'));
+      click(rowFor('beta/two.ts'), { shiftKey: true });
+      click(checkboxIn(rowFor('beta/three.ts')));
+
+      expect(onToggleReviewed).toHaveBeenCalledWith(
+        ['alpha/nested/one.ts', 'beta/three.ts', 'beta/two.ts'],
+        true,
+      );
+    });
+
+    it('only marks the clicked file when it is outside the selection', () => {
+      const onToggleReviewed = vi.fn();
+      renderMulti(onToggleReviewed);
+
+      click(rowFor('beta/three.ts'));
+      click(rowFor('beta/two.ts'), { metaKey: true });
+      click(checkboxIn(rowFor('alpha/nested/one.ts')));
+
+      expect(onToggleReviewed).toHaveBeenCalledWith(
+        ['alpha/nested/one.ts'],
+        true,
+      );
+    });
+
+    it('clears the selection on Escape', () => {
+      const onToggleReviewed = vi.fn();
+      renderMulti(onToggleReviewed);
+
+      click(rowFor('alpha/nested/one.ts'));
+      click(rowFor('beta/two.ts'), { shiftKey: true });
+      flushSync(() =>
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })),
+      );
+      click(checkboxIn(rowFor('beta/two.ts')));
+
+      expect(onToggleReviewed).toHaveBeenCalledWith(['beta/two.ts'], true);
+    });
+    it('counts files hidden by the reviewed treatment in folder rollups', () => {
+      const onToggleReviewed = vi.fn();
+      flushSync(() =>
+        root.render(
+          <DiffFileTree
+            files={multiFiles}
+            selectedPath={null}
+            onSelectFile={() => undefined}
+            reviewedPaths={new Set(['beta/two.ts'])}
+            reviewedTreatment="hide"
+            onToggleReviewed={onToggleReviewed}
+          />,
+        ),
+      );
+
+      const betaFolder = Array.from(
+        container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'),
+      ).find((button) => button.textContent?.startsWith('beta'));
+
+      // beta holds three.ts + two.ts; two.ts is reviewed and hidden.
+      expect(betaFolder?.textContent).toContain('1/2');
+
+      click(betaFolder?.querySelector('[role="checkbox"]'));
+      expect(onToggleReviewed).toHaveBeenCalledWith(
+        ['beta/three.ts', 'beta/two.ts'],
+        true,
+      );
+    });
+
+    it('drops the selection when another file is opened elsewhere', () => {
+      const onToggleReviewed = vi.fn();
+      const render = (selectedPath: string | null) =>
+        flushSync(() =>
+          root.render(
+            <DiffFileTree
+              files={multiFiles}
+              selectedPath={selectedPath}
+              onSelectFile={() => undefined}
+              reviewedPaths={new Set<string>()}
+              onToggleReviewed={onToggleReviewed}
+            />,
+          ),
+        );
+
+      render(null);
+      click(rowFor('beta/three.ts'));
+      click(rowFor('beta/two.ts'), { shiftKey: true });
+
+      // Something else (tab strip, J/K) opens an unselected file.
+      render('alpha/nested/one.ts');
+      click(checkboxIn(rowFor('beta/two.ts')));
+
+      expect(onToggleReviewed).toHaveBeenCalledWith(['beta/two.ts'], true);
+    });
+  });
 });
