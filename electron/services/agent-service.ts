@@ -63,13 +63,16 @@ import {
   type ThinkingEffort,
 } from '@shared/types';
 import type {
+  NormalizedEntry,
+  ToolUseByName,
+} from '@shared/normalized-message-v2';
+import type {
   PermissionsChangedEvent,
   PermissionScope,
   ResolvedPermissionRule,
 } from '@shared/permission-types';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { AiUsageFeature } from '@shared/ai-usage-types';
-import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
 import {
   AgentMessageRepository,
@@ -126,6 +129,7 @@ import { pathExists } from '../lib/fs';
 import { QuestionBrokerService } from './question-broker-service';
 import { resolveGlobalRules } from './global-permissions-service';
 import { SettingsRepository } from '../database/repositories/settings';
+import { shellEditTracker } from './shell-edit-tracker';
 import { startAgentWithPrReviewLifecycle } from './pr-review-task-service';
 import { stepPermissionService } from './step-permission-service';
 import { StepService } from './step-service';
@@ -520,6 +524,8 @@ interface ActiveSession {
   agentMemoryCaptureEligible: boolean;
   previousResultFallback: string | null;
   queuedPromptIdsBySubmissionId: Map<string, string>;
+  /** Identifies this session's shell-edit tracking, see `shellEditTracker`. */
+  shellEditToken?: object;
 }
 
 function queuedPromptTombstoneKey(stepId: string, submissionId: string): string {
@@ -850,6 +856,9 @@ class AgentService {
 
   private deleteSession(stepId: string, session: ActiveSession): void {
     tombstoneAllQueuedPromptSubmissionIds(session);
+    if (session.shellEditToken) {
+      shellEditTracker.end(stepId, session.shellEditToken);
+    }
     if (this.sessions.get(stepId) === session) {
       this.sessions.delete(stepId);
     }
@@ -995,6 +1004,77 @@ class AgentService {
       dbg.agent('Failed to persist synthetic entry: %O', error);
     }
     this.emitEvent(taskId, session.stepId, { type: 'entry', entry });
+  }
+
+  /**
+   * Feeds the shell edit tracker as tool uses stream in: Bash commands that look
+   * file-mutating are watched, and files already covered by an edit/write tool
+   * use are recorded so they are not attributed to a shell command as well.
+   */
+  private trackShellEditCandidates(
+    stepId: string,
+    entry: NormalizedEntry,
+  ): void {
+    if (entry.type !== 'tool-use') return;
+    if (entry.name === 'bash') {
+      const { input } = entry as ToolUseByName<'bash'>;
+      shellEditTracker.watchBashCommand({
+        stepId,
+        toolId: entry.toolId,
+        command: input.command,
+      });
+      return;
+    }
+    if (entry.name === 'edit' || entry.name === 'write') {
+      const { input } = entry as ToolUseByName<'edit' | 'write'>;
+      const filePaths = input.files?.map((file) => file.filePath) ?? [
+        input.filePath,
+      ];
+      for (const filePath of filePaths) {
+        if (filePath) shellEditTracker.noteToolEditedFile({ stepId, filePath });
+      }
+    }
+  }
+
+  /**
+   * After a watched Bash tool call completes, emits a synthetic `edit` entry
+   * describing the files the command changed, so the prompt-group diff summary
+   * accounts for shell edits.
+   */
+  private async emitShellEditEntry(
+    stepId: string,
+    session: ActiveSession,
+    toolId: string,
+  ): Promise<void> {
+    let files;
+    try {
+      files = await shellEditTracker.captureBashResult({ stepId, toolId });
+    } catch (error) {
+      dbg.agent('Failed to capture shell edits: %O', error);
+      return;
+    }
+    if (!files?.length) return;
+    await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+      id: nanoid(),
+      date: new Date().toISOString(),
+      isSynthetic: true,
+      type: 'tool-use',
+      toolId: `shell-edit-${toolId}`,
+      parentToolId: toolId,
+      name: 'edit',
+      input: {
+        filePath: files[0]!.filePath,
+        oldString: '',
+        newString: '',
+        files: files.map((file) => ({
+          filePath: file.filePath,
+          type: file.type,
+          patch: file.patch,
+          additions: file.additions,
+          deletions: file.deletions,
+        })),
+      },
+    });
   }
 
   /**
@@ -1450,6 +1530,10 @@ class AgentService {
       workingDir = step.meta.workspacePath;
     }
 
+    // Baseline snapshot so shell commands that edit files (sed -i, scripts,
+    // heredoc redirects) still show up in the prompt-group diff summary.
+    session.shellEditToken = shellEditTracker.begin({ stepId, workingDir });
+
     dbg.agentSession(
       'runBackend for step %s (task %s): backend=%s, cwd=%s, resuming=%s',
       stepId,
@@ -1828,6 +1912,7 @@ class AgentService {
         } catch (error) {
           dbg.agent('Failed to persist entry: %O', error);
         }
+        this.trackShellEditCandidates(stepId, event.entry);
         this.emitEvent(taskId, stepId, { type: 'entry', entry: event.entry });
         break;
       }
@@ -1845,6 +1930,15 @@ class AgentService {
           type: 'entry-update',
           entry: event.entry,
         });
+        // Most backends report tool completion by re-emitting the tool-use
+        // entry with its result attached, not as a separate `tool-result`.
+        if (
+          event.entry.type === 'tool-use' &&
+          event.entry.name === 'bash' &&
+          (event.entry as ToolUseByName<'bash'>).result !== undefined
+        ) {
+          await this.emitShellEditEntry(stepId, session, event.entry.toolId);
+        }
         break;
       }
 
@@ -1867,6 +1961,7 @@ class AgentService {
           isError: event.isError,
           durationMs: event.durationMs,
         });
+        await this.emitShellEditEntry(stepId, session, event.toolId);
         break;
       }
 
