@@ -27,6 +27,48 @@ import type {
   GlobalPromptResponse,
 } from '@shared/global-prompt-types';
 import type {
+  MobileColorScheme,
+  MobilePlatform,
+  MobilePreviewAndroidAppRestartParams,
+  MobilePreviewAndroidAppStatusParams,
+  MobilePreviewAndroidAppTrustParams,
+  MobilePreviewAndroidCreateDeviceParams,
+  MobilePreviewAndroidInstallSystemImageParams,
+  MobilePreviewAttachSessionParams,
+  MobilePreviewDetachSessionParams,
+  MobilePreviewExpoLaunchParams,
+  MobilePreviewForwardPortParams,
+  MobilePreviewFrameEvent,
+  MobilePreviewInputEvent,
+  MobilePreviewIosAppRequestParams,
+  MobilePreviewIosAppStatusCancelParams,
+  MobilePreviewIosAppStatusRequestParams,
+  MobilePreviewIosCreateDeviceParams,
+  MobilePreviewIosRenameDeviceParams,
+  MobilePreviewListSessionsParams,
+  MobilePreviewNativeLogEvent,
+  MobilePreviewNativeLogSessionEvent,
+  MobilePreviewNativeLogStartParams,
+  MobilePreviewNetworkProxyCertificateParams,
+  MobilePreviewNetworkProxyEvent,
+  MobilePreviewNetworkProxySessionEvent,
+  MobilePreviewNetworkProxyStartParams,
+  MobilePreviewOpenDeeplinkParams,
+  MobilePreviewPacketCaptureEvent,
+  MobilePreviewPacketCaptureSessionEvent,
+  MobilePreviewPacketCaptureStartParams,
+  MobilePreviewSessionEvent,
+  MobilePreviewSetTextSizeParams,
+  MobilePreviewStartParams,
+  MobileRotationDirection,
+  ReactNativeDevToolsEmbeddedBoundsParams,
+  ReactNativeDevToolsEmbeddedCloseParams,
+  ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedVisibilityParams,
+  ReactNativeDevToolsOpenParams,
+  ReactNativeDevToolsResolveParams,
+} from '@shared/mobile-simulator-types';
+import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
@@ -38,8 +80,7 @@ import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { DebugLogEntry } from '@shared/debug-log-types';
-
-
+import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
 
@@ -70,6 +111,8 @@ contextBridge.exposeInMainWorld('api', {
     create: (data: unknown) => ipcRenderer.invoke('projects:create', data),
     update: (id: string, data: unknown) =>
       ipcRenderer.invoke('projects:update', id, data),
+    detectMobilePreview: (projectId: string) =>
+      ipcRenderer.invoke('projects:detectMobilePreview', projectId),
     detectAzureRemote: (projectPath: string) =>
       ipcRenderer.invoke('projects:detectAzureRemote', projectPath),
     uploadLogo: (projectId: string, sourcePath: string) =>
@@ -965,6 +1008,206 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener(AGENT_CHANNELS.EVENT, handler);
     },
   },
+  mobilePreview: {
+    listDevices: (platform: MobilePlatform) =>
+      ipcRenderer.invoke('mobilePreview:listDevices', platform),
+    listSessions: (params: MobilePreviewListSessionsParams) =>
+      ipcRenderer.invoke('mobilePreview:listSessions', params),
+    getAndroidToolStatus: () =>
+      ipcRenderer.invoke('mobilePreview:getAndroidToolStatus'),
+    listAndroidDeviceProfiles: () =>
+      ipcRenderer.invoke('mobilePreview:listAndroidDeviceProfiles'),
+    listAndroidSystemImages: () =>
+      ipcRenderer.invoke('mobilePreview:listAndroidSystemImages'),
+    createAndroidDevice: (params: MobilePreviewAndroidCreateDeviceParams) =>
+      ipcRenderer.invoke('mobilePreview:createAndroidDevice', params),
+    deleteAndroidDevice: (name: string) =>
+      ipcRenderer.invoke('mobilePreview:deleteAndroidDevice', name),
+    installAndroidSystemImage: (
+      params: MobilePreviewAndroidInstallSystemImageParams,
+    ) => ipcRenderer.invoke('mobilePreview:installAndroidSystemImage', params),
+    getIosToolStatus: () =>
+      ipcRenderer.invoke('mobilePreview:getIosToolStatus'),
+    listIosRuntimes: () =>
+      ipcRenderer.invoke('mobilePreview:listIosRuntimes'),
+    listIosDeviceTypes: () =>
+      ipcRenderer.invoke('mobilePreview:listIosDeviceTypes'),
+    createIosDevice: (params: MobilePreviewIosCreateDeviceParams) =>
+      ipcRenderer.invoke('mobilePreview:createIosDevice', params),
+    deleteIosDevice: (deviceId: string) =>
+      ipcRenderer.invoke('mobilePreview:deleteIosDevice', deviceId),
+    eraseIosDevice: (deviceId: string) =>
+      ipcRenderer.invoke('mobilePreview:eraseIosDevice', deviceId),
+    renameIosDevice: (params: MobilePreviewIosRenameDeviceParams) =>
+      ipcRenderer.invoke('mobilePreview:renameIosDevice', params),
+    getIosAppStatus: (params: MobilePreviewIosAppStatusRequestParams) =>
+      ipcRenderer.invoke('mobilePreview:getIosAppStatus', params),
+    cancelIosAppStatus: (params: MobilePreviewIosAppStatusCancelParams) =>
+      ipcRenderer.invoke('mobilePreview:cancelIosAppStatus', params),
+    restartIosApp: (params: MobilePreviewIosAppRequestParams) =>
+      ipcRenderer.invoke('mobilePreview:restartIosApp', params),
+    launchExpo: (params: MobilePreviewExpoLaunchParams) =>
+      ipcRenderer.invoke('mobilePreview:launchExpo', params),
+    cancelExpoLaunch: (requestId: string) =>
+      ipcRenderer.invoke('mobilePreview:cancelExpoLaunch', requestId),
+    start: (params: MobilePreviewStartParams) =>
+      ipcRenderer.invoke('mobilePreview:start', params),
+    attachSession: (params: MobilePreviewAttachSessionParams) =>
+      ipcRenderer.invoke('mobilePreview:attachSession', params),
+    detachSession: (params: MobilePreviewDetachSessionParams) =>
+      ipcRenderer.invoke('mobilePreview:detachSession', params),
+    stop: (sessionId: string) =>
+      ipcRenderer.invoke('mobilePreview:stop', sessionId),
+    sendInput: (sessionId: string, event: MobilePreviewInputEvent) =>
+      ipcRenderer.invoke('mobilePreview:sendInput', sessionId, event),
+    openDeeplink: (params: MobilePreviewOpenDeeplinkParams) =>
+      ipcRenderer.invoke('mobilePreview:openDeeplink', params),
+    forwardPort: (params: MobilePreviewForwardPortParams) =>
+      ipcRenderer.invoke('mobilePreview:forwardPort', params),
+    setTextSize: (params: MobilePreviewSetTextSizeParams) =>
+      ipcRenderer.invoke('mobilePreview:setTextSize', params),
+    setColorScheme: (sessionId: string, scheme: MobileColorScheme) =>
+      ipcRenderer.invoke('mobilePreview:setColorScheme', sessionId, scheme),
+    rotate: (sessionId: string, direction: MobileRotationDirection) =>
+      ipcRenderer.invoke('mobilePreview:rotate', sessionId, direction),
+    startNativeLogs: (params: MobilePreviewNativeLogStartParams) =>
+      ipcRenderer.invoke('mobilePreview:startNativeLogs', params),
+    stopNativeLogs: (sessionId: string) =>
+      ipcRenderer.invoke('mobilePreview:stopNativeLogs', sessionId),
+    startNetworkProxy: (params: MobilePreviewNetworkProxyStartParams) =>
+      ipcRenderer.invoke('mobilePreview:startNetworkProxy', params),
+    stopNetworkProxy: (sessionId: string) =>
+      ipcRenderer.invoke('mobilePreview:stopNetworkProxy', sessionId),
+    startPacketCapture: (params: MobilePreviewPacketCaptureStartParams) =>
+      ipcRenderer.invoke('mobilePreview:startPacketCapture', params),
+    stopPacketCapture: (sessionId: string) =>
+      ipcRenderer.invoke('mobilePreview:stopPacketCapture', sessionId),
+    resolveReactNativeDevTools: (params: ReactNativeDevToolsResolveParams) =>
+      ipcRenderer.invoke('mobilePreview:resolveReactNativeDevTools', params),
+    openReactNativeDevTools: (params: ReactNativeDevToolsOpenParams) =>
+      ipcRenderer.invoke('mobilePreview:openReactNativeDevTools', params),
+    openEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedOpenParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:openEmbeddedReactNativeDevTools',
+        params,
+      ),
+    setEmbeddedReactNativeDevToolsBounds: (
+      params: ReactNativeDevToolsEmbeddedBoundsParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:setEmbeddedReactNativeDevToolsBounds',
+        params,
+      ),
+    setEmbeddedReactNativeDevToolsVisibility: (
+      params: ReactNativeDevToolsEmbeddedVisibilityParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:setEmbeddedReactNativeDevToolsVisibility',
+        params,
+      ),
+    closeEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedCloseParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:closeEmbeddedReactNativeDevTools',
+        params,
+      ),
+    installNetworkProxyCertificate: (
+      params: MobilePreviewNetworkProxyCertificateParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:installNetworkProxyCertificate',
+        params,
+      ),
+    prepareAndroidAppTrust: (params: MobilePreviewAndroidAppTrustParams) =>
+      ipcRenderer.invoke('mobilePreview:prepareAndroidAppTrust', params),
+    getAndroidAppStatus: (params: MobilePreviewAndroidAppStatusParams) =>
+      ipcRenderer.invoke('mobilePreview:getAndroidAppStatus', params),
+    restartAndroidApp: (params: MobilePreviewAndroidAppRestartParams) =>
+      ipcRenderer.invoke('mobilePreview:restartAndroidApp', params),
+    onNativeLogSession: (
+      callback: (event: MobilePreviewNativeLogSessionEvent) => void,
+    ) => {
+      const handler = (_: unknown, event: MobilePreviewNativeLogSessionEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:nativeLogSession', handler);
+      return () =>
+        ipcRenderer.removeListener('mobilePreview:nativeLogSession', handler);
+    },
+    onNativeLog: (callback: (event: MobilePreviewNativeLogEvent) => void) => {
+      const handler = (_: unknown, event: MobilePreviewNativeLogEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:nativeLog', handler);
+      return () =>
+        ipcRenderer.removeListener('mobilePreview:nativeLog', handler);
+    },
+    onNetworkProxySession: (
+      callback: (event: MobilePreviewNetworkProxySessionEvent) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        event: MobilePreviewNetworkProxySessionEvent,
+      ) => callback(event);
+      ipcRenderer.on('mobilePreview:networkProxySession', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'mobilePreview:networkProxySession',
+          handler,
+        );
+    },
+    onNetworkProxyRequest: (
+      callback: (event: MobilePreviewNetworkProxyEvent) => void,
+    ) => {
+      const handler = (_: unknown, event: MobilePreviewNetworkProxyEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:networkProxyRequest', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'mobilePreview:networkProxyRequest',
+          handler,
+        );
+    },
+    onPacketCaptureSession: (
+      callback: (event: MobilePreviewPacketCaptureSessionEvent) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        event: MobilePreviewPacketCaptureSessionEvent,
+      ) => callback(event);
+      ipcRenderer.on('mobilePreview:packetCaptureSession', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'mobilePreview:packetCaptureSession',
+          handler,
+        );
+    },
+    onPacketCaptureRequest: (
+      callback: (event: MobilePreviewPacketCaptureEvent) => void,
+    ) => {
+      const handler = (_: unknown, event: MobilePreviewPacketCaptureEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:packetCaptureRequest', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'mobilePreview:packetCaptureRequest',
+          handler,
+        );
+    },
+    onFrame: (callback: (event: MobilePreviewFrameEvent) => void) => {
+      const handler = (_: unknown, event: MobilePreviewFrameEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:frame', handler);
+      return () => ipcRenderer.removeListener('mobilePreview:frame', handler);
+    },
+    onSession: (callback: (event: MobilePreviewSessionEvent) => void) => {
+      const handler = (_: unknown, event: MobilePreviewSessionEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:session', handler);
+      return () => ipcRenderer.removeListener('mobilePreview:session', handler);
+    },
+  },
   debug: {
     getTableNames: () => ipcRenderer.invoke('debug:getTableNames'),
     getDatabaseSize: () => ipcRenderer.invoke('debug:getDatabaseSize'),
@@ -1071,6 +1314,8 @@ contextBridge.exposeInMainWorld('api', {
         taskId: params.taskId,
         runCommandId: params.runCommandId,
       }),
+    startAdHocCommand: (params: StartAdHocRunCommandParams) =>
+      ipcRenderer.invoke('project:commands:run:startAdHocCommand', params),
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];

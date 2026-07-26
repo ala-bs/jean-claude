@@ -21,6 +21,7 @@ import type {
   RunCommandEnvVar,
   RunCommandLogStream,
   RunStatus,
+  StartAdHocRunCommandParams,
   WorkspacePackage,
 } from '@shared/run-command-types';
 import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
@@ -254,6 +255,7 @@ interface TrackedProcess {
   commandId: string;
   name: string | null;
   command: string;
+  ports: number[];
   pty: nodePty.IPty;
   pid: number;
   status: 'running' | 'stopped' | 'errored';
@@ -743,6 +745,7 @@ export class RunCommandService {
       commandId: command.id,
       name: command.name,
       command: commandValue,
+      ports: command.ports,
       pty: ptyProcess,
       pid: ptyProcess.pid,
       status: 'running',
@@ -795,6 +798,7 @@ export class RunCommandService {
           id: t.commandId,
           name: t.name,
           command: t.command,
+          ports: t.ports,
           status: t.status,
           pid: t.pid,
         }))
@@ -1143,6 +1147,86 @@ export class RunCommandService {
     return this.getRunStatus(taskId);
   }
 
+  async startAdHocCommand({
+    taskId,
+    projectId,
+    workingDir,
+    runCommandId,
+    name,
+    command,
+    ports,
+    availablePort,
+    envVars = [],
+  }: StartAdHocRunCommandParams): Promise<RunStatus | PortsInUseErrorData> {
+    const adHocCommand: ProjectCommand = {
+      id: runCommandId,
+      projectId,
+      name,
+      command,
+      ports,
+      portConflictStrategy: availablePort ? 'use-available-port' : 'prompt',
+      portOverrideProvider: availablePort?.provider ?? 'env',
+      portOverrideEnvVar:
+        availablePort?.provider === 'env' ? (availablePort.envVar ?? null) : null,
+      portOverrideArgs:
+        availablePort?.provider === 'args' ? (availablePort.args ?? null) : null,
+      envVars,
+      confirmBeforeRun: false,
+      confirmMessage: null,
+      sortOrder: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    return this.trackStart(() =>
+      this.withCommandLock({
+        taskId,
+        runCommandId,
+        operation: async () => {
+          const didStop = await this.stopCommandWithoutLock({
+            taskId,
+            runCommandId,
+          });
+          if (!didStop) return this.getRunStatus(taskId);
+
+          const portsInUse = await this.getPortsInUse([adHocCommand]);
+          const blockingPortsInUse = this.getBlockingPortsInUse(portsInUse, [
+            adHocCommand,
+          ]);
+          if (blockingPortsInUse.length > 0) {
+            return {
+              type: 'PortsInUseError',
+              message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
+              portsInUse: blockingPortsInUse,
+            };
+          }
+
+          const portOverrides = await this.getPortOverrides({
+            commands: [adHocCommand],
+            portsInUse,
+          });
+          const portOverride = portOverrides.get(adHocCommand.id);
+          const context = await this.getRunCommandContext({
+            taskId,
+            projectId,
+            workingDir,
+          });
+
+          await this.spawnTrackedCommand({
+            taskId,
+            workingDir,
+            command: adHocCommand,
+            context,
+            envOverrides: portOverride?.envOverrides,
+            commandOverride: portOverride?.command,
+          });
+
+          this.notifyStatusChange(taskId);
+          return this.getRunStatus(taskId);
+        },
+      }),
+    );
+  }
+
   async stopCommand({
     taskId,
     runCommandId,
@@ -1423,6 +1507,11 @@ export class RunCommandService {
       }
     }
     return stopped;
+  }
+
+  resetTaskAfterReactivation(taskId: string): void {
+    if (!this.runningProcesses.delete(taskId)) return;
+    this.notifyStatusChange(taskId);
   }
 
   async getPackageScripts(projectPath: string): Promise<PackageScriptsResult> {

@@ -1,3 +1,5 @@
+import { type Kysely, sql } from 'kysely';
+
 import {
   PrWorkspaceState,
   Task,
@@ -5,10 +7,13 @@ import {
   TaskTodoItem,
   TaskType,
 } from '@shared/types';
-import { sql } from 'kysely';
 
-
-import { NewTaskRow, TaskRow, UpdateTaskRow } from '../schema';
+import {
+  type Database as DatabaseSchema,
+  NewTaskRow,
+  TaskRow,
+  UpdateTaskRow,
+} from '../schema';
 import { db } from '../index';
 import { dbg } from '../../lib/debug';
 import { transitionActivePrWorkspacesToPending } from './pr-workspace-transitions';
@@ -101,20 +106,21 @@ function toTask<T extends TaskRow>(
     cleanupBranchName: _cleanupBranchName,
     ...rest
   } = row;
+  const normalizedPrWorkspaceState = prWorkspaceState ?? null;
   if (
-    prWorkspaceState !== null &&
-    prWorkspaceState !== 'active' &&
-    prWorkspaceState !== 'cleanup-pending' &&
-    prWorkspaceState !== 'kept'
+    normalizedPrWorkspaceState !== null &&
+    normalizedPrWorkspaceState !== 'active' &&
+    normalizedPrWorkspaceState !== 'cleanup-pending' &&
+    normalizedPrWorkspaceState !== 'kept'
   ) {
-    throw new Error(`Invalid PR workspace state: ${prWorkspaceState}`);
+    throw new Error(`Invalid PR workspace state: ${normalizedPrWorkspaceState}`);
   }
   return {
     ...rest,
     type: (type ?? 'agent') as TaskType,
     userCompleted: Boolean(userCompleted),
     hasUnread: Boolean(hasUnread),
-    prWorkspaceState,
+    prWorkspaceState: normalizedPrWorkspaceState,
     workItemIds: workItemIds ? JSON.parse(workItemIds) : null,
     workItemUrls: workItemUrls ? JSON.parse(workItemUrls) : null,
     todoItems: todoItems ? (JSON.parse(todoItems) as TaskTodoItem[]) : [],
@@ -203,6 +209,64 @@ function toDbUpdateValues(data: UpdateTaskInput): Partial<UpdateTaskRow> {
     }),
   };
 }
+
+export function createTaskCompletionOperations(
+  database: Pick<Kysely<DatabaseSchema>, 'transaction'>,
+) {
+  const markUserCompleted = async (
+    id: string,
+    completeExecution: boolean,
+  ): Promise<Task> => {
+    return database.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom('tasks')
+        .select(['userCompleted', 'projectId'])
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+
+      if (current.userCompleted && !completeExecution) {
+        const row = await trx
+          .selectFrom('tasks')
+          .selectAll()
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow();
+        return toTask(row) as Task;
+      }
+
+      if (!current.userCompleted) {
+        await trx
+          .updateTable('tasks')
+          .set((eb) => ({
+            sortOrder: eb('sortOrder', '+', 1),
+          }))
+          .where('projectId', '=', current.projectId)
+          .where('userCompleted', '=', 1)
+          .execute();
+      }
+
+      const row = await trx
+        .updateTable('tasks')
+        .set({
+          userCompleted: 1,
+          ...(completeExecution && { status: 'completed' as const }),
+          ...(!current.userCompleted && { sortOrder: 0 }),
+          updatedAt: new Date().toISOString(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      return toTask(row) as Task;
+    });
+  };
+
+  return {
+    markUserCompleted: (id: string) => markUserCompleted(id, false),
+    markCompleted: (id: string) => markUserCompleted(id, true),
+  };
+}
+
+const taskCompletionOperations = createTaskCompletionOperations(db);
 
 export const TaskRepository = {
   findAll: async () => {
@@ -640,46 +704,9 @@ export const TaskRepository = {
     return toTask(row) as Task;
   },
 
-  markUserCompleted: async (id: string): Promise<Task> => {
-    return db.transaction().execute(async (trx) => {
-      const current = await trx
-        .selectFrom('tasks')
-        .select(['userCompleted', 'projectId'])
-        .where('id', '=', id)
-        .executeTakeFirstOrThrow();
+  markUserCompleted: taskCompletionOperations.markUserCompleted,
 
-      if (current.userCompleted) {
-        const row = await trx
-          .selectFrom('tasks')
-          .selectAll()
-          .where('id', '=', id)
-          .executeTakeFirstOrThrow();
-        return toTask(row) as Task;
-      }
-
-      await trx
-        .updateTable('tasks')
-        .set((eb) => ({
-          sortOrder: eb('sortOrder', '+', 1),
-        }))
-        .where('projectId', '=', current.projectId)
-        .where('userCompleted', '=', 1)
-        .execute();
-
-      const row = await trx
-        .updateTable('tasks')
-        .set({
-          userCompleted: 1,
-          sortOrder: 0,
-          updatedAt: new Date().toISOString(),
-        })
-        .where('id', '=', id)
-        .returningAll()
-        .executeTakeFirstOrThrow();
-
-      return toTask(row) as Task;
-    });
-  },
+  markCompleted: taskCompletionOperations.markCompleted,
 
   clearUserCompleted: async (id: string): Promise<Task> => {
     const row = await db

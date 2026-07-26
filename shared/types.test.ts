@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
   DEFAULT_WORK_ITEM_SUMMARY_SLOT,
   getInteractionModeOptions,
   isAiSkillSlotsSetting,
+  isMobilePreviewProjectConfig,
   isPrReviewChatStepMeta,
   SETTINGS_DEFINITIONS,
 } from './types';
 import type { AgentBackendType } from './agent-backend-types';
+import type { MobilePreviewNetworkCaptureSource } from './mobile-simulator-types';
 
 describe('getInteractionModeOptions', () => {
   it('falls back instead of returning undefined for stale backend values', () => {
@@ -37,6 +40,37 @@ describe('SETTINGS_DEFINITIONS.thinkingSettings', () => {
         },
       }),
     ).toBe(true);
+  });
+});
+
+describe('MobilePreviewNetworkCaptureSource', () => {
+  it('accepts packet-only capture entries', () => {
+    const allowedSources = [
+      'proxied',
+      'mitm',
+      'tunneled',
+      'packet-only',
+    ] satisfies MobilePreviewNetworkCaptureSource[];
+
+    expect(allowedSources).toContain('packet-only');
+  });
+});
+
+describe('MobilePreviewProjectConfig', () => {
+  it('defaults iOS bundle ID to automatic resolution', () => {
+    expect(DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG.iosBundleId).toBeNull();
+    expect(isMobilePreviewProjectConfig(DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG)).toBe(
+      true,
+    );
+  });
+
+  it('rejects invalid iOS bundle ID value types', () => {
+    expect(
+      isMobilePreviewProjectConfig({
+        ...DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
+        iosBundleId: 123,
+      }),
+    ).toBe(false);
   });
 });
 

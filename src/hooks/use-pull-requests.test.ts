@@ -52,15 +52,16 @@ describe('useSetAutoComplete', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    root.render(
-      createElement(
-        QueryClientProvider,
-        { client: new QueryClient() },
-        createElement(Consumer, { index: 0 }),
-        createElement(Consumer, { index: 1 }),
-      ),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync(() => {
+      root!.render(
+        createElement(
+          QueryClientProvider,
+          { client: new QueryClient() },
+          createElement(Consumer, { index: 0 }),
+          createElement(Consumer, { index: 1 }),
+        ),
+      );
+    });
 
     Reflect.get(results[0] as object, 'mutate')({ enabled: false });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -100,14 +101,15 @@ describe('useMarkPullRequestDraft', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    root.render(
-      createElement(
-        QueryClientProvider,
-        { client: queryClient },
-        createElement(Consumer),
-      ),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync(() => {
+      root!.render(
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(Consumer),
+        ),
+      );
+    });
 
     mutation!.mutate();
     await new Promise((resolve) => setTimeout(resolve, 0));

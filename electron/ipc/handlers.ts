@@ -62,6 +62,40 @@ import type {
   QueueBuildIpcParams,
 } from '@shared/pipeline-types';
 import type {
+  MobileColorScheme,
+  MobilePlatform,
+  MobilePreviewAndroidAppRestartParams,
+  MobilePreviewAndroidAppStatusParams,
+  MobilePreviewAndroidAppTrustParams,
+  MobilePreviewAndroidCreateDeviceParams,
+  MobilePreviewAndroidInstallSystemImageParams,
+  MobilePreviewAttachSessionParams,
+  MobilePreviewDetachSessionParams,
+  MobilePreviewExpoLaunchParams,
+  MobilePreviewForwardPortParams,
+  MobilePreviewInputEvent,
+  MobilePreviewIosAppRequestParams,
+  MobilePreviewIosAppStatusCancelParams,
+  MobilePreviewIosAppStatusRequestParams,
+  MobilePreviewIosCreateDeviceParams,
+  MobilePreviewIosRenameDeviceParams,
+  MobilePreviewListSessionsParams,
+  MobilePreviewNativeLogStartParams,
+  MobilePreviewNetworkProxyCertificateParams,
+  MobilePreviewNetworkProxyStartParams,
+  MobilePreviewOpenDeeplinkParams,
+  MobilePreviewPacketCaptureStartParams,
+  MobilePreviewSetTextSizeParams,
+  MobilePreviewStartParams,
+  MobileRotationDirection,
+  ReactNativeDevToolsEmbeddedBoundsParams,
+  ReactNativeDevToolsEmbeddedCloseParams,
+  ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedVisibilityParams,
+  ReactNativeDevToolsOpenParams,
+  ReactNativeDevToolsResolveParams,
+} from '@shared/mobile-simulator-types';
+import type {
   NewMcpServerTemplate,
   NewProjectMcpOverride,
   UpdateMcpServerTemplate,
@@ -71,6 +105,7 @@ import type {
   NewProjectCommandGroup,
   ProjectSuggestions,
   RunCommandConfigItem,
+  StartAdHocRunCommandParams,
   UpdateProjectCommand,
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
@@ -88,6 +123,7 @@ import type { UsageProviderType } from '@shared/usage-types';
 
 
 import * as backendModelsService from '../services/backend-models-service';
+import * as reactNativeDevToolsService from '../services/mobile-preview-react-native-devtools-service';
 import {
   activateMcpServer,
   deactivateMcpServer,
@@ -364,6 +400,15 @@ import {
   installFromRegistry,
   searchRegistry,
 } from '../services/skill-registry-service';
+import { detectMobilePreviewProjectConfig } from '../services/mobile-preview-project-detector';
+import { mobilePreviewNativeLogService } from '../services/mobile-preview-native-log-service';
+import { mobilePreviewNetworkProxyService } from '../services/mobile-preview-network-proxy-service';
+import { mobilePreviewPacketCaptureService } from '../services/mobile-preview-packet-capture-service';
+
+import {
+  assertProjectPathUnchanged,
+  omitProjectPath,
+} from '../services/project-update-validation';
 import {
   generateCommitMessageForTask,
   generateMergeMessageForTask,
@@ -404,6 +449,9 @@ import { generateTaskName } from '../services/name-generation-service';
 import { generateWorkItemVerificationNote } from '../services/work-item-verification-note-service';
 import { handlePromptResponse } from '../services/global-prompt-service';
 import { McpTemplateRepository } from '../database/repositories/mcp-templates';
+import { mobilePreviewExpoLaunchService } from '../services/mobile-preview-expo-launch-service';
+import { mobilePreviewIosAppService } from '../services/mobile-preview-ios-app-service';
+import { mobilePreviewService } from '../services/mobile-preview-service';
 import { NotificationRepository } from '../database/repositories/notifications';
 import { notificationService } from '../services/notification-service';
 import { orchestrateReloadedPreview } from '../services/reload-preview-service';
@@ -423,6 +471,7 @@ import { stepPermissionService } from '../services/step-permission-service';
 import { StepService } from '../services/step-service';
 import { stopReloadPreviewActivities } from '../services/reload-preview-service';
 import { systemCalendarService } from '../services/system-calendar-service';
+import { taskRuntimeCleanupService } from '../services/task-runtime-cleanup-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 import { TrackedPipelineRepository } from '../database/repositories/tracked-pipelines';
 import { UsageSnapshotRepository } from '../database/repositories/usage-snapshots';
@@ -673,8 +722,18 @@ function validateRemoveStepPermissionParams(params: unknown): {
   };
 }
 
-async function deleteTaskAndEmit(task: Task, stepIds?: string[]) {
-  await TaskRepository.delete(task.id);
+async function deleteTaskAndEmit(
+  task: Task,
+  stepIds?: string[],
+) {
+  await taskRuntimeCleanupService.runProvisionalTransition(
+    task.id,
+    async () => {
+      await TaskRepository.delete(task.id);
+      return true;
+    },
+    (deleted) => deleted,
+  );
   emitTaskDelete({ taskId: task.id, projectId: task.projectId, stepIds });
 }
 
@@ -1152,7 +1211,16 @@ export function registerIpcHandlers() {
   );
   ipcMain.handle('projects:create', async (_, data: NewProject) => {
     dbg.ipc('projects:create %o', { name: data.name, path: data.path });
-    const project = await ProjectRepository.create(data);
+    const mobilePreviewConfig =
+      data.mobilePreviewConfig ??
+      (await detectMobilePreviewProjectConfig(data.path).catch((error) => {
+        dbg.ipc('projects:create mobile preview detection failed: %O', error);
+        return undefined;
+      }));
+    const project = await ProjectRepository.create({
+      ...data,
+      ...(mobilePreviewConfig && { mobilePreviewConfig }),
+    });
     emitProjectUpsert(project);
     return project;
   });
@@ -1170,10 +1238,35 @@ export function registerIpcHandlers() {
     }
   });
   ipcMain.handle(
+    'projects:detectMobilePreview',
+    async (_, projectId: string) => {
+      dbg.ipc('projects:detectMobilePreview %s', projectId);
+      const project = await ProjectRepository.findById(projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      const mobilePreviewConfig = await detectMobilePreviewProjectConfig(
+        project.path,
+        project.mobilePreviewConfig,
+      );
+      const result = await ProjectRepository.update(projectId, {
+        mobilePreviewConfig,
+      });
+      emitProjectUpsert(result);
+      return result;
+    },
+  );
+  ipcMain.handle(
     'projects:update',
     async (_, id: string, data: UpdateProject) => {
       dbg.ipc('projects:update %s %o', id, data);
-      const result = await ProjectRepository.update(id, data);
+      if (data.path !== undefined) {
+        const currentProject = await ProjectRepository.findById(id);
+        if (!currentProject) throw new Error(`Project not found: ${id}`);
+        await assertProjectPathUnchanged({
+          currentPath: currentProject.path,
+          suppliedPath: data.path,
+        });
+      }
+      const result = await ProjectRepository.update(id, omitProjectPath(data));
       if (
         data.archivedAt !== undefined ||
         data.showWorkItemsInFeed !== undefined ||
@@ -1378,7 +1471,11 @@ export function registerIpcHandlers() {
           err,
         );
       });
-      const updatedTask = await TaskRepository.markUserCompleted(step.taskId);
+      const updatedTask = await taskRuntimeCleanupService.runProvisionalTransition(
+        step.taskId,
+        () => TaskRepository.markUserCompleted(step.taskId),
+        (task) => task.userCompleted,
+      );
       emitTaskUpsert(updatedTask);
       return featureMap;
     },
@@ -2028,7 +2125,7 @@ export function registerIpcHandlers() {
           await TaskRepository.delete(id);
         }
         dbg.ipc('Deleted task %s', id);
-      };
+          };
 
       return routeTaskDeletion(
         { taskId: id },
@@ -5032,6 +5129,11 @@ export function registerIpcHandlers() {
     },
   );
   ipcMain.handle(
+    'project:commands:run:startAdHocCommand',
+    (_, params: StartAdHocRunCommandParams) =>
+      runCommandService.startAdHocCommand(params),
+  );
+  ipcMain.handle(
     'project:commands:run:startGroup',
     async (
       _,
@@ -5111,6 +5213,305 @@ export function registerIpcHandlers() {
       params: { projectPath: string; suggestions: ProjectSuggestions },
     ) => runCommandService.saveProjectSuggestions(params),
   );
+
+  // Mobile Preview
+  ipcMain.handle('mobilePreview:listDevices', (_, platform: MobilePlatform) =>
+    mobilePreviewService.listDevices(platform),
+  );
+  ipcMain.handle(
+    'mobilePreview:listSessions',
+    (_, params: MobilePreviewListSessionsParams) =>
+      mobilePreviewService.listSessions(params),
+  );
+  ipcMain.handle('mobilePreview:getAndroidToolStatus', () =>
+    mobilePreviewService.getAndroidToolStatus(),
+  );
+  ipcMain.handle('mobilePreview:listAndroidDeviceProfiles', () =>
+    mobilePreviewService.listAndroidDeviceProfiles(),
+  );
+  ipcMain.handle('mobilePreview:listAndroidSystemImages', () =>
+    mobilePreviewService.listAndroidSystemImages(),
+  );
+  ipcMain.handle(
+    'mobilePreview:createAndroidDevice',
+    (_, params: MobilePreviewAndroidCreateDeviceParams) =>
+      mobilePreviewService.createAndroidDevice(params),
+  );
+  ipcMain.handle('mobilePreview:deleteAndroidDevice', (_, name: string) =>
+    mobilePreviewService.deleteAndroidDevice(name),
+  );
+  ipcMain.handle(
+    'mobilePreview:installAndroidSystemImage',
+    (_, params: MobilePreviewAndroidInstallSystemImageParams) =>
+      mobilePreviewService.installAndroidSystemImage(params),
+  );
+  ipcMain.handle('mobilePreview:getIosToolStatus', () =>
+    mobilePreviewService.getIosToolStatus(),
+  );
+  ipcMain.handle('mobilePreview:listIosRuntimes', () =>
+    mobilePreviewService.listIosRuntimes(),
+  );
+  ipcMain.handle('mobilePreview:listIosDeviceTypes', () =>
+    mobilePreviewService.listIosDeviceTypes(),
+  );
+  ipcMain.handle(
+    'mobilePreview:createIosDevice',
+    (_, params: MobilePreviewIosCreateDeviceParams) =>
+      mobilePreviewService.createIosDevice(params),
+  );
+  ipcMain.handle('mobilePreview:deleteIosDevice', (_, deviceId: string) =>
+    mobilePreviewService.deleteIosDevice(deviceId),
+  );
+  ipcMain.handle('mobilePreview:eraseIosDevice', (_, deviceId: string) =>
+    mobilePreviewService.eraseIosDevice(deviceId),
+  );
+  ipcMain.handle(
+    'mobilePreview:renameIosDevice',
+    (_, params: MobilePreviewIosRenameDeviceParams) =>
+      mobilePreviewService.renameIosDevice(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:getIosAppStatus',
+    (_, params: MobilePreviewIosAppStatusRequestParams) =>
+      mobilePreviewIosAppService.getIosAppStatus(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:cancelIosAppStatus',
+    (_, params: MobilePreviewIosAppStatusCancelParams) =>
+      mobilePreviewIosAppService.cancelIosAppStatus(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:restartIosApp',
+    (_, params: MobilePreviewIosAppRequestParams) =>
+      mobilePreviewIosAppService.restartIosApp(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:launchExpo',
+    (_, params: MobilePreviewExpoLaunchParams) =>
+      mobilePreviewExpoLaunchService.launch(params),
+  );
+  ipcMain.handle('mobilePreview:cancelExpoLaunch', (_, requestId: string) =>
+    mobilePreviewExpoLaunchService.cancel(requestId),
+  );
+  ipcMain.handle(
+    'mobilePreview:start',
+    (event, params: MobilePreviewStartParams) =>
+      mobilePreviewService.start(params, event.sender),
+  );
+  ipcMain.handle(
+    'mobilePreview:attachSession',
+    (event, params: MobilePreviewAttachSessionParams) =>
+      mobilePreviewService.attachSession(params, event.sender),
+  );
+  ipcMain.handle(
+    'mobilePreview:detachSession',
+    (event, params: MobilePreviewDetachSessionParams) =>
+      mobilePreviewService.detachSession(params, event.sender),
+  );
+  ipcMain.handle('mobilePreview:stop', (_, sessionId: string) =>
+    mobilePreviewService.stop(sessionId),
+  );
+  ipcMain.handle(
+    'mobilePreview:sendInput',
+    (_, sessionId: string, input: MobilePreviewInputEvent) =>
+      mobilePreviewService.sendInput(sessionId, input),
+  );
+  ipcMain.handle(
+    'mobilePreview:openDeeplink',
+    (_, params: MobilePreviewOpenDeeplinkParams) =>
+      mobilePreviewService.openDeeplink(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:forwardPort',
+    (_, params: MobilePreviewForwardPortParams) =>
+      mobilePreviewService.forwardPort(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:setTextSize',
+    (_, params: MobilePreviewSetTextSizeParams) =>
+      mobilePreviewService.setTextSize(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:setColorScheme',
+    (_, sessionId: string, scheme: MobileColorScheme) =>
+      mobilePreviewService.setColorScheme(sessionId, scheme),
+  );
+  ipcMain.handle(
+    'mobilePreview:rotate',
+    (_, sessionId: string, direction: MobileRotationDirection) =>
+      mobilePreviewService.rotate(sessionId, direction),
+  );
+  ipcMain.handle(
+    'mobilePreview:startNativeLogs',
+    (_, params: MobilePreviewNativeLogStartParams) =>
+      mobilePreviewNativeLogService.start(params),
+  );
+  ipcMain.handle('mobilePreview:stopNativeLogs', (_, sessionId: string) =>
+    mobilePreviewNativeLogService.stop(sessionId),
+  );
+  ipcMain.handle(
+    'mobilePreview:startNetworkProxy',
+    (_, params: MobilePreviewNetworkProxyStartParams) =>
+      mobilePreviewNetworkProxyService.start(params),
+  );
+  ipcMain.handle('mobilePreview:stopNetworkProxy', (_, sessionId: string) =>
+    mobilePreviewNetworkProxyService.stop(sessionId),
+  );
+  ipcMain.handle(
+    'mobilePreview:installNetworkProxyCertificate',
+    (_, params: MobilePreviewNetworkProxyCertificateParams) =>
+      mobilePreviewNetworkProxyService.installCertificate(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:prepareAndroidAppTrust',
+    async (_, params: MobilePreviewAndroidAppTrustParams) => {
+      const [project, task] = await Promise.all([
+        ProjectRepository.findById(params.projectId),
+        TaskRepository.findById(params.taskId),
+      ]);
+      if (!project) throw new Error('Project not found');
+      if (!task || task.projectId !== project.id) {
+        throw new Error('Task not found for project');
+      }
+      return mobilePreviewNetworkProxyService.prepareAndroidAppTrust({
+        projectPath: task.worktreePath ?? project.path,
+        androidProjectPath: params.androidProjectPath,
+      });
+    },
+  );
+  ipcMain.handle(
+    'mobilePreview:getAndroidAppStatus',
+    async (_, params: MobilePreviewAndroidAppStatusParams) => {
+      const [project, task] = await Promise.all([
+        ProjectRepository.findById(params.projectId),
+        TaskRepository.findById(params.taskId),
+      ]);
+      if (!project) throw new Error('Project not found');
+      if (!task || task.projectId !== project.id) {
+        throw new Error('Task not found for project');
+      }
+      return mobilePreviewNetworkProxyService.getAndroidAppStatus({
+        projectPath: task.worktreePath ?? project.path,
+        androidProjectPath: params.androidProjectPath,
+        deviceId: params.deviceId,
+      });
+    },
+  );
+  ipcMain.handle(
+    'mobilePreview:restartAndroidApp',
+    async (_, params: MobilePreviewAndroidAppRestartParams) => {
+      const [project, task] = await Promise.all([
+        ProjectRepository.findById(params.projectId),
+        TaskRepository.findById(params.taskId),
+      ]);
+      if (!project) throw new Error('Project not found');
+      if (!task || task.projectId !== project.id) {
+        throw new Error('Task not found for project');
+      }
+      return mobilePreviewNetworkProxyService.restartAndroidApp({
+        projectPath: task.worktreePath ?? project.path,
+        androidProjectPath: params.androidProjectPath,
+        deviceId: params.deviceId,
+      });
+    },
+  );
+  ipcMain.handle(
+    'mobilePreview:startPacketCapture',
+    (_, params: MobilePreviewPacketCaptureStartParams) =>
+      mobilePreviewPacketCaptureService.start(params),
+  );
+  ipcMain.handle('mobilePreview:stopPacketCapture', (_, sessionId: string) =>
+    mobilePreviewPacketCaptureService.stop(sessionId),
+  );
+  ipcMain.handle(
+    'mobilePreview:resolveReactNativeDevTools',
+    (_, params: ReactNativeDevToolsResolveParams) =>
+      reactNativeDevToolsService.resolveReactNativeDevTools(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:openReactNativeDevTools',
+    (_, params: ReactNativeDevToolsOpenParams) =>
+      reactNativeDevToolsService.openReactNativeDevTools(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:openEmbeddedReactNativeDevTools',
+    (event, params: ReactNativeDevToolsEmbeddedOpenParams) =>
+      reactNativeDevToolsService.openEmbeddedReactNativeDevTools(
+        event.sender,
+        params,
+      ),
+  );
+  ipcMain.handle(
+    'mobilePreview:setEmbeddedReactNativeDevToolsBounds',
+    (event, params: ReactNativeDevToolsEmbeddedBoundsParams) =>
+      reactNativeDevToolsService.setEmbeddedReactNativeDevToolsBounds(
+        event.sender,
+        params,
+      ),
+  );
+  ipcMain.handle(
+    'mobilePreview:setEmbeddedReactNativeDevToolsVisibility',
+    (event, params: ReactNativeDevToolsEmbeddedVisibilityParams) =>
+      reactNativeDevToolsService.setEmbeddedReactNativeDevToolsVisibility(
+        event.sender,
+        params,
+      ),
+  );
+  ipcMain.handle(
+    'mobilePreview:closeEmbeddedReactNativeDevTools',
+    (event, params: ReactNativeDevToolsEmbeddedCloseParams) =>
+      reactNativeDevToolsService.closeEmbeddedReactNativeDevTools(
+        event.sender,
+        params,
+      ),
+  );
+  ipcMain.on('mobilePreview:embeddedReactNativeDevToolsBringToFront', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    window?.focus();
+  });
+
+  mobilePreviewNativeLogService.onSession((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send('mobilePreview:nativeLogSession', event);
+      }
+    });
+  });
+  mobilePreviewNativeLogService.onLog((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send('mobilePreview:nativeLog', event);
+      }
+    });
+  });
+  mobilePreviewNetworkProxyService.onSession((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send('mobilePreview:networkProxySession', event);
+      }
+    });
+  });
+  mobilePreviewNetworkProxyService.onRequest((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send('mobilePreview:networkProxyRequest', event);
+      }
+    });
+  });
+  mobilePreviewPacketCaptureService.onSession((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send('mobilePreview:packetCaptureSession', event);
+      }
+    });
+  });
+  mobilePreviewPacketCaptureService.onRequest((event) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send('mobilePreview:packetCaptureRequest', event);
+      }
+    });
+  });
 
   const previousRunCommandStatuses = new Map<string, Map<string, string>>();
 
@@ -6274,10 +6675,17 @@ export function registerIpcHandlers() {
         });
 
         // Mark the task as completed
-        await updateTaskAndEmit(step.taskId, {
-          status: 'completed',
-          updatedAt: new Date().toISOString(),
-        });
+        const completedTask =
+          await taskRuntimeCleanupService.runProvisionalTransition(
+            step.taskId,
+            () =>
+              TaskRepository.update(step.taskId, {
+                status: 'completed',
+                updatedAt: new Date().toISOString(),
+              }),
+            (task) => task.status === 'completed',
+          );
+        emitTaskUpsert(completedTask);
         // Cleanup workspace after successful publish
         await cleanupSkillWorkspace(data.workspacePath).catch((err) => {
           dbg.ipc(

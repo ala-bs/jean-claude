@@ -67,6 +67,99 @@ export type TaskStatus =
   | 'interrupted';
 export type InteractionMode = 'ask' | 'auto' | 'plan';
 
+export type MobilePreviewIntegrationMode = 'auto' | 'enabled' | 'disabled';
+export type MobilePreviewProjectStack =
+  | 'expo'
+  | 'react-native'
+  | 'ios'
+  | 'android';
+export type MobilePreviewDetectionConfidence = 'high' | 'medium' | 'low';
+
+export interface MobilePreviewDetectedApp {
+  path: string;
+  stacks: MobilePreviewProjectStack[];
+  androidProjectPath?: string | null;
+  detectedAndroidPackageName?: string | null;
+  detectedIosBundleId?: string | null;
+  detectedDependenciesInstallCommand?: string | null;
+  detectedMetroStartCommand?: string | null;
+  detectedAndroidPrebuildCommand?: string | null;
+  detectedIosPrebuildCommand?: string | null;
+  detectedAndroidBuildCommand?: string | null;
+  detectedIosBuildCommand?: string | null;
+  confidence: MobilePreviewDetectionConfidence;
+  reasons: string[];
+}
+
+export interface MobilePreviewProjectConfig {
+  mode: MobilePreviewIntegrationMode;
+  selectedAppPath: string | null;
+  androidProjectPath?: string | null;
+  androidPackageName?: string | null;
+  detectedApps: MobilePreviewDetectedApp[];
+  detectionUpdatedAt: string | null;
+  packageManager?: 'pnpm' | 'npm' | 'yarn' | 'bun' | null;
+  dependenciesInstallCommand?: string | null;
+  metroPort?: number;
+  metroStartCommand?: string | null;
+  androidPrebuildCommand?: string | null;
+  iosPrebuildCommand?: string | null;
+  androidBuildCommand?: string | null;
+  iosBuildCommand?: string | null;
+  iosBundleId?: string | null;
+}
+
+export const DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG: MobilePreviewProjectConfig =
+  {
+    mode: 'auto',
+    selectedAppPath: null,
+    androidProjectPath: null,
+    androidPackageName: null,
+    detectedApps: [],
+    detectionUpdatedAt: null,
+    packageManager: null,
+    dependenciesInstallCommand: null,
+    metroPort: 8081,
+    metroStartCommand: null,
+    androidPrebuildCommand: null,
+    iosPrebuildCommand: null,
+    androidBuildCommand: null,
+    iosBuildCommand: null,
+    iosBundleId: null,
+  };
+
+export function isMobilePreviewProjectConfig(
+  value: unknown,
+): value is MobilePreviewProjectConfig {
+  if (!value || typeof value !== 'object') return false;
+  const config = value as Record<string, unknown>;
+  return (
+    (config.mode === 'auto' ||
+      config.mode === 'enabled' ||
+      config.mode === 'disabled') &&
+    (typeof config.selectedAppPath === 'string' ||
+      config.selectedAppPath === null) &&
+    (typeof config.androidProjectPath === 'string' ||
+      config.androidProjectPath === null ||
+      config.androidProjectPath === undefined) &&
+    (typeof config.iosBundleId === 'string' ||
+      config.iosBundleId === null ||
+      config.iosBundleId === undefined) &&
+    Array.isArray(config.detectedApps) &&
+    (typeof config.detectionUpdatedAt === 'string' ||
+      config.detectionUpdatedAt === null)
+  );
+}
+
+export function isMobilePreviewProjectEnabled(
+  config: MobilePreviewProjectConfig | null | undefined,
+) {
+  if (!config) return false;
+  if (config.mode === 'disabled') return false;
+  if (config.mode === 'enabled') return true;
+  return config.detectedApps.length > 0;
+}
+
 export interface TaskTodoItem {
   id: string;
   title: string;
@@ -275,6 +368,7 @@ export interface Project {
   completionContext: string | null;
   summary: string | null;
   aiSkillSlots: AiSkillSlotsSetting | null;
+  mobilePreviewConfig?: MobilePreviewProjectConfig;
   protectedBranches: string[];
   favoriteBranches: string[];
   prPriority: ProjectPriority;
@@ -314,6 +408,7 @@ export interface NewProject {
   completionContext?: string | null;
   summary?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
+  mobilePreviewConfig?: MobilePreviewProjectConfig;
   protectedBranches?: string[];
   favoriteBranches?: string[];
   prPriority?: ProjectPriority;
@@ -353,6 +448,7 @@ export interface UpdateProject {
   completionContext?: string | null;
   summary?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
+  mobilePreviewConfig?: MobilePreviewProjectConfig;
   protectedBranches?: string[];
   favoriteBranches?: string[];
   prPriority?: ProjectPriority;

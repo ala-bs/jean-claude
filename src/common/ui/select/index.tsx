@@ -46,6 +46,7 @@ export const Select = forwardRef<
     value: string;
     options: SelectOption<string>[];
     onChange: (value: string) => void;
+    onOpenChange?: (open: boolean) => void;
     disabled?: boolean;
     label?: string;
     size?: ComponentSize;
@@ -61,6 +62,7 @@ export const Select = forwardRef<
     value,
     options,
     onChange,
+    onOpenChange,
     disabled,
     label,
     size = 'md',
@@ -79,6 +81,12 @@ export const Select = forwardRef<
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const isOpenRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  }, [onOpenChange]);
 
   const position = useDropdownPosition({ isOpen, triggerRef, side, align });
 
@@ -86,26 +94,37 @@ export const Select = forwardRef<
   const selectedIndex = options.findIndex((o) => o.value === value);
 
   const close = useCallback(() => {
+    isOpenRef.current = false;
     setIsOpen(false);
+    onOpenChange?.(false);
     setFocusedIndex(-1);
     triggerRef.current?.focus();
-  }, []);
+  }, [onOpenChange]);
 
   const open = useCallback(() => {
     if (disabled) return;
+    isOpenRef.current = true;
     setIsOpen(true);
-  }, [disabled]);
+    onOpenChange?.(true);
+  }, [disabled, onOpenChange]);
 
   const toggle = useCallback(() => {
     if (disabled) return;
-    setIsOpen((prev) => {
-      if (prev) {
-        setFocusedIndex(-1);
-        triggerRef.current?.focus();
+    if (isOpen) {
+      close();
+    } else {
+      open();
+    }
+  }, [close, disabled, isOpen, open]);
+
+  useEffect(
+    () => () => {
+      if (isOpenRef.current) {
+        onOpenChangeRef.current?.(false);
       }
-      return !prev;
-    });
-  }, [disabled]);
+    },
+    [],
+  );
 
   const cycleNext = useCallback(() => {
     if (options.length === 0) return;
@@ -380,6 +399,7 @@ export const Select = forwardRef<
   value: T;
   options: SelectOption<T>[];
   onChange: (value: T) => void;
+  onOpenChange?: (open: boolean) => void;
   disabled?: boolean;
   label?: string;
   size?: ComponentSize;

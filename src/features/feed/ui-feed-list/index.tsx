@@ -1313,10 +1313,7 @@ export function FeedList() {
           },
         });
       } else if (item.taskId) {
-        navigate({
-          to: '/all/$taskId',
-          params: { taskId: item.taskId },
-        });
+        navigate({ to: '/all/$taskId', params: { taskId: item.taskId } });
       }
     },
     [allVisibleItems, navigate],
@@ -1346,10 +1343,7 @@ export function FeedList() {
           },
         });
       } else if (item.taskId) {
-        navigate({
-          to: '/all/$taskId',
-          params: { taskId: item.taskId },
-        });
+        navigate({ to: '/all/$taskId', params: { taskId: item.taskId } });
       }
     },
     [navigate],

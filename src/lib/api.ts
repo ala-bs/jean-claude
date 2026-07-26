@@ -114,6 +114,67 @@ import type {
   UpdateMcpServerTemplate,
 } from '@shared/mcp-types';
 import type {
+  MobileColorScheme,
+  MobilePlatform,
+  MobilePreviewAndroidAppRestartParams,
+  MobilePreviewAndroidAppRestartResult,
+  MobilePreviewAndroidAppStatus,
+  MobilePreviewAndroidAppStatusParams,
+  MobilePreviewAndroidAppTrustParams,
+  MobilePreviewAndroidAppTrustResult,
+  MobilePreviewAndroidCreateDeviceParams,
+  MobilePreviewAndroidDeviceProfile,
+  MobilePreviewAndroidInstallSystemImageParams,
+  MobilePreviewAndroidSystemImage,
+  MobilePreviewAndroidToolStatus,
+  MobilePreviewAttachSessionParams,
+  MobilePreviewDetachSessionParams,
+  MobilePreviewDevice,
+  MobilePreviewExpoLaunchParams,
+  MobilePreviewExpoLaunchResult,
+  MobilePreviewForwardPortParams,
+  MobilePreviewFrameEvent,
+  MobilePreviewInputEvent,
+  MobilePreviewIosAppRequestParams,
+  MobilePreviewIosAppRestartResult,
+  MobilePreviewIosAppStatus,
+  MobilePreviewIosAppStatusCancelParams,
+  MobilePreviewIosAppStatusRequestParams,
+  MobilePreviewIosCreateDeviceParams,
+  MobilePreviewIosDeviceType,
+  MobilePreviewIosRenameDeviceParams,
+  MobilePreviewIosRuntime,
+  MobilePreviewIosToolStatus,
+  MobilePreviewListSessionsParams,
+  MobilePreviewNativeLogEvent,
+  MobilePreviewNativeLogSession,
+  MobilePreviewNativeLogSessionEvent,
+  MobilePreviewNativeLogStartParams,
+  MobilePreviewNetworkProxyCertificate,
+  MobilePreviewNetworkProxyCertificateParams,
+  MobilePreviewNetworkProxyEvent,
+  MobilePreviewNetworkProxySession,
+  MobilePreviewNetworkProxySessionEvent,
+  MobilePreviewNetworkProxyStartParams,
+  MobilePreviewOpenDeeplinkParams,
+  MobilePreviewPacketCaptureEvent,
+  MobilePreviewPacketCaptureSession,
+  MobilePreviewPacketCaptureSessionEvent,
+  MobilePreviewPacketCaptureStartParams,
+  MobilePreviewSession,
+  MobilePreviewSessionEvent,
+  MobilePreviewSetTextSizeParams,
+  MobilePreviewStartParams,
+  MobileRotationDirection,
+  ReactNativeDevToolsEmbeddedBoundsParams,
+  ReactNativeDevToolsEmbeddedCloseParams,
+  ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedVisibilityParams,
+  ReactNativeDevToolsOpenParams,
+  ReactNativeDevToolsResolveParams,
+  ReactNativeDevToolsResolveResult,
+} from '@shared/mobile-simulator-types';
+import type {
   NewProjectCommand,
   NewProjectCommandGroup,
   PackageScriptsResult,
@@ -123,6 +184,7 @@ import type {
   ProjectSuggestions,
   RunCommandConfigItem,
   RunStatus,
+  StartAdHocRunCommandParams,
   StartPrCommandParams,
   StartPrCommandResult,
   UpdateProjectCommand,
@@ -495,6 +557,7 @@ export interface Api {
     findById: (id: string) => Promise<Project | undefined>;
     create: (data: NewProject) => Promise<Project>;
     update: (id: string, data: UpdateProject) => Promise<Project>;
+    detectMobilePreview: (projectId: string) => Promise<Project>;
     detectAzureRemote: (
       projectPath: string,
     ) => Promise<DetectedAzureRemote | null>;
@@ -1344,6 +1407,135 @@ export interface Api {
     >;
     onEvent: (callback: AgentEventCallback<AgentUIEvent>) => UnsubscribeFn;
   };
+  mobilePreview: {
+    listDevices: (platform: MobilePlatform) => Promise<MobilePreviewDevice[]>;
+    listSessions: (
+      params: MobilePreviewListSessionsParams,
+    ) => Promise<MobilePreviewSession[]>;
+    getAndroidToolStatus: () => Promise<MobilePreviewAndroidToolStatus>;
+    listAndroidDeviceProfiles: () => Promise<
+      MobilePreviewAndroidDeviceProfile[]
+    >;
+    listAndroidSystemImages: () => Promise<MobilePreviewAndroidSystemImage[]>;
+    createAndroidDevice: (
+      params: MobilePreviewAndroidCreateDeviceParams,
+    ) => Promise<void>;
+    deleteAndroidDevice: (name: string) => Promise<void>;
+    installAndroidSystemImage: (
+      params: MobilePreviewAndroidInstallSystemImageParams,
+    ) => Promise<void>;
+    getIosToolStatus: () => Promise<MobilePreviewIosToolStatus>;
+    listIosRuntimes: () => Promise<MobilePreviewIosRuntime[]>;
+    listIosDeviceTypes: () => Promise<MobilePreviewIosDeviceType[]>;
+    createIosDevice: (
+      params: MobilePreviewIosCreateDeviceParams,
+    ) => Promise<string>;
+    deleteIosDevice: (deviceId: string) => Promise<void>;
+    eraseIosDevice: (deviceId: string) => Promise<void>;
+    renameIosDevice: (
+      params: MobilePreviewIosRenameDeviceParams,
+    ) => Promise<void>;
+    getIosAppStatus: (
+      params: MobilePreviewIosAppStatusRequestParams,
+    ) => Promise<MobilePreviewIosAppStatus>;
+    cancelIosAppStatus: (
+      params: MobilePreviewIosAppStatusCancelParams,
+    ) => Promise<boolean>;
+    restartIosApp: (
+      params: MobilePreviewIosAppRequestParams,
+    ) => Promise<MobilePreviewIosAppRestartResult>;
+    launchExpo: (
+      params: MobilePreviewExpoLaunchParams,
+    ) => Promise<MobilePreviewExpoLaunchResult>;
+    cancelExpoLaunch: (requestId: string) => Promise<boolean>;
+    start: (params: MobilePreviewStartParams) => Promise<MobilePreviewSession>;
+    attachSession: (
+      params: MobilePreviewAttachSessionParams,
+    ) => Promise<MobilePreviewSession>;
+    detachSession: (params: MobilePreviewDetachSessionParams) => Promise<void>;
+    stop: (sessionId: string) => Promise<void>;
+    sendInput: (
+      sessionId: string,
+      event: MobilePreviewInputEvent,
+    ) => Promise<void>;
+    openDeeplink: (params: MobilePreviewOpenDeeplinkParams) => Promise<void>;
+    forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
+    setTextSize: (params: MobilePreviewSetTextSizeParams) => Promise<void>;
+    setColorScheme: (
+      sessionId: string,
+      scheme: MobileColorScheme,
+    ) => Promise<void>;
+    rotate: (
+      sessionId: string,
+      direction: MobileRotationDirection,
+    ) => Promise<void>;
+    startNativeLogs: (
+      params: MobilePreviewNativeLogStartParams,
+    ) => Promise<MobilePreviewNativeLogSession>;
+    stopNativeLogs: (sessionId: string) => Promise<void>;
+    startNetworkProxy: (
+      params: MobilePreviewNetworkProxyStartParams,
+    ) => Promise<MobilePreviewNetworkProxySession>;
+    stopNetworkProxy: (sessionId: string) => Promise<void>;
+    startPacketCapture: (
+      params: MobilePreviewPacketCaptureStartParams,
+    ) => Promise<MobilePreviewPacketCaptureSession>;
+    stopPacketCapture: (sessionId: string) => Promise<void>;
+    resolveReactNativeDevTools: (
+      params: ReactNativeDevToolsResolveParams,
+    ) => Promise<ReactNativeDevToolsResolveResult>;
+    openReactNativeDevTools: (
+      params: ReactNativeDevToolsOpenParams,
+    ) => Promise<void>;
+    openEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedOpenParams,
+    ) => Promise<void>;
+    setEmbeddedReactNativeDevToolsBounds: (
+      params: ReactNativeDevToolsEmbeddedBoundsParams,
+    ) => Promise<void>;
+    setEmbeddedReactNativeDevToolsVisibility: (
+      params: ReactNativeDevToolsEmbeddedVisibilityParams,
+    ) => Promise<void>;
+    closeEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedCloseParams,
+    ) => Promise<void>;
+    installNetworkProxyCertificate: (
+      params: MobilePreviewNetworkProxyCertificateParams,
+    ) => Promise<MobilePreviewNetworkProxyCertificate>;
+    prepareAndroidAppTrust: (
+      params: MobilePreviewAndroidAppTrustParams,
+    ) => Promise<MobilePreviewAndroidAppTrustResult>;
+    getAndroidAppStatus: (
+      params: MobilePreviewAndroidAppStatusParams,
+    ) => Promise<MobilePreviewAndroidAppStatus>;
+    restartAndroidApp: (
+      params: MobilePreviewAndroidAppRestartParams,
+    ) => Promise<MobilePreviewAndroidAppRestartResult>;
+    onNativeLogSession: (
+      callback: (event: MobilePreviewNativeLogSessionEvent) => void,
+    ) => UnsubscribeFn;
+    onNativeLog: (
+      callback: (event: MobilePreviewNativeLogEvent) => void,
+    ) => UnsubscribeFn;
+    onNetworkProxySession: (
+      callback: (event: MobilePreviewNetworkProxySessionEvent) => void,
+    ) => UnsubscribeFn;
+    onNetworkProxyRequest: (
+      callback: (event: MobilePreviewNetworkProxyEvent) => void,
+    ) => UnsubscribeFn;
+    onPacketCaptureSession: (
+      callback: (event: MobilePreviewPacketCaptureSessionEvent) => void,
+    ) => UnsubscribeFn;
+    onPacketCaptureRequest: (
+      callback: (event: MobilePreviewPacketCaptureEvent) => void,
+    ) => UnsubscribeFn;
+    onFrame: (
+      callback: (event: MobilePreviewFrameEvent) => void,
+    ) => UnsubscribeFn;
+    onSession: (
+      callback: (event: MobilePreviewSessionEvent) => void,
+    ) => UnsubscribeFn;
+  };
   debug: {
     getTableNames: () => Promise<string[]>;
     getDatabaseSize: () => Promise<DebugDatabaseSizeResult>;
@@ -1427,6 +1619,9 @@ export interface Api {
       taskId: string;
       runCommandId: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
+    startAdHocCommand: (
+      params: StartAdHocRunCommandParams,
+    ) => Promise<RunStatus | PortsInUseErrorData>;
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
@@ -1898,6 +2093,9 @@ export const api: Api = hasWindowApi
         update: async () => {
           throw new Error('API not available');
         },
+        detectMobilePreview: async () => {
+          throw new Error('API not available');
+        },
         detectAzureRemote: async () => null,
         uploadLogo: async () => {
           throw new Error('API not available');
@@ -2351,6 +2549,104 @@ export const api: Api = hasWindowApi
         getPendingRequest: async () => null,
         onEvent: () => () => {},
       },
+      mobilePreview: {
+        listDevices: async () => [],
+        listSessions: async () => [],
+        getAndroidToolStatus: async () => ({
+          hostArch: 'unknown',
+          sdkRoot: null,
+          adbPath: null,
+          emulatorPath: null,
+          avdmanagerPath: null,
+          sdkmanagerPath: null,
+          missingTools: ['adb', 'emulator', 'avdmanager', 'sdkmanager'],
+        }),
+        listAndroidDeviceProfiles: async () => [],
+        listAndroidSystemImages: async () => [],
+        createAndroidDevice: async () => {},
+        deleteAndroidDevice: async () => {},
+        installAndroidSystemImage: async () => {},
+        getIosToolStatus: async () => ({
+          xcrunPath: null,
+          missingTools: ['xcrun'],
+        }),
+        listIosRuntimes: async () => [],
+        listIosDeviceTypes: async () => [],
+        createIosDevice: async () => '',
+        deleteIosDevice: async () => {},
+        eraseIosDevice: async () => {},
+        renameIosDevice: async () => {},
+        getIosAppStatus: async () => {
+          throw new Error('API not available');
+        },
+        cancelIosAppStatus: async () => false,
+        restartIosApp: async () => {
+          throw new Error('API not available');
+        },
+        launchExpo: async () => {
+          throw new Error('API not available');
+        },
+        cancelExpoLaunch: async () => false,
+        start: async () => {
+          throw new Error('API not available');
+        },
+        attachSession: async () => {
+          throw new Error('API not available');
+        },
+        detachSession: async () => {},
+        stop: async () => {},
+        sendInput: async () => {},
+        openDeeplink: async () => {},
+        forwardPort: async () => {},
+        setTextSize: async () => {},
+        setColorScheme: async () => {},
+        rotate: async () => {},
+        startNativeLogs: async () => {
+          throw new Error('API not available');
+        },
+        stopNativeLogs: async () => {},
+        startNetworkProxy: async () => {
+          throw new Error('API not available');
+        },
+        stopNetworkProxy: async () => {},
+        startPacketCapture: async () => {
+          throw new Error('API not available');
+        },
+        stopPacketCapture: async () => {},
+        resolveReactNativeDevTools: async (params) => ({
+          metroBaseUrl: `http://localhost:${params.metroPort}`,
+          frontendUrl: null,
+          targets: [],
+          error: 'API not available',
+        }),
+        openReactNativeDevTools: async () => {},
+        openEmbeddedReactNativeDevTools: async () => {
+          throw new Error('API not available');
+        },
+        setEmbeddedReactNativeDevToolsBounds: async () => {},
+        setEmbeddedReactNativeDevToolsVisibility: async () => {},
+        closeEmbeddedReactNativeDevTools: async () => {},
+        installNetworkProxyCertificate: async () => {
+          throw new Error('API not available');
+        },
+        prepareAndroidAppTrust: async () => {
+          throw new Error('API not available');
+        },
+        getAndroidAppStatus: async () => {
+          throw new Error('API not available');
+        },
+        restartAndroidApp: async () => {
+          throw new Error('API not available');
+        },
+        onNativeLogSession: () => () => {},
+        onNativeLog: () => () => {},
+        onNetworkProxySession: () => () => {},
+        onNetworkProxyRequest: () => () => {},
+        onPacketCaptureSession: () => () => {},
+        onPacketCaptureRequest: () => () => {},
+        onFrame: () => () => {},
+        onSession: () => () => {},
+      },
       debug: {
         getTableNames: async () => [],
         getDatabaseSize: async () => ({
@@ -2455,6 +2751,10 @@ export const api: Api = hasWindowApi
       },
       runCommands: {
         startCommand: async () => ({
+          isRunning: false,
+          commands: [],
+        }),
+        startAdHocCommand: async () => ({
           isRunning: false,
           commands: [],
         }),

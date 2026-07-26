@@ -1,12 +1,16 @@
-import type {
-  AiSkillSlotConfig,
-  AiSkillSlotKey,
-  AiSkillSlotsSetting,
-  ModelPreference,
-  ProjectFeatureMap,
-  ProjectFeatureMapItem,
-  ProjectLogoHistoryItem,
-  UpdateProject,
+import {
+  type AiSkillSlotConfig,
+  type AiSkillSlotKey,
+  type AiSkillSlotsSetting,
+  DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
+  type MobilePreviewDetectedApp,
+  type MobilePreviewIntegrationMode,
+  type MobilePreviewProjectConfig,
+  type ModelPreference,
+  type ProjectFeatureMap,
+  type ProjectFeatureMapItem,
+  type ProjectLogoHistoryItem,
+  type UpdateProject,
 } from '@shared/types';
 import {
   Archive,
@@ -21,6 +25,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Smartphone,
   Sparkles,
   Trash2,
   X,
@@ -31,6 +36,12 @@ import {
   flushProjectSettings,
   type ProjectSettingsSave,
 } from './utils-project-settings-save-data';
+import {
+  getDefaultMobileBuildCommand,
+  migrateBuildCommand,
+  migrateDetectedCommand,
+  migrateIosBundleId,
+} from '@/lib/mobile-preview-config';
 import {
   ListDetailLayout,
   ListGroupHeader,
@@ -63,6 +74,7 @@ import {
   useDeleteGeneratedProjectLogo,
   useDeleteProject,
   useDeleteProjectWorktreesFolder,
+  useDetectMobilePreviewProject,
   useGeneratedProjectLogos,
   useGenerateProjectLogo,
   useProject,
@@ -608,6 +620,473 @@ function collectVisibleProjectFeatureRows(
   });
 }
 
+const MOBILE_PREVIEW_MODE_OPTIONS = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'enabled', label: 'Enabled' },
+  { value: 'disabled', label: 'Disabled' },
+];
+
+function formatMobilePreviewStacks(config: MobilePreviewProjectConfig) {
+  const stacks = [...new Set(config.detectedApps.flatMap((app) => app.stacks))];
+  return stacks.length > 0 ? stacks.join(', ') : 'None detected';
+}
+
+function getDefaultAndroidProjectPath(
+  config: MobilePreviewProjectConfig,
+  selectedAppPath = config.selectedAppPath,
+) {
+  if (!selectedAppPath) return null;
+  const selectedApp = config.detectedApps.find(
+    (app) => app.path === selectedAppPath,
+  );
+  return selectedApp?.androidProjectPath ?? null;
+}
+
+function getPackageExec(
+  packageManager: MobilePreviewProjectConfig['packageManager'],
+) {
+  if (packageManager === 'pnpm') return 'pnpm exec';
+  if (packageManager === 'yarn') return 'yarn';
+  if (packageManager === 'bun') return 'bunx';
+  return 'npx';
+}
+
+function getDefaultAndroidPrebuildCommand(
+  config: MobilePreviewProjectConfig,
+) {
+  return `${getPackageExec(config.packageManager)} expo prebuild --platform android`;
+}
+
+function getDefaultIosPrebuildCommand(config: MobilePreviewProjectConfig) {
+  return `${getPackageExec(config.packageManager)} expo prebuild --platform ios`;
+}
+
+function isPackageOnlyMobileCandidate(app: MobilePreviewDetectedApp) {
+  const hasNativeProject = app.stacks.includes('ios') || app.stacks.includes('android');
+  const hasAppConfig = app.reasons.some((reason) =>
+    reason.toLowerCase().includes('app config'),
+  );
+  const dependencyOnly = app.reasons.every((reason) =>
+    reason.toLowerCase().includes('dependency'),
+  );
+
+  return dependencyOnly && !hasNativeProject && !hasAppConfig;
+}
+
+function formatMobileAppPath(app: MobilePreviewDetectedApp) {
+  return app.path === '.' ? 'Root app' : app.path;
+}
+
+function formatMobileAppDescription(app: MobilePreviewDetectedApp) {
+  if (isPackageOnlyMobileCandidate(app)) {
+    return `${app.reasons.join(', ')}. Likely shared package, not runnable app.`;
+  }
+
+  return app.reasons.join(', ');
+}
+
+function ProjectMobilePreviewIntegration({
+  config,
+  isDetecting,
+  onChange,
+  onDetect,
+}: {
+  config: MobilePreviewProjectConfig;
+  isDetecting: boolean;
+  onChange: (config: MobilePreviewProjectConfig) => void;
+  onDetect: () => void;
+}) {
+  const appOptions = config.detectedApps.map((app) => {
+    const packageOnly = isPackageOnlyMobileCandidate(app);
+
+    return {
+      value: app.path,
+      label: formatMobileAppPath(app),
+      description: formatMobileAppDescription(app),
+      group: packageOnly ? 'Dependency-only packages' : 'Runnable app candidates',
+      badge: packageOnly ? 'package' : app.stacks.join(', '),
+    };
+  });
+
+  return (
+    <div className="border-border-2 bg-bg-2/60 space-y-3 rounded-lg border p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Smartphone className="text-ink-3 h-4 w-4" />
+            <h3 className="text-ink-1 text-sm font-semibold">Mobile Preview</h3>
+          </div>
+          <p className="text-ink-3 mt-1 text-xs">
+            Project-level mobile app detection for Expo, React Native, iOS, and
+            Android.
+          </p>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={onDetect}
+          disabled={isDetecting}
+          loading={isDetecting}
+          icon={<RefreshCw />}
+        >
+          Auto-detect
+        </Button>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="md:col-span-2">
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            App
+          </label>
+          <Select
+            value={config.selectedAppPath ?? ''}
+            options={[
+              {
+                value: '',
+                label: 'Ask when opening preview',
+                description: 'Choose each time instead of saving app path.',
+              },
+              ...appOptions,
+            ]}
+            onChange={(value) => {
+              const previousDefaultAndroidProjectPath =
+                getDefaultAndroidProjectPath(config);
+              const selectedAppPath = value || null;
+              const currentSelectedApp = config.detectedApps.find(
+                (app) => app.path === config.selectedAppPath,
+              );
+              const selectedApp = config.detectedApps.find(
+                (app) => app.path === selectedAppPath,
+              );
+              const nextDefaultAndroidProjectPath =
+                getDefaultAndroidProjectPath(config, selectedAppPath);
+              const currentDetectedMetroStartCommand =
+                config.detectedApps.find(
+                  (app) => app.path === config.selectedAppPath,
+                )?.detectedMetroStartCommand ?? null;
+              const selectedDetectedMetroStartCommand =
+                config.detectedApps.find((app) => app.path === selectedAppPath)
+                  ?.detectedMetroStartCommand ?? null;
+              const currentDetectedAndroidPrebuildCommand =
+                config.detectedApps.find(
+                  (app) => app.path === config.selectedAppPath,
+                )?.detectedAndroidPrebuildCommand ?? null;
+              const selectedDetectedAndroidPrebuildCommand =
+                config.detectedApps.find((app) => app.path === selectedAppPath)
+                  ?.detectedAndroidPrebuildCommand ?? null;
+              const currentDetectedIosPrebuildCommand =
+                config.detectedApps.find(
+                  (app) => app.path === config.selectedAppPath,
+                )?.detectedIosPrebuildCommand ?? null;
+              const selectedDetectedIosPrebuildCommand =
+                config.detectedApps.find((app) => app.path === selectedAppPath)
+                  ?.detectedIosPrebuildCommand ?? null;
+              const getGeneratedBuildCommand = (
+                app: MobilePreviewDetectedApp | undefined,
+                platform: 'android' | 'ios',
+              ) =>
+                app?.[
+                  platform === 'android'
+                    ? 'detectedAndroidBuildCommand'
+                    : 'detectedIosBuildCommand'
+                ] ??
+                getDefaultMobileBuildCommand({
+                  app,
+                  packageManager: config.packageManager,
+                  platform,
+                });
+              const androidBuildCommand = migrateBuildCommand({
+                currentCommand: config.androidBuildCommand,
+                currentGeneratedCommands: [
+                  currentSelectedApp?.detectedAndroidBuildCommand,
+                  getDefaultMobileBuildCommand({
+                    app: currentSelectedApp,
+                    packageManager: config.packageManager,
+                    platform: 'android',
+                  }),
+                ],
+                selectedGeneratedCommand: getGeneratedBuildCommand(
+                  selectedApp,
+                  'android',
+                ),
+                legacyPackageManager: config.packageManager,
+                platform: 'android',
+              });
+              const iosBuildCommand = migrateBuildCommand({
+                currentCommand: config.iosBuildCommand,
+                currentGeneratedCommands: [
+                  currentSelectedApp?.detectedIosBuildCommand,
+                  getDefaultMobileBuildCommand({
+                    app: currentSelectedApp,
+                    packageManager: config.packageManager,
+                    platform: 'ios',
+                  }),
+                ],
+                selectedGeneratedCommand: getGeneratedBuildCommand(
+                  selectedApp,
+                  'ios',
+                ),
+                legacyPackageManager: config.packageManager,
+                platform: 'ios',
+              });
+              onChange({
+                ...config,
+                selectedAppPath,
+                iosBundleId: migrateIosBundleId({
+                  currentSelectedAppPath: config.selectedAppPath,
+                  selectedAppPath,
+                  iosBundleId: config.iosBundleId,
+                }),
+                androidPackageName: migrateDetectedCommand({
+                  currentCommand: config.androidPackageName,
+                  currentDetectedCommand:
+                    currentSelectedApp?.detectedAndroidPackageName ?? null,
+                  selectedDetectedCommand:
+                    selectedApp?.detectedAndroidPackageName ?? null,
+                }),
+                androidProjectPath:
+                  !config.androidProjectPath ||
+                  config.androidProjectPath === previousDefaultAndroidProjectPath
+                    ? nextDefaultAndroidProjectPath
+                    : config.androidProjectPath,
+                 androidBuildCommand,
+                dependenciesInstallCommand: migrateDetectedCommand({
+                  currentCommand: config.dependenciesInstallCommand,
+                  currentDetectedCommand:
+                    currentSelectedApp?.detectedDependenciesInstallCommand ?? null,
+                  selectedDetectedCommand:
+                    selectedApp?.detectedDependenciesInstallCommand ?? null,
+                }),
+                iosBuildCommand,
+                metroStartCommand:
+                  !config.metroStartCommand ||
+                  config.metroStartCommand === currentDetectedMetroStartCommand
+                    ? selectedDetectedMetroStartCommand
+                    : config.metroStartCommand,
+                androidPrebuildCommand:
+                  !config.androidPrebuildCommand ||
+                  config.androidPrebuildCommand ===
+                    currentDetectedAndroidPrebuildCommand
+                    ? selectedDetectedAndroidPrebuildCommand
+                    : config.androidPrebuildCommand,
+                iosPrebuildCommand:
+                  !config.iosPrebuildCommand ||
+                  config.iosPrebuildCommand ===
+                    currentDetectedIosPrebuildCommand
+                    ? selectedDetectedIosPrebuildCommand
+                    : config.iosPrebuildCommand,
+              });
+            }}
+            className="w-full justify-between"
+            disabled={config.detectedApps.length === 0}
+          />
+          <p className="text-ink-3 mt-1 text-xs">
+            Select runnable app first. Build commands and Android folder fill from
+            selected app. Packages with React Native only in dev or optional
+            dependencies may be shared packages, not apps.
+          </p>
+        </div>
+        <div>
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            Integration
+          </label>
+          <Select
+            value={config.mode}
+            options={MOBILE_PREVIEW_MODE_OPTIONS}
+            onChange={(value) =>
+              onChange({
+                ...config,
+                mode: value as MobilePreviewIntegrationMode,
+              })
+            }
+            className="w-full justify-between"
+          />
+        </div>
+        <div>
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            Dev server port
+          </label>
+          <Input
+            size="md"
+            type="number"
+            min={1}
+            max={65535}
+            value={String(config.metroPort ?? 8081)}
+            onChange={(event) => {
+              const nextPort = Number(event.target.value);
+              onChange({
+                ...config,
+                metroPort: Number.isFinite(nextPort) ? nextPort : 8081,
+              });
+            }}
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            Dependencies install command
+          </label>
+          <Input
+            size="md"
+            value={config.dependenciesInstallCommand ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                dependenciesInstallCommand: event.target.value || null,
+              })
+            }
+            placeholder="Auto, e.g. pnpm install or yarn install"
+          />
+        </div>
+        <div>
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            Android package ID
+          </label>
+          <Input
+            size="md"
+            value={config.androidPackageName ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                androidPackageName: event.target.value || null,
+              })
+            }
+            placeholder="Auto, e.g. com.example.app"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            Dev server command
+          </label>
+          <Input
+            size="md"
+            value={config.metroStartCommand ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                metroStartCommand: event.target.value || null,
+              })
+            }
+            placeholder="Auto, e.g. pnpm start or npx expo start"
+          />
+        </div>
+        <div>
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            Android prebuild command
+          </label>
+          <Input
+            size="md"
+            value={config.androidPrebuildCommand ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                androidPrebuildCommand: event.target.value || null,
+              })
+            }
+            placeholder={`Auto, e.g. ${getDefaultAndroidPrebuildCommand(config)}`}
+          />
+        </div>
+        <div>
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            Android build command
+          </label>
+          <Input
+            size="md"
+            value={config.androidBuildCommand ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                androidBuildCommand: event.target.value || null,
+              })
+            }
+            placeholder="Auto, e.g. pnpm android or pnpm exec expo run:android"
+          />
+        </div>
+        <div>
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            iOS prebuild command
+          </label>
+          <Input
+            size="md"
+            value={config.iosPrebuildCommand ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                iosPrebuildCommand: event.target.value || null,
+              })
+            }
+            placeholder={`Auto, e.g. ${getDefaultIosPrebuildCommand(config)}`}
+          />
+        </div>
+        <div>
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            iOS build command
+          </label>
+          <Input
+            size="md"
+            value={config.iosBuildCommand ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                iosBuildCommand: event.target.value || null,
+              })
+            }
+            placeholder="Auto, e.g. pnpm ios or pnpm exec expo run:ios"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            iOS bundle ID
+          </label>
+          <Input
+            size="md"
+            value={config.iosBundleId ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                iosBundleId: event.target.value || null,
+              })
+            }
+            placeholder="Auto, e.g. com.example.app"
+          />
+        </div>
+        <div>
+          <label className="text-ink-1 mb-1 block text-xs font-medium">
+            Android project folder
+          </label>
+          <Input
+            size="md"
+            value={config.androidProjectPath ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...config,
+                androidProjectPath: event.target.value || null,
+              })
+            }
+            placeholder={
+              getDefaultAndroidProjectPath(config) ??
+              'e.g. apps/mobile/android'
+            }
+          />
+        </div>
+      </div>
+
+      <div className="text-ink-3 grid gap-2 text-xs md:grid-cols-2">
+        <div>
+          <span className="text-ink-2">Detected:</span>{' '}
+          {formatMobilePreviewStacks(config)}
+        </div>
+        <div>
+          <span className="text-ink-2">Last scan:</span>{' '}
+          {config.detectionUpdatedAt
+            ? new Date(config.detectionUpdatedAt).toLocaleString()
+            : 'Never'}
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
 function ProjectCommitIgnoreSettings({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
@@ -732,6 +1211,7 @@ export function ProjectSettings({
   const deleteGeneratedProjectLogo = useDeleteGeneratedProjectLogo();
   const regenerateProjectSummary = useRegenerateProjectSummary();
   const createProjectFeatureMapTask = useCreateProjectFeatureMapTask();
+  const detectMobilePreviewProject = useDetectMobilePreviewProject();
   const removeProjectLogo = useRemoveProjectLogo();
   const deleteProject = useDeleteProject();
   const deleteWorktreesFolder = useDeleteProjectWorktreesFolder();
@@ -789,6 +1269,8 @@ export function ProjectSettings({
   const [aiSkillSlots, setAiSkillSlots] = useState<AiSkillSlotsSetting | null>(
     null,
   );
+  const [mobilePreviewConfig, setMobilePreviewConfig] =
+    useState<MobilePreviewProjectConfig>(DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG);
   const [protectedBranches, setProtectedBranches] = useState<string[]>([]);
   const [favoriteBranches, setFavoriteBranches] = useState<string[]>([]);
   const [isGeneratingContext, setIsGeneratingContext] = useState(false);
@@ -837,6 +1319,8 @@ export function ProjectSettings({
       protectedBranches: project.protectedBranches ?? [],
       favoriteBranches: project.favoriteBranches ?? [],
       aiSkillSlots: project.aiSkillSlots,
+      mobilePreviewConfig:
+        project.mobilePreviewConfig ?? DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
     };
   }, [project]);
 
@@ -859,6 +1343,7 @@ export function ProjectSettings({
       protectedBranches,
       favoriteBranches,
       aiSkillSlots,
+      mobilePreviewConfig,
     }),
     [
       aiSkillSlots,
@@ -870,6 +1355,7 @@ export function ProjectSettings({
       defaultAgentModelPreference,
       defaultBranch,
       favoriteBranches,
+      mobilePreviewConfig,
       name,
       path,
       prPriority,
@@ -940,6 +1426,9 @@ export function ProjectSettings({
       setProtectedBranches(project.protectedBranches ?? []);
       setFavoriteBranches(project.favoriteBranches ?? []);
       setAiSkillSlots(project.aiSkillSlots);
+      setMobilePreviewConfig(
+        project.mobilePreviewConfig ?? DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
+      );
       initializedProjectIdRef.current = project.id;
     }
   }, [backendModelPresets, project]);
@@ -1125,6 +1614,37 @@ export function ProjectSettings({
             : 'Failed to create project feature map task.';
         addToast({
           message,
+          type: 'error',
+        });
+      });
+  }
+
+  function handleMobilePreviewConfigChange(
+    nextConfig: MobilePreviewProjectConfig,
+  ) {
+    markFieldDirty('mobilePreviewConfig');
+    setMobilePreviewConfig(nextConfig);
+  }
+
+  function handleDetectMobilePreview() {
+    void detectMobilePreviewProject
+      .mutateAsync(projectId)
+      .then((updatedProject) => {
+        setMobilePreviewConfig(
+          updatedProject.mobilePreviewConfig ??
+            DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
+        );
+        addToast({
+          message: 'Mobile preview detection updated.',
+          type: 'success',
+        });
+      })
+      .catch((error: unknown) => {
+        addToast({
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Failed to detect mobile apps.',
           type: 'error',
         });
       });
@@ -1722,6 +2242,12 @@ export function ProjectSettings({
       content = (
         <div className="space-y-4">
           <h2 className="text-ink-1 text-lg font-semibold">Integrations</h2>
+          <ProjectMobilePreviewIntegration
+            config={mobilePreviewConfig}
+            isDetecting={detectMobilePreviewProject.isPending}
+            onChange={handleMobilePreviewConfigChange}
+            onDetect={handleDetectMobilePreview}
+          />
           <RepoLink project={project} />
           <WorkItemsLink
             project={project}

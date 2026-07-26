@@ -39,6 +39,8 @@ export default defineConfig({
       'src/features/project/ui-work-item-title-parser-settings/**/*.test.ts',
       'src/features/settings/**/*.test.tsx',
       'src/features/common/ui-video-gif-converter/**/*.test.ts',
+      'src/features/mobile-preview/**/*.test.ts',
+      'src/features/mobile-preview/**/*.test.tsx',
       'src/features/new-task/ui-prompt-composer/**/*.test.ts',
       'src/features/pull-request/**/*.test.ts',
       'src/features/pull-request/**/*.test.tsx',

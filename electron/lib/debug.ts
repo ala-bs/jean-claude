@@ -130,6 +130,7 @@ export const dbg = {
   mcp: createLogger('mcp'),
   completion: createLogger('completion'),
   feed: createLogger('feed'),
+  mobilePreview: createLogger('mobile-preview'),
 };
 
 // Re-export for custom namespace creation

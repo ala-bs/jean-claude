@@ -17,6 +17,7 @@ import { Route as OnboardingSetupRouteImport } from './routes/onboarding/setup'
 import { Route as AllTaskIdRouteImport } from './routes/all/$taskId'
 import { Route as ProjectsProjectIdIndexRouteImport } from './routes/projects/$projectId/index'
 import { Route as AllNotesNoteIdRouteImport } from './routes/all/notes/$noteId'
+import { Route as AllMobileTaskIdRouteImport } from './routes/all/mobile/$taskId'
 import { Route as ProjectsProjectIdPrsIndexRouteImport } from './routes/projects/$projectId/prs/index'
 import { Route as AllPrsProjectIdIndexRouteImport } from './routes/all/prs/$projectId/index'
 import { Route as ProjectsProjectIdTasksNewRouteImport } from './routes/projects/$projectId/tasks/new'
@@ -63,6 +64,11 @@ const ProjectsProjectIdIndexRoute = ProjectsProjectIdIndexRouteImport.update({
 const AllNotesNoteIdRoute = AllNotesNoteIdRouteImport.update({
   id: '/all/notes/$noteId',
   path: '/all/notes/$noteId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AllMobileTaskIdRoute = AllMobileTaskIdRouteImport.update({
+  id: '/all/mobile/$taskId',
+  path: '/all/mobile/$taskId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsProjectIdPrsIndexRoute =
@@ -113,6 +119,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
   '/all/': typeof AllIndexRoute
+  '/all/mobile/$taskId': typeof AllMobileTaskIdRoute
   '/all/notes/$noteId': typeof AllNotesNoteIdRoute
   '/projects/$projectId/': typeof ProjectsProjectIdIndexRoute
   '/all/prs/$projectId/$prId': typeof AllPrsProjectIdPrIdRoute
@@ -129,6 +136,7 @@ export interface FileRoutesByTo {
   '/onboarding/setup': typeof OnboardingSetupRoute
   '/projects/new': typeof ProjectsNewRoute
   '/all': typeof AllIndexRoute
+  '/all/mobile/$taskId': typeof AllMobileTaskIdRoute
   '/all/notes/$noteId': typeof AllNotesNoteIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdIndexRoute
   '/all/prs/$projectId/$prId': typeof AllPrsProjectIdPrIdRoute
@@ -147,6 +155,7 @@ export interface FileRoutesById {
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/new': typeof ProjectsNewRoute
   '/all/': typeof AllIndexRoute
+  '/all/mobile/$taskId': typeof AllMobileTaskIdRoute
   '/all/notes/$noteId': typeof AllNotesNoteIdRoute
   '/projects/$projectId/': typeof ProjectsProjectIdIndexRoute
   '/all/prs/$projectId/$prId': typeof AllPrsProjectIdPrIdRoute
@@ -166,6 +175,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId'
     | '/projects/new'
     | '/all/'
+    | '/all/mobile/$taskId'
     | '/all/notes/$noteId'
     | '/projects/$projectId/'
     | '/all/prs/$projectId/$prId'
@@ -182,6 +192,7 @@ export interface FileRouteTypes {
     | '/onboarding/setup'
     | '/projects/new'
     | '/all'
+    | '/all/mobile/$taskId'
     | '/all/notes/$noteId'
     | '/projects/$projectId'
     | '/all/prs/$projectId/$prId'
@@ -199,6 +210,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId'
     | '/projects/new'
     | '/all/'
+    | '/all/mobile/$taskId'
     | '/all/notes/$noteId'
     | '/projects/$projectId/'
     | '/all/prs/$projectId/$prId'
@@ -217,6 +229,7 @@ export interface RootRouteChildren {
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRouteWithChildren
   ProjectsNewRoute: typeof ProjectsNewRoute
   AllIndexRoute: typeof AllIndexRoute
+  AllMobileTaskIdRoute: typeof AllMobileTaskIdRoute
   AllNotesNoteIdRoute: typeof AllNotesNoteIdRoute
   AllPrsProjectIdPrIdRoute: typeof AllPrsProjectIdPrIdRoute
   AllWorkItemsProjectIdWorkItemIdRoute: typeof AllWorkItemsProjectIdWorkItemIdRoute
@@ -279,6 +292,13 @@ declare module '@tanstack/react-router' {
       path: '/all/notes/$noteId'
       fullPath: '/all/notes/$noteId'
       preLoaderRoute: typeof AllNotesNoteIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/all/mobile/$taskId': {
+      id: '/all/mobile/$taskId'
+      path: '/all/mobile/$taskId'
+      fullPath: '/all/mobile/$taskId'
+      preLoaderRoute: typeof AllMobileTaskIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$projectId/prs/': {
@@ -359,6 +379,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsProjectIdRoute: ProjectsProjectIdRouteWithChildren,
   ProjectsNewRoute: ProjectsNewRoute,
   AllIndexRoute: AllIndexRoute,
+  AllMobileTaskIdRoute: AllMobileTaskIdRoute,
   AllNotesNoteIdRoute: AllNotesNoteIdRoute,
   AllPrsProjectIdPrIdRoute: AllPrsProjectIdPrIdRoute,
   AllWorkItemsProjectIdWorkItemIdRoute: AllWorkItemsProjectIdWorkItemIdRoute,

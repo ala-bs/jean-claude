@@ -1,8 +1,11 @@
 import { FileText, Loader2, Play, Square } from 'lucide-react';
-import { type MutableRefObject, useState } from 'react';
+import { type MutableRefObject, useMemo, useState } from 'react';
 import clsx from 'clsx';
 
-
+import {
+  type CommandRunStatus,
+  getRunCommandDisplayName,
+} from '@shared/run-command-types';
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 import {
   getRunCommandAction,
@@ -15,12 +18,9 @@ import {
 } from '@/stores/task-messages';
 import { Button } from '@/common/ui/button';
 import { Chip } from '@/common/ui/chip';
-import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { Kbd } from '@/common/ui/kbd';
 import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { useRunCommands } from '@/hooks/use-run-commands';
-
-
 
 import { ConfirmRunModal } from './confirm-run-modal';
 import { KillPortsModal } from './kill-ports-modal';
@@ -96,6 +96,19 @@ export function RunButton({
     </Button>
   ) : null;
 
+  const configuredCommandIds = useMemo(
+    () => new Set(commands.map((command) => command.id)),
+    [commands],
+  );
+  const adHocRunningCommands = useMemo(
+    () =>
+      (status?.commands ?? []).filter(
+        (command) =>
+          command.status === 'running' && !configuredCommandIds.has(command.id),
+      ),
+    [configuredCommandIds, status?.commands],
+  );
+
   if (commandAvailability.state === 'loading') {
     return showAvailabilityState ? (
       <div className="flex items-center gap-2">
@@ -125,7 +138,7 @@ export function RunButton({
   }
 
   // Keep historical logs reachable after command configuration is removed.
-  if (menuItems.length === 0 && !hasLogEntries) {
+  if (menuItems.length === 0 && adHocRunningCommands.length === 0 && !hasLogEntries) {
     return null;
   }
 
@@ -183,6 +196,11 @@ export function RunButton({
     }
 
     executeCommand(runCommandId);
+  };
+
+  const handleRunningAdHocAction = (command: CommandRunStatus) => {
+    if (isCommandStopping(command.id)) return;
+    void stopCommand(command.id);
   };
 
   const handleGroupAction = (groupId: string) => {
@@ -254,7 +272,7 @@ export function RunButton({
   return (
     <>
       <div className="flex items-center gap-2">
-        {menuItems.length > 0 ? (
+        {menuItems.length > 0 || adHocRunningCommands.length > 0 ? (
           <Dropdown
             align="right"
             dropdownRef={dropdownRef}
@@ -286,6 +304,23 @@ export function RunButton({
               </button>
             }
           >
+            {adHocRunningCommands.map((command, index) => {
+              const isBusy = isCommandStopping(command.id);
+              return (
+                <div key={`adhoc:${command.id}`}>
+                  <DropdownItem onClick={() => handleRunningAdHocAction(command)}>
+                    <span className="text-ink-2 mr-2 truncate text-xs">
+                      {getRunCommandDisplayName(command)}
+                    </span>
+                    <Chip size="xs" color="red" className="uppercase">
+                      {isBusy ? '...' : 'Stop'}
+                    </Chip>
+                  </DropdownItem>
+                  {(index < adHocRunningCommands.length - 1 ||
+                    menuItems.length > 0) && <DropdownDivider />}
+                </div>
+              );
+            })}
           {menuItems.map((menuItem, index) => {
             if (menuItem.type === 'command') {
               const command = menuItem.item;

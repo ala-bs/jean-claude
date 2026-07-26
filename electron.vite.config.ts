@@ -53,6 +53,10 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'electron/preload.ts'),
+          'react-native-devtools': resolve(
+            __dirname,
+            'electron/react-native-devtools-preload.ts',
+          ),
         },
       },
     },

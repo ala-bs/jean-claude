@@ -21,6 +21,7 @@ import { cleanupOrphanedWorkspaces } from './services/system-project-service';
 import { createReloadPreviewReadinessRegistrar } from './services/reload-preview-service';
 import { dbg } from './lib/debug';
 import { migrateDatabase } from './database';
+import { mobilePreviewNetworkProxyService } from './services/mobile-preview-network-proxy-service';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { registerIpcHandlers } from './ipc/handlers';
@@ -458,6 +459,8 @@ app.on('before-quit', (event) => {
           dbg.main('Idle shared OpenCode server stopped');
           await runCommandService.stopAllCommands();
           dbg.main('All commands stopped');
+          await mobilePreviewNetworkProxyService.stopAll();
+          dbg.main('Mobile preview network proxies stopped');
         })(),
         QUIT_CLEANUP_TIMEOUT_MS,
       );

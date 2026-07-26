@@ -61,6 +61,9 @@ export function TaskMessageManager() {
   const setRunCommandRunning = useTaskMessagesStore(
     (s) => s.setRunCommandRunning,
   );
+  const setRunCommandStatusesHydrated = useTaskMessagesStore(
+    (s) => s.setRunCommandStatusesHydrated,
+  );
 
   useEffect(() => {
     const pendingEntryUpdates: Array<{
@@ -255,7 +258,14 @@ export function TaskMessageManager() {
   // guaranteed to be active before the initialization fetch resolves,
   // eliminating the race where a command stops between fetch and subscribe.
   useEffect(() => {
+    let cancelled = false;
+    const eventVersionByTaskId = new Map<string, number>();
+    setRunCommandStatusesHydrated(false);
     const unsub = api.runCommands.onStatusChange((taskId, status) => {
+      eventVersionByTaskId.set(
+        taskId,
+        (eventVersionByTaskId.get(taskId) ?? 0) + 1,
+      );
       setRunCommandRunning(taskId, status.isRunning ? status : false);
     });
 
@@ -264,23 +274,36 @@ export function TaskMessageManager() {
     api.runCommands
       .getTaskIdsWithRunningCommands()
       .then(async (taskIds) => {
-        const results = await Promise.all(
-          taskIds.map((taskId) =>
-            api.runCommands
-              .getStatus(taskId)
-              .then((status) => ({ taskId, status })),
-          ),
+        await Promise.all(
+          taskIds.map(async (taskId) => {
+            const eventVersion = eventVersionByTaskId.get(taskId) ?? 0;
+            try {
+              const status = await api.runCommands.getStatus(taskId);
+              if (
+                cancelled ||
+                (eventVersionByTaskId.get(taskId) ?? 0) !== eventVersion
+              ) {
+                return;
+              }
+              setRunCommandRunning(taskId, status.isRunning ? status : false);
+            } catch {
+              // One failed task snapshot must not block remaining hydration.
+            }
+          }),
         );
-        for (const { taskId, status } of results) {
-          setRunCommandRunning(taskId, status.isRunning ? status : false);
-        }
       })
       .catch(() => {
         // Ignore — can happen during app shutdown
+      })
+      .finally(() => {
+        if (!cancelled) setRunCommandStatusesHydrated(true);
       });
 
-    return unsub;
-  }, [setRunCommandRunning]);
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [setRunCommandRunning, setRunCommandStatusesHydrated]);
 
   return null;
 }

@@ -116,6 +116,7 @@ export interface ProjectTable {
   completionContext: string | null;
   summary: string | null;
   aiSkillSlots: string | null; // JSON text
+  mobilePreviewConfig: string | null; // JSON text
   protectedBranches: string | null; // JSON array of branch names
   favoriteBranches: string | null; // JSON array of branch names
   prPriority: string;

@@ -1,17 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { PortsInUseErrorData, RunStatus } from '@shared/run-command-types';
+import type {
+  PortsInUseErrorData,
+  RunStatus,
+  StartAdHocRunCommandParams,
+} from '@shared/run-command-types';
 import { api } from '@/lib/api';
 import { isPortsInUseError } from '@shared/run-command-types';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
-
+type AdHocParams = Omit<
+  StartAdHocRunCommandParams,
+  'taskId' | 'projectId' | 'workingDir'
+>;
 
 interface PendingStart {
   commandIds: string[];
-  kind: 'command' | 'group';
+  kind: 'command' | 'group' | 'ad-hoc';
   operationToken: symbol;
+  adHocParams?: AdHocParams;
 }
 
 interface PortConflictRecord {
@@ -27,6 +35,7 @@ const EMPTY_COMMAND_IDS: string[] = [];
 export function useRunCommands({
   taskId,
   projectId,
+  workingDir,
 }: {
   taskId: string;
   projectId: string;
@@ -54,10 +63,10 @@ export function useRunCommands({
   const portConflictRef = useLatestRef(portConflict);
   const taskIdRef = useLatestRef(taskId);
   const taskGenerationRef = useLatestRef(taskGeneration);
+  const workingDirRef = useLatestRef(workingDir);
   const currentStatus = statusTaskId === taskId ? status : null;
   const hasCurrentOperation =
-    operationTaskId === taskId &&
-    operationTaskGeneration === taskGeneration;
+    operationTaskId === taskId && operationTaskGeneration === taskGeneration;
   const currentPortConflict =
     portConflict?.taskId === taskId &&
     portConflict.taskGeneration === taskGeneration
@@ -108,6 +117,7 @@ export function useRunCommands({
       taskGeneration: { taskId: string };
       taskId: string;
     },
+    adHocParams?: AdHocParams,
   ) => {
     const uniqueCommandIds = [...new Set(commandIds)];
     const currentResetRunCommandLogs = resetRunCommandLogsRef.current;
@@ -161,8 +171,14 @@ export function useRunCommands({
         }),
       );
 
-      const result =
-        uniqueCommandIds.length === 1
+      const result = adHocParams
+        ? await api.runCommands.startAdHocCommand({
+            taskId: currentTaskId,
+            projectId,
+            workingDir: workingDirRef.current,
+            ...adHocParams,
+          })
+        : uniqueCommandIds.length === 1
           ? await api.runCommands.startCommand({
               taskId: currentTaskId,
               runCommandId: uniqueCommandIds[0],
@@ -176,7 +192,12 @@ export function useRunCommands({
         if (isCurrentOperation()) {
           setPortConflict({
             error: result,
-            operation: { commandIds: uniqueCommandIds, kind, operationToken },
+            operation: {
+              commandIds: uniqueCommandIds,
+              kind,
+              operationToken,
+              adHocParams,
+            },
             projectId,
             taskGeneration: currentTaskGeneration,
             taskId: currentTaskId,
@@ -212,9 +233,7 @@ export function useRunCommands({
             startOperationTokensRef.current.get(commandId) === operationToken,
         );
         setStartingCommandIds((current) =>
-          current.filter(
-            (commandId) => !currentCommandIds.includes(commandId),
-          ),
+          current.filter((commandId) => !currentCommandIds.includes(commandId)),
         );
         for (const commandId of currentCommandIds) {
           startOperationTokensRef.current.delete(commandId);
@@ -225,6 +244,9 @@ export function useRunCommands({
 
   const startCommand = async (runCommandId: string) =>
     runStart([runCommandId], 'command');
+
+  const startAdHocCommand = async (params: AdHocParams) =>
+    runStart([params.runCommandId], 'ad-hoc', undefined, params);
 
   const startGroup = async (runCommandIds: string[]) =>
     runStart(runCommandIds, 'group');
@@ -299,9 +321,7 @@ export function useRunCommands({
     if (!conflict || portConflictRef.current !== conflict) return;
 
     const commandIds = [
-      ...new Set(
-        conflict.error.portsInUse.map((port) => port.commandId),
-      ),
+      ...new Set(conflict.error.portsInUse.map((port) => port.commandId)),
     ];
     for (const commandId of commandIds) {
       await api.runCommands.killPortsForCommand(conflict.projectId, commandId);
@@ -319,6 +339,7 @@ export function useRunCommands({
       conflict.operation.commandIds,
       conflict.operation.kind,
       conflict,
+      conflict.operation.adHocParams,
     );
   };
 
@@ -355,6 +376,7 @@ export function useRunCommands({
       stoppingCommandIdSet.has(commandId),
     isStartingAnyCommand: currentStartingCommandIds.length > 0,
     startCommand,
+    startAdHocCommand,
     startGroup,
     stopCommand,
     stopGroup,

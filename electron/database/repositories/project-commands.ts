@@ -6,6 +6,7 @@ import type {
   RunCommandEnvVar,
   UpdateProjectCommand,
 } from '@shared/run-command-types';
+import { getAvailablePortOverrideValidationError } from '@shared/run-command-types';
 
 import { db } from '../index';
 
@@ -43,6 +44,15 @@ function parseRow(row: {
   };
 }
 
+function assertValidPortOverride(command: {
+  id?: string;
+  ports: number[];
+  portConflictStrategy: ProjectCommand['portConflictStrategy'];
+}): void {
+  const error = getAvailablePortOverrideValidationError(command);
+  if (error) throw new Error(error);
+}
+
 export const ProjectCommandRepository = {
   findByProjectId: async (projectId: string): Promise<ProjectCommand[]> => {
     const rows = await db
@@ -65,6 +75,7 @@ export const ProjectCommandRepository = {
   },
 
   create: async (data: NewProjectCommand): Promise<ProjectCommand> => {
+    assertValidPortOverride(data);
     const id = crypto.randomUUID();
 
     const row = await db
@@ -99,6 +110,32 @@ export const ProjectCommandRepository = {
     id: string,
     data: UpdateProjectCommand,
   ): Promise<ProjectCommand> => {
+    if (
+      data.ports !== undefined ||
+      data.portConflictStrategy !== undefined
+    ) {
+      if (
+        data.ports !== undefined &&
+        data.portConflictStrategy !== undefined
+      ) {
+        assertValidPortOverride({
+          id,
+          ports: data.ports,
+          portConflictStrategy: data.portConflictStrategy,
+        });
+      } else {
+        const current = await ProjectCommandRepository.findById(id);
+        if (current) {
+          assertValidPortOverride({
+            id,
+            ports: data.ports ?? current.ports,
+            portConflictStrategy:
+              data.portConflictStrategy ?? current.portConflictStrategy,
+          });
+        }
+      }
+    }
+
     const updateData: Record<string, unknown> = {};
     if (data.name !== undefined) updateData.name = data.name;
     if (data.command !== undefined) updateData.command = data.command;

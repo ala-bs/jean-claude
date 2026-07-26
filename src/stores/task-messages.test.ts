@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
+import type { RunStatus } from '@shared/run-command-types';
 
 import {
   getQuestionDraftKey,
@@ -16,6 +17,7 @@ describe('task messages store', () => {
       runCommandRunning: {},
       questionDrafts: {},
       questionResponsesInFlight: {},
+      areRunCommandStatusesHydrated: false,
     });
   });
 
@@ -107,6 +109,18 @@ describe('task messages store', () => {
     expect(useTaskMessagesStore.getState().questionDrafts).toEqual({});
   });
 
+  it('tracks run-command status hydration explicitly', () => {
+    expect(
+      useTaskMessagesStore.getState().areRunCommandStatusesHydrated,
+    ).toBe(false);
+
+    useTaskMessagesStore.getState().setRunCommandStatusesHydrated(true);
+
+    expect(
+      useTaskMessagesStore.getState().areRunCommandStatusesHydrated,
+    ).toBe(true);
+  });
+
   it('keeps run-command output without newline as pending line', () => {
     const store = useTaskMessagesStore.getState();
 
@@ -185,6 +199,57 @@ describe('task messages store', () => {
 
     expect(generation).toBeGreaterThan(0);
     expect(log.pendingLines.stdout).toMatchObject({ line: 'new' });
+  });
+
+  it('propagates run-command status updates when only effective ports change', () => {
+    const store = useTaskMessagesStore.getState();
+    const status = {
+      isRunning: true,
+      commands: [
+        {
+          id: 'mobile-dev-server:app',
+          name: 'Metro',
+          command: 'pnpm start',
+          ports: [8081],
+          status: 'running',
+        },
+      ],
+    } satisfies RunStatus;
+
+    store.setRunCommandRunning('task-1', status);
+    store.setRunCommandRunning('task-1', {
+      ...status,
+      commands: [{ ...status.commands[0], ports: [8082] }],
+    });
+
+    expect(
+      useTaskMessagesStore.getState().runCommandRunning['task-1'].commands[0]
+        .ports,
+    ).toEqual([8082]);
+  });
+
+  it('safely updates a legacy run-command status with missing ports', () => {
+    const store = useTaskMessagesStore.getState();
+    const command = {
+      id: 'mobile-dev-server:legacy',
+      name: 'Metro',
+      command: 'pnpm start',
+      status: 'running',
+    } as RunStatus['commands'][number];
+
+    store.setRunCommandRunning('task-1', {
+      isRunning: true,
+      commands: [command],
+    });
+    store.setRunCommandRunning('task-1', {
+      isRunning: true,
+      commands: [{ ...command, ports: [8082] }],
+    });
+
+    expect(
+      useTaskMessagesStore.getState().runCommandRunning['task-1'].commands[0]
+        .ports,
+    ).toEqual([8082]);
   });
 
   it('applies authoritative reset generation and clears queued logs', () => {

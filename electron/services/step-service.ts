@@ -5,6 +5,7 @@ import type {
 import type {
   InteractionMode,
   ModelPreference,
+  Task,
   TaskStep,
   TaskStepMeta,
   TaskStepType,
@@ -26,6 +27,7 @@ import {
 } from './cache-event-service';
 import { prepareSummaryGenerationPrompt } from './session-summary-service';
 import { summarizeNormalizedMessages } from './session-summary-service';
+import { taskRuntimeCleanupService } from './task-runtime-cleanup-service';
 
 
 
@@ -528,6 +530,10 @@ export const StepService = {
     sortOrder?: number;
   }): Promise<TaskStep> => {
     debug('create step taskId=%s name=%s', data.taskId, data.name);
+    const task = await TaskRepository.findById(data.taskId);
+    if (task && !task.userCompleted) {
+      await taskRuntimeCleanupService.resetAfterReactivation(data.taskId);
+    }
     const createdStep = await TaskStepRepository.create(
       { ...data, sessionRules: {} },
     );
@@ -804,7 +810,19 @@ export const StepService = {
     const steps = await TaskStepRepository.findByTaskId(taskId);
     const newStatus = computeTaskStatus(steps);
     debug('syncTaskStatus taskId=%s newStatus=%s', taskId, newStatus);
-    const task = await TaskRepository.update(taskId, { status: newStatus });
+    let task: Task;
+    if (newStatus === 'completed') {
+      task = await taskRuntimeCleanupService.runProvisionalTransition(
+        taskId,
+        () => TaskRepository.update(taskId, { status: newStatus }),
+        (updatedTask) => updatedTask.status === 'completed',
+      );
+    } else {
+      task = await TaskRepository.update(taskId, { status: newStatus });
+    }
     emitTaskUpsert(task);
+    if (newStatus !== 'completed' && !task.userCompleted) {
+      await taskRuntimeCleanupService.resetAfterReactivation(taskId);
+    }
   },
 };

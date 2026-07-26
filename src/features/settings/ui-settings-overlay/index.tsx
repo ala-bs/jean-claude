@@ -36,6 +36,7 @@ import {
   CalendarSettings,
   EditorSettings,
   MaintenanceSettings,
+  MobilePreviewSettings,
   NotificationsSettings,
   PromptPrefaceSettings,
   UsageDisplaySettings,
@@ -121,6 +122,7 @@ function getGlobalSections(): GlobalSection[] {
 
   const generalSubs: GlobalSubItem[] = [
     { id: 'appearance', label: 'Appearance' },
+    { id: 'mobile-preview', label: 'Mobile Preview' },
     { id: 'editor', label: 'Editor' },
     { id: 'notifications', label: 'Notifications' },
     ...(api.platform === 'darwin'
@@ -719,6 +721,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Where projects open and how they launch.';
       case 'appearance':
         return 'Visual effects and motion preferences.';
+      case 'mobile-preview':
+        return 'Mobile preview setup and proxy behavior.';
       case 'notifications':
         return 'How and when jean-claude lets you know about runs.';
       case 'work-activity':
@@ -752,6 +756,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <EditorSettings />;
       case 'general:appearance':
         return <AppearanceSettings />;
+      case 'general:mobile-preview':
+        return <MobilePreviewSettings />;
       case 'general:notifications':
         return <NotificationsSettings />;
       case 'general:work-activity':

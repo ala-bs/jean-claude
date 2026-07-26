@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Smartphone,
   Trash2,
 } from 'lucide-react';
 import type { ComponentProps, PointerEvent, ReactNode } from 'react';
@@ -23,8 +24,6 @@ import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import { nanoid } from 'nanoid';
 import { useShallow } from 'zustand/react/shallow';
-
-
 
 import {
   type AddStepPresetType,
@@ -59,6 +58,7 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import { formatModelName, getModelFromEntry } from '@/hooks/use-model';
+
 import {
   getDefaultInteractionModeForBackend,
   type InteractionMode,
@@ -74,6 +74,10 @@ import {
   useEditorSetting,
   usePromptSnippetsSetting,
 } from '@/hooks/use-settings';
+import {
+  getTaskMobilePreviewRuntimeKey,
+  openTaskMobilePreviewWorkspace,
+} from '@/features/mobile-preview/utils-mobile-preview-task-action';
 import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
@@ -117,7 +121,10 @@ import {
   useSteps,
   useUpdateStep,
 } from '@/hooks/use-steps';
-import { useProject, useProjectIsGitRepository } from '@/hooks/use-projects';
+import {
+  useProject,
+  useProjectIsGitRepository,
+} from '@/hooks/use-projects';
 import { AddPermissionModal } from '@/features/agent/ui-add-permission-modal';
 import type { AgentResourceSample } from '@/hooks/use-agent-resource-snapshots';
 import { api } from '@/lib/api';
@@ -160,6 +167,7 @@ import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useContextUsage } from '@/hooks/use-context-usage';
+import { useMobilePreviewWorkspaceStore } from '@/stores/mobile-preview-workspace';
 import { useModal } from '@/common/context/modal';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
@@ -175,8 +183,6 @@ import { useWorkItemById } from '@/hooks/use-work-items';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
-
-
 
 import {
   createPermissionModalState,
@@ -1032,6 +1038,25 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const projectCommandAvailability = useProjectCommandAvailability(
     projectId ?? '',
   );
+  const isMobilePreviewWorkspaceOpen = useMobilePreviewWorkspaceStore(
+    (state) => state.isOpen,
+  );
+  const selectedMobilePreviewRuntimeKey = useMobilePreviewWorkspaceStore(
+    (state) => state.selectedRuntimeKey,
+  );
+  const openMobilePreviewWorkspace = useMobilePreviewWorkspaceStore(
+    (state) => state.open,
+  );
+  const openTaskInMobilePreview = useCallback(
+    (runtimeKey: string) => {
+      openTaskMobilePreviewWorkspace({
+        runtimeKey,
+        open: openMobilePreviewWorkspace,
+      });
+      void navigate({ to: '/all/mobile/$taskId', params: { taskId } });
+    },
+    [navigate, openMobilePreviewWorkspace, taskId],
+  );
   const { data: projectIsGitRepository } = useProjectIsGitRepository(
     projectId ?? null,
   );
@@ -1182,7 +1207,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     togglePrView,
     closePrView,
   } = usePrViewState(taskId);
-
   // File explorer state for review view
   const { rootPath: taskRootPathForExplorer } = useTaskRootPath(taskId);
   const {
@@ -2385,8 +2409,18 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     !!project.workItemProviderId &&
     !!project.workItemProjectId &&
     !!project.workItemProjectName;
+  const mobilePreviewRuntimeKey = getTaskMobilePreviewRuntimeKey({
+    taskId,
+    mobilePreviewConfig: project.mobilePreviewConfig,
+  });
+  const mobilePreviewEnabled = mobilePreviewRuntimeKey !== null;
+  const isTaskMobilePreviewOpen =
+    isMobilePreviewWorkspaceOpen &&
+    selectedMobilePreviewRuntimeKey === mobilePreviewRuntimeKey;
   const shouldRenderMessageSection =
-    !isPrViewOpen && !isDiffViewOpen && activeStep?.type !== 'pr-review';
+    !isPrViewOpen &&
+    !isDiffViewOpen &&
+    activeStep?.type !== 'pr-review';
   const backendLabel =
     AVAILABLE_BACKENDS.find(
       (backend) => backend.value === activeStep?.agentBackend,
@@ -2578,6 +2612,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
             {/* Right: Run + Overflow menu */}
             <div className="flex shrink-0 items-center gap-2">
+              {mobilePreviewEnabled && (
+                <Button
+                  variant={isTaskMobilePreviewOpen ? 'secondary' : 'ghost'}
+                  size="xs"
+                  icon={<Smartphone />}
+                  title="Mobile Preview"
+                  aria-label="Open task in mobile workspace"
+                  aria-pressed={isTaskMobilePreviewOpen}
+                  onClick={() =>
+                    openTaskInMobilePreview(mobilePreviewRuntimeKey)
+                  }
+                />
+              )}
               {!isZeroStepPrWorkspace && runButton}
 
               {/* Overflow menu */}
@@ -2629,6 +2676,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     {task.workItemIds?.length
                       ? 'Edit Work Items'
                       : 'Link Work Items'}
+                  </DropdownItem>
+                )}
+                {mobilePreviewEnabled && (
+                  <DropdownItem
+                    icon={<Smartphone />}
+                    onClick={() =>
+                      openTaskInMobilePreview(mobilePreviewRuntimeKey)
+                    }
+                    checked={isTaskMobilePreviewOpen}
+                  >
+                    Mobile Preview
                   </DropdownItem>
                 )}
 

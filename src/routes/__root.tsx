@@ -29,6 +29,7 @@ import { TaskMessageManager } from '@/features/agent/task-message-manager';
 import { useChangelogStore } from '@/stores/changelog';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
+import { useMobilePreviewWorkspaceStore } from '@/stores/mobile-preview-workspace';
 import { useModal } from '@/common/context/modal';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useOverlaysStore } from '@/stores/overlays';
@@ -433,6 +434,12 @@ function RootLayout() {
     setupBackendSelected || (backendsSetting?.enabledBackends?.length ?? 0) > 0;
   const closeChangelog = useChangelogStore((s) => s.close);
   const closeOverlays = useOverlaysStore((s) => s.closeAll);
+  const isMobilePreviewWorkspaceOpen = useMobilePreviewWorkspaceStore(
+    (state) => state.isOpen,
+  );
+  const closeMobilePreviewWorkspace = useMobilePreviewWorkspaceStore(
+    (state) => state.close,
+  );
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -445,6 +452,8 @@ function RootLayout() {
   const hideContentForSetupDecision =
     !isOnboardingFlowRoute &&
     (isLoadingProjects || (setupRequired && !setupSkippedThisSession));
+  const suppressMobilePreviewWorkspace =
+    isOnboardingFlowRoute || isSetupRoute || hideContentForSetupDecision;
 
   useEffect(() => {
     if (setupRequired || isOnboardingFlowRoute) closeChangelog();
@@ -453,6 +462,16 @@ function RootLayout() {
   useEffect(() => {
     if (isOnboardingFlowRoute) closeOverlays();
   }, [closeOverlays, isOnboardingFlowRoute]);
+
+  useEffect(() => {
+    if (suppressMobilePreviewWorkspace && isMobilePreviewWorkspaceOpen) {
+      closeMobilePreviewWorkspace();
+    }
+  }, [
+    closeMobilePreviewWorkspace,
+    isMobilePreviewWorkspaceOpen,
+    suppressMobilePreviewWorkspace,
+  ]);
 
   return (
     <div
@@ -497,8 +516,10 @@ function RootLayout() {
       <div className="flex h-full w-full flex-1 flex-col overflow-hidden">
         <Header />
         <main className="flex h-full w-full overflow-hidden">
-          {!isSetupRoute && !hideContentForSetupDecision && <MainSidebar />}
-          {hideContentForSetupDecision ? <StartupSetupGate /> : <Outlet />}
+          <div className="flex h-full min-w-0 flex-1">
+            {!isSetupRoute && !hideContentForSetupDecision && <MainSidebar />}
+            {hideContentForSetupDecision ? <StartupSetupGate /> : <Outlet />}
+          </div>
         </main>
       </div>
     </div>

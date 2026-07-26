@@ -10,6 +10,9 @@ const {
   prepareSummaryGenerationPromptMock,
   findTaskByIdMock,
   updateTaskMock,
+  runProvisionalTransitionMock,
+  stopTaskRuntimeMock,
+  resetTaskRuntimeMock,
   summarizeNormalizedMessagesMock,
   archiveAndDeleteRawMessagesMock,
 } = vi.hoisted(() => ({
@@ -22,6 +25,9 @@ const {
   prepareSummaryGenerationPromptMock: vi.fn(),
   findTaskByIdMock: vi.fn(),
   updateTaskMock: vi.fn(),
+  runProvisionalTransitionMock: vi.fn(),
+  stopTaskRuntimeMock: vi.fn(),
+  resetTaskRuntimeMock: vi.fn(),
   summarizeNormalizedMessagesMock: vi.fn(),
   archiveAndDeleteRawMessagesMock: vi.fn(),
 }));
@@ -57,6 +63,14 @@ vi.mock('../database/repositories/tasks', () => ({
   TaskRepository: {
     findById: findTaskByIdMock,
     update: updateTaskMock,
+  },
+}));
+
+vi.mock('./task-runtime-cleanup-service', () => ({
+  taskRuntimeCleanupService: {
+    runProvisionalTransition: runProvisionalTransitionMock,
+    stopByTask: stopTaskRuntimeMock,
+    resetAfterReactivation: resetTaskRuntimeMock,
   },
 }));
 
@@ -98,6 +112,19 @@ describe('StepService.resolveAndValidate', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    runProvisionalTransitionMock.mockImplementation(
+      async (_taskId, transition, isTerminal) => {
+        await stopTaskRuntimeMock(_taskId);
+        try {
+          const result = await transition();
+          if (!isTerminal(result)) await resetTaskRuntimeMock(_taskId);
+          return result;
+        } catch (error) {
+          await resetTaskRuntimeMock(_taskId);
+          throw error;
+        }
+      },
+    );
     prepareSummaryGenerationPromptMock.mockImplementation((messages) => {
       if (messages.length === 0) {
         throw new Error('Cannot summarize empty message history');
@@ -260,5 +287,83 @@ describe('StepService.resolveAndValidate', () => {
     expect(result.warnings).toEqual([
       'Summary generation failed for step "Step 1" (step-1); used last message fallback.',
     ]);
+  });
+});
+
+describe('StepService.syncTaskStatus', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runProvisionalTransitionMock.mockImplementation(
+      async (taskId, transition, isTerminal) => {
+        await stopTaskRuntimeMock(taskId);
+        try {
+          const result = await transition();
+          if (!isTerminal(result)) await resetTaskRuntimeMock(taskId);
+          return result;
+        } catch (error) {
+          await resetTaskRuntimeMock(taskId);
+          throw error;
+        }
+      },
+    );
+  });
+
+  it('stops task runtime before writing automatic completion', async () => {
+    findStepsByTaskIdMock.mockResolvedValue([
+      { id: 'step-1', taskId: 'task-1', status: 'completed' },
+    ]);
+    stopTaskRuntimeMock.mockResolvedValue(undefined);
+    updateTaskMock.mockResolvedValue({
+      id: 'task-1',
+      status: 'completed',
+      userCompleted: false,
+    });
+
+    await StepService.syncTaskStatus('task-1');
+
+    expect(stopTaskRuntimeMock).toHaveBeenCalledWith('task-1');
+    expect(stopTaskRuntimeMock.mock.invocationCallOrder[0]).toBeLessThan(
+      updateTaskMock.mock.invocationCallOrder[0],
+    );
+    expect(updateTaskMock).toHaveBeenCalledOnce();
+    expect(resetTaskRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it('deliberately resets runtime tombstone when task becomes active again', async () => {
+    findStepsByTaskIdMock.mockResolvedValue([
+      { id: 'step-1', taskId: 'task-1', status: 'ready' },
+    ]);
+    updateTaskMock.mockResolvedValue({
+      id: 'task-1',
+      status: 'waiting',
+      userCompleted: false,
+    });
+    resetTaskRuntimeMock.mockResolvedValue(undefined);
+
+    await StepService.syncTaskStatus('task-1');
+
+    expect(resetTaskRuntimeMock).toHaveBeenCalledWith('task-1');
+    expect(updateTaskMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resetTaskRuntimeMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('resets provisional runtime cleanup when automatic completion write fails', async () => {
+    stopTaskRuntimeMock.mockClear();
+    resetTaskRuntimeMock.mockClear();
+    findStepsByTaskIdMock.mockResolvedValue([
+      { id: 'step-1', taskId: 'task-1', status: 'completed' },
+    ]);
+    stopTaskRuntimeMock.mockResolvedValue(undefined);
+    updateTaskMock.mockRejectedValue(new Error('write failed'));
+    resetTaskRuntimeMock.mockResolvedValue(undefined);
+
+    await expect(StepService.syncTaskStatus('task-1')).rejects.toThrow(
+      'write failed',
+    );
+
+    expect(resetTaskRuntimeMock).toHaveBeenCalledWith('task-1');
+    expect(runProvisionalTransitionMock).toHaveBeenCalledOnce();
+    expect(updateTaskMock).toHaveBeenCalledOnce();
   });
 });

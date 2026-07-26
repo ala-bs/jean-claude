@@ -78,6 +78,7 @@ import * as m076 from './migrations/076_work_item_summaries';
 import * as m077 from './migrations/077_task_step_archived_at';
 import * as m078 from './migrations/078_pr_workspace_support';
 import * as m079 from './migrations/079_migrate_agent_memory';
+import * as m080 from './migrations/080_project_mobile_preview_config';
 
 const migrations: Record<string, Migration> = {
   '001_initial': m001,
@@ -158,6 +159,7 @@ const migrations: Record<string, Migration> = {
   '077_task_step_archived_at': m077,
   '078_pr_workspace_support': m078,
   '079_migrate_agent_memory': m079,
+  '080_project_mobile_preview_config': m080,
 };
 
 export const migrationProvider: MigrationProvider = {
