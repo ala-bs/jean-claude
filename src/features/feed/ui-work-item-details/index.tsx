@@ -515,7 +515,10 @@ export function WorkItemDetails({
     workItemId,
   });
   const linkedPrs = workItem?.linkedPrs ?? [];
-  const { data: linkedPullRequestStatuses = [] } = useLinkedPullRequestStatuses({
+  const {
+    data: linkedPullRequestStatuses = [],
+    isLoading: isLoadingPullRequestStatuses,
+  } = useLinkedPullRequestStatuses({
     providerId,
     linkedPrs,
   });
@@ -616,11 +619,6 @@ export function WorkItemDetails({
   const hasReproSteps = fields.workItemType === 'Bug' && !!fields.reproSteps;
   const hasContent =
     !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
-  const hasLinks =
-    !!workItem.parentId ||
-    !!workItem.childIds?.length ||
-    !!workItem.relatedWorkItemIds?.length ||
-    !!workItem.linkedPrs?.length;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -853,20 +851,19 @@ export function WorkItemDetails({
           className="border-glass-border/50 bg-bg-1/20 flex min-w-0 shrink-0 flex-col border-l"
           style={{ width: effectiveCommentsPaneWidth }}
         >
-          {hasLinks && (
-            <WorkItemLinks
-              workItem={workItem}
-              linkedWorkItems={linkedWorkItems}
-              linkedPullRequestStatuses={linkedPullRequestStatuses}
-              isLoadingWorkItems={isLoadingLinkedWorkItems}
-              onOpenWorkItem={(id) =>
-                setLinkDetailModal({ type: 'work-item', workItemId: id })
-              }
-              onOpenPullRequest={(pr) =>
-                setLinkDetailModal({ type: 'pull-request', pr })
-              }
-            />
-          )}
+          <WorkItemLinks
+            workItem={workItem}
+            linkedWorkItems={linkedWorkItems}
+            linkedPullRequestStatuses={linkedPullRequestStatuses}
+            isLoadingWorkItems={isLoadingLinkedWorkItems}
+            isLoadingPullRequestStatuses={isLoadingPullRequestStatuses}
+            onOpenWorkItem={(id) =>
+              setLinkDetailModal({ type: 'work-item', workItemId: id })
+            }
+            onOpenPullRequest={(pr) =>
+              setLinkDetailModal({ type: 'pull-request', pr })
+            }
+          />
 
           <div className="border-glass-border flex gap-0 border-b px-3">
             <FeedTabButton
@@ -978,6 +975,7 @@ function WorkItemLinks({
   linkedWorkItems,
   linkedPullRequestStatuses,
   isLoadingWorkItems,
+  isLoadingPullRequestStatuses,
   onOpenWorkItem,
   onOpenPullRequest,
 }: {
@@ -985,6 +983,7 @@ function WorkItemLinks({
   linkedWorkItems: AzureDevOpsWorkItem[];
   linkedPullRequestStatuses: AzureDevOpsPullRequestStatus[];
   isLoadingWorkItems: boolean;
+  isLoadingPullRequestStatuses: boolean;
   onOpenWorkItem: (workItemId: number) => void;
   onOpenPullRequest: (
     pr: NonNullable<AzureDevOpsWorkItem['linkedPrs']>[number],
@@ -1019,18 +1018,24 @@ function WorkItemLinks({
       </button>
 
       {!collapsed && <div className="flex flex-col gap-2.5 px-5 pb-3">
-        {!!workItem.linkedPrs?.length && (
-          <LinkGroup label="Pull Requests">
-            {workItem.linkedPrs.map((pr) => (
+        <LinkGroup label="Pull Requests">
+          {workItem.linkedPrs?.length ? (
+            workItem.linkedPrs.map((pr) => (
               <LinkedPrChip
                 key={`${pr.projectId}-${pr.repoId}-${pr.prId}`}
                 pr={pr}
                 status={findPullRequestStatus(pr)}
+                isLoadingStatus={isLoadingPullRequestStatuses}
                 onOpen={() => onOpenPullRequest(pr)}
               />
-            ))}
-          </LinkGroup>
-        )}
+            ))
+          ) : (
+            <span className="text-ink-3 flex items-center gap-1.5 py-1 text-xs italic">
+              <GitPullRequest className="h-3.5 w-3.5 shrink-0" />
+              No pull request associated
+            </span>
+          )}
+        </LinkGroup>
 
         {workItem.parentId && (
           <LinkGroup label="Parent">
@@ -1102,25 +1107,69 @@ function LinkGroup({ label, children }: { label: string; children: ReactNode }) 
 function LinkedPrChip({
   pr,
   status,
+  isLoadingStatus,
   onOpen,
 }: {
   pr: NonNullable<AzureDevOpsWorkItem['linkedPrs']>[number];
   status?: AzureDevOpsPullRequestStatus;
+  isLoadingStatus: boolean;
   onOpen: () => void;
 }) {
+  const state = getPullRequestState(status);
   const content = (
     <>
-      <GitPullRequest className="h-3.5 w-3.5 shrink-0 text-acc-ink" />
+      <GitPullRequest className="text-acc-ink h-3.5 w-3.5 shrink-0" />
       <span>PR #{pr.prId}</span>
-      {status?.isDraft && <span className="text-ink-3">Draft</span>}
+      {state ? (
+        <Chip size="xs" color={state.color} pill className={state.className}>
+          {state.label}
+        </Chip>
+      ) : isLoadingStatus ? (
+        <span className="bg-ink-4/20 h-3.5 w-12 shrink-0 animate-pulse rounded-full" />
+      ) : (
+        <Chip size="xs" color="neutral" pill title="Pull request state unavailable">
+          Unknown
+        </Chip>
+      )}
     </>
   );
 
   return (
-    <LinkChip onClick={onOpen} title={`Open PR #${pr.prId}`}>
+    <LinkChip
+      onClick={onOpen}
+      title={
+        state ? `Open PR #${pr.prId} (${state.label})` : `Open PR #${pr.prId}`
+      }
+    >
       {content}
     </LinkChip>
   );
+}
+
+// Mirrors the PR header badge mapping (src/features/pull-request/ui-pr-header).
+function getPullRequestState(status?: AzureDevOpsPullRequestStatus):
+  | {
+      label: string;
+      color: 'green' | 'purple' | 'red' | 'neutral';
+      className?: string;
+    }
+  | null {
+  if (!status) return null;
+  if (status.isDraft && status.status === 'active') {
+    return {
+      label: 'Draft',
+      color: 'neutral',
+      className: '!bg-amber-300 !font-semibold !text-amber-950',
+    };
+  }
+  switch (status.status) {
+    case 'completed':
+      return { label: 'Merged', color: 'purple' };
+    case 'abandoned':
+      return { label: 'Closed', color: 'red' };
+    default:
+      return { label: 'Open', color: 'green' };
+  }
 }
 
 function LinkedWorkItemChip({
