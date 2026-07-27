@@ -12,6 +12,7 @@ import {
   Link2,
   Loader2,
   MessagesSquare,
+  RefreshCw,
 } from 'lucide-react';
 import {
   startTransition,
@@ -431,6 +432,7 @@ export function WorkItemDetails({
     data: workItem,
     isLoading,
     error,
+    refetch: refetchWorkItem,
   } = useWorkItemById({
     providerId,
     workItemId,
@@ -487,6 +489,7 @@ export function WorkItemDetails({
     data: comments = [],
     isLoading: isLoadingComments,
     error: commentsError,
+    refetch: refetchComments,
   } = useWorkItemComments({
     providerId,
     projectName,
@@ -496,29 +499,55 @@ export function WorkItemDetails({
     data: history = [],
     isLoading: isLoadingHistory,
     error: historyError,
+    refetch: refetchHistory,
   } = useWorkItemHistory({
     providerId,
     projectName,
     workItemId,
   });
-  const { data: relatedTestCases = [], isLoading: isLoadingTestCases } =
-    useRelatedTestCases({
-      providerId,
-      projectName,
-      workItemId,
-    });
+  const {
+    data: relatedTestCases = [],
+    isLoading: isLoadingTestCases,
+    refetch: refetchTestCases,
+  } = useRelatedTestCases({
+    providerId,
+    projectName,
+    workItemId,
+  });
   const linkedPrs = workItem?.linkedPrs ?? [];
   const { data: linkedPullRequestStatuses = [] } = useLinkedPullRequestStatuses({
     providerId,
     linkedPrs,
   });
   const linkedWorkItemIds = getLinkedWorkItemIds(workItem);
-  const { data: linkedWorkItems = [], isLoading: isLoadingLinkedWorkItems } =
-    useWorkItemsByIds({
-      providerId,
-      projectName,
-      workItemIds: linkedWorkItemIds,
-    });
+  const {
+    data: linkedWorkItems = [],
+    isLoading: isLoadingLinkedWorkItems,
+    refetch: refetchLinkedWorkItems,
+  } = useWorkItemsByIds({
+    providerId,
+    projectName,
+    workItemIds: linkedWorkItemIds,
+  });
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    void Promise.allSettled([
+      refetchWorkItem(),
+      refetchComments(),
+      refetchHistory(),
+      refetchTestCases(),
+      refetchLinkedWorkItems(),
+      ownerQuery.refetch(),
+    ]).finally(() => setIsRefreshing(false));
+  }, [
+    refetchWorkItem,
+    refetchComments,
+    refetchHistory,
+    refetchTestCases,
+    refetchLinkedWorkItems,
+    ownerQuery,
+  ]);
   const addComment = useAddWorkItemComment();
   const updateComment = useUpdateWorkItemComment();
   const updateField = useUpdateWorkItemField();
@@ -610,6 +639,18 @@ export function WorkItemDetails({
               {fields.title}
             </h1>
           </div>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="text-ink-2 hover:border-glass-border hover:text-ink-1 border-glass-border flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors disabled:opacity-60"
+            title="Refresh work item"
+          >
+            <RefreshCw
+              className={clsx('h-3.5 w-3.5', isRefreshing && 'animate-spin')}
+            />
+            Refresh
+          </button>
           {workItem.url && (
             <a
               href={workItem.url}

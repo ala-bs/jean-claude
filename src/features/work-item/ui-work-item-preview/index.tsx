@@ -8,7 +8,9 @@ import {
   Link2,
   Loader2,
   MessagesSquare,
+  RefreshCw,
 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   type ReactNode,
   startTransition,
@@ -197,6 +199,28 @@ export function WorkItemPreview({
       workItemIds: [...new Set(relatedIds)],
     });
 
+  const queryClient = useQueryClient();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleRefresh = useCallback(() => {
+    if (!workItemId) return;
+    setIsRefreshing(true);
+    const keys = [
+      'work-item',
+      'work-items',
+      'work-items-by-ids',
+      'work-item-comments',
+      'work-item-history',
+      'related-test-cases',
+      'related-test-cases-batch',
+      'pull-request-work-items',
+    ];
+    void queryClient
+      .invalidateQueries({
+        predicate: (query) => keys.includes(query.queryKey[0] as string),
+      })
+      .finally(() => setIsRefreshing(false));
+  }, [queryClient, workItemId]);
+
   const hasTestCases = relatedTestCases.length > 0 || !!relatedTestCasesError;
   const canEditMetadata = editableMetadata && !readOnly;
 
@@ -273,7 +297,7 @@ export function WorkItemPreview({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {(editableMetadata || headerLeading || headerActions) && <div className={isEditorial ? 'border-line flex items-start gap-2 border-b px-4 py-3' : 'border-glass-border flex items-start gap-2 border-b px-3 py-2.5'}>
+      {(editableMetadata || headerLeading || headerActions || !!workItemId) && <div className={isEditorial ? 'border-line flex items-start gap-2 border-b px-4 py-3' : 'border-glass-border flex items-start gap-2 border-b px-3 py-2.5'}>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <WorkItemTypeIcon type={workItemType} size="sm" variant={variant} />
@@ -433,7 +457,22 @@ export function WorkItemPreview({
             />
           )}
         </div>
-        {headerActions && <div className="flex shrink-0 items-center gap-1">{headerActions}</div>}
+        <div className="flex shrink-0 items-center gap-1">
+          {!!workItemId && (
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              title="Refresh work item"
+              className="text-ink-3 hover:text-ink-1 flex items-center rounded p-1 transition-colors disabled:opacity-60"
+            >
+              <RefreshCw
+                className={isRefreshing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
+              />
+            </button>
+          )}
+          {headerActions}
+        </div>
       </div>}
        <div className={isEditorial ? 'border-line flex gap-1 border-b px-3 pt-2' : 'border-glass-border flex gap-0 border-b'}>
         <TabButton
