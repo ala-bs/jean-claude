@@ -199,6 +199,18 @@ export function getDeferredSetupAction({
   return prebuildStatus === 'completed' && prebuildDone ? 'resume' : 'none';
 }
 
+export function getDependencyInstallDeferredAction({
+  resumeRequested,
+  status,
+}: {
+  resumeRequested: boolean;
+  status: string | undefined;
+}): 'none' | 'error' | 'resume' {
+  if (!resumeRequested) return 'none';
+  if (status === 'errored') return 'error';
+  return status === 'completed' ? 'resume' : 'none';
+}
+
 export function cancelPendingWorkspaceSetup({
   cancelSetupOperation,
   cancelStart,

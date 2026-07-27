@@ -6,6 +6,7 @@ import {
   createIosBuildLaunchCoordinator,
   createPreviewSetupOperationCoordinator,
   getDeferredSetupAction,
+  getDependencyInstallDeferredAction,
   getIosAppStatusRequestKey,
   getIosAppStatusRequestState,
   getIosBuildAttemptDecision,
@@ -426,6 +427,33 @@ describe('preview setup operation coordinator', () => {
         prebuildDone: true,
       }),
     ).toBe('resume');
+  });
+
+  it('waits for dependency install completion before resuming setup', () => {
+    expect(
+      getDependencyInstallDeferredAction({
+        resumeRequested: true,
+        status: undefined,
+      }),
+    ).toBe('none');
+    expect(
+      getDependencyInstallDeferredAction({
+        resumeRequested: true,
+        status: 'running',
+      }),
+    ).toBe('none');
+    expect(
+      getDependencyInstallDeferredAction({
+        resumeRequested: true,
+        status: 'completed',
+      }),
+    ).toBe('resume');
+    expect(
+      getDependencyInstallDeferredAction({
+        resumeRequested: false,
+        status: 'completed',
+      }),
+    ).toBe('none');
   });
 
   it('resumes deferred setup only after command completion and refreshed project status', () => {

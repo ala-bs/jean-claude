@@ -109,6 +109,7 @@ import {
   createIosBuildLaunchCoordinator,
   createPreviewSetupOperationCoordinator,
   getDeferredSetupAction,
+  getDependencyInstallDeferredAction,
   getIosAppStatusRequestKey,
   getIosAppStatusRequestState,
   getMobileAppSetupDecision,
@@ -5505,7 +5506,6 @@ export function MobilePreviewPane({
             command: dependenciesInstallCommand,
             ports: [],
           });
-          showActionNotice('Dependency install started; setup will continue when it finishes');
         }
         return;
       }
@@ -5793,11 +5793,14 @@ export function MobilePreviewPane({
   ]);
 
   useEffect(() => {
-    if (!resumeSetupAfterDependenciesInstall) return;
-    if (dependenciesInstallStatusValue === 'running') return;
+    const deferredAction = getDependencyInstallDeferredAction({
+      resumeRequested: resumeSetupAfterDependenciesInstall,
+      status: dependenciesInstallStatusValue,
+    });
+    if (deferredAction === 'none') return;
     queueMicrotask(() => {
       setResumeSetupAfterDependenciesInstall(false);
-      if (dependenciesInstallStatusValue === 'errored') {
+      if (deferredAction === 'error') {
         setInputNotice('Dependency install failed; check Metro tab logs');
         return;
       }
@@ -5855,6 +5858,7 @@ export function MobilePreviewPane({
           dependenciesInstallStatusValue === 'running' ? 'Stop' : 'Run',
         onClick: () => {
           if (dependenciesInstallStatusValue === 'running') {
+            setResumeSetupAfterDependenciesInstall(false);
             void runCommands.stopCommand(dependenciesInstallCommandId);
             return;
           }

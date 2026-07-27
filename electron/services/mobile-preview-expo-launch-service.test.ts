@@ -405,6 +405,7 @@ describe('mobilePreviewExpoLaunchService', () => {
   it('tries legacy endpoint after current endpoint transport failure', async () => {
     deps.fetch
       .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
       .mockResolvedValueOnce(
         new Response(null, {
           status: 307,
@@ -415,6 +416,21 @@ describe('mobilePreviewExpoLaunchService', () => {
     await expect(
       createMobilePreviewExpoLaunchService(deps).launch(params),
     ).resolves.toEqual({ url: 'https://expo.dev/@example/mobile' });
+    expect(deps.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries current endpoint when Metro is still starting', async () => {
+    deps.fetch
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ url: 'exp://127.0.0.1:19001' }), {
+          status: 200,
+        }),
+      );
+
+    await expect(
+      createMobilePreviewExpoLaunchService(deps).launch(params),
+    ).resolves.toEqual({ url: 'exp://127.0.0.1:19001' });
     expect(deps.fetch).toHaveBeenCalledTimes(2);
   });
 

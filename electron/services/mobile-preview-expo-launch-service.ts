@@ -379,6 +379,7 @@ export function createMobilePreviewExpoLaunchService(deps: {
 }) {
   const timeoutMs = deps.timeoutMs ?? 5_000;
   const maxResponseBytes = deps.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  const transportRetryDelayMs = Math.min(250, Math.max(25, timeoutMs / 10));
   const latestRequestIds = new Map<string, string>();
   const activeRequestControllers = new Map<string, AbortController>();
   const deviceOpenTails = new Map<string, Promise<void>>();
@@ -552,6 +553,37 @@ export function createMobilePreviewExpoLaunchService(deps: {
     }
   }
 
+  async function requestWithTransportRetry<T>(
+    url: URL,
+    handleResponse: (
+      response: Response,
+      signal: AbortSignal,
+    ) => Promise<T> | T,
+    signal: AbortSignal,
+  ): Promise<T> {
+    try {
+      return await request(url, handleResponse, signal);
+    } catch (error) {
+      if (!(error instanceof ExpoLaunchTransportError) || error.timedOut) {
+        throw error;
+      }
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          signal.removeEventListener('abort', onAbort);
+          resolve();
+        }, transportRetryDelayMs);
+        const onAbort = () => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          reject(signal.reason);
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        timer.unref();
+      });
+      return request(url, handleResponse, signal);
+    }
+  }
+
   async function requestLegacy(
     baseUrl: URL,
     platform: MobilePreviewExpoLaunchParams['platform'],
@@ -646,7 +678,7 @@ export function createMobilePreviewExpoLaunchService(deps: {
         currentUrl.searchParams.set('runtime', 'default');
         let result: MobilePreviewExpoLaunchResult;
         try {
-          const currentResult = await request(
+          const currentResult = await requestWithTransportRetry(
             currentUrl,
             async (response, signal) => {
               if (response.status === 404) {
