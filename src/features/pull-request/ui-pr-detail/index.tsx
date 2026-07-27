@@ -7,7 +7,7 @@ import {
   useState,
 } from 'react';
 import clsx from 'clsx';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 
 
@@ -16,6 +16,7 @@ import {
   normalizeAzureChangeType,
 } from '@/features/common/ui-file-diff';
 import {
+  containsAzureDevOpsMention,
   type MentionDisplayNames,
   normalizeMentionId,
 } from '@/lib/azure-devops-mentions';
@@ -614,6 +615,27 @@ export function PrDetail({
     selectedFile,
   ]);
 
+  const mentionProviderId = repoInfo?.providerId ?? project?.repoProviderId;
+  const hasUnresolvedMentions = useMemo(
+    () =>
+      threads.some((thread) =>
+        thread.comments.some((comment) =>
+          containsAzureDevOpsMention(comment.content ?? ''),
+        ),
+      ) || containsAzureDevOpsMention(pr?.description ?? ''),
+    [pr?.description, threads],
+  );
+  const { data: initialMentionOptions } = useQuery({
+    queryKey: ['azure-identities', mentionProviderId, 'pr-detail'],
+    queryFn: () =>
+      api.azureDevOps.searchIdentities({
+        providerId: mentionProviderId!,
+        query: '',
+      }),
+    enabled: !!mentionProviderId && hasUnresolvedMentions,
+    staleTime: 5 * 60_000,
+  });
+
   const { mentionDisplayNames, mentionOptions } = useMemo(() => {
     const names: MentionDisplayNames = {};
     const optionsById = new Map<string, MentionOption>();
@@ -638,6 +660,7 @@ export function PrDetail({
     for (const thread of threads) {
       for (const comment of thread.comments) addPerson(comment.author);
     }
+    for (const option of initialMentionOptions ?? []) addPerson(option);
     for (const option of searchedMentionOptions) addPerson(option);
 
     return {
@@ -646,7 +669,13 @@ export function PrDetail({
         a.displayName.localeCompare(b.displayName),
       ),
     };
-  }, [pr?.createdBy, pr?.reviewers, searchedMentionOptions, threads]);
+  }, [
+    initialMentionOptions,
+    pr?.createdBy,
+    pr?.reviewers,
+    searchedMentionOptions,
+    threads,
+  ]);
 
   const handleSearchMentions = useCallback(
     async (query: string) => {
@@ -792,6 +821,7 @@ export function PrDetail({
             bottomPadding={bottomPadding}
             fileCount={files.length}
             files={files}
+            mentionDisplayNames={mentionDisplayNames}
             mentionOptions={mentionOptions}
             onSearchMentions={handleSearchMentions}
             commentSubmitLabel={undefined}

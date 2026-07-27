@@ -98,6 +98,7 @@ export function PrOverview({
   bottomPadding = 0,
   fileCount = 0,
   files = [],
+  mentionDisplayNames: providedMentionDisplayNames,
   mentionOptions = [],
   onSearchMentions,
   repoInfo,
@@ -118,6 +119,7 @@ export function PrOverview({
   bottomPadding?: number;
   fileCount?: number;
   files?: AzureDevOpsFileChange[];
+  mentionDisplayNames?: MentionDisplayNames;
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   repoInfo?: PullRequestRepoInfo;
@@ -135,7 +137,7 @@ export function PrOverview({
   const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
 
   const mentionDisplayNames = useMemo(() => {
-    const names: MentionDisplayNames = {};
+    const names: MentionDisplayNames = { ...providedMentionDisplayNames };
     const addName = (
       id: string | undefined,
       displayName: string | undefined,
@@ -156,7 +158,13 @@ export function PrOverview({
     }
 
     return names;
-  }, [currentUser, pr.createdBy, pr.reviewers, threads]);
+  }, [
+    currentUser,
+    pr.createdBy,
+    pr.reviewers,
+    providedMentionDisplayNames,
+    threads,
+  ]);
 
 
   const handleExpandCheck = useCallback((buildId: number | null) => {
