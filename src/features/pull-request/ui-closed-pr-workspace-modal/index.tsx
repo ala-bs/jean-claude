@@ -17,6 +17,7 @@ import {
 import { Button } from '@/common/ui/button';
 import { getPrWorkspaceDeletionDestination } from '@/lib/pr-workspace-navigation';
 import { Modal } from '@/common/ui/modal';
+import { useHasQueuedModal } from '@/common/context/modal';
 import { useToastStore } from '@/stores/toasts';
 
 const preventDismiss = () => {};
@@ -35,6 +36,8 @@ export function ClosedPrWorkspaceModal() {
   const resolution = useResolvePrWorkspaceDecision();
   const addToast = useToastStore((state) => state.addToast);
   const decision = decisions[0];
+  // Queued modals bypass arbitration, so yield explicitly to avoid stacking.
+  const hasQueuedModal = useHasQueuedModal();
 
   const resolve = async (action: 'keep' | 'delete') => {
     if (!decision) return;
@@ -70,7 +73,9 @@ export function ClosedPrWorkspaceModal() {
 
   return (
     <Modal
-      isOpen={decision !== undefined || loadError !== null}
+      isOpen={
+        !hasQueuedModal && (decision !== undefined || loadError !== null)
+      }
       onClose={preventDismiss}
       closeOnClickOutside={false}
       closeOnEscape={false}

@@ -6,6 +6,7 @@ import { RemoveScroll } from 'react-remove-scroll';
 import { api } from '@/lib/api';
 import type { GlobalPrompt } from '@shared/global-prompt-types';
 import { Kbd } from '@/common/ui/kbd';
+import { useHasQueuedModal } from '@/common/context/modal';
 import { useModalArbitration } from '@/common/context/modal-arbitration';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 
@@ -29,7 +30,10 @@ export function GlobalPromptFromBackModal() {
   }, []);
 
   const currentPrompt = promptQueue[0] ?? null;
-  const ownsArbitration = useModalArbitration(currentPrompt !== null, 100);
+  // Queued modals bypass arbitration, so yield explicitly to avoid stacking.
+  const hasQueuedModal = useHasQueuedModal();
+  const ownsArbitration =
+    useModalArbitration(currentPrompt !== null, 100) && !hasQueuedModal;
   const hasInput = !!currentPrompt?.inputType;
 
   // Auto-focus input when a prompt with input appears
