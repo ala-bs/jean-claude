@@ -289,6 +289,24 @@ describe('compound command breakdown', () => {
     ]);
   });
 
+  it('evaluates commands hidden inside assignments and loops', () => {
+    const result = evaluatePermissionWithMatch(
+      [
+        { tool: 'bash', pattern: 'echo *', action: 'allow' },
+        { tool: 'bash', pattern: 'pnpm test', action: 'allow' },
+      ],
+      'bash',
+      'echo hi && NODE_ENV=$(rm -rf /) pnpm test',
+    );
+
+    expect(result.subCommands?.map((sub) => sub.command)).toEqual([
+      'echo hi',
+      'rm -rf /',
+      'pnpm test',
+    ]);
+    expect(result.action).toBe('ask');
+  });
+
   it('omits the breakdown for a simple command', () => {
     expect(
       evaluatePermissionWithMatch(rules, 'bash', 'cd /repo').subCommands,
