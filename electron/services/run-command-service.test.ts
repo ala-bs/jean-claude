@@ -613,3 +613,34 @@ describe('RunCommandService stopCommandsForTask', () => {
     }
   }, 10_000);
 });
+
+describe('runCommandService.resetTaskAfterReactivation', () => {
+  beforeEach(() => {
+    testService.runningProcesses.clear();
+  });
+
+  afterEach(() => {
+    testService.runningProcesses.clear();
+  });
+
+  it('keeps live processes tracked when a task is reactivated without a stop', () => {
+    addRunningCommand('task-1', 'command-1');
+
+    runCommandService.resetTaskAfterReactivation('task-1');
+
+    expect(testService.runningProcesses.get('task-1')?.has('command-1')).toBe(
+      true,
+    );
+  });
+
+  it('drops terminated processes and clears empty task entries', () => {
+    addRunningCommand('task-1', 'command-1');
+    testService.runningProcesses
+      .get('task-1')
+      ?.set('command-1', { status: 'stopped' });
+
+    runCommandService.resetTaskAfterReactivation('task-1');
+
+    expect(testService.runningProcesses.has('task-1')).toBe(false);
+  });
+});

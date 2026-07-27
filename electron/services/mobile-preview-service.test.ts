@@ -630,6 +630,25 @@ describe('mobile preview service', () => {
     ).resolves.toMatchObject({ taskId: 'task-1' });
   });
 
+  it('leaves a live preview untouched when resetting a never-stopped task', async () => {
+    const { service, ios } = createService();
+    const session = await service.start({
+      taskId: 'task-1',
+      projectPath: '/project',
+      platform: 'ios',
+      deviceId: 'device-1',
+    });
+
+    await expect(
+      service.resetTaskAfterReactivation('task-1'),
+    ).resolves.toBeUndefined();
+
+    expect(ios.adapter.startStream).toHaveBeenCalledTimes(1);
+    await expect(
+      service.sendInput(session.id, { type: 'tap', x: 1, y: 1 }),
+    ).resolves.toBeUndefined();
+  });
+
   it('keeps a later terminal stop when reactivation is queued behind cleanup', async () => {
     const { service, ios } = createService({ deferIosStops: true });
     await service.start({

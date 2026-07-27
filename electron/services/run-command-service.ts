@@ -1510,8 +1510,20 @@ export class RunCommandService {
   }
 
   resetTaskAfterReactivation(taskId: string): void {
-    if (!this.runningProcesses.delete(taskId)) return;
-    this.notifyStatusChange(taskId);
+    const taskProcesses = this.runningProcesses.get(taskId);
+    if (!taskProcesses) return;
+
+    // Only drop already-terminated entries. Dropping live processes would
+    // orphan them (ports held, never stoppable, missed on shutdown cleanup)
+    // — reachable because reactivation can happen without a prior stop.
+    let removed = false;
+    for (const [runCommandId, tracked] of [...taskProcesses]) {
+      if (tracked.status === 'running' && !tracked.exited) continue;
+      taskProcesses.delete(runCommandId);
+      removed = true;
+    }
+    if (taskProcesses.size === 0) this.runningProcesses.delete(taskId);
+    if (removed) this.notifyStatusChange(taskId);
   }
 
   async getPackageScripts(projectPath: string): Promise<PackageScriptsResult> {

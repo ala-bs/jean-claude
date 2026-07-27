@@ -1,3 +1,19 @@
+const MAX_ERROR_DETAIL_LENGTH = 200;
+
+/** Flattens error causes into the message so IPC-serialized errors stay debuggable. */
+export function describeErrors(errors: unknown[]): string {
+  return errors
+    .map((error) => {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      const firstLine = message.split('\n')[0] ?? '';
+      return firstLine.length > MAX_ERROR_DETAIL_LENGTH
+        ? `${firstLine.slice(0, MAX_ERROR_DETAIL_LENGTH)}…`
+        : firstLine;
+    })
+    .join('; ');
+}
+
 export function createTaskRuntimeCleanupService(deps: {
   stopRunCommandsForTask: (taskId: string) => Promise<void>;
   stopMobilePreviewSessionsByTask: (taskId: string) => Promise<void>;
@@ -16,7 +32,10 @@ export function createTaskRuntimeCleanupService(deps: {
       result.status === 'rejected' ? [result.reason] : [],
     );
     if (errors.length > 0) {
-      throw new AggregateError(errors, `Failed to ${label}: ${taskId}`);
+      throw new AggregateError(
+        errors,
+        `Failed to ${label}: ${taskId} (${describeErrors(errors)})`,
+      );
     }
   }
 
@@ -46,7 +65,7 @@ export function createTaskRuntimeCleanupService(deps: {
         } catch (resetError) {
           throw new AggregateError(
             [error, resetError],
-            `Task transition and runtime reset failed: ${taskId}`,
+            `Task transition and runtime reset failed: ${taskId} (${describeErrors([error, resetError])})`,
           );
         }
         throw error;

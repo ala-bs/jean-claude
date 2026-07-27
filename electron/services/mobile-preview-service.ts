@@ -839,6 +839,9 @@ export function createMobilePreviewService({
     },
 
     resetTaskAfterReactivation(taskId: string): Promise<void> {
+      // Task was never marked terminal: nothing to reactivate, and any
+      // currently running preview must be left untouched.
+      if (!terminalTaskIds.has(taskId)) return Promise.resolve();
       const resetGeneration = invalidateTaskStarts(taskId);
       return runTaskOperation(taskId, async () => {
         if (getTaskGeneration(taskId) !== resetGeneration) return;

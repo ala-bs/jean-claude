@@ -178,4 +178,24 @@ describe('task runtime cleanup service', () => {
       'task-1',
     );
   });
+  it('includes underlying error messages in the aggregate message', async () => {
+    const deps = {
+      stopRunCommandsForTask: vi.fn().mockResolvedValue(undefined),
+      stopMobilePreviewSessionsByTask: vi.fn().mockResolvedValue(undefined),
+      resetRunCommandTaskAfterReactivation: vi.fn().mockResolvedValue(undefined),
+      resetMobilePreviewTaskAfterReactivation: vi
+        .fn()
+        .mockRejectedValue(new Error('Cannot reactivate task with active preview: task-1')),
+    };
+    const service = createTaskRuntimeCleanupService(deps);
+
+    const error = await service
+      .resetAfterReactivation('task-1')
+      .catch((reason) => reason);
+
+    expect(error.message).toContain('Failed to reset task runtime: task-1');
+    expect(error.message).toContain(
+      'Cannot reactivate task with active preview: task-1',
+    );
+  });
 });
