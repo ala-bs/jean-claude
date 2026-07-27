@@ -376,6 +376,9 @@ export class ClaudeCodeBackend implements AgentBackend {
       cwd: config.cwd,
       env: getChildProcessEnv(),
       allowedTools: [],
+      // Disable the built-in question tool: we expose our own
+      // `mcp__jean-claude-mcp__ask_question` which renders in the task UI.
+      disallowedTools: ['AskUserQuestion'],
       canUseTool: async (
         toolName: string,
         input: Record<string, unknown>,
