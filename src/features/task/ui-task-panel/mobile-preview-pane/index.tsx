@@ -510,6 +510,58 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+// A <canvas> reports 300x150 until a frame sets its intrinsic size. That default
+// is landscape and would wrongly flip a portrait session, so treat it as unknown.
+const DEFAULT_CANVAS_WIDTH = 300;
+const DEFAULT_CANVAS_HEIGHT = 150;
+
+function getSurfaceIntrinsicSize(
+  surface: HTMLImageElement | HTMLCanvasElement | null,
+): { width: number; height: number } | null {
+  if (!surface) return null;
+  if (surface instanceof HTMLImageElement) {
+    if (!surface.naturalWidth || !surface.naturalHeight) return null;
+    return { width: surface.naturalWidth, height: surface.naturalHeight };
+  }
+  if (!surface.width || !surface.height) return null;
+  if (
+    surface.width === DEFAULT_CANVAS_WIDTH &&
+    surface.height === DEFAULT_CANVAS_HEIGHT
+  ) {
+    return null;
+  }
+  return { width: surface.width, height: surface.height };
+}
+
+/**
+ * Device coordinate space for input events. Session dimensions are captured once
+ * at stream start, so when the device rotates afterwards they must be re-oriented
+ * to match what is actually rendered.
+ */
+function resolveDeviceSize({
+  surface,
+  sessionWidth,
+  sessionHeight,
+  fallback,
+}: {
+  surface: { width: number; height: number } | null;
+  sessionWidth: number | null;
+  sessionHeight: number | null;
+  fallback: { width: number; height: number };
+}) {
+  if (!sessionWidth || !sessionHeight) {
+    return surface ?? fallback;
+  }
+  if (!surface || surface.width === surface.height) {
+    return { width: sessionWidth, height: sessionHeight };
+  }
+  const sameOrientation =
+    surface.width > surface.height === sessionWidth > sessionHeight;
+  return sameOrientation
+    ? { width: sessionWidth, height: sessionHeight }
+    : { width: sessionHeight, height: sessionWidth };
+}
+
 function formatDeviceState(state: MobilePreviewDevice['state']) {
   if (state === 'booted') return 'Booted';
   if (state === 'shutdown') return 'Shutdown';
@@ -3530,13 +3582,12 @@ export function MobilePreviewPane({
         return null;
       }
 
-      const naturalWidth =
-        image?.naturalWidth || session?.width || canvas?.width || rect.width;
-      const naturalHeight =
-        image?.naturalHeight ||
-        session?.height ||
-        canvas?.height ||
-        rect.height;
+      const { width: naturalWidth, height: naturalHeight } = resolveDeviceSize({
+        surface: getSurfaceIntrinsicSize(surface),
+        sessionWidth: session?.width ?? null,
+        sessionHeight: session?.height ?? null,
+        fallback: { width: rect.width, height: rect.height },
+      });
 
       const x = options.clampToBounds
         ? clamp(clientX, rect.left, rect.right)
@@ -4204,8 +4255,15 @@ export function MobilePreviewPane({
       return;
     }
 
-    const width = session.width ?? imgRef.current?.naturalWidth ?? 0;
-    const height = session.height ?? imgRef.current?.naturalHeight ?? 0;
+    const surfaceElement =
+      imgRef.current ?? containerRef.current?.querySelector('canvas') ?? null;
+    const surface = getSurfaceIntrinsicSize(surfaceElement);
+    const { width, height } = resolveDeviceSize({
+      surface,
+      sessionWidth: session.width ?? null,
+      sessionHeight: session.height ?? null,
+      fallback: surface ?? { width: 0, height: 0 },
+    });
     if (width <= 0 || height <= 0) return;
 
     const y = Math.round(height / 2);

@@ -2037,7 +2037,20 @@ export function createAndroidMobilePreviewAdapter({
               void startVideoFallback(error);
             },
             onSize: (size) => {
-              if (!screenSize) params.onSession(size);
+              if (!screenSize) {
+                params.onSession(size);
+                return;
+              }
+              // scrcpy sizes are downscaled by maxSize, so they can't be used as
+              // input coordinates. Only adopt their orientation: keep `wm size`
+              // magnitudes and transpose them when the device rotated.
+              const streamLandscape = size.width > size.height;
+              const screenLandscape = screenSize.width > screenSize.height;
+              params.onSession(
+                streamLandscape === screenLandscape
+                  ? { width: screenSize.width, height: screenSize.height }
+                  : { width: screenSize.height, height: screenSize.width },
+              );
             },
           }),
           timeoutMs: ANDROID_SCRCPY_START_TIMEOUT_MS,
