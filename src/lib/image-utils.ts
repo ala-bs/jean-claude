@@ -13,6 +13,30 @@ export const ALLOWED_IMAGE_TYPES = [
   'image/avif',
 ];
 
+const MIME_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/avif': 'avif',
+};
+
+/**
+ * Attachment hosts (e.g. Azure DevOps) serve uploaded files with a content type
+ * derived from the file extension, not from the upload request. Images are
+ * re-encoded to AVIF/WebP during compression, so the original extension would
+ * make the attachment render as broken. Align the extension with actual bytes.
+ */
+export function getAttachmentFileName(
+  fileName: string,
+  mimeType: string,
+): string {
+  const extension = MIME_EXTENSIONS[mimeType];
+  if (!extension) return fileName;
+  const base = fileName.replace(/\.[^./\\]+$/, '') || 'image';
+  return `${base}.${extension}`;
+}
+
 export async function processImageFile(
   file: File,
   onAttach: (image: PromptImagePart) => void,

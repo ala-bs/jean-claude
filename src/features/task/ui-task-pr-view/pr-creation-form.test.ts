@@ -108,11 +108,18 @@ vi.mock('@/stores/toasts', () => ({
     selector({ addToast: vi.fn() }),
 }));
 
-vi.mock('@/lib/image-utils', () => ({
-  MAX_FILE_SIZE: 10 * 1024 * 1024,
-  MAX_IMAGES: 5,
-  processImageFile: processImageFileSpy,
-}));
+vi.mock('@/lib/image-utils', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/image-utils')>(
+      '@/lib/image-utils',
+    );
+  return {
+    MAX_FILE_SIZE: 10 * 1024 * 1024,
+    MAX_IMAGES: 5,
+    getAttachmentFileName: actual.getAttachmentFileName,
+    processImageFile: processImageFileSpy,
+  };
+});
 
 import { PrCreationForm } from './pr-creation-form';
 
