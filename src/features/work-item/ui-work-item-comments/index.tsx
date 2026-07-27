@@ -138,6 +138,7 @@ function CommentsContent({
   emptyMessage,
   mentionDisplayNames,
   onEditComment,
+  editingCommentId,
   reactionsEnabled,
   projectName,
 }: {
@@ -148,6 +149,7 @@ function CommentsContent({
   emptyMessage: string;
   mentionDisplayNames?: MentionDisplayNames;
   onEditComment?: (comment: WorkItemComment) => void;
+  editingCommentId?: number | null;
   reactionsEnabled: boolean;
   projectName?: string;
 }) {
@@ -180,7 +182,10 @@ function CommentsContent({
           key={comment.id}
           className="rounded-md border px-3 py-2.5"
           style={{
-            borderColor: 'oklch(1 0 0 / 0.06)',
+            borderColor:
+              editingCommentId === comment.id
+                ? 'var(--color-accent, oklch(0.7 0.16 250))'
+                : 'oklch(1 0 0 / 0.06)',
             background: 'oklch(1 0 0 / 0.02)',
           }}
         >
@@ -316,6 +321,24 @@ export function WorkItemComments({
     [providerId],
   );
 
+  const startEditing = useCallback(
+    (comment: WorkItemComment) => {
+      setEditingComment(comment);
+      setDraft(comment.rawText ?? comment.text);
+      // The editor is a shared composer at the bottom of the pane; without
+      // scrolling + focusing it, clicking the pencil looks like a no-op.
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        textarea.scrollIntoView({ block: 'nearest' });
+        textarea.focus();
+        const end = textarea.value.length;
+        textarea.setSelectionRange(end, end);
+      });
+    },
+    [],
+  );
+
   async function handleSubmit() {
     if (!trimmedDraft || (!onAddComment && !onUpdateComment)) return;
     try {
@@ -369,6 +392,22 @@ export function WorkItemComments({
 
   const editor = onAddComment || onUpdateComment ? (
     <div className="border-glass-border/50 bg-bg-1/70 sticky bottom-0 -mx-5 mt-3 border-t px-5 pt-3 pb-1 backdrop-blur">
+        {editingComment && (
+          <div className="text-ink-3 mb-1.5 flex items-center gap-2 text-[11px]">
+            <Pencil className="h-3 w-3" />
+            <span>Editing comment from {editingComment.createdBy}</span>
+            <button
+              type="button"
+              className="text-ink-3 hover:text-ink-1 ml-auto"
+              onClick={() => {
+                setEditingComment(null);
+                setDraft('');
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         <MentionTextarea
          ref={textareaRef}
         value={draft}
@@ -428,7 +467,8 @@ export function WorkItemComments({
             providerId={providerId}
             emptyMessage={emptyMessage}
             mentionDisplayNames={mentionDisplayNames}
-            onEditComment={onUpdateComment ? (comment) => { setEditingComment(comment); setDraft(comment.rawText ?? comment.text); } : undefined}
+            onEditComment={onUpdateComment ? startEditing : undefined}
+            editingCommentId={editingComment?.id ?? null}
             reactionsEnabled={!!onAddComment || !!onUpdateComment}
             projectName={projectName}
           />
@@ -462,7 +502,8 @@ export function WorkItemComments({
           providerId={providerId}
           emptyMessage={emptyMessage}
           mentionDisplayNames={mentionDisplayNames}
-          onEditComment={onUpdateComment ? (comment) => { setEditingComment(comment); setDraft(comment.rawText ?? comment.text); } : undefined}
+          onEditComment={onUpdateComment ? startEditing : undefined}
+          editingCommentId={editingComment?.id ?? null}
           reactionsEnabled={!!onAddComment || !!onUpdateComment}
           projectName={projectName}
         />

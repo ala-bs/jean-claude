@@ -636,6 +636,7 @@ export function useAddWorkItemComment() {
 
 export function useUpdateWorkItemComment() {
   const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
   return useMutation({
     mutationFn: (params: {
       providerId: string;
@@ -647,9 +648,28 @@ export function useUpdateWorkItemComment() {
     onSuccess: (comment, variables) => {
       queryClient.setQueryData<WorkItemComment[]>(
         ['work-item-comments', variables.providerId, variables.projectName, [variables.workItemId]],
-        (existing) => existing?.map((item) => (item.id === comment.id ? comment : item)),
+        (existing) =>
+          existing?.map((item) =>
+            item.id === comment.id
+              ? { ...item, ...comment, reactions: item.reactions }
+              : item,
+          ),
       );
       queryClient.invalidateQueries({ queryKey: ['work-item-comments', variables.providerId, variables.projectName] });
+    },
+    onError: (error, variables) => {
+      console.error('[work-item-comment] update failed', {
+        workItemId: variables.workItemId,
+        commentId: variables.commentId,
+        error,
+      });
+      addToast({
+        message:
+          error instanceof Error
+            ? `Failed to update comment: ${error.message}`
+            : 'Failed to update work item comment',
+        type: 'error',
+      });
     },
   });
 }

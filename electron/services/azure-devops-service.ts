@@ -1909,7 +1909,16 @@ export async function updateWorkItemComment(params: {
     },
   );
   if (!response.ok) {
-    throw new Error(`Failed to update comment for work item ${params.workItemId}: ${await response.text()}`);
+    const body = await response.text();
+    console.error('[azure-devops] updateWorkItemComment failed', {
+      status: response.status,
+      workItemId: params.workItemId,
+      commentId: params.commentId,
+      body: body.slice(0, 500),
+    });
+    throw new Error(
+      `Failed to update comment for work item ${params.workItemId} (HTTP ${response.status}): ${body.slice(0, 300)}`,
+    );
   }
   const c: { id: number; workItemId?: number; text?: string; renderedText?: string; createdBy?: { displayName?: string }; createdDate?: string } = await response.json();
   const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({ orgName, projectName: params.projectName });
