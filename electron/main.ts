@@ -1,6 +1,7 @@
 import { join } from 'path';
 
-import { app, BrowserWindow, protocol, shell } from 'electron';
+import type { MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, Menu, protocol, shell } from 'electron';
 import fixPath from 'fix-path';
 
 import {
@@ -99,6 +100,63 @@ if (process.env.JC_SKIP_INSTANCE_LOCK) {
 if (!process.env.TERM) {
   dbg.main('Fixing PATH for non-terminal launch');
   fixPath();
+}
+
+/** Converts a live Menu back into a template we can rebuild from. */
+function menuToTemplate(menu: Menu): MenuItemConstructorOptions[] {
+  return menu.items.map((item): MenuItemConstructorOptions => {
+    if (item.type === 'separator') return { type: 'separator' };
+
+    // Submenu roles (e.g. 'windowMenu') regenerate Electron's defaults and
+    // would reintroduce the Close item, so expand them explicitly instead.
+    if (item.submenu) {
+      return { label: item.label, submenu: menuToTemplate(item.submenu) };
+    }
+
+    return { role: item.role, label: item.label };
+  });
+}
+
+/**
+ * Rebuilds the application menu with the "Close Window" item stripped of its
+ * Cmd+W accelerator, so the shortcut no longer closes the window.
+ *
+ * The item is kept (greyed out) rather than made invisible: a present-but-
+ * accelerator-less item is skipped by macOS `performKeyEquivalent`, so the
+ * keydown reaches the renderer and the in-app cmd+w binding ("Open Worktree
+ * in Editor") keeps working.
+ *
+ * macOS only — Windows/Linux default menus have no 'close' role.
+ */
+function disableCloseWindowShortcut() {
+  const menu = Menu.getApplicationMenu();
+  if (!menu) {
+    dbg.main('No application menu found; Cmd+W close is still active');
+    return;
+  }
+
+  let stripped = false;
+  const template = menuToTemplate(menu).map((topLevelItem) => {
+    if (!Array.isArray(topLevelItem.submenu)) return topLevelItem;
+
+    return {
+      ...topLevelItem,
+      submenu: topLevelItem.submenu.map((item) => {
+        if (item.role !== 'close') return item;
+        stripped = true;
+        // Drop the role (and with it the accelerator + close behaviour).
+        return { label: item.label ?? 'Close Window', enabled: false };
+      }),
+    };
+  });
+
+  if (!stripped) {
+    dbg.main('No "Close Window" menu item found; nothing to disable');
+    return;
+  }
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  dbg.main('Removed Cmd+W accelerator from "Close Window"');
 }
 
 function createWindow() {
@@ -412,6 +470,7 @@ app.whenReady().then(async () => {
   });
 
   canCreateMainWindow = true;
+  disableCloseWindowShortcut();
   createWindow();
   dbg.main('Main window created, app ready');
 
