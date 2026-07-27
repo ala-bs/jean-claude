@@ -1391,7 +1391,7 @@ describe('agentService provider runtime', () => {
       ...defaultTask,
       id: 'pr-workspace-1',
       type: 'pr-review' as const,
-      status: 'interrupted' as const,
+      status: 'running' as const,
       pullRequestId: '1128',
     };
     const genericTask = {
@@ -1418,6 +1418,60 @@ describe('agentService provider runtime', () => {
     });
   });
 
+  it('does not re-update tasks already in their recovered status', async () => {
+    const interruptedTask = {
+      ...defaultTask,
+      id: 'generic-task-1',
+      status: 'interrupted' as const,
+    };
+    const waitingPrWorkspace = {
+      ...defaultTask,
+      id: 'pr-workspace-1',
+      type: 'pr-review' as const,
+      status: 'waiting' as const,
+      pullRequestId: '1128',
+    };
+    taskRepositoryMock.findByStatuses.mockResolvedValue([
+      interruptedTask,
+      waitingPrWorkspace,
+    ]);
+    taskStepRepositoryMock.findByStatus.mockResolvedValue([]);
+
+    await agentService.recoverStaleTasks();
+
+    expect(taskRepositoryMock.findByStatuses).toHaveBeenCalledWith([
+      'running',
+      'waiting',
+    ]);
+    expect(taskRepositoryMock.update).not.toHaveBeenCalled();
+    expect(emitTaskUpsertMock).not.toHaveBeenCalled();
+  });
+
+  it('restores PR workspaces with running steps even when the task row is already interrupted', async () => {
+    const prWorkspace = {
+      ...defaultTask,
+      id: 'pr-workspace-1',
+      type: 'pr-review' as const,
+      status: 'interrupted' as const,
+      pullRequestId: '1128',
+    };
+    const runningStep = { ...defaultStep, taskId: prWorkspace.id };
+    taskRepositoryMock.findByStatuses.mockResolvedValue([]);
+    taskStepRepositoryMock.findByStatus.mockResolvedValue([runningStep]);
+    taskRepositoryMock.findById.mockResolvedValue(prWorkspace);
+    taskRepositoryMock.update.mockResolvedValue({
+      ...prWorkspace,
+      status: 'waiting',
+    });
+
+    await agentService.recoverStaleTasks();
+
+    expect(taskRepositoryMock.update).toHaveBeenCalledWith(prWorkspace.id, {
+      status: 'waiting',
+    });
+    expect(stepServiceMock.syncTaskStatus).not.toHaveBeenCalled();
+  });
+
   it('keeps PR workspace containers waiting when recovering active steps', async () => {
     const prWorkspace = {
       ...defaultTask,
@@ -1429,6 +1483,7 @@ describe('agentService provider runtime', () => {
     const runningStep = { ...defaultStep, taskId: prWorkspace.id };
     taskRepositoryMock.findByStatuses.mockResolvedValue([prWorkspace]);
     taskStepRepositoryMock.findByStatus.mockResolvedValue([runningStep]);
+    taskRepositoryMock.findById.mockResolvedValue(prWorkspace);
     taskRepositoryMock.update.mockResolvedValue({
       ...prWorkspace,
       status: 'waiting',

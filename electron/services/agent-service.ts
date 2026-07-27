@@ -3577,16 +3577,21 @@ class AgentService {
   async recoverStaleTasks(): Promise<void> {
     // PR workspaces are containers that remain available after restart. Generic
     // agent tasks represent an interrupted run when their process disappears.
-    const staleTasks = await TaskRepository.findByStatuses([
-      'running',
-      'waiting',
-      'interrupted',
-    ]);
+    // Only live states are stale on startup. Already-'interrupted' tasks are in
+    // their terminal recovered state — touching them bumps updatedAt and (for
+    // pr-review) flips them back to 'waiting' on every restart.
+    const staleTasks = await TaskRepository.findByStatuses(['running', 'waiting']);
 
+    let recoveredTaskCount = 0;
     for (const task of staleTasks) {
       try {
+        const nextStatus = task.type === 'pr-review' ? 'waiting' : 'interrupted';
+        if (task.status === nextStatus) {
+          continue;
+        }
+        recoveredTaskCount++;
         const updatedTask = await TaskRepository.update(task.id, {
-          status: task.type === 'pr-review' ? 'waiting' : 'interrupted',
+          status: nextStatus,
         });
         emitTaskUpsert(updatedTask);
       } catch (error) {
@@ -3594,8 +3599,8 @@ class AgentService {
       }
     }
 
-    if (staleTasks.length > 0) {
-      dbg.agent('Recovered %d stale task(s) on startup', staleTasks.length);
+    if (recoveredTaskCount > 0) {
+      dbg.agent('Recovered %d stale task(s) on startup', recoveredTaskCount);
     }
 
     // Recover stale steps — find ALL steps with 'running' status across all tasks
@@ -3603,6 +3608,20 @@ class AgentService {
     // Write a synthetic interrupted message scoped to each step so the timeline shows it.
     const allRunningSteps = await TaskStepRepository.findByStatus('running');
     let staleStepCount = 0;
+    // Resolve pr-review-ness from the task row itself (not from staleTasks) so a
+    // pr-review workspace whose task row is already 'interrupted' still gets
+    // restored to 'waiting'.
+    const prReviewCache = new Map<string, boolean>();
+    const isPrReviewTask = async (taskId: string): Promise<boolean> => {
+      const cached = prReviewCache.get(taskId);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const task = await TaskRepository.findById(taskId);
+      const isPrReview = task?.type === 'pr-review';
+      prReviewCache.set(taskId, isPrReview);
+      return isPrReview;
+    };
     for (const step of allRunningSteps) {
       try {
         const messageCount =
@@ -3627,7 +3646,7 @@ class AgentService {
           status: 'interrupted',
         });
         emitStepUpsert(updatedStep);
-        if (staleTasks.some((task) => task.id === step.taskId && task.type === 'pr-review')) {
+        if (await isPrReviewTask(step.taskId)) {
           const updatedTask = await TaskRepository.update(step.taskId, {
             status: 'waiting',
           });
@@ -3644,7 +3663,7 @@ class AgentService {
             status: 'interrupted',
           });
           emitStepUpsert(updatedStep);
-          if (staleTasks.some((task) => task.id === step.taskId && task.type === 'pr-review')) {
+          if (await isPrReviewTask(step.taskId)) {
             const updatedTask = await TaskRepository.update(step.taskId, {
               status: 'waiting',
             });
