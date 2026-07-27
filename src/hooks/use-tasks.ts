@@ -206,6 +206,38 @@ export function useUpdateTask() {
   });
 }
 
+export function useSetTaskSourceBranch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      taskId,
+      sourceBranch,
+    }: {
+      taskId: string;
+      sourceBranch: string;
+    }) => api.tasks.setSourceBranch({ taskId, sourceBranch }),
+    onSuccess: (task, { taskId }) => {
+      ingestTask(task);
+      markTaskListsStale(task.projectId);
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
+      queryClient.invalidateQueries({
+        queryKey: ['tasks', { projectId: task.projectId }],
+      });
+      queryClient.invalidateQueries({ queryKey: ['worktree-diff', taskId] });
+      queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+      queryClient.invalidateQueries({
+        queryKey: ['worktree-local-changes', taskId],
+      });
+      queryClient.invalidateQueries({ queryKey: ['worktree-commits', taskId] });
+      queryClient.invalidateQueries({
+        queryKey: ['worktree-file-content', taskId],
+      });
+      invalidateFeedItems(queryClient);
+    },
+  });
+}
+
 export function useUpdateTaskPendingMessage() {
   const queryClient = useQueryClient();
   return useMutation({

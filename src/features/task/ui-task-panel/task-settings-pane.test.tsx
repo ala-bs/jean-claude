@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
-import type { TaskStep } from '@shared/types';
+import type { BranchInfo, TaskStep } from '@shared/types';
+
+import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
+import { RootOverlay } from '@/common/context/overlay';
 
 import { TaskSettingsPane } from './task-settings-pane';
 
@@ -12,6 +15,25 @@ import { TaskSettingsPane } from './task-settings-pane';
 
 vi.mock('@/hooks/use-skills', () => ({
   useSkills: () => ({ data: [], isLoading: false, error: null }),
+}));
+
+const setSourceBranchMutate = vi.fn();
+
+const branchFixtures = [
+  { name: 'main', lastCommitDate: '2026-01-01T00:00:00.000Z' },
+  { name: 'jean-claude/task-1', lastCommitDate: '2026-01-01T00:00:00.000Z' },
+  { name: 'develop', lastCommitDate: '2026-01-01T00:00:00.000Z' },
+] satisfies BranchInfo[];
+
+vi.mock('@/hooks/use-projects', () => ({
+  useProjectBranches: () => ({ data: branchFixtures, isLoading: false }),
+}));
+
+vi.mock('@/hooks/use-tasks', () => ({
+  useSetTaskSourceBranch: () => ({
+    mutate: setSourceBranchMutate,
+    isPending: false,
+  }),
 }));
 
 function step(overrides: Partial<TaskStep> = {}): TaskStep {
@@ -72,6 +94,121 @@ describe('TaskSettingsPane', () => {
   afterEach(async () => {
     await act(() => root.unmount());
     container.remove();
+  });
+
+  function renderEditableSource() {
+    return act(() =>
+      root.render(
+        <RootKeyboardBindings>
+          <RootOverlay>
+            <TaskSettingsPane
+              activeStep={null}
+              sourceBranch="main"
+              sourceCommit={null}
+              taskId="task-1"
+              projectId="project-1"
+              taskBranchName="jean-claude/task-1"
+              canEditSourceBranch
+              onRemoveTool={onRemoveTool}
+              onClose={vi.fn()}
+              onOpenDebugMessages={vi.fn()}
+            />
+          </RootOverlay>
+        </RootKeyboardBindings>,
+      ),
+    );
+  }
+
+  function sourceBranchTrigger() {
+    return Array.from(container.querySelectorAll('button')).find(
+      (button) => (button.textContent ?? '').trim() === 'main',
+    );
+  }
+
+  async function openBranchOptions() {
+    await act(async () => {
+      sourceBranchTrigger()?.click();
+    });
+    return Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    );
+  }
+
+  it('lets the user change the source branch, excluding the task branch', async () => {
+    setSourceBranchMutate.mockClear();
+    await renderEditableSource();
+    expect(sourceBranchTrigger()).toBeDefined();
+
+    const options = await openBranchOptions();
+    const labels = options.map((option) => option.textContent ?? '');
+    expect(labels.some((label) => label.includes('jean-claude/task-1'))).toBe(
+      false,
+    );
+
+    const develop = options.find((option) =>
+      (option.textContent ?? '').includes('develop'),
+    );
+    await act(async () => {
+      develop?.click();
+    });
+
+    expect(setSourceBranchMutate).toHaveBeenCalledWith(
+      { taskId: 'task-1', sourceBranch: 'develop' },
+      expect.anything(),
+    );
+  });
+
+  it('does not mutate when re-selecting the current source branch', async () => {
+    setSourceBranchMutate.mockClear();
+    await renderEditableSource();
+
+    const options = await openBranchOptions();
+    const main = options.find(
+      (option) => (option.textContent ?? '').trim() === 'main',
+    );
+    await act(async () => {
+      main?.click();
+    });
+
+    expect(setSourceBranchMutate).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an error when changing the source branch fails', async () => {
+    setSourceBranchMutate.mockClear();
+    setSourceBranchMutate.mockImplementation((_vars, options) => {
+      options?.onError?.(new Error('No common ancestor'));
+    });
+    await renderEditableSource();
+
+    const options = await openBranchOptions();
+    const develop = options.find((option) =>
+      (option.textContent ?? '').includes('develop'),
+    );
+    await act(async () => {
+      develop?.click();
+    });
+
+    expect(container.textContent).toContain('No common ancestor');
+    setSourceBranchMutate.mockReset();
+  });
+
+  it('renders the source branch read-only when editing is not allowed', async () => {
+    await act(() =>
+      root.render(
+        <TaskSettingsPane
+          activeStep={null}
+          sourceBranch="main"
+          sourceCommit={null}
+          taskId="task-1"
+          onRemoveTool={onRemoveTool}
+          onClose={vi.fn()}
+          onOpenDebugMessages={vi.fn()}
+        />,
+      ),
+    );
+
+    expect(container.textContent).toContain('main');
+    expect(container.querySelector('[role="combobox"]')).toBeNull();
   });
 
   it('shows active-step identity and switches immediately to its rules', async () => {

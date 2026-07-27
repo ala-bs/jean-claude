@@ -3031,6 +3031,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             sourceBranch={task.sourceBranch}
             sourceCommit={task.startCommitHash}
             taskId={taskId}
+            projectId={task.projectId}
+            taskBranchName={
+              task.branchName ??
+              (task.worktreePath
+                ? getBranchFromWorktreePath(task.worktreePath)
+                : null)
+            }
+            canEditSourceBranch={
+              Boolean(task.worktreePath) && task.type !== 'pr-review'
+            }
             onRemoveTool={handleRemoveSessionAllowedTool}
             onClose={closeRightPane}
             onOpenDebugMessages={openDebugMessages}

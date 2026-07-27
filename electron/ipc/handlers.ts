@@ -298,6 +298,7 @@ import {
   isGitRepository,
   mergeWorktree,
   pushBranch,
+  resolveSourceBranchMergeBase,
   updateProjectCommitIgnore,
 } from '../services/worktree-service';
 import {
@@ -497,6 +498,7 @@ import {
   validateRendererTaskUpdate,
 } from './task-update-validation';
 import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
+import { validateTaskSourceBranchChange } from './task-source-branch-validation';
 
 function redactAiGenerationSetting(
   setting: AiGenerationSetting,
@@ -2036,6 +2038,30 @@ export function registerIpcHandlers() {
         )
       : updateTaskAndEmit(id, data);
   });
+  ipcMain.handle(
+    'tasks:setSourceBranch',
+    async (_, params: { taskId: string; sourceBranch: string }) => {
+      const { taskId, sourceBranch } = params;
+      const task = await TaskRepository.findById(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      const project = await ProjectRepository.findById(task.projectId);
+      if (!project) throw new Error(`Project ${task.projectId} not found`);
+      const branches = await getProjectBranches(project.path);
+      validateTaskSourceBranchChange({ task, sourceBranch, branches });
+
+      const worktreePath = task.worktreePath ?? '';
+      const mergeBase = await resolveSourceBranchMergeBase(
+        worktreePath,
+        sourceBranch,
+      );
+      if (!mergeBase) {
+        throw new Error(
+          `No common ancestor between this task and ${sourceBranch}`,
+        );
+      }
+      return updateTaskAndEmit(taskId, { sourceBranch });
+    },
+  );
   ipcMain.handle(
     'tasks:updatePendingMessage',
     (_, id: string, pendingMessage: string | null) =>

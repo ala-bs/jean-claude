@@ -206,6 +206,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tasks:update', id, data),
     updatePendingMessage: (id: string, pendingMessage: string | null) =>
       ipcRenderer.invoke('tasks:updatePendingMessage', id, pendingMessage),
+    setSourceBranch: (params: { taskId: string; sourceBranch: string }) =>
+      ipcRenderer.invoke('tasks:setSourceBranch', params),
     delete: (id: string, options?: { deleteWorktree?: boolean }) =>
       ipcRenderer.invoke('tasks:delete', id, options),
     deletePrWorkspaceTask: (params: { taskId: string }) =>

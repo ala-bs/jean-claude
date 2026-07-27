@@ -657,6 +657,10 @@ export interface Api {
       id: string,
       pendingMessage: string | null,
     ) => Promise<Task>;
+    setSourceBranch: (params: {
+      taskId: string;
+      sourceBranch: string;
+    }) => Promise<Task>;
     delete: (
       id: string,
       options?: { deleteWorktree?: boolean },
@@ -2176,6 +2180,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         updatePendingMessage: async () => {
+          throw new Error('API not available');
+        },
+        setSourceBranch: async () => {
           throw new Error('API not available');
         },
         delete: async () => {},

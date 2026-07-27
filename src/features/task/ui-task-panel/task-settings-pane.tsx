@@ -11,16 +11,19 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { useState } from 'react';
 
 
 
 import { isPrReviewChatStepMeta, type TaskStep } from '@shared/types';
+import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { IconButton } from '@/common/ui/icon-button';
 import { Separator } from '@/common/ui/separator';
 import type { Skill } from '@shared/skill-types';
+import { useProjectBranches } from '@/hooks/use-projects';
+import { useSetTaskSourceBranch } from '@/hooks/use-tasks';
 import { useSkills } from '@/hooks/use-skills';
 
 
@@ -163,6 +166,9 @@ export function TaskSettingsPane({
   sourceBranch,
   sourceCommit,
   taskId,
+  projectId,
+  taskBranchName,
+  canEditSourceBranch = false,
   onRemoveTool,
   onClose,
   onOpenDebugMessages,
@@ -171,6 +177,9 @@ export function TaskSettingsPane({
   sourceBranch: string | null;
   sourceCommit: string | null;
   taskId: string;
+  projectId?: string;
+  taskBranchName?: string | null;
+  canEditSourceBranch?: boolean;
   onRemoveTool: ({
     toolName,
     pattern,
@@ -182,6 +191,31 @@ export function TaskSettingsPane({
   onOpenDebugMessages: () => void;
 }) {
   const [copiedCommit, setCopiedCommit] = useState(false);
+  const [branchError, setBranchError] = useState<string | null>(null);
+  const { data: branches, isLoading: branchesLoading } = useProjectBranches(
+    canEditSourceBranch ? (projectId ?? null) : null,
+  );
+  const setSourceBranch = useSetTaskSourceBranch();
+  const selectableBranches = useMemo(
+    () => (branches ?? []).filter((branch) => branch.name !== taskBranchName),
+    [branches, taskBranchName],
+  );
+
+  const handleSourceBranchChange = (branch: string) => {
+    if (branch === sourceBranch) return;
+    setBranchError(null);
+    setSourceBranch.mutate(
+      { taskId, sourceBranch: branch },
+      {
+        onSuccess: () => setBranchError(null),
+        onError: (error) =>
+          setBranchError(
+            error instanceof Error ? error.message : 'Failed to update branch',
+          ),
+      },
+    );
+  };
+
   const isReviewChat = isPrReviewChatStepMeta(activeStep?.meta);
   const sessionRules = activeStep?.sessionRules ?? {};
 
@@ -210,17 +244,34 @@ export function TaskSettingsPane({
       {/* Content */}
       <div className="flex-1 space-y-6 overflow-auto p-4">
         {/* Source Info Section */}
-        {(sourceBranch || sourceCommit) && (
+        {(sourceBranch || sourceCommit || canEditSourceBranch) && (
           <section>
             <h4 className="text-ink-3 mb-3 text-xs font-medium tracking-wide uppercase">
               Source
             </h4>
             <div className="space-y-2">
-              {sourceBranch && (
-                <div className="bg-bg-1 flex items-center gap-2 rounded-md px-3 py-2.5">
-                  <GitBranch className="text-ink-3 h-4 w-4" />
-                  <span className="text-ink-1 text-sm">{sourceBranch}</span>
+              {canEditSourceBranch ? (
+                <div className="space-y-1">
+                  <BranchSelect
+                    branches={selectableBranches}
+                    branchesLoading={branchesLoading}
+                    value={sourceBranch ?? undefined}
+                    onChange={handleSourceBranchChange}
+                    disabled={setSourceBranch.isPending}
+                    placeholder="Select source branch..."
+                    size="sm"
+                  />
+                  {branchError && (
+                    <p className="text-status-fail text-[11px]">{branchError}</p>
+                  )}
                 </div>
+              ) : (
+                sourceBranch && (
+                  <div className="bg-bg-1 flex items-center gap-2 rounded-md px-3 py-2.5">
+                    <GitBranch className="text-ink-3 h-4 w-4" />
+                    <span className="text-ink-1 text-sm">{sourceBranch}</span>
+                  </div>
+                )
               )}
               {sourceCommit && (
                 <div className="bg-bg-1 flex items-center gap-2 rounded-md px-3 py-2.5">

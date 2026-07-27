@@ -620,6 +620,23 @@ function getSourceBranchRefs(
 }
 
 /**
+ * Resolves the merge-base a source branch would produce for a worktree.
+ * Returns null when no common ancestor is reachable, meaning the diff would
+ * silently fall back to the (stale) start commit.
+ */
+export async function resolveSourceBranchMergeBase(
+  worktreePath: string,
+  sourceBranch: string,
+): Promise<string | null> {
+  const { sourceRef, baseCommit } = await getDiffBaseCommit(
+    worktreePath,
+    '',
+    sourceBranch,
+  );
+  return sourceRef ? baseCommit : null;
+}
+
+/**
  * Gets the commit hash to use as the diff base.
  * If sourceBranch is provided, uses the merge-base between HEAD and the source branch.
  * This ensures we only see changes unique to this branch, even after merging
