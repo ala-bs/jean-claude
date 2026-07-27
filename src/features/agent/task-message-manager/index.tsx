@@ -171,6 +171,25 @@ export function TaskMessageManager() {
           // Invalidate feed so attention changes to needs-permission
           invalidateTaskFeed(queryClient);
           break;
+        case 'permission-resolved': {
+          // Main resolved the request itself (auto-accept). Only clear if the
+          // banner still shows that exact request, so a newer one survives.
+          const state = useTaskMessagesStore.getState();
+          if (
+            state.steps[stepId]?.pendingPermission?.requestId ===
+            event.requestId
+          ) {
+            setPermission(stepId, null);
+          }
+          if (
+            state.pendingRequestsByTaskId[taskId]?.permission?.requestId ===
+            event.requestId
+          ) {
+            clearPendingRequestForTask(taskId);
+          }
+          invalidateTaskFeed(queryClient);
+          break;
+        }
         case 'question':
           flushPendingEntryUpdates(stepId);
           if (event.questions.length === 0) {

@@ -128,6 +128,7 @@ import {
 import { AddPermissionModal } from '@/features/agent/ui-add-permission-modal';
 import type { AgentResourceSample } from '@/hooks/use-agent-resource-snapshots';
 import { api } from '@/lib/api';
+import { AutoAcceptToggle } from '@/features/agent/ui-auto-accept-toggle';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Chip } from '@/common/ui/chip';
@@ -163,6 +164,7 @@ import { StepFlowBar } from '@/features/task/ui-step-flow-bar';
 import { TaskPrView } from '@/features/task/ui-task-pr-view';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useAgentResourceSnapshots } from '@/hooks/use-agent-resource-snapshots';
+import { useAutoAccept } from '@/stores/auto-accept';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
@@ -1764,6 +1766,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [activeStepId, setTaskMode],
   );
 
+  const { enabled: isAutoAccepting, setEnabled: setAutoAccept } =
+    useAutoAccept(activeStepId ?? undefined);
+  const enableAutoAccept = useCallback(
+    () => setAutoAccept(true),
+    [setAutoAccept],
+  );
+
   const permissionProps = useMemo(() => {
     if (!agentMeta.pendingPermission) return null;
     const canChangeRules = !isPrReviewChatStepMeta(activeStep?.meta);
@@ -1777,9 +1786,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         : undefined,
       onAllowGlobally: canChangeRules ? handleAllowGlobally : undefined,
       onSetMode: handleSetMode,
+      onAutoAcceptAll:
+        canChangeRules && !isAutoAccepting ? enableAutoAccept : undefined,
       worktreePath: task?.worktreePath,
     };
   }, [
+    isAutoAccepting,
+    enableAutoAccept,
     agentMeta.pendingPermission,
     activeStep,
     respondToPermission,
@@ -2953,6 +2966,11 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                       : handleAllowGlobally
                   }
                   onSetMode={handleSetMode}
+                  onAutoAcceptAll={
+                    isPrReviewChatStepMeta(activeStep?.meta) || isAutoAccepting
+                      ? undefined
+                      : enableAutoAccept
+                  }
                   worktreePath={task.worktreePath}
                   afterLastPromptGroup={
                     canContinueInterruptedStep ? (
@@ -3195,6 +3213,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onAllowForProjectWorktrees,
   onAllowGlobally,
   onSetMode,
+  onAutoAcceptAll,
   worktreePath,
   afterLastPromptGroup,
 }: {
@@ -3249,6 +3268,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
     input: Record<string, unknown>,
   ) => Promise<void>;
   onSetMode?: (mode: InteractionMode) => void;
+  onAutoAcceptAll?: () => void | Promise<void>;
   worktreePath?: string | null;
   afterLastPromptGroup?: ReactNode;
 }) {
@@ -3391,6 +3411,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
             onAllowForProjectWorktrees={onAllowForProjectWorktrees}
             onAllowGlobally={onAllowGlobally}
             onSetMode={onSetMode}
+            onAutoAcceptAll={onAutoAcceptAll}
             worktreePath={worktreePath}
           />
         </div>
@@ -3612,6 +3633,9 @@ const TaskInputFooter = memo(function TaskInputFooter({
     [activeStepId, setStepMode],
   );
 
+  const { enabled: autoAcceptEnabled, toggle: toggleAutoAccept } =
+    useAutoAccept(activeStepId ?? undefined);
+
   const updateStep = useUpdateStep();
   const mutateStepAsync = updateStep.mutateAsync;
   const [thinkingEffortOverride, setThinkingEffortOverride] =
@@ -3805,6 +3829,16 @@ const TaskInputFooter = memo(function TaskInputFooter({
         onChange={handleModeChange}
         backend={effectiveBackend}
         disabled={isRunning || isTaskCompleted}
+        size="sm"
+      />
+      <AutoAcceptToggle
+        enabled={autoAcceptEnabled}
+        onToggle={toggleAutoAccept}
+        disabled={
+          !activeStepId ||
+          isTaskCompleted ||
+          isPrReviewChatStepMeta(activeStep?.meta)
+        }
         size="sm"
       />
       <ModelSelector

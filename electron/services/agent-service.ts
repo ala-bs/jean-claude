@@ -703,6 +703,12 @@ class AgentService {
   private runCleanupPromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private resultUpdateUsageQueues = new Map<string, Promise<void>>();
   private requestResponsePromises = new Map<string, Promise<void>>();
+  /**
+   * Steps with per-session auto-accept enabled. In-memory only: cleared when
+   * the app restarts. Deny rules still run in the backend before a request is
+   * ever emitted, so this only auto-allows what would have prompted the user.
+   */
+  private autoAcceptSteps = new Set<string>();
   private startingSteps = new Set<string>();
   private registeringSteps = new Set<string>();
   private pendingSessionRegistrations = new Set<Promise<void>>();
@@ -861,6 +867,7 @@ class AgentService {
     }
     if (this.sessions.get(stepId) === session) {
       this.sessions.delete(stepId);
+      this.autoAcceptSteps.delete(stepId);
     }
   }
 
@@ -1995,6 +2002,15 @@ class AgentService {
           type: 'permission',
           permissionRequest: request,
         });
+        if (this.autoAcceptSteps.has(stepId)) {
+          dbg.agentPermission(
+            'Auto-accepting request %s for step %s (session auto-accept)',
+            request.requestId,
+            stepId,
+          );
+          void this.autoAcceptRequest(stepId, session, request.requestId);
+          break;
+        }
         if (shouldEmit) {
           await this.emitPendingRequest(session, session.pendingRequests[0]);
         }
@@ -2895,6 +2911,14 @@ class AgentService {
       return;
     }
     session.pendingRequests.splice(resolvedRequestIndex, 1);
+    if (request.type === 'permission') {
+      // The renderer clears its own banner when the user answers, but nothing
+      // does so when main resolves a request on its own (auto-accept).
+      this.emitEvent(taskId, stepId, {
+        type: 'permission-resolved',
+        requestId,
+      });
+    }
     dbg.agentPermission(
       'Resolved %s request (remaining pending: %d)',
       request.type,
@@ -3450,6 +3474,71 @@ class AgentService {
     }
 
     return null;
+  }
+
+  isAutoAcceptEnabled(stepId: string): boolean {
+    return this.autoAcceptSteps.has(stepId);
+  }
+
+  /**
+   * Allow a request on the user's behalf. `toolsToAllow: []` keeps the grant
+   * scoped to this one call: without it `respondOnce` would derive a rule and
+   * the backend would stop prompting for that tool even after auto-accept is
+   * switched back off.
+   *
+   * If the response fails the request stays queued and was never emitted, which
+   * would block every later request, so surface it to the user instead.
+   */
+  private async autoAcceptRequest(
+    stepId: string,
+    session: ActiveSession,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      await this.respond(stepId, requestId, {
+        behavior: 'allow',
+        toolsToAllow: [],
+      });
+    } catch (error) {
+      dbg.agentPermission(
+        'Auto-accept failed for request %s: %o',
+        requestId,
+        error,
+      );
+      await this.emitQueueHeadRequest(session);
+    }
+  }
+
+  /** Emit the queued request the user is waiting on, if there is one. */
+  private async emitQueueHeadRequest(session: ActiveSession): Promise<void> {
+    const head = session.pendingRequests[0];
+    if (!head) return;
+    await this.emitPendingRequest(session, head);
+  }
+
+  /**
+   * Toggle per-session auto-accept for a step. Nothing is persisted: the flag
+   * lives for the lifetime of the app process. Enabling it drains any requests
+   * already waiting for the user.
+   */
+  async setAutoAccept(stepId: string, enabled: boolean): Promise<void> {
+    const session = this.sessions.get(stepId);
+    if (!enabled) {
+      this.autoAcceptSteps.delete(stepId);
+      // Requests that arrived while auto-accept was on were queued but never
+      // emitted, so re-surface whatever the run is now blocked on.
+      if (session) await this.emitQueueHeadRequest(session);
+      return;
+    }
+    this.autoAcceptSteps.add(stepId);
+
+    if (!session) return;
+    const pendingPermissions = session.pendingRequests.filter(
+      (request) => request.type === 'permission',
+    );
+    for (const request of pendingPermissions) {
+      await this.autoAcceptRequest(stepId, session, request.requestId);
+    }
   }
 
   async setMode(stepId: string, mode: InteractionMode): Promise<void> {

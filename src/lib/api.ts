@@ -800,6 +800,8 @@ export interface Api {
       warnings: string[];
     }>;
     setMode: (stepId: string, mode: InteractionMode) => Promise<TaskStep>;
+    setAutoAccept: (stepId: string, enabled: boolean) => Promise<boolean>;
+    getAutoAccept: (stepId: string) => Promise<boolean>;
     submitPrReview: (stepId: string) => Promise<TaskStep>;
     addSessionAllowedTool: (params: {
       stepId: string;
@@ -2285,6 +2287,12 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         setMode: async () => {
+          throw new Error('API not available');
+        },
+        setAutoAccept: async () => {
+          throw new Error('API not available');
+        },
+        getAutoAccept: async () => {
           throw new Error('API not available');
         },
         submitPrReview: async () => {

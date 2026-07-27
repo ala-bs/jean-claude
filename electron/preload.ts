@@ -354,6 +354,10 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('steps:resolvePrompt', stepId),
     setMode: (stepId: string, mode: string) =>
       ipcRenderer.invoke('steps:setMode', stepId, mode),
+    setAutoAccept: (stepId: string, enabled: boolean) =>
+      ipcRenderer.invoke('steps:setAutoAccept', stepId, enabled),
+    getAutoAccept: (stepId: string) =>
+      ipcRenderer.invoke('steps:getAutoAccept', stepId),
     submitPrReview: (stepId: string) =>
       ipcRenderer.invoke('steps:submitPrReview', stepId),
     addSessionAllowedTool: (params: {

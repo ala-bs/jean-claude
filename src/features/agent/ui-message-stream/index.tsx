@@ -83,6 +83,7 @@ export interface PermissionBannerProps {
     input: Record<string, unknown>,
   ) => Promise<void>;
   onSetMode?: (mode: InteractionMode) => void;
+  onAutoAcceptAll?: () => void | Promise<void>;
   worktreePath?: string | null;
 }
 
@@ -544,6 +545,7 @@ export const MessageStream = memo(function MessageStream({
                 }
                 onAllowGlobally={pendingPermission.onAllowGlobally}
                 onSetMode={pendingPermission.onSetMode}
+                onAutoAcceptAll={pendingPermission.onAutoAcceptAll}
                 worktreePath={pendingPermission.worktreePath}
               />
             </div>

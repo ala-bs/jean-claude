@@ -3768,6 +3768,104 @@ describe('agentService provider runtime', () => {
     await startPromise;
   });
 
+  it('auto-accepts permission requests without prompting when session auto-accept is on', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.setAutoAccept('step-1', true);
+    const startPromise = agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(providerCalls.permissions).toHaveLength(1);
+    });
+    // Empty toolsToAllow keeps the grant scoped to this call, so switching
+    // auto-accept off restores prompting for the same tool.
+    expect(providerCalls.permissions[0]).toMatchObject({
+      requestId: 'permission-1',
+      response: { behavior: 'allow', toolsToAllow: [] },
+    });
+    expect(agentService.getPendingRequest('step-1')).toBeNull();
+
+    release();
+    await startPromise;
+  });
+
+  it('does not auto-accept questions when session auto-accept is on', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'question',
+      request: {
+        requestId: 'question-1',
+        questions: [
+          {
+            id: 'q1',
+            type: 'single_choice',
+            question: 'Pick one',
+            header: 'Pick',
+            multiSelect: false,
+            options: [{ id: 'a', label: 'A', description: 'Option A' }],
+          },
+        ],
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.setAutoAccept('step-1', true);
+    const startPromise = agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'question',
+        data: { requestId: 'question-1' },
+      });
+    });
+    expect(providerCalls.permissions).toEqual([]);
+
+    release();
+    await startPromise;
+  });
+
+  it('re-emits a queued request when session auto-accept is turned off', async () => {
+    providerState.permissionResponseError = new Error('provider offline');
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.setAutoAccept('step-1', true);
+    const startPromise = agentService.start('step-1');
+
+    // The auto-allow fails, so the request stays queued and unanswered.
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'permission',
+        data: { requestId: 'permission-1' },
+      });
+    });
+
+    providerState.permissionResponseError = null;
+    await agentService.setAutoAccept('step-1', false);
+
+    expect(agentService.getPendingRequest('step-1')).toMatchObject({
+      type: 'permission',
+      data: { requestId: 'permission-1' },
+    });
+
+    release();
+    await startPromise;
+  });
+
   it('validates and persists selected parent directory before responding', async () => {
     const { handle, release } = createWaitingHandle({
       type: 'permission-request',

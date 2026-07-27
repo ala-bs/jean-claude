@@ -2177,6 +2177,18 @@ export function registerIpcHandlers() {
       return TaskStepRepository.findById(stepId);
     },
   );
+  ipcMain.handle(
+    'steps:setAutoAccept',
+    async (_, stepId: string, enabled: boolean) => {
+      const step = await TaskStepRepository.findById(stepId);
+      if (step) validateRendererStepModeChange(step);
+      await agentService.setAutoAccept(stepId, enabled);
+      return agentService.isAutoAcceptEnabled(stepId);
+    },
+  );
+  ipcMain.handle('steps:getAutoAccept', async (_, stepId: string) => {
+    return agentService.isAutoAcceptEnabled(stepId);
+  });
   ipcMain.handle('steps:submitPrReview', async (_, stepId: string) => {
     dbg.ipc('steps:submitPrReview stepId=%s', stepId);
 

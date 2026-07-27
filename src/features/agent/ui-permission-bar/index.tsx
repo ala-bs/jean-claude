@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   TriangleAlert,
   X,
+  Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
@@ -288,6 +289,7 @@ export function PermissionBar({
   onAllowForProjectWorktrees,
   onAllowGlobally,
   onSetMode,
+  onAutoAcceptAll,
   worktreePath,
 }: {
   request: NormalizedPermissionRequest & { taskId: string };
@@ -312,6 +314,11 @@ export function PermissionBar({
     input: Record<string, unknown>,
   ) => Promise<void>;
   onSetMode?: (mode: InteractionMode) => void;
+  /**
+   * Turn on per-session auto-accept. Not a permission rule: it only stops this
+   * session from prompting, and is dropped when the app restarts.
+   */
+  onAutoAcceptAll?: () => void | Promise<void>;
   worktreePath?: string | null;
 }) {
   const modal = useModal();
@@ -945,6 +952,17 @@ export function PermissionBar({
               >
                 Allow
               </Button>
+              {onAutoAcceptAll && (
+                <Button
+                  onClick={onAutoAcceptAll}
+                  variant="secondary"
+                  size="sm"
+                  icon={<Zap />}
+                  title="Stop asking for this session. Nothing is saved to your permission rules."
+                >
+                  Auto-accept session
+                </Button>
+              )}
               {directoryAccess && (
                 <Dropdown
                   dropdownRef={directoryDropdownRef}

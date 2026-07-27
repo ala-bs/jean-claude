@@ -20,6 +20,11 @@ export type AgentUIEventPayload =
     }
   | { type: 'status'; status: TaskStatus; error?: string }
   | ({ type: 'permission' } & NormalizedPermissionRequest)
+  /**
+   * A permission request was resolved without the renderer asking for it
+   * (e.g. per-session auto-accept). The renderer clears the matching banner.
+   */
+  | { type: 'permission-resolved'; requestId: string }
   | {
       type: 'question';
       requestId: string;
