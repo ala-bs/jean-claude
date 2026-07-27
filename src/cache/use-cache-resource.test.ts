@@ -6,8 +6,10 @@ import {
   ensureResource,
   getCacheSubscriptionKey,
   isResourceInitialLoading,
+  isResourceLoading,
   shouldLoadChangedResource,
 } from './use-cache-resource';
+import type { ResourceMeta } from './cache-types';
 import {
   isResourceFresh,
   markResourceChanged,
@@ -298,6 +300,68 @@ describe('isResourceFresh', () => {
         50,
         120,
       ),
+    ).toBe(false);
+  });
+});
+
+describe('isResourceLoading', () => {
+  const meta = (overrides: Partial<ResourceMeta>): ResourceMeta => ({
+    status: 'success',
+    error: null,
+    lastFetchedAt: 100,
+    stale: false,
+    observerCount: 1,
+    lastUnusedAt: null,
+    ...overrides,
+  });
+
+  it('stays loading while a refetch is in flight without data', () => {
+    expect(
+      isResourceLoading({
+        enabled: true,
+        meta: meta({ status: 'loading', stale: true }),
+        hasData: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('stays loading when invalidated mid-flight and awaiting reload', () => {
+    expect(
+      isResourceLoading({
+        enabled: true,
+        meta: meta({ stale: true }),
+        hasData: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('reports not loading for a settled resource with no data', () => {
+    expect(
+      isResourceLoading({
+        enabled: true,
+        meta: meta({}),
+        hasData: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not force loading when data is already available', () => {
+    expect(
+      isResourceLoading({
+        enabled: true,
+        meta: meta({ status: 'loading', stale: true }),
+        hasData: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('is never loading when disabled', () => {
+    expect(
+      isResourceLoading({
+        enabled: false,
+        meta: meta({ status: 'loading', stale: true }),
+        hasData: false,
+      }),
     ).toBe(false);
   });
 });

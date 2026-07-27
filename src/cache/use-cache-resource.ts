@@ -111,6 +111,29 @@ export function isResourceInitialLoading(
   );
 }
 
+// A resource with no data yet is only "not found" once nothing is in flight
+// and no reload is pending. Otherwise (first fetch, refetch, or invalidated
+// mid-flight and waiting for the reload effect) it is still loading.
+export function isResourceLoading({
+  enabled,
+  meta,
+  hasData,
+}: {
+  enabled: boolean;
+  meta: ResourceMeta | ResourceResultMeta | undefined;
+  hasData: boolean;
+}) {
+  if (isResourceInitialLoading(enabled, meta)) {
+    return true;
+  }
+
+  return (
+    enabled &&
+    !hasData &&
+    (meta?.status === 'loading' || shouldLoadChangedResource(meta))
+  );
+}
+
 export async function ensureResource<T>({
   key,
   staleTime = 0,
@@ -261,6 +284,7 @@ export function useCacheResource<TData, TSelected = TData>({
     void loadResource().catch(() => {});
   }, [enabled, loadResource, meta]);
 
+
   const refetch = useCallback(async () => {
     await ensureResource({
       key,
@@ -275,7 +299,11 @@ export function useCacheResource<TData, TSelected = TData>({
 
   return {
     data,
-    isLoading: isResourceInitialLoading(enabled, meta),
+    isLoading: isResourceLoading({
+      enabled,
+      meta,
+      hasData: data !== undefined,
+    }),
     isFetching: enabled && metaStatus === 'loading',
     isError: metaStatus === 'error',
     error,
