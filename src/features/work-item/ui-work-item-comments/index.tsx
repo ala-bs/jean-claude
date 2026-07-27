@@ -1,5 +1,6 @@
 import { ImagePlus, MessageSquare, MessagesSquare, Pencil, Send, X } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import { api, type WorkItemComment } from '@/lib/api';
@@ -21,6 +22,24 @@ import {
 } from '@/common/ui/mention-textarea';
 import { Button } from '@/common/ui/button';
 import { Dropdown } from '@/common/ui/dropdown';
+import {
+  ALLOWED_IMAGE_TYPES,
+  getAttachmentFileName,
+  MAX_IMAGES,
+  processImageFile,
+} from '@/lib/image-utils';
+import {
+  getPromptImageMarkdownSize,
+  markdownImagePlaceholderPattern,
+} from '@/lib/markdown-image-size';
+import { createPromptImageUploadCache } from '@/lib/prompt-image-upload-cache';
+import { uploadImagesIntoMarkdown } from '@/features/pull-request/ui-pr-comment-form';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
+import type { PromptImagePart } from '@shared/agent-backend-types';
+import {
+  isVideoFile,
+  VideoGifConverter,
+} from '@/features/common/ui-video-gif-converter';
 import { useSetWorkItemCommentReaction } from '@/hooks/use-work-items';
 import type { WorkItemCommentReactionType } from '@/lib/api';
 
@@ -109,25 +128,15 @@ function formatCommentDate(value: string) {
   }).format(date);
 }
 
-const MAX_COMMENT_IMAGES = 10;
-const MAX_COMMENT_IMAGE_SIZE = 50 * 1024 * 1024;
-const COMMENT_IMAGE_TYPES = new Set([
-  'image/gif',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-]);
+const MAX_COMMENT_IMAGES = MAX_IMAGES;
 
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') return reject(new Error('Unable to read image'));
-      resolve(reader.result.slice(reader.result.indexOf(',') + 1));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error('Unable to read image'));
-    reader.readAsDataURL(file);
-  });
+/** Pending attachment: uploaded only when the comment is sent. */
+type PendingImage = PromptImagePart & { placeholderMarkdown?: string };
+
+function pendingImageFileName(image: PendingImage, index: number) {
+  if (image.filename) return image.filename;
+  const extension = image.mimeType.split('/')[1] || 'png';
+  return `image-${index + 1}.${extension}`;
 }
 
 function CommentsContent({
@@ -257,6 +266,18 @@ export function WorkItemComments({
   const [draft, setDraft] = useState('');
   const [editingComment, setEditingComment] = useState<WorkItemComment | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [composerError, setComposerError] = useState<string | null>(null);
+  const imageTokenRef = useRef(0);
+  const pendingImagesRef = useRef<PendingImage[]>([]);
+  const uploadCacheRef = useRef(createPromptImageUploadCache());
+  const pendingImagePreviewUrls = useImagePreviewUrls(pendingImages);
+
+  useEffect(() => {
+    const uploadCache = uploadCacheRef.current;
+    return () => uploadCache.clear();
+  }, []);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchedMentions, setSearchedMentions] = useState<{
@@ -325,12 +346,14 @@ export function WorkItemComments({
     (comment: WorkItemComment) => {
       setEditingComment(comment);
       setDraft(comment.rawText ?? comment.text);
-      // The editor is a shared composer at the bottom of the pane; without
-      // scrolling + focusing it, clicking the pencil looks like a no-op.
+      setComposerError(null);
+      pendingImagesRef.current = [];
+      setPendingImages([]);
+      // The composer is shared for new comments and edits; focusing it makes
+      // clicking the pencil feel connected to the editor.
       requestAnimationFrame(() => {
         const textarea = textareaRef.current;
         if (!textarea) return;
-        textarea.scrollIntoView({ block: 'nearest' });
         textarea.focus();
         const end = textarea.value.length;
         textarea.setSelectionRange(end, end);
@@ -339,10 +362,77 @@ export function WorkItemComments({
     [],
   );
 
+  const clearPendingImages = useCallback(() => {
+    pendingImagesRef.current = [];
+    setPendingImages([]);
+    uploadCacheRef.current.clear();
+  }, []);
+
+  const removePendingImage = useCallback((index: number) => {
+    const target = pendingImagesRef.current[index];
+    if (target?.placeholderMarkdown) {
+      const pattern = markdownImagePlaceholderPattern(target.placeholderMarkdown);
+      if (pattern) setDraft((body) => body.replace(pattern, ''));
+    }
+    pendingImagesRef.current = pendingImagesRef.current.filter(
+      (_, i) => i !== index,
+    );
+    setPendingImages(pendingImagesRef.current);
+  }, []);
+
   async function handleSubmit() {
-    if (!trimmedDraft || (!onAddComment && !onUpdateComment)) return;
+    if (isUploading || isAddingComment) return;
+    if (!onAddComment && !onUpdateComment) return;
+    const images = pendingImagesRef.current;
+    if (!trimmedDraft && images.length === 0) return;
+
+    setComposerError(null);
+    let text: string;
+    if (images.length > 0) {
+      if (!providerId || !projectName) {
+        setComposerError('Cannot upload images for this work item.');
+        return;
+      }
+      setIsUploading(true);
+      try {
+        text = await uploadImagesIntoMarkdown({
+          body: trimmedDraft,
+          images,
+          uploadImage: async (image, fileName) => {
+            const mimeType = image.storageMimeType ?? image.mimeType;
+            const { url } = await api.azureDevOps.uploadWorkItemAttachment({
+              providerId,
+              projectName,
+              filename: getAttachmentFileName(fileName, mimeType),
+              mimeType,
+              base64: image.storageData ?? image.data,
+            });
+            return url;
+          },
+          uploadCache: uploadCacheRef.current,
+          mentionOptions,
+        });
+      } catch (uploadError) {
+        // Uploaded URLs stay cached, so retrying only re-uploads what failed.
+        setComposerError(
+          uploadError instanceof Error
+            ? uploadError.message
+            : 'Failed to upload image',
+        );
+        return;
+      } finally {
+        setIsUploading(false);
+      }
+    } else {
+      text = encodeMentionDisplayNames(trimmedDraft, mentionOptions);
+    }
+
+    if (text.includes('jc-image://')) {
+      setComposerError('Remove incomplete image placeholders before sending.');
+      return;
+    }
+
     try {
-      const text = encodeMentionDisplayNames(trimmedDraft, mentionOptions);
       if (editingComment && onUpdateComment) {
         await onUpdateComment({ commentId: editingComment.id, text });
         setEditingComment(null);
@@ -350,48 +440,82 @@ export function WorkItemComments({
         await onAddComment(text);
       }
       setDraft('');
+      clearPendingImages();
     } catch {
       // Mutation hook handles user-facing error toast. Keep draft for retry.
     }
   }
 
-  async function attachFiles(files: FileList | File[]) {
-    if (!providerId || !projectName || isUploading) return;
-    const images = [...files].filter((file) => COMMENT_IMAGE_TYPES.has(file.type));
-    if (images.length === 0) return;
-    if (images.some((file) => file.size > MAX_COMMENT_IMAGE_SIZE)) {
-      console.error('Comment image exceeds 50 MB limit');
+  // Tracks the caret across back-to-back inserts: the DOM selection is only
+  // corrected after React commits, so re-reading it would use stale offsets.
+  const insertionCaretRef = useRef<number | null>(null);
+
+  const insertTextAtCursor = useCallback((text: string) => {
+    const textarea = textareaRef.current;
+    const tracked = insertionCaretRef.current;
+    const start = tracked ?? textarea?.selectionStart;
+    const end = tracked ?? textarea?.selectionEnd;
+    if (start === undefined || end === undefined) {
+      setDraft((current) => `${current}${current ? '\n\n' : ''}${text}`);
       return;
     }
-    const textarea = textareaRef.current;
-    const start = textarea?.selectionStart ?? draft.length;
-    const end = textarea?.selectionEnd ?? start;
-    setIsUploading(true);
-    try {
-      const remaining = Math.max(0, MAX_COMMENT_IMAGES - (draft.match(/!\[[^\]]*\]\(/g)?.length ?? 0));
-      const markdownParts: string[] = [];
-      for (const file of images.slice(0, remaining)) {
-        const { url } = await api.azureDevOps.uploadWorkItemAttachment({
-          providerId,
-          projectName,
-          filename: file.name,
-          mimeType: file.type,
-          base64: await readFileAsBase64(file),
-        });
-        markdownParts.push(`![${file.name}](${url})`);
+    setDraft((current) => `${current.slice(0, start)}${text}${current.slice(end)}`);
+    const cursor = start + text.length;
+    insertionCaretRef.current = cursor;
+    requestAnimationFrame(() => {
+      insertionCaretRef.current = null;
+      textarea?.focus();
+      textarea?.setSelectionRange(cursor, cursor);
+    });
+  }, []);
+
+  const addPendingImage = useCallback(
+    (image: PromptImagePart) => {
+      if (pendingImagesRef.current.length >= MAX_COMMENT_IMAGES) {
+        setComposerError(`You can attach up to ${MAX_COMMENT_IMAGES} images.`);
+        return;
       }
-      const markdown = markdownParts.join('\n');
-      setDraft((value) => `${value.slice(0, start)}${markdown}${value.slice(end)}`);
-      requestAnimationFrame(() => textarea?.setSelectionRange(start + markdown.length, start + markdown.length));
-    } catch (error) {
-      console.error('Failed to upload comment image:', error);
-    } finally {
-      setIsUploading(false);
+      imageTokenRef.current += 1;
+      const token = imageTokenRef.current;
+      const fileName = pendingImageFileName(image, token - 1);
+      const altText = fileName.replace(/[[\]()\\]/g, '_');
+      const placeholderMarkdown = `![${altText}](jc-image://${token}${getPromptImageMarkdownSize(image)})`;
+      pendingImagesRef.current = [
+        ...pendingImagesRef.current,
+        { ...image, filename: fileName, placeholderMarkdown },
+      ];
+      setPendingImages(pendingImagesRef.current);
+      setComposerError(null);
+      insertTextAtCursor(placeholderMarkdown);
+    },
+    [insertTextAtCursor],
+  );
+
+  async function attachFiles(files: FileList | File[]) {
+    if (!canAttach) return;
+    const all = [...files];
+    const imageFiles = all.filter((file) => ALLOWED_IMAGE_TYPES.includes(file.type));
+    const video = all.find(isVideoFile);
+    const remaining = MAX_COMMENT_IMAGES - pendingImagesRef.current.length;
+    if (remaining <= 0) {
+      setComposerError(`You can attach up to ${MAX_COMMENT_IMAGES} images.`);
+      return;
     }
+    if (imageFiles.length > remaining) {
+      setComposerError(
+        `Only ${remaining} more image${remaining === 1 ? '' : 's'} can be attached.`,
+      );
+    }
+    for (const file of imageFiles.slice(0, remaining)) {
+      await processImageFile(file, addPendingImage, setComposerError);
+    }
+    if (!video) return;
+    if (remaining > imageFiles.length) setVideoFile(video);
+    else setComposerError(`You can attach up to ${MAX_COMMENT_IMAGES} images.`);
   }
 
   const editor = onAddComment || onUpdateComment ? (
-    <div className="border-glass-border/50 bg-bg-1/70 sticky bottom-0 -mx-5 mt-3 border-t px-5 pt-3 pb-1 backdrop-blur">
+    <div className="border-glass-border/50 bg-bg-1/70 sticky top-0 z-10 -mx-5 mb-3 border-b px-5 pt-1 pb-3 backdrop-blur">
         {editingComment && (
           <div className="text-ink-3 mb-1.5 flex items-center gap-2 text-[11px]">
             <Pencil className="h-3 w-3" />
@@ -402,6 +526,8 @@ export function WorkItemComments({
               onClick={() => {
                 setEditingComment(null);
                 setDraft('');
+                clearPendingImages();
+                setComposerError(null);
               }}
             >
               Cancel
@@ -426,17 +552,57 @@ export function WorkItemComments({
          }}
          onPaste={(event) => {
            const files = [...event.clipboardData.files];
-           if (files.some((file) => COMMENT_IMAGE_TYPES.has(file.type)) && !event.clipboardData.getData('text/plain')) {
+           if (files.some((file) => ALLOWED_IMAGE_TYPES.includes(file.type) || isVideoFile(file)) && !event.clipboardData.getData('text/plain')) {
              event.preventDefault();
              void attachFiles(files);
            }
          }}
+         onDragOver={(event) => event.preventDefault()}
+         onDrop={(event) => {
+           const files = [...event.dataTransfer.files];
+           if (!files.some((file) => ALLOWED_IMAGE_TYPES.includes(file.type) || isVideoFile(file))) return;
+           event.preventDefault();
+           void attachFiles(files);
+         }}
        />
-       <input ref={fileInputRef} type="file" accept="image/*" multiple hidden onChange={(event) => { void attachFiles(event.target.files ?? []); event.target.value = ''; }} />
+       {pendingImages.length > 0 && (
+         <div className="mt-2 flex flex-wrap gap-2">
+           {pendingImages.map((image, index) => {
+             const name = pendingImageFileName(image, index);
+             return (
+               <div key={image.placeholderMarkdown ?? `${name}-${index}`} className="border-glass-border relative h-16 w-16 overflow-hidden rounded border">
+                 {pendingImagePreviewUrls[index] ? (
+                   <img src={pendingImagePreviewUrls[index]} alt={name} className="h-full w-full object-cover" />
+                 ) : (
+                   <div className="text-ink-3 flex h-full w-full items-center justify-center px-1 text-center text-[9px]">
+                     <span className="truncate">{name}</span>
+                   </div>
+                 )}
+                 <button
+                   type="button"
+                   className="bg-bg-1/90 text-ink-2 hover:text-ink-0 absolute top-0.5 right-0.5 flex h-6 w-6 items-center justify-center rounded"
+                   aria-label={`Remove ${name}`}
+                   onClick={() => removePendingImage(index)}
+                   disabled={isUploading}
+                 >
+                   <X className="h-3.5 w-3.5" />
+                 </button>
+               </div>
+             );
+           })}
+         </div>
+       )}
+       {composerError && (
+         <p className="text-status-fail mt-2 text-[11px]" role="alert">
+           {composerError}
+         </p>
+       )}
+       <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple hidden onChange={(event) => { void attachFiles(event.target.files ?? []); event.target.value = ''; }} />
        <div className="mt-2 flex items-center justify-between gap-2">
          <div className="flex items-center gap-2">
            <button type="button" className="text-ink-3 hover:text-ink-1 inline-flex items-center gap-1 text-[11px]" disabled={!canAttach} onClick={() => fileInputRef.current?.click()}>
-             <ImagePlus className="h-3.5 w-3.5" /> {isUploading ? 'Uploading...' : 'Add image/GIF'}
+             <ImagePlus className="h-3.5 w-3.5" /> Add image/GIF
+             {pendingImages.length > 0 ? ` (${pendingImages.length}/${MAX_COMMENT_IMAGES})` : ''}
            </button>
            <span className="text-ink-4 text-[11px]">Cmd+Enter to post</span>
          </div>
@@ -446,19 +612,29 @@ export function WorkItemComments({
           variant="primary"
           icon={<Send className="h-3.5 w-3.5" />}
            loading={isAddingComment || isUploading}
-          disabled={!trimmedDraft}
+          disabled={!trimmedDraft && pendingImages.length === 0}
            onClick={handleSubmit}
          >
            {editingComment ? 'Save' : 'Post'}
          </Button>
-         {editingComment && <button type="button" className="text-ink-3 hover:text-ink-1" onClick={() => { setEditingComment(null); setDraft(''); }} aria-label="Cancel editing"><X className="h-4 w-4" /></button>}
+         {editingComment && <button type="button" className="text-ink-3 hover:text-ink-1" onClick={() => { setEditingComment(null); setDraft(''); clearPendingImages(); setComposerError(null); }} aria-label="Cancel editing"><X className="h-4 w-4" /></button>}
       </div>
+      {videoFile &&
+        createPortal(
+          <VideoGifConverter
+            file={videoFile}
+            onAttach={addPendingImage}
+            onClose={() => setVideoFile(null)}
+          />,
+          document.body,
+        )}
     </div>
   ) : null;
 
   if (hideHeader) {
     return (
       <div className="flex min-h-full min-w-0 flex-col overflow-x-hidden">
+        {editor}
         <div className="min-h-0 flex-1">
           <CommentsContent
             comments={comments}
@@ -473,7 +649,6 @@ export function WorkItemComments({
             projectName={projectName}
           />
         </div>
-        {editor}
       </div>
     );
   }
@@ -495,6 +670,7 @@ export function WorkItemComments({
       </div>
 
       <div className="border-glass-border/50 mt-3 min-h-0 flex-1 overflow-y-auto border-t pt-3">
+        {editor}
         <CommentsContent
           comments={comments}
           isLoading={isLoading}
@@ -508,7 +684,6 @@ export function WorkItemComments({
           projectName={projectName}
         />
       </div>
-      {editor}
     </div>
   );
 }
