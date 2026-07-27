@@ -65,6 +65,7 @@ import {
   useNewTaskDraftStore,
   type WorkItemsViewMode,
 } from '@/stores/new-task-draft';
+import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import {
   KeyboardLayerProvider,
   useKeyboardLayer,
@@ -540,6 +541,10 @@ export function NewTaskOverlay({
         : null,
     [selectedProjectId, projects],
   );
+  const {
+    iterationFilter: workItemsIterationFilter,
+    setIterationFilter: setWorkItemsIterationFilter,
+  } = useWorkItemPickerIterationFilter(selectedProjectId);
   useEffect(() => {
     if (projectsLoading || selectedProjectId === null || selectedProject) {
       return;
@@ -1864,12 +1869,8 @@ export function NewTaskOverlay({
                   onViewModeChange={(mode: WorkItemsViewMode) =>
                     updateDraft({ workItemsViewMode: mode })
                   }
-                  iterationFilter={
-                    draft?.workItemsIterationFilter ?? '__current__'
-                  }
-                  onIterationFilterChange={(iterationFilter) =>
-                    updateDraft({ workItemsIterationFilter: iterationFilter })
-                  }
+                  iterationFilter={workItemsIterationFilter}
+                  onIterationFilterChange={setWorkItemsIterationFilter}
                   onWorkItemToggle={handleWorkItemToggle}
                   onClearSelectedWorkItems={handleClearSelectedWorkItems}
                   onHighlightChange={setHighlightedWorkItemId}

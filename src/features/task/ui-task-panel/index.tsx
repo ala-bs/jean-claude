@@ -182,6 +182,7 @@ import { useToastStore } from '@/stores/toasts';
 import { useWorkItemById } from '@/hooks/use-work-items';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
+import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
 
 import {
@@ -1275,6 +1276,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const stepStartJobIdsRef = useRef<Map<string, string>>(new Map());
   const [showWorkItemsEditor, setShowWorkItemsEditor] = useState(false);
   const [workItemsFilter, setWorkItemsFilter] = useState('');
+  const {
+    iterationFilter: workItemsIterationFilter,
+    setIterationFilter: setWorkItemsIterationFilter,
+  } = useWorkItemPickerIterationFilter(projectId);
   // Buffered selection state for work items modal (applied on submit)
   const [draftWorkItemIds, setDraftWorkItemIds] = useState<string[]>([]);
   const [draftWorkItemUrls, setDraftWorkItemUrls] = useState<string[]>([]);
@@ -2585,6 +2590,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                       onToggleSelect={handleWorkItemToggle}
                       onClearSelection={handleClearWorkItems}
                       filter={workItemsFilter}
+                      iterationFilter={workItemsIterationFilter}
+                      onIterationFilterChange={setWorkItemsIterationFilter}
                     />
                   </div>
 
