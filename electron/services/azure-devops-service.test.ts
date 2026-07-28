@@ -1185,7 +1185,7 @@ describe('setWorkItemCommentReaction', () => {
   });
 
   it.each([
-    ['like', 'POST'],
+    ['like', 'PUT'],
     ['heart', 'DELETE'],
   ])('uses Azure reaction route for %s', async (reactionType, method) => {
     await setWorkItemCommentReaction({
@@ -1194,11 +1194,11 @@ describe('setWorkItemCommentReaction', () => {
       workItemId: 299,
       commentId: 42,
       reactionType: reactionType as 'like' | 'heart',
-      engaged: method === 'POST',
+      engaged: method === 'PUT',
     });
 
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      `https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments/42/reactions/${reactionType}?api-version=7.1-preview.4`,
+      `https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments/42/reactions/${reactionType}?api-version=7.1-preview.1`,
       { method, headers: { Authorization: 'Basic OnBhdA==' } },
     );
   });

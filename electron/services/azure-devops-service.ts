@@ -1551,13 +1551,15 @@ export async function setWorkItemCommentReaction(params: {
   engaged: boolean;
 }): Promise<void> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
-  const url = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments/${params.commentId}/reactions/${params.reactionType}?api-version=7.1-preview.4`;
+  const url = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments/${params.commentId}/reactions/${params.reactionType}?api-version=7.1-preview.1`;
   const response = await fetch(url, {
-    method: params.engaged ? 'POST' : 'DELETE',
+    method: params.engaged ? 'PUT' : 'DELETE',
     headers: { Authorization: authHeader },
   });
   if (!response.ok) {
-    throw new Error(`Failed to update work item comment reaction: ${await response.text()}`);
+    throw new Error(
+      `Failed to update work item comment reaction (${response.status} ${response.statusText}) ${params.engaged ? 'PUT' : 'DELETE'} ${url}: ${await response.text()}`,
+    );
   }
 }
 
