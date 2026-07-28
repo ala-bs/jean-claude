@@ -810,18 +810,12 @@ export const StepService = {
     const steps = await TaskStepRepository.findByTaskId(taskId);
     const newStatus = computeTaskStatus(steps);
     debug('syncTaskStatus taskId=%s newStatus=%s', taskId, newStatus);
-    let task: Task;
-    if (newStatus === 'completed') {
-      task = await taskRuntimeCleanupService.runProvisionalTransition(
-        taskId,
-        () => TaskRepository.update(taskId, { status: newStatus }),
-        (updatedTask) => updatedTask.status === 'completed',
-      );
-    } else {
-      task = await TaskRepository.update(taskId, { status: newStatus });
-    }
+    // An agent run finishing (status === 'completed') is NOT a terminal task
+    // state: the worktree stays alive and previews/run commands must keep
+    // working. Only user-archived tasks (userCompleted) are terminal.
+    const task = await TaskRepository.update(taskId, { status: newStatus });
     emitTaskUpsert(task);
-    if (newStatus !== 'completed' && !task.userCompleted) {
+    if (!task.userCompleted) {
       await taskRuntimeCleanupService.resetAfterReactivation(taskId);
     }
   },

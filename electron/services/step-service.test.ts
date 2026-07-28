@@ -308,25 +308,39 @@ describe('StepService.syncTaskStatus', () => {
     );
   });
 
-  it('stops task runtime before writing automatic completion', async () => {
+  it('keeps task runtime alive when the agent run completes', async () => {
     findStepsByTaskIdMock.mockResolvedValue([
       { id: 'step-1', taskId: 'task-1', status: 'completed' },
     ]);
-    stopTaskRuntimeMock.mockResolvedValue(undefined);
     updateTaskMock.mockResolvedValue({
       id: 'task-1',
       status: 'completed',
       userCompleted: false,
     });
+    resetTaskRuntimeMock.mockResolvedValue(undefined);
 
     await StepService.syncTaskStatus('task-1');
 
-    expect(stopTaskRuntimeMock).toHaveBeenCalledWith('task-1');
-    expect(stopTaskRuntimeMock.mock.invocationCallOrder[0]).toBeLessThan(
-      updateTaskMock.mock.invocationCallOrder[0],
-    );
+    expect(stopTaskRuntimeMock).not.toHaveBeenCalled();
+    expect(runProvisionalTransitionMock).not.toHaveBeenCalled();
     expect(updateTaskMock).toHaveBeenCalledOnce();
+    expect(resetTaskRuntimeMock).toHaveBeenCalledWith('task-1');
+  });
+
+  it('does not reset runtime for user-completed tasks', async () => {
+    findStepsByTaskIdMock.mockResolvedValue([
+      { id: 'step-1', taskId: 'task-1', status: 'completed' },
+    ]);
+    updateTaskMock.mockResolvedValue({
+      id: 'task-1',
+      status: 'completed',
+      userCompleted: true,
+    });
+
+    await StepService.syncTaskStatus('task-1');
+
     expect(resetTaskRuntimeMock).not.toHaveBeenCalled();
+    expect(stopTaskRuntimeMock).not.toHaveBeenCalled();
   });
 
   it('deliberately resets runtime tombstone when task becomes active again', async () => {
@@ -348,22 +362,20 @@ describe('StepService.syncTaskStatus', () => {
     );
   });
 
-  it('resets provisional runtime cleanup when automatic completion write fails', async () => {
+  it('propagates completion write failures without touching runtime', async () => {
     stopTaskRuntimeMock.mockClear();
     resetTaskRuntimeMock.mockClear();
     findStepsByTaskIdMock.mockResolvedValue([
       { id: 'step-1', taskId: 'task-1', status: 'completed' },
     ]);
-    stopTaskRuntimeMock.mockResolvedValue(undefined);
     updateTaskMock.mockRejectedValue(new Error('write failed'));
-    resetTaskRuntimeMock.mockResolvedValue(undefined);
 
     await expect(StepService.syncTaskStatus('task-1')).rejects.toThrow(
       'write failed',
     );
 
-    expect(resetTaskRuntimeMock).toHaveBeenCalledWith('task-1');
-    expect(runProvisionalTransitionMock).toHaveBeenCalledOnce();
+    expect(stopTaskRuntimeMock).not.toHaveBeenCalled();
+    expect(resetTaskRuntimeMock).not.toHaveBeenCalled();
     expect(updateTaskMock).toHaveBeenCalledOnce();
   });
 });
