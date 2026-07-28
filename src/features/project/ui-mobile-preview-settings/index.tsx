@@ -294,6 +294,11 @@ export function ProjectMobilePreviewIntegration({
         selectedAppPath,
         iosBundleId: config.iosBundleId,
       }),
+      appScheme: migrateDetectedCommand({
+        currentCommand: config.appScheme,
+        currentDetectedCommand: currentSelectedApp?.detectedAppScheme ?? null,
+        selectedDetectedCommand: nextSelectedApp?.detectedAppScheme ?? null,
+      }),
       androidPackageName: migrateDetectedCommand({
         currentCommand: config.androidPackageName,
         currentDetectedCommand:
@@ -482,6 +487,11 @@ export function ProjectMobilePreviewIntegration({
       placeholder: selectedApp?.detectedIosBundleId ?? 'auto · com.example.app',
     }),
     textField({
+      key: 'appScheme',
+      label: 'App scheme',
+      placeholder: selectedApp?.detectedAppScheme ?? 'auto · myapp',
+    }),
+    textField({
       key: 'androidPackageName',
       label: 'Android package ID',
       placeholder:
@@ -514,6 +524,7 @@ export function ProjectMobilePreviewIntegration({
       androidPrebuildCommand: null,
       iosPrebuildCommand: null,
       iosBundleId: null,
+      appScheme: null,
       androidPackageName: null,
       androidProjectPath: null,
     });

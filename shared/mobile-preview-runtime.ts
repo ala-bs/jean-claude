@@ -1,4 +1,4 @@
-const MOBILE_DEV_SERVER_COMMAND_PREFIX = 'mobile-dev-server:';
+export const MOBILE_DEV_SERVER_COMMAND_PREFIX = 'mobile-dev-server:';
 const MOBILE_PREVIEW_RUNTIME_PREFIX = 'mobile-runtime:';
 
 function decodeIdentityPart(value: string): string | null {

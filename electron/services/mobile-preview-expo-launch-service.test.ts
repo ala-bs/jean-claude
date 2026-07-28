@@ -390,6 +390,7 @@ describe('mobilePreviewExpoLaunchService', () => {
     expect(url.pathname).toBe('/_expo/link');
     expect(Object.fromEntries(url.searchParams)).toEqual({
       platform: 'android',
+      choice: 'expo-go',
     });
     expect(legacyInit).toMatchObject({ method: 'GET', redirect: 'manual' });
     expect(deps.openDeeplink).toHaveBeenCalledWith(
@@ -400,6 +401,72 @@ describe('mobilePreviewExpoLaunchService', () => {
       },
       expect.any(AbortSignal),
     );
+  });
+
+  it('asks for the dev-client link when the app depends on expo-dev-client', async () => {
+    deps.resolveAppSchemes.mockResolvedValue(new Set(['falbala']));
+    deps.fetch.mockResolvedValueOnce(
+      new Response(null, {
+        status: 307,
+        headers: {
+          location:
+            'exp+falbala://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A19001',
+        },
+      }),
+    );
+    const service = createMobilePreviewExpoLaunchService({
+      ...deps,
+      resolveUsesDevClient: vi.fn().mockResolvedValue(true),
+    });
+
+    await expect(service.launch(params)).resolves.toEqual({
+      url: 'exp+falbala://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A19001',
+    });
+    // Dev-client apps skip `/_expo/open` entirely: it has no dev-client hint
+    // and would answer with the Expo Go link.
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    const legacyUrl = new URL(String(deps.fetch.mock.calls[0][0]));
+    expect(legacyUrl.pathname).toBe('/_expo/link');
+    expect(Object.fromEntries(legacyUrl.searchParams)).toEqual({
+      platform: 'ios',
+      choice: 'expo-dev-client',
+    });
+  });
+
+  it('trusts the configured app scheme when the app config cannot be read', async () => {
+    deps.resolveAppSchemes.mockRejectedValue(
+      new Error('Dynamic Expo config cannot be safely resolved'),
+    );
+    deps.fetch.mockResolvedValueOnce(
+      new Response(null, {
+        status: 307,
+        headers: {
+          location: 'exp+falbala://expo-development-client/?url=x',
+        },
+      }),
+    );
+    const service = createMobilePreviewExpoLaunchService({
+      ...deps,
+      resolveUsesDevClient: vi.fn().mockResolvedValue(true),
+    });
+
+    await expect(
+      service.launch({ ...params, appScheme: 'falbala' }),
+    ).resolves.toEqual({
+      url: 'exp+falbala://expo-development-client/?url=x',
+    });
+  });
+
+  it('keeps trusting config-declared schemes alongside the configured one', async () => {
+    deps.resolveAppSchemes.mockResolvedValue(new Set(['myapp']));
+    deps.fetch.mockResolvedValue(
+      new Response(JSON.stringify({ url: 'myapp://launch' }), { status: 200 }),
+    );
+    const service = createMobilePreviewExpoLaunchService(deps);
+
+    await expect(
+      service.launch({ ...params, appScheme: 'other-scheme' }),
+    ).resolves.toEqual({ url: 'myapp://launch' });
   });
 
   it('tries legacy endpoint after current endpoint transport failure', async () => {

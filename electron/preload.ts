@@ -54,6 +54,8 @@ import type {
   MobilePreviewNetworkProxySessionEvent,
   MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
+  MobilePreviewOpenDevMenuParams,
+  MobilePreviewReloadExpoParams,
   MobilePreviewPacketCaptureEvent,
   MobilePreviewPacketCaptureSessionEvent,
   MobilePreviewPacketCaptureStartParams,
@@ -1082,6 +1084,10 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:sendInput', sessionId, event),
     openDeeplink: (params: MobilePreviewOpenDeeplinkParams) =>
       ipcRenderer.invoke('mobilePreview:openDeeplink', params),
+    openDevMenu: (params: MobilePreviewOpenDevMenuParams) =>
+      ipcRenderer.invoke('mobilePreview:openDevMenu', params),
+    reloadExpo: (params: MobilePreviewReloadExpoParams) =>
+      ipcRenderer.invoke('mobilePreview:reloadExpo', params),
     forwardPort: (params: MobilePreviewForwardPortParams) =>
       ipcRenderer.invoke('mobilePreview:forwardPort', params),
     setTextSize: (params: MobilePreviewSetTextSizeParams) =>

@@ -28,6 +28,11 @@ export function getMobilePreviewConfigForApp({
       currentDetectedCommand: currentSelectedApp?.detectedIosBundleId ?? null,
       selectedDetectedCommand: selectedApp?.detectedIosBundleId ?? null,
     }),
+    appScheme: migrateDetectedCommand({
+      currentCommand: config.appScheme,
+      currentDetectedCommand: currentSelectedApp?.detectedAppScheme ?? null,
+      selectedDetectedCommand: selectedApp?.detectedAppScheme ?? null,
+    }),
     androidProjectPath:
       !config.androidProjectPath ||
       config.androidProjectPath === (currentSelectedApp?.androidProjectPath ?? null)

@@ -18,6 +18,8 @@ vi.mock('../database/repositories/tasks', () => ({
 
 import {
   RunCommandService,
+  parseDevServerPortFromOutput,
+  resolveEffectivePorts,
   runCommandService,
   signalProcessGroupOrProcess,
 } from './run-command-service';
@@ -642,5 +644,85 @@ describe('runCommandService.resetTaskAfterReactivation', () => {
     runCommandService.resetTaskAfterReactivation('task-1');
 
     expect(testService.runningProcesses.has('task-1')).toBe(false);
+  });
+});
+
+describe('parseDevServerPortFromOutput', () => {
+  it('reads the port Metro reports', () => {
+    expect(
+      parseDevServerPortFromOutput('› Metro waiting on exp://192.168.1.159:8082'),
+    ).toBe(8082);
+    expect(
+      parseDevServerPortFromOutput('Waiting on http://localhost:8083'),
+    ).toBe(8083);
+  });
+
+  it('ignores output without a port', () => {
+    expect(parseDevServerPortFromOutput('Starting Metro Bundler')).toBeNull();
+    expect(parseDevServerPortFromOutput('')).toBeNull();
+  });
+
+  it('does not truncate an out-of-range port', () => {
+    expect(
+      parseDevServerPortFromOutput('Waiting on http://localhost:123456'),
+    ).toBeNull();
+  });
+
+  it('ignores unrelated localhost URLs', () => {
+    expect(
+      parseDevServerPortFromOutput('Connected to postgres http://localhost:5432'),
+    ).toBeNull();
+    expect(
+      parseDevServerPortFromOutput('API base url http://localhost:3000'),
+    ).toBeNull();
+  });
+});
+
+describe('parseDevServerPortFromOutput (dev server banners)', () => {
+  it('reads the port from a dev-client banner with a percent-encoded url', () => {
+    expect(
+      parseDevServerPortFromOutput(
+        '› Metro waiting on exp+falbala://expo-development-client/?url=http%3A%2F%2F192.168.1.159%3A8085',
+      ),
+    ).toBe(8085);
+  });
+
+  it('reads the port through ANSI styling', () => {
+    expect(
+      parseDevServerPortFromOutput(
+        '\u001b[32m›\u001b[39m Metro waiting on \u001b[1mexp://192.168.1.159:8086\u001b[22m',
+      ),
+    ).toBe(8086);
+  });
+});
+
+describe('resolveEffectivePorts', () => {
+  it('prefers the port injected into the rewritten command', () => {
+    expect(
+      resolveEffectivePorts({
+        declaredPorts: [8081],
+        commandOverride: 'npx expo start --dev-client --port 8090',
+      }),
+    ).toEqual([8090]);
+  });
+
+  it('prefers the declared port env override for the command port var', () => {
+    expect(
+      resolveEffectivePorts({
+        declaredPorts: [8081],
+        envOverrides: { PORT: '8091', OTHER_ID: '4242' },
+        portEnvVarName: 'PORT',
+      }),
+    ).toEqual([8091]);
+  });
+
+  it('ignores unrelated env values and falls back to declared ports', () => {
+    expect(
+      resolveEffectivePorts({
+        declaredPorts: [8081],
+        envOverrides: { SOME_NUMERIC_ID: '4242' },
+        portEnvVarName: 'PORT',
+      }),
+    ).toEqual([8081]);
   });
 });

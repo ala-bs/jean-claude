@@ -157,6 +157,8 @@ import type {
   MobilePreviewNetworkProxySessionEvent,
   MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
+  MobilePreviewOpenDevMenuParams,
+  MobilePreviewReloadExpoParams,
   MobilePreviewPacketCaptureEvent,
   MobilePreviewPacketCaptureSession,
   MobilePreviewPacketCaptureSessionEvent,
@@ -1472,6 +1474,8 @@ export interface Api {
       event: MobilePreviewInputEvent,
     ) => Promise<void>;
     openDeeplink: (params: MobilePreviewOpenDeeplinkParams) => Promise<void>;
+    openDevMenu: (params: MobilePreviewOpenDevMenuParams) => Promise<void>;
+    reloadExpo: (params: MobilePreviewReloadExpoParams) => Promise<void>;
     forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
     setTextSize: (params: MobilePreviewSetTextSizeParams) => Promise<void>;
     setColorScheme: (
@@ -2622,6 +2626,8 @@ export const api: Api = hasWindowApi
         stop: async () => {},
         sendInput: async () => {},
         openDeeplink: async () => {},
+        openDevMenu: async () => {},
+        reloadExpo: async () => {},
         forwardPort: async () => {},
         setTextSize: async () => {},
         setColorScheme: async () => {},

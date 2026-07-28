@@ -72,12 +72,32 @@ const MAX_STATIC_EXPO_CONFIG_BYTES = 64 * 1024;
 
 class ExpoLaunchTransportError extends Error {
   readonly timedOut: boolean;
+  readonly connectionRefused: boolean;
 
-  constructor(message: string, timedOut = false) {
+  constructor(
+    message: string,
+    timedOut = false,
+    connectionRefused = false,
+  ) {
     super(message);
     this.name = 'ExpoLaunchTransportError';
     this.timedOut = timedOut;
+    this.connectionRefused = connectionRefused;
   }
+}
+
+function isConnectionRefused(error: unknown): boolean {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const code =
+    cause && typeof cause === 'object' && 'code' in cause
+      ? String((cause as { code?: unknown }).code)
+      : '';
+  return (
+    code === 'ECONNREFUSED' ||
+    code === 'ECONNRESET' ||
+    code === 'EHOSTUNREACH' ||
+    (cause instanceof Error && cause.message.includes('ECONNREFUSED'))
+  );
 }
 
 function assertParams(
@@ -152,7 +172,14 @@ async function parseLaunchUrl(
   }
   if (customProtocol) {
     const trustedSchemes = await getTrustedSchemes();
-    if (!trustedSchemes.has(protocol.slice(0, -1))) {
+    const scheme = protocol.slice(0, -1);
+    // Development builds are reached through `exp+<scheme>://`, which Expo
+    // derives from the app's own (trusted) scheme.
+    const devClientBase = scheme.startsWith('exp+') ? scheme.slice(4) : null;
+    if (
+      !trustedSchemes.has(scheme) &&
+      !(devClientBase && trustedSchemes.has(devClientBase))
+    ) {
       throw new Error(
         'Expo launch custom URL protocol is not configured by trusted app config',
       );
@@ -292,6 +319,41 @@ export async function resolveExpoAppSchemes(
   return new Set();
 }
 
+/**
+ * Development builds register `exp+<scheme>://`, Expo Go registers `exp://`.
+ * The dev server only tells them apart through `?choice=`, so pick based on
+ * whether the app depends on `expo-dev-client`.
+ */
+function normalizeConfiguredScheme(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const scheme = value.trim().toLowerCase().replace(/:\/*$/, '');
+  if (!scheme || !/^[a-z][a-z\d+.-]*$/.test(scheme)) return null;
+  if (BLOCKED_PROTOCOLS.has(`${scheme}:`)) return null;
+  return scheme;
+}
+
+export async function resolveUsesExpoDevClient(
+  appPath: string,
+): Promise<boolean> {
+  const appRoot = await realpath(appPath);
+  const packageJson = await readStaticExpoConfig(appRoot, 'package.json').catch(
+    () => null,
+  );
+  if (!packageJson) return false;
+  for (const field of ['dependencies', 'devDependencies']) {
+    const deps = packageJson[field];
+    if (
+      deps &&
+      typeof deps === 'object' &&
+      !Array.isArray(deps) &&
+      Object.prototype.hasOwnProperty.call(deps, 'expo-dev-client')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function parseOptionalScheme(
   value: Record<string, unknown>,
 ): string | undefined {
@@ -368,6 +430,7 @@ export function createMobilePreviewExpoLaunchService(deps: {
   resolveTaskRoot: typeof resolveTrustedTaskRoot;
   resolveAppPath: typeof resolvePathInsideRoot;
   resolveAppSchemes: (appPath: string) => Promise<Set<string>>;
+  resolveUsesDevClient?: (appPath: string) => Promise<boolean>;
   getRunStatus: (taskId: string) => RunStatus;
   fetch: typeof fetch;
   openDeeplink: (
@@ -376,10 +439,14 @@ export function createMobilePreviewExpoLaunchService(deps: {
   ) => Promise<void>;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  connectRetryWindowMs?: number;
 }) {
   const timeoutMs = deps.timeoutMs ?? 5_000;
   const maxResponseBytes = deps.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const transportRetryDelayMs = Math.min(250, Math.max(25, timeoutMs / 10));
+  // Metro reports "running" (log line / port claim) slightly before it accepts
+  // connections, so a connection-refused is usually "not ready yet".
+  const connectRetryWindowMs = deps.connectRetryWindowMs ?? 30_000;
   const latestRequestIds = new Map<string, string>();
   const activeRequestControllers = new Map<string, AbortController>();
   const deviceOpenTails = new Map<string, Promise<void>>();
@@ -530,8 +597,27 @@ export function createMobilePreviewExpoLaunchService(deps: {
           );
         }
         const message = error instanceof Error ? error.message : String(error);
+        const cause = error instanceof Error ? error.cause : undefined;
+        const causeMessage =
+          cause instanceof Error
+            ? `${cause.name}: ${cause.message}${
+                'code' in cause && cause.code ? ` (${String(cause.code)})` : ''
+              }`
+            : cause
+              ? String(cause)
+              : 'none';
+        console.error(
+          '[expo-launch] fetch failed',
+          JSON.stringify({
+            url: url.toString(),
+            message,
+            cause: causeMessage,
+          }),
+        );
         throw new ExpoLaunchTransportError(
-          `Expo launch request failed: ${message}`,
+          `Expo launch request failed: ${message} (cause: ${causeMessage})`,
+          false,
+          isConnectionRefused(error),
         );
       }
       try {
@@ -561,26 +647,51 @@ export function createMobilePreviewExpoLaunchService(deps: {
     ) => Promise<T> | T,
     signal: AbortSignal,
   ): Promise<T> {
-    try {
-      return await request(url, handleResponse, signal);
-    } catch (error) {
-      if (!(error instanceof ExpoLaunchTransportError) || error.timedOut) {
-        throw error;
+    // Metro binds on the IPv6 wildcard in some setups; if the IPv4 loopback
+    // is refused, `localhost` (which resolves to ::1 too) still reaches it.
+    const hosts =
+      url.hostname === '127.0.0.1' ? ['127.0.0.1', 'localhost'] : [url.hostname];
+    const attemptUrl = (index: number) => {
+      const next = new URL(url);
+      next.hostname = hosts[index % hosts.length];
+      return next;
+    };
+
+    const startedAt = Date.now();
+    let attempt = 0;
+    let delay = transportRetryDelayMs;
+    for (;;) {
+      try {
+        return await request(attemptUrl(attempt), handleResponse, signal);
+      } catch (error) {
+        if (!(error instanceof ExpoLaunchTransportError) || error.timedOut) {
+          throw error;
+        }
+        attempt += 1;
+        const elapsed = Date.now() - startedAt;
+        // Connection refused = dev server not accepting yet; keep waiting for
+        // it within the readiness window. Other transport errors get one retry.
+        const keepRetrying = error.connectionRefused
+          ? elapsed + delay < connectRetryWindowMs
+          : attempt < hosts.length;
+        if (!keepRetrying) throw error;
+
+        const waitMs = delay;
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            resolve();
+          }, waitMs);
+          const onAbort = () => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', onAbort);
+            reject(signal.reason);
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+          timer.unref();
+        });
+        delay = Math.min(delay * 2, 2_000);
       }
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          signal.removeEventListener('abort', onAbort);
-          resolve();
-        }, transportRetryDelayMs);
-        const onAbort = () => {
-          clearTimeout(timer);
-          signal.removeEventListener('abort', onAbort);
-          reject(signal.reason);
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        timer.unref();
-      });
-      return request(url, handleResponse, signal);
     }
   }
 
@@ -589,10 +700,17 @@ export function createMobilePreviewExpoLaunchService(deps: {
     platform: MobilePreviewExpoLaunchParams['platform'],
     getTrustedSchemes: () => Promise<ReadonlySet<string>>,
     signal: AbortSignal,
+    usesDevClient = false,
   ): Promise<MobilePreviewExpoLaunchResult> {
     const url = new URL('/_expo/link', baseUrl);
     url.searchParams.set('platform', platform);
-    return request(url, async (response) => {
+    // Without `choice` the dev server always answers with the Expo Go link
+    // (`exp://`), which a development build cannot open.
+    url.searchParams.set(
+      'choice',
+      usesDevClient ? 'expo-dev-client' : 'expo-go',
+    );
+    return requestWithTransportRetry(url, async (response) => {
       cancelUnusedBody(response);
       if (response.status === 404) {
         throw new Error('Expo server does not support device launch');
@@ -666,17 +784,47 @@ export function createMobilePreviewExpoLaunchService(deps: {
             'Mobile dev server is not running for requested task, app, and port',
           );
         }
+        // An explicit project setting wins over config discovery, which throws
+        // for dynamic `app.config.js` projects.
+        const configuredScheme = normalizeConfiguredScheme(params.appScheme);
         let trustedSchemesPromise: Promise<ReadonlySet<string>> | undefined;
         const getTrustedSchemes = () => {
-          trustedSchemesPromise ??= deps.resolveAppSchemes(appPath);
+          trustedSchemesPromise ??= (async () => {
+            let discovered: ReadonlySet<string> = new Set();
+            try {
+              discovered = await deps.resolveAppSchemes(appPath);
+            } catch (error) {
+              // Dynamic `app.config.js` cannot be resolved safely. That is only
+              // fatal when no scheme was configured in project settings.
+              if (!configuredScheme) throw error;
+            }
+            return configuredScheme
+              ? new Set([...discovered, configuredScheme])
+              : discovered;
+          })();
           return trustedSchemesPromise;
         };
+
+        const usesDevClient =
+          (await deps.resolveUsesDevClient?.(appPath)) ?? false;
+        signal.throwIfAborted();
 
         const baseUrl = new URL(`http://127.0.0.1:${params.metroPort}`);
         const currentUrl = new URL('/_expo/open', baseUrl);
         currentUrl.searchParams.set('platform', params.platform);
         currentUrl.searchParams.set('runtime', 'default');
         let result: MobilePreviewExpoLaunchResult;
+        if (usesDevClient) {
+          // `/_expo/open` has no dev-client hint, so it answers with the Expo Go
+          // link. Go straight to `/_expo/link?choice=expo-dev-client`.
+          result = await requestLegacy(
+            baseUrl,
+            params.platform,
+            getTrustedSchemes,
+            signal,
+            true,
+          );
+        } else {
         try {
           const currentResult = await requestWithTransportRetry(
             currentUrl,
@@ -705,6 +853,7 @@ export function createMobilePreviewExpoLaunchService(deps: {
               params.platform,
               getTrustedSchemes,
               signal,
+              usesDevClient,
             ));
         } catch (error) {
           if (
@@ -716,10 +865,12 @@ export function createMobilePreviewExpoLaunchService(deps: {
               params.platform,
               getTrustedSchemes,
               signal,
+              usesDevClient,
             );
           } else {
             throw error;
           }
+        }
         }
 
         await withDeviceOpenLock(ownerKey, signal, async () => {
@@ -766,6 +917,7 @@ export const mobilePreviewExpoLaunchService =
     resolveTaskRoot: resolveTrustedTaskRoot,
     resolveAppPath: resolvePathInsideRoot,
     resolveAppSchemes: resolveExpoAppSchemes,
+    resolveUsesDevClient: resolveUsesExpoDevClient,
     getRunStatus: (taskId) => runCommandService.getRunStatus(taskId),
     fetch,
     openDeeplink: (params, signal) =>

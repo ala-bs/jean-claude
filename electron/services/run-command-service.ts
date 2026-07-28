@@ -24,6 +24,7 @@ import type {
   StartAdHocRunCommandParams,
   WorkspacePackage,
 } from '@shared/run-command-types';
+import { MOBILE_DEV_SERVER_COMMAND_PREFIX } from '@shared/mobile-preview-runtime';
 import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
 
 import { dbg } from '../lib/debug';
@@ -35,6 +36,7 @@ import { TaskRepository } from '../database/repositories/tasks';
 
 const execAsync = promisify(exec);
 const RUN_COMMAND_LOG_FLUSH_INTERVAL_MS = 50;
+const PORT_SCAN_TAIL_LENGTH = 200;
 const RUN_COMMAND_LOG_FLUSH_BYTES = 16 * 1024;
 const PROJECT_SUGGESTIONS_PATH = '.jean-claude/suggestions.json';
 const RUN_COMMAND_ENV_SOURCE_KEYS = new Set(
@@ -42,6 +44,70 @@ const RUN_COMMAND_ENV_SOURCE_KEYS = new Set(
 );
 
 type ProcessSignal = 'SIGINT' | 'SIGTERM' | 'SIGKILL';
+
+/**
+ * A port-conflict override rewrites the command with `--port <n>` (or sets an
+ * env var). Prefer that port over the declared one so status consumers point at
+ * the server that actually came up.
+ */
+export function resolveEffectivePorts({
+  declaredPorts,
+  commandOverride,
+  envOverrides,
+  portEnvVarName,
+}: {
+  declaredPorts: number[];
+  commandOverride?: string;
+  envOverrides?: Record<string, string>;
+  /** The env var this command uses to receive an overridden port, if any. */
+  portEnvVarName?: string | null;
+}): number[] {
+  const envValue = portEnvVarName ? envOverrides?.[portEnvVarName] : undefined;
+  const fromEnv = envValue === undefined ? null : Number(envValue);
+  if (
+    fromEnv !== null &&
+    Number.isInteger(fromEnv) &&
+    fromEnv > 0 &&
+    fromEnv <= 65_535
+  ) {
+    return [fromEnv];
+  }
+
+  const match = commandOverride?.match(/--port[= ](\d{1,5})/);
+  const fromArgs = match ? Number(match[1]) : null;
+  if (fromArgs && fromArgs > 0 && fromArgs <= 65_535) return [fromArgs];
+
+  return declaredPorts;
+}
+
+/**
+ * Metro/Expo can bind a different port than requested (its own fallback when
+ * the port is taken). Learn the real one from the banner it prints.
+ */
+export function parseDevServerPortFromOutput(chunk: string): number | null {
+  // PTY output carries ANSI styling, and dev-client banners percent-encode the
+  // embedded URL (`...%3A8081`), so normalize before matching.
+  const text = chunk
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/%3A/gi, ':')
+    .replace(/%2F/gi, '/');
+
+  const patterns = [
+    /Metro waiting on \S*?:(\d{2,5})(?!\d)/i,
+    /(?:Dev server ready|Web is waiting on|Waiting on)\s+\S*?:(\d{2,5})(?!\d)/i,
+    /exp\+?[\w.-]*:\/\/[^\s/]*?:(\d{2,5})(?!\d)/i,
+    /url=https?:\/\/[^\s]*?:(\d{2,5})(?!\d)/i,
+    /(?:Metro|Bundler|Dev server).{0,40}?https?:\/\/[^\s:]+:(\d{2,5})(?!\d)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (Number.isInteger(port) && port > 0 && port <= 65_535) return port;
+  }
+  return null;
+}
 
 function parseSuggestionEnvVar(value: unknown): RunCommandEnvVar | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -256,6 +322,8 @@ interface TrackedProcess {
   name: string | null;
   command: string;
   ports: number[];
+  /** Set once the real listening port has been read from command output. */
+  portLearnedFromOutput?: boolean;
   pty: nodePty.IPty;
   pid: number;
   status: 'running' | 'stopped' | 'errored';
@@ -717,6 +785,15 @@ export class RunCommandService {
   }): Promise<void> {
     const commandValue = commandOverride ?? command.command;
     dbg.runCommand('Spawning command via PTY: %s', commandValue);
+    // A port conflict rewrites the command (or env) with a freshly allocated
+    // port. Report that port instead of the declared one, otherwise callers
+    // (mobile preview: Metro/DevTools/deeplinks) talk to the wrong server.
+    const effectivePorts = resolveEffectivePorts({
+      declaredPorts: command.ports,
+      commandOverride,
+      envOverrides,
+      portEnvVarName: this.getPortOverrideEnvVar(command),
+    });
     const commandEnv = await this.getCommandEnv({ command, context });
 
     const shell =
@@ -734,6 +811,11 @@ export class RunCommandService {
       env: getChildProcessEnv({ overrides: { ...commandEnv, ...envOverrides } }),
     });
 
+    // Only dev servers advertise their listening port in output; scanning every
+    // command would latch onto unrelated localhost URLs.
+    const canLearnPort = command.id.startsWith(MOBILE_DEV_SERVER_COMMAND_PREFIX);
+    let portScanTail = '';
+
     let exitResolve: (value: { exitCode: number; signal?: number }) => void;
     const exitPromise = new Promise<{ exitCode: number; signal?: number }>(
       (resolve) => {
@@ -745,7 +827,7 @@ export class RunCommandService {
       commandId: command.id,
       name: command.name,
       command: commandValue,
-      ports: command.ports,
+      ports: effectivePorts,
       pty: ptyProcess,
       pid: ptyProcess.pid,
       status: 'running',
@@ -766,6 +848,27 @@ export class RunCommandService {
     );
 
     ptyProcess.onData((data: string) => {
+      // Dev servers can bind a port of their own choosing; adopt it once so
+      // status consumers stop talking to the requested-but-unused port.
+      if (canLearnPort && !trackedProcess.portLearnedFromOutput) {
+        // Metro's banner can straddle two PTY chunks, so match against a small
+        // carry-over window instead of the raw chunk.
+        const window = `${portScanTail}${data}`;
+        portScanTail = window.slice(-PORT_SCAN_TAIL_LENGTH);
+        const observedPort = parseDevServerPortFromOutput(window);
+        if (observedPort && trackedProcess.ports?.[0] !== observedPort) {
+          trackedProcess.portLearnedFromOutput = true;
+          trackedProcess.ports = [observedPort];
+          dbg.runCommand(
+            'Observed dev server port %d for command %s',
+            observedPort,
+            trackedProcess.commandId,
+          );
+          this.notifyStatusChange(taskId);
+        } else if (observedPort) {
+          trackedProcess.portLearnedFromOutput = true;
+        }
+      }
       this.appendLogChunk({
         taskId,
         tracked: trackedProcess,

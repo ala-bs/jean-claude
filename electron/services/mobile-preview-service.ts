@@ -23,6 +23,8 @@ import {
   type MobilePreviewIosToolStatus,
   type MobilePreviewListSessionsParams,
   type MobilePreviewOpenDeeplinkParams,
+  type MobilePreviewOpenDevMenuParams,
+  type MobilePreviewReloadExpoParams,
   type MobilePreviewSession,
   type MobilePreviewSetTextSizeParams,
   type MobilePreviewStartParams,
@@ -33,6 +35,10 @@ import {
   type MobilePreviewLifecycle,
   registerBeforeQuitCleanup,
 } from './mobile-preview-lifecycle';
+import {
+  sendMetroDevMenuCommand,
+  sendMetroReloadCommand,
+} from './mobile-preview-dev-menu';
 import { androidAdapter } from './mobile-preview-android-adapter';
 import { iosIdbAdapter } from './mobile-preview-ios-idb-adapter';
 import { TaskRepository } from '../database/repositories';
@@ -59,6 +65,7 @@ type MobilePreviewAdapter = {
     url: string,
     signal?: AbortSignal,
   ) => Promise<void>;
+  openDevMenu?: (deviceId: string) => Promise<void>;
   forwardPort?: (params: {
     deviceId: string;
     hostPort: number;
@@ -882,6 +889,26 @@ export function createMobilePreviewService({
         params.url,
         options?.signal,
       );
+    },
+
+    async openDevMenu(
+      params: MobilePreviewOpenDevMenuParams,
+    ): Promise<void> {
+      assertSupportedPlatform(params.platform);
+      try {
+        await sendMetroDevMenuCommand(params.metroPort);
+        return;
+      } catch (error) {
+        // Metro may not be reachable (proxied port, app not connected).
+        // Android can still trigger the menu straight on the device.
+        const openDevMenu = adapters[params.platform].openDevMenu;
+        if (!openDevMenu) throw error;
+        await openDevMenu(params.deviceId);
+      }
+    },
+
+    async reloadExpo(params: MobilePreviewReloadExpoParams): Promise<void> {
+      await sendMetroReloadCommand(params.metroPort);
     },
 
     async forwardPort(params: MobilePreviewForwardPortParams): Promise<void> {

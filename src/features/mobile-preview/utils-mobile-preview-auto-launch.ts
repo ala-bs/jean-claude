@@ -33,6 +33,7 @@ export function getMobilePreviewAutoLaunchDecision({
   metroPort,
   completedOwnerKey,
   isSelectedDeviceReady,
+  isAppInstalled = null,
 }: {
   isRunningRuntime: boolean;
   isLoadingDevices: boolean;
@@ -47,6 +48,8 @@ export function getMobilePreviewAutoLaunchDecision({
   metroPort: number;
   completedOwnerKey: string | null;
   isSelectedDeviceReady: boolean;
+  /** null while the install status is still unknown. */
+  isAppInstalled?: boolean | null;
 }): MobilePreviewAutoLaunchDecision {
   if (!isRunningRuntime) return { status: 'idle' };
   if (isLoadingDevices) {
@@ -69,6 +72,16 @@ export function getMobilePreviewAutoLaunchDecision({
       status: 'unsupported',
       message:
         'Automatic Metro reassignment is unavailable for vanilla React Native. Device stream remains available.',
+    };
+  }
+
+  // Launching opens an `exp://` deeplink, which only resolves when the dev
+  // client (or Expo Go) is installed on the device. Without it the simulator
+  // answers with LSApplicationWorkspaceErrorDomain 115.
+  if (isAppInstalled === false) {
+    return {
+      status: 'waiting',
+      message: 'Install the app (or Expo Go) on this device first — Setup → Build',
     };
   }
 

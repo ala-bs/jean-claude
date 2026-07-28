@@ -81,6 +81,7 @@ export interface MobilePreviewDetectedApp {
   androidProjectPath?: string | null;
   detectedAndroidPackageName?: string | null;
   detectedIosBundleId?: string | null;
+  detectedAppScheme?: string | null;
   detectedDependenciesInstallCommand?: string | null;
   detectedMetroStartCommand?: string | null;
   detectedAndroidPrebuildCommand?: string | null;
@@ -107,6 +108,8 @@ export interface MobilePreviewProjectConfig {
   androidBuildCommand?: string | null;
   iosBuildCommand?: string | null;
   iosBundleId?: string | null;
+  /** URL scheme used to deeplink into the app (dev builds use `exp+<scheme>://`). */
+  appScheme?: string | null;
 }
 
 export const DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG: MobilePreviewProjectConfig =
@@ -126,6 +129,7 @@ export const DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG: MobilePreviewProjectConfig =
     androidBuildCommand: null,
     iosBuildCommand: null,
     iosBundleId: null,
+    appScheme: null,
   };
 
 export function isMobilePreviewProjectConfig(

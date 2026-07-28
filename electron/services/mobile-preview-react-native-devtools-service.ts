@@ -374,6 +374,40 @@ function absolutizeDevToolsFrontendUrl({
   return buildDevToolsFrontendUrl({ metroBaseUrl, target, panel, launchId });
 }
 
+
+/**
+ * Metro may bind the IPv6 wildcard only, so try `localhost` when the IPv4
+ * loopback is refused before declaring the dev server unreachable.
+ */
+async function fetchMetroJsonList(metroPort: number): Promise<Response> {
+  let lastError: unknown;
+  for (const host of ['127.0.0.1', 'localhost']) {
+    try {
+      return await fetch(`http://${host}:${metroPort}/json/list`, {
+        signal: AbortSignal.timeout(2500),
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+function describeMetroFetchError(error: unknown, metroPort: number): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message !== 'fetch failed') return message;
+  // undici hides the real reason in `cause`; surface something actionable.
+  const cause = error instanceof Error ? error.cause : undefined;
+  const code =
+    cause && typeof cause === 'object' && 'code' in cause
+      ? String((cause as { code?: unknown }).code)
+      : '';
+  if (code === 'ECONNREFUSED' || code === 'AggregateError' || !code) {
+    return `Metro dev server is not reachable on port ${metroPort}. Start it from the Metro tab, then Refresh.`;
+  }
+  return `Metro dev server request failed on port ${metroPort} (${code})`;
+}
+
 export async function resolveReactNativeDevTools({
   metroPort,
   panel,
@@ -390,9 +424,7 @@ export async function resolveReactNativeDevTools({
     };
   }
   try {
-    const response = await fetch(`${metroBaseUrl}/json/list`, {
-      signal: AbortSignal.timeout(2500),
-    });
+    const response = await fetchMetroJsonList(metroPort);
     if (!response.ok) {
       throw new Error(`Metro returned ${response.status}`);
     }
@@ -436,7 +468,7 @@ export async function resolveReactNativeDevTools({
       metroBaseUrl,
       frontendUrl: null,
       targets: [],
-      error: error instanceof Error ? error.message : String(error),
+      error: describeMetroFetchError(error, metroPort),
     };
   }
 }

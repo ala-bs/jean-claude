@@ -7,6 +7,7 @@ import {
   Funnel,
   Keyboard,
   Link,
+  ListTree,
   Loader2,
   MoreHorizontal,
   MousePointer2,
@@ -2167,6 +2168,11 @@ export function MobilePreviewPane({
   const [deviceId, setDeviceId] = useState('');
   const [previewRotationDeg, setPreviewRotationDeg] = useState(0);
   const [inputNotice, setInputNotice] = useState<string | null>(null);
+  // Successful actions stay silent: they clear any stale error instead of
+  // adding an informational banner.
+  const showActionNotice = useCallback((_message?: string) => {
+    setInputNotice(null);
+  }, []);
   const [runtimeLaunchRetry, setRuntimeLaunchRetry] = useState(0);
   const [isStandaloneInspectorOpen, setIsStandaloneInspectorOpen] =
     useState(false);
@@ -2185,6 +2191,9 @@ export function MobilePreviewPane({
   );
   const [selectedDevToolsTargetId, setSelectedDevToolsTargetId] = useState('');
   const devToolsViewRef = useRef<HTMLDivElement | null>(null);
+  const devToolsOpenedRef = useRef(false);
+  const [isDevToolsViewOpen, setIsDevToolsViewOpen] = useState(false);
+  const devToolsShouldShowRef = useRef(false);
   const devToolsOpenRequestRef = useRef(0);
   const devToolsTargetMenuOpenRef = useRef(false);
   const [activeConsoleCommandId, setActiveConsoleCommandId] = useState<
@@ -2387,6 +2396,12 @@ export function MobilePreviewPane({
     mobilePreviewConfig?.androidProjectPath ??
     getDefaultAndroidProjectPath({ appPath, detectedApps });
   const inferredAndroidProjectPath = appPath === '.' ? 'android' : `${appPath}/android`;
+  // Project override first, detected app config second (see Project Settings →
+  // Mobile Preview → App scheme).
+  const configuredAppScheme =
+    mobilePreviewConfig?.appScheme ??
+    detectedApps.find((app) => app.path === appPath)?.detectedAppScheme ??
+    null;
   const effectiveProjectPath =
     appPath && appPath !== '.' ? `${projectPath}/${appPath}` : projectPath;
   const devServerCommandId = useMemo(
@@ -2455,10 +2470,16 @@ export function MobilePreviewPane({
         devServerStatus.ports?.[0] ??
         configuredDevServerPort)
       : (metroPortOverride ?? configuredDevServerPort);
+  // Eager: resolve the DevTools target as soon as Metro is running so the
+  // embedded view can attach before the user opens the tab (captures early
+  // console/network activity). Poll until a target shows up, then stop.
+  const isDevServerRunning =
+    !devServerStarting && devServerStatus?.status === 'running';
   const reactNativeDevTools = useReactNativeDevTools({
     metroPort: effectiveDevServerPort,
     panel: 'console',
-    enabled: activeTab === 'devtools',
+    enabled: isDevServerRunning || activeTab === 'devtools',
+    pollUntilTargetMs: 5000,
   });
   useEffect(() => {
     const targets = reactNativeDevTools.data?.targets ?? [];
@@ -3193,9 +3214,10 @@ export function MobilePreviewPane({
     if (activeSessionDeviceReady) return;
     if (selectedDevicePreferenceKeyRef.current !== devicePreferenceKey) return;
 
-    if (autoLaunchRunningRuntime && !savedSelectedDevice && !deviceId) {
-      return;
-    }
+    // Never pick a device on the user's behalf: with nothing persisted and
+    // nothing chosen yet the pane stays idle ("No device selected") instead of
+    // booting an arbitrary simulator.
+    if (!savedSelectedDevice && !deviceId) return;
 
     if (visibleDevices.length === 0) {
       queueMicrotask(() => setDeviceId(''));
@@ -3217,7 +3239,6 @@ export function MobilePreviewPane({
     }
   }, [
     activeSessionDeviceReady,
-    autoLaunchRunningRuntime,
     deviceId,
     devicePreferenceKey,
     isLoadingDevices,
@@ -3471,6 +3492,11 @@ export function MobilePreviewPane({
     metroPort: effectiveDevServerPort,
     retryGeneration: runtimeLaunchRetry,
     isSelectedDeviceReady: activeSessionDeviceReady,
+    isAppInstalled:
+      (platform === 'android'
+        ? androidAppStatus?.appInstalled
+        : iosAppStatus?.appInstalled) ?? null,
+    appScheme: configuredAppScheme,
   });
   useEffect(() => {
     imageFrameCountRef.current = imageFrameCount;
@@ -3803,10 +3829,6 @@ export function MobilePreviewPane({
     [selectPreviewDevice],
   );
 
-  const showActionNotice = useCallback((message: string) => {
-    setInputNotice(message);
-  }, []);
-
   const handleCopyDeviceId = useCallback(async () => {
     if (!deviceId) return;
     await navigator.clipboard.writeText(deviceId);
@@ -3830,6 +3852,35 @@ export function MobilePreviewPane({
       setIsRunningAction(false);
     }
   }, [deeplinkUrl, deviceId, platform, showActionNotice]);
+
+  const handleOpenDevMenu = useCallback(async () => {
+    if (!deviceId) return;
+    setIsRunningAction(true);
+    try {
+      await api.mobilePreview.openDevMenu({
+        platform,
+        deviceId,
+        metroPort: effectiveDevServerPort,
+      });
+      showActionNotice('Dev menu toggled on device');
+    } catch (error) {
+      setInputNotice(formatError(error) ?? 'Failed to open dev menu');
+    } finally {
+      setIsRunningAction(false);
+    }
+  }, [deviceId, effectiveDevServerPort, platform, showActionNotice]);
+
+  const handleReloadExpo = useCallback(async () => {
+    setIsRunningAction(true);
+    try {
+      await api.mobilePreview.reloadExpo({ metroPort: effectiveDevServerPort });
+      showActionNotice();
+    } catch (error) {
+      setInputNotice(formatError(error) ?? 'Failed to reload Expo');
+    } finally {
+      setIsRunningAction(false);
+    }
+  }, [effectiveDevServerPort, showActionNotice]);
 
   const handleShowDeeplinkAction = useCallback(() => {
     mobileActionsMenuRef.current?.toggle();
@@ -5709,7 +5760,7 @@ export function MobilePreviewPane({
           });
           showActionNotice('Expo prebuild started; setup will continue when it finishes');
         } else {
-          setInputNotice('Checking Android project folder before proxy setup');
+          showActionNotice('Checking Android project folder before proxy setup');
         }
         return;
       }
@@ -6300,14 +6351,18 @@ export function MobilePreviewPane({
     null;
   const devToolsFrontendUrl =
     devToolsTarget?.devtoolsFrontendUrl ?? devToolsResult?.frontendUrl ?? null;
-  const devToolsViewId = `rn-devtools:${taskId}`;
+  // One embedded DevTools view per task *and* device, so switching devices
+  // doesn't reuse (or tear down) another device's debugger session.
+  const devToolsViewId = `rn-devtools:${taskId}:${platform}:${deviceId || 'none'}`;
   const handleDevToolsTargetMenuOpenChange = useCallback(
     (open: boolean) => {
       devToolsTargetMenuOpenRef.current = open;
+      const visible = !open && devToolsShouldShowRef.current;
+      if (!devToolsOpenedRef.current) return;
       void api.mobilePreview
         .setEmbeddedReactNativeDevToolsVisibility({
           viewId: devToolsViewId,
-          visible: !open,
+          visible,
         })
         .catch((error) => {
           setDevToolsLaunchError(formatError(error) ?? String(error));
@@ -6340,8 +6395,14 @@ export function MobilePreviewPane({
       });
   }, [devToolsViewId]);
 
+  // Lifecycle: create the embedded view as soon as a frontend URL exists
+  // (even while another tab is active) and keep it alive across tab switches
+  // so console/network history is preserved. Only destroyed on unmount, task
+  // change, or when the target disappears.
   useEffect(() => {
-    if (activeTab !== 'devtools' || !devToolsFrontendUrl) {
+    if (!devToolsFrontendUrl) {
+      devToolsOpenedRef.current = false;
+      queueMicrotask(() => setIsDevToolsViewOpen(false));
       void api.mobilePreview.closeEmbeddedReactNativeDevTools({
         viewId: devToolsViewId,
       });
@@ -6349,28 +6410,35 @@ export function MobilePreviewPane({
     }
 
     const element = devToolsViewRef.current;
-    if (!element) return;
-
-    const rect = element.getBoundingClientRect();
+    const rect = element?.getBoundingClientRect();
     const requestId = devToolsOpenRequestRef.current + 1;
     devToolsOpenRequestRef.current = requestId;
-    setDevToolsLaunchError(null);
+    queueMicrotask(() => setDevToolsLaunchError(null));
     void api.mobilePreview
       .openEmbeddedReactNativeDevTools({
         viewId: devToolsViewId,
         frontendUrl: devToolsFrontendUrl,
-        bounds: {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-        },
+        bounds: rect
+          ? {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+            }
+          : { x: 0, y: 0, width: 0, height: 0 },
       })
       .then(() => {
         if (devToolsOpenRequestRef.current !== requestId) return;
+        devToolsOpenedRef.current = true;
+        setIsDevToolsViewOpen(true);
+        // Apply the visibility/bounds the UI wants right now; the view may
+        // have been created while a different tab was showing.
+        if (devToolsViewRef.current) updateEmbeddedDevToolsBounds();
         return api.mobilePreview.setEmbeddedReactNativeDevToolsVisibility({
           viewId: devToolsViewId,
-          visible: !devToolsTargetMenuOpenRef.current,
+          visible:
+            devToolsShouldShowRef.current &&
+            !devToolsTargetMenuOpenRef.current,
         });
       })
       .catch((error) => {
@@ -6378,22 +6446,58 @@ export function MobilePreviewPane({
         setDevToolsLaunchError(formatError(error) ?? String(error));
       });
 
-    const resizeObserver = new ResizeObserver(updateEmbeddedDevToolsBounds);
-    resizeObserver.observe(element);
-    window.addEventListener('resize', updateEmbeddedDevToolsBounds);
-
     return () => {
       devToolsOpenRequestRef.current += 1;
-      resizeObserver.disconnect();
-      window.removeEventListener('resize', updateEmbeddedDevToolsBounds);
+      devToolsOpenedRef.current = false;
+      queueMicrotask(() => setIsDevToolsViewOpen(false));
       void api.mobilePreview.closeEmbeddedReactNativeDevTools({
         viewId: devToolsViewId,
       });
+    };
+  }, [devToolsFrontendUrl, devToolsViewId, updateEmbeddedDevToolsBounds]);
+
+  // Visibility + bounds: show the (already running) view only on the DevTools
+  // tab; hide it otherwise instead of tearing it down.
+  useEffect(() => {
+    const wantsTab = activeTab === 'devtools' && !!devToolsFrontendUrl;
+    devToolsShouldShowRef.current = wantsTab;
+    const shouldShow = wantsTab && !devToolsTargetMenuOpenRef.current;
+    if (!isDevToolsViewOpen) return;
+
+    if (!shouldShow) {
+      void api.mobilePreview
+        .setEmbeddedReactNativeDevToolsVisibility({
+          viewId: devToolsViewId,
+          visible: false,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const element = devToolsViewRef.current;
+    if (!element) return;
+    updateEmbeddedDevToolsBounds();
+    void api.mobilePreview
+      .setEmbeddedReactNativeDevToolsVisibility({
+        viewId: devToolsViewId,
+        visible: true,
+      })
+      .catch((error) => {
+        setDevToolsLaunchError(formatError(error) ?? String(error));
+      });
+
+    const resizeObserver = new ResizeObserver(updateEmbeddedDevToolsBounds);
+    resizeObserver.observe(element);
+    window.addEventListener('resize', updateEmbeddedDevToolsBounds);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateEmbeddedDevToolsBounds);
     };
   }, [
     activeTab,
     devToolsFrontendUrl,
     devToolsViewId,
+    isDevToolsViewOpen,
     updateEmbeddedDevToolsBounds,
   ]);
 
@@ -6713,17 +6817,16 @@ export function MobilePreviewPane({
           </Button>
         </div>
       ) : null}
-      {runtimeLaunchState.status !== 'idle' ? (
+      {runtimeLaunchState.status !== 'idle' &&
+      runtimeLaunchState.status !== 'ready' ? (
         <div
           className={clsx(
             'border-b px-3 py-1.5 font-mono text-[10.5px]',
             runtimeLaunchState.status === 'error'
               ? 'border-status-fail/30 bg-status-fail/10 text-status-fail'
-              : runtimeLaunchState.status === 'ready'
-                ? 'border-status-done/25 bg-status-done-soft text-status-done'
-                : runtimeLaunchState.status === 'unsupported'
-                  ? 'border-status-warn/30 bg-status-warn/10 text-status-warn'
-                  : 'border-line-soft bg-bg-1 text-ink-3',
+              : runtimeLaunchState.status === 'unsupported'
+                ? 'border-status-warn/30 bg-status-warn/10 text-status-warn'
+                : 'border-line-soft bg-bg-1 text-ink-3',
           )}
           role={runtimeLaunchState.status === 'error' ? 'alert' : 'status'}
         >
@@ -6965,10 +7068,49 @@ export function MobilePreviewPane({
                 Open Deeplink
               </DropdownItem>
               {platform === 'android' ? (
+                <DropdownItem
+                  icon={<RotateCw />}
+                  onClick={handleRestartAndroidApp}
+                  disabled={
+                    !deviceId ||
+                    !effectiveAndroidProjectPath ||
+                    isRestartingAndroidApp
+                  }
+                >
+                  Restart App
+                </DropdownItem>
+              ) : (
+                <DropdownItem
+                  icon={<RotateCw />}
+                  onClick={handleRestartIosApp}
+                  disabled={
+                    !deviceId ||
+                    !iosAppStatus?.appInstalled ||
+                    isRestartingIosApp
+                  }
+                >
+                  Restart App
+                </DropdownItem>
+              )}
+              <DropdownItem
+                icon={<RotateCcw />}
+                onClick={() => void handleReloadExpo()}
+                disabled={!isDevServerRunning || isRunningAction}
+              >
+                Reload Expo
+              </DropdownItem>
+              {platform === 'android' ? (
                 <DropdownItem icon={<Route />} onClick={() => setActiveAction('port')}>
                   Forward Port
                 </DropdownItem>
               ) : null}
+              <DropdownItem
+                icon={<ListTree />}
+                onClick={() => void handleOpenDevMenu()}
+                disabled={!deviceId || !isDevServerRunning || isRunningAction}
+              >
+                Open Dev Menu
+              </DropdownItem>
               <DropdownItem icon={<Type />} onClick={() => setActiveAction('text-size')}>
                 Text Size
               </DropdownItem>
@@ -6981,6 +7123,46 @@ export function MobilePreviewPane({
             </Button>
             <Button variant="ghost" size="sm" onClick={handleBackButton} disabled={!isRunning || isInputPreparing}>
               Back
+            </Button>
+            <span className="bg-border mx-1 h-5 w-px" />
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<ListTree />}
+              onClick={() => void handleOpenDevMenu()}
+              disabled={!isRunning || isRunningAction}
+              title="Open the Expo / React Native dev menu on the device"
+            >
+              Dev Menu
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RotateCcw />}
+              onClick={() => void handleReloadExpo()}
+              disabled={!isDevServerRunning || isRunningAction}
+              title="Reload the JS bundle on the connected app (Metro reload)"
+            >
+              Reload
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RotateCw />}
+              onClick={
+                platform === 'android'
+                  ? handleRestartAndroidApp
+                  : handleRestartIosApp
+              }
+              disabled={
+                !deviceId ||
+                (platform === 'android'
+                  ? !effectiveAndroidProjectPath || isRestartingAndroidApp
+                  : !iosAppStatus?.appInstalled || isRestartingIosApp)
+              }
+              title="Restart the native app on the device"
+            >
+              Restart
             </Button>
             <span className="bg-border mx-1 h-5 w-px" />
             <Button

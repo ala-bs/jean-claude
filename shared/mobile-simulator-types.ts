@@ -151,6 +151,16 @@ export type MobilePreviewOpenDeeplinkParams = {
   url: string;
 };
 
+export type MobilePreviewOpenDevMenuParams = {
+  platform: MobilePlatform;
+  deviceId: string;
+  metroPort: number;
+};
+
+export type MobilePreviewReloadExpoParams = {
+  metroPort: number;
+};
+
 export type MobilePreviewExpoLaunchParams = {
   requestId: string;
   taskId: string;
@@ -159,6 +169,11 @@ export type MobilePreviewExpoLaunchParams = {
   platform: MobilePlatform;
   deviceId: string;
   metroPort: number;
+  /**
+   * App URL scheme from project settings. Overrides scheme discovery from the
+   * app config, which fails for dynamic `app.config.js` projects.
+   */
+  appScheme?: string | null;
 };
 
 export type MobilePreviewExpoLaunchResult = {

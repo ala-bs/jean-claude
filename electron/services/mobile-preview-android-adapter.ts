@@ -2188,6 +2188,22 @@ export function createAndroidMobilePreviewAdapter({
       );
     },
 
+    async openDevMenu(deviceId: string): Promise<void> {
+      await assertAdbInstalled();
+      assertDeviceId(deviceId);
+      const adbSerial = await resolveAndroidAdbSerial(deviceId);
+      // KEYCODE_MENU — what a physical menu button / `adb shell input
+      // keyevent 82` does, which RN maps to the dev menu.
+      await runAdbCommand([
+        '-s',
+        adbSerial,
+        'shell',
+        'input',
+        'keyevent',
+        '82',
+      ]);
+    },
+
     async forwardPort({
       deviceId,
       hostPort,

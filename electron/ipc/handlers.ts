@@ -84,6 +84,8 @@ import type {
   MobilePreviewNetworkProxyCertificateParams,
   MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
+  MobilePreviewOpenDevMenuParams,
+  MobilePreviewReloadExpoParams,
   MobilePreviewPacketCaptureStartParams,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
@@ -5353,6 +5355,16 @@ export function registerIpcHandlers() {
     'mobilePreview:sendInput',
     (_, sessionId: string, input: MobilePreviewInputEvent) =>
       mobilePreviewService.sendInput(sessionId, input),
+  );
+  ipcMain.handle(
+    'mobilePreview:reloadExpo',
+    (_, params: MobilePreviewReloadExpoParams) =>
+      mobilePreviewService.reloadExpo(params),
+  );
+  ipcMain.handle(
+    'mobilePreview:openDevMenu',
+    (_, params: MobilePreviewOpenDevMenuParams) =>
+      mobilePreviewService.openDevMenu(params),
   );
   ipcMain.handle(
     'mobilePreview:openDeeplink',

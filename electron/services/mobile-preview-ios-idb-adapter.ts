@@ -3552,10 +3552,21 @@ export const iosIdbAdapter = {
     await assertXcrunAvailable(signal);
     assertDeviceId(deviceId);
     assertDeeplinkUrl(url);
-    await runCommand('xcrun', ['simctl', 'openurl', deviceId, url], {
-      signal,
-      timeoutMs: MOBILE_PREVIEW_DEEPLINK_OPEN_TIMEOUT_MS,
-    });
+    try {
+      await runCommand('xcrun', ['simctl', 'openurl', deviceId, url], {
+        signal,
+        timeoutMs: MOBILE_PREVIEW_DEEPLINK_OPEN_TIMEOUT_MS,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('LSApplicationWorkspaceErrorDomain')) {
+        const scheme = url.split(':')[0];
+        throw new Error(
+          `Simulator has no app registered for "${scheme}://". Install the dev client (or Expo Go) on this simulator, then retry.`,
+        );
+      }
+      throw error;
+    }
   },
 
   async setTextSize(

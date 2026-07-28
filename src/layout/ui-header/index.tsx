@@ -495,6 +495,15 @@ export function Header() {
     : DEFAULT_ACTIVITY_RESERVE_PX;
 
   useCommands('header-menu-trigger', [
+    showMobilePreviewWorkspace && {
+      shortcut: 'cmd+ctrl+m' as const,
+      label: 'Toggle Mobile Preview',
+      section: 'General',
+      keywords: ['mobile', 'preview', 'simulator', 'device'],
+      handler: () => {
+        toggleMobileMode();
+      },
+    },
     {
       shortcut: 'cmd+\\',
       label: 'Toggle Menu',
@@ -637,6 +646,15 @@ export function Header() {
           >
             Pipelines
           </DropdownItem>
+          {showMobilePreviewWorkspace && (
+            <DropdownItem
+              icon={<Smartphone />}
+              onClick={toggleMobileMode}
+              shortcut="cmd+ctrl+m"
+            >
+              Mobile Preview
+            </DropdownItem>
+          )}
           <DropdownItem icon={<History />} onClick={openChangelog}>
             Changelog
           </DropdownItem>

@@ -68,16 +68,25 @@ export function useReactNativeDevTools({
   metroPort,
   panel = 'console',
   enabled = true,
+  pollUntilTargetMs,
 }: {
   metroPort: number;
   panel?: ReactNativeDevToolsPanel;
   enabled?: boolean;
+  /** Keep polling at this interval until at least one target is reported. */
+  pollUntilTargetMs?: number;
 }) {
   return useQuery({
     queryKey: ['mobile-preview-react-native-devtools', metroPort, panel],
     queryFn: () =>
       api.mobilePreview.resolveReactNativeDevTools({ metroPort, panel }),
     enabled,
+    refetchInterval: pollUntilTargetMs
+      ? (query) =>
+          (query.state.data?.targets?.length ?? 0) > 0
+            ? false
+            : pollUntilTargetMs
+      : false,
     refetchOnWindowFocus: false,
     retry: false,
   });

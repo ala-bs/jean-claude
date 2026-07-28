@@ -81,6 +81,20 @@ describe('detectMobilePreviewProjectConfig', () => {
     });
   });
 
+  it('detects the Expo app scheme, taking the first entry of an array', async () => {
+    await writeJson(path.join(tempDir, 'package.json'), {
+      dependencies: { expo: '^52.0.0', 'expo-dev-client': '^5.0.0' },
+    });
+    await writeJson(path.join(tempDir, 'app.json'), {
+      expo: { scheme: ['falbala', 'falbala-staging'] },
+    });
+
+    const config = await detectMobilePreviewProjectConfig(tempDir);
+
+    expect(config.appScheme).toBe('falbala');
+    expect(config.detectedApps[0]?.detectedAppScheme).toBe('falbala');
+  });
+
   it('does not persist unresolved iOS build-variable bundle IDs', async () => {
     await writeJson(path.join(tempDir, 'package.json'), {
       dependencies: { 'react-native': '^0.76.0' },

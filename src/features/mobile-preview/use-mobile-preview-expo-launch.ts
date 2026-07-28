@@ -34,6 +34,8 @@ export function useMobilePreviewExpoLaunch({
   metroPort,
   retryGeneration,
   isSelectedDeviceReady,
+  isAppInstalled = null,
+  appScheme = null,
 }: {
   isRunningRuntime: boolean;
   isLoadingDevices: boolean;
@@ -48,14 +50,26 @@ export function useMobilePreviewExpoLaunch({
   metroPort: number;
   retryGeneration: number;
   isSelectedDeviceReady: boolean;
+  isAppInstalled?: boolean | null;
+  appScheme?: string | null;
 }) {
   const [state, setState] = useState<MobilePreviewRuntimeLaunchState>({
     status: 'idle',
   });
   const completedOwnerKeyRef = useRef<string | null>(null);
+  // Kept in refs: these change while a launch is in flight (install-status
+  // polling) and must not cancel + restart it.
+  const isAppInstalledRef = useRef(isAppInstalled);
+  const appSchemeRef = useRef(appScheme);
+  useEffect(() => {
+    isAppInstalledRef.current = isAppInstalled;
+    appSchemeRef.current = appScheme;
+  }, [appScheme, isAppInstalled]);
   const selectedDeviceId = selectedDevice?.id ?? null;
   const selectedDevicePlatform = selectedDevice?.platform ?? null;
   const selectedDeviceState = selectedDevice?.state ?? null;
+
+  const isAppInstallBlocking = isAppInstalled === false;
 
   useEffect(() => {
     let active = true;
@@ -77,6 +91,7 @@ export function useMobilePreviewExpoLaunch({
       metroPort,
       completedOwnerKey: completedOwnerKeyRef.current,
       isSelectedDeviceReady,
+      isAppInstalled: isAppInstalledRef.current,
     });
     if (decision.status === 'idle') {
       completedOwnerKeyRef.current = null;
@@ -92,7 +107,7 @@ export function useMobilePreviewExpoLaunch({
 
     const requestId = createRequestId();
     void api.mobilePreview
-      .launchExpo({ ...decision.params, requestId })
+      .launchExpo({ ...decision.params, requestId, appScheme: appSchemeRef.current })
       .then(() => {
         if (!active) return;
         completedOwnerKeyRef.current = decision.ownerKey;
@@ -126,6 +141,8 @@ export function useMobilePreviewExpoLaunch({
     selectedDevicePlatform,
     selectedDeviceState,
     taskId,
+    // Only a blocked->unblocked transition should re-run the decision.
+    isAppInstallBlocking,
   ]);
 
   return state;

@@ -115,7 +115,18 @@ async function readMobileAppIdentities(absolutePath: string) {
     // Native project may be absent or incomplete.
   }
 
-  return { androidPackageName, iosBundleId };
+  // Expo `scheme` may be a string or an array of strings; the first entry is
+  // what `expo-dev-client` derives `exp+<scheme>://` from.
+  const rawScheme = expo?.scheme;
+  const appScheme = normalizeIdentity(
+    typeof rawScheme === 'string'
+      ? rawScheme
+      : Array.isArray(rawScheme) && typeof rawScheme[0] === 'string'
+        ? rawScheme[0]
+        : null,
+  );
+
+  return { androidPackageName, iosBundleId, appScheme };
 }
 
 async function detectPackageManager(
@@ -404,6 +415,7 @@ async function detectApp(
     androidProjectPath,
     detectedAndroidPackageName: identities.androidPackageName,
     detectedIosBundleId: identities.iosBundleId,
+    detectedAppScheme: identities.appScheme,
     detectedDependenciesInstallCommand:
       getDependenciesInstallCommand(packageManager),
     detectedMetroStartCommand: getDefaultMetroStartCommand({
@@ -659,5 +671,15 @@ export async function detectMobilePreviewProjectConfig(
             nextGeneratedCommand: selectedApp?.detectedIosBundleId,
           })
         : (selectedApp?.detectedIosBundleId ?? null),
+    appScheme:
+      previousConfig?.selectedAppPath === selectedAppPath
+        ? reconcileGeneratedCommand({
+            currentCommand: previousConfig?.appScheme,
+            previousGeneratedCommands: [
+              previouslyDetectedSelectedApp?.detectedAppScheme,
+            ],
+            nextGeneratedCommand: selectedApp?.detectedAppScheme,
+          })
+        : (selectedApp?.detectedAppScheme ?? null),
   };
 }
