@@ -70,6 +70,7 @@ import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
+import { useWorkItemModalStore } from '@/stores/work-item-modal';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
 
 
@@ -698,15 +699,14 @@ export function FeedItemCard({
       if (isModifiedClick(e) && openExternalUrl(workItemUrl)) {
         return;
       }
-      navigate({
-        to: '/all/work-items/$projectId/$workItemId',
-        params: {
-          projectId: item.projectId,
-          workItemId,
-        },
+      const numericId = Number(workItemId);
+      if (!Number.isFinite(numericId)) return;
+      useWorkItemModalStore.getState().open({
+        projectId: item.projectId,
+        workItemId: numericId,
       });
     },
-    [navigate, item.projectId],
+    [item.projectId],
   );
 
   return (
@@ -1260,15 +1260,14 @@ function SubtaskRow({
       if (isModifiedClick(e) && openExternalUrl(workItemUrl)) {
         return;
       }
-      navigate({
-        to: '/all/work-items/$projectId/$workItemId',
-        params: {
-          projectId: child.projectId,
-          workItemId,
-        },
+      const numericId = Number(workItemId);
+      if (!Number.isFinite(numericId)) return;
+      useWorkItemModalStore.getState().open({
+        projectId: child.projectId,
+        workItemId: numericId,
       });
     },
-    [navigate, child.projectId],
+    [child.projectId],
   );
 
   const childNeedsPermission = child.attention === 'needs-permission';

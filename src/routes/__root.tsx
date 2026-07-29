@@ -36,6 +36,7 @@ import { useOverlaysStore } from '@/stores/overlays';
 import { useProjects } from '@/hooks/use-projects';
 import { useToastStore } from '@/stores/toasts';
 import { useUISetting } from '@/stores/ui';
+import { WorkItemModal } from '@/features/feed/ui-work-item-modal';
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -511,6 +512,7 @@ function RootLayout() {
       <AppearanceBridge />
       <GlobalPromptFromBackModal />
       <ClosedPrWorkspaceModal />
+      <WorkItemModal />
       <OnboardingBootstrap />
       {!isOnboardingFlowRoute && <GlobalCommands />}
       {/* <TaskCommands /> */}
