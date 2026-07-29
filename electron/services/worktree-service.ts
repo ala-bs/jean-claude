@@ -2094,9 +2094,63 @@ export async function pushBranch(params: {
   const remote = params.remote ?? 'origin';
   dbg.worktree('pushBranch: %s to %s', params.branchName, remote);
 
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn('git', ['push', '-u', remote, params.branchName], {
+  return runGitWithSshPrompt({
+    args: ['push', '-u', remote, params.branchName],
+    cwd: params.worktreePath,
+    label: 'git push',
+  });
+}
+
+/**
+ * Pulls the latest commits for a branch from a remote into the worktree.
+ * Uses the same interactive SSH prompt handling as pushBranch.
+ */
+export async function pullBranch(params: {
+  worktreePath: string;
+  branchName: string;
+  remote?: string;
+}): Promise<void> {
+  const remote = params.remote ?? 'origin';
+  dbg.worktree('pullBranch: %s from %s', params.branchName, remote);
+
+  try {
+    await runGitWithSshPrompt({
+      args: ['pull', '--ff-only', remote, params.branchName],
       cwd: params.worktreePath,
+      label: 'git pull',
+    });
+  } catch (error) {
+    throw new Error(explainPullFailure(getExecErrorMessage(error)));
+  }
+}
+
+/**
+ * Turns raw `git pull --ff-only` stderr into actionable guidance.
+ */
+function explainPullFailure(message: string): string {
+  if (/would be overwritten by merge|local changes/i.test(message)) {
+    return `Pull failed because the worktree has uncommitted changes. Commit or discard them, then pull again.\n\n${message}`;
+  }
+
+  if (/Not possible to fast-forward|diverging|non-fast-forward/i.test(message)) {
+    return `Pull failed because the local branch has diverged from the remote. Rebase or merge manually, then pull again.\n\n${message}`;
+  }
+
+  return message;
+}
+
+/**
+ * Runs a git command that may prompt for SSH credentials, surfacing the prompt
+ * to the renderer via the global prompt dialog.
+ */
+function runGitWithSshPrompt(params: {
+  args: string[];
+  cwd: string;
+  label: string;
+}): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn('git', params.args, {
+      cwd: params.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -2112,7 +2166,7 @@ export async function pushBranch(params: {
     child.stderr?.on('data', async (data: Buffer) => {
       const text = data.toString();
       stderrOutput += text;
-      dbg.worktree('pushBranch stderr: %s', text.trim());
+      dbg.worktree('%s stderr: %s', params.label, text.trim());
 
       if (promptHandled) return;
 
@@ -2162,17 +2216,17 @@ export async function pushBranch(params: {
     });
 
     child.on('error', (err) => {
-      reject(new Error(`Failed to spawn git push: ${err.message}`));
+      reject(new Error(`Failed to spawn ${params.label}: ${err.message}`));
     });
 
     child.on('close', (code) => {
       if (code === 0) {
-        dbg.worktree('Push successful');
+        dbg.worktree('%s successful', params.label);
         resolve();
       } else {
         const errorMessage =
           stderrOutput.trim() || stdoutOutput.trim() || `Exit code ${code}`;
-        reject(new Error(`git push failed: ${errorMessage}`));
+        reject(new Error(`${params.label} failed: ${errorMessage}`));
       }
     });
   });

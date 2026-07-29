@@ -35,6 +35,7 @@ const {
   hasUncommittedWorktreeChanges,
   hasUnpushedWorktreeCommits,
   mergeWorktree,
+  pullBranch,
 } = await import('./worktree-service');
 
 let testDir: string;
@@ -545,5 +546,69 @@ describe('remote-qualified source baselines', () => {
     expect(diff).toContain('+task');
     expect(diff).not.toContain('local-only.txt');
     expect(diff).not.toContain('remote-only.txt');
+  });
+});
+
+describe('pullBranch', () => {
+  let remoteDir: string;
+
+  beforeEach(async () => {
+    remoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-pull-remote-'));
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-pull-local-'));
+
+    await execFileAsync('git', ['init', '--bare', '-b', 'main', remoteDir]);
+    await git(['clone', remoteDir, testDir], os.tmpdir());
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test User']);
+    await writeFile('tracked.txt', 'base\n');
+    await commit('base');
+    await git(['push', '-u', 'origin', 'main']);
+  });
+
+  afterEach(async () => {
+    if (testDir) await fs.rm(testDir, { force: true, recursive: true });
+    if (remoteDir) await fs.rm(remoteDir, { force: true, recursive: true });
+  });
+
+  async function pushRemoteCommit() {
+    const otherDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-pull-other-'));
+    await git(['clone', remoteDir, otherDir], os.tmpdir());
+    await git(['config', 'user.email', 'other@example.com'], otherDir);
+    await git(['config', 'user.name', 'Other User'], otherDir);
+    await fs.writeFile(path.join(otherDir, 'tracked.txt'), 'remote\n', 'utf-8');
+    await git(['commit', '-am', 'remote change'], otherDir);
+    await git(['push', 'origin', 'main'], otherDir);
+    await fs.rm(otherDir, { force: true, recursive: true });
+  }
+
+  it('fast-forwards the worktree to the latest remote commit', async () => {
+    await pushRemoteCommit();
+
+    await pullBranch({ worktreePath: testDir, branchName: 'main' });
+
+    const content = await fs.readFile(
+      path.join(testDir, 'tracked.txt'),
+      'utf-8',
+    );
+    expect(content).toBe('remote\n');
+  });
+
+  it('explains uncommitted local changes instead of raw git output', async () => {
+    await pushRemoteCommit();
+    await writeFile('tracked.txt', 'dirty\n');
+
+    await expect(
+      pullBranch({ worktreePath: testDir, branchName: 'main' }),
+    ).rejects.toThrow(/uncommitted changes/i);
+  });
+
+  it('explains a diverged branch instead of raw git output', async () => {
+    await pushRemoteCommit();
+    await writeFile('tracked.txt', 'local\n');
+    await commit('local change');
+
+    await expect(
+      pullBranch({ worktreePath: testDir, branchName: 'main' }),
+    ).rejects.toThrow(/diverged/i);
   });
 });

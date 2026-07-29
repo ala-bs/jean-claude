@@ -30,10 +30,13 @@ describe('PrWorkspaceEmptyState', () => {
   async function renderState({
     hasConfiguredCommands = true,
     state = 'ready',
+    isPulling = false,
   }: {
     hasConfiguredCommands?: boolean;
     state?: 'loading' | 'error' | 'ready';
+    isPulling?: boolean;
   } = {}) {
+    const onPull = vi.fn();
     const onAddStep = vi.fn();
     const onDelete = vi.fn();
     const onOpenLogs = vi.fn();
@@ -55,6 +58,8 @@ describe('PrWorkspaceEmptyState', () => {
           onDelete={onDelete}
           onOpenLogs={onOpenLogs}
           onOpenPullRequest={onOpenPullRequest}
+          onPull={onPull}
+          isPulling={isPulling}
           onOpenProjectSettings={onOpenProjectSettings}
           commandControls={<button type="button">Run workspace command</button>}
         />,
@@ -67,8 +72,15 @@ describe('PrWorkspaceEmptyState', () => {
       onOpenLogs,
       onOpenPullRequest,
       onOpenProjectSettings,
+      onPull,
       retryCommands,
     };
+  }
+
+  function findButton(label: string) {
+    return Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes(label),
+    );
   }
 
   it('only selects loaded, zero-step PR review tasks', () => {
@@ -115,6 +127,21 @@ describe('PrWorkspaceEmptyState', () => {
     expect(callbacks.onDelete).toHaveBeenCalledOnce();
     expect(callbacks.onOpenLogs).toHaveBeenCalledOnce();
     expect(callbacks.onOpenPullRequest).toHaveBeenCalledOnce();
+  });
+
+  it('pulls the latest changes and disables the button while pulling', async () => {
+    const callbacks = await renderState();
+
+    await act(async () => findButton('Pull')?.click());
+    expect(callbacks.onPull).toHaveBeenCalledOnce();
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await renderState({ isPulling: true });
+
+    const pullingButton = findButton('Pulling...');
+    expect(pullingButton).toBeTruthy();
+    expect(pullingButton?.disabled).toBe(true);
   });
 
   it('shows project command setup guidance when no commands are configured', async () => {

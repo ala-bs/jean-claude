@@ -291,6 +291,27 @@ export function useGenerateCommitMessage() {
   });
 }
 
+export function usePullBranch() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: { taskId: string }) =>
+      api.tasks.worktree.pullBranch(params.taskId),
+    onSuccess: (_, { taskId }) => {
+      queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+      queryClient.invalidateQueries({ queryKey: ['worktree-diff', taskId] });
+      queryClient.invalidateQueries({
+        queryKey: ['worktree-file-content', taskId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['worktree-local-changes', taskId],
+      });
+      queryClient.invalidateQueries({ queryKey: ['worktree-commits', taskId] });
+      invalidateFeedResource(queryClient, 'tasks');
+    },
+  });
+}
+
 export function usePushBranch() {
   const queryClient = useQueryClient();
   const invalidateWorktreeQueries = (taskId: string) => {

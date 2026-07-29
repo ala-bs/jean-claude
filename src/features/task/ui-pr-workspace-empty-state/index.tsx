@@ -1,4 +1,5 @@
 import {
+  ArrowDownToLine,
   ArrowUpRight,
   FileText,
   GitPullRequest,
@@ -29,6 +30,8 @@ export function PrWorkspaceEmptyState({
   onOpenLogs,
   onOpenProjectSettings,
   onOpenPullRequest,
+  onPull,
+  isPulling = false,
   projectName,
   pullRequestId,
 }: {
@@ -43,6 +46,8 @@ export function PrWorkspaceEmptyState({
   onOpenLogs: () => void;
   onOpenProjectSettings: () => void;
   onOpenPullRequest?: () => void;
+  onPull?: () => void;
+  isPulling?: boolean;
   projectName: string;
   pullRequestId: string | null;
 }) {
@@ -85,6 +90,24 @@ export function PrWorkspaceEmptyState({
             >
               Add Step
             </Button>
+            {onPull ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={
+                  isPulling ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <ArrowDownToLine />
+                  )
+                }
+                disabled={isPulling}
+                onClick={onPull}
+              >
+                {isPulling ? 'Pulling...' : 'Pull'}
+              </Button>
+            ) : null}
             {onOpenPullRequest ? (
               <Button
                 type="button"

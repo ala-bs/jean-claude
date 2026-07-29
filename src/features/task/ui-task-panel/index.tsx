@@ -174,6 +174,7 @@ import { useModal } from '@/common/context/modal';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
+import { usePullBranch } from '@/hooks/use-worktree-diff';
 import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useSkills } from '@/hooks/use-skills';
@@ -1260,6 +1261,22 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   } = useAgentControls({ taskId, stepId: activeStepId });
 
   const addToast = useToastStore((s) => s.addToast);
+  const pullBranchMutation = usePullBranch();
+  const handlePullPrWorkspace = useCallback(() => {
+    pullBranchMutation.mutate(
+      { taskId },
+      {
+        onSuccess: () =>
+          addToast({ type: 'success', message: 'Pulled latest changes' }),
+        onError: (error: unknown) =>
+          addToast({
+            type: 'error',
+            message:
+              error instanceof Error ? error.message : 'Failed to pull changes',
+          }),
+      },
+    );
+  }, [addToast, pullBranchMutation, taskId]);
   const removeReviewComment = useReviewCommentsStore((s) => s.removeComment);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
@@ -2907,6 +2924,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   }}
                   onDelete={openDeleteDialog}
                   onOpenPullRequest={openMatchingPullRequest}
+                  onPull={handlePullPrWorkspace}
+                  isPulling={pullBranchMutation.isPending}
                   onOpenLogs={() => openCommandLogs()}
                   onOpenProjectSettings={() =>
                     useOverlaysStore.getState().open('settings')

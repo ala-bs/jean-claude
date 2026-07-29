@@ -299,6 +299,7 @@ import {
   getWorktreeUnifiedDiff,
   isGitRepository,
   mergeWorktree,
+  pullBranch,
   pushBranch,
   resolveSourceBranchMergeBase,
   updateProjectCommitIgnore,
@@ -4129,6 +4130,18 @@ export function registerIpcHandlers() {
       }
     },
   );
+
+  ipcMain.handle('tasks:worktree:pullBranch', async (_, taskId: string) => {
+    const task = await TaskRepository.findById(taskId);
+    if (!task?.worktreePath || !task?.branchName) {
+      throw new Error(`Task ${taskId} does not have a worktree with a branch`);
+    }
+
+    return await pullBranch({
+      worktreePath: task.worktreePath,
+      branchName: task.branchName,
+    });
+  });
 
   ipcMain.handle(
     'tasks:worktree:delete',

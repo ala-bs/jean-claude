@@ -207,6 +207,9 @@ vi.mock('@/hooks/use-agent-resource-snapshots', () => ({
 }));
 vi.mock('@/hooks/use-backend-models', () => ({ useBackendModels: () => ({ data: [] }) }));
 vi.mock('@/hooks/use-context-usage', () => ({ useContextUsage: () => null }));
+vi.mock('@/hooks/use-worktree-diff', () => ({
+  usePullBranch: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 vi.mock('@/hooks/use-skills', () => ({ useSkills: () => ({ data: [] }) }));
 vi.mock('@/hooks/use-task-root-path', () => ({ useTaskRootPath: () => ({ rootPath: '/repo' }) }));
 vi.mock('@/hooks/use-work-items', () => ({ useWorkItemById: () => ({ data: null }) }));

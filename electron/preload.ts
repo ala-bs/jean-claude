@@ -310,6 +310,8 @@ contextBridge.exposeInMainWorld('api', {
         ipcRenderer.invoke('tasks:worktree:getBranches', taskId),
       pushBranch: (taskId: string, params?: { commitUnstaged?: boolean }) =>
         ipcRenderer.invoke('tasks:worktree:pushBranch', taskId, params),
+      pullBranch: (taskId: string) =>
+        ipcRenderer.invoke('tasks:worktree:pullBranch', taskId),
       delete: (taskId: string, options?: { keepBranch?: boolean }) =>
         ipcRenderer.invoke('tasks:worktree:delete', taskId, options),
     },

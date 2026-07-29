@@ -745,6 +745,7 @@ export interface Api {
         taskId: string,
         params?: { commitUnstaged?: boolean },
       ) => Promise<void>;
+      pullBranch: (taskId: string) => Promise<void>;
       delete: (
         taskId: string,
         options?: { keepBranch?: boolean },
@@ -2251,6 +2252,7 @@ export const api: Api = hasWindowApi
             }) as MergeWorktreeResult,
           getBranches: async () => [],
           pushBranch: async () => {},
+          pullBranch: async () => {},
           delete: async () => ({}),
         },
         summary: {
