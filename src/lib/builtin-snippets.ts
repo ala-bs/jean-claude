@@ -86,7 +86,8 @@ in case of doubt, ask first`,
     name: 'update tests',
     description: 'updates tests after i made some additional changes',
     template: `I made some additional changes, please update tests accordingly
-In case of doubt ask me first`,
+only update tests, don't rollback my changes
+You have some doubt on some part of my changes, ask first`,
     enabled: true,
     contexts: { newTask: true, newTaskStep: true },
     autocomplete: { enabled: true, slugs: ['update-tests'] },
