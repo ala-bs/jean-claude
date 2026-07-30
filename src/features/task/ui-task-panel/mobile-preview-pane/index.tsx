@@ -12,6 +12,8 @@ import {
   MoreHorizontal,
   MousePointer2,
   PanelRight,
+  Pin,
+  PinOff,
   Play,
   Plus,
   RotateCcw,
@@ -80,6 +82,7 @@ import {
   useMobilePreviewShowGestures,
 } from '@/stores/navigation';
 
+import { useMobilePreviewDeepLinksStore } from '@/stores/mobile-preview-deep-links';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
 import { api } from '@/lib/api';
@@ -157,6 +160,7 @@ const WHEEL_SWIPE_MIN_DISTANCE_PX = 40;
 const WHEEL_SWIPE_MAX_DISTANCE_PX = 320;
 const TOUCH_MOVE_THROTTLE_MS = 16;
 const POINTER_EDGE_SLOP_PX = 24;
+const EMPTY_DEEP_LINKS: Array<{ url: string; pinned: boolean }> = [];
 const FIRST_PREVIEW_FRAME_SETUP_WAIT_MS = 15_000;
 const GESTURE_FEEDBACK_FADE_MS = 300;
 
@@ -2180,6 +2184,16 @@ export function MobilePreviewPane({
     null,
   );
   const [deeplinkUrl, setDeeplinkUrl] = useState('');
+  const deepLinks = useMobilePreviewDeepLinksStore(
+    (state) => state.linksByProject[projectId] ?? EMPTY_DEEP_LINKS,
+  );
+  const recordDeepLinkOpened = useMobilePreviewDeepLinksStore(
+    (state) => state.recordOpened,
+  );
+  const toggleDeepLinkPinned = useMobilePreviewDeepLinksStore(
+    (state) => state.togglePinned,
+  );
+  const removeDeepLink = useMobilePreviewDeepLinksStore((state) => state.remove);
   const [hostPort, setHostPort] = useState('3000');
   const [devicePort, setDevicePort] = useState('3000');
   const [textSize, setTextSize] = useState<MobilePreviewTextSize>('normal');
@@ -3845,13 +3859,21 @@ export function MobilePreviewPane({
         deviceId,
         url: deeplinkUrl.trim(),
       });
+      recordDeepLinkOpened(projectId, deeplinkUrl);
       showActionNotice('Deeplink opened');
     } catch (error) {
       setInputNotice(formatError(error) ?? 'Failed to open deeplink');
     } finally {
       setIsRunningAction(false);
     }
-  }, [deeplinkUrl, deviceId, platform, showActionNotice]);
+  }, [
+    deeplinkUrl,
+    deviceId,
+    platform,
+    projectId,
+    recordDeepLinkOpened,
+    showActionNotice,
+  ]);
 
   const handleOpenDevMenu = useCallback(async () => {
     if (!deviceId) return;
@@ -4375,7 +4397,7 @@ export function MobilePreviewPane({
     activeAction && deviceId ? (
       <div className="border-line bg-bg-1 flex flex-wrap items-center gap-2 border-t px-4 py-2">
         {activeAction === 'deeplink' ? (
-          <>
+          <div className="flex min-w-52 flex-1 flex-wrap items-center gap-2">
             <Input
               ref={deeplinkInputRef}
               value={deeplinkUrl}
@@ -4393,7 +4415,38 @@ export function MobilePreviewPane({
             >
               Open
             </Button>
-          </>
+            {deepLinks.length > 0 ? (
+              <div className="flex max-h-20 min-w-full flex-wrap gap-1 overflow-y-auto">
+                {deepLinks.map((link) => (
+                  <div
+                    key={link.url}
+                    className="border-border/60 bg-bg-0 flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5"
+                  >
+                    <button
+                      type="button"
+                      className="text-ink-2 max-w-56 truncate text-left text-[11px] hover:underline"
+                      title={link.url}
+                      onClick={() => setDeeplinkUrl(link.url)}
+                    >
+                      {link.url}
+                    </button>
+                    <IconButton
+                      size="sm"
+                      icon={link.pinned ? <PinOff /> : <Pin />}
+                      tooltip={link.pinned ? 'Unpin deeplink' : 'Pin deeplink'}
+                      onClick={() => toggleDeepLinkPinned(projectId, link.url)}
+                    />
+                    <IconButton
+                      size="sm"
+                      icon={<X />}
+                      tooltip="Remove deeplink"
+                      onClick={() => removeDeepLink(projectId, link.url)}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
         ) : null}
         {activeAction === 'port' ? (
           <>
