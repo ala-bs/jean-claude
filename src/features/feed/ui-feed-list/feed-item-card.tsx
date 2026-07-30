@@ -544,6 +544,7 @@ export function FeedItemCard({
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
   const canSetPrAutoComplete =
     hasPr &&
+    item.taskType !== 'pr-review' &&
     prApprovalCount > 0 &&
     !prMerged &&
     !prHasConflicts &&
