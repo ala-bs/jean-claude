@@ -4627,6 +4627,7 @@ export function MobilePreviewPane({
           taskId={taskId}
           runCommandId={consoleCommandId}
           isRunning={consoleRunning}
+          workingDir={projectPath}
           emptyText={
             consoleIsPrebuild
               ? `Run prebuild to generate ${platform} folder`

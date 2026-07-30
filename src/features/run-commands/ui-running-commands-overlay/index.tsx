@@ -27,7 +27,7 @@ import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjects } from '@/hooks/use-projects';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import { useTasks } from '@/hooks/use-tasks';
+import { useTask, useTasks } from '@/hooks/use-tasks';
 import { useToastStore } from '@/stores/toasts';
 
 
@@ -467,6 +467,7 @@ function LogViewer({
   const log = useTaskMessagesStore(
     (s) => s.runCommandLogs[taskId]?.[runCommandId] ?? null,
   );
+  const { data: task } = useTask(taskId);
 
   return (
     <div className="flex h-full flex-col">
@@ -502,6 +503,7 @@ function LogViewer({
         taskId={taskId}
         runCommandId={runCommandId}
         isRunning={isRunning}
+        workingDir={task?.worktreePath ?? undefined}
         ignoredKeys={OVERLAY_IGNORED_KEYS}
         stopKeyPropagation
       />

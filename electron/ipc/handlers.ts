@@ -4887,7 +4887,12 @@ export function registerIpcHandlers() {
 
   ipcMain.handle(
     'shell:openInEditor',
-    async (_, dirPath: string, folderContext?: string) => {
+    async (_, rawPath: string, folderContext?: string) => {
+      // spawn() runs without a shell, so `~` must be expanded here.
+      const dirPath = rawPath.startsWith('~/')
+        ? path.join(os.homedir(), rawPath.slice(2))
+        : rawPath;
+
       if (!(await pathExists(dirPath))) {
         throw new Error(
           `Path does not exist: ${dirPath}. The worktree may have been deleted.`,

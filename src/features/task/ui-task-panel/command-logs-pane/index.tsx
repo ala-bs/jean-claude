@@ -562,6 +562,7 @@ export function CommandLogsPane({
               taskId={taskId}
               runCommandId={activeCommandId}
               isRunning={isActiveRunning}
+              workingDir={workingDir}
               ignoreBrowserShortcuts
               emptyText={
                 normalizedSearchQuery
