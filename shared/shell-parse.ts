@@ -18,9 +18,118 @@ const REDIRECT_OPS = [
   /\d*>>/y,
   /\d*>/y,
   /<<</y,
-  /<</y,
+  /<<-?/y,
   /</y,
 ];
+
+/** Heredoc operator: `<<` or `<<-`, but not `<<<` (herestring). */
+const HEREDOC_OP = /<<-?(?!<)/y;
+
+/**
+ * Heredoc delimiter word. Bash concatenates quoted and unquoted parts, so
+ * `EOF`, `'EOF'`, `"EOF"` and `E"OF"` all denote the same terminator `EOF`.
+ */
+const HEREDOC_DELIM = /\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;|&<>()"'])+)/y;
+
+/** Resolve a raw delimiter word to the literal text bash matches lines against. */
+function unquoteDelimiter(raw: string): string {
+  let out = '';
+  for (let i = 0; i < raw.length; i += 1) {
+    const char = raw[i];
+    if (char === "'" || char === '"') {
+      const end = raw.indexOf(char, i + 1);
+      if (end === -1) {
+        out += raw.slice(i + 1);
+        return out;
+      }
+      out += raw.slice(i + 1, end);
+      i = end;
+      continue;
+    }
+    if (char === '\\' && i + 1 < raw.length) {
+      out += raw[i + 1];
+      i += 1;
+      continue;
+    }
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * Skip a heredoc body starting at `index` (just past a newline) until the
+ * terminating delimiter line. Returns the index just past that line.
+ *
+ * Trailing whitespace on the terminator line is tolerated even though bash
+ * would not terminate there: ending the body early only ever surfaces more
+ * commands to the permission engine, which is the safe direction.
+ */
+function skipHeredocBody(
+  command: string,
+  index: number,
+  delimiter: string,
+  allowIndent: boolean,
+): { end: number; body: string } {
+  let i = index;
+  while (i <= command.length) {
+    const lineEnd = command.indexOf('\n', i);
+    const end = lineEnd === -1 ? command.length : lineEnd;
+    const line = command.slice(i, end);
+    const candidate = allowIndent ? line.replace(/^\t+/, '') : line;
+    if (candidate.trimEnd() === delimiter) {
+      return {
+        end: lineEnd === -1 ? command.length : lineEnd + 1,
+        body: command.slice(index, i),
+      };
+    }
+    if (lineEnd === -1) break;
+    i = lineEnd + 1;
+  }
+  return { end: command.length, body: command.slice(index) };
+}
+
+/**
+ * If an arithmetic expression (`$((...))` or `((...))`) starts at `index`,
+ * return the index just past its closing `))`, else -1.
+ *
+ * Like bash, `((` is arithmetic whenever a matching `))` closes it — `;`, `|`
+ * and `&` inside are arithmetic operators, not command separators, so the
+ * content is never inspected. A group that closes on a lone `)` is a nested
+ * subshell (`((echo hi); ls)`) and must keep flowing through normal parsing so
+ * its commands stay visible to the permission engine.
+ *
+ * An unterminated opener consumes only the rest of its line: that keeps a
+ * stray `<<` from being read as a heredoc without swallowing the commands on
+ * the following lines.
+ */
+function arithmeticEnd(command: string, index: number): number {
+  // Legacy `$[expr]` arithmetic: its `<<` is a left shift too.
+  if (command[index] === '$' && command[index + 1] === '[') {
+    const end = command.indexOf(']', index + 2);
+    return end === -1 ? lineEnd(command, index) : end + 1;
+  }
+  if (command[index] !== '(' || command[index + 1] !== '(') return -1;
+  let depth = 0;
+  for (let i = index; i < command.length; i += 1) {
+    const char = command[i];
+    if (char === '(') depth += 1;
+    else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        // Require the group to have closed as `))`, i.e. arithmetic.
+        return command[i - 1] === ')' || command[i + 1] === ')' ? i + 1 : -1;
+      }
+    }
+  }
+  // Never closed: consume the line so a `<<` inside cannot open a heredoc.
+  return lineEnd(command, index);
+}
+
+/** Index just past the end of the line containing `index`. */
+function lineEnd(command: string, index: number): number {
+  const nl = command.indexOf('\n', index);
+  return nl === -1 ? command.length : nl;
+}
 
 /** Whitespace after a redirection operator, before its target. */
 const SPACE = /\s*/y;
@@ -34,6 +143,22 @@ const SPACE = /\s*/y;
  */
 function skipRedirectTarget(command: string, index: number): number {
   let i = index;
+  // A process/command substitution target (`>$(cmd)`, `< <(cmd)`) is consumed
+  // whole so its inner command can still be harvested by the caller.
+  if (
+    (command[i] === '$' || command[i] === '<' || command[i] === '>') &&
+    command[i + 1] === '('
+  ) {
+    let depth = 0;
+    for (i += 1; i < command.length; i += 1) {
+      if (command[i] === '(') depth += 1;
+      else if (command[i] === ')') {
+        depth -= 1;
+        if (depth === 0) return i + 1;
+      }
+    }
+    return command.length;
+  }
   const quote = command[i];
   if (quote === "'" || quote === '"') {
     i += 1;
@@ -59,10 +184,54 @@ function skipRedirectTarget(command: string, index: number): number {
  * or backticks (e.g. a perl regex containing `<<<<<<<`) is left untouched.
  */
 export function stripRedirections(command: string): string {
+  return stripRedirectionsInternal(command).text;
+}
+
+/**
+ * Stripped command text with the commands hidden inside heredoc bodies and
+ * substitution redirect targets appended as extra `;` segments, so a caller
+ * that can only pass a single string (permission matching) still sees them.
+ *
+ * Each appended command is sanitised first: an unbalanced quote or a trailing
+ * backslash would otherwise escape the `;` and merge the next command into it.
+ */
+export function stripRedirectionsWithNested(command: string): string {
+  const { text, harvested } = stripRedirectionsInternal(command);
+  return [text, ...harvested.map(sanitizeAppended)].join('; ');
+}
+
+function sanitizeAppended(value: string): string {
+  let out = value.replace(/\\+$/, '').trim();
+  for (const quote of ["'", '"', '`']) {
+    const count = out.split(quote).length - 1;
+    if (count % 2 === 1) out = out.split(quote).join(' ');
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * `stripRedirections` plus the commands it found in places whose text cannot
+ * safely be spliced back into the stripped string: expanded heredoc bodies and
+ * substitution redirect targets. They are returned separately so a stray quote
+ * or backslash in them can never corrupt the surrounding command text.
+ */
+function stripRedirectionsInternal(command: string): {
+  text: string;
+  harvested: string[];
+} {
+  const harvested: string[] = [];
   let out = '';
   let inSingleQuote = false;
   let inDoubleQuote = false;
   let inBacktick = false;
+  /** Heredocs opened on the current line, bodies start after next newline. */
+  const pendingHeredocs: {
+    delimiter: string;
+    allowIndent: boolean;
+    expands: boolean;
+  }[] = [];
+  /** Depth of open `${...}` parameter expansions. */
+  let braceDepth = 0;
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command[i];
@@ -119,6 +288,69 @@ export function stripRedirections(command: string): string {
       continue;
     }
 
+    // Copy arithmetic verbatim: its `<<` is a left shift, not a heredoc.
+    const arithEnd = arithmeticEnd(command, i);
+    if (arithEnd !== -1) {
+      out += command.slice(i, arithEnd);
+      i = arithEnd - 1;
+      continue;
+    }
+
+    // Track `${...}` nesting: a `#` inside one is parameter expansion syntax
+    // (`${x// #/}`), never a comment.
+    if (char === '$' && command[i + 1] === '{') {
+      braceDepth += 1;
+      out += '${';
+      i += 1;
+      continue;
+    }
+    if (char === '}' && braceDepth > 0) {
+      braceDepth -= 1;
+      out += char;
+      continue;
+    }
+
+    // A `#` starting a word begins a comment: drop it (its `<<` is not a
+    // heredoc) but leave the newline so it still separates commands.
+    if (
+      char === '#' &&
+      braceDepth === 0 &&
+      (out.length === 0 || /[\s;|&(]$/.test(out))
+    ) {
+      const lineEnd = command.indexOf('\n', i);
+      i = (lineEnd === -1 ? command.length : lineEnd) - 1;
+      continue;
+    }
+
+    // Process substitution used as an argument (`diff <(ls a) <(ls b)`): keep
+    // it verbatim so its inner commands stay visible.
+    if ((char === '<' || char === '>') && command[i + 1] === '(') {
+      const end = skipRedirectTarget(command, i);
+      out += command.slice(i, end);
+      i = end - 1;
+      continue;
+    }
+
+    // Heredoc: strip `<<DELIM` and remember to skip its body at next newline.
+    HEREDOC_OP.lastIndex = i;
+    const heredoc = HEREDOC_OP.exec(command);
+    if (heredoc) {
+      HEREDOC_DELIM.lastIndex = i + heredoc[0].length;
+      const delim = HEREDOC_DELIM.exec(command);
+      if (delim) {
+        const delimiter = unquoteDelimiter(delim[1]);
+        pendingHeredocs.push({
+          delimiter,
+          allowIndent: heredoc[0].endsWith('-'),
+          // An unquoted delimiter (`<<EOF`) leaves the body expanded, so any
+          // `$( )` or backticks in it really execute.
+          expands: !/['"\\]/.test(delim[1]),
+        });
+        i = HEREDOC_DELIM.lastIndex - 1;
+        continue;
+      }
+    }
+
     let matched = false;
     for (const re of REDIRECT_OPS) {
       re.lastIndex = i;
@@ -126,7 +358,13 @@ export function stripRedirections(command: string): string {
       if (!m) continue;
       SPACE.lastIndex = i + m[0].length;
       SPACE.exec(command);
-      i = skipRedirectTarget(command, SPACE.lastIndex) - 1;
+      const targetEnd = skipRedirectTarget(command, SPACE.lastIndex);
+      // A substitution target (`>$(cmd)`) runs its inner command: harvest it.
+      const target = command.slice(SPACE.lastIndex, targetEnd);
+      if (/[$<>]\(|`/.test(target)) {
+        harvested.push(...extractSubstitutionCommands(target));
+      }
+      i = targetEnd - 1;
       matched = true;
       break;
     }
@@ -134,8 +372,28 @@ export function stripRedirections(command: string): string {
 
     // An unquoted newline separates commands just like `;` does.
     if (char === '\n') {
+      // Heredoc bodies opened on this line are data, not commands: skip them,
+      // but keep any substitution the shell will expand inside them.
+      while (pendingHeredocs.length > 0) {
+        const doc = pendingHeredocs.shift();
+        if (!doc) break;
+        const { end, body } = skipHeredocBody(
+          command,
+          i + 1,
+          doc.delimiter,
+          doc.allowIndent,
+        );
+        i = end - 1;
+        if (doc.expands) {
+          harvested.push(...extractSubstitutionCommands(body, { prose: true }));
+        }
+      }
       out = out.trimEnd();
-      if (out.length > 0 && !out.endsWith(';')) out += ';';
+      // An escaped `\;` (e.g. `find -exec ... \;`) is an argument, not a
+      // separator, so it still needs one appended.
+      const endsWithSeparator =
+        out.endsWith(';') && !isEscaped(out, out.length - 1);
+      if (out.length > 0 && !endsWithSeparator) out += ';';
       continue;
     }
 
@@ -148,7 +406,7 @@ export function stripRedirections(command: string): string {
     out += char;
   }
 
-  return out.trim();
+  return { text: out.trim(), harvested };
 }
 
 function isEscaped(command: string, index: number): boolean {
@@ -167,7 +425,7 @@ function isEscaped(command: string, index: number): boolean {
  * of current command so exact permission patterns still match original text.
  */
 export function parseCompoundCommand(command: string): string[] {
-  const cleaned = stripRedirections(command);
+  const { text: cleaned, harvested } = stripRedirectionsInternal(command);
   const commands: string[] = [];
   let segmentStart = 0;
   let inSingleQuote = false;
@@ -220,7 +478,14 @@ export function parseCompoundCommand(command: string): string[] {
       continue;
     }
 
-    if (char === '$' && nextChar === '(' && !inSingleQuote && !inBacktick) {
+    // `$( )` command substitutions and `<( )` / `>( )` process substitutions
+    // keep their inner operators out of the top-level split.
+    if (
+      (char === '$' || char === '<' || char === '>') &&
+      nextChar === '(' &&
+      !inSingleQuote &&
+      !inBacktick
+    ) {
       commandSubstitutionDepth += 1;
       i += 1;
       continue;
@@ -278,7 +543,10 @@ export function parseCompoundCommand(command: string): string[] {
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
 
-  return refined.length > 0 ? refined : rawSegments;
+  const parsed = refined.length > 0 ? refined : rawSegments;
+  // Harvested commands come last so the outer command stays first for display
+  // and rule attribution.
+  return [...parsed, ...harvested].filter((part) => part.trim().length > 0);
 }
 
 /**
@@ -333,9 +601,15 @@ function tokenizeTopLevel(segment: string): string[] {
     }
     // Inside double quotes whitespace never splits, so substitution depth only
     // needs tracking outside them (tracking it inside mis-nests literal parens).
-    if (!inDoubleQuote && char === '$' && segment[i + 1] === '(') {
+    // `$( )` command substitutions and `<( )` / `>( )` process substitutions
+    // stay one token, whitespace inside included.
+    if (
+      !inDoubleQuote &&
+      (char === '$' || char === '<' || char === '>') &&
+      segment[i + 1] === '('
+    ) {
       depth += 1;
-      current += '$(';
+      current += char + '(';
       i += 1;
       continue;
     }
@@ -367,10 +641,14 @@ function tokenizeTopLevel(segment: string): string[] {
 }
 
 /**
- * Extract the commands nested inside `$( )` / backtick substitutions of a
- * string, parsed recursively so `X=$(a && b)` yields both `a` and `b`.
+ * Extract the commands nested inside `$( )`, `<( )`, `>( )` and backtick
+ * substitutions of a string, parsed recursively so `X=$(a && b)` yields both
+ * `a` and `b`.
  */
-function extractSubstitutionCommands(value: string): string[] {
+function extractSubstitutionCommands(
+  value: string,
+  options?: { prose: boolean },
+): string[] {
   const found: string[] = [];
 
   for (let i = 0; i < value.length; i += 1) {
@@ -378,7 +656,9 @@ function extractSubstitutionCommands(value: string): string[] {
       i += 1;
       continue;
     }
-    if (value[i] === "'") {
+    // Heredoc bodies are prose, not shell: an apostrophe in `it's` opens no
+    // quote there, so honouring it would hide every later substitution.
+    if (value[i] === "'" && !options?.prose) {
       i += 1;
       while (i < value.length && value[i] !== "'") i += 1;
       continue;
@@ -390,7 +670,13 @@ function extractSubstitutionCommands(value: string): string[] {
       found.push(value.slice(start, i));
       continue;
     }
-    if (value[i] === '$' && value[i + 1] === '(') {
+    if (
+      (value[i] === '$' || value[i] === '<' || value[i] === '>') &&
+      value[i + 1] === '('
+    ) {
+      // Never skip `$((...))` here: command substitutions inside arithmetic
+      // (`$(( $(id) ))`) really do execute, so their commands must surface.
+      // `<( )` / `>( )` are process substitutions and execute too.
       const start = i + 2;
       let depth = 1;
       i += 2;

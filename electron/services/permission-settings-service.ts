@@ -12,6 +12,7 @@ import {
 import {
   parseCompoundCommand,
   stripRedirections,
+  stripRedirectionsWithNested,
   validateSubpathArgs,
 } from '@shared/shell-parse';
 
@@ -588,12 +589,15 @@ export function normalizeToolRequest(
     case 'bash':
       return {
         tool: 'bash',
+        // Commands nested in heredoc bodies and substitution redirect targets
+        // are appended to the stripped text so they stay visible to
+        // `parseCompoundCommand` and cannot ride along on an allow rule.
         matchValue:
           input.__permissionExact === true
             ? escapeExactBashPattern(
-                stripRedirections(String(input.command ?? '')),
+                stripRedirectionsWithNested(String(input.command ?? '')),
               )
-            : stripRedirections(String(input.command ?? '')),
+            : stripRedirectionsWithNested(String(input.command ?? '')),
       };
     case 'read':
       return {

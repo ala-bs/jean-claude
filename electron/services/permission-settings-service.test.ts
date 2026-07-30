@@ -232,6 +232,44 @@ describe('normalizeToolRequest', () => {
     ).toBe('ask');
   });
 
+  it('keeps commands hidden in heredocs and redirect targets visible', () => {
+    const allowCat = [
+      { tool: 'bash', pattern: 'cat*', action: 'allow' as const },
+      { tool: 'bash', pattern: 'echo*', action: 'allow' as const },
+    ];
+
+    const heredoc = normalizeToolRequest('Bash', {
+      command: 'cat <<EOF\n$(rm -rf /)\nEOF',
+    });
+    expect(
+      evaluatePermission(allowCat, heredoc.tool, heredoc.matchValue),
+    ).toBe('ask');
+
+    const target = normalizeToolRequest('Bash', {
+      command: 'echo hi >$(rm -rf /)',
+    });
+    expect(evaluatePermission(allowCat, target.tool, target.matchValue)).toBe(
+      'ask',
+    );
+
+    // An unbalanced quote in a nested command must not merge the next one
+    // into it and let it ride along on the `echo*` rule.
+    const merged = normalizeToolRequest('Bash', {
+      command: "cat <<EOF\n$(echo 'x)\n$(rm -rf /)\nEOF",
+    });
+    expect(evaluatePermission(allowCat, merged.tool, merged.matchValue)).toBe(
+      'ask',
+    );
+
+    // A quoted delimiter keeps the body inert, so the command stays allowed.
+    const inert = normalizeToolRequest('Bash', {
+      command: "cat <<'EOF'\n$(rm -rf /)\nEOF",
+    });
+    expect(evaluatePermission(allowCat, inert.tool, inert.matchValue)).toBe(
+      'allow',
+    );
+  });
+
   it('uses OpenCode external-directory permission pattern for matching', () => {
     expect(
       normalizeToolRequest('external_directory', {

