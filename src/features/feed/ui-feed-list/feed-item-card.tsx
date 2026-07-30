@@ -1074,8 +1074,8 @@ export function FeedItemCard({
                 />
                 <PrDiamond color={prStateColor} />
               </div>
-              <div className="flex flex-1 flex-col gap-1 py-1.5 pr-3.5">
-                <div className="text-ink-3 flex items-center gap-1.5 text-[10.5px]">
+              <div className="flex min-w-0 flex-1 flex-col gap-1 py-1.5 pr-3.5">
+                <div className="text-ink-3 flex min-w-0 flex-wrap items-center gap-1.5 text-[10.5px]">
                   <span
                     className={clsx(
                       'font-mono',

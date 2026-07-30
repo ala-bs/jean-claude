@@ -1500,7 +1500,7 @@ export function FeedList() {
   return (
     <div
       ref={listRef}
-      className="flex h-full flex-col overflow-y-auto overscroll-contain"
+      className="flex h-full flex-col overflow-x-hidden overflow-y-auto overscroll-contain"
       style={{
         maskImage:
           'linear-gradient(to bottom, black 0, black calc(100% - 8px), transparent 100%)',
