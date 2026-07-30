@@ -33,7 +33,7 @@ import {
 } from './yaml-pipeline-parser';
 
 import { azureHtmlToMarkdown } from './azure-html-to-markdown';
-import { dbg } from '../lib/debug';
+import { createDebug, dbg } from '../lib/debug';
 import { ProviderRepository } from '../database/repositories/providers';
 import { sendGlobalPromptToWindow } from './global-prompt-service';
 import { TokenRepository } from '../database/repositories/tokens';
@@ -3165,9 +3165,27 @@ export async function uploadPullRequestAttachment(params: {
     .digest('hex')
     .slice(0, 8);
 
+  // The renderer's claimed mime/extension can drift from the actual bytes
+  // (canvas re-encoding, fallbacks). Azure serves attachments with a content
+  // type derived from the file name, so sniff the bytes and make them win.
+  const sniffed = sniffImageExtension(data);
+  const requestedName = params.fileName || 'image.png';
+  const baseName = sniffed
+    ? `${requestedName.replace(/\.[^./\\]+$/, '') || 'image'}.${sniffed}`
+    : requestedName;
+
+  dbg.azure('pr-attachment:upload', {
+    pullRequestId: params.pullRequestId,
+    requestedName,
+    requestedMimeType: params.mimeType,
+    sniffedExtension: sniffed ?? 'unknown',
+    bytes: data.byteLength,
+    magic: data.subarray(0, 12).toString('hex'),
+  });
+
   for (let attempt = 0; attempt < 10; attempt++) {
     const fileName = getPullRequestAttachmentFileName(
-      params.fileName,
+      baseName,
       hashSuffix,
       attempt,
     );
@@ -3185,6 +3203,12 @@ export async function uploadPullRequestAttachment(params: {
 
     if (!response.ok) {
       const error = await response.text();
+      dbg.azure('pr-attachment:upload-failed', {
+        fileName,
+        attempt,
+        status: response.status,
+        error: error.slice(0, 500),
+      });
       if (isDuplicateAttachmentNameError(error) && attempt < 9) {
         continue;
       }
@@ -3195,6 +3219,18 @@ export async function uploadPullRequestAttachment(params: {
     if (!attachment.url) {
       throw new Error('Azure DevOps did not return an attachment URL');
     }
+
+    dbg.azure('pr-attachment:uploaded', {
+      fileName,
+      attempt,
+      url: attachment.url,
+    });
+
+    await verifyAttachmentContentType({
+      attachmentUrl: attachment.url,
+      authHeader,
+      expectedBytes: data.byteLength,
+    });
 
     return { url: attachment.url };
   }
@@ -3213,6 +3249,96 @@ function getPullRequestAttachmentFileName(
   if (extensionIndex <= 0) return `${fileName}-${suffix}`;
 
   return `${fileName.slice(0, extensionIndex)}-${suffix}${fileName.slice(extensionIndex)}`;
+}
+
+/**
+ * Read the attachment back so a wrong served content type shows up in the logs
+ * instead of only as a broken image in the Azure UI. Debug-gated (HEAD only) so
+ * it costs nothing when `jc:azure` logging is disabled.
+ */
+async function verifyAttachmentContentType(params: {
+  attachmentUrl: string;
+  authHeader: string;
+  expectedBytes: number;
+}): Promise<void> {
+  if (!createDebug.enabled('jc:azure')) return;
+
+  // Never send the PAT to a host Azure didn't vouch for.
+  let url: URL;
+  try {
+    url = new URL(params.attachmentUrl);
+  } catch {
+    dbg.azure('pr-attachment:verify-skipped', { reason: 'invalid-url' });
+    return;
+  }
+  const isAllowedHost =
+    url.protocol === 'https:' &&
+    url.username === '' &&
+    url.password === '' &&
+    (url.hostname === 'dev.azure.com' ||
+      url.hostname.endsWith('.visualstudio.com'));
+  if (!isAllowedHost) {
+    dbg.azure('pr-attachment:verify-skipped', {
+      reason: 'disallowed-host',
+      host: url.hostname,
+    });
+    return;
+  }
+
+  try {
+    const verify = await fetch(url.href, {
+      method: 'HEAD',
+      redirect: 'manual',
+      headers: { Authorization: params.authHeader },
+    });
+    // HEAD has no body, but cancel defensively so no socket is pinned.
+    await verify.body?.cancel();
+    dbg.azure('pr-attachment:verify', {
+      url: url.href,
+      status: verify.status,
+      contentType: verify.headers.get('content-type'),
+      contentLength: verify.headers.get('content-length'),
+      expectedBytes: params.expectedBytes,
+    });
+  } catch (verifyError) {
+    dbg.azure('pr-attachment:verify-failed', {
+      url: url.href,
+      error: String(verifyError),
+    });
+  }
+}
+
+/**
+ * Detect the real image format from magic bytes. Authoritative over the
+ * caller-provided mime type, since Azure derives the served content type from
+ * the attachment file name.
+ */
+export function sniffImageExtension(data: Buffer): string | null {
+  const ascii = (start: number, end: number) =>
+    data.subarray(start, end).toString('ascii');
+
+  if (data.length >= 8 && data[0] === 0x89 && ascii(1, 4) === 'PNG')
+    return 'png';
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8) return 'jpg';
+  if (data.length >= 6 && ascii(0, 3) === 'GIF') return 'gif';
+  if (data.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP')
+    return 'webp';
+  if (data.length >= 12 && ascii(4, 8) === 'ftyp') {
+    // Check the major brand *and* the compatible-brands list: AVIF files are
+    // commonly stamped `mif1` as the major brand with `avif` as compatible.
+    const boxSize = data.readUInt32BE(0);
+    const brandsEnd = Math.min(
+      data.length,
+      boxSize > 8 && boxSize <= data.length ? boxSize : data.length,
+    );
+    const brands = ascii(8, brandsEnd);
+    if (/avif|avis/.test(brands)) return 'avif';
+    const majorBrand = ascii(8, 12);
+    if (majorBrand.startsWith('hei') || majorBrand.startsWith('mif'))
+      return 'heic';
+  }
+  if (data.length >= 4 && /^\s*(<\?xml|<svg)/.test(ascii(0, 64))) return 'svg';
+  return null;
 }
 
 function isDuplicateAttachmentNameError(error: string) {

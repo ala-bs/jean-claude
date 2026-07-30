@@ -117,6 +117,7 @@ vi.mock('@/lib/image-utils', async () => {
     MAX_FILE_SIZE: 10 * 1024 * 1024,
     MAX_IMAGES: 5,
     getAttachmentFileName: actual.getAttachmentFileName,
+    getAttachmentPayload: actual.getAttachmentPayload,
     processImageFile: processImageFileSpy,
   };
 });

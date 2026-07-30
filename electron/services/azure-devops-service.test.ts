@@ -38,6 +38,7 @@ import {
   setWorkItemCommentReaction,
   updatePullRequestTitle,
   updateWorkItemBoardColumn,
+  sniffImageExtension,
   uploadPullRequestAttachment,
 } from './azure-devops-service';
 
@@ -809,6 +810,47 @@ function workItemResponse(id: number) {
     ],
   };
 }
+
+describe('sniffImageExtension', () => {
+  function isoBmff(majorBrand: string, compatibleBrands: string[]) {
+    const brands = [majorBrand, '\0\0\0\0', ...compatibleBrands].join('');
+    const body = Buffer.concat([
+      Buffer.from('ftyp', 'ascii'),
+      Buffer.from(brands, 'ascii'),
+    ]);
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(body.length + 4);
+    return Buffer.concat([size, body]);
+  }
+
+  it('detects common raster formats from magic bytes', () => {
+    expect(
+      sniffImageExtension(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      ),
+    ).toBe('png');
+    expect(sniffImageExtension(Buffer.from([0xff, 0xd8, 0xff]))).toBe('jpg');
+    expect(sniffImageExtension(Buffer.from('GIF89a-data', 'ascii'))).toBe(
+      'gif',
+    );
+    expect(
+      sniffImageExtension(Buffer.from('RIFF\0\0\0\0WEBPVP8 ', 'ascii')),
+    ).toBe('webp');
+  });
+
+  it('detects AVIF from the major brand and the compatible-brands list', () => {
+    expect(sniffImageExtension(isoBmff('avif', ['mif1']))).toBe('avif');
+    expect(sniffImageExtension(isoBmff('mif1', ['avif', 'miaf']))).toBe('avif');
+  });
+
+  it('detects HEIC and SVG, and gives up on unknown bytes', () => {
+    expect(sniffImageExtension(isoBmff('heic', ['mif1']))).toBe('heic');
+    expect(sniffImageExtension(Buffer.from('  <svg xmlns=', 'ascii'))).toBe(
+      'svg',
+    );
+    expect(sniffImageExtension(Buffer.from('not-an-image', 'ascii'))).toBeNull();
+  });
+});
 
 describe('uploadPullRequestAttachment', () => {
   beforeEach(() => {

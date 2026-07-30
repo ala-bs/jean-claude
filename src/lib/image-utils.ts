@@ -37,6 +37,37 @@ export function getAttachmentFileName(
   return `${base}.${extension}`;
 }
 
+const ATTACHMENT_SAFE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+/**
+ * Pick the bytes to upload as a remote attachment (Azure DevOps).
+ *
+ * The storage variant is usually AVIF, which Azure DevOps fails to render in PR
+ * descriptions. Prefer the storage bytes only when they are a broadly supported
+ * format (e.g. an untouched GIF staged for animation), otherwise fall back to
+ * the WebP agent variant.
+ */
+export function getAttachmentPayload(image: {
+  data: string;
+  mimeType: string;
+  storageData?: string;
+  storageMimeType?: string;
+}): { dataBase64: string; mimeType: string } {
+  if (
+    image.storageData &&
+    image.storageMimeType &&
+    ATTACHMENT_SAFE_MIME_TYPES.has(image.storageMimeType)
+  ) {
+    return { dataBase64: image.storageData, mimeType: image.storageMimeType };
+  }
+  return { dataBase64: image.data, mimeType: image.mimeType };
+}
+
 export async function processImageFile(
   file: File,
   onAttach: (image: PromptImagePart) => void,

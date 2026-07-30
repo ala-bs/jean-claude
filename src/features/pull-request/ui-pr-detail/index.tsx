@@ -50,7 +50,10 @@ import {
   useTaskReviewFileDrafts,
 } from '@/stores/task-review-comment-drafts';
 import { api } from '@/lib/api';
-import { getAttachmentFileName } from '@/lib/image-utils';
+import {
+  getAttachmentFileName,
+  getAttachmentPayload,
+} from '@/lib/image-utils';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import { isPrReviewChatStepMeta } from '@shared/types';
 import type { MentionOption } from '@/common/ui/mention-textarea';
@@ -457,13 +460,14 @@ export function PrDetail({
 
   const handleUploadImage = useCallback(
     async (image: PromptImagePart, fileName: string) => {
-      const mimeType = image.mimeType || 'application/octet-stream';
+      const payload = getAttachmentPayload(image);
+      const mimeType = payload.mimeType || 'application/octet-stream';
       const attachment = await uploadAttachment.mutateAsync({
         // Extension must match the uploaded bytes: attachments are served with
         // a content type derived from the file name, not the request.
         fileName: getAttachmentFileName(fileName, mimeType),
         mimeType,
-        dataBase64: image.data,
+        dataBase64: payload.dataBase64,
       });
       return attachment.url;
     },
