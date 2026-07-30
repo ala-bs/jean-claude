@@ -22,7 +22,7 @@ export const BUILTIN_SNIPPETS: PromptSnippet[] = [
     <test_case id="{{this.id}}" title="{{this.title}}">
 {{#if this.steps}}
 {{#each this.steps}}
-      <step>
+      <step zero_based_index="{{@index}}">
         <action>{{this.action}}</action>
         <expected_result>{{this.expectedResult}}</expected_result>
       </step>
@@ -49,9 +49,17 @@ End with the following summary tables:
 
 {{#if (any workItems "testCases")}}
 **Results per Test Case:**
-| Work Item | Test Case | Status | Notes |
-|-----------|-----------|--------|-------|
-(one row per test case — Status is ✅ PASS, ❌ FAIL, or ⬚ NOT TESTED. Notes = brief reason when not PASS)
+| Work Item | Test Case | Spec Source | Expected Behavior | Actual Behavior | Status |
+|-----------|-----------|-------------|-------------------|-----------------|--------|
+
+Rules for this table:
+- One row per test case (not per work item). Never merge or skip rows.
+- **Spec Source**: where the expectation comes from. Quote the origin verbatim (trimmed to the relevant sentence), and name the artifact it came from, e.g. \`Test case #42, step 2: "Click Save"\` or \`Work item #17 description: "the badge must disappear once read"\`. Step numbers are 1-based for humans, so cite \`zero_based_index + 1\`. If the expectation is implied rather than written, mark it \`inferred from <artifact>\` and state what was inferred and why.
+- **Expected Behavior**: 2-4 sentences, not a fragment. Spell out the precondition / setup, the exact user action, the observable outcome (what appears, changes, is persisted, is emitted), and any edge condition or state transition the spec requires. Name concrete UI labels, fields, statuses, values, and side effects rather than saying "works correctly" or "behaves as expected".
+- **Actual Behavior**: what the current code actually does, with the file + function/symbol that implements (or fails to implement) it. On FAIL, state the concrete gap and where to fix it. On NOT TESTED, state precisely what blocked verification and what is needed (running app, credentials, device, data fixture...).
+- **Status**: ✅ PASS, ❌ FAIL, or ⬚ NOT TESTED — no ⚠️ PARTIAL in this table; a partially satisfied test case is ❌ FAIL.
+
+Formatting rules so the table stays valid: escape every \`|\` inside a cell as \`\\|\`, strip any HTML tags coming from work item descriptions and keep only their text, and never emit a raw newline inside a cell — use \`<br>\` instead. If a cell gets long, break it with \`<br>\` rather than shortening the explanation.
 {{/if}}`,
     enabled: true,
     contexts: { newTask: true, newTaskStep: true },
