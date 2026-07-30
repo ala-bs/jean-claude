@@ -20,10 +20,12 @@ import {
   compileForOpenCode,
   evaluatePermission,
   evaluatePermissionWithMatch,
+  evaluateToolPermission,
   normalizeToolRequest,
   isUnrestrictedBashPattern,
   readProjectPermissions,
   readSettings,
+  seedDefaultProjectPermissions,
 } from './permission-settings-service';
 
 const tempDirs: string[] = [];
@@ -41,6 +43,86 @@ afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
+});
+
+describe('seedDefaultProjectPermissions', () => {
+  it('seeds default allow rules on a fresh project', async () => {
+    const projectPath = await createTempProject();
+    await seedDefaultProjectPermissions(projectPath);
+
+    const settings = await readSettings(projectPath);
+    expect(settings.permissions.project).toEqual({
+      edit: {
+        '*': 'allow',
+        '**/.jean-claude/**': 'ask',
+        '**/.claude/**': 'ask',
+      },
+      write: {
+        '*': 'allow',
+        '**/.jean-claude/**': 'ask',
+        '**/.claude/**': 'ask',
+      },
+      grep: 'allow',
+      glob: 'allow',
+      read: 'allow',
+    });
+  });
+
+  it('still asks before editing its own permission config', async () => {
+    const projectPath = await createTempProject();
+    await seedDefaultProjectPermissions(projectPath);
+
+    const evaluate = (toolName: string, filePath: string) =>
+      evaluateToolPermission({
+        projectPath,
+        isWorktree: false,
+        toolName,
+        input: { filePath: path.join(projectPath, filePath) },
+      });
+
+    await expect(evaluate('Edit', 'src/index.ts')).resolves.toBe('allow');
+    await expect(
+      evaluate('Edit', '.jean-claude/settings.local.json'),
+    ).resolves.toBe('ask');
+    await expect(evaluate('Write', '.claude/settings.json')).resolves.toBe(
+      'ask',
+    );
+  });
+
+  it('does not overwrite existing settings', async () => {
+    const projectPath = await createTempProject();
+    await addProjectPermissionRule({
+      projectPath,
+      toolName: 'Bash',
+      input: { command: 'git status' },
+      action: 'allow',
+    });
+    const before = await readSettings(projectPath);
+
+    await seedDefaultProjectPermissions(projectPath);
+
+    expect(await readSettings(projectPath)).toEqual(before);
+  });
+
+  it('does not seed when legacy .claude settings exist', async () => {
+    const projectPath = await createTempProject();
+    await fs.mkdir(path.join(projectPath, '.claude'), { recursive: true });
+    await fs.writeFile(
+      path.join(projectPath, '.claude/settings.local.json'),
+      JSON.stringify({ permissions: { allow: ['Read'] } }),
+      'utf-8',
+    );
+
+    await seedDefaultProjectPermissions(projectPath);
+
+    await expect(
+      fs.access(path.join(projectPath, '.jean-claude/settings.local.json')),
+    ).rejects.toThrow();
+  });
+
+  it('ignores an empty root dir', async () => {
+    await expect(seedDefaultProjectPermissions('')).resolves.toBeUndefined();
+  });
 });
 
 describe('addWorktreePermission', () => {

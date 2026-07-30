@@ -240,6 +240,7 @@ import {
   readProjectPromptPreface,
   readSettings,
   removeProjectPermissionRule,
+  seedDefaultProjectPermissions,
   writeProjectPromptPreface,
   writeSettings,
 } from '../services/permission-settings-service';
@@ -1229,6 +1230,9 @@ export function registerIpcHandlers() {
       ...(mobilePreviewConfig && { mobilePreviewConfig }),
     });
     emitProjectUpsert(project);
+    await seedDefaultProjectPermissions(project.path).catch((error) => {
+      dbg.ipc('projects:create default permissions seeding failed: %O', error);
+    });
     return project;
   });
   ipcMain.handle('projects:detectAzureRemote', async (_, projectPath: string) => {

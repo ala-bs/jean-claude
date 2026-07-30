@@ -241,6 +241,61 @@ export async function writeSettings(
   });
 }
 
+/**
+ * Default permissions seeded when a project is added for the first time.
+ * Safe, read/edit-oriented tools are allowed; everything else falls back to ask.
+ */
+const SELF_CONFIG_GUARD: Record<string, PermissionAction> = {
+  // Rules are last-match-wins, so these must come after the `*` entry.
+  // Prevents the agent from silently widening its own permissions or hooks.
+  '**/.jean-claude/**': 'ask',
+  '**/.claude/**': 'ask',
+};
+
+const DEFAULT_PROJECT_PERMISSIONS: PermissionScope = {
+  edit: { '*': 'allow', ...SELF_CONFIG_GUARD },
+  write: { '*': 'allow', ...SELF_CONFIG_GUARD },
+  grep: 'allow',
+  glob: 'allow',
+  read: 'allow',
+};
+
+/**
+ * Seeds `.jean-claude/settings.local.json` with default permissions.
+ * No-op if a settings file (or legacy settings) already exists.
+ */
+export async function seedDefaultProjectPermissions(
+  rootDir: string,
+): Promise<void> {
+  if (!rootDir) {
+    dbg.agentPermission('seedDefaultProjectPermissions: empty rootDir');
+    return;
+  }
+
+  const seeded = await withProjectWriteLock(rootDir, async () => {
+    try {
+      await fs.access(getSettingsPath(rootDir));
+      return false; // already configured
+    } catch {
+      // no settings file yet
+    }
+
+    // Conservative: any parseable legacy `.claude` settings means the project
+    // was already configured elsewhere, so don't overwrite it.
+    if (await readLegacySettings(rootDir)) return false;
+
+    await writeSettings(rootDir, {
+      version: 1,
+      permissions: { project: { ...DEFAULT_PROJECT_PERMISSIONS } },
+    });
+    return true;
+  });
+
+  if (seeded) {
+    emitPermissionsChanged({ scope: 'project', projectPath: rootDir });
+  }
+}
+
 export async function readProjectPromptPreface(
   rootDir: string,
   globalEntries: import('@shared/prompt-preface-types').PromptPrefaceEntry[] = [],
