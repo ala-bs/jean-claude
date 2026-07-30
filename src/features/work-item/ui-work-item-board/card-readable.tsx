@@ -10,20 +10,13 @@ import { parseWorkItemTitle } from '@/lib/work-item-title-parser';
 import { Tooltip } from '@/common/ui/tooltip';
 
 import { parseAzureWorkItemTags } from './utils';
+import {
+  DEFAULT_BOARD_COLOR_SETTINGS,
+  type BoardColorSettings,
+  getBoardTagTone,
+} from '@/features/work-item/utils-board-colors';
 
 const VISIBLE_SCOPE_LIMIT = 3;
-
-// Tags that change what you do next keep a coloured chip; everything else is
-// provenance and collapses into a single "+n".
-const STATE_TAG_TONES: Record<string, { label: string; tone: string }> = {
-  'us ready': { label: 'US ready', tone: 'text-status-done bg-status-done/12' },
-  'change request': { label: 'change request', tone: 'text-status-run bg-status-run/12' },
-  'true-bug': { label: 'true bug', tone: 'text-status-fail bg-status-fail/12' },
-  'not-a-true-bug': { label: 'not a bug', tone: 'text-ink-2 bg-bg-3' },
-  duplicate: { label: 'duplicate', tone: 'text-ink-2 bg-bg-3' },
-  blocked: { label: 'blocked', tone: 'text-status-fail bg-status-fail/12' },
-  ready: { label: 'ready', tone: 'text-status-done bg-status-done/12' },
-};
 
 function iterationLeaf(iterationPath?: string) {
   const leaf = iterationPath?.split(/[\\/]/).at(-1);
@@ -43,8 +36,10 @@ export function WorkItemBoardReadableCard({
   isExactMatch,
   onOpen,
   onOpenChildBugs,
+  colorSettings = DEFAULT_BOARD_COLOR_SETTINGS,
 }: {
   workItem: AzureDevOpsWorkItem;
+  colorSettings?: BoardColorSettings;
   search: string;
   parserSetting: WorkItemTitleParserSetting | null;
   avatar: ReactNode;
@@ -62,8 +57,13 @@ export function WorkItemBoardReadableCard({
   const hiddenScopeCount = parsed.labels.length - scopes.length;
   const isBug = workItem.fields.workItemType === 'Bug';
   const tags = parseAzureWorkItemTags(workItem.fields.tags ?? '');
-  const stateTags = tags.filter((tag) => STATE_TAG_TONES[tag.toLowerCase()]);
-  const otherTags = tags.filter((tag) => !STATE_TAG_TONES[tag.toLowerCase()]);
+  const stateTags = tags.flatMap((tag) => {
+    const tone = getBoardTagTone(tag, colorSettings.rules);
+    return tone ? [{ tag, ...tone }] : [];
+  });
+  const otherTags = tags.filter(
+    (tag) => !getBoardTagTone(tag, colorSettings.rules),
+  );
   const sprint = iterationLeaf(workItem.fields.iterationPath);
 
   return (
@@ -183,22 +183,20 @@ export function WorkItemBoardReadableCard({
                 {bugProgress.closed}/{bugProgress.total} closed
               </span>
             ))}
-          {stateTags.map((tag) => {
-            const state = STATE_TAG_TONES[tag.toLowerCase()];
-            return (
-              <span
-                key={tag}
-                title={tag}
-                className={clsx(
-                  'inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10.5px] whitespace-nowrap',
-                  state.tone,
-                )}
-              >
-                <span className="h-1 w-1 rounded-full bg-current" />
-                {state.label}
-              </span>
-            );
-          })}
+          {stateTags.map((state) => (
+            <span
+              key={state.tag}
+              title={state.tag}
+              className="inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10.5px] whitespace-nowrap"
+              style={{
+                color: state.tone,
+                background: `color-mix(in oklch, ${state.tone} 12%, transparent)`,
+              }}
+            >
+              <span className="h-1 w-1 rounded-full bg-current" />
+              {state.label}
+            </span>
+          ))}
           {otherTags.length > 0 && (
             <span className="text-ink-3 font-mono text-[10.5px]" title={otherTags.join(', ')}>
               +{otherTags.length}

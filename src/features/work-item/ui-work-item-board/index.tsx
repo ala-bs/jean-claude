@@ -12,6 +12,12 @@ import { useCachedWorkItemSummaries } from '@/hooks/use-work-item-summary';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentAzureUser } from '@/hooks/use-work-items';
 import { UserAvatar } from '@/common/ui/user-avatar';
+import {
+  DEFAULT_BOARD_COLOR_SETTINGS,
+  type BoardColorSettings,
+  getBoardColumnApplyMode,
+  getBoardColumnTone,
+} from '@/features/work-item/utils-board-colors';
 
 
 import {
@@ -51,32 +57,6 @@ function getColumnColor(status: string): string {
   }
 }
 
-// Thin colour rule above each editorial column header.
-function getColumnRuleColor(status: string): string {
-  switch (status.toLowerCase()) {
-    case 'new':
-    case 'to do':
-      return 'border-t-ink-3/40';
-    case 'active':
-    case 'in progress':
-    case 'in design':
-      return 'border-t-status-run/70';
-    case 'blocked':
-      return 'border-t-status-fail/70';
-    case 'pr':
-    case 'code review':
-    case 'review':
-      return 'border-t-status-review/70';
-    case 'resolved':
-    case 'done':
-    case 'closed':
-    case 'deployed':
-      return 'border-t-status-done/70';
-    default:
-      return 'border-t-line';
-  }
-}
-
 export function WorkItemBoard({
   workItems,
   boardColumns,
@@ -97,6 +77,7 @@ export function WorkItemBoard({
   relatedBugWorkItemIds = [],
   variant = 'default',
   parserSetting = null,
+  colorSettings = DEFAULT_BOARD_COLOR_SETTINGS,
 }: {
   workItems: AzureDevOpsWorkItem[];
   boardColumns: AzureDevOpsBoardColumn[];
@@ -120,6 +101,7 @@ export function WorkItemBoard({
   relatedBugWorkItemIds?: number[];
   variant?: 'default' | 'editorial';
   parserSetting?: WorkItemTitleParserSetting | null;
+  colorSettings?: BoardColorSettings;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
@@ -291,15 +273,27 @@ export function WorkItemBoard({
             </button>
           );
         }
+        const columnTone = getBoardColumnTone(name, colorSettings);
+        const applyMode = getBoardColumnApplyMode(name, colorSettings);
+        const showColumnRule = applyMode === 'rule' || applyMode === 'both';
+        const showColumnTint = applyMode === 'tint' || applyMode === 'both';
         return (
         <div
           key={id}
           className={clsx(
             'flex h-full shrink-0 flex-col overflow-hidden',
             isEditorial
-              ? 'border-line-soft bg-bg-0/60 w-67 border-r'
+              ? 'border-line-soft w-67 border-r'
               : 'bg-bg-1/50 w-56 rounded',
+            isEditorial && !showColumnTint && 'bg-bg-0/60',
           )}
+          style={
+            isEditorial && showColumnTint
+              ? {
+                  background: `linear-gradient(color-mix(in oklch, ${columnTone} 13%, var(--color-bg-0)), color-mix(in oklch, ${columnTone} 5%, var(--color-bg-0)) 260px)`,
+                }
+              : undefined
+          }
         >
           {/* Column header */}
           <button
@@ -309,12 +303,16 @@ export function WorkItemBoard({
             className={clsx(
               'flex w-full items-center text-left disabled:cursor-default',
               isEditorial
-                ? [
-                    'border-line-soft h-10 border-t-2 border-b px-3.5',
-                    getColumnRuleColor(name),
-                  ]
+                ? 'border-line-soft border-t-transparent h-10 border-t-2 border-b px-3.5'
                 : ['border-t-2 px-2 py-1.5', getColumnColor(name)],
             )}
+            style={
+              isEditorial && showColumnRule
+                ? {
+                    borderTopColor: `color-mix(in oklch, ${columnTone} 70%, transparent)`,
+                  }
+                : undefined
+            }
           >
             <span
               className={clsx(
@@ -468,6 +466,7 @@ export function WorkItemBoard({
                 >
                   {isEditorial ? <WorkItemBoardReadableCard
                     workItem={workItem}
+                    colorSettings={colorSettings}
                     search={search}
                     parserSetting={parserSetting}
                     avatar={avatar}

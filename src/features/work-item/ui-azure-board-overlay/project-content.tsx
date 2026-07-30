@@ -1,5 +1,8 @@
 /* eslint-disable sort-imports */
-import { ArrowLeft, Bug, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, Loader2, RefreshCw, Search, X } from 'lucide-react';
+import { ArrowLeft, Bug, ChevronDown, ChevronLeft, ChevronRight, Copy, ExternalLink, Loader2, RefreshCw, Search, Settings2, X } from 'lucide-react';
+import clsx from 'clsx';
+
+import { BoardColorSettingsMenu } from '@/features/work-item/ui-azure-board-overlay/color-settings-menu';
 import {
   isWorkItemClosedState,
   pushWorkItemStack,
@@ -299,6 +302,9 @@ export function AzureBoardProjectContent({
   const [bugsForWorkItemId, setBugsForWorkItemId] = useState<number | null>(null);
   const [isRelatedBugsPanelOpen, setIsRelatedBugsPanelOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isColorMenuOpen, setIsColorMenuOpen] = useState(false);
+  const [colorMenuTab, setColorMenuTab] = useState<'tags' | 'columns'>('tags');
+  const colorMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const refreshingRef = useRef(false);
   const mountedRef = useRef(true);
@@ -319,6 +325,11 @@ export function AzureBoardProjectContent({
     projectCollapsedColumnIds ?? EMPTY_AZURE_BOARD_COLUMN_IDS;
   const toggleCollapsedColumn = useAzureBoardStore(
     (state) => state.toggleCollapsedColumn,
+  );
+  const colorSettings = useAzureBoardStore((state) => state.colorSettings);
+  const setColorSettings = useAzureBoardStore((state) => state.setColorSettings);
+  const resetColorSettings = useAzureBoardStore(
+    (state) => state.resetColorSettings,
   );
   const debouncedSearchText = useDebouncedValue(filters.search, 250);
   const params = {
@@ -509,7 +520,7 @@ export function AzureBoardProjectContent({
     setIsRelatedBugsPanelOpen(false);
   };
   return (
-    <div ref={contentRef} className="flex min-h-0 flex-1 flex-col">
+    <div ref={contentRef} className="relative flex min-h-0 flex-1 flex-col">
       <header className="border-line flex min-h-12 shrink-0 items-center gap-2 border-b px-4 py-2.5">
         <div className="flex shrink-0 items-center gap-2">{headerLeading}</div>
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
@@ -524,6 +535,21 @@ export function AzureBoardProjectContent({
           <MultiFilterDropdown label="Filter by tags" allLabel="All tags" countLabel="tags" options={tagOptions.map((tag) => ({ value: tag, label: tag }))} selected={filters.tags} onChange={(tags) => setFilters(project.id, { tags })} />
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <Tooltip align="right" content="Board colours">
+            <button
+              ref={colorMenuTriggerRef}
+              type="button"
+              onClick={() => setIsColorMenuOpen((open) => !open)}
+              aria-label="Board colours"
+              aria-expanded={isColorMenuOpen}
+              className={clsx(
+                'hover:text-ink-1 rounded p-1',
+                isColorMenuOpen ? 'bg-bg-3 text-ink-0' : 'text-ink-3',
+              )}
+            >
+              <Settings2 size={17} />
+            </button>
+          </Tooltip>
           <Tooltip
             align="right"
             content={
@@ -554,6 +580,19 @@ export function AzureBoardProjectContent({
           </button>
         </div>
       </header>
+          {isColorMenuOpen && (
+            <BoardColorSettingsMenu
+              settings={colorSettings}
+              onChange={setColorSettings}
+              onReset={resetColorSettings}
+              onClose={() => setIsColorMenuOpen(false)}
+              tagOptions={tagOptions}
+              columnNames={columns.map((column) => column.name)}
+              activeTab={colorMenuTab}
+              onActiveTabChange={setColorMenuTab}
+              triggerRef={colorMenuTriggerRef}
+            />
+          )}
           {blockingBoardError ? (
             <div className="grid flex-1 place-items-center px-6 text-center">
               <div>
@@ -626,6 +665,7 @@ export function AzureBoardProjectContent({
                   }}
                   variant="editorial"
                   parserSetting={project.workItemTitleParser}
+                  colorSettings={colorSettings}
                 />
               }
               details={selectedWorkItemId !== null ? (
