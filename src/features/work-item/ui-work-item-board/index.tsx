@@ -25,6 +25,7 @@ import {
   WorkItemTypeIcon,
 } from '../ui-work-item-shared';
 import { WorkItemBoardPrimaryHeading } from './card-primary-heading';
+import { WorkItemBoardReadableCard } from './card-readable';
 
 const EMPTY_COLUMN_IDS: string[] = [];
 
@@ -50,18 +51,29 @@ function getColumnColor(status: string): string {
   }
 }
 
-function getWorkItemBorderColor(type: string): string {
-  switch (type) {
-    case 'Bug':
-      return 'border-l-status-fail';
-    case 'User Story':
-      return 'border-l-status-review';
-    case 'Feature':
-      return 'border-l-acc-ink';
-    case 'Task':
-      return 'border-l-status-run';
+// Thin colour rule above each editorial column header.
+function getColumnRuleColor(status: string): string {
+  switch (status.toLowerCase()) {
+    case 'new':
+    case 'to do':
+      return 'border-t-ink-3/40';
+    case 'active':
+    case 'in progress':
+    case 'in design':
+      return 'border-t-status-run/70';
+    case 'blocked':
+      return 'border-t-status-fail/70';
+    case 'pr':
+    case 'code review':
+    case 'review':
+      return 'border-t-status-review/70';
+    case 'resolved':
+    case 'done':
+    case 'closed':
+    case 'deployed':
+      return 'border-t-status-done/70';
     default:
-      return 'border-l-ink-3';
+      return 'border-t-line';
   }
 }
 
@@ -285,7 +297,7 @@ export function WorkItemBoard({
           className={clsx(
             'flex h-full shrink-0 flex-col overflow-hidden',
             isEditorial
-              ? 'border-line-soft bg-bg-0 w-63 border-r'
+              ? 'border-line-soft bg-bg-0/60 w-67 border-r'
               : 'bg-bg-1/50 w-56 rounded',
           )}
         >
@@ -297,19 +309,31 @@ export function WorkItemBoard({
             className={clsx(
               'flex w-full items-center text-left disabled:cursor-default',
               isEditorial
-                ? 'border-line h-10 border-b px-3'
+                ? [
+                    'border-line-soft h-10 border-t-2 border-b px-3.5',
+                    getColumnRuleColor(name),
+                  ]
                 : ['border-t-2 px-2 py-1.5', getColumnColor(name)],
             )}
           >
             <span
               className={clsx(
-                'text-ink-1 min-w-0 truncate text-xs font-medium',
-                isEditorial && 'font-mono uppercase tracking-[0.04em]',
+                'text-ink-1 min-w-0 truncate',
+                isEditorial
+                  ? 'text-[12.5px] font-semibold tracking-[-0.005em]'
+                  : 'text-xs font-medium',
               )}
             >
               {name}
             </span>
-            <span className="text-ink-3 ml-1.5 font-mono text-[10px]">{items.length}</span>
+            <span
+              className={clsx(
+                'text-ink-3 ml-1.5 font-mono text-[10px]',
+                isEditorial && 'bg-bg-2 rounded-full px-1.5 py-px',
+              )}
+            >
+              {items.length}
+            </span>
             {canCollapse && <ChevronLeft className="text-ink-3 ml-auto h-3.5 w-3.5" />}
           </button>
 
@@ -317,7 +341,7 @@ export function WorkItemBoard({
           <div
             className={clsx(
               'flex min-h-0 flex-1 flex-col overflow-y-auto',
-              isEditorial ? 'gap-[5px] p-2.5' : 'gap-1 p-1.5',
+              isEditorial ? 'gap-[7px] px-3 pt-2.5 pb-4' : 'gap-1 p-1.5',
             )}
           >
             {items.map((workItem) => {
@@ -427,29 +451,39 @@ export function WorkItemBoard({
                   role={hasPrimaryButton ? undefined : 'button'}
                   tabIndex={hasPrimaryButton ? undefined : 0}
                   className={clsx(
-                    'flex cursor-pointer flex-col gap-1.5 border p-2 text-left transition-[box-shadow,border-color,background-color]',
+                    'flex cursor-pointer flex-col text-left transition-[box-shadow,border-color,background-color]',
                     isEditorial
-                      ? ['bg-bg-0 rounded-[6px] border-l-[3px] px-3 py-2.5', getWorkItemBorderColor(workItem.fields.workItemType)]
-                      : 'rounded',
+                      ? 'bg-bg-1 relative gap-1.5 rounded-lg border border-transparent px-3 py-2.5'
+                      : 'gap-1.5 rounded border p-2',
                     isExactMatch
-                      ? 'border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'
+                      ? 'border border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'
                       : isHighlighted
-                        ? 'border-acc bg-acc/10 shadow-[0_0_0_3px_oklch(0.72_0.2_295_/_0.1)]'
+                        ? 'border border-acc bg-acc/10 shadow-[0_0_0_3px_oklch(0.72_0.2_295_/_0.1)]'
                         : isRelatedBug
-                          ? 'border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_oklch(0.72_0.18_25_/_0.12)]'
-                        : 'hover:bg-bg-2 border-line',
+                          ? 'border border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_oklch(0.72_0.18_25_/_0.12)]'
+                          : isEditorial
+                            ? 'hover:bg-bg-2'
+                            : 'hover:bg-bg-2 border-line',
                   )}
                 >
-                  {isEditorial && !parserSetting ? <button
-                    type="button"
-                    onClick={(event) => {
+                  {isEditorial ? <WorkItemBoardReadableCard
+                    workItem={workItem}
+                    search={search}
+                    parserSetting={parserSetting}
+                    avatar={avatar}
+                    selectionControl={selectionControl}
+                    summaryExcerpt={summaryExcerpt}
+                    summaryIsStale={summaryIsStale}
+                    bugProgress={bugProgress}
+                    outOfSprintLabel={isOutOfSprint ? (workItem.fields.iterationPath?.split(/[\\/]/).at(-1) ?? null) : null}
+                    isExactMatch={isExactMatch}
+                    onOpen={(event) => {
                       event.stopPropagation();
                       openWorkItem(event.metaKey || event.ctrlKey);
                     }}
-                    className="focus-visible:ring-acc flex w-full flex-col gap-1.5 text-left outline-none focus-visible:ring-1"
-                  >
-                    {cardHeading}
-                  </button> : cardHeading}
+                    onOpenChildBugs={onOpenChildBugs ? () => onOpenChildBugs(workItem) : undefined}
+                  /> : <>
+                  {cardHeading}
                   {summaryExcerpt && (
                     <div className="text-ink-3 flex min-w-0 items-center gap-1.5 text-[10.5px] leading-snug">
                       <Sparkles className="text-acc h-3 w-3 shrink-0" />
@@ -492,10 +526,7 @@ export function WorkItemBoard({
                       {parseAzureWorkItemTags(workItem.fields.tags).map((tag) => (
                         <span
                           key={tag}
-                          className={clsx(
-                            'bg-bg-3 text-ink-3 max-w-full truncate px-1.5 py-0.5 font-mono text-[9px] leading-3',
-                            !isEditorial && 'rounded',
-                          )}
+                          className="bg-bg-3 text-ink-3 max-w-full truncate rounded px-1.5 py-0.5 font-mono text-[9px] leading-3"
                           title={tag}
                         >
                           {tag}
@@ -503,6 +534,7 @@ export function WorkItemBoard({
                       ))}
                     </div>
                   )}
+                  </>}
                 </div>
               );
             })}
