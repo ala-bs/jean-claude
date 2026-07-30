@@ -25,7 +25,7 @@ type CreateTaskInput = {
   worktreePath: string;
   startCommitHash: string;
   branchName: string;
-  sourceBranch: string;
+  sourceBranch: string | null;
   pullRequestId: string;
   pullRequestUrl: string | null;
   prWorkspaceState: 'active';
@@ -36,7 +36,7 @@ type RestoreTaskWorktreeInput = {
   worktreePath?: string;
   startCommitHash?: string;
   branchName?: string;
-  sourceBranch?: string;
+  sourceBranch?: string | null;
   pullRequestUrl?: string | null;
   prWorkspaceState: 'active';
   prWorkspacePendingAt: null;
@@ -49,6 +49,7 @@ type PrReviewProject = {
   id: string;
   name: string;
   path: string;
+  defaultBranch?: string | null;
   archivedAt: string | null;
   repoProviderId: string | null;
   repoProjectId: string | null;
@@ -69,6 +70,7 @@ export type PrReviewTaskDeps = {
   }) => Promise<{
     title: string;
     sourceRefName: string;
+    targetRefName?: string | null;
     url?: string | null;
     status: 'active' | 'completed' | 'abandoned';
   }>;
@@ -76,6 +78,14 @@ export type PrReviewTaskDeps = {
     projectPath: string;
     sourceBranch: string;
   }) => Promise<void>;
+  /**
+   * Resolves the merge-base between the worktree HEAD and a branch.
+   * Used to anchor the PR review diff at target..source.
+   */
+  resolveMergeBase: (params: {
+    worktreePath: string;
+    sourceBranch: string;
+  }) => Promise<string | null>;
   createWorktree: (
     projectPath: string,
     projectId: string,
@@ -322,6 +332,57 @@ export function withPrLifecycleLock<T>(
   })();
 }
 
+/**
+ * Converts a Git ref into a branch name. Returns null for refs that are not
+ * branches (e.g. `refs/pull/...`), so callers can fall back instead of
+ * building a nonsense `origin/refs/pull/...` base.
+ */
+function toBranchName(ref: string): string | null {
+  if (!ref.startsWith('refs/')) return ref;
+  if (!ref.startsWith('refs/heads/')) return null;
+  return ref.slice('refs/heads/'.length);
+}
+
+/**
+ * Resolves the commit a PR review diff should be anchored on: the merge-base
+ * between the review worktree HEAD (the PR source branch) and the PR target
+ * branch. Falls back to the worktree start commit when the target branch is
+ * unknown or unreachable.
+ */
+async function resolveDiffBaseCommit({
+  deps,
+  worktreePath,
+  diffBaseBranch,
+  fallbackCommitHash,
+}: {
+  deps: Pick<PrReviewTaskDeps, 'resolveMergeBase'>;
+  worktreePath: string;
+  diffBaseBranch: string | null;
+  fallbackCommitHash: string;
+}): Promise<string> {
+  if (!diffBaseBranch) return fallbackCommitHash;
+  try {
+    const mergeBase = await deps.resolveMergeBase({
+      worktreePath,
+      sourceBranch: diffBaseBranch,
+    });
+    if (mergeBase) return mergeBase;
+    dbg.ipc(
+      'No merge-base with %s for PR review worktree %s; the diff may be empty',
+      diffBaseBranch,
+      worktreePath,
+    );
+  } catch (mergeBaseError) {
+    dbg.ipc(
+      'Failed to resolve merge-base with %s for PR review worktree %s: %O',
+      diffBaseBranch,
+      worktreePath,
+      mergeBaseError,
+    );
+  }
+  return fallbackCommitHash;
+}
+
 async function createOrGetPrReviewTaskUnlocked(
   params: {
     projectId: string;
@@ -375,6 +436,21 @@ async function createOrGetPrReviewTaskUnlocked(
   if (pr.status !== 'active') {
     throw new Error('PR review tasks can only start for an active PR');
   }
+  const sourceBranch = pr.sourceRefName.replace('refs/heads/', '');
+  const targetBranch = pr.targetRefName
+    ? toBranchName(pr.targetRefName)
+    : null;
+  // The worktree HEAD is the PR source branch, so diffing against the source
+  // branch always yields nothing. Anchor the diff on the PR target branch.
+  // Without a usable target, prefer the project default branch and finally
+  // null (which makes the diff fall back to the stored start commit) — never
+  // the source branch, which would collapse the diff base onto HEAD again.
+  const diffBaseBranch = targetBranch
+    ? `origin/${targetBranch}`
+    : project.defaultBranch
+      ? `origin/${project.defaultBranch}`
+      : null;
+
   if (existingTask?.worktreePath) {
     if (existingTask.prWorkspaceState === 'active') {
       return { task: existingTask, created: false };
@@ -383,23 +459,33 @@ async function createOrGetPrReviewTaskUnlocked(
     deps.emitTaskUpsert(task);
     return { task, created: false };
   }
-  const sourceBranch = pr.sourceRefName.replace('refs/heads/', '');
   const rawName = `Review: ${pr.title}`;
   const taskName = rawName.length > 40 ? rawName.slice(0, 37) + '...' : rawName;
   const remoteSourceBranch = `origin/${sourceBranch}`;
 
-  try {
-    await deps.fetchSourceBranch({
-      projectPath: project.path,
-      sourceBranch,
-    });
-  } catch (fetchError) {
-    dbg.ipc(
-      'Failed to fetch origin/%s before review worktree creation: %O',
-      sourceBranch,
-      fetchError,
-    );
-  }
+  const branchesToFetch = [
+    ...new Set(
+      [sourceBranch, targetBranch].filter(
+        (branch): branch is string => branch !== null,
+      ),
+    ),
+  ];
+  await Promise.all(
+    branchesToFetch.map(async (branch) => {
+      try {
+        await deps.fetchSourceBranch({
+          projectPath: project.path,
+          sourceBranch: branch,
+        });
+      } catch (fetchError) {
+        dbg.ipc(
+          'Failed to fetch origin/%s before review worktree creation: %O',
+          branch,
+          fetchError,
+        );
+      }
+    }),
+  );
 
   let worktreeResult:
     | {
@@ -436,7 +522,13 @@ async function createOrGetPrReviewTaskUnlocked(
     );
   }
 
-  const { worktreePath, startCommitHash, branchName } = worktreeResult;
+  const { worktreePath, branchName } = worktreeResult;
+  const startCommitHash = await resolveDiffBaseCommit({
+    deps,
+    worktreePath,
+    diffBaseBranch,
+    fallbackCommitHash: worktreeResult.startCommitHash,
+  });
   let persistedResult: { task: Task; created: boolean };
   try {
     if (existingTask) {
@@ -444,7 +536,7 @@ async function createOrGetPrReviewTaskUnlocked(
         worktreePath,
         startCommitHash,
         branchName,
-        sourceBranch,
+        sourceBranch: diffBaseBranch,
         pullRequestUrl: pr.url ?? null,
         prWorkspaceState: 'active',
         prWorkspacePendingAt: null,
@@ -460,7 +552,7 @@ async function createOrGetPrReviewTaskUnlocked(
         worktreePath,
         startCommitHash,
         branchName,
-        sourceBranch,
+        sourceBranch: diffBaseBranch,
         pullRequestId: String(pullRequestId),
         pullRequestUrl: pr.url ?? null,
         prWorkspaceState: 'active',

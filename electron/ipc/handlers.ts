@@ -1162,6 +1162,8 @@ export function registerIpcHandlers() {
           findProjectById: ProjectRepository.findById,
           getPullRequest,
           fetchSourceBranch: fetchPrReviewSourceBranch,
+          resolveMergeBase: ({ worktreePath, sourceBranch }) =>
+            resolveSourceBranchMergeBase(worktreePath, sourceBranch),
           createWorktree,
           cleanupWorktree,
           createTask: TaskRepository.create,
@@ -2002,6 +2004,8 @@ export function registerIpcHandlers() {
       findProjectById: ProjectRepository.findById,
       getPullRequest,
       fetchSourceBranch: fetchPrReviewSourceBranch,
+      resolveMergeBase: ({ worktreePath, sourceBranch }) =>
+        resolveSourceBranchMergeBase(worktreePath, sourceBranch),
       createWorktree,
       cleanupWorktree,
       createTask: TaskRepository.create,

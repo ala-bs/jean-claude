@@ -104,6 +104,7 @@ function makeDeps(overrides: Partial<Parameters<typeof createOrGetPrReviewTask>[
       status: 'active',
     }),
     fetchSourceBranch: vi.fn().mockResolvedValue(undefined),
+    resolveMergeBase: vi.fn().mockResolvedValue(null),
     createWorktree: vi.fn().mockResolvedValue({
       worktreePath: '/repo/.worktrees/review-pr-12',
       startCommitHash: 'abc123',
@@ -182,6 +183,146 @@ function deferred<T>() {
 }
 
 describe('createOrGetPrReviewTask', () => {
+  it('anchors the review diff on the PR target branch', async () => {
+    const deps = makeDeps({
+      getPullRequest: vi.fn().mockResolvedValue({
+        pullRequestId: 12,
+        title: 'Fix bug',
+        sourceRefName: 'refs/heads/feature/fix-bug',
+        targetRefName: 'refs/heads/main',
+        url: 'https://example.test/pr/12',
+        status: 'active',
+      }),
+      resolveMergeBase: vi.fn().mockResolvedValue('base999'),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.fetchSourceBranch).toHaveBeenCalledWith({
+      projectPath: '/repo',
+      sourceBranch: 'main',
+    });
+    expect(deps.createWorktree).toHaveBeenCalledWith(
+      '/repo',
+      'project-1',
+      'Jean-Claude',
+      'Review PR #12',
+      'Review: Fix bug',
+      'origin/feature/fix-bug',
+    );
+    expect(deps.resolveMergeBase).toHaveBeenCalledWith({
+      worktreePath: '/repo/.worktrees/review-pr-12',
+      sourceBranch: 'origin/main',
+    });
+    expect(deps.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceBranch: 'origin/main',
+        startCommitHash: 'base999',
+      }),
+    );
+  });
+
+  it('falls back to the project default branch when the PR has no target branch', async () => {
+    const deps = makeDeps({
+      findProjectById: vi
+        .fn()
+        .mockResolvedValue(makeProject({ defaultBranch: 'develop' })),
+      resolveMergeBase: vi.fn().mockResolvedValue('base111'),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.resolveMergeBase).toHaveBeenCalledWith({
+      worktreePath: '/repo/.worktrees/review-pr-12',
+      sourceBranch: 'origin/develop',
+    });
+    expect(deps.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceBranch: 'origin/develop',
+        startCommitHash: 'base111',
+      }),
+    );
+  });
+
+  it('never anchors the diff on the source branch when no base branch is known', async () => {
+    const deps = makeDeps();
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.fetchSourceBranch).toHaveBeenCalledTimes(1);
+    expect(deps.resolveMergeBase).not.toHaveBeenCalled();
+    expect(deps.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceBranch: null,
+        startCommitHash: 'abc123',
+      }),
+    );
+  });
+
+  it.each([
+    ['returns no merge-base', vi.fn().mockResolvedValue(null)],
+    ['throws', vi.fn().mockRejectedValue(new Error('git exploded'))],
+  ])(
+    'keeps the worktree start commit when merge-base %s',
+    async (_label, resolveMergeBase) => {
+      const deps = makeDeps({
+        getPullRequest: vi.fn().mockResolvedValue({
+          pullRequestId: 12,
+          title: 'Fix bug',
+          sourceRefName: 'refs/heads/feature/fix-bug',
+          targetRefName: 'refs/heads/main',
+          url: null,
+          status: 'active',
+        }),
+        resolveMergeBase,
+      });
+
+      await createOrGetPrReviewTask(
+        { projectId: 'project-1', pullRequestId: 12 },
+        deps,
+      );
+
+      expect(deps.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceBranch: 'origin/main',
+          startCommitHash: 'abc123',
+        }),
+      );
+    },
+  );
+
+  it('ignores a non-branch target ref instead of building a nonsense base', async () => {
+    const deps = makeDeps({
+      getPullRequest: vi.fn().mockResolvedValue({
+        pullRequestId: 12,
+        title: 'Fix bug',
+        sourceRefName: 'refs/heads/feature/fix-bug',
+        targetRefName: 'refs/pull/12/merge',
+        url: null,
+        status: 'active',
+      }),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.resolveMergeBase).not.toHaveBeenCalled();
+    expect(deps.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceBranch: null }),
+    );
+  });
+
   it('returns an existing active pr-review task without creating a worktree', async () => {
     const existingTask = makeTask({ id: 'existing-task' });
     const deps = makeDeps({
@@ -275,7 +416,7 @@ describe('createOrGetPrReviewTask', () => {
       worktreePath: '/repo/.worktrees/review-pr-12',
       startCommitHash: 'abc123',
       branchName: 'review-pr-12',
-      sourceBranch: 'feature/fix-bug',
+      sourceBranch: null,
       pullRequestUrl: 'https://example.test/pr/12',
     });
     expect(result.task).not.toHaveProperty('sessionRules');
@@ -293,7 +434,7 @@ describe('createOrGetPrReviewTask', () => {
         worktreePath: '/repo/.worktrees/review-pr-12',
         startCommitHash: 'abc123',
         branchName: 'review-pr-12',
-        sourceBranch: 'feature/fix-bug',
+        sourceBranch: null,
         prWorkspaceState: 'active',
         prWorkspacePendingAt: null,
       }),
@@ -360,7 +501,7 @@ describe('createOrGetPrReviewTask', () => {
       worktreePath: '/repo/.worktrees/review-pr-12',
       startCommitHash: 'abc123',
       branchName: 'review-pr-12',
-      sourceBranch: 'feature/fix-bug',
+      sourceBranch: null,
       pullRequestId: '12',
       pullRequestUrl: 'https://example.test/pr/12',
     });
