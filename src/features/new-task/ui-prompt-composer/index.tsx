@@ -706,7 +706,8 @@ export function PromptComposer({
   );
 
   const handlePaste = useCallback(
-    (e: ClipboardEvent<HTMLElement>) => {
+    (e: ClipboardEvent<HTMLElement> | globalThis.ClipboardEvent) => {
+      if (!e.clipboardData) return;
       const items = Array.from(e.clipboardData.items);
       const imageItems = items.filter((item) => item.type.startsWith('image/'));
       const nextVideoFile = Array.from(e.clipboardData.files).find(isVideoFile);
@@ -1193,7 +1194,6 @@ export function PromptComposer({
           </div>
           <div
             className="flex-1"
-            onPaste={handlePaste}
             onDragOver={handleTextareaDragOver}
           >
             <HandlebarsEditor
@@ -1204,6 +1204,7 @@ export function PromptComposer({
               minHeight="200px"
               maxHeight="500px"
               featureMap={featureMap}
+              onPaste={handlePaste}
             />
           </div>
           <div
