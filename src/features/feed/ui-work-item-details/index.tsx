@@ -9,10 +9,12 @@ import {
   FlaskConical,
   GitPullRequest,
   History,
+  Check,
   Link2,
   Loader2,
   MessagesSquare,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import {
   startTransition,
@@ -52,6 +54,8 @@ import {
 } from '@/hooks/use-work-items';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { Chip } from '@/common/ui/chip';
+import { Kbd } from '@/common/ui/kbd';
+import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { Modal } from '@/common/ui/modal';
 import { PrDetail } from '@/features/pull-request/ui-pr-detail';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
@@ -414,9 +418,11 @@ function EditableIteration({
 export function WorkItemDetails({
   projectId,
   workItemId,
+  onClose,
 }: {
   projectId: string;
   workItemId: number;
+  onClose?: () => void;
 }) {
   const { data: project } = useProject(projectId);
   const providerId = project?.workItemProviderId ?? null;
@@ -533,6 +539,7 @@ export function WorkItemDetails({
     workItemIds: linkedWorkItemIds,
   });
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
     void Promise.allSettled([
@@ -551,6 +558,45 @@ export function WorkItemDetails({
     refetchLinkedWorkItems,
     ownerQuery,
   ]);
+  const workItemUrl = workItem?.url ?? null;
+  const copiedTimeoutRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimeoutRef.current) window.clearTimeout(copiedTimeoutRef.current);
+    },
+    [],
+  );
+  const handleCopyLink = useCallback(() => {
+    if (!workItemUrl) return;
+    void navigator.clipboard
+      .writeText(workItemUrl)
+      .then(() => {
+        setCopiedLink(true);
+        if (copiedTimeoutRef.current)
+          window.clearTimeout(copiedTimeoutRef.current);
+        copiedTimeoutRef.current = window.setTimeout(
+          () => setCopiedLink(false),
+          1500,
+        );
+      })
+      .catch(() => setCopiedLink(false));
+  }, [workItemUrl]);
+  const handleOpenInAzure = useCallback(() => {
+    if (!workItemUrl) return;
+    window.open(workItemUrl, '_blank', 'noopener,noreferrer');
+  }, [workItemUrl]);
+
+  useRegisterKeyboardBindings(`work-item-details:${workItemId}`, {
+    'cmd+shift+c': () => {
+      handleCopyLink();
+      return true;
+    },
+    'cmd+shift+o': () => {
+      handleOpenInAzure();
+      return true;
+    },
+  });
+
   const addComment = useAddWorkItemComment();
   const updateComment = useUpdateWorkItemComment();
   const updateField = useUpdateWorkItemField();
@@ -650,16 +696,43 @@ export function WorkItemDetails({
             Refresh
           </button>
           {workItem.url && (
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="text-ink-2 hover:border-glass-border hover:text-ink-1 border-glass-border flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors"
+              title="Copy work item link (⌘⇧C)"
+            >
+              {copiedLink ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <Link2 className="h-3.5 w-3.5" />
+              )}
+              {copiedLink ? 'Copied' : 'Copy link'}
+              <Kbd shortcut="cmd+shift+c" />
+            </button>
+          )}
+          {workItem.url && (
             <a
               href={workItem.url}
               target="_blank"
               rel="noopener noreferrer"
               className="text-ink-2 hover:border-glass-border hover:text-ink-1 border-glass-border flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors"
-              title="Open in Azure DevOps"
+              title="Open in Azure DevOps (⌘⇧O)"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               Open
+              <Kbd shortcut="cmd+shift+o" />
             </a>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close dialog"
+              className="text-ink-2 hover:bg-glass-medium hover:text-ink-1 shrink-0 rounded p-1"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
           )}
         </div>
 
@@ -704,12 +777,6 @@ export function WorkItemDetails({
               </span>
             </div>
           )}
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="text-ink-3">Project:</span>
-              <span className="text-ink-1">
-                {fields.teamProject ?? project.name}
-              </span>
-          </div>
           {providerId && (
             <div className="flex items-center gap-1.5 text-xs">
               <span className="text-ink-3">Story points:</span>

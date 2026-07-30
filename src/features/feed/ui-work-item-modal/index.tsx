@@ -1,6 +1,10 @@
 import { useEffect } from 'react';
 import { useRouterState } from '@tanstack/react-router';
 
+import {
+  KeyboardLayerProvider,
+  useKeyboardLayer,
+} from '@/common/context/keyboard-bindings';
 import { Modal } from '@/common/ui/modal';
 import { ModalArbitrationScope } from '@/common/context/modal-arbitration';
 import { useWorkItemModalStore } from '@/stores/work-item-modal';
@@ -11,6 +15,7 @@ export function WorkItemModal() {
   const close = useWorkItemModalStore((state) => state.close);
 
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const layer = useKeyboardLayer('dialog', { exclusive: !!target });
 
   useEffect(() => {
     close();
@@ -19,10 +24,12 @@ export function WorkItemModal() {
   if (!target) return null;
 
   return (
+    <KeyboardLayerProvider layer={layer}>
     <Modal
       isOpen
       onClose={close}
-      title={`Work Item #${target.workItemId}`}
+      showHeader={false}
+      ariaLabel={`Work Item #${target.workItemId}`}
       size="xl"
       contentClassName="min-h-0 overflow-hidden p-0"
       panelClassName="h-[85vh]"
@@ -31,8 +38,10 @@ export function WorkItemModal() {
         <WorkItemDetails
           projectId={target.projectId}
           workItemId={target.workItemId}
+          onClose={close}
         />
       </ModalArbitrationScope>
     </Modal>
+    </KeyboardLayerProvider>
   );
 }

@@ -95,7 +95,9 @@ describe('WorkItemModal', () => {
         .open({ projectId: 'project-1', workItemId: 42 });
     });
     expect(document.body.textContent).toContain('Details for 42');
-    expect(document.body.textContent).toContain('Work Item #42');
+    expect(
+      document.querySelector('[aria-label="Work Item #42"]'),
+    ).not.toBeNull();
   });
 
   it('keeps the work item modal mounted when a linked item modal opens', () => {
