@@ -440,6 +440,7 @@ export function WorkItemBoard({
                 <div
                   key={workItem.id}
                   data-work-item-id={workItem.id}
+                  aria-current={isHighlighted ? 'true' : undefined}
                   onClick={(event) => openWorkItem(event.metaKey || event.ctrlKey)}
                   onKeyDown={hasPrimaryButton ? undefined : (event) => {
                     if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -456,7 +457,7 @@ export function WorkItemBoard({
                     isExactMatch
                       ? 'border border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'
                       : isHighlighted
-                        ? 'border border-acc bg-acc/10 shadow-[0_0_0_3px_oklch(0.72_0.2_295_/_0.1)]'
+                        ? 'border !border-acc'
                         : isRelatedBug
                           ? 'border border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_oklch(0.72_0.18_25_/_0.12)]'
                           : isEditorial
