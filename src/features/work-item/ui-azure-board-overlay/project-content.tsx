@@ -18,9 +18,10 @@ import {
   useWorkItemsByIds,
 } from '@/hooks/use-work-items';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { resolveDetailsPaneEscape } from '@/features/work-item/ui-azure-board-overlay/details-pane-escape';
 import { BoardSplitPane } from '@/features/work-item/ui-azure-board-overlay/board-split-pane';
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/time';
@@ -291,10 +292,12 @@ export function AzureBoardProjectContent({
   project,
   onClose,
   headerLeading,
+  escapeInterceptorRef,
 }: {
   project: ConfiguredAzureBoardProject;
   onClose: () => void;
   headerLeading: ReactNode;
+  escapeInterceptorRef: RefObject<(() => boolean) | null>;
 }) {
   const queryClient = useQueryClient();
   const [workItemStack, setWorkItemStack] = useState<number[]>([]);
@@ -519,6 +522,45 @@ export function AzureBoardProjectContent({
     setBugsForWorkItemId(null);
     setIsRelatedBugsPanelOpen(false);
   };
+  // Escape steps back one level (mirrors the details pane back button) and
+  // only closes the pane at the root level. Returns false when the pane is
+  // closed so the overlay handles escape itself.
+  const handleDetailsPaneEscape = () => {
+    const action = resolveDetailsPaneEscape({
+      isDetailsPaneOpen: selectedWorkItemId !== null,
+      workItemStackDepth: workItemStack.length,
+      hasRelatedBugsStory: bugsForWorkItem !== null && bugsForWorkItem !== undefined,
+      isRelatedBugsPanelOpen,
+    });
+    switch (action) {
+      case 'none':
+        return false;
+      case 'back-to-related-bugs':
+        if (bugsForWorkItem) {
+          setWorkItemStack([bugsForWorkItem.id]);
+          setIsRelatedBugsPanelOpen(true);
+        }
+        return true;
+      case 'pop-work-item':
+        setWorkItemStack((stack) => stack.slice(0, -1));
+        return true;
+      case 'close-related-bugs':
+        setBugsForWorkItemId(null);
+        setIsRelatedBugsPanelOpen(false);
+        return true;
+      default:
+        closeDetailsPane();
+        return true;
+    }
+  };
+  const handleDetailsPaneEscapeRef = useRef(handleDetailsPaneEscape);
+  handleDetailsPaneEscapeRef.current = handleDetailsPaneEscape;
+  useEffect(() => {
+    escapeInterceptorRef.current = () => handleDetailsPaneEscapeRef.current();
+    return () => {
+      escapeInterceptorRef.current = null;
+    };
+  }, [escapeInterceptorRef]);
   return (
     <div ref={contentRef} className="relative flex min-h-0 flex-1 flex-col">
       <header className="border-line flex min-h-12 shrink-0 items-center gap-2 border-b px-4 py-2.5">
