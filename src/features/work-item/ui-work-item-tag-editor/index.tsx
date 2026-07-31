@@ -59,11 +59,15 @@ export function WorkItemTagEditor({
         (!normalizedQuery || suggestion.toLocaleLowerCase().includes(normalizedQuery)),
     );
   }, [query, selectedKeys, suggestions]);
+  const customTag = query.trim();
+  const canCreateCustomTag =
+    !!customTag && !selectedKeys.has(customTag.toLocaleLowerCase());
+  const optionCount = filteredSuggestions.length + (canCreateCustomTag ? 1 : 0);
   const activeFocusedIndex = Math.min(
     focusedIndex,
-    Math.max(filteredSuggestions.length - 1, 0),
+    Math.max(optionCount - 1, 0),
   );
-  const showSuggestions = isOpen && filteredSuggestions.length > 0;
+  const showSuggestions = isOpen && optionCount > 0;
 
   const close = () => {
     setIsOpen(false);
@@ -160,19 +164,19 @@ export function WorkItemTagEditor({
               setFocusedIndex(0);
             }}
             onKeyDown={(event) => {
-              if (event.key === 'ArrowDown' && filteredSuggestions.length > 0) {
+              if (event.key === 'ArrowDown' && optionCount > 0) {
                 event.preventDefault();
-                setFocusedIndex((index) => (index + 1) % filteredSuggestions.length);
-              } else if (event.key === 'ArrowUp' && filteredSuggestions.length > 0) {
+                setFocusedIndex((index) => (index + 1) % optionCount);
+              } else if (event.key === 'ArrowUp' && optionCount > 0) {
                 event.preventDefault();
                 setFocusedIndex((index) =>
-                  index <= 0 ? filteredSuggestions.length - 1 : index - 1,
+                  index <= 0 ? optionCount - 1 : index - 1,
                 );
               } else if (event.key === 'Enter') {
                 event.preventDefault();
                 const suggestion = filteredSuggestions[activeFocusedIndex];
                 if (suggestion) addTag(suggestion);
-                else if (query.trim()) addTag(query);
+                else if (canCreateCustomTag) addTag(customTag);
               } else if (event.key === ',' || event.key === ';') {
                 event.preventDefault();
                 if (query.trim()) addTag(query);
@@ -239,6 +243,26 @@ export function WorkItemTagEditor({
               {suggestion}
             </button>
           ))}
+          {canCreateCustomTag && (
+            <button
+              id={`${listboxId}-option-${filteredSuggestions.length}`}
+              type="button"
+              role="option"
+              aria-selected={
+                activeFocusedIndex === filteredSuggestions.length
+              }
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setFocusedIndex(filteredSuggestions.length)}
+              onClick={() => addTag(customTag)}
+              className={`text-ink-1 block w-full truncate px-2.5 py-1.5 text-left text-xs ${
+                activeFocusedIndex === filteredSuggestions.length
+                  ? 'bg-bg-3'
+                  : 'hover:bg-bg-2'
+              }`}
+            >
+              Create "{customTag}"
+            </button>
+          )}
         </div>,
         document.body,
       )}
