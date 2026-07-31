@@ -53,8 +53,23 @@ export function WorkItemBoardReadableCard({
   onOpenChildBugs?: () => void;
 }) {
   const parsed = parseWorkItemTitle({ title: workItem.fields.title, setting: parserSetting });
-  const scopes = parsed.labels.slice(0, VISIBLE_SCOPE_LIMIT);
-  const hiddenScopeCount = parsed.labels.length - scopes.length;
+  // Colour rules apply to title-extracted labels too; coloured ones never collapse.
+  const scopeEntries = parsed.labels.map((label) => ({
+    label,
+    tone: getBoardTagTone(label, colorSettings.rules),
+  }));
+  let plainShown = 0;
+  const visibleScopes = scopeEntries.filter((entry) => {
+    if (entry.tone) return true;
+    if (plainShown >= VISIBLE_SCOPE_LIMIT) return false;
+    plainShown += 1;
+    return true;
+  });
+  const hiddenScopeLabels = scopeEntries
+    .filter((entry) => !entry.tone)
+    .slice(VISIBLE_SCOPE_LIMIT)
+    .map((entry) => entry.label);
+  const hiddenScopeCount = hiddenScopeLabels.length;
   const isBug = workItem.fields.workItemType === 'Bug';
   const tags = parseAzureWorkItemTags(workItem.fields.tags ?? '');
   const stateTags = tags.flatMap((tag) => {
@@ -109,22 +124,37 @@ export function WorkItemBoardReadableCard({
       </div>
 
       {/* 3 — scope, as text not confetti */}
-      {scopes.length > 0 && (
+      {scopeEntries.length > 0 && (
         <div className="flex flex-wrap items-center gap-1" aria-label="Extracted labels">
-          {scopes.map((label) => (
-            <span
-              key={label.toLocaleLowerCase()}
-              title={label}
-              className="bg-bg-3 text-ink-3 max-w-full truncate rounded px-1.5 py-px font-mono text-[10px] leading-4"
-            >
-              {label}
-            </span>
-          ))}
+          {visibleScopes.map((entry) =>
+            entry.tone ? (
+              <span
+                key={entry.label.toLocaleLowerCase()}
+                title={entry.label}
+                className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-[10.5px] leading-4"
+                style={{
+                  color: entry.tone.tone,
+                  background: `color-mix(in oklch, ${entry.tone.tone} 12%, transparent)`,
+                }}
+              >
+                <span className="h-1 w-1 shrink-0 rounded-full bg-current" />
+                <span className="min-w-0 truncate">{entry.tone.label}</span>
+              </span>
+            ) : (
+              <span
+                key={entry.label.toLocaleLowerCase()}
+                title={entry.label}
+                className="bg-bg-3 text-ink-3 max-w-full truncate rounded px-1.5 py-px font-mono text-[10px] leading-4"
+              >
+                {entry.label}
+              </span>
+            ),
+          )}
           {hiddenScopeCount > 0 && (
-            <Tooltip content={parsed.labels.join(', ')}>
+            <Tooltip content={hiddenScopeLabels.join(', ')}>
               <span
                 tabIndex={0}
-                aria-label={`Show all extracted labels: ${parsed.labels.join(', ')}`}
+                aria-label={`${hiddenScopeCount} more extracted labels: ${hiddenScopeLabels.join(', ')}`}
                 onClick={(event) => event.stopPropagation()}
                 className="text-ink-3 cursor-default font-mono text-[10.5px] outline-none"
               >
