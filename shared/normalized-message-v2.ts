@@ -125,6 +125,7 @@ export type NormalizedToolUse = {
           before?: string;
           after?: string;
         }[];
+        isTurnSummary?: boolean;
       };
       result?: {
         success: boolean;
@@ -166,6 +167,7 @@ export type NormalizedToolUse = {
           before?: string;
           after?: string;
         }[];
+        isTurnSummary?: boolean;
       };
       result?: {
         changes: {

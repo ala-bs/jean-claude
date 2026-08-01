@@ -10,8 +10,8 @@ import { useCachedWorkItemSummaries } from '@/hooks/use-work-item-summary';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentAzureUser } from '@/hooks/use-work-items';
 import {
-  DEFAULT_BOARD_COLOR_SETTINGS,
   type BoardColorSettings,
+  DEFAULT_BOARD_COLOR_SETTINGS,
   getBoardColumnApplyMode,
   getBoardColumnTone,
 } from '@/features/work-item/utils-board-colors';

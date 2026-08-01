@@ -2,8 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import {
-  DEFAULT_BOARD_COLOR_SETTINGS,
   type BoardColorSettings,
+  DEFAULT_BOARD_COLOR_SETTINGS,
   sanitizeBoardColorSettings,
 } from '@/features/work-item/utils-board-colors';
 

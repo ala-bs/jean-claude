@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Bug,
+  Check,
   CheckSquare,
   ChevronDown,
   ChevronRight,
@@ -9,7 +10,6 @@ import {
   FlaskConical,
   GitPullRequest,
   History,
-  Check,
   Link2,
   Loader2,
   MessagesSquare,

@@ -1014,50 +1014,18 @@ class AgentService {
   }
 
   /**
-   * Feeds the shell edit tracker as tool uses stream in: Bash commands that look
-   * file-mutating are watched, and files already covered by an edit/write tool
-   * use are recorded so they are not attributed to a shell command as well.
+   * Emits one authoritative edit entry covering every file changed during the
+   * turn, shell commands and Edit/Write tool uses alike.
    */
-  private trackShellEditCandidates(
-    stepId: string,
-    entry: NormalizedEntry,
-  ): void {
-    if (entry.type !== 'tool-use') return;
-    if (entry.name === 'bash') {
-      const { input } = entry as ToolUseByName<'bash'>;
-      shellEditTracker.watchBashCommand({
-        stepId,
-        toolId: entry.toolId,
-        command: input.command,
-      });
-      return;
-    }
-    if (entry.name === 'edit' || entry.name === 'write') {
-      const { input } = entry as ToolUseByName<'edit' | 'write'>;
-      const filePaths = input.files?.map((file) => file.filePath) ?? [
-        input.filePath,
-      ];
-      for (const filePath of filePaths) {
-        if (filePath) shellEditTracker.noteToolEditedFile({ stepId, filePath });
-      }
-    }
-  }
-
-  /**
-   * After a watched Bash tool call completes, emits a synthetic `edit` entry
-   * describing the files the command changed, so the prompt-group diff summary
-   * accounts for shell edits.
-   */
-  private async emitShellEditEntry(
+  private async emitTurnEditEntry(
     stepId: string,
     session: ActiveSession,
-    toolId: string,
   ): Promise<void> {
     let files;
     try {
-      files = await shellEditTracker.captureBashResult({ stepId, toolId });
+      files = await shellEditTracker.captureTurn(stepId);
     } catch (error) {
-      dbg.agent('Failed to capture shell edits: %O', error);
+      dbg.agent('Failed to capture turn diff: %O', error);
       return;
     }
     if (!files?.length) return;
@@ -1066,8 +1034,7 @@ class AgentService {
       date: new Date().toISOString(),
       isSynthetic: true,
       type: 'tool-use',
-      toolId: `shell-edit-${toolId}`,
-      parentToolId: toolId,
+      toolId: `turn-edit-${nanoid()}`,
       name: 'edit',
       input: {
         filePath: files[0]!.filePath,
@@ -1079,7 +1046,10 @@ class AgentService {
           patch: file.patch,
           additions: file.additions,
           deletions: file.deletions,
+          before: file.before,
+          after: file.after,
         })),
+        isTurnSummary: true,
       },
     });
   }
@@ -1717,6 +1687,12 @@ class AgentService {
         await this.processEvent(stepId, session, event);
       }
     } finally {
+      // An interrupted turn still changed files, and no `result` event will
+      // arrive to report them. Emits nothing when the turn ended normally,
+      // because the `result` handler already consumed the diff.
+      if (session.abortController.signal.aborted) {
+        await this.emitTurnEditEntry(stepId, session);
+      }
       if (jcMcpRegistrationId) {
         await this.jcMcpBridgeService.unregisterStep(stepId, jcMcpRegistrationId);
       }
@@ -1919,7 +1895,6 @@ class AgentService {
         } catch (error) {
           dbg.agent('Failed to persist entry: %O', error);
         }
-        this.trackShellEditCandidates(stepId, event.entry);
         this.emitEvent(taskId, stepId, { type: 'entry', entry: event.entry });
         break;
       }
@@ -1937,15 +1912,6 @@ class AgentService {
           type: 'entry-update',
           entry: event.entry,
         });
-        // Most backends report tool completion by re-emitting the tool-use
-        // entry with its result attached, not as a separate `tool-result`.
-        if (
-          event.entry.type === 'tool-use' &&
-          event.entry.name === 'bash' &&
-          (event.entry as ToolUseByName<'bash'>).result !== undefined
-        ) {
-          await this.emitShellEditEntry(stepId, session, event.entry.toolId);
-        }
         break;
       }
 
@@ -1968,7 +1934,6 @@ class AgentService {
           isError: event.isError,
           durationMs: event.durationMs,
         });
-        await this.emitShellEditEntry(stepId, session, event.toolId);
         break;
       }
 
@@ -2044,6 +2009,8 @@ class AgentService {
           break;
         }
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
+
+        await this.emitTurnEditEntry(stepId, session);
 
         const resultEntryId = nanoid();
 
@@ -2190,6 +2157,8 @@ class AgentService {
         dbg.agent('Backend error for step %s: %s', stepId, event.error);
         session.hasTerminalError = true;
         this.clearPendingRequests(session);
+
+        await this.emitTurnEditEntry(stepId, session);
 
         // Emit a synthetic error entry so the user sees the error in the timeline
         await this.persistAndEmitSyntheticEntry(taskId, session, {

@@ -68,13 +68,52 @@ describe('worktree tree snapshots', () => {
     expect([...byPath.keys()].sort()).toEqual(['a.txt', 'b.txt']);
     expect(byPath.get('a.txt')?.type).toBe('update');
     expect(byPath.get('a.txt')?.additions).toBe(1);
+    expect(byPath.get('a.txt')?.before).toBe('one\ntwo\n');
+    expect(byPath.get('a.txt')?.after).toBe('one\ntwo\nthree\n');
     expect(byPath.get('b.txt')?.type).toBe('add');
+    expect(byPath.get('b.txt')?.before).toBeUndefined();
+    expect(byPath.get('b.txt')?.after).toBe('new\n');
     expect(byPath.get('b.txt')?.patch).toContain('+new');
 
     // The real index and HEAD must be untouched.
     const indexAfter = await fs.readFile(path.join(repo, '.git', 'index'));
     expect(indexAfter.equals(indexBefore)).toBe(true);
     expect((await git(repo, 'status', '--porcelain')).trim()).not.toBe('');
+  });
+
+  it('skips content capture for binary files', async () => {
+    const before = await snapshotWorktreeTree(repo);
+    await fs.writeFile(
+      path.join(repo, 'blob.bin'),
+      Buffer.from([0x00, 0x01, 0x02, 0xff, 0x00]),
+    );
+    const after = await snapshotWorktreeTree(repo);
+
+    const files = await diffWorktreeTrees({
+      worktreePath: repo,
+      before: before!,
+      after: after!,
+    });
+    const binary = files.find((file) => file.filePath === 'blob.bin');
+    expect(binary).toBeDefined();
+    expect(binary?.before).toBeUndefined();
+    expect(binary?.after).toBeUndefined();
+  });
+
+  it('omits content when the diff exceeds the patch file cap', async () => {
+    const before = await snapshotWorktreeTree(repo);
+    await fs.writeFile(path.join(repo, 'x.txt'), 'x\n');
+    await fs.writeFile(path.join(repo, 'y.txt'), 'y\n');
+    const after = await snapshotWorktreeTree(repo);
+
+    const files = await diffWorktreeTrees({
+      worktreePath: repo,
+      before: before!,
+      after: after!,
+      maxPatchFiles: 1,
+    });
+    expect(files).toHaveLength(2);
+    expect(files.every((file) => file.after === undefined)).toBe(true);
   });
 
   it('returns no changes when nothing was modified', async () => {

@@ -1094,6 +1094,37 @@ function isFileChangeToolEntry(
   );
 }
 
+/**
+ * True when two tool-reported paths denote the same file.
+ *
+ * Both sides are normally absolute, in which case equality is required. A
+ * relative path is only matched against an absolute one by suffix, since that
+ * is the only case where the same file can be spelled two ways.
+ */
+function pathsMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const aAbsolute = a.startsWith('/');
+  const bAbsolute = b.startsWith('/');
+  if (aAbsolute === bAbsolute) return false;
+  return aAbsolute ? a.endsWith(`/${b}`) : b.endsWith(`/${a}`);
+}
+
+/** The synthetic entry that aggregates every file changed during a turn. */
+function isTurnSummaryEntry(entry: NormalizedEntry): boolean {
+  return (
+    entry.type === 'tool-use' &&
+    entry.name === 'edit' &&
+    (entry as ToolUseByName<'edit'>).input.isTurnSummary === true
+  );
+}
+
+function getEditedFilePaths(entry: NormalizedEntry): string[] {
+  if (!isFileChangeToolEntry(entry)) return [];
+  const files = entry.input.files ?? [{ filePath: entry.input.filePath }];
+  return files.map((file) => file.filePath).filter(Boolean);
+}
+
 export function getFileChangeToolEntries(
   childMessages: DisplayMessage[],
   promptEntry?: NormalizedEntry & { type: 'user-prompt' },
@@ -1128,7 +1159,21 @@ export function getFileChangeToolEntries(
     if (dm.kind === 'skill') dm.childEntries.forEach(addEntry);
   }
 
-  return entries;
+  // A turn summary already reports the final state of every file it lists, so
+  // drop the per-tool entries it supersedes to avoid double-counting.
+  const summaryPaths = entries
+    .filter(isTurnSummaryEntry)
+    .flatMap(getEditedFilePaths);
+
+  if (summaryPaths.length === 0) return entries;
+
+  return entries.filter((entry) => {
+    if (isTurnSummaryEntry(entry)) return true;
+    if (!isFileChangeToolEntry(entry)) return true;
+    return !getEditedFilePaths(entry).some((filePath) =>
+      summaryPaths.some((summaryPath) => pathsMatch(filePath, summaryPath)),
+    );
+  });
 }
 
 function getFileStats(fileChangeEntries: NormalizedEntry[]): FileStats | null {

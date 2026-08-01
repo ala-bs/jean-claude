@@ -26,6 +26,17 @@ const MAX_BUFFER = 10 * 1024 * 1024;
 
 /** Per-file patch size cap, so a huge generated file cannot bloat a message row. */
 const MAX_PATCH_BYTES = 256 * 1024;
+/**
+ * Per-file content size cap. Full before/after content is persisted in the
+ * message row, so this bounds how much a single file can contribute.
+ */
+const MAX_CONTENT_BYTES = 256 * 1024;
+
+/** Total before+after content captured for one diff, across all files. */
+const MAX_TOTAL_CONTENT_BYTES = 4 * 1024 * 1024;
+
+/** Bounds concurrent `git show` processes spawned while reading contents. */
+const CONTENT_READ_CONCURRENCY = 8;
 
 export interface TreeDiffFile {
   filePath: string;
@@ -33,6 +44,8 @@ export interface TreeDiffFile {
   patch?: string;
   additions: number;
   deletions: number;
+  before?: string;
+  after?: string;
 }
 
 /**
@@ -263,7 +276,10 @@ export async function diffWorktreeTrees({
       );
       return files.slice(0, maxFiles);
     }
-    if (files.length === 0 || files.length > maxPatchFiles) return files;
+    if (files.length === 0) return files;
+    if (files.length > maxPatchFiles) return files;
+
+    await attachFileContents(worktreePath, before, after, files);
 
     // Patches are a nice-to-have: if the diff is too large for the buffer we
     // still return the per-file line counts rather than losing the change.
@@ -287,5 +303,87 @@ export async function diffWorktreeTrees({
   } catch (error) {
     dbg.worktree('diffWorktreeTrees failed: %o', error);
     return [];
+  }
+}
+
+/**
+ * Fills in full before/after content for each changed file, so the renderer can
+ * show one coherent diff per file instead of stitching fragmented patches.
+ *
+ * Reads run at bounded concurrency (each read is a `git show` child process) and
+ * stop once the total captured content passes {@link MAX_TOTAL_CONTENT_BYTES};
+ * line counts and patches still describe the change in that case.
+ */
+async function attachFileContents(
+  worktreePath: string,
+  before: string,
+  after: string,
+  files: TreeDiffFile[],
+): Promise<void> {
+  let totalBytes = 0;
+  let next = 0;
+
+  const worker = async (): Promise<void> => {
+    while (next < files.length) {
+      const file = files[next++];
+      if (!file) continue;
+      if (totalBytes >= MAX_TOTAL_CONTENT_BYTES) return;
+      const [beforeContent, afterContent] = await Promise.all([
+        file.type === 'add'
+          ? null
+          : readTreeFile(worktreePath, before, file.filePath),
+        file.type === 'delete'
+          ? null
+          : readTreeFile(worktreePath, after, file.filePath),
+      ]);
+      const size =
+        (beforeContent === null ? 0 : Buffer.byteLength(beforeContent)) +
+        (afterContent === null ? 0 : Buffer.byteLength(afterContent));
+      if (totalBytes + size > MAX_TOTAL_CONTENT_BYTES) {
+        dbg.worktree('diffWorktreeTrees content budget exhausted');
+        totalBytes = MAX_TOTAL_CONTENT_BYTES;
+        return;
+      }
+      totalBytes += size;
+      if (beforeContent !== null) file.before = beforeContent;
+      if (afterContent !== null) file.after = afterContent;
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(CONTENT_READ_CONCURRENCY, files.length) },
+      worker,
+    ),
+  );
+}
+
+/**
+ * Returns a blob's text content, or null when it is missing, oversized or
+ * binary. Binary blobs are skipped rather than decoded, so mojibake is never
+ * persisted or rendered as a text diff.
+ */
+async function readTreeFile(
+  worktreePath: string,
+  tree: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['show', `${tree}:${filePath}`],
+      {
+        cwd: worktreePath,
+        encoding: 'buffer',
+        maxBuffer: MAX_CONTENT_BYTES,
+      },
+    );
+    const buffer = stdout as unknown as Buffer;
+    if (buffer.length > MAX_CONTENT_BYTES) return null;
+    // Git's own heuristic: a NUL byte anywhere means "treat as binary".
+    if (buffer.includes(0)) return null;
+    return buffer.toString('utf-8');
+  } catch {
+    return null;
   }
 }
