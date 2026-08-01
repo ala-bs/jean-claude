@@ -355,6 +355,21 @@ describe('isResourceLoading', () => {
     ).toBe(false);
   });
 
+  it('does not report initial loading when cached data survived meta GC', () => {
+    // Resource meta was garbage collected (undefined / never fetched) while the
+    // entity is still retained by an index — render the cached data, not a spinner.
+    expect(
+      isResourceLoading({ enabled: true, meta: undefined, hasData: true }),
+    ).toBe(false);
+    expect(
+      isResourceLoading({
+        enabled: true,
+        meta: meta({ status: 'idle', lastFetchedAt: null }),
+        hasData: true,
+      }),
+    ).toBe(false);
+  });
+
   it('is never loading when disabled', () => {
     expect(
       isResourceLoading({

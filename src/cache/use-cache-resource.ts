@@ -123,6 +123,12 @@ export function isResourceLoading({
   meta: ResourceMeta | ResourceResultMeta | undefined;
   hasData: boolean;
 }) {
+  // Cached data already available (e.g. entity retained by an index while the
+  // per-resource meta was GC'd) - never report loading, just refresh silently.
+  if (hasData) {
+    return false;
+  }
+
   if (isResourceInitialLoading(enabled, meta)) {
     return true;
   }
