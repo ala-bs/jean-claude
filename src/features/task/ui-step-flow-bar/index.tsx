@@ -4,17 +4,21 @@ import {
   Check,
   Circle,
   Loader2,
+  Pencil,
   Plus,
   Search,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 
 import { isPrReviewChatStepMeta, type TaskStep, type TaskStepStatus } from '@shared/types';
-import { useArchiveStep, useSteps } from '@/hooks/use-steps';
+import { useArchiveStep, useSteps, useUpdateStep } from '@/hooks/use-steps';
 import { Button } from '@/common/ui/button';
+import { Input } from '@/common/ui/input';
+import { Kbd } from '@/common/ui/kbd';
+import { Modal } from '@/common/ui/modal';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useMessageContextMenu } from '@/features/agent/ui-message-stream/ui-message-context-menu';
 import { useTaskState } from '@/stores/navigation';
@@ -490,7 +494,10 @@ export function StepFlowBar({
   const { data: steps } = useSteps(taskId);
   const { activeStepId, setActiveStepId } = useTaskState(taskId);
   const archiveStep = useArchiveStep();
+  const updateStep = useUpdateStep();
   const addToast = useToastStore((state) => state.addToast);
+  const [renameStep, setRenameStep] = useState<TaskStep | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const { openMenu, portal } = useMessageContextMenu({
     overlayId: 'step-context-menu',
   });
@@ -505,6 +512,14 @@ export function StepFlowBar({
     (event: React.MouseEvent, step: TaskStep) => {
       if (step.archivedAt || isPrReviewChatStepMeta(step.meta)) return;
       openMenu(event, [
+        {
+          label: 'Rename step',
+          icon: <Pencil />,
+          onClick: () => {
+            setRenameDraft(step.name);
+            setRenameStep(step);
+          },
+        },
         {
           label: 'Archive step',
           icon: <Archive />,
@@ -525,7 +540,7 @@ export function StepFlowBar({
         },
       ]);
     },
-    [addToast, archiveStep, openMenu],
+    [addToast, archiveStep, openMenu, updateStep],
   );
 
   useCommands('step-flow-bar', [
@@ -645,6 +660,77 @@ export function StepFlowBar({
         </div>
       </div>
       {portal}
+      <Modal
+        isOpen={!!renameStep}
+        onClose={() => setRenameStep(null)}
+        title="Rename step"
+        closeOnClickOutside={!updateStep.isPending}
+        closeOnEscape={!updateStep.isPending}
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const nextName = renameDraft.trim();
+            if (!renameStep || !nextName || nextName === renameStep.name) {
+              setRenameStep(null);
+              return;
+            }
+
+            updateStep.mutate(
+              { stepId: renameStep.id, data: { name: nextName } },
+              {
+                onSuccess: () => setRenameStep(null),
+                onError: (error) =>
+                  addToast({
+                    type: 'error',
+                    message:
+                      error instanceof Error
+                        ? error.message
+                        : 'Failed to rename step.',
+                  }),
+              },
+            );
+          }}
+        >
+          <Input
+            autoFocus
+            value={renameDraft}
+            onChange={(event) => setRenameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setRenameStep(null);
+              }
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            disabled={updateStep.isPending}
+            aria-label="Step name"
+          />
+          <div className="flex justify-end gap-3">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setRenameStep(null)}
+              disabled={updateStep.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={updateStep.isPending}
+              disabled={updateStep.isPending || !renameDraft.trim()}
+            >
+              Rename
+              <Kbd shortcut="cmd+enter" />
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
