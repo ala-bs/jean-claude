@@ -16,6 +16,7 @@ import {
   useSensors,
 } from '@dnd-kit/core';
 import React, {
+  memo,
   startTransition,
   useCallback,
   useEffect,
@@ -47,7 +48,6 @@ import {
 import {
   expandFeatureReferencesInPrompt,
   getReferencedFeatures,
-  type PreparedProjectFeature,
   type PreparedProjectFeatures,
   prepareProjectFeatureReferences,
 } from '@/lib/prompt-feature-context';
@@ -160,18 +160,20 @@ function projectHasWorkItems(project: Project | null): boolean {
   );
 }
 
-function FinalPromptPreviewButton({
-  prompt,
+const EMPTY_PROMPT_FILES: PromptFilePart[] = [];
+
+const FinalPromptPreviewButton = memo(function FinalPromptPreviewButton({
+  getPrompt,
   projectRoot,
   preparedFeatures,
-  referencedFeatures,
+  referencedFeatureCount,
   fileComments,
   files,
 }: {
-  prompt: string;
+  getPrompt: () => string;
   projectRoot: string | null | undefined;
   preparedFeatures: PreparedProjectFeatures;
-  referencedFeatures: PreparedProjectFeature[];
+  referencedFeatureCount: number;
   fileComments: ComposerFileComment[];
   files: PromptFilePart[];
 }) {
@@ -190,7 +192,7 @@ function FinalPromptPreviewButton({
   const finalPromptPreview = useMemo(() => {
     if (!isOpen) return '';
 
-    let finalPrompt = prompt;
+    let finalPrompt = getPrompt();
     if (fileCommentText) {
       finalPrompt = finalPrompt.trim()
         ? `${finalPrompt}\n\n${fileCommentText}`
@@ -202,10 +204,10 @@ function FinalPromptPreviewButton({
     });
     finalPrompt += buildAttachedFilesXml(files);
     return finalPrompt;
-  }, [isOpen, prompt, fileCommentText, preparedFeatures, files]);
+  }, [isOpen, getPrompt, fileCommentText, preparedFeatures, files]);
 
   const hasGeneratedContext =
-    referencedFeatures.length > 0 ||
+    referencedFeatureCount > 0 ||
     fileComments.length > 0 ||
     files.length > 0;
   if (!hasGeneratedContext) return null;
@@ -220,9 +222,9 @@ function FinalPromptPreviewButton({
         <Eye className="h-3 w-3" />
         <span className="text-acc font-mono text-[10px]">Preview</span>
         <span className="text-ink-3 text-[10px]">final prompt</span>
-        {referencedFeatures.length > 0 && (
+        {referencedFeatureCount > 0 && (
           <span className="bg-acc-soft text-acc rounded px-1.5 py-px font-mono text-[10px]">
-            {referencedFeatures.length} feat
+            {referencedFeatureCount} feat
           </span>
         )}
         {fileComments.length > 0 && (
@@ -251,8 +253,8 @@ function FinalPromptPreviewButton({
               ~{Math.ceil(finalPromptPreview.length / 4).toLocaleString()}{' '}
               tokens
             </span>
-            {referencedFeatures.length > 0 && (
-              <span>{referencedFeatures.length} feature refs</span>
+            {referencedFeatureCount > 0 && (
+              <span>{referencedFeatureCount} feature refs</span>
             )}
             {fileComments.length > 0 && (
               <span>{fileComments.length} comments</span>
@@ -266,7 +268,7 @@ function FinalPromptPreviewButton({
       </Modal>
     </>
   );
-}
+});
 
 function resolveDefaultBackend({
   selectedProject,
@@ -381,6 +383,12 @@ function NewTaskPromptInput({
     [prompt, preparedFeatures],
   );
 
+  // Keep the latest prompt in a ref so the preview button (memoized) doesn't
+  // re-render on every keystroke; it reads the prompt lazily when opened.
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
+  const getPrompt = useCallback(() => promptRef.current, []);
+
   const handlePromptChange = useCallback(
     (nextPrompt: string) => {
       if (hasCreateTaskError) {
@@ -428,12 +436,12 @@ function NewTaskPromptInput({
         {!isNoteMode && selectedProject && (
           <div className="px-[18px] pb-3.5">
             <FinalPromptPreviewButton
-              prompt={prompt}
+              getPrompt={getPrompt}
               projectRoot={selectedProject.path}
               preparedFeatures={preparedFeatures}
-              referencedFeatures={referencedFeatures}
+              referencedFeatureCount={referencedFeatures.length}
               fileComments={fileComments}
-              files={files ?? []}
+              files={files ?? EMPTY_PROMPT_FILES}
             />
           </div>
         )}
