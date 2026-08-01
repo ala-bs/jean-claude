@@ -1,12 +1,21 @@
 import {
   ArrowUpFromLine,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   GitCommit,
   GitMerge,
   GitPullRequest,
   Shield,
 } from 'lucide-react';
-import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   useBackgroundJobsStore,
@@ -36,6 +45,20 @@ import { MergeConfirmDialog } from './merge-confirm-dialog';
 import { PushConfirmDialog } from './push-confirm-dialog';
 
 
+const COLLAPSE_KEY = 'worktree-actions-collapsed';
+
+/** Returns the stored preference, or null when unset/unreadable. */
+function readCollapsedPreference(): boolean | null {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_KEY);
+    if (raw === 'collapsed') return true;
+    if (raw === 'expanded') return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function WorktreeActions({
   taskId,
   projectId,
@@ -61,6 +84,17 @@ export function WorktreeActions({
   onOpenPrView: () => void;
   showBranchActions?: boolean;
 }) {
+  const [isCollapsed, setIsCollapsed] = useState(
+    () => readCollapsedPreference() ?? true,
+  );
+  const toggleCollapsed = useCallback((next: boolean) => {
+    setIsCollapsed(next);
+    try {
+      localStorage.setItem(COLLAPSE_KEY, next ? 'collapsed' : 'expanded');
+    } catch {
+      // ignore storage failures — collapse state is a cosmetic preference
+    }
+  }, []);
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
   const [isPushConfirmOpen, setIsPushConfirmOpen] = useState(false);
   const [isMergeConfirmOpen, setIsMergeConfirmOpen] = useState(false);
@@ -315,22 +349,173 @@ export function WorktreeActions({
       : []),
   ]);
 
+  const modals = (
+    <>
+      <CommitModal
+        isOpen={isCommitModalOpen}
+        onClose={() => setIsCommitModalOpen(false)}
+        onCommit={handleCommit}
+        taskId={taskId}
+        canAutoGenerate={canAutoGenerateCommitMessage}
+        contentRef={commitDialogRef}
+      />
+
+      <PushConfirmDialog
+        isOpen={isPushConfirmOpen}
+        onClose={() => setIsPushConfirmOpen(false)}
+        onCommitAndPush={handleConfirmPush}
+        onPushOnly={hasUnpushedCommits ? handlePushExistingCommits : undefined}
+        showPushOnly={hasUnpushedCommits}
+        isPending={pushMutation.isPending}
+      />
+
+      <MergeConfirmDialog
+        isOpen={isMergeConfirmOpen}
+        onClose={() => setIsMergeConfirmOpen(false)}
+        onConfirm={handleMerge}
+        taskId={taskId}
+        branchName={branchName}
+        targetBranch={selectedBranch}
+        isPending={mergeMutation.isPending}
+        hasUncommittedChanges={status?.hasUncommittedChanges ?? false}
+        canAutoGenerateCommitMessage={canAutoGenerateMergeMessage}
+        contentRef={mergeDialogRef}
+      />
+    </>
+  );
+
+  if (isCollapsed) {
+    return (
+      <div className="border-glass-border flex items-center gap-1.5 border-t px-2 py-1.5">
+        <Button
+          onClick={() => setIsCommitModalOpen(true)}
+          disabled={!canCommit}
+          loading={hasRunningCommitJob}
+          variant="secondary"
+          size="sm"
+          icon={<GitCommit />}
+          className="flex-1"
+          title={commitButtonTitle}
+        >
+          Commit
+        </Button>
+
+        {showBranchActions &&
+          (isSelectedBranchProtected ? (
+            <span
+              className="flex h-7 shrink-0 items-center gap-1 rounded border border-amber-800/50 bg-amber-950/30 px-2 text-xs text-amber-300"
+              title={`Branch "${selectedBranch}" is protected. Direct merges are blocked.`}
+            >
+              <Shield className="h-3.5 w-3.5 shrink-0" />
+              Protected
+            </span>
+          ) : (
+            <Button
+              onClick={() => setIsMergeConfirmOpen(true)}
+              disabled={!canMerge}
+              loading={mergeMutation.isPending}
+              variant="primary"
+              size="sm"
+              icon={<GitMerge />}
+              className="min-w-0 flex-1"
+              title={
+                canMerge ? `Merge into ${selectedBranch}` : 'Merge unavailable'
+              }
+            >
+              <span className="truncate">Merge → {selectedBranch}</span>
+            </Button>
+          ))}
+
+        {showBranchActions &&
+          hasRepoLink &&
+          pullRequestUrl &&
+          (hasUnpushedCommits || hasUncommittedChanges) && (
+            <Button
+              onClick={handlePush}
+              disabled={!canPush}
+              loading={pushMutation.isPending}
+              variant="secondary"
+              size="sm"
+              icon={<ArrowUpFromLine />}
+              className="shrink-0 px-2"
+              title={
+                hasUncommittedChanges
+                  ? 'Commit changes and then push'
+                  : 'Push changes to remote'
+              }
+              aria-label="Push changes"
+            />
+          )}
+
+        {showBranchActions &&
+          hasRepoLink &&
+          (pullRequestUrl ? (
+            <a
+              href={pullRequestUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-green-700 text-white transition-colors hover:bg-green-600"
+              title="View pull request"
+              aria-label="View pull request"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          ) : (
+            <Button
+              onClick={onOpenPrView}
+              disabled={!canCreatePr}
+              variant="primary"
+              size="sm"
+              icon={<GitPullRequest />}
+              className="shrink-0 bg-green-700 px-2 hover:bg-green-600"
+              title="Create pull request"
+              aria-label="Create pull request"
+            />
+          ))}
+
+        <Button
+          onClick={() => toggleCollapsed(false)}
+          variant="ghost"
+          size="sm"
+          icon={<ChevronUp />}
+          className="shrink-0 px-1.5"
+          title="Expand actions"
+          aria-label="Expand actions"
+        />
+
+        {modals}
+      </div>
+    );
+  }
+
   return (
     <div className="border-glass-border flex flex-col gap-3 border-t p-3">
-      {/* Commit button */}
-      <Button
-        onClick={() => setIsCommitModalOpen(true)}
-        disabled={!canCommit}
-        loading={hasRunningCommitJob}
-        variant="secondary"
-        size="md"
-        icon={<GitCommit />}
-        className="w-full"
-        title={commitButtonTitle}
-      >
-        Commit
-        <Kbd shortcut="cmd+shift+k" className="text-[9px]" />
-      </Button>
+      <div className="flex items-center gap-1.5">
+        {/* Commit button */}
+        <Button
+          onClick={() => setIsCommitModalOpen(true)}
+          disabled={!canCommit}
+          loading={hasRunningCommitJob}
+          variant="secondary"
+          size="md"
+          icon={<GitCommit />}
+          className="flex-1"
+          title={commitButtonTitle}
+        >
+          Commit
+          <Kbd shortcut="cmd+shift+k" className="text-[9px]" />
+        </Button>
+
+        <Button
+          onClick={() => toggleCollapsed(true)}
+          variant="ghost"
+          size="md"
+          icon={<ChevronDown />}
+          className="shrink-0 px-1.5"
+          title="Collapse actions"
+          aria-label="Collapse actions"
+        />
+      </div>
 
       {showBranchActions && (
         <div className="flex flex-col gap-2">
@@ -419,37 +604,8 @@ export function WorktreeActions({
           </Button>
         ))}
 
-      {/* Modals */}
-      <CommitModal
-        isOpen={isCommitModalOpen}
-        onClose={() => setIsCommitModalOpen(false)}
-        onCommit={handleCommit}
-        taskId={taskId}
-        canAutoGenerate={canAutoGenerateCommitMessage}
-        contentRef={commitDialogRef}
-      />
-
-      <PushConfirmDialog
-        isOpen={isPushConfirmOpen}
-        onClose={() => setIsPushConfirmOpen(false)}
-        onCommitAndPush={handleConfirmPush}
-        onPushOnly={hasUnpushedCommits ? handlePushExistingCommits : undefined}
-        showPushOnly={hasUnpushedCommits}
-        isPending={pushMutation.isPending}
-      />
-
-      <MergeConfirmDialog
-        isOpen={isMergeConfirmOpen}
-        onClose={() => setIsMergeConfirmOpen(false)}
-        onConfirm={handleMerge}
-        taskId={taskId}
-        branchName={branchName}
-        targetBranch={selectedBranch}
-        isPending={mergeMutation.isPending}
-        hasUncommittedChanges={status?.hasUncommittedChanges ?? false}
-        canAutoGenerateCommitMessage={canAutoGenerateMergeMessage}
-        contentRef={mergeDialogRef}
-      />
+      {modals}
     </div>
   );
 }
+
