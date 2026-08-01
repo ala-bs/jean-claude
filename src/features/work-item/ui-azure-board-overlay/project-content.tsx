@@ -20,10 +20,14 @@ import {
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { resolveDetailsPaneEscape } from '@/features/work-item/ui-azure-board-overlay/details-pane-escape';
 import { BoardSplitPane } from '@/features/work-item/ui-azure-board-overlay/board-split-pane';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 
-import type { AzureDevOpsWorkItem } from '@/lib/api';
+import type {
+  AzureDevOpsBoardColumn,
+  AzureDevOpsIteration,
+  AzureDevOpsWorkItem,
+} from '@/lib/api';
 import { formatRelativeTime } from '@/lib/time';
 import { Tooltip } from '@/common/ui/tooltip';
 import {
@@ -46,6 +50,14 @@ import {
   buildAzureBoardRelationshipModel,
   resolveAzureBoardIterationFilter,
 } from './build-board-model';
+
+const EMPTY_SELECTED_WORK_ITEM_IDS: string[] = [];
+const EMPTY_WORK_ITEMS: AzureDevOpsWorkItem[] = [];
+const EMPTY_ITERATIONS: AzureDevOpsIteration[] = [];
+const EMPTY_BOARD_COLUMNS: AzureDevOpsBoardColumn[] = [];
+const BASE_WORK_ITEM_FILTERS = {
+  excludeWorkItemTypes: ['Test Suite', 'Test Plan'],
+};
 
 export type ConfiguredAzureBoardProject = Project & {
   workItemProviderId: string;
@@ -335,21 +347,28 @@ export function AzureBoardProjectContent({
     (state) => state.resetColorSettings,
   );
   const debouncedSearchText = useDebouncedValue(filters.search, 250);
-  const params = {
-    providerId: project.workItemProviderId,
-    projectId: project.workItemProjectId,
-    projectName: project.workItemProjectName,
-  };
-  const baseFilters = { excludeWorkItemTypes: ['Test Suite', 'Test Plan'] };
+  const params = useMemo(
+    () => ({
+      providerId: project.workItemProviderId,
+      projectId: project.workItemProjectId,
+      projectName: project.workItemProjectName,
+    }),
+    [
+      project.workItemProviderId,
+      project.workItemProjectId,
+      project.workItemProjectName,
+    ],
+  );
+  const baseFilters = BASE_WORK_ITEM_FILTERS;
   const metadataQuery = useWorkItems({
     ...params,
     enabled: true,
     refetchOnMount: 'always',
     filters: baseFilters,
   });
-  const metadataItems = metadataQuery.data ?? [];
+  const metadataItems = metadataQuery.data ?? EMPTY_WORK_ITEMS;
   const iterationsQuery = useIterations({ ...params, refetchOnMount: 'always' });
-  const iterations = iterationsQuery.data ?? [];
+  const iterations = iterationsQuery.data ?? EMPTY_ITERATIONS;
   const hasUsableIterations = iterationsQuery.data !== undefined;
   const iterationFilter = resolveAzureBoardIterationFilter({
     iterations,
@@ -375,14 +394,14 @@ export function AzureBoardProjectContent({
   });
   const items =
     iterationFilter.status === 'resolved' || iterationFilter.status === 'partial'
-      ? (itemsQuery.data ?? [])
-      : [];
+      ? (itemsQuery.data ?? EMPTY_WORK_ITEMS)
+      : EMPTY_WORK_ITEMS;
   const columnsQuery = useBoardColumns({
     ...params,
     enabled: true,
     refetchOnMount: 'always',
   });
-  const columns = columnsQuery.data ?? [];
+  const columns = columnsQuery.data ?? EMPTY_BOARD_COLUMNS;
   const isLoading =
     iterationFilter.status === 'pending' ||
     (itemsQuery.isLoading && items.length === 0) ||
@@ -394,7 +413,10 @@ export function AzureBoardProjectContent({
     tagOptions,
     iterationOptions,
     storyLinkedWorkItemIds,
-  } = buildAzureBoardBaseModel({ metadataItems, items, iterations, filters });
+  } = useMemo(
+    () => buildAzureBoardBaseModel({ metadataItems, items, iterations, filters }),
+    [metadataItems, items, iterations, filters],
+  );
   const selectedWorkItemId = workItemStack.at(-1) ?? null;
   const rootWorkItemId = workItemStack[0] ?? null;
   const selectedListWorkItem =
@@ -422,12 +444,45 @@ export function AzureBoardProjectContent({
       ? childWorkItemsQuery.error.message
       : null,
   ].filter((message): message is string => !!message))];
-  const { childBugProgressByWorkItemId, bugsForWorkItem, relatedBugs } =
-    buildAzureBoardRelationshipModel({
-      visibleItems,
-      childWorkItems: childWorkItemsQuery.data ?? [],
-      bugsForWorkItemId,
-    });
+  const childWorkItems = childWorkItemsQuery.data ?? EMPTY_WORK_ITEMS;
+  const { childBugProgressByWorkItemId, bugsForWorkItem, relatedBugs } = useMemo(
+    () =>
+      buildAzureBoardRelationshipModel({
+        visibleItems,
+        childWorkItems,
+        bugsForWorkItemId,
+      }),
+    [visibleItems, childWorkItems, bugsForWorkItemId],
+  );
+  const relatedBugWorkItemIds = useMemo(
+    () => relatedBugs.map((bug) => bug.id),
+    [relatedBugs],
+  );
+  const currentIterationPath = useMemo(
+    () => iterations.find((iteration) => iteration.isCurrent)?.path,
+    [iterations],
+  );
+  const handleBoardHighlight = useCallback((item: AzureDevOpsWorkItem) => {
+    setBugsForWorkItemId(null);
+    setIsRelatedBugsPanelOpen(false);
+    setHighlightedBoardWorkItemId(item.id);
+    setWorkItemStack([item.id]);
+  }, []);
+  const handleBoardModifiedClick = useCallback((item: AzureDevOpsWorkItem) => {
+    window.open(item.url, '_blank');
+  }, []);
+  const handleToggleColumn = useCallback(
+    (columnId: string) => {
+      toggleCollapsedColumn(project.id, columnId);
+    },
+    [project.id, toggleCollapsedColumn],
+  );
+  const handleOpenChildBugs = useCallback((item: AzureDevOpsWorkItem) => {
+    setBugsForWorkItemId(item.id);
+    setIsRelatedBugsPanelOpen(true);
+    setHighlightedBoardWorkItemId(item.id);
+    setWorkItemStack([item.id]);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -679,32 +734,18 @@ export function AzureBoardProjectContent({
                   workItems={visibleItems}
                   boardColumns={columns}
                   highlightedWorkItemId={highlightedBoardWorkItemId?.toString() ?? null}
-                  selectedWorkItemIds={[]}
+                  selectedWorkItemIds={EMPTY_SELECTED_WORK_ITEM_IDS}
                   providerId={params.providerId}
                   search={filters.search}
-                  currentIterationPath={iterations.find((iteration) => iteration.isCurrent)?.path}
+                  currentIterationPath={currentIterationPath}
                   showSelection={false}
-                  onHighlight={(item) => {
-                    setBugsForWorkItemId(null);
-                    setIsRelatedBugsPanelOpen(false);
-                    setHighlightedBoardWorkItemId(item.id);
-                    setWorkItemStack([item.id]);
-                  }}
-                  onModifiedClick={(item) => window.open(item.url, '_blank')}
-                  collapsedColumnIds={
-                     collapsedColumnIds
-                   }
-                   onToggleColumn={(columnId) => {
-                      toggleCollapsedColumn(project.id, columnId);
-                   }}
+                  onHighlight={handleBoardHighlight}
+                  onModifiedClick={handleBoardModifiedClick}
+                  collapsedColumnIds={collapsedColumnIds}
+                  onToggleColumn={handleToggleColumn}
                   childBugProgressByWorkItemId={childBugProgressByWorkItemId}
-                  relatedBugWorkItemIds={relatedBugs.map((bug) => bug.id)}
-                  onOpenChildBugs={(item) => {
-                    setBugsForWorkItemId(item.id);
-                    setIsRelatedBugsPanelOpen(true);
-                    setHighlightedBoardWorkItemId(item.id);
-                    setWorkItemStack([item.id]);
-                  }}
+                  relatedBugWorkItemIds={relatedBugWorkItemIds}
+                  onOpenChildBugs={handleOpenChildBugs}
                   variant="editorial"
                   parserSetting={project.workItemTitleParser}
                   colorSettings={colorSettings}

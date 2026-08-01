@@ -1,17 +1,14 @@
-import { Bug, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
 import { getWorkItemSummaryExcerpt } from '@shared/work-item-summary';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
-import { getOwnerColor } from '@/features/work-item/utils-owner-color';
-import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { useCachedWorkItemSummaries } from '@/hooks/use-work-item-summary';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentAzureUser } from '@/hooks/use-work-items';
-import { UserAvatar } from '@/common/ui/user-avatar';
 import {
   DEFAULT_BOARD_COLOR_SETTINGS,
   type BoardColorSettings,
@@ -20,20 +17,13 @@ import {
 } from '@/features/work-item/utils-board-colors';
 
 
-import {
-  groupWorkItemsByBoardColumns,
-  isAzureWorkItemOutOfSprint,
-  parseAzureWorkItemTags,
-} from './utils';
-import {
-  HighlightedSearchText,
-  SelectionCheckbox,
-  WorkItemTypeIcon,
-} from '../ui-work-item-shared';
-import { WorkItemBoardPrimaryHeading } from './card-primary-heading';
-import { WorkItemBoardReadableCard } from './card-readable';
+import { groupWorkItemsByBoardColumns } from './utils';
+import { WorkItemBoardCard } from './card-board-item';
 
 const EMPTY_COLUMN_IDS: string[] = [];
+const EMPTY_RELATED_BUG_IDS: number[] = [];
+// Shared stable fallback so callers don't pass a fresh [] and defeat the memo.
+export const EMPTY_BOARD_COLUMNS: AzureDevOpsBoardColumn[] = [];
 
 // Column header color
 function getColumnColor(status: string): string {
@@ -57,7 +47,7 @@ function getColumnColor(status: string): string {
   }
 }
 
-export function WorkItemBoard({
+export const WorkItemBoard = memo(function WorkItemBoard({
   workItems,
   boardColumns,
   highlightedWorkItemId,
@@ -74,7 +64,7 @@ export function WorkItemBoard({
   onToggleColumn,
   childBugProgressByWorkItemId,
   onOpenChildBugs,
-  relatedBugWorkItemIds = [],
+  relatedBugWorkItemIds = EMPTY_RELATED_BUG_IDS,
   variant = 'default',
   parserSetting = null,
   colorSettings = DEFAULT_BOARD_COLOR_SETTINGS,
@@ -105,9 +95,13 @@ export function WorkItemBoard({
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
+  const workItemIds = useMemo(
+    () => workItems.map((workItem) => workItem.id),
+    [workItems],
+  );
   const { data: cachedSummaries = [] } = useCachedWorkItemSummaries({
     providerId: providerId ?? null,
-    workItemIds: workItems.map((workItem) => workItem.id),
+    workItemIds,
   });
   const summariesByWorkItemId = useMemo(
     () =>
@@ -343,10 +337,6 @@ export function WorkItemBoard({
             )}
           >
             {items.map((workItem) => {
-              const isOutOfSprint = isAzureWorkItemOutOfSprint(
-                workItem,
-                currentIterationPath,
-              );
               const isHighlighted =
                 workItem.id.toString() === highlightedWorkItemId;
               const isExactMatch =
@@ -364,178 +354,30 @@ export function WorkItemBoard({
                 !!cachedSummary &&
                 cachedSummary.sourceChangedDate !==
                   (workItem.fields.changedDate ?? null);
-              const openWorkItem = (modified: boolean) => {
-                if (modified && onModifiedClick) {
-                  onModifiedClick(workItem);
-                  return;
-                }
-                onHighlight(workItem);
-              };
-              const selectionControl = showSelection && onToggleSelect ? <button
-                    type="button"
-                    aria-label={`${isSelected ? 'Deselect' : 'Select'} work item #${workItem.id}`}
-                    aria-checked={isSelected}
-                    role="checkbox"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleSelect(workItem);
-                    }}
-                    className="rounded"
-                  >
-                    <SelectionCheckbox checked={isSelected} size="sm" />
-                  </button> : undefined;
-              const avatar = workItem.fields.assignedTo ? <UserAvatar
-                name={workItem.fields.assignedTo}
-                color={getOwnerColor(workItem.fields.assignedTo)}
-                title={currentUser?.displayName && workItem.fields.assignedTo === currentUser.displayName ? `${workItem.fields.assignedTo} (you)` : workItem.fields.assignedTo}
-                highlight={!!currentUser?.displayName && workItem.fields.assignedTo === currentUser.displayName}
-              /> : null;
-              const metadataContent = <>
-                  <WorkItemTypeIcon
-                    type={workItem.fields.workItemType}
-                    size="sm"
-                    variant={variant}
-                  />
-                  <span className="text-ink-3 font-mono text-[10px]">
-                    <HighlightedSearchText text={`#${workItem.id}`} search={search} />
-                  </span>
-                  {isExactMatch && <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">Exact</span>}
-                  {isOutOfSprint && <span className="max-w-28 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase" title={`Iteration: ${workItem.fields.iterationPath}`}>{workItem.fields.iterationPath?.split(/[\\/]/).at(-1)}</span>}
-                  {!isEditorial && <span className="text-ink-2 max-w-[80px] truncate text-[10px]">{workItem.fields.workItemType}</span>}
-                </>;
-              const cardMetadata = <span className="flex items-center gap-1.5">
-                {selectionControl}
-                {metadataContent}
-                <span className="ml-auto">{avatar}</span>
-              </span>;
-              const rawTitle = <span className={clsx(
-                'text-ink-0 line-clamp-2 leading-[1.36]',
-                isEditorial ? 'text-xs' : 'text-[12.5px]',
-              )}>
-                <HighlightedSearchText text={workItem.fields.title} search={search} />
-              </span>;
-              const cardHeading = parserSetting ? <ParsedWorkItemTitle
-                  title={workItem.fields.title}
-                  parserSetting={parserSetting}
-                  compact
-                  search={search}
-                  renderTitle={(title) => <WorkItemBoardPrimaryHeading
-                    selectionControl={selectionControl}
-                    trailingControl={avatar}
-                    metadata={metadataContent}
-                    title={title}
-                    onOpen={(event) => {
-                      event.stopPropagation();
-                      openWorkItem(event.metaKey || event.ctrlKey);
-                    }}
-                  />}
-                  titleClassName={clsx(
-                    'text-ink-0 line-clamp-2 leading-[1.36]',
-                    isEditorial ? 'text-xs' : 'text-[12.5px]',
-                  )}
-                /> : <>{cardMetadata}{rawTitle}</>;
-              const hasPrimaryButton = isEditorial || parserSetting !== null;
-
               return (
-                <div
+                <WorkItemBoardCard
                   key={workItem.id}
-                  data-work-item-id={workItem.id}
-                  aria-current={isHighlighted ? 'true' : undefined}
-                  onClick={(event) => openWorkItem(event.metaKey || event.ctrlKey)}
-                  onKeyDown={hasPrimaryButton ? undefined : (event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
-                    openWorkItem(event.metaKey || event.ctrlKey);
-                  }}
-                  role={hasPrimaryButton ? undefined : 'button'}
-                  tabIndex={hasPrimaryButton ? undefined : 0}
-                  className={clsx(
-                    'flex cursor-pointer flex-col text-left transition-[box-shadow,border-color,background-color]',
-                    isEditorial
-                      ? 'bg-bg-1 relative gap-1.5 rounded-lg border border-transparent px-3 py-2.5'
-                      : 'gap-1.5 rounded border p-2',
-                    isExactMatch
-                      ? 'border border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'
-                      : isHighlighted
-                        ? 'border !border-acc'
-                        : isRelatedBug
-                          ? 'border border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_oklch(0.72_0.18_25_/_0.12)]'
-                          : isEditorial
-                            ? 'hover:bg-bg-2'
-                            : 'hover:bg-bg-2 border-line',
-                  )}
-                >
-                  {isEditorial ? <WorkItemBoardReadableCard
-                    workItem={workItem}
-                    colorSettings={colorSettings}
-                    search={search}
-                    parserSetting={parserSetting}
-                    avatar={avatar}
-                    selectionControl={selectionControl}
-                    summaryExcerpt={summaryExcerpt}
-                    summaryIsStale={summaryIsStale}
-                    bugProgress={bugProgress}
-                    outOfSprintLabel={isOutOfSprint ? (workItem.fields.iterationPath?.split(/[\\/]/).at(-1) ?? null) : null}
-                    isExactMatch={isExactMatch}
-                    onOpen={(event) => {
-                      event.stopPropagation();
-                      openWorkItem(event.metaKey || event.ctrlKey);
-                    }}
-                    onOpenChildBugs={onOpenChildBugs ? () => onOpenChildBugs(workItem) : undefined}
-                  /> : <>
-                  {cardHeading}
-                  {summaryExcerpt && (
-                    <div className="text-ink-3 flex min-w-0 items-center gap-1.5 text-[10.5px] leading-snug">
-                      <Sparkles className="text-acc h-3 w-3 shrink-0" />
-                      <span className="line-clamp-1 min-w-0">{summaryExcerpt}</span>
-                      {summaryIsStale && (
-                        <span
-                          className="bg-status-run h-1.5 w-1.5 shrink-0 rounded-full"
-                          title="Summary source updated"
-                        />
-                      )}
-                    </div>
-                  )}
-                  {bugProgress && (
-                    onOpenChildBugs ? <button
-                      type="button"
-                      title={`${bugProgress.closed} of ${bugProgress.total} related bugs closed`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onOpenChildBugs(workItem);
-                      }}
-                      className={clsx(
-                        'flex items-center gap-1 self-start rounded-sm px-1.5 py-0.5 font-mono text-[10px] underline decoration-current/40 underline-offset-2 transition-colors',
-                        bugProgress.closed === bugProgress.total
-                          ? 'text-status-done hover:bg-status-done/10'
-                          : 'text-status-fail hover:bg-status-fail/10',
-                      )}
-                    >
-                      <Bug className="h-3 w-3" />
-                      {bugProgress.closed}/{bugProgress.total} closed
-                    </button> : <span className={clsx(
-                      'flex items-center gap-1 self-start font-mono text-[10px]',
-                      bugProgress.closed === bugProgress.total ? 'text-status-done' : 'text-status-fail',
-                    )}>
-                      <Bug className="h-3 w-3" />
-                      {bugProgress.closed}/{bugProgress.total} closed
-                    </span>
-                  )}
-                  {workItem.fields.tags && (
-                    <div className="flex max-h-8 flex-wrap gap-1 overflow-hidden" aria-label="Tags">
-                      {parseAzureWorkItemTags(workItem.fields.tags).map((tag) => (
-                        <span
-                          key={tag}
-                          className="bg-bg-3 text-ink-3 max-w-full truncate rounded px-1.5 py-0.5 font-mono text-[9px] leading-3"
-                          title={tag}
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  </>}
-                </div>
+                  workItem={workItem}
+                  search={search}
+                  variant={variant}
+                  parserSetting={parserSetting}
+                  colorSettings={colorSettings}
+                  currentIterationPath={currentIterationPath}
+                  currentUserDisplayName={currentUser?.displayName}
+                  isHighlighted={isHighlighted}
+                  isExactMatch={isExactMatch}
+                  isSelected={isSelected}
+                  isRelatedBug={isRelatedBug}
+                  bugClosedCount={bugProgress?.closed ?? null}
+                  bugTotalCount={bugProgress?.total ?? null}
+                  summaryExcerpt={summaryExcerpt}
+                  summaryIsStale={summaryIsStale}
+                  showSelection={showSelection}
+                  onToggleSelect={onToggleSelect}
+                  onHighlight={onHighlight}
+                  onModifiedClick={onModifiedClick}
+                  onOpenChildBugs={onOpenChildBugs}
+                />
               );
             })}
           </div>
@@ -544,4 +386,4 @@ export function WorkItemBoard({
       })}
     </div>
   );
-}
+});
