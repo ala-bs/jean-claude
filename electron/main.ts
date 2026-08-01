@@ -23,6 +23,11 @@ import { createReloadPreviewReadinessRegistrar } from './services/reload-preview
 import { dbg } from './lib/debug';
 import { migrateDatabase } from './database';
 import { mobilePreviewNetworkProxyService } from './services/mobile-preview-network-proxy-service';
+import { killOrphanedCoreSimulatorHelpers } from './services/mobile-preview-ios-idb-adapter';
+import {
+  runBeforeQuitCleanups,
+  stopVetoingQuit,
+} from './services/mobile-preview-lifecycle';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { registerIpcHandlers } from './ipc/handlers';
@@ -371,6 +376,10 @@ app.whenReady().then(async () => {
   dbg.main('App ready, initializing...');
   showDockIcon();
 
+  // Reap framebuffer helpers left behind by a previous run (they otherwise keep
+  // encoding frames at full CPU forever).
+  void killOrphanedCoreSimulatorHelpers();
+
   // Register azure-image-proxy protocol handler
   dbg.main('Registering azure-image-proxy protocol handler...');
   protocol.handle('azure-image-proxy', async (request) => {
@@ -518,6 +527,11 @@ app.on('before-quit', (event) => {
           dbg.main('Idle shared OpenCode server stopped');
           await runCommandService.stopAllCommands();
           dbg.main('All commands stopped');
+          // Stops mobile preview sessions and their helper processes. Awaited
+          // here so this handler stays the single owner of app.quit(): the
+          // registry must not quit while agents/DB writes are still in flight.
+          await runBeforeQuitCleanups();
+          dbg.main('Mobile preview sessions stopped');
           await mobilePreviewNetworkProxyService.stopAll();
           dbg.main('Mobile preview network proxies stopped');
         })(),
@@ -528,6 +542,9 @@ app.on('before-quit', (event) => {
       runCommandService.killAllProcessGroupsSync();
       killAllOpenCodeServersSync();
     } finally {
+      // A timed-out or failed preview cleanup must not leave the registry
+      // vetoing quits forever.
+      stopVetoingQuit();
       app.quit();
     }
   })();

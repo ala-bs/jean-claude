@@ -2173,6 +2173,53 @@ async function findCoreSimulatorHelperSource(): Promise<string> {
   throw new Error('CoreSimulator framebuffer helper source not found.');
 }
 
+let orphanedHelperSweep: Promise<void> | null = null;
+
+/**
+ * Older app runs could leave the framebuffer helper behind as an orphan
+ * (re-parented to launchd) where it kept encoding frames at full CPU forever.
+ * Sweep those once per app run. Only processes re-parented to launchd are
+ * matched, so a helper owned by another running app instance is never killed.
+ */
+export function resetOrphanedHelperSweepForTests(): void {
+  orphanedHelperSweep = null;
+}
+
+export function killOrphanedCoreSimulatorHelpers(): Promise<void> {
+  orphanedHelperSweep ??= sweepOrphanedCoreSimulatorHelpers().catch((error) => {
+    // Allow a later attempt if this one failed outright.
+    orphanedHelperSweep = null;
+    debug(
+      'iOS preview orphan helper sweep failed: %s',
+      error instanceof Error ? error.message : String(error),
+    );
+  });
+  return orphanedHelperSweep;
+}
+
+async function sweepOrphanedCoreSimulatorHelpers(): Promise<void> {
+  const binaryPath = join(
+    tmpdir(),
+    'jean-claude-mobile-preview',
+    CORE_SIMULATOR_HELPER_BINARY,
+  );
+  const { stdout } = await runCommand('ps', ['-axo', 'pid=,ppid=,command='], {
+    timeoutMs: 5_000,
+  });
+  for (const line of stdout.split('\n')) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+    if (!match) continue;
+    const [, pid, ppid, command] = match;
+    if (ppid !== '1' || !command.startsWith(binaryPath)) continue;
+    debug('iOS preview killing orphaned framebuffer helper pid=%s', pid);
+    try {
+      process.kill(Number(pid), 'SIGKILL');
+    } catch {
+      // Process already gone.
+    }
+  }
+}
+
 async function buildCoreSimulatorFramebufferHelper(
   signal: AbortSignal,
 ): Promise<string> {
@@ -2183,6 +2230,7 @@ async function buildCoreSimulatorFramebufferHelper(
   const outputDir = join(tmpdir(), 'jean-claude-mobile-preview');
   const outputPath = join(outputDir, CORE_SIMULATOR_HELPER_BINARY);
   await mkdir(outputDir, { recursive: true });
+  await killOrphanedCoreSimulatorHelpers();
   await runCommand(
     'xcrun',
     [

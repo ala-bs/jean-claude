@@ -38,6 +38,8 @@ import {
   getIosActiveTouchSessionForTests,
   getPendingIosBootWaiterCountForTests,
   iosIdbAdapter as rawIosIdbAdapter,
+  killOrphanedCoreSimulatorHelpers,
+  resetOrphanedHelperSweepForTests,
   MAX_MJPEG_PENDING_BYTES,
   parseSimctlDeviceTypes,
   parseSimctlDevices,
@@ -4993,5 +4995,68 @@ describe('mobile preview iOS idb adapter', () => {
 
     await vi.advanceTimersByTimeAsync(SCREENSHOT_POLL_INTERVAL_MS);
     expect(onFrame.mock.calls.length).toBeGreaterThan(frameCountAfterFirstTick);
+  });
+});
+
+describe('killOrphanedCoreSimulatorHelpers', () => {
+  const helperPath = join(
+    tmpdir(),
+    'jean-claude-mobile-preview',
+    'mobile-preview-ios-framebuffer',
+  );
+
+  beforeEach(() => {
+    resetOrphanedHelperSweepForTests();
+    runCommandMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('kills only helpers re-parented to launchd', async () => {
+    runCommandMock.mockResolvedValue({
+      stdout: [
+        `  111     1 ${helperPath} DEVICE-A 15 0.65`,
+        `  222   4242 ${helperPath} DEVICE-B 15 0.65`,
+        '  333     1 /usr/bin/some-other-process',
+        'garbage line',
+      ].join('\n'),
+      stderr: '',
+    } as Awaited<ReturnType<typeof runCommand>>);
+    const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+    await killOrphanedCoreSimulatorHelpers();
+
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    expect(killSpy).toHaveBeenCalledWith(111, 'SIGKILL');
+    killSpy.mockRestore();
+  });
+
+  it('runs once per app run but retries after a failure', async () => {
+    runCommandMock.mockRejectedValueOnce(new Error('ps exploded'));
+    await killOrphanedCoreSimulatorHelpers();
+    expect(runCommandMock).toHaveBeenCalledTimes(1);
+
+    runCommandMock.mockResolvedValue({
+      stdout: '',
+      stderr: '',
+    } as Awaited<ReturnType<typeof runCommand>>);
+    await killOrphanedCoreSimulatorHelpers();
+    await killOrphanedCoreSimulatorHelpers();
+    expect(runCommandMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('survives a process that exits between the scan and the kill', async () => {
+    runCommandMock.mockResolvedValue({
+      stdout: `  111     1 ${helperPath} DEVICE-A`,
+      stderr: '',
+    } as Awaited<ReturnType<typeof runCommand>>);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw new Error('ESRCH');
+    });
+
+    await expect(killOrphanedCoreSimulatorHelpers()).resolves.toBeUndefined();
+    killSpy.mockRestore();
   });
 });
