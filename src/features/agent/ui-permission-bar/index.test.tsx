@@ -437,6 +437,28 @@ describe('PermissionBar per-part rule editing', () => {
     expect(markup).toContain('Edit permission rule for jq .');
   });
 
+  it('keeps part editing available when matched rule is long', () => {
+    const command = 'git status';
+    const longPattern = `Bash(${command} ${'x'.repeat(240)})`;
+    const markup = renderToStaticMarkup(
+      bashBarElement({
+        command,
+        subCommands: [
+          {
+            command,
+            action: 'ask',
+            matchedRule: { tool: 'Bash', pattern: longPattern, action: 'allow' },
+          },
+          { command: 'jq .', action: 'ask' },
+        ],
+      }),
+    );
+
+    expect(markup).toContain('max-w-[45%]');
+    expect(markup).toContain(`title="Bash: ${longPattern}"`);
+    expect(markup).toContain('Edit permission rule for git status');
+  });
+
   it('does not offer per-part editing for denied parts or risky commands', () => {
     const denied = renderToStaticMarkup(
       bashBarElement({

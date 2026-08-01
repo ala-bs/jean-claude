@@ -241,7 +241,7 @@ function SubCommandBreakdown({
               {sub.command}
             </code>
             <span
-              className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[11px] ${
+              className={`mt-0.5 min-w-0 max-w-[45%] shrink rounded px-1.5 py-0.5 text-[11px] truncate ${
                 isAllowed
                   ? 'bg-green-400/10 text-green-300'
                   : isDenied
