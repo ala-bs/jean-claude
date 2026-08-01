@@ -26,6 +26,7 @@ import {
   readProjectPermissions,
   readSettings,
   seedDefaultProjectPermissions,
+  compileForClaude,
 } from './permission-settings-service';
 
 const tempDirs: string[] = [];
@@ -211,6 +212,17 @@ describe('isUnrestrictedBashPattern', () => {
 });
 
 describe('compileForOpenCode', () => {
+  it('omits digit-regex rules for backend compilation', () => {
+    expect(
+      compileForOpenCode([
+        { tool: 'bash', pattern: 'deploy --id \\d+', action: 'allow' },
+      ]),
+    ).toEqual([
+      { permission: '*', pattern: '*', action: 'ask' },
+      { permission: 'external_directory', pattern: '*', action: 'ask' },
+    ]);
+  });
+
   it('adds an ask baseline before explicit rules', () => {
     expect(
       compileForOpenCode([
@@ -268,7 +280,67 @@ describe('compileForOpenCode', () => {
   });
 });
 
+describe('compileForClaude', () => {
+  it('omits digit-regex rules for backend compilation', () => {
+    expect(
+      compileForClaude([
+        { tool: 'bash', pattern: 'deploy --id \\d+', action: 'allow' },
+      ]),
+    ).toEqual({ allow: [], deny: [] });
+  });
+});
+
 describe('evaluatePermission', () => {
+  it.each([
+    ['deploy --id 123', 'deploy --id \\d+'],
+    ['deploy --id 42', 'deploy --id \\d{2}'],
+    ['deploy --id 7', 'deploy --id \\d'],
+  ])('matches digit regex pattern %s', (command, pattern) => {
+    expect(
+      evaluatePermission(
+        [{ tool: 'bash', pattern, action: 'allow' }],
+        'bash',
+        command,
+      ),
+    ).toBe('allow');
+  });
+
+  it('does not match non-digit text with digit regex pattern', () => {
+    expect(
+      evaluatePermission(
+        [{ tool: 'bash', pattern: 'deploy --id \\d+', action: 'allow' }],
+        'bash',
+        'deploy --id abc',
+      ),
+    ).toBe('ask');
+  });
+
+  it('preserves path glob matching alongside digit regex', () => {
+    expect(
+      evaluatePermission(
+        [{ tool: 'read', pattern: 'src/\\d*.ts', action: 'allow' }],
+        'read',
+        'src/123.ts',
+      ),
+    ).toBe('allow');
+  });
+
+  it('does not confuse literal marker text with digit tokens', () => {
+    expect(
+      evaluatePermission(
+        [
+          {
+            tool: 'read',
+            pattern: '__JEAN_CLAUDE_DIGIT_0__-\\d',
+            action: 'allow',
+          },
+        ],
+        'read',
+        '__JEAN_CLAUDE_DIGIT_0__-7',
+      ),
+    ).toBe('allow');
+  });
+
   it('matches bash wildcard patterns across multiple trailing arguments', () => {
     expect(
       evaluatePermission(

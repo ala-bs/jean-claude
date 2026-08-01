@@ -16,6 +16,10 @@ import clsx from 'clsx';
 import type React from 'react';
 
 
+import {
+  containsDigitRegex,
+  matchPermissionPattern,
+} from '@shared/permission-pattern';
 import type {
   PermissionAction,
   PermissionScope,
@@ -90,8 +94,13 @@ const TOOL_GUIDANCE: Record<
 > = {
   bash: {
     placeholder: 'git status*',
-    hint: 'Exact command or prefix with * wildcard. A specific command pattern is required.',
-    examples: ['git *', 'npm run build', 'pnpm install*', 'ls -la'],
+    hint: 'Exact command, * wildcard, or \\d digit regex. A specific command pattern is required.',
+    examples: [
+      'git *',
+      'deploy --id \\d+',
+      'deploy --id \\d{4}',
+      'pnpm install*',
+    ],
   },
   read: {
     placeholder: '/path/to/file',
@@ -278,6 +287,9 @@ function globLikeMatches(
   isBash: boolean,
 ): boolean {
   if (pattern === '*') return true;
+  if (containsDigitRegex(pattern)) {
+    return matchPermissionPattern(pattern, value, isBash);
+  }
   const regex = pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*+/g, (stars) => (isBash || stars.length > 1 ? '.*' : '[^/]*'))
@@ -289,13 +301,18 @@ function globLikeMatches(
 function materializePattern(tool: string, pattern: string): string {
   const fill = tool === 'bash' ? 'hello' : 'example';
   return pattern
+    .replace(/\\d\{(\d+)\}/g, (_, count: string) =>
+      '1'.repeat(Math.min(Number(count), 32)),
+    )
+    .replace(/\\d\+/g, '123')
+    .replace(/\\d/g, '1')
     .replace(/\*+/g, fill)
     .replace(/\?/g, 'x')
     .replace(/\{subpath\}/g, 'src/app.ts');
 }
 
 function getLiteralPrefix(pattern: string): string {
-  const wildcardIndex = pattern.search(/[?*{]/);
+  const wildcardIndex = pattern.search(/\\d|[?*{]/);
   return wildcardIndex === -1 ? pattern : pattern.slice(0, wildcardIndex);
 }
 
@@ -363,7 +380,7 @@ function buildPatternExamples(tool: string, pattern: string) {
   const generated = materializePattern(tool, trimmed);
   const samples =
     TOOL_SAMPLE_VALUES[tool] ?? TOOL_GUIDANCE[tool]?.examples ?? [];
-  const hasWildcard = /[*?{]/.test(trimmed);
+  const hasWildcard = /\\d|[*?{]/.test(trimmed);
   const candidates = Array.from(
     new Set([
       ...buildNearMatchCandidates(tool, trimmed),

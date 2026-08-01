@@ -16,6 +16,10 @@ import {
   validateSubpathArgs,
 } from '@shared/shell-parse';
 
+import {
+  containsDigitRegex,
+  matchPermissionPattern,
+} from '../../shared/permission-pattern';
 import type {
   JeanClaudeSettings,
   PermissionAction,
@@ -496,6 +500,9 @@ const PICOMATCH_OPTIONS: picomatch.PicomatchOptions = { dot: true };
  */
 function matchPattern(pattern: string, value: string, isBash = false): boolean {
   if (pattern === '*') return true;
+  if (containsDigitRegex(pattern)) {
+    return matchPermissionPattern(pattern, value, isBash);
+  }
   if (isBash) return matchBashPattern(pattern, value);
   return picomatch.isMatch(value, pattern, PICOMATCH_OPTIONS);
 }
@@ -1101,6 +1108,7 @@ export function compileForClaude(rules: ResolvedPermissionRule[]): {
   };
 
   for (const rule of rules) {
+    if (containsDigitRegex(rule.pattern)) continue;
     if (rule.tool === '*') continue; // Claude doesn't support wildcard tool
     if (rule.subpathRoot) continue; // Subpath rules handled by runtime evaluator
     const claudeName = toolNameMap[rule.tool] ?? rule.tool;
@@ -1143,6 +1151,7 @@ export function compileForOpenCode(
     // provided. Keep Jean-Claude's default as ask, then let explicit rules win.
     { permission: '*', pattern: '*', action: 'ask' as const },
     ...rules
+      .filter((rule) => !containsDigitRegex(rule.pattern))
       // External paths are canonicalized and evaluated by the adapter for each
       // request so replacing a directory with a symlink cannot reuse a grant.
       .filter((rule) => rule.tool !== 'external_directory')
