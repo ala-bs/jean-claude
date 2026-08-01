@@ -935,6 +935,8 @@ contextBridge.exposeInMainWorld('api', {
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) =>
       ipcRenderer.invoke('shell:openInEditor', dirPath, folderContext),
+    openPath: (targetPath: string) =>
+      ipcRenderer.invoke('shell:openPath', targetPath),
     openTeamsJoinUrl: (url: string) =>
       ipcRenderer.invoke('shell:openTeamsJoinUrl', url),
     getAvailableEditors: () => ipcRenderer.invoke('shell:getAvailableEditors'),

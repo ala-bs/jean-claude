@@ -26,6 +26,7 @@ import {
   QuestionResponse,
 } from '@shared/agent-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
+import { isDefaultAppFile } from '@shared/default-app-extensions';
 import type {
   AgentMemoryFollowUpCapture,
   AgentMemoryPromptCapture,
@@ -4902,6 +4903,29 @@ export function registerIpcHandlers() {
       openInEditor(dirPath, setting, folderContext);
     },
   );
+
+  // Opens a file with the OS default application.
+  // Cross-platform: macOS `open`, Windows `start`, Linux `xdg-open`.
+  ipcMain.handle('shell:openPath', async (_, rawPath: string) => {
+    const targetPath = rawPath.startsWith('~/')
+      ? path.join(os.homedir(), rawPath.slice(2))
+      : rawPath;
+
+    // Paths come from untrusted command/agent log output, and openPath would
+    // happily execute a .app/.exe/.command. Only allow known-inert file types.
+    if (!isDefaultAppFile(targetPath)) {
+      throw new Error(`Cannot open this file type: ${targetPath}`);
+    }
+
+    if (!(await pathExists(targetPath))) {
+      throw new Error(`Path does not exist: ${targetPath}`);
+    }
+
+    const error = await shell.openPath(targetPath);
+    if (error) {
+      throw new Error(error);
+    }
+  });
 
   ipcMain.handle('shell:setupGlobalGitignore', async () => {
     const START_MARKER = '# >>> jean-claude (managed automatically)';

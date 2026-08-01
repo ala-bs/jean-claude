@@ -1340,6 +1340,7 @@ export interface Api {
   };
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) => Promise<void>;
+    openPath: (targetPath: string) => Promise<void>;
     openTeamsJoinUrl: (url: string) => Promise<void>;
     getAvailableEditors: () => Promise<{ id: string; available: boolean }[]>;
     getAgentCliStatus: () => Promise<
@@ -2531,6 +2532,7 @@ export const api: Api = hasWindowApi
       },
       shell: {
         openInEditor: async () => {},
+        openPath: async () => {},
         openTeamsJoinUrl: async () => {},
         getAvailableEditors: async () => [],
         getAgentCliStatus: async () => [],

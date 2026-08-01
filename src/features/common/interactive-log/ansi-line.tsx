@@ -2,6 +2,8 @@ import { memo, type MouseEvent, useMemo } from 'react';
 import Anser from 'anser';
 
 
+import { isDefaultAppFile } from '@shared/default-app-extensions';
+
 import { api } from '@/lib/api';
 import { useToastStore } from '@/stores/toasts';
 
@@ -94,13 +96,19 @@ export const AnsiLine = memo(function AnsiLine({
       const absolutePath = resolveLogPath(part.path, workingDir);
       if (!absolutePath) return <span key={key}>{part.text}</span>;
 
+      // Images, PDFs, media and archives open with the OS default
+      // application; everything else opens in the configured editor.
+      const opensWithDefaultApp = isDefaultAppFile(absolutePath);
+
       const handleFileClick = (event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         if (!event.metaKey && !event.ctrlKey) return;
 
         event.stopPropagation();
-        api.shell
-          .openInEditor(absolutePath, workingDir)
+        const openPromise = opensWithDefaultApp
+          ? api.shell.openPath(absolutePath)
+          : api.shell.openInEditor(absolutePath, workingDir);
+        openPromise
           .catch((error: unknown) => {
             useToastStore.getState().addToast({
               type: 'error',
@@ -118,7 +126,11 @@ export const AnsiLine = memo(function AnsiLine({
           type="button"
           onClick={handleFileClick}
           className={`${LINK_CLASS_NAME} inline cursor-pointer bg-transparent p-0 font-[inherit] text-[inherit] whitespace-pre-wrap`}
-          title="Cmd-click to open in editor"
+          title={
+            opensWithDefaultApp
+              ? 'Cmd-click to open with default app'
+              : 'Cmd-click to open in editor'
+          }
         >
           {part.text}
         </button>
