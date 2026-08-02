@@ -64,7 +64,6 @@ import {
 } from '@shared/types';
 import type {
   NormalizedEntry,
-  ToolUseByName,
 } from '@shared/normalized-message-v2';
 import type {
   PermissionsChangedEvent,

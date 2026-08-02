@@ -1221,6 +1221,11 @@ export interface Api {
     openImageFile: () => Promise<string | null>;
     openFiles: () => Promise<string[] | null>;
     openApplication: () => Promise<{ path: string; name: string } | null>;
+    saveFile: (params: {
+      defaultPath?: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+      content?: Uint8Array;
+    }) => Promise<string | null>;
   };
   fs: {
     readPackageJson: (dirPath: string) => Promise<PackageJson | null>;
@@ -2473,6 +2478,7 @@ export const api: Api = hasWindowApi
         openImageFile: async () => null,
         openFiles: async () => null,
         openApplication: async () => null,
+        saveFile: async () => null,
       },
       fs: {
         readPackageJson: async () => null,

@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Check,
+  Circle,
   Copy,
   Keyboard,
   Link,
@@ -436,6 +437,13 @@ export function MobilePreviewPane({
   });
   const [previewFpsStore] = useState(createPreviewFpsStore);
   const [gestureFeedbackStore] = useState(createGestureFeedbackStore);
+  const [isRecording, setIsRecording] = useState(false);
+  const recordingRef = useRef<{
+    recorder: MediaRecorder;
+    stream: MediaStream;
+    timer: number;
+    chunks: Blob[];
+  } | null>(null);
   const selectedAppPath = mobilePreviewConfig?.selectedAppPath ?? null;
   const detectedApps = mobilePreviewConfig?.detectedApps ?? EMPTY_DETECTED_APPS;
   const validSelectedAppPath =
@@ -1565,6 +1573,82 @@ export function MobilePreviewPane({
     session?.status === 'starting' ||
     session?.status === 'streaming';
   const hasActiveSession = !!session && session.status !== 'stopped';
+  const stopRecording = () => {
+    const recording = recordingRef.current;
+    if (!recording) return;
+    window.clearInterval(recording.timer);
+    recording.recorder.stop();
+    recordingRef.current = null;
+    setIsRecording(false);
+  };
+  const startRecording = () => {
+    if (!hasImageFrame || isRecording) return;
+    const source = containerRef.current?.querySelector('canvas, img') as
+      | HTMLCanvasElement
+      | HTMLImageElement
+      | null;
+    if (!source) return;
+    const sourceWidth = source instanceof HTMLCanvasElement ? source.width : source.naturalWidth;
+    const sourceHeight = source instanceof HTMLCanvasElement ? source.height : source.naturalHeight;
+    const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+      .find((candidate) => MediaRecorder.isTypeSupported(candidate));
+    if (!sourceWidth || !sourceHeight || !mimeType) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = sourceWidth;
+    canvas.height = sourceHeight;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const draw = () => {
+      context.drawImage(source, 0, 0, sourceWidth, sourceHeight);
+      const feedback = gestureFeedbackStore.get();
+      if (!showGestures || !feedback?.points.length) return;
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      const surfaceRect = source.getBoundingClientRect();
+      if (!containerRect || !surfaceRect) return;
+      const scaleX = sourceWidth / surfaceRect.width;
+      const scaleY = sourceHeight / surfaceRect.height;
+      context.strokeStyle = '#7dd3fc';
+      context.lineWidth = 3 * scaleX;
+      context.lineCap = 'round';
+      context.beginPath();
+      feedback.points.forEach((point, index) => {
+        const x = (point.x + containerRect.left - surfaceRect.left) * scaleX;
+        const y = (point.y + containerRect.top - surfaceRect.top) * scaleY;
+        if (index === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      });
+      context.stroke();
+    };
+    const stream = canvas.captureStream(30);
+    const recorder = new MediaRecorder(stream, { mimeType });
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) chunks.push(event.data);
+    };
+    recorder.onstop = async () => {
+      try {
+        const folder = mobilePreviewConfig?.mobilePreviewRecordingFolder ??
+          (await api.settings.get('mobilePreviewRecordingFolder'));
+        const defaultPath = folder
+          ? `${folder}/mobile-preview-${new Date().toISOString().replaceAll(':', '-')}.webm`
+          : undefined;
+        const blob = new Blob(chunks, { type: recorder.mimeType });
+        await api.dialog.saveFile({
+          defaultPath,
+          filters: [{ name: 'WebM video', extensions: ['webm'] }],
+          content: new Uint8Array(await blob.arrayBuffer()),
+        });
+      } finally {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
+    draw();
+    recorder.start();
+    const timer = window.setInterval(draw, 1000 / 30);
+    recordingRef.current = { recorder, stream, timer, chunks };
+    setIsRecording(true);
+  };
+  useEffect(() => stopRecording, []);
   const isInputPreparing = session?.inputStatus === 'starting';
   const displayError =
     session?.error ??
@@ -4368,6 +4452,15 @@ export function MobilePreviewPane({
               disabled={!hasImageFrame}
             >
               Screenshot
+            </Button>
+            <Button
+              variant={isRecording ? 'secondary' : 'ghost'}
+              size="sm"
+              icon={<Circle className={isRecording ? 'fill-status-fail text-status-fail' : ''} />}
+              disabled={!hasImageFrame}
+              onClick={isRecording ? stopRecording : startRecording}
+            >
+              {isRecording ? 'Stop recording' : 'Record'}
             </Button>
             <span className="bg-border mx-1 h-4 w-px" />
             <IconButton

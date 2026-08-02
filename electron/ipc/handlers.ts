@@ -4328,6 +4328,20 @@ export function registerIpcHandlers() {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle('dialog:saveFile', async (event, params: {
+    defaultPath?: string;
+    filters?: Array<{ name: string; extensions: string[] }>;
+    content?: Uint8Array;
+  }) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showSaveDialog(window!, params ?? {});
+    if (result.canceled || !result.filePath) return null;
+    if (params?.content) {
+      await fs.writeFile(result.filePath, Buffer.from(params.content));
+    }
+    return result.filePath;
+  });
+
   ipcMain.handle('dialog:openImageFile', async (event) => {
     dbg.ipc('dialog:openImageFile called');
     const window = BrowserWindow.fromWebContents(event.sender);

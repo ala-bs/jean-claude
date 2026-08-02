@@ -110,6 +110,7 @@ export interface MobilePreviewProjectConfig {
   iosBundleId?: string | null;
   /** URL scheme used to deeplink into the app (dev builds use `exp+<scheme>://`). */
   appScheme?: string | null;
+  mobilePreviewRecordingFolder?: string | null;
 }
 
 export const DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG: MobilePreviewProjectConfig =
@@ -1445,6 +1446,11 @@ function isWorkActivitySetting(value: unknown): value is WorkActivitySetting {
 }
 
 export const SETTINGS_DEFINITIONS = {
+  mobilePreviewRecordingFolder: {
+    defaultValue: null as string | null,
+    validate: (value: unknown): value is string | null =>
+      value === null || typeof value === 'string',
+  },
   editor: {
     defaultValue: { type: 'preset', id: 'vscode' } as EditorSetting,
     validate: isEditorSetting,

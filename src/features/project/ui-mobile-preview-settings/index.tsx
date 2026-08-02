@@ -12,6 +12,7 @@ import {
   migrateDetectedCommand,
   migrateIosBundleId,
 } from '@/lib/mobile-preview-config';
+import { api } from '@/lib/api';
 import {
   type MobilePreviewDetectedApp,
   type MobilePreviewProjectConfig,
@@ -426,6 +427,8 @@ export function ProjectMobilePreviewIntegration({
     },
   };
 
+  const recordingFolder = config.mobilePreviewRecordingFolder ?? '';
+
   const primaryFields: CommandField[] = [
     textField({
       key: 'metroStartCommand',
@@ -510,7 +513,7 @@ export function ProjectMobilePreviewIntegration({
   ).length;
   const hasOverrides = [...primaryFields, ...advancedFields].some(
     (field) => field.isCustom,
-  );
+  ) || Boolean(config.mobilePreviewRecordingFolder);
 
   const resetAll = () => {
     setEditingKey(null);
@@ -527,6 +530,7 @@ export function ProjectMobilePreviewIntegration({
       appScheme: null,
       androidPackageName: null,
       androidProjectPath: null,
+      mobilePreviewRecordingFolder: null,
     });
   };
 
@@ -666,6 +670,38 @@ export function ProjectMobilePreviewIntegration({
           </div>
 
           {renderRows(primaryFields)}
+
+          <div className="mt-3 grid gap-1.5">
+            <span className="text-ink-3 text-xs">Recording folder override</span>
+            <div className="flex gap-2">
+              <input
+                value={recordingFolder}
+                readOnly
+                placeholder="Use global default"
+                className="border-line bg-bg-2 text-ink-1 min-w-0 flex-1 rounded-md border px-2 py-1.5 text-xs"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  const folder = await api.dialog.openDirectory();
+                  if (folder) onChange({ ...config, mobilePreviewRecordingFolder: folder });
+                }}
+                className="border-line bg-bg-2 text-ink-1 hover:bg-bg-3 rounded-md border px-2.5 py-1.5 text-xs"
+              >
+                Choose
+              </button>
+              {recordingFolder ? (
+                <button
+                  type="button"
+                  onClick={() => onChange({ ...config, mobilePreviewRecordingFolder: null })}
+                  className="text-ink-3 hover:text-ink-1 px-1 text-xs"
+                >
+                  Reset
+                </button>
+              ) : null}
+            </div>
+            <p className="text-ink-4 text-[11px]">Saved WebM recordings use this folder after global default.</p>
+          </div>
 
           <div className="mt-2">
             <button

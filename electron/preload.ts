@@ -790,6 +790,11 @@ contextBridge.exposeInMainWorld('api', {
     openImageFile: () => ipcRenderer.invoke('dialog:openImageFile'),
     openFiles: () => ipcRenderer.invoke('dialog:openFiles'),
     openApplication: () => ipcRenderer.invoke('dialog:openApplication'),
+    saveFile: (params: {
+      defaultPath?: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+      content?: Uint8Array;
+    }) => ipcRenderer.invoke('dialog:saveFile', params),
   },
   settings: {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),

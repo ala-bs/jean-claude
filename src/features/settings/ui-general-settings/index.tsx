@@ -845,6 +845,8 @@ export function WorkActivitySettings() {
 export function GeneralSettings() {
   return (
     <div>
+      <MobilePreviewRecordingSettings />
+      <div className="border-line-soft my-8 border-t" />
       <EditorSettings />
       <div className="border-line-soft my-8 border-t" />
       <NotificationsSettings />
@@ -857,6 +859,34 @@ export function GeneralSettings() {
       <div className="border-line-soft my-8 border-t" />
       <MaintenanceSettings />
     </div>
+  );
+}
+
+function MobilePreviewRecordingSettings() {
+  const folder = useSetting('mobilePreviewRecordingFolder').data;
+  const update = useUpdateSetting<'mobilePreviewRecordingFolder'>();
+  return (
+    <section>
+      <h2 className="text-ink-1 text-lg font-semibold">Mobile Preview Recordings</h2>
+      <p className="text-ink-3 mt-1 text-sm">Default folder for saved WebM recordings.</p>
+      <div className="mt-3 flex gap-2">
+        <span className="border-line bg-bg-1 text-ink-2 min-w-0 flex-1 truncate rounded-md border px-3 py-2 text-xs">
+          {folder || 'System default'}
+        </span>
+        <Button
+          size="sm"
+          variant="secondary"
+          icon={<FolderOpen />}
+          onClick={async () => {
+            const selected = await api.dialog.openDirectory();
+            if (selected) update.mutate({ key: 'mobilePreviewRecordingFolder', value: selected });
+          }}
+        >
+          Choose
+        </Button>
+        {folder ? <Button size="sm" variant="ghost" onClick={() => update.mutate({ key: 'mobilePreviewRecordingFolder', value: null })}>Reset</Button> : null}
+      </div>
+    </section>
   );
 }
 
