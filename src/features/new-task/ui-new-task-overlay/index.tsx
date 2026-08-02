@@ -528,7 +528,10 @@ export function NewTaskOverlay({
   });
 
   // Prompt template state (not persisted - derived from selections)
-  const [promptTemplate, setPromptTemplate] = useState<string>('');
+  // null = user has not edited it yet, fall back to the derived default
+  const [promptTemplateOverride, setPromptTemplate] = useState<string | null>(
+    null,
+  );
 
   // Sort projects by sortOrder
   const sortedProjects = useMemo(
@@ -651,6 +654,12 @@ export function NewTaskOverlay({
   );
   const previousSelectedWorkItemIdsSignatureRef = useRef<string | null>(null);
 
+  // Identity of the compose-step seeding (project + selected work items), so we
+  // seed the prompt template at most once per selection and never overwrite
+  // what the user typed.
+  const composeSeedKey = `${selectedProjectId ?? 'all'}:${selectedWorkItemIdsSignature}`;
+  const seededComposeKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (previousSelectedWorkItemIdsSignatureRef.current === null) {
       previousSelectedWorkItemIdsSignatureRef.current =
@@ -693,6 +702,19 @@ export function NewTaskOverlay({
 
   // Current search step (only relevant in search mode)
   const searchStep = draft?.searchStep ?? 'select';
+
+  // Effective prompt template: what the user typed, else the default generated
+  // from the selected work items. Deriving it (instead of seeding via effect)
+  // also covers entry points that jump straight to the compose step, e.g.
+  // "Create task" from the Azure board details pane.
+  const promptTemplate =
+    promptTemplateOverride ??
+    (inputMode === 'search' &&
+    searchStep === 'compose' &&
+    selectedWorkItems.length > 0 &&
+    selectedWorkItems.length === (draft?.workItemIds ?? []).length
+      ? generateInitialTemplate(draft?.workItemIds ?? [])
+      : '');
 
   // Toggle input mode
   const toggleInputMode = useCallback(() => {
@@ -1031,14 +1053,8 @@ export function NewTaskOverlay({
   const [isFetchingWorkItemImages, setIsFetchingWorkItemImages] =
     useState(false);
 
-  // Advance to compose step and extract work item images
-  const advanceToCompose = useCallback(async () => {
-    if (!canAdvanceToCompose) return;
-    const template = generateInitialTemplate(draft?.workItemIds ?? []);
-    setPromptTemplate(template);
-    updateDraft({ searchStep: 'compose' });
-
-    // Extract and fetch images from work item HTML in background
+  // Extract and fetch images from work item HTML in background
+  const fetchWorkItemImages = useCallback(async () => {
     const providerId = selectedProject?.workItemProviderId;
     if (!providerId) return;
 
@@ -1053,7 +1069,7 @@ export function NewTaskOverlay({
     const urlsToFetch = imageUrls.slice(0, slotsAvailable);
     const fetchSessionId = ++workItemImageFetchSessionRef.current;
     const imageDraftKey = selectedProjectId ?? 'all';
-    setIsFetchingWorkItemImages(true);
+    startTransition(() => setIsFetchingWorkItemImages(true));
     try {
       const fetchedImages = await Promise.all(
         urlsToFetch.map(async (imageUrl) => {
@@ -1154,13 +1170,43 @@ export function NewTaskOverlay({
       }
     }
   }, [
-    canAdvanceToCompose,
-    draft?.workItemIds,
     draft?.images,
     selectedProjectId,
     selectedWorkItems,
     selectedProject?.workItemProviderId,
+  ]);
+
+  // Advance to compose step and extract work item images
+  const advanceToCompose = useCallback(async () => {
+    if (!canAdvanceToCompose) return;
+    seededComposeKeyRef.current = composeSeedKey;
+    setPromptTemplate(null);
+    updateDraft({ searchStep: 'compose' });
+    await fetchWorkItemImages();
+  }, [
+    canAdvanceToCompose,
+    composeSeedKey,
+    fetchWorkItemImages,
     updateDraft,
+  ]);
+
+  // Entry points that jump straight to the compose step (e.g. "Create task"
+  // from the Azure board details pane) bypass advanceToCompose, so fetch the
+  // work item images here. The prompt template itself is derived.
+  useEffect(() => {
+    if (inputMode !== 'search' || searchStep !== 'compose') return;
+    if (seededComposeKeyRef.current === composeSeedKey) return;
+    const ids = draft?.workItemIds ?? [];
+    if (ids.length === 0 || selectedWorkItems.length !== ids.length) return;
+    seededComposeKeyRef.current = composeSeedKey;
+    void fetchWorkItemImages();
+  }, [
+    inputMode,
+    searchStep,
+    composeSeedKey,
+    draft?.workItemIds,
+    selectedWorkItems,
+    fetchWorkItemImages,
   ]);
 
   // Go back to select step
