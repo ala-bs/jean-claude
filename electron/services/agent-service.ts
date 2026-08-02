@@ -514,6 +514,19 @@ interface ActiveSession {
     source?: 'backend' | 'jc-mcp';
   }>;
   hasTerminalError: boolean;
+  /**
+   * True once a terminal `result`/`error` event was handled for the current
+   * turn while the backend stream is still open. Background subagents keep
+   * streaming after the main turn reports a result, so activity arriving after
+   * this flag is set means the step is actually still running.
+   */
+  turnFinalized: boolean;
+  /**
+   * Terminal status we reported for the last finalized turn, kept so that a
+   * step reactivated by post-result activity can be closed again if the stream
+   * ends without emitting another `result`.
+   */
+  lastTerminalStatus: 'completed' | 'errored' | null;
   stopRequested: boolean;
   /** Context needed to re-resolve permission rules while the run is live. */
   permissionContext?: {
@@ -1304,6 +1317,8 @@ class AgentService {
       abortController: new AbortController(),
       pendingRequests: [],
       hasTerminalError: false,
+      turnFinalized: false,
+      lastTerminalStatus: null,
       stopRequested: false,
       agentMemoryCaptureEligible:
         task.type === 'agent' && (step.type === 'agent' || step.type === 'fork'),
@@ -1524,6 +1539,8 @@ class AgentService {
 
     // Create new abort controller for this query iteration
     session.abortController = new AbortController();
+    session.turnFinalized = false;
+    session.lastTerminalStatus = null;
 
     if (options?.generateNameOnInit && task.name === null) {
       // NOTE: fire-and-forget
@@ -1684,7 +1701,7 @@ class AgentService {
           break;
         }
 
-        await this.processEvent(stepId, session, event);
+        await this.processEvent(stepId, session, event, runHandle);
       }
     } finally {
       // An interrupted turn still changed files, and no `result` event will
@@ -1703,6 +1720,12 @@ class AgentService {
         await this.cleanupRunHandle(runHandle);
       }
     }
+
+    // A step reactivated by post-result background activity may never get a
+    // second `result` (the stream just ends). Drain anything queued during that
+    // window, or close the step so it doesn't stay stuck on "running". Runs
+    // after cleanup so it can safely start a follow-up run.
+    await this.closeReactivatedStep(stepId, session, runHandle);
   }
 
   private enqueueResultUpdateUsage(
@@ -1843,12 +1866,161 @@ class AgentService {
   /**
    * Process a single event from the backend event stream.
    */
+  /**
+   * The Claude backend reports a `result` for the main turn while background
+   * subagents (and the follow-up turn they trigger) keep streaming on the same
+   * run handle. When live activity arrives after we already finalized the turn,
+   * flip the step back to `running` so the UI stops showing it as done.
+   */
+  private async reactivateAfterFinalizedTurn(
+    stepId: string,
+    session: ActiveSession,
+    runHandle: AgentRunHandle | null,
+  ): Promise<void> {
+    if (!session.turnFinalized) return;
+    if (session.stopRequested || session.hasTerminalError) return;
+    if (this.sessions.get(stepId) !== session) return;
+    // Late events from a superseded run handle must not resurrect the step.
+    if (session.runHandle !== runHandle) return;
+    if (session.abortController.signal.aborted) return;
+
+    const step = await TaskStepRepository.findById(stepId);
+    if (!step) return;
+    session.turnFinalized = false;
+    if (step.status === 'running') return;
+
+    dbg.agentSession(
+      'Step %s received activity after result — restoring running state',
+      stepId,
+    );
+    await StepService.update(stepId, { status: 'running' });
+    // A pending permission/question keeps the task on `waiting` even though the
+    // step is running — don't let the sync clobber that.
+    if (session.pendingRequests.length === 0) {
+      await StepService.syncTaskStatus(session.taskId);
+    }
+    this.emitEvent(session.taskId, stepId, {
+      type: 'status',
+      status: session.pendingRequests.length > 0 ? 'waiting' : 'running',
+    });
+  }
+
+  /** Pop the next queued prompt and its associated parts/capture metadata. */
+  private takeNextQueuedPrompt(session: ActiveSession): {
+    prompt: QueuedPrompt;
+    parts: PromptPart[];
+    capture: ReturnType<typeof queuedPromptCaptures.get>;
+  } | null {
+    const prompt = session.queuedPrompts.shift();
+    if (!prompt) return null;
+    const parts =
+      queuedPromptParts.get(prompt.id) ?? textPrompt(prompt.content);
+    const capture = queuedPromptCaptures.get(prompt.id);
+    queuedPromptParts.delete(prompt.id);
+    queuedPromptCaptures.delete(prompt.id);
+    tombstoneQueuedPromptSubmissionIds(session, prompt.id);
+    return { prompt, parts, capture };
+  }
+
+  /**
+   * Runs once the backend stream ends. Only does something when the step was
+   * flipped back to `running` by post-result activity (background subagents)
+   * and no second `result` arrived: drains a prompt queued during that window,
+   * otherwise restores the terminal status so the step can't stay stuck.
+   */
+  private async closeReactivatedStep(
+    stepId: string,
+    session: ActiveSession,
+    runHandle: AgentRunHandle | null,
+  ): Promise<void> {
+    // Ownership guards run BEFORE consuming the session-scoped terminal state,
+    // so a superseded run frame can't swallow the current run's status.
+    if (this.sessions.get(stepId) !== session) return;
+    if (session.runHandle !== runHandle) return;
+
+    const status = session.lastTerminalStatus;
+    session.lastTerminalStatus = null;
+    if (!status || session.turnFinalized) return;
+
+    if (session.stopRequested || session.hasTerminalError) return;
+    if (session.abortController.signal.aborted) return;
+
+    // A prompt queued while the step was reactivated would otherwise be lost,
+    // because only the `result` handler drains the queue.
+    const queued = this.takeNextQueuedPrompt(session);
+    if (queued && status === 'errored') {
+      // Mirror the result handler: an errored turn discards the queue.
+      this.emitEvent(session.taskId, stepId, {
+        type: 'queue-update',
+        queuedPrompts: session.queuedPrompts,
+      });
+    }
+    if (queued && status === 'completed') {
+      dbg.agentSession(
+        'Step %s draining prompt queued after post-result activity',
+        stepId,
+      );
+      this.emitEvent(session.taskId, stepId, {
+        type: 'queue-update',
+        queuedPrompts: session.queuedPrompts,
+      });
+      if (queued.capture && session.agentMemoryCaptureEligible) {
+        void captureAgentMemoryPromptSubmissionSafe({
+          source: 'queued-prompt',
+          sourceId: `queued-prompt:${queued.prompt.id}`,
+          projectId: session.projectId,
+          taskId: session.taskId,
+          stepId,
+          userText: queued.capture.userText,
+          previousAgentResult: session.previousResultFallback,
+          reviews: queued.capture.reviews,
+        });
+      }
+      await this.runBackend(stepId, queued.parts, session);
+      return;
+    }
+
+    const step = await TaskStepRepository.findById(stepId);
+    if (!step || step.status !== 'running') return;
+
+    dbg.agentSession(
+      'Step %s stream ended after post-result activity — restoring %s',
+      stepId,
+      status,
+    );
+    this.clearPendingRequests(session);
+    if (status === 'errored') {
+      await StepService.errorStep(stepId);
+    } else {
+      // Dependent steps were already auto-started at the premature `result`,
+      // so the returned ids are intentionally ignored here.
+      await StepService.completeStep(stepId);
+    }
+    await this.markTaskUnreadIfBackground(session.taskId);
+    this.emitEvent(session.taskId, stepId, { type: 'status', status });
+  }
+
   private async processEvent(
     stepId: string,
     session: ActiveSession,
     event: AgentEvent,
+    runHandle: AgentRunHandle | null = null,
   ): Promise<void> {
     const { taskId } = session;
+
+    // Any live activity after a finalized turn means background work (usually a
+    // subagent) is still running on this handle. Permission/question events
+    // count too — otherwise a post-result prompt would land on a step the UI
+    // still shows as completed.
+    if (
+      event.type === 'entry' ||
+      event.type === 'entry-update' ||
+      event.type === 'tool-result' ||
+      event.type === 'permission-request' ||
+      event.type === 'question'
+    ) {
+      await this.reactivateAfterFinalizedTurn(stepId, session, runHandle);
+    }
 
     switch (event.type) {
       case 'session-id': {
@@ -2045,6 +2217,11 @@ class AgentService {
           }
         }
 
+        // Keep the fallback fresh so later prompt captures (including the
+        // post-result drain path) attribute the right previous result.
+        session.previousResultFallback =
+          result.text ?? session.previousResultFallback;
+
         // Check for queued prompts
         const nextPrompt = session.queuedPrompts.shift();
         if (nextPrompt && result.isError) {
@@ -2116,6 +2293,10 @@ class AgentService {
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
         this.emitEvent(taskId, stepId, { type: 'status', status });
+        // Background subagents may still stream on this run handle; any further
+        // activity flips the step back to running.
+        session.turnFinalized = true;
+        session.lastTerminalStatus = status;
 
         // Auto-start dependent steps whose dependencies are now satisfied
         for (const autoStepId of autoStartStepIds) {
