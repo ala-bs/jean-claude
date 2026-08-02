@@ -594,13 +594,14 @@ export function FeedItemCard({
           },
         });
       } else if (item.taskId) {
+        if (item.taskId === currentTaskId) return;
         navigate({
           to: '/all/$taskId',
           params: { taskId: item.taskId },
         });
       }
     },
-    [navigate, item, pullRequestUrl],
+    [currentTaskId, navigate, item, pullRequestUrl],
   );
 
   const openMenu = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {

@@ -25,9 +25,15 @@ vi.mock('@/lib/api', () => ({
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
-function Harness({ deviceId }: { deviceId: string }) {
+function Harness({
+  deviceId,
+  isRunningRuntime = true,
+}: {
+  deviceId: string;
+  isRunningRuntime?: boolean;
+}) {
   useMobilePreviewExpoLaunch({
-    isRunningRuntime: true,
+    isRunningRuntime,
     isLoadingDevices: false,
     selectedDevice: { id: deviceId, platform: 'ios', state: 'booted' },
     isExpoApp: true,
@@ -59,6 +65,20 @@ describe('useMobilePreviewExpoLaunch', () => {
     await act(async () => root.unmount());
 
     expect(apiMocks.cancelExpoLaunch).toHaveBeenCalledWith(requestId);
+  });
+
+  it('does not launch while retained sessions are hydrating', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    await act(async () =>
+      root.render(<Harness deviceId="device-1" isRunningRuntime={false} />),
+    );
+
+    expect(apiMocks.launchExpo).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
   });
 
   it('cancels the old launch before starting one for a different device', async () => {

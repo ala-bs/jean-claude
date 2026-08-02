@@ -540,7 +540,7 @@ export function StepFlowBar({
         },
       ]);
     },
-    [addToast, archiveStep, openMenu, updateStep],
+    [addToast, archiveStep, openMenu],
   );
 
   useCommands('step-flow-bar', [

@@ -609,7 +609,9 @@ export function AzureBoardProjectContent({
     }
   };
   const handleDetailsPaneEscapeRef = useRef(handleDetailsPaneEscape);
-  handleDetailsPaneEscapeRef.current = handleDetailsPaneEscape;
+  useEffect(() => {
+    handleDetailsPaneEscapeRef.current = handleDetailsPaneEscape;
+  });
   useEffect(() => {
     escapeInterceptorRef.current = () => handleDetailsPaneEscapeRef.current();
     return () => {

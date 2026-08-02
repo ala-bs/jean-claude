@@ -25,10 +25,13 @@ import {
   type ReactNativeDevToolsPanel,
 } from '@shared/mobile-simulator-types';
 import { api } from '@/lib/api';
+import { createStreamListStore } from './utils-stream-list-store';
 
 function logMobilePreviewDebug(..._args: unknown[]) {}
 
 const MAX_PENDING_NATIVE_LOGS = 1000;
+const MAX_NATIVE_LOGS = 1000;
+const MAX_NETWORK_REQUESTS = 500;
 const MAX_PENDING_NETWORK_REQUESTS = 500;
 const MAX_PENDING_FRAME_EVENTS = 120;
 const MAX_QUARANTINED_PREVIEW_SESSIONS = 100;
@@ -204,7 +207,7 @@ export function useMobilePreviewNativeLogs(
   const [session, setSession] = useState<MobilePreviewNativeLogSession | null>(
     null,
   );
-  const [logs, setLogs] = useState<MobilePreviewNativeLogEvent[]>([]);
+  const [logsStore] = useState(createStreamListStore<MobilePreviewNativeLogEvent>);
   const sessionRef = useRef<MobilePreviewNativeLogSession | null>(null);
   const pendingLogsRef = useRef<MobilePreviewNativeLogEvent[]>([]);
   const flushLogsFrameRef = useRef<number | null>(null);
@@ -221,8 +224,8 @@ export function useMobilePreviewNativeLogs(
     sessionRef.current = null;
     queueMicrotask(() => {
       setSession(null);
-      setLogs([]);
     });
+    logsStore.clear();
     if (!params) return undefined;
 
     const unsubscribeSession = api.mobilePreview.onNativeLogSession((event) => {
@@ -245,7 +248,7 @@ export function useMobilePreviewNativeLogs(
         flushLogsFrameRef.current = null;
         const nextLogs = pendingLogsRef.current;
         pendingLogsRef.current = [];
-        setLogs((current) => [...current, ...nextLogs].slice(-1000));
+        logsStore.append(nextLogs, MAX_NATIVE_LOGS);
       });
     });
 
@@ -266,7 +269,7 @@ export function useMobilePreviewNativeLogs(
       }
       pendingLogsRef.current = [];
     };
-  }, [matchesParams, params]);
+  }, [logsStore, matchesParams, params]);
 
   const startMutation = useMutation({
     mutationFn: (startParams: MobilePreviewNativeLogStartParams) =>
@@ -283,7 +286,7 @@ export function useMobilePreviewNativeLogs(
 
   return {
     session,
-    logs,
+    logsStore,
     start: startMutation.mutateAsync,
     stop: stopMutation.mutateAsync,
     isStarting: startMutation.isPending,
@@ -297,7 +300,9 @@ export function useMobilePreviewNetworkProxy(
 ) {
   const [session, setSession] =
     useState<MobilePreviewNetworkProxySession | null>(null);
-  const [requests, setRequests] = useState<MobilePreviewNetworkRequest[]>([]);
+  const [requestsStore] = useState(
+    createStreamListStore<MobilePreviewNetworkRequest>,
+  );
   const sessionRef = useRef<MobilePreviewNetworkProxySession | null>(null);
   const pendingRequestsRef = useRef<MobilePreviewNetworkRequest[]>([]);
   const flushRequestsFrameRef = useRef<number | null>(null);
@@ -331,7 +336,7 @@ export function useMobilePreviewNetworkProxy(
           flushRequestsFrameRef.current = null;
           const nextRequests = pendingRequestsRef.current;
           pendingRequestsRef.current = [];
-          setRequests((current) => [...current, ...nextRequests].slice(-500));
+          requestsStore.append(nextRequests, MAX_NETWORK_REQUESTS);
         });
       },
     );
@@ -353,7 +358,7 @@ export function useMobilePreviewNetworkProxy(
       }
       pendingRequestsRef.current = [];
     };
-  }, []);
+  }, [requestsStore]);
 
   const startMutation = useMutation({
     mutationFn: (startParams: MobilePreviewNetworkProxyStartParams) =>
@@ -379,12 +384,12 @@ export function useMobilePreviewNetworkProxy(
 
   const clear = useCallback(() => {
     pendingRequestsRef.current = [];
-    setRequests([]);
-  }, []);
+    requestsStore.clear();
+  }, [requestsStore]);
 
   return {
     session,
-    requests,
+    requestsStore,
     start: startMutation.mutateAsync,
     stop: stopMutation.mutateAsync,
     clear,
@@ -409,7 +414,9 @@ export function useMobilePreviewPacketCapture(
 ) {
   const [session, setSession] =
     useState<MobilePreviewPacketCaptureSession | null>(null);
-  const [requests, setRequests] = useState<MobilePreviewNetworkRequest[]>([]);
+  const [requestsStore] = useState(
+    createStreamListStore<MobilePreviewNetworkRequest>,
+  );
   const sessionRef = useRef<MobilePreviewPacketCaptureSession | null>(null);
   const pendingRequestsRef = useRef<MobilePreviewNetworkRequest[]>([]);
   const flushRequestsFrameRef = useRef<number | null>(null);
@@ -426,8 +433,8 @@ export function useMobilePreviewPacketCapture(
     sessionRef.current = null;
     queueMicrotask(() => {
       setSession(null);
-      setRequests([]);
     });
+    requestsStore.clear();
     if (!params) return undefined;
 
     const unsubscribeSession = api.mobilePreview.onPacketCaptureSession(
@@ -453,7 +460,7 @@ export function useMobilePreviewPacketCapture(
           flushRequestsFrameRef.current = null;
           const nextRequests = pendingRequestsRef.current;
           pendingRequestsRef.current = [];
-          setRequests((current) => [...current, ...nextRequests].slice(-500));
+          requestsStore.append(nextRequests, MAX_NETWORK_REQUESTS);
         });
       },
     );
@@ -475,7 +482,7 @@ export function useMobilePreviewPacketCapture(
       }
       pendingRequestsRef.current = [];
     };
-  }, [matchesParams, params]);
+  }, [matchesParams, params, requestsStore]);
 
   const startMutation = useMutation({
     mutationFn: (startParams: MobilePreviewPacketCaptureStartParams) =>
@@ -492,12 +499,12 @@ export function useMobilePreviewPacketCapture(
 
   const clear = useCallback(() => {
     pendingRequestsRef.current = [];
-    setRequests([]);
-  }, []);
+    requestsStore.clear();
+  }, [requestsStore]);
 
   return {
     session,
-    requests,
+    requestsStore,
     start: startMutation.mutateAsync,
     stop: stopMutation.mutateAsync,
     clear,
@@ -552,12 +559,17 @@ export function useMobilePreviewSession(
   const [activeSessionDeviceKeys, setActiveSessionDeviceKeys] = useState<
     ReadonlySet<string>
   >(() => new Set());
-  const [frameUrl, setFrameUrl] = useState<string | null>(null);
-  const [imageFrameCount, setImageFrameCount] = useState(0);
-  const [h264ChunkBase64, setH264ChunkBase64] = useState<string | null>(null);
+  // Image frames stream at up to 60fps. They are pushed to subscribers through a
+  // ref-based emitter so a new frame never re-renders the pane; only the
+  // "first frame received" transition is React state.
+  const [hasImageFrame, setHasImageFrame] = useState(false);
+  const imageFrameCountRef = useRef(0);
+  const imageFrameListenersRef = useRef(
+    new Set<(nextFrameUrl: string | null) => void>(),
+  );
   const [lastError, setLastError] = useState<Error | null>(null);
   const [isHydratingRetainedSessions, setIsHydratingRetainedSessions] =
-    useState(false);
+    useState(retainSessions);
   const sessionRef = useRef<MobilePreviewSession | null>(null);
   const frameUrlRef = useRef<string | null>(null);
   const h264ChunkListenersRef = useRef(
@@ -591,6 +603,29 @@ export function useMobilePreviewSession(
   useEffect(() => {
     selectedDeviceRef.current = selectedDevice;
   }, [selectedDevice]);
+
+  const emitImageFrame = useCallback((nextFrameUrl: string | null) => {
+    imageFrameListenersRef.current.forEach((listener) => {
+      listener(nextFrameUrl);
+    });
+  }, []);
+
+  const subscribeImageFrames = useCallback(
+    (listener: (nextFrameUrl: string | null) => void) => {
+      imageFrameListenersRef.current.add(listener);
+      listener(frameUrlRef.current);
+      return () => {
+        imageFrameListenersRef.current.delete(listener);
+      };
+    },
+    [],
+  );
+
+  const resetImageFrames = useCallback(() => {
+    imageFrameCountRef.current = 0;
+    setHasImageFrame(false);
+    emitImageFrame(null);
+  }, [emitImageFrame]);
 
   const revokeFrameUrl = useCallback(() => {
     if (frameUrlRef.current?.startsWith('blob:')) {
@@ -648,12 +683,10 @@ export function useMobilePreviewSession(
 
       if (previousSessionId && previousSessionId !== nextSession?.id) {
         revokeFrameUrl();
-        setFrameUrl(null);
-        setImageFrameCount(0);
-        setH264ChunkBase64(null);
+        resetImageFrames();
       }
     },
-    [revokeFrameUrl, syncActiveSessionDeviceKeys, taskId],
+    [resetImageFrames, revokeFrameUrl, syncActiveSessionDeviceKeys, taskId],
   );
 
   const shouldAcceptSession = useCallback(
@@ -819,20 +852,23 @@ export function useMobilePreviewSession(
             });
           }
           revokeFrameUrl();
-          setFrameUrl(null);
-          setH264ChunkBase64(event.frameBase64);
+          emitImageFrame(null);
+          // Mirrors the old setFrameUrl(null): consumers gated on "an image
+          // frame exists" (e.g. the screenshot button) must not stay enabled
+          // once the session switched to a video codec.
+          setHasImageFrame(false);
           return;
         }
 
-        setH264ChunkBase64(null);
         const nextFrameUrl = createObjectUrlFromBase64(
           event.frameBase64,
           currentSession.frameFormat === 'png' ? 'image/png' : 'image/jpeg',
         );
         revokeFrameUrl();
         frameUrlRef.current = nextFrameUrl;
-        setFrameUrl(nextFrameUrl);
-        setImageFrameCount((count) => count + 1);
+        imageFrameCountRef.current += 1;
+        emitImageFrame(nextFrameUrl);
+        setHasImageFrame(true);
       });
     };
 
@@ -939,6 +975,7 @@ export function useMobilePreviewSession(
     };
   }, [
     detachRetainedSession,
+    emitImageFrame,
     retainSessions,
     revokeFrameUrl,
     setSession,
@@ -994,9 +1031,7 @@ export function useMobilePreviewSession(
     queueMicrotask(() => {
       if (!isMountedRef.current) return;
       setSession(null);
-      setFrameUrl(null);
-      setImageFrameCount(0);
-      setH264ChunkBase64(null);
+      resetImageFrames();
     });
 
     if (!retainSessions) {
@@ -1010,7 +1045,7 @@ export function useMobilePreviewSession(
         });
       });
     }
-  }, [retainSessions, taskId, revokeFrameUrl, setSession]);
+  }, [resetImageFrames, retainSessions, taskId, revokeFrameUrl, setSession]);
 
   useEffect(() => {
     const selectionGeneration = startGenerationRef.current;
@@ -1239,7 +1274,9 @@ export function useMobilePreviewSession(
       unknownFrameGenerationRef.current = startGeneration;
       latestH264ConfigurationRef.current = null;
       pendingH264ChunksRef.current = [];
-      setImageFrameCount(0);
+      // Only the fps counter resets here: the last frame stays on screen while
+      // the new session spins up, as it did before frames moved out of state.
+      imageFrameCountRef.current = 0;
 
       try {
         const nextSession = await startPreview(params);
@@ -1327,7 +1364,13 @@ export function useMobilePreviewSession(
         throw error;
       }
     },
-    [detachRetainedSession, retainSessions, setSession, startPreview, taskId],
+    [
+      detachRetainedSession,
+      retainSessions,
+      setSession,
+      startPreview,
+      taskId,
+    ],
   );
 
   const stop = useCallback(async () => {
@@ -1427,9 +1470,9 @@ export function useMobilePreviewSession(
   return {
     session,
     activeSessionDeviceKeys,
-    frameUrl,
-    imageFrameCount,
-    h264ChunkBase64,
+    hasImageFrame,
+    imageFrameCountRef,
+    subscribeImageFrames,
     subscribeH264Chunks,
     start,
     cancelStart,

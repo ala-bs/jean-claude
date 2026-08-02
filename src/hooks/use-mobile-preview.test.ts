@@ -837,7 +837,7 @@ describe('useMobilePreviewSession pending start cancellation', () => {
     });
     expect(preview!.session).toEqual(retainedSession);
     expect(preview!.activeSessionDeviceKeys).toEqual(new Set(['ios:device-1']));
-    expect(preview!.imageFrameCount).toBe(1);
+    expect(preview!.imageFrameCountRef.current).toBe(1);
   });
 
   it('accepts full attach H264 bootstrap at shared queue boundary', async () => {

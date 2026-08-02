@@ -1313,10 +1313,11 @@ export function FeedList() {
           },
         });
       } else if (item.taskId) {
+        if (item.taskId === currentTaskId) return;
         navigate({ to: '/all/$taskId', params: { taskId: item.taskId } });
       }
     },
-    [allVisibleItems, navigate],
+    [allVisibleItems, currentTaskId, navigate],
   );
 
   const navigateToFeedItem = useCallback(
@@ -1343,10 +1344,11 @@ export function FeedList() {
           },
         });
       } else if (item.taskId) {
+        if (item.taskId === currentTaskId) return;
         navigate({ to: '/all/$taskId', params: { taskId: item.taskId } });
       }
     },
-    [navigate],
+    [currentTaskId, navigate],
   );
 
   const navigateRelative = useCallback(

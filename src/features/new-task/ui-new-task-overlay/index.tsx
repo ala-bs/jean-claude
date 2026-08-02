@@ -386,7 +386,9 @@ function NewTaskPromptInput({
   // Keep the latest prompt in a ref so the preview button (memoized) doesn't
   // re-render on every keystroke; it reads the prompt lazily when opened.
   const promptRef = useRef(prompt);
-  promptRef.current = prompt;
+  useEffect(() => {
+    promptRef.current = prompt;
+  }, [prompt]);
   const getPrompt = useCallback(() => promptRef.current, []);
 
   const handlePromptChange = useCallback(

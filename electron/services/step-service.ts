@@ -5,7 +5,6 @@ import type {
 import type {
   InteractionMode,
   ModelPreference,
-  Task,
   TaskStep,
   TaskStepMeta,
   TaskStepType,

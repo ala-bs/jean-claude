@@ -1,10 +1,7 @@
 import {
   AlertTriangle,
-  Ban,
   Check,
-  ChevronRight,
   Copy,
-  Funnel,
   Keyboard,
   Link,
   ListTree,
@@ -15,7 +12,6 @@ import {
   Pin,
   PinOff,
   Play,
-  Plus,
   RotateCcw,
   RotateCw,
   Route,
@@ -25,30 +21,19 @@ import {
   X,
 } from 'lucide-react';
 import {
-  BitmapVideoFrameRenderer,
-  WebCodecsVideoDecoder,
-  WebGLVideoFrameRenderer,
 } from '@yume-chan/scrcpy-decoder-webcodecs';
 import {
   type CSSProperties,
-  type KeyboardEvent,
-  type PointerEvent,
   type MouseEvent as ReactMouseEvent,
-  type SVGProps,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type WheelEvent,
 } from 'react';
 import {
-  type ScrcpyMediaStreamPacket,
-  ScrcpyVideoCodecId,
 } from '@yume-chan/scrcpy';
 import clsx from 'clsx';
-import { createPortal } from 'react-dom';
-import { motion } from 'framer-motion';
 
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 
@@ -57,10 +42,8 @@ import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
 import { Select } from '@/common/ui/select';
 
-import { InteractiveLog } from '@/features/common/interactive-log';
 
 import {
-  type MobilePreviewH264Chunk,
   useAndroidDeviceManagement,
   useIosDeviceManagement,
   useMobilePreviewDevices,
@@ -91,20 +74,40 @@ import { createMobileDevServerCommandId } from '@/lib/mobile-preview-runtime';
 import type {
   MobilePlatform,
   MobilePreviewAndroidAppStatus,
-  MobilePreviewAndroidDeviceProfile,
-  MobilePreviewAndroidSystemImage,
   MobilePreviewDevice,
   MobilePreviewIosAppStatus,
-  MobilePreviewIosDeviceType,
-  MobilePreviewIosRuntime,
   MobilePreviewNetworkRequest,
   MobilePreviewQuality,
-  MobilePreviewStreamStrategy,
   MobilePreviewTextSize,
-  MobileRotationDirection,
 } from '@shared/mobile-simulator-types';
 
 import type { CommandRunStatus } from '@shared/run-command-types';
+import {
+  appendNetworkFilterToken,
+  getNetworkFacets,
+  getNetworkHostname,
+  getNetworkMethodClass,
+  getNetworkPath,
+  getNetworkStatusClass,
+  getNetworkStatusLabel,
+  logNetworkFilterDebug,
+  matchesNetworkFilter,
+  matchesNetworkFilterToken,
+  matchesNetworkPreset,
+  type NetworkFilterContextMenuState,
+  type NetworkFilterToken,
+  type NetworkPresetFilter,
+} from './utils-network';
+import {
+  NetworkFacetButton,
+  NetworkFilterAutocomplete,
+  NetworkFilterChip,
+  NetworkFilterContextMenu,
+  NetworkRequestDetails,
+} from './ui-network-inspector';
+import {
+  useStreamListStoreWhen,
+} from '@/hooks/utils-stream-list-store';
 import type { MobilePreviewProjectConfig } from '@shared/types';
 
 import {
@@ -121,159 +124,74 @@ import {
   shouldStopPreviousIosBuild,
 } from './utils-setup-operation';
 import {
-  canStartPointerInteraction,
-  createWheelGestureFeedback,
-  getNextGestureFeedbackId,
-  getPointerDownInput,
-  getPointerMoveInputs,
-  getPointerUpInput,
-  isPointWithinSurfaceBounds,
-  matchesActivePointer,
-  restartGestureFeedbackTimer,
 } from './utils-input';
-import { containsH264Keyframe, createH264AccessUnitParser } from './utils-h264';
 import {
   getVisibleMobilePreviewPaneTab,
   isMobilePreviewPaneTabVisible,
   type MobilePreviewPaneTab,
 } from './utils-tabs';
 import {
-  mapRotatedSurfacePoint,
-  normalizeRotationDegrees,
 } from './utils-rotation';
 import {
-  notifyH264FrameRendered,
-  notifyImageFrameRendered,
-  notifyRawRgbaFrameRendered,
 } from './utils-frame-readiness';
-import { canAutoStartMobilePreviewDevice } from '@/features/mobile-preview/utils-mobile-preview-auto-launch';
+import {
+  EmptyState,
+  PlatformLogo,
+  PreviewErrorState,
+} from './ui-common';
+import {
+  NativeLogsTabLabel,
+  NetworkRequestCountDetail,
+  NetworkTabLabel,
+  PreviewStatusText,
+} from './ui-stream-readouts';
+import {
+  cleanPreviewError,
+  formatError,
+  getStreamStrategyLabel,
+  getWaitingForFrameDetail,
+} from './utils-preview-error';
+import {
+  canStartDevice,
+  formatAndroidImageTag,
+  formatAndroidScreenSpec,
+  formatDeviceState,
+  getAndroidImageCompatibilityWarning,
+  getDefaultAndroidProjectPath,
+  getIosDeviceChrome,
+  getOptionalPositiveInteger,
+  getPreferredAndroidSystemImage,
+  getPreviewDeviceKey,
+  getSuggestedAndroidSystemImageId,
+  getSuggestedIosDeviceName,
+  isOptionalPositiveInteger,
+  parsePort,
+} from './utils-device-setup';
+import { useMobilePreviewInput } from './use-mobile-preview-input';
+import { DevServerTab } from './ui-dev-server-tab';
+import { DevToolsTab } from './ui-devtools-tab';
+import { LogsTab } from './ui-logs-tab';
+import {
+  GestureFeedbackOverlay,
+  H264PreviewCanvas,
+  ImagePreviewSurface,
+  RawRgbaPreviewCanvas,
+} from './ui-preview-surface';
+
+export { buildGestureFeedbackPath } from './ui-preview-surface';
+import {
+  createGestureFeedbackStore,
+} from './gesture-feedback-store';
+import {
+  createPreviewFpsStore,
+} from './preview-fps-store';
 import { getDeviceCornerRadiusRatio } from './utils-device-frame';
 import { getMobilePreviewStandaloneLayoutClasses } from '@/features/mobile-preview/utils-mobile-preview-standalone-layout';
 import { useMobilePreviewAutoStart } from '@/features/mobile-preview/use-mobile-preview-auto-start';
 import { useMobilePreviewExpoLaunch } from '@/features/mobile-preview/use-mobile-preview-expo-launch';
 
-const SWIPE_THRESHOLD_PX = 8;
-const LONG_PRESS_THRESHOLD_MS = 500;
-const WHEEL_SWIPE_DURATION_MS = 180;
-const WHEEL_INPUT_THROTTLE_MS = 120;
-const WHEEL_SWIPE_MIN_DISTANCE_PX = 40;
-const WHEEL_SWIPE_MAX_DISTANCE_PX = 320;
-const TOUCH_MOVE_THROTTLE_MS = 16;
-const POINTER_EDGE_SLOP_PX = 24;
 const EMPTY_DEEP_LINKS: Array<{ url: string; pinned: boolean }> = [];
 const FIRST_PREVIEW_FRAME_SETUP_WAIT_MS = 15_000;
-const GESTURE_FEEDBACK_FADE_MS = 300;
-
-type GestureFeedback = {
-  id: number;
-  points: Array<{ x: number; y: number }>;
-  released: boolean;
-};
-
-export function buildGestureFeedbackPath(
-  points: Array<{ x: number; y: number }>,
-): string {
-  return points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
-    .join(' ');
-}
-
-function GestureFeedbackOverlay({ feedback }: { feedback: GestureFeedback | null }) {
-  if (!feedback || feedback.points.length === 0) return null;
-
-  const lastPoint = feedback.points.at(-1)!;
-  const path = buildGestureFeedbackPath(feedback.points);
-
-  return (
-    <svg className="pointer-events-none absolute inset-0 z-20 size-full overflow-visible">
-      {feedback.points.length > 1 ? (
-        <motion.path
-          d={path}
-          fill="none"
-          stroke="var(--color-acc)"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          initial={{ opacity: 0.8 }}
-          animate={{ opacity: feedback.released ? 0 : 0.8 }}
-          transition={{ duration: GESTURE_FEEDBACK_FADE_MS / 1000 }}
-          style={{ filter: 'drop-shadow(0 0 3px rgb(0 0 0 / 0.55))' }}
-        />
-      ) : null}
-      <motion.circle
-        cx={lastPoint.x}
-        cy={lastPoint.y}
-        r="7"
-        fill="var(--color-acc)"
-        stroke="rgb(255 255 255 / 0.9)"
-        strokeWidth="2"
-        initial={{ opacity: 0, scale: 0.5 }}
-        animate={{
-          opacity: feedback.released ? 0 : 0.95,
-          scale: feedback.released ? 1.8 : 1,
-        }}
-        transition={{ duration: GESTURE_FEEDBACK_FADE_MS / 1000 }}
-        style={{ transformOrigin: `${lastPoint.x}px ${lastPoint.y}px` }}
-      />
-    </svg>
-  );
-}
-
-function logMobilePreviewDebug(..._args: unknown[]) {}
-
-const NETWORK_FILTER_DEBUG_KEY = 'jc:debug-network-filter';
-
-function logNetworkFilterDebug(
-  event: string,
-  detail?: Record<string, unknown>,
-) {
-  try {
-    if (window.localStorage.getItem(NETWORK_FILTER_DEBUG_KEY) !== '1') return;
-  } catch {
-    return;
-  }
-
-  console.info('[jc:network-filter]', event, detail ?? {});
-}
-
-function IconAppleLogo(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="-1.5 0 20 20" aria-hidden="true" fill="currentColor" {...props}>
-      <g transform="translate(-102 -7439)">
-        <g transform="translate(56 160)">
-          <path d="M57.5708873,7282.19296 C58.2999598,7281.34797 58.7914012,7280.17098 58.6569121,7279 C57.6062792,7279.04 56.3352055,7279.67099 55.5818643,7280.51498 C54.905374,7281.26397 54.3148354,7282.46095 54.4735932,7283.60894 C55.6455696,7283.69593 56.8418148,7283.03894 57.5708873,7282.19296 M60.1989864,7289.62485 C60.2283111,7292.65181 62.9696641,7293.65879 63,7293.67179 C62.9777537,7293.74279 62.562152,7295.10677 61.5560117,7296.51675 C60.6853718,7297.73474 59.7823735,7298.94772 58.3596204,7298.97372 C56.9621472,7298.99872 56.5121648,7298.17973 54.9134635,7298.17973 C53.3157735,7298.17973 52.8162425,7298.94772 51.4935978,7298.99872 C50.1203933,7299.04772 49.0738052,7297.68074 48.197098,7296.46676 C46.4032359,7293.98379 45.0330649,7289.44985 46.8734421,7286.3899 C47.7875635,7284.87092 49.4206455,7283.90793 51.1942837,7283.88393 C52.5422083,7283.85893 53.8153044,7284.75292 54.6394294,7284.75292 C55.4635543,7284.75292 57.0106846,7283.67793 58.6366882,7283.83593 C59.3172232,7283.86293 61.2283842,7284.09893 62.4549652,7285.8199 C62.355868,7285.8789 60.1747177,7287.09489 60.1989864,7289.62485" />
-        </g>
-      </g>
-    </svg>
-  );
-}
-
-function IconAndroidLogo(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="19.933 68.509 228.155 228.155" aria-hidden="true" fill="none" {...props}>
-      <path d="M101.885 207.092c7.865 0 14.241 6.376 14.241 14.241v61.09c0 7.865-6.376 14.24-14.241 14.24-7.864 0-14.24-6.375-14.24-14.24v-61.09c0-7.864 6.376-14.24 14.24-14.24z" fill="currentColor" />
-      <path d="M69.374 133.645c-.047.54-.088 1.086-.088 1.638v92.557c0 9.954 7.879 17.973 17.66 17.973h94.124c9.782 0 17.661-8.02 17.661-17.973v-92.557c0-.552-.02-1.1-.066-1.638H69.374z" fill="currentColor" />
-      <path d="M166.133 207.092c7.865 0 14.241 6.376 14.241 14.241v61.09c0 7.865-6.376 14.24-14.241 14.24-7.864 0-14.24-6.375-14.24-14.24v-61.09c0-7.864 6.376-14.24 14.24-14.24zM46.405 141.882c7.864 0 14.24 6.376 14.24 14.241v61.09c0 7.865-6.376 14.241-14.24 14.241-7.865 0-14.241-6.376-14.241-14.24v-61.09c-.001-7.865 6.375-14.242 14.241-14.242zM221.614 141.882c7.864 0 14.24 6.376 14.24 14.241v61.09c0 7.865-6.376 14.241-14.24 14.241-7.865 0-14.241-6.376-14.241-14.24v-61.09c0-7.865 6.376-14.242 14.241-14.242zM69.79 127.565c.396-28.43 25.21-51.74 57.062-54.812h14.312c31.854 3.073 56.666 26.384 57.062 54.812H69.79z" fill="currentColor" />
-      <path d="M74.743 70.009l15.022 26.02M193.276 70.009l-15.023 26.02" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M114.878 102.087c.012 3.974-3.277 7.205-7.347 7.216-4.068.01-7.376-3.202-7.388-7.176v-.04c-.011-3.975 3.278-7.205 7.347-7.216 4.068-.011 7.376 3.2 7.388 7.176v.04zM169.874 102.087c.012 3.974-3.277 7.205-7.347 7.216-4.068.01-7.376-3.202-7.388-7.176v-.04c-.011-3.975 3.278-7.205 7.347-7.216 4.068-.011 7.376 3.2 7.388 7.176v.04z" fill="var(--color-bg-0)" />
-    </svg>
-  );
-}
-
-function PlatformLogo({ platform }: { platform: MobilePlatform }) {
-  const label = platform === 'ios' ? 'iOS' : 'Android';
-  const Icon = platform === 'ios' ? IconAppleLogo : IconAndroidLogo;
-
-  return (
-    <span
-      aria-label={label}
-      title={label}
-      className="text-acc-ink bg-acc-soft inline-flex size-5 items-center justify-center rounded-[3px]"
-    >
-      <Icon className="size-3.5" />
-    </span>
-  );
-}
 
 const FPS_OPTIONS = [
   { value: '15', label: '15 FPS' },
@@ -289,146 +207,6 @@ const QUALITY_OPTIONS = [
 ];
 const EMPTY_DETECTED_APPS: MobilePreviewProjectConfig['detectedApps'] = [];
 
-function getDefaultAndroidProjectPath({
-  appPath,
-  detectedApps,
-}: {
-  appPath: string;
-  detectedApps: MobilePreviewProjectConfig['detectedApps'];
-}) {
-  const app = detectedApps.find((detectedApp) => detectedApp.path === appPath);
-  return app?.androidProjectPath ?? null;
-}
-
-function getSuggestedAndroidSystemImageId(hostArch: string | null | undefined) {
-  if (hostArch === 'arm64') {
-    return 'system-images;android-35;google_apis;arm64-v8a';
-  }
-  if (hostArch === 'x64' || hostArch === 'ia32') {
-    return 'system-images;android-35;google_apis;x86_64';
-  }
-
-  const architecture = (
-    navigator as Navigator & {
-      userAgentData?: { architecture?: string; platform?: string };
-    }
-  ).userAgentData?.architecture?.toLowerCase();
-  const platform = `${navigator.platform} ${architecture ?? ''}`.toLowerCase();
-  const abi = platform.includes('mac') || platform.includes('arm') || platform.includes('aarch')
-    ? 'arm64-v8a'
-    : 'x86_64';
-  return `system-images;android-35;google_apis;${abi}`;
-}
-
-function getPreferredAndroidSystemImage(
-  images: MobilePreviewAndroidSystemImage[] | undefined,
-  hostArch: string | null | undefined,
-) {
-  if (!images?.length) return null;
-  const preferredAbi =
-    hostArch === 'arm64'
-      ? 'arm64-v8a'
-      : hostArch === 'x64' || hostArch === 'ia32'
-        ? 'x86_64'
-        : null;
-  return (
-    images.find(
-      (image) => image.tag === 'google_apis' && image.abi === preferredAbi,
-    ) ??
-    images.find((image) => image.tag === 'google_apis') ??
-    images[0]
-  );
-}
-
-function formatAndroidScreenSpec(
-  screen: MobilePreviewAndroidDeviceProfile['screen'],
-) {
-  if (!screen) return 'Dimensions unknown';
-  const density = screen.densityDpi ? ` @ ${screen.densityDpi} dpi` : '';
-  return `${screen.width} x ${screen.height}${density}`;
-}
-
-function formatAndroidImageTag(tag: string) {
-  return tag.replaceAll('_', ' ');
-}
-
-function getSuggestedIosDeviceName({
-  deviceType,
-  runtime,
-}: {
-  deviceType: MobilePreviewIosDeviceType | null;
-  runtime: MobilePreviewIosRuntime | null;
-}) {
-  if (!deviceType || !runtime) return '';
-  return `${deviceType.name} ${runtime.name}`;
-}
-
-function getIosDeviceChrome(deviceType: MobilePreviewIosDeviceType) {
-  const name = deviceType.name.toLowerCase();
-  const isMax = /max|plus/.test(name);
-  const isSe = /\bse\b/.test(name);
-  const hasDynamicIsland =
-    /iphone\s+(1[5-9]|[2-9]\d)|air/.test(name) ||
-    /iphone\s+14\s+pro/.test(name);
-  const hasClassicNotch = !isSe && !hasDynamicIsland;
-  const height = isMax ? 68 : /pro|air/.test(name) ? 64 : 60;
-  const aspect = deviceType.screen
-    ? Math.min(deviceType.screen.width, deviceType.screen.height) /
-      Math.max(deviceType.screen.width, deviceType.screen.height)
-    : isSe
-      ? 0.56
-      : isMax
-        ? 0.47
-        : 0.455;
-
-  return {
-    aspect,
-    height,
-    hasClassicNotch,
-    hasDynamicIsland,
-    hasHomeButton: isSe,
-  };
-}
-
-function getAndroidImageCompatibilityWarning(
-  hostArch: string | null | undefined,
-  abi: string | null | undefined,
-) {
-  if (!hostArch || !abi) return null;
-  if (hostArch === 'arm64' && abi === 'x86_64') {
-    return 'x86_64 images are slower on Apple Silicon.';
-  }
-  if ((hostArch === 'x64' || hostArch === 'ia32') && abi === 'arm64-v8a') {
-    return 'arm64 images may not run on Intel hosts.';
-  }
-  return null;
-}
-
-function parseOptionalPositiveInteger(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  const parsed = Number(trimmed);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : Number.NaN;
-}
-
-function isOptionalPositiveInteger(value: string) {
-  const parsed = parseOptionalPositiveInteger(value);
-  return parsed === undefined || !Number.isNaN(parsed);
-}
-
-function getOptionalPositiveInteger(value: string) {
-  const parsed = parseOptionalPositiveInteger(value);
-  return Number.isNaN(parsed) ? undefined : parsed;
-}
-
-function parsePort(value: string) {
-  const trimmed = value.trim();
-  const parsed = Number(trimmed);
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535
-    ? parsed
-    : null;
-}
-
 const TEXT_SIZE_OPTIONS = [
   { value: 'small', label: 'Small' },
   { value: 'normal', label: 'Normal' },
@@ -437,1705 +215,6 @@ const TEXT_SIZE_OPTIONS = [
 ];
 
 type MobilePreviewAction = 'deeplink' | 'port' | 'text-size';
-
-type ImagePreviewStats = {
-  receivedFps: number;
-};
-
-function formatError(error: unknown): string | null {
-  if (!error) return null;
-  return error instanceof Error ? error.message : String(error);
-}
-
-function cleanPreviewError(message: string): string {
-  return message
-    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
-    .replace(/^Error:\s*/i, '')
-    .trim();
-}
-
-function getStreamStrategyLabel(
-  strategy: MobilePreviewStreamStrategy | null | undefined,
-) {
-  switch (strategy) {
-    case 'coresimulator-framebuffer':
-      return 'CoreSimulator framebuffer';
-    case 'idb-h264-stream':
-      return 'idb H264 stream';
-    case 'idb-rbga-stream':
-      return 'idb raw RGBA stream';
-    case 'idb-video-stream':
-      return 'idb video stream';
-    case 'simctl-screenshot':
-      return 'simctl screenshots';
-    case 'adb-screenrecord':
-      return 'adb screenrecord';
-    case 'adb-screenshot':
-      return 'adb screenshots';
-    case 'scrcpy':
-      return 'scrcpy';
-    default:
-      return null;
-  }
-}
-
-function getWaitingForFrameDetail(
-  strategy: MobilePreviewStreamStrategy | null | undefined,
-) {
-  switch (strategy) {
-    case 'coresimulator-framebuffer':
-      return 'Preview stream is running; waiting for CoreSimulator frames';
-    case 'simctl-screenshot':
-      return 'Preview stream is running; waiting for simulator screenshots';
-    case 'idb-rbga-stream':
-    case 'idb-h264-stream':
-    case 'idb-video-stream':
-      return 'Preview stream is running; waiting for idb frames';
-    case 'adb-screenshot':
-      return 'Preview stream is running; waiting for Android screenshots';
-    case 'adb-screenrecord':
-      return 'Preview stream is running; waiting for Android screenrecord frames';
-    case 'scrcpy':
-      return 'Preview stream is running; waiting for scrcpy frames';
-    default:
-      return 'Preview stream is running; waiting for frames';
-  }
-}
-
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-// A <canvas> reports 300x150 until a frame sets its intrinsic size. That default
-// is landscape and would wrongly flip a portrait session, so treat it as unknown.
-const DEFAULT_CANVAS_WIDTH = 300;
-const DEFAULT_CANVAS_HEIGHT = 150;
-
-function getSurfaceIntrinsicSize(
-  surface: HTMLImageElement | HTMLCanvasElement | null,
-): { width: number; height: number } | null {
-  if (!surface) return null;
-  if (surface instanceof HTMLImageElement) {
-    if (!surface.naturalWidth || !surface.naturalHeight) return null;
-    return { width: surface.naturalWidth, height: surface.naturalHeight };
-  }
-  if (!surface.width || !surface.height) return null;
-  if (
-    surface.width === DEFAULT_CANVAS_WIDTH &&
-    surface.height === DEFAULT_CANVAS_HEIGHT
-  ) {
-    return null;
-  }
-  return { width: surface.width, height: surface.height };
-}
-
-/**
- * Device coordinate space for input events. Session dimensions are captured once
- * at stream start, so when the device rotates afterwards they must be re-oriented
- * to match what is actually rendered.
- */
-function resolveDeviceSize({
-  surface,
-  sessionWidth,
-  sessionHeight,
-  fallback,
-}: {
-  surface: { width: number; height: number } | null;
-  sessionWidth: number | null;
-  sessionHeight: number | null;
-  fallback: { width: number; height: number };
-}) {
-  if (!sessionWidth || !sessionHeight) {
-    return surface ?? fallback;
-  }
-  if (!surface || surface.width === surface.height) {
-    return { width: sessionWidth, height: sessionHeight };
-  }
-  const sameOrientation =
-    surface.width > surface.height === sessionWidth > sessionHeight;
-  return sameOrientation
-    ? { width: sessionWidth, height: sessionHeight }
-    : { width: sessionHeight, height: sessionWidth };
-}
-
-function formatDeviceState(state: MobilePreviewDevice['state']) {
-  if (state === 'booted') return 'Booted';
-  if (state === 'shutdown') return 'Shutdown';
-  return 'Unknown';
-}
-
-function formatNetworkClient(request: {
-  clientAddress: string | null;
-  clientPort: number | null;
-}) {
-  if (!request.clientAddress) return '-';
-  if (request.clientPort === null) return request.clientAddress;
-  return `${request.clientAddress}:${request.clientPort}`;
-}
-
-type NetworkFilterKey = 'text' | 'method' | 'status' | 'path' | 'host';
-
-type NetworkFilterToken = {
-  key: NetworkFilterKey;
-  value: string;
-  neg: boolean;
-  exact?: boolean;
-};
-
-type NetworkFilterSuggestion =
-  | {
-      kind: 'key';
-      key: Exclude<NetworkFilterKey, 'text'>;
-      label: string;
-      hint: string;
-      neg: boolean;
-    }
-  | {
-      kind: 'value';
-      label: string;
-      count: number;
-      token: NetworkFilterToken;
-    };
-
-const NETWORK_FILTER_FIELDS = [
-  { key: 'method', hint: 'HTTP method' },
-  { key: 'status', hint: 'response code' },
-  { key: 'path', hint: 'URL path' },
-  { key: 'host', hint: 'captured domain' },
-] as const satisfies ReadonlyArray<{
-  key: Exclude<NetworkFilterKey, 'text'>;
-  hint: string;
-}>;
-
-function parseNetworkFilterToken(rawValue: string): NetworkFilterToken {
-  let value = rawValue.trim();
-  let neg = false;
-  if (value.startsWith('-') || value.startsWith('!')) {
-    neg = true;
-    value = value.slice(1).trim();
-  }
-
-  const colonIndex = value.indexOf(':');
-  if (colonIndex > 0) {
-    const key = value.slice(0, colonIndex).toLowerCase() as NetworkFilterKey;
-    const tokenValue = value.slice(colonIndex + 1).trim();
-    if (
-      tokenValue &&
-      NETWORK_FILTER_FIELDS.some((field) => field.key === key)
-    ) {
-      return { key, value: tokenValue, neg };
-    }
-  }
-
-  return { key: 'text', value, neg };
-}
-
-function matchesNetworkFilterToken(
-  request: MobilePreviewNetworkRequest,
-  token: NetworkFilterToken,
-) {
-  const normalizedValue = token.value.trim().toLowerCase();
-  if (!normalizedValue) return true;
-
-  const rawMatch = (() => {
-    if (token.key === 'method') {
-      return request.method.toLowerCase() === normalizedValue;
-    }
-    if (token.key === 'status') {
-      if (/^\dxx$/.test(normalizedValue)) {
-        return request.status !== null
-          ? Math.floor(request.status / 100) === Number(normalizedValue[0])
-          : request.tunnelOnly && normalizedValue === '2xx';
-      }
-      return getNetworkStatusLabel(request).toString().toLowerCase() === normalizedValue;
-    }
-    if (token.key === 'path') {
-      const path = getNetworkPath(request.url).toLowerCase();
-      return token.exact ? path === normalizedValue : path.includes(normalizedValue);
-    }
-    if (token.key === 'host') {
-      const host = getNetworkHostname(request.url).toLowerCase();
-      return token.exact ? host === normalizedValue : host.includes(normalizedValue);
-    }
-    return [
-      request.method,
-      request.url,
-      getNetworkStatusLabel(request).toString(),
-      request.error ?? '',
-      formatNetworkClient(request),
-    ].some((value) => value.toLowerCase().includes(normalizedValue));
-  })();
-
-  return token.neg ? !rawMatch : rawMatch;
-}
-
-function matchesNetworkFilter(
-  request: MobilePreviewNetworkRequest,
-  filter: NetworkFilterToken[],
-) {
-  return filter.every((token) => matchesNetworkFilterToken(request, token));
-}
-
-function formatNetworkHeaders(headers: Record<string, string>) {
-  const entries = Object.entries(headers);
-  if (entries.length === 0) return '-';
-  return entries.map(([key, value]) => `${key}: ${value}`).join('\n');
-}
-
-function formatNetworkPreview(value: string | null) {
-  if (!value) return '-';
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
-}
-
-function quoteCurlArg(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function formatCurlCommand(request: MobilePreviewNetworkRequest) {
-  const lines = [
-    'curl',
-    `  -X ${quoteCurlArg(request.method)}`,
-    `  ${quoteCurlArg(request.url)}`,
-  ];
-
-  Object.entries(request.requestHeaders).forEach(([key, value]) => {
-    lines.splice(-1, 0, `  -H ${quoteCurlArg(`${key}: ${value}`)}`);
-  });
-
-  if (request.requestBodyPreview) {
-    lines.splice(
-      -1,
-      0,
-      `  --data-raw ${quoteCurlArg(request.requestBodyPreview)}`,
-    );
-  }
-
-  return lines.join(' \\\n');
-}
-
-function getNetworkStatusClass(request: {
-  error: string | null;
-  status: number | null;
-  tunnelOnly: boolean;
-}) {
-  if (request.error || (request.status !== null && request.status >= 400)) {
-    return 'text-status-fail';
-  }
-  if (request.status !== null && request.status >= 300) {
-    return 'text-amber-300';
-  }
-  if (request.tunnelOnly) return 'text-sky-300';
-  return 'text-emerald-300';
-}
-
-function getHeaderValue(headers: Record<string, string>, name: string) {
-  const targetName = name.toLowerCase();
-  const entry = Object.entries(headers).find(
-    ([key]) => key.toLowerCase() === targetName,
-  );
-  return entry?.[1] ?? null;
-}
-
-function getNetworkStatusLabel(request: {
-  status: number | null;
-  tunnelOnly: boolean;
-}) {
-  if (request.tunnelOnly) return 'Tunnel';
-  return request.status ?? '...';
-}
-
-function getNetworkMethodClass(method: string) {
-  switch (method.toUpperCase()) {
-    case 'POST':
-      return 'text-amber-300';
-    case 'PUT':
-    case 'PATCH':
-      return 'text-violet-300';
-    case 'DELETE':
-      return 'text-status-fail';
-    default:
-      return 'text-sky-300';
-  }
-}
-
-function getNetworkHostname(url: string) {
-  try {
-    return new URL(url).host;
-  } catch {
-    return '-';
-  }
-}
-
-function getNetworkPath(url: string) {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.pathname}${parsed.search}`;
-  } catch {
-    return url;
-  }
-}
-
-function getNetworkFilterFieldValues(
-  requests: MobilePreviewNetworkRequest[],
-  key: Exclude<NetworkFilterKey, 'text'>,
-) {
-  const values = requests.flatMap((request) => {
-    if (key === 'method') return [request.method.toUpperCase()];
-    if (key === 'status') {
-      return request.status === null
-        ? [getNetworkStatusLabel(request).toString()]
-        : [`${Math.floor(request.status / 100)}xx`, request.status.toString()];
-    }
-    if (key === 'path') return [getNetworkPath(request.url)];
-    return [getNetworkHostname(request.url)];
-  });
-
-  return [...new Set(values.filter(Boolean))].sort((first, second) =>
-    first.localeCompare(second, undefined, { numeric: true }),
-  );
-}
-
-function buildNetworkFilterSuggestions({
-  draft,
-  requests,
-}: {
-  draft: string;
-  requests: MobilePreviewNetworkRequest[];
-}): NetworkFilterSuggestion[] {
-  let value = draft.trim();
-  let neg = false;
-  if (value.startsWith('-') || value.startsWith('!')) {
-    neg = true;
-    value = value.slice(1).trim();
-  }
-
-  const colonIndex = value.indexOf(':');
-  if (colonIndex > 0) {
-    const key = value.slice(0, colonIndex).toLowerCase() as NetworkFilterKey;
-    const field = NETWORK_FILTER_FIELDS.find((item) => item.key === key);
-    if (field) {
-      const filterValue = value.slice(colonIndex + 1).trim().toLowerCase();
-      return getNetworkFilterFieldValues(requests, field.key)
-        .filter((item) => item.toLowerCase().includes(filterValue))
-        .slice(0, 8)
-        .map((item) => {
-          const token = {
-            key: field.key,
-            value: item,
-            neg,
-            exact: field.key === 'host' || field.key === 'path' || undefined,
-          };
-          return {
-            kind: 'value',
-            label: `${field.key}:${item}`,
-            count: requests.filter((request) =>
-              matchesNetworkFilterToken(request, { ...token, neg: false }),
-            ).length,
-            token,
-          };
-        });
-    }
-  }
-
-  const suggestions: NetworkFilterSuggestion[] = [];
-  if (value) {
-    const token = { key: 'text' as const, value, neg };
-    suggestions.push({
-      kind: 'value',
-      label: value,
-      count: requests.filter((request) =>
-        matchesNetworkFilterToken(request, { ...token, neg: false }),
-      ).length,
-      token,
-    });
-  }
-
-  NETWORK_FILTER_FIELDS.filter(
-    (field) => !value || field.key.startsWith(value.toLowerCase()),
-  ).forEach((field) => {
-    suggestions.push({
-      kind: 'key',
-      key: field.key,
-      label: `${field.key}:`,
-      hint: field.hint,
-      neg,
-    });
-  });
-
-  return suggestions;
-}
-
-function appendNetworkFilterToken(
-  currentTokens: NetworkFilterToken[],
-  token: NetworkFilterToken,
-) {
-  const alreadyExists = currentTokens.some(
-    (currentToken) =>
-      currentToken.key === token.key &&
-      currentToken.value === token.value &&
-      currentToken.neg === token.neg &&
-      !!currentToken.exact === !!token.exact,
-  );
-  return alreadyExists ? currentTokens : [...currentTokens, token];
-}
-
-function getNetworkTransferredBytes(request: MobilePreviewNetworkRequest) {
-  const length =
-    getHeaderValue(request.responseHeaders, 'content-length') ??
-    getHeaderValue(request.requestHeaders, 'content-length');
-  const parsedLength = length ? Number.parseInt(length, 10) : Number.NaN;
-  if (Number.isFinite(parsedLength)) return parsedLength;
-  return (
-    (request.requestBodyPreview?.length ?? 0) +
-    (request.responseBodyPreview?.length ?? 0)
-  );
-}
-
-function getNetworkStats(requests: MobilePreviewNetworkRequest[]) {
-  const failed = requests.filter(
-    (request) =>
-      request.error || (request.status !== null && request.status >= 400),
-  ).length;
-  const ok = requests.filter(
-    (request) =>
-      !request.error &&
-      !request.tunnelOnly &&
-      request.status !== null &&
-      request.status >= 200 &&
-      request.status < 400,
-  ).length;
-  const durations = requests
-    .map((request) => request.durationMs)
-    .filter((duration): duration is number => duration !== null);
-  const avgDuration =
-    durations.length === 0
-      ? null
-      : Math.round(
-          durations.reduce((sum, duration) => sum + duration, 0) /
-            durations.length,
-        );
-  const bytes = requests.reduce(
-    (sum, request) => sum + getNetworkTransferredBytes(request),
-    0,
-  );
-  return { total: requests.length, failed, ok, avgDuration, bytes };
-}
-
-function getNetworkFacets(requests: MobilePreviewNetworkRequest[]) {
-  const byPath = new Map<string, MobilePreviewNetworkRequest[]>();
-  requests.forEach((request) => {
-    const path = getNetworkPath(request.url);
-    byPath.set(path, [...(byPath.get(path) ?? []), request]);
-  });
-  return [...byPath.entries()]
-    .map(([path, facetRequests]) => ({
-      path,
-      count: facetRequests.length,
-      failed: facetRequests.some(
-        (request) =>
-          request.error || (request.status !== null && request.status >= 400),
-      ),
-    }))
-    .sort((firstFacet, secondFacet) => secondFacet.count - firstFacet.count);
-}
-
-function NetworkFacetButton({
-  label,
-  count,
-  active,
-  failed,
-  onClick,
-  onContextMenu,
-  contextPath,
-}: {
-  label: string;
-  count: number;
-  active: boolean;
-  failed?: boolean;
-  onClick: () => void;
-  onContextMenu?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  contextPath?: string;
-}) {
-  return (
-    <button
-      type="button"
-      data-network-filter-context={contextPath ? 'endpoint' : undefined}
-      data-network-filter-path={contextPath}
-      onClick={onClick}
-      onContextMenu={onContextMenu}
-      onMouseDown={(event) => {
-        if (event.button === 2) onContextMenu?.(event);
-      }}
-      className={clsx(
-        'flex h-[26px] w-full items-center gap-2 rounded-[3px] px-2 text-left transition-colors',
-        active ? 'bg-zinc-800/70 text-ink-1' : 'text-ink-2 hover:bg-zinc-900/80',
-      )}
-    >
-      <span
-        className={clsx(
-          'h-1.5 w-1.5 shrink-0 rounded-full',
-          failed ? 'bg-status-fail' : 'bg-emerald-300',
-        )}
-      />
-      <span className="min-w-0 flex-1 truncate text-xs">{label}</span>
-      <span className="text-ink-4 font-mono text-[10px]">{count}</span>
-    </button>
-  );
-}
-
-type NetworkPresetFilter = 'all' | 'errors' | 'post' | 'get';
-type NetworkDetailTab = 'all' | 'headers' | 'body' | 'request' | 'timing';
-type NetworkFilterContextMenuState = {
-  x: number;
-  y: number;
-  title: string;
-  subtitle: string;
-  items: Array<{
-    key: Exclude<NetworkFilterKey, 'text'>;
-    value: string;
-  }>;
-};
-
-function matchesNetworkPreset(
-  request: MobilePreviewNetworkRequest,
-  preset: NetworkPresetFilter,
-) {
-  if (preset === 'errors') {
-    return request.error || (request.status !== null && request.status >= 400);
-  }
-  if (preset === 'post') return request.method.toUpperCase() === 'POST';
-  if (preset === 'get') return request.method.toUpperCase() === 'GET';
-  return true;
-}
-
-function NetworkFilterChip({
-  label,
-  count,
-  active,
-  tone = 'neutral',
-  onClick,
-}: {
-  label: string;
-  count: number;
-  active: boolean;
-  tone?: 'neutral' | 'danger' | 'success';
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={clsx(
-        'inline-flex h-5 shrink-0 items-center gap-1.5 rounded-[3px] border px-1.5 text-[10px] font-medium transition-colors',
-        active
-          ? 'border-zinc-800 bg-zinc-800/70 text-ink-1'
-          : 'border-transparent text-ink-2 hover:bg-zinc-900/80',
-      )}
-    >
-      {tone !== 'neutral' ? (
-        <span
-          className={clsx(
-            'h-1.5 w-1.5 rounded-full',
-            tone === 'danger' ? 'bg-status-fail' : 'bg-emerald-300',
-          )}
-        />
-      ) : null}
-      {label}
-      <span className="text-ink-4 font-mono text-[10px]">{count}</span>
-    </button>
-  );
-}
-
-function NetworkFilterAutocomplete({
-  tokens,
-  onChange,
-  requests,
-  resultCount,
-}: {
-  tokens: NetworkFilterToken[];
-  onChange: (tokens: NetworkFilterToken[]) => void;
-  requests: MobilePreviewNetworkRequest[];
-  resultCount: number;
-}) {
-  const [draft, setDraft] = useState('');
-  const [open, setOpen] = useState(false);
-  const [highlightedIndex, setHighlightedIndex] = useState(0);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const suggestions = useMemo(
-    () => buildNetworkFilterSuggestions({ draft, requests }),
-    [draft, requests],
-  );
-  const isValueSuggestion = draft.replace(/^[-!]/, '').includes(':');
-
-  useEffect(() => {
-    const onPointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, []);
-
-  const focusInput = () => inputRef.current?.focus();
-  const addToken = (token: NetworkFilterToken) => {
-    if (!token.value.trim()) return;
-    logNetworkFilterDebug('autocomplete-add-token', { token });
-    onChange([...tokens, token]);
-    setDraft('');
-    setHighlightedIndex(0);
-    setOpen(true);
-    requestAnimationFrame(focusInput);
-  };
-  const removeToken = (index: number) =>
-    onChange(tokens.filter((_, tokenIndex) => tokenIndex !== index));
-  const toggleToken = (index: number) =>
-    onChange(
-      tokens.map((token, tokenIndex) =>
-        tokenIndex === index ? { ...token, neg: !token.neg } : token,
-      ),
-    );
-  const applySuggestion = (suggestion: NetworkFilterSuggestion) => {
-    if (suggestion.kind === 'key') {
-      setDraft(`${suggestion.neg ? '-' : ''}${suggestion.key}:`);
-      setHighlightedIndex(0);
-      setOpen(true);
-      requestAnimationFrame(focusInput);
-      return;
-    }
-    addToken(suggestion.token);
-  };
-  const excludeSuggestion = (suggestion: NetworkFilterSuggestion) => {
-    if (suggestion.kind !== 'value') return;
-    addToken({ ...suggestion.token, neg: true });
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      const suggestion = suggestions[highlightedIndex];
-      if (suggestion) applySuggestion(suggestion);
-      else addToken(parseNetworkFilterToken(draft));
-    } else if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setOpen(true);
-      setHighlightedIndex((index) =>
-        Math.min(index + 1, Math.max(0, suggestions.length - 1)),
-      );
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setHighlightedIndex((index) => Math.max(0, index - 1));
-    } else if (event.key === 'Backspace' && !draft && tokens.length > 0) {
-      removeToken(tokens.length - 1);
-    } else if (event.key === 'Escape') {
-      setOpen(false);
-    }
-  };
-
-  return (
-    <div ref={rootRef} className="relative min-w-[260px] flex-1">
-      <div
-        role="button"
-        tabIndex={-1}
-        onClick={() => {
-          focusInput();
-          setOpen(true);
-        }}
-        className={clsx(
-          'flex min-h-7 cursor-text items-center gap-1.5 rounded-[3px] border bg-zinc-950 px-2 transition-shadow',
-          open
-            ? 'border-acc shadow-[0_0_0_2px_color-mix(in_oklch,var(--color-acc)_24%,transparent)]'
-            : 'border-zinc-800',
-        )}
-      >
-        <Funnel
-          className={clsx(
-            'h-3.5 w-3.5 shrink-0',
-            open ? 'text-acc' : 'text-ink-4',
-          )}
-        />
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1">
-          {tokens.map((token, index) => (
-            <span
-              key={`${token.key}:${token.value}:${token.exact ? 'exact' : 'partial'}:${index}`}
-              className={clsx(
-                'inline-flex h-5 shrink-0 items-center gap-1 rounded-[3px] border px-1.5 font-mono text-[10px]',
-                token.neg
-                  ? 'border-status-fail/40 bg-status-fail/10 text-ink-2'
-                  : 'border-zinc-800 bg-zinc-900/80 text-ink-1',
-              )}
-            >
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  toggleToken(index);
-                }}
-                title={token.neg ? 'Click to include' : 'Click to exclude'}
-                className="inline-flex min-w-0 items-center gap-1"
-              >
-                {token.neg ? <Ban className="text-status-fail h-2.5 w-2.5" /> : null}
-                {token.key !== 'text' ? (
-                  <span className="text-ink-4">{token.key}:</span>
-                ) : null}
-                <span className={clsx('max-w-32 truncate', token.neg && 'line-through')}>
-                  {token.value}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  removeToken(index);
-                }}
-                className="text-ink-4 hover:text-ink-1 rounded-[2px] p-0.5"
-                title="Remove filter"
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
-            </span>
-          ))}
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.currentTarget.value);
-              setHighlightedIndex(0);
-              setOpen(true);
-            }}
-            onFocus={() => setOpen(true)}
-            onKeyDown={onKeyDown}
-            placeholder={tokens.length > 0 ? '' : 'Filter status:4xx, method:POST, -host:api'}
-            className="text-ink-1 h-5 min-w-28 flex-1 border-0 bg-transparent font-mono text-[11px] outline-none placeholder:text-ink-4"
-          />
-        </div>
-        {tokens.length > 0 || draft ? (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onChange([]);
-              setDraft('');
-              focusInput();
-            }}
-            className="text-ink-4 hover:text-ink-1 rounded-[3px] p-0.5"
-            title="Clear filter"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        ) : null}
-      </div>
-
-      {open && suggestions.length > 0 ? (
-        <div className="absolute top-[calc(100%+4px)] right-0 left-0 z-40 max-h-72 overflow-auto rounded-md border border-zinc-800 bg-zinc-900 p-1 shadow-2xl">
-          <div className="text-ink-4 px-2 py-1 text-[9px] font-semibold tracking-wide uppercase">
-            {isValueSuggestion ? 'Values' : 'Filter by field'}
-          </div>
-          {suggestions.map((suggestion, index) => {
-            const active = highlightedIndex === index;
-            const isNegated =
-              suggestion.kind === 'value' ? suggestion.token.neg : suggestion.neg;
-            return (
-              <button
-                key={`${suggestion.kind}:${suggestion.label}:${index}`}
-                type="button"
-                onMouseEnter={() => setHighlightedIndex(index)}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  applySuggestion(suggestion);
-                }}
-                className={clsx(
-                  'flex h-7 w-full items-center gap-2 rounded-[3px] px-2 text-left transition-colors',
-                  active ? 'bg-zinc-800/80' : 'hover:bg-zinc-800/60',
-                )}
-              >
-                {suggestion.kind === 'key' ? (
-                  <ChevronRight className="text-ink-4 h-3 w-3 shrink-0" />
-                ) : isNegated ? (
-                  <Ban className="text-status-fail h-3 w-3 shrink-0" />
-                ) : (
-                  <Plus className="text-ink-4 h-3 w-3 shrink-0" />
-                )}
-                <span
-                  className={clsx(
-                    'text-ink-1 min-w-0 truncate font-mono text-[11px]',
-                    isNegated && 'line-through',
-                  )}
-                >
-                  {suggestion.label}
-                </span>
-                <span className="min-w-0 flex-1" />
-                {suggestion.kind === 'key' ? (
-                  <span className="text-ink-4 text-[10px]">{suggestion.hint}</span>
-                ) : (
-                  <>
-                    {active && !isNegated ? (
-                      <span
-                        role="button"
-                        tabIndex={-1}
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          excludeSuggestion(suggestion);
-                        }}
-                        className="text-status-fail border-status-fail/30 bg-status-fail/10 inline-flex h-5 items-center gap-1 rounded-[3px] border px-1.5 text-[10px]"
-                      >
-                        <Ban className="h-2.5 w-2.5" />
-                        Exclude
-                      </span>
-                    ) : null}
-                    <span className="text-ink-4 min-w-5 text-right font-mono text-[10px]">
-                      {suggestion.count}
-                    </span>
-                  </>
-                )}
-              </button>
-            );
-          })}
-          <div className="text-ink-4 mt-1 flex items-center gap-2 border-t border-zinc-800 px-2 py-1.5 text-[10px]">
-            <span className="font-mono">Enter add</span>
-            <span className="font-mono">- exclude</span>
-            <span className="font-mono">Backspace remove</span>
-            <span className="min-w-0 flex-1" />
-            <span className="font-mono">
-              {resultCount} match{resultCount === 1 ? '' : 'es'}
-            </span>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function NetworkFilterContextMenu({
-  state,
-  onAddFilter,
-  onClose,
-}: {
-  state: NetworkFilterContextMenuState;
-  onAddFilter: (token: NetworkFilterToken) => void;
-  onClose: () => void;
-}) {
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const left = Math.max(0, Math.min(state.x, window.innerWidth - 260));
-  const top = Math.max(0, Math.min(state.y, window.innerHeight - 244));
-
-  useEffect(() => {
-    const onPointerDown = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) {
-        onClose();
-      }
-    };
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [onClose]);
-
-  const addFilter = (key: Exclude<NetworkFilterKey, 'text'>, value: string, neg: boolean) => {
-    const token = {
-      key,
-      value,
-      neg,
-      exact: key === 'host' || key === 'path' || undefined,
-    };
-    logNetworkFilterDebug('context-menu-add-token', { token });
-    onAddFilter(token);
-    onClose();
-  };
-
-  return createPortal(
-    <div
-      ref={menuRef}
-      className="fixed z-50 w-64 overflow-hidden rounded-md border border-zinc-800 bg-zinc-900 shadow-2xl"
-      style={{ left, top }}
-      role="menu"
-    >
-      <div className="border-b border-zinc-800 px-3 py-2">
-        <div className="text-ink-4 text-[9px] font-semibold tracking-wide uppercase">
-          {state.title}
-        </div>
-        <div className="text-ink-2 mt-1 truncate font-mono text-[10px]">
-          {state.subtitle}
-        </div>
-      </div>
-      <div className="p-1">
-        {state.items.map((item) => (
-          <button
-            key={`${item.key}:${item.value}`}
-            type="button"
-            role="menuitem"
-            onClick={() => addFilter(item.key, item.value, false)}
-            className="hover:bg-zinc-800/80 flex h-7 w-full items-center gap-2 rounded-[3px] px-2 text-left"
-          >
-            <Plus className="text-ink-4 h-3 w-3 shrink-0" />
-            <span className="text-ink-4 w-12 shrink-0 text-[10px]">{item.key}</span>
-            <span className="text-ink-1 min-w-0 truncate font-mono text-[11px]">
-              {item.value}
-            </span>
-          </button>
-        ))}
-      </div>
-      <div className="border-t border-zinc-800 p-1">
-        {state.items.map((item) => (
-          <button
-            key={`exclude:${item.key}:${item.value}`}
-            type="button"
-            role="menuitem"
-            onClick={() => addFilter(item.key, item.value, true)}
-            className="hover:bg-zinc-800/80 flex h-7 w-full items-center gap-2 rounded-[3px] px-2 text-left"
-          >
-            <Ban className="text-status-fail h-3 w-3 shrink-0" />
-            <span className="text-status-fail w-12 shrink-0 text-[10px]">
-              not {item.key}
-            </span>
-            <span className="text-ink-2 min-w-0 truncate font-mono text-[11px] line-through">
-              {item.value}
-            </span>
-          </button>
-        ))}
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-function NetworkDetailSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: string;
-}) {
-  return (
-    <section className="grid gap-1">
-      <div className="text-ink-3 text-[10px] font-semibold tracking-wide uppercase">
-        {title}
-      </div>
-      <pre className="text-ink-1 max-h-52 overflow-auto rounded-[3px] border border-zinc-900/90 bg-black/35 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-        {children}
-      </pre>
-    </section>
-  );
-}
-
-function NetworkRequestDetails({
-  request,
-  onClose,
-}: {
-  request: MobilePreviewNetworkRequest;
-  onClose: () => void;
-}) {
-  const [detailWidth, setDetailWidth] = useState(392);
-  const [activeDetailTab, setActiveDetailTab] =
-    useState<NetworkDetailTab>('all');
-  const [copiedCurl, setCopiedCurl] = useState(false);
-  const { isDragging, handleMouseDown } = useHorizontalResize({
-    initialWidth: detailWidth,
-    minWidth: 320,
-    maxWidth: 760,
-    maxWidthFraction: 0.75,
-    direction: 'left',
-    onWidthChange: setDetailWidth,
-  });
-  const requestCookies = getHeaderValue(request.requestHeaders, 'cookie');
-  const responseCookies = getHeaderValue(
-    request.responseHeaders,
-    'set-cookie',
-  );
-
-  useEffect(() => {
-    queueMicrotask(() => setCopiedCurl(false));
-  }, [request.id]);
-
-  const handleCopyCurl = useCallback(async () => {
-    await navigator.clipboard.writeText(formatCurlCommand(request));
-    setCopiedCurl(true);
-    window.setTimeout(() => setCopiedCurl(false), 1400);
-  }, [request]);
-
-  const tlsDuration = request.decrypted ? 18 : 0;
-  const waitingDuration = Math.max(
-    1,
-    Math.round((request.durationMs ?? 0) * 0.62),
-  );
-  const downloadDuration = Math.max(
-    1,
-    Math.round((request.durationMs ?? 0) * 0.18),
-  );
-  const timingSections: Array<[string, number, string]> = request.decrypted
-    ? [
-        ['DNS', 4, 'bg-ink-4'],
-        ['Connect', 12, 'bg-sky-300'],
-        ['TLS', tlsDuration, 'bg-cyan-300'],
-        ['Waiting (TTFB)', waitingDuration, 'bg-amber-400'],
-        ['Download', downloadDuration, 'bg-emerald-300'],
-      ]
-    : [
-        ['DNS', 4, 'bg-ink-4'],
-        ['Connect', 12, 'bg-sky-300'],
-        ['Waiting (TTFB)', waitingDuration, 'bg-amber-400'],
-        ['Download', downloadDuration, 'bg-emerald-300'],
-      ];
-  const rawTimingTotal =
-    4 + 12 + tlsDuration + waitingDuration + downloadDuration;
-  const timingTotal = rawTimingTotal > 1 ? rawTimingTotal : 1;
-  const tabs: Array<{ value: NetworkDetailTab; label: string }> = [
-    { value: 'all', label: 'All' },
-    { value: 'headers', label: 'Headers' },
-    { value: 'body', label: 'Body' },
-    { value: 'request', label: 'Request' },
-    { value: 'timing', label: 'Timing' },
-  ];
-
-  return (
-    <aside
-      style={{ width: detailWidth }}
-      className="relative flex min-w-[320px] max-w-[75%] flex-col border-l border-zinc-900/90 bg-zinc-950/80"
-    >
-      <div
-        onMouseDown={handleMouseDown}
-        className={clsx(
-          'hover:bg-acc/50 absolute top-0 left-0 z-10 h-full w-1 cursor-col-resize transition-colors',
-          isDragging && 'bg-acc/50',
-        )}
-      />
-      <div className="flex items-start justify-between gap-3 border-b border-zinc-900/90 px-3 py-1.5">
-        <div className="min-w-0">
-          <div className="text-ink-1 flex items-center gap-2 text-[13px] font-medium">
-            <span className="font-mono">{request.method}</span>
-            <span className={clsx('font-mono', getNetworkStatusClass(request))}>
-              {request.status ?? '-'}
-            </span>
-          </div>
-          <div className="text-ink-3 truncate font-mono text-[11px]">
-            {request.url}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <IconButton
-            size="sm"
-            variant="ghost"
-            icon={copiedCurl ? <Check /> : <Copy />}
-            tooltip={copiedCurl ? 'Copied curl' : 'Copy as curl'}
-            onClick={handleCopyCurl}
-          />
-          <IconButton
-            size="sm"
-            variant="ghost"
-            icon={<X />}
-            tooltip="Close"
-            onClick={onClose}
-          />
-        </div>
-      </div>
-      <div className="flex shrink-0 gap-1 border-b border-zinc-900/90 px-2 py-1">
-        {tabs.map((tab) => (
-          <button
-            key={tab.value}
-            type="button"
-            onClick={() => setActiveDetailTab(tab.value)}
-            className={clsx(
-              'h-5 rounded-[3px] px-2 text-[10px] font-medium transition-colors',
-              activeDetailTab === tab.value
-                ? 'bg-zinc-800/70 text-ink-1'
-                : 'text-ink-3 hover:bg-zinc-900/80 hover:text-ink-1',
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-2.5">
-        {request.error ? (
-          <div className="border-status-fail/40 bg-status-fail/10 text-status-fail mb-3 rounded border px-2 py-1.5 text-xs">
-            {request.error}
-          </div>
-        ) : null}
-        <div className="grid gap-2.5">
-          {(activeDetailTab === 'all' || activeDetailTab === 'timing') ? (
-            <section className="grid gap-1.5">
-              <div className="text-ink-3 text-[10px] font-semibold tracking-wide uppercase">
-                Timing · {request.durationMs === null ? '-' : `${request.durationMs}ms`}
-              </div>
-              <div className="grid gap-1.5">
-                {timingSections.map(([label, duration, colorClass]) => (
-                  <div key={label} className="grid grid-cols-[88px_1fr_40px] items-center gap-2">
-                    <span className="text-ink-3 text-[11px]">{label}</span>
-                    <span className="h-1.5 overflow-hidden rounded-full bg-zinc-900">
-                      <span
-                        className={clsx('block h-full rounded-full', colorClass)}
-                        style={{ width: `${(duration / timingTotal) * 100}%` }}
-                      />
-                    </span>
-                    <span className="text-ink-3 text-right font-mono text-[10px]">
-                      {duration}ms
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-          {(activeDetailTab === 'all' || activeDetailTab === 'headers') ? (
-            <>
-              <NetworkDetailSection title="Response headers">
-                {formatNetworkHeaders(request.responseHeaders)}
-              </NetworkDetailSection>
-              <NetworkDetailSection title="Response cookies">
-                {responseCookies ?? '-'}
-              </NetworkDetailSection>
-            </>
-          ) : null}
-          {(activeDetailTab === 'all' || activeDetailTab === 'request') ? (
-            <>
-              <NetworkDetailSection title="Request headers">
-                {formatNetworkHeaders(request.requestHeaders)}
-              </NetworkDetailSection>
-              <NetworkDetailSection title="Request cookies">
-                {requestCookies ?? '-'}
-              </NetworkDetailSection>
-              <NetworkDetailSection title="Request body">
-                {formatNetworkPreview(request.requestBodyPreview)}
-              </NetworkDetailSection>
-            </>
-          ) : null}
-          {(activeDetailTab === 'all' || activeDetailTab === 'body') ? (
-            <NetworkDetailSection title="Response body">
-              {formatNetworkPreview(request.responseBodyPreview)}
-            </NetworkDetailSection>
-          ) : null}
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function canStartDevice(device: MobilePreviewDevice | undefined) {
-  return canAutoStartMobilePreviewDevice(device);
-}
-
-function getPreviewDeviceKey(platform: MobilePlatform, deviceId: string) {
-  return `${platform}:${deviceId}`;
-}
-
-function H264PreviewCanvas({
-  sessionId,
-  width,
-  height,
-  subscribeH264Chunks,
-  onFpsChange,
-  onFrameRendered,
-  surfaceStyle,
-}: {
-  sessionId: string;
-  width: number | null;
-  height: number | null;
-  subscribeH264Chunks: (
-    listener: (chunk: MobilePreviewH264Chunk) => void,
-  ) => () => void;
-  onFpsChange: (fps: number) => void;
-  onFrameRendered: (
-    sessionId: string,
-    source: 'image' | 'raw-rgba' | 'h264',
-  ) => void;
-  surfaceStyle?: CSSProperties;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const decoderRef = useRef<WebCodecsVideoDecoder | null>(null);
-  const writerRef =
-    useRef<WritableStreamDefaultWriter<ScrcpyMediaStreamPacket> | null>(null);
-  const parserRef = useRef<ReturnType<typeof createH264AccessUnitParser>>(
-    createH264AccessUnitParser(),
-  );
-  const chunksReceivedRef = useRef(0);
-  const dataPacketsReceivedRef = useRef(0);
-  const accessUnitsRef = useRef(0);
-  const queuedDecodesRef = useRef(0);
-  const decoderGenerationRef = useRef(0);
-  const hasDecodedKeyframeRef = useRef(false);
-  const lastStatsSampleRef = useRef({
-    at: 0,
-    received: 0,
-    queued: 0,
-    rendered: 0,
-    skipped: 0,
-  });
-  const [decodeError, setDecodeError] = useState<string | null>(null);
-  const [decodedFrames, setDecodedFrames] = useState(0);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return undefined;
-
-    parserRef.current = createH264AccessUnitParser();
-    chunksReceivedRef.current = 0;
-    dataPacketsReceivedRef.current = 0;
-    accessUnitsRef.current = 0;
-    queuedDecodesRef.current = 0;
-    decoderGenerationRef.current += 1;
-    hasDecodedKeyframeRef.current = false;
-    lastStatsSampleRef.current = {
-      at: performance.now(),
-      received: 0,
-      queued: 0,
-      rendered: 0,
-      skipped: 0,
-    };
-    queueMicrotask(() => {
-      setDecodeError(null);
-      setDecodedFrames(0);
-      onFpsChange(0);
-    });
-
-    if (!WebCodecsVideoDecoder.isSupported) {
-      queueMicrotask(() => {
-        setDecodeError(
-          'WebCodecs VideoDecoder is not available in this renderer',
-        );
-      });
-      return undefined;
-    }
-
-    let renderedFrameRequest: number | null = null;
-    try {
-      const renderer = WebGLVideoFrameRenderer.isSupported
-        ? new WebGLVideoFrameRenderer(canvas)
-        : new BitmapVideoFrameRenderer(canvas);
-      const decoder = new WebCodecsVideoDecoder({
-        codec: ScrcpyVideoCodecId.H264,
-        renderer,
-      });
-      decoder.sizeChanged(({ width, height }) => {
-        canvas.width = width;
-        canvas.height = height;
-        logMobilePreviewDebug(
-          'jc:mobile-preview:renderer h264 size sessionId=%s size=%dx%d',
-          sessionId,
-          width,
-          height,
-        );
-      });
-      decoderRef.current = decoder;
-      writerRef.current = decoder.writable.getWriter();
-      const observeRenderedFrame = () => {
-        if (decoder.framesRendered > 0) {
-          notifyH264FrameRendered(onFrameRendered, sessionId);
-          return;
-        }
-        renderedFrameRequest = requestAnimationFrame(observeRenderedFrame);
-      };
-      renderedFrameRequest = requestAnimationFrame(observeRenderedFrame);
-    } catch (error) {
-      queueMicrotask(() => {
-        setDecodeError(error instanceof Error ? error.message : String(error));
-      });
-    }
-
-    return () => {
-      if (renderedFrameRequest !== null) {
-        cancelAnimationFrame(renderedFrameRequest);
-      }
-      decoderGenerationRef.current += 1;
-      void writerRef.current?.close().catch(() => undefined);
-      writerRef.current = null;
-      decoderRef.current?.dispose();
-      decoderRef.current = null;
-    };
-  }, [onFpsChange, onFrameRendered, sessionId]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      const decoder = decoderRef.current;
-      const now = performance.now();
-      const previous = lastStatsSampleRef.current;
-      const seconds = Math.max((now - previous.at) / 1000, 0.001);
-      const rendered = decoder?.framesRendered ?? 0;
-      const skipped = decoder?.framesSkipped ?? 0;
-      const received = dataPacketsReceivedRef.current;
-      const queued = queuedDecodesRef.current;
-
-      const renderedFps = Math.round((rendered - previous.rendered) / seconds);
-      onFpsChange(renderedFps);
-      lastStatsSampleRef.current = {
-        at: now,
-        received,
-        queued,
-        rendered,
-        skipped,
-      };
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, [onFpsChange, sessionId]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !width || !height) return;
-    canvas.width = width;
-    canvas.height = height;
-  }, [height, width]);
-
-  const writeH264Packet = useCallback(
-    (packet: ScrcpyMediaStreamPacket) => {
-      const writer = writerRef.current;
-      if (!decoderRef.current || !writer) return;
-      const decoderGeneration = decoderGenerationRef.current;
-      if (packet.type === 'data') dataPacketsReceivedRef.current += 1;
-
-      if (packet.type === 'configuration') {
-        hasDecodedKeyframeRef.current = false;
-      } else if (!hasDecodedKeyframeRef.current) {
-        if (packet.keyframe === false) {
-          return;
-        }
-        hasDecodedKeyframeRef.current = true;
-      }
-
-      void writer.write(packet).catch((error: unknown) => {
-        if (
-          writerRef.current !== writer ||
-          decoderGenerationRef.current !== decoderGeneration
-        ) {
-          return;
-        }
-        logMobilePreviewDebug(
-          'jc:mobile-preview:renderer h264 decode throw sessionId=%s queued=%d type=%s bytes=%d error=%s',
-          sessionId,
-          queuedDecodesRef.current,
-          packet.type,
-          packet.data.length,
-          error instanceof Error ? error.message : String(error),
-        );
-        setDecodeError(error instanceof Error ? error.message : String(error));
-      });
-      queuedDecodesRef.current += 1;
-      if (packet.type === 'data') setDecodedFrames((count) => count || 1);
-    },
-    [sessionId],
-  );
-
-  const processH264Chunk = useCallback(
-    (nextChunk: MobilePreviewH264Chunk) => {
-      const writer = writerRef.current;
-      if (!decoderRef.current || !writer) return;
-
-      chunksReceivedRef.current += 1;
-      if (
-        chunksReceivedRef.current === 1 ||
-        chunksReceivedRef.current % 30 === 0
-      ) {
-        logMobilePreviewDebug(
-          'jc:mobile-preview:renderer h264 process chunk sessionId=%s chunks=%d base64Length=%d packetType=%s',
-          sessionId,
-          chunksReceivedRef.current,
-          nextChunk.frameBase64.length,
-          nextChunk.h264PacketType ?? 'raw',
-        );
-      }
-
-      if (nextChunk.h264PacketType) {
-        const data = base64ToBytes(nextChunk.frameBase64);
-        const keyframe =
-          nextChunk.h264PacketType === 'data'
-            ? nextChunk.keyframe || containsH264Keyframe(data) || undefined
-            : undefined;
-        writeH264Packet({
-          type: nextChunk.h264PacketType,
-          keyframe,
-          data,
-        } as ScrcpyMediaStreamPacket);
-        return;
-      }
-
-      const accessUnits = parserRef.current(
-        base64ToBytes(nextChunk.frameBase64),
-      );
-      accessUnitsRef.current += accessUnits.length;
-      if (accessUnits.length > 0 || chunksReceivedRef.current % 30 === 0) {
-        logMobilePreviewDebug(
-          'jc:mobile-preview:renderer h264 parser sessionId=%s chunks=%d emitted=%d totalAccessUnits=%d framesRendered=%d framesSkipped=%d',
-          sessionId,
-          chunksReceivedRef.current,
-          accessUnits.length,
-          accessUnitsRef.current,
-          decoderRef.current.framesRendered,
-          decoderRef.current.framesSkipped,
-        );
-      }
-
-      for (const accessUnit of accessUnits) {
-        if (accessUnit.configuration) {
-          writeH264Packet({
-            type: 'configuration',
-            data: accessUnit.configuration,
-          });
-        }
-        writeH264Packet({
-          type: 'data',
-          keyframe: accessUnit.isKey,
-          data: accessUnit.data,
-        });
-        if (
-          queuedDecodesRef.current === 1 ||
-          queuedDecodesRef.current % 30 === 0
-        ) {
-          logMobilePreviewDebug(
-            'jc:mobile-preview:renderer h264 decode queued sessionId=%s queued=%d key=%s bytes=%d',
-            sessionId,
-            queuedDecodesRef.current,
-            accessUnit.isKey,
-            accessUnit.data.length,
-          );
-        }
-      }
-    },
-    [sessionId, writeH264Packet],
-  );
-
-  useEffect(
-    () => subscribeH264Chunks(processH264Chunk),
-    [processH264Chunk, subscribeH264Chunks],
-  );
-
-  return (
-    <div className="relative flex h-full items-center justify-center bg-zinc-950 p-4">
-      <canvas
-        ref={canvasRef}
-        className="max-h-full max-w-full rounded-xl shadow-2xl select-none"
-        style={surfaceStyle}
-      />
-      {decodedFrames === 0 ? (
-        <div className="bg-bg-0/80 text-ink-2 border-border/70 absolute rounded-xl border px-3 py-2 text-xs shadow-xl backdrop-blur">
-          {decodeError
-            ? `H264 decode failed: ${decodeError}`
-            : 'Waiting for H264 frame...'}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function RawRgbaPreviewCanvas({
-  sessionId,
-  width,
-  height,
-  subscribeH264Chunks,
-  onFrameRendered,
-  surfaceStyle,
-}: {
-  sessionId: string;
-  width: number;
-  height: number;
-  subscribeH264Chunks: (
-    listener: (chunk: MobilePreviewH264Chunk) => void,
-  ) => () => void;
-  onFrameRendered: (
-    sessionId: string,
-    source: 'image' | 'raw-rgba' | 'h264',
-  ) => void;
-  surfaceStyle?: CSSProperties;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const framesRef = useRef(0);
-  const [frames, setFrames] = useState(0);
-
-  const processRawFrame = useCallback(
-    (chunk: MobilePreviewH264Chunk) => {
-      const canvas = canvasRef.current;
-      const context = canvas?.getContext('2d');
-      if (!canvas || !context) return;
-
-      const bytes = base64ToBytes(chunk.frameBase64);
-      const expectedBytes = width * height * 4;
-      if (bytes.length !== expectedBytes) {
-        logMobilePreviewDebug(
-          'jc:mobile-preview:renderer raw frame size mismatch sessionId=%s bytes=%d expected=%d width=%d height=%d',
-          sessionId,
-          bytes.length,
-          expectedBytes,
-          width,
-          height,
-        );
-        return;
-      }
-
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-      }
-
-      context.putImageData(
-        new ImageData(new Uint8ClampedArray(bytes), width, height),
-        0,
-        0,
-      );
-      if (framesRef.current === 0) {
-        notifyRawRgbaFrameRendered(onFrameRendered, sessionId);
-      }
-      framesRef.current += 1;
-      if (framesRef.current === 1 || framesRef.current % 30 === 0) {
-        logMobilePreviewDebug(
-          'jc:mobile-preview:renderer raw output sessionId=%s frames=%d canvas=%dx%d',
-          sessionId,
-          framesRef.current,
-          canvas.width,
-          canvas.height,
-        );
-      }
-      setFrames(framesRef.current);
-    },
-    [height, onFrameRendered, sessionId, width],
-  );
-
-  useEffect(() => {
-    framesRef.current = 0;
-    queueMicrotask(() => setFrames(0));
-  }, [sessionId]);
-
-  useEffect(
-    () => subscribeH264Chunks(processRawFrame),
-    [processRawFrame, subscribeH264Chunks],
-  );
-
-  return (
-    <div className="relative flex h-full items-center justify-center bg-zinc-950 p-4">
-      <canvas
-        ref={canvasRef}
-        className="max-h-full max-w-full rounded-xl shadow-2xl select-none"
-        style={surfaceStyle}
-      />
-      {frames === 0 ? (
-        <div className="bg-bg-0/80 text-ink-2 border-border/70 absolute rounded-xl border px-3 py-2 text-xs shadow-xl backdrop-blur">
-          Waiting for raw frame...
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function getPreviewErrorInfo(message: string): {
-  title: string;
-  summary: string;
-  steps: string[];
-  detail?: string;
-} {
-  const cleaned = cleanPreviewError(message);
-
-  if (cleaned.includes('Missing required iOS preview tool: idb')) {
-    return {
-      title: 'Install iOS streaming tools',
-      summary:
-        'Jean-Claude can see simulators, but needs idb to send interactive input.',
-      steps: [
-        'brew tap facebook/fb && brew install idb-companion',
-        'python3 -m pip install fb-idb',
-        'Restart Jean-Claude after idb is on PATH',
-      ],
-    };
-  }
-
-  if (cleaned.includes('Missing required iOS preview tool: xcrun')) {
-    return {
-      title: 'Install Xcode tools',
-      summary: 'xcrun is required to list and boot iOS simulators.',
-      steps: ['xcode-select --install', 'Restart Jean-Claude'],
-    };
-  }
-
-  if (cleaned.includes('Missing required Android preview tool: adb')) {
-    return {
-      title: 'Install Android Platform Tools',
-      summary: 'adb is required to find Android devices and send input.',
-      steps: [
-        'brew install --cask android-platform-tools',
-        'adb devices -l',
-        'Restart Jean-Claude after adb is on PATH',
-      ],
-    };
-  }
-
-  return {
-    title: 'Preview error',
-    summary: cleaned,
-    steps: [],
-  };
-}
-
-function EmptyState({ title, detail }: { title: string; detail?: string }) {
-  return (
-    <div className="flex h-full items-center justify-center p-6 text-center">
-      <div>
-        <div className="text-ink-1 text-sm font-medium">{title}</div>
-        {detail ? (
-          <div className="text-ink-3 mt-1 text-xs">{detail}</div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function PreviewErrorState({ message }: { message: string }) {
-  const info = getPreviewErrorInfo(message);
-
-  return (
-    <div className="flex h-full items-center justify-center p-6">
-      <div className="border-border/70 bg-bg-1/70 w-full max-w-[520px] overflow-hidden rounded-2xl border shadow-[0_22px_80px_oklch(0_0_0_/_0.32)]">
-        <div className="border-border/60 flex items-start gap-3 border-b p-4">
-          <div className="bg-status-warn/15 text-status-warn mt-0.5 rounded-xl p-2">
-            <AlertTriangle className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-ink-1 text-sm font-semibold">{info.title}</div>
-            <div className="text-ink-3 mt-1 text-xs leading-relaxed">
-              {info.summary}
-            </div>
-          </div>
-        </div>
-
-        {info.steps.length > 0 ? (
-          <div className="space-y-2 p-4">
-            <div className="text-ink-3 flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
-              <Terminal className="h-3.5 w-3.5" />
-              Setup steps
-            </div>
-            <div className="space-y-2">
-              {info.steps.map((step) => (
-                <code
-                  key={step}
-                  className="border-border/70 bg-bg-0 text-ink-1 block rounded-lg border px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap"
-                >
-                  {step}
-                </code>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {info.detail ? (
-          <div className="border-border/60 text-ink-3 border-t px-4 py-3 text-[11px] leading-relaxed">
-            {info.detail}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
 
 export function MobilePreviewPane({
   taskId,
@@ -2290,6 +369,11 @@ export function MobilePreviewPane({
   const { quality, setQuality } = useMobilePreviewQuality();
   const { showGestures, setShowGestures } = useMobilePreviewShowGestures();
   const { autoStartProxy } = useMobilePreviewAutoStartProxy();
+  const visibleActiveTab = getVisibleMobilePreviewPaneTab({
+    tab: activeTab,
+    networkEnabled: autoStartProxy,
+  });
+  const isDevServerTabVisible = visibleActiveTab === 'dev-server';
   const { isDragging, handleMouseDown } = useHorizontalResize({
     initialWidth: width,
     minWidth,
@@ -2342,24 +426,6 @@ export function MobilePreviewPane({
   const suggestedIosDeviceNameRef = useRef('');
   const previousIosBuildCommandIdRef = useRef<string | null>(null);
   const launchedIosBuildCommandIdsRef = useRef(new Set<string>());
-  const pointerStartRef = useRef<{
-    pointerId: number;
-    pointerType: string;
-    clientX: number;
-    clientY: number;
-    imageX: number;
-    imageY: number;
-    currentImageX: number;
-    currentImageY: number;
-    lastMoveSentAt: number;
-    startedAt: number;
-    didSendTouchDown: boolean;
-  } | null>(null);
-  const lastWheelInputAtRef = useRef(0);
-  const gestureFeedbackIdRef = useRef(0);
-  const gestureFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
   const [setupOperationCoordinator] = useState(
     createPreviewSetupOperationCoordinator,
   );
@@ -2368,13 +434,8 @@ export function MobilePreviewPane({
     at: 0,
     received: 0,
   });
-  const imageFrameCountRef = useRef(0);
-  const [imageStats, setImageStats] = useState<ImagePreviewStats>({
-    receivedFps: 0,
-  });
-  const [h264Fps, setH264Fps] = useState(0);
-  const [gestureFeedback, setGestureFeedback] =
-    useState<GestureFeedback | null>(null);
+  const [previewFpsStore] = useState(createPreviewFpsStore);
+  const [gestureFeedbackStore] = useState(createGestureFeedbackStore);
   const selectedAppPath = mobilePreviewConfig?.selectedAppPath ?? null;
   const detectedApps = mobilePreviewConfig?.detectedApps ?? EMPTY_DETECTED_APPS;
   const validSelectedAppPath =
@@ -2618,9 +679,12 @@ export function MobilePreviewPane({
     (platform === 'android' && isExpoApp ? inferredAndroidProjectPath : null);
   const consoleCommandId = activeConsoleCommandId ?? devServerCommandId;
   const consoleStatus = runCommands.statusByCommandId[consoleCommandId];
+  // Metro output streams continuously; only read it while its tab is visible.
   const devServerLog =
-    useTaskMessagesStore(
-      (state) => state.runCommandLogs[taskId]?.[consoleCommandId],
+    useTaskMessagesStore((state) =>
+      isDevServerTabVisible
+        ? state.runCommandLogs[taskId]?.[consoleCommandId]
+        : undefined,
     ) ?? null;
 
   useEffect(() => {
@@ -2765,14 +829,22 @@ export function MobilePreviewPane({
         : null,
     [enableNetworkMitm, networkCertificateInstalled, networkProxyParams],
   );
+  // Only subscribe to the request buffer while the network tab is on screen, so
+  // proxy traffic cannot re-render the pane (and the preview surface) in the
+  // background.
+  const isNetworkTabVisible = visibleActiveTab === 'network';
+  const capturedNetworkRequests = useStreamListStoreWhen(
+    networkProxy.requestsStore,
+    isNetworkTabVisible,
+  );
   const networkRequests = useMemo(
     () =>
-      [...networkProxy.requests].sort(
+      [...capturedNetworkRequests].sort(
         (firstRequest, secondRequest) =>
           Date.parse(secondRequest.startedAt) -
           Date.parse(firstRequest.startedAt),
       ),
-    [networkProxy.requests],
+    [capturedNetworkRequests],
   );
   const displayedNetworkRequests = useMemo(
     () =>
@@ -2791,10 +863,6 @@ export function MobilePreviewPane({
         )
         .filter((request) => matchesNetworkFilter(request, networkFilter)),
     [displayedNetworkRequests, networkFacet, networkFilter, networkPreset],
-  );
-  const networkStats = useMemo(
-    () => getNetworkStats(displayedNetworkRequests),
-    [displayedNetworkRequests],
   );
   const networkFacets = useMemo(
     () => getNetworkFacets(displayedNetworkRequests),
@@ -2842,15 +910,21 @@ export function MobilePreviewPane({
     visibleNetworkRequests,
   ]);
 
+  // These three reconcile the selection/facet against the visible requests. They
+  // must not run while the network tab is hidden: the request buffer is
+  // unsubscribed then, so the derived lists are empty and would otherwise clear
+  // the user's selected request and endpoint filter.
   useEffect(() => {
+    if (!isNetworkTabVisible) return;
     if (hasAutoSelectedNetworkRequestRef.current) return;
     const firstRequest = visibleNetworkRequests[0];
     if (!firstRequest) return;
     hasAutoSelectedNetworkRequestRef.current = true;
     queueMicrotask(() => setSelectedNetworkRequestId(firstRequest.id));
-  }, [visibleNetworkRequests]);
+  }, [isNetworkTabVisible, visibleNetworkRequests]);
 
   useEffect(() => {
+    if (!isNetworkTabVisible) return;
     if (!selectedNetworkRequestId) return;
     if (
       visibleNetworkRequests.some(
@@ -2863,13 +937,14 @@ export function MobilePreviewPane({
     queueMicrotask(() =>
       setSelectedNetworkRequestId(visibleNetworkRequests[0]?.id ?? null),
     );
-  }, [selectedNetworkRequestId, visibleNetworkRequests]);
+  }, [isNetworkTabVisible, selectedNetworkRequestId, visibleNetworkRequests]);
 
   useEffect(() => {
+    if (!isNetworkTabVisible) return;
     if (networkFacet === 'all') return;
     if (networkFacets.some((facet) => facet.path === networkFacet)) return;
     queueMicrotask(() => setNetworkFacet('all'));
-  }, [networkFacet, networkFacets]);
+  }, [isNetworkTabVisible, networkFacet, networkFacets]);
 
   const {
     data: iosDevices = [],
@@ -2884,8 +959,9 @@ export function MobilePreviewPane({
   const {
     session,
     activeSessionDeviceKeys,
-    frameUrl,
-    imageFrameCount,
+    hasImageFrame,
+    imageFrameCountRef,
+    subscribeImageFrames,
     subscribeH264Chunks,
     start,
     cancelStart,
@@ -2998,6 +1074,8 @@ export function MobilePreviewPane({
       ),
     [allDevices, deviceId, platform],
   );
+  const sessionWidth = session?.width ?? null;
+  const sessionHeight = session?.height ?? null;
   const previewSurfaceStyle = useMemo<CSSProperties>(
     () => {
       const radiusRatio = getDeviceCornerRadiusRatio({
@@ -3005,7 +1083,7 @@ export function MobilePreviewPane({
         deviceName: selectedDevice?.name ?? '',
       });
       const screenAspectRatio =
-        session?.width && session.height ? session.width / session.height : 0.46;
+        sessionWidth && sessionHeight ? sessionWidth / sessionHeight : 0.46;
       return {
         borderRadius: `${radiusRatio * 100}% / ${radiusRatio * screenAspectRatio * 100}%`,
         transform: `rotate(${previewRotationDeg}deg)`,
@@ -3017,7 +1095,8 @@ export function MobilePreviewPane({
       platform,
       previewRotationDeg,
       selectedDevice?.name,
-      session,
+      sessionWidth,
+      sessionHeight,
     ],
   );
   const selectedDeviceCanStart = canStartDevice(selectedDevice);
@@ -3496,7 +1575,7 @@ export function MobilePreviewPane({
   const streamStrategyLabel = getStreamStrategyLabel(session?.streamStrategy);
 
   const runtimeLaunchState = useMobilePreviewExpoLaunch({
-    isRunningRuntime: autoLaunchRunningRuntime,
+    isRunningRuntime: autoLaunchRunningRuntime && !isHydratingRetainedSessions,
     isLoadingDevices,
     selectedDevice: selectedDevice ?? null,
     isExpoApp,
@@ -3512,10 +1591,6 @@ export function MobilePreviewPane({
         : iosAppStatus?.appInstalled) ?? null,
     appScheme: configuredAppScheme,
   });
-  useEffect(() => {
-    imageFrameCountRef.current = imageFrameCount;
-  }, [imageFrameCount]);
-
   const handlePreviewFrameRendered = useCallback(
     (sessionId: string, source: 'image' | 'raw-rgba' | 'h264') => {
       setupOperationCoordinator.markFrameRendered(sessionId, source);
@@ -3540,25 +1615,21 @@ export function MobilePreviewPane({
       at: performance.now(),
       received: 0,
     };
-    queueMicrotask(() => {
-      setImageStats({
-        receivedFps: 0,
-      });
-      setH264Fps(0);
-    });
-  }, [session?.id]);
+    previewFpsStore.set(0);
+  }, [previewFpsStore, session?.id]);
 
   useEffect(() => {
     queueMicrotask(() => setPreviewRotationDeg(0));
   }, [session?.id]);
 
+  // H264 sessions report their own fps from the decoder; image sessions are
+  // sampled here. Both write to the same ref-based store so the readout never
+  // re-renders the pane.
+  const isImageFpsSampled =
+    session?.status === 'streaming' && session.frameFormat !== 'h264';
   useEffect(() => {
-    if (session?.status !== 'streaming') {
-      queueMicrotask(() => {
-        setImageStats((current) =>
-          current.receivedFps === 0 ? current : { receivedFps: 0 },
-        );
-      });
+    if (!isImageFpsSampled) {
+      previewFpsStore.set(0);
       return undefined;
     }
 
@@ -3569,9 +1640,7 @@ export function MobilePreviewPane({
       const received = imageFrameCountRef.current;
       const receivedFps = Math.round((received - previous.received) / seconds);
 
-      setImageStats((current) =>
-        current.receivedFps === receivedFps ? current : { receivedFps },
-      );
+      previewFpsStore.set(receivedFps);
       lastImageStatsSampleRef.current = {
         at: now,
         received,
@@ -3579,195 +1648,39 @@ export function MobilePreviewPane({
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [session?.id, session?.status]);
+  }, [imageFrameCountRef, isImageFpsSampled, previewFpsStore, session?.id]);
 
-  const previewFps =
-    session?.frameFormat === 'h264' ? h264Fps : imageStats.receivedFps;
   const previewMethodText =
     session?.status === 'streaming'
       ? (streamStrategyLabel ?? session.streamStrategy)
       : null;
-  const previewFpsText =
-    session?.status === 'streaming' ? `${previewFps} fps` : null;
 
-  const mapClientPointToImage = useCallback(
-    (
-      clientX: number,
-      clientY: number,
-      options: {
-        clampToBounds?: boolean;
-        allowOutsideBounds?: boolean;
-        edgeSlopPx?: number;
-      } = {},
-    ) => {
-      const image = imgRef.current;
-      const canvas = containerRef.current?.querySelector('canvas') ?? null;
-      const surface = image ?? canvas;
-      if (!surface) return null;
+  const {
+    handleBackButton,
+    handleHomeButton,
+    handleKeyDown,
+    handlePointerCancel,
+    handlePointerDown,
+    handlePointerMove,
+    handlePointerUp,
+    handleRotateButton,
+    handleShowKeyboardButton,
+    handleWheel,
+  } = useMobilePreviewInput({
+    containerRef,
+    imgRef,
+    gestureFeedbackStore,
+    isRunning,
+    session,
+    platform,
+    previewRotationDeg,
+    showGestures,
+    sendInput,
+    rotate,
+    setInputNotice,
+    setPreviewRotationDeg,
+  });
 
-      const rect = surface.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return null;
-      const slop = options.clampToBounds
-        ? (options.edgeSlopPx ?? POINTER_EDGE_SLOP_PX)
-        : 0;
-      if (
-        !options.allowOutsideBounds &&
-        !isPointWithinSurfaceBounds({
-          x: clientX,
-          y: clientY,
-          surface: rect,
-          slop,
-        })
-      ) {
-        return null;
-      }
-
-      const { width: naturalWidth, height: naturalHeight } = resolveDeviceSize({
-        surface: getSurfaceIntrinsicSize(surface),
-        sessionWidth: session?.width ?? null,
-        sessionHeight: session?.height ?? null,
-        fallback: { width: rect.width, height: rect.height },
-      });
-
-      const x = options.clampToBounds
-        ? clamp(clientX, rect.left, rect.right)
-        : clientX;
-      const y = options.clampToBounds
-        ? clamp(clientY, rect.top, rect.bottom)
-        : clientY;
-      const rotation = normalizeRotationDegrees(previewRotationDeg);
-      const displayWidth =
-        rotation === 90 || rotation === 270 ? naturalHeight : naturalWidth;
-      const displayHeight =
-        rotation === 90 || rotation === 270 ? naturalWidth : naturalHeight;
-      const rawPoint = {
-        x: (x - rect.left) * (displayWidth / rect.width),
-        y: (y - rect.top) * (displayHeight / rect.height),
-      };
-      const point = mapRotatedSurfacePoint({
-        ...rawPoint,
-        width: naturalWidth,
-        height: naturalHeight,
-        rotationDegrees: previewRotationDeg,
-      });
-
-      return {
-        x: clamp(Math.round(point.x), 0, naturalWidth - 1),
-        y: clamp(Math.round(point.y), 0, naturalHeight - 1),
-      };
-    },
-    [previewRotationDeg, session?.height, session?.width],
-  );
-
-  const sendInputSafe = useCallback(
-    (event: Parameters<typeof sendInput>[0]) => {
-      void sendInput(event)
-        .then(() => setInputNotice(null))
-        .catch((sendError) => {
-          setInputNotice(formatError(sendError) ?? 'Input failed');
-        });
-    },
-    [sendInput],
-  );
-
-  const getGestureFeedbackPoint = useCallback((clientX: number, clientY: number) => {
-    const containerRect = containerRef.current?.getBoundingClientRect();
-    const image = imgRef.current;
-    const canvas = containerRef.current?.querySelector('canvas') ?? null;
-    const surfaceRect = (image ?? canvas)?.getBoundingClientRect();
-    if (!containerRect || !surfaceRect) return null;
-    return {
-      x:
-        clamp(clientX, surfaceRect.left, surfaceRect.right) -
-        containerRect.left,
-      y:
-        clamp(clientY, surfaceRect.top, surfaceRect.bottom) -
-        containerRect.top,
-    };
-  }, []);
-
-  const clearGestureFeedbackTimer = useCallback(() => {
-    if (!gestureFeedbackTimerRef.current) return;
-    clearTimeout(gestureFeedbackTimerRef.current);
-    gestureFeedbackTimerRef.current = null;
-  }, []);
-
-  const beginGestureFeedback = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!showGestures) return;
-      const point = getGestureFeedbackPoint(clientX, clientY);
-      if (!point) return;
-      clearGestureFeedbackTimer();
-      gestureFeedbackIdRef.current = getNextGestureFeedbackId(
-        gestureFeedbackIdRef.current,
-      );
-      setGestureFeedback({
-        id: gestureFeedbackIdRef.current,
-        points: [point],
-        released: false,
-      });
-    },
-    [clearGestureFeedbackTimer, getGestureFeedbackPoint, showGestures],
-  );
-
-  const extendGestureFeedback = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!showGestures) return;
-      const point = getGestureFeedbackPoint(clientX, clientY);
-      if (!point) return;
-      setGestureFeedback((current) => {
-        if (!current || current.released) return current;
-        const previous = current.points.at(-1);
-        if (previous && Math.hypot(point.x - previous.x, point.y - previous.y) < 2) {
-          return current;
-        }
-        return { ...current, points: [...current.points.slice(-59), point] };
-      });
-    },
-    [getGestureFeedbackPoint, showGestures],
-  );
-
-  const releaseGestureFeedback = useCallback(() => {
-    if (!showGestures) return;
-    clearGestureFeedbackTimer();
-    setGestureFeedback((current) =>
-      current ? { ...current, released: true } : current,
-    );
-    gestureFeedbackTimerRef.current = setTimeout(() => {
-      gestureFeedbackTimerRef.current = null;
-      setGestureFeedback(null);
-    }, GESTURE_FEEDBACK_FADE_MS);
-  }, [clearGestureFeedbackTimer, showGestures]);
-
-  const showWheelGestureFeedback = useCallback(
-    (startPoint: { x: number; y: number }, endPoint: { x: number; y: number }) => {
-      if (!showGestures) return;
-      const feedback = createWheelGestureFeedback({
-        currentId: gestureFeedbackIdRef.current,
-        startPoint,
-        endPoint,
-      });
-      gestureFeedbackIdRef.current = feedback.id;
-      setGestureFeedback(feedback);
-      gestureFeedbackTimerRef.current = restartGestureFeedbackTimer({
-        currentTimer: gestureFeedbackTimerRef.current,
-        delayMs: GESTURE_FEEDBACK_FADE_MS,
-        onExpire: () => {
-          gestureFeedbackTimerRef.current = null;
-          setGestureFeedback(null);
-        },
-      });
-    },
-    [showGestures],
-  );
-
-  useEffect(() => {
-    if (!showGestures) {
-      clearGestureFeedbackTimer();
-      queueMicrotask(() => setGestureFeedback(null));
-    }
-    return clearGestureFeedbackTimer;
-  }, [clearGestureFeedbackTimer, showGestures]);
 
   const autoPreviewStartAttemptKey = selectedPreviewDeviceKey
     ? [
@@ -3959,431 +1872,6 @@ export function MobilePreviewPane({
       setIsRunningAction(false);
     }
   }, [deviceId, platform, showActionNotice, textSize]);
-
-  const handlePointerDown = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      if (
-        !canStartPointerInteraction({
-          isPrimary: event.isPrimary,
-          button: event.button,
-          pointerType: event.pointerType,
-          activePointerId: pointerStartRef.current?.pointerId ?? null,
-        })
-      ) {
-        return;
-      }
-      containerRef.current?.focus();
-      const point = mapClientPointToImage(event.clientX, event.clientY, {
-        clampToBounds: session?.platform === 'ios',
-      });
-      if (!point) return;
-
-      beginGestureFeedback(event.clientX, event.clientY);
-      event.currentTarget.setPointerCapture(event.pointerId);
-      pointerStartRef.current = {
-        pointerId: event.pointerId,
-        pointerType: event.pointerType,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        imageX: point.x,
-        imageY: point.y,
-        currentImageX: point.x,
-        currentImageY: point.y,
-        lastMoveSentAt: 0,
-        startedAt: Date.now(),
-        didSendTouchDown: false,
-      };
-      const downInput = getPointerDownInput({
-        platform: session?.platform ?? platform,
-        pointerType: event.pointerType,
-        point,
-      });
-      if (downInput) {
-        pointerStartRef.current.didSendTouchDown = true;
-        sendInputSafe(downInput);
-      }
-    },
-    [
-      beginGestureFeedback,
-      mapClientPointToImage,
-      platform,
-      sendInputSafe,
-      session?.platform,
-    ],
-  );
-
-  const handlePointerMove = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      const startPoint = pointerStartRef.current;
-      if (!startPoint || startPoint.pointerId !== event.pointerId) {
-        return;
-      }
-
-      const point = mapClientPointToImage(event.clientX, event.clientY, {
-        clampToBounds: session?.platform === 'ios',
-      });
-      if (!point) return;
-
-      extendGestureFeedback(event.clientX, event.clientY);
-      startPoint.currentImageX = point.x;
-      startPoint.currentImageY = point.y;
-
-      if (
-        (session?.platform !== 'ios' && session?.platform !== 'android') ||
-        !startPoint.pointerType
-      ) {
-        return;
-      }
-
-      const distance = Math.hypot(
-        event.clientX - startPoint.clientX,
-        event.clientY - startPoint.clientY,
-      );
-      if (distance <= SWIPE_THRESHOLD_PX) return;
-
-      const now = Date.now();
-      if (now - startPoint.lastMoveSentAt < TOUCH_MOVE_THROTTLE_MS) return;
-
-      startPoint.lastMoveSentAt = now;
-      const inputs = getPointerMoveInputs({
-        platform: session.platform,
-        pointerType: startPoint.pointerType,
-        startPoint: { x: startPoint.imageX, y: startPoint.imageY },
-        point,
-        didSendTouchDown: startPoint.didSendTouchDown,
-      });
-      if (inputs.some((input) => input.type === 'touchDown')) {
-        startPoint.didSendTouchDown = true;
-      }
-      inputs.forEach(sendInputSafe);
-    },
-    [extendGestureFeedback, mapClientPointToImage, sendInputSafe, session],
-  );
-
-  const finishPointerInteraction = useCallback(
-    (pointerId: number, clientX: number, clientY: number) => {
-      const startPoint = pointerStartRef.current;
-      if (!startPoint || startPoint.pointerId !== pointerId) return;
-      pointerStartRef.current = null;
-      extendGestureFeedback(clientX, clientY);
-      releaseGestureFeedback();
-
-      const endPoint = mapClientPointToImage(clientX, clientY, {
-        clampToBounds: session?.platform === 'ios',
-      });
-
-      if (startPoint.didSendTouchDown) {
-        const upInput = getPointerUpInput({
-          didSendTouchDown: true,
-          point: {
-            x: endPoint?.x ?? startPoint.currentImageX,
-            y: endPoint?.y ?? startPoint.currentImageY,
-          },
-        });
-        if (upInput) sendInputSafe(upInput);
-        return;
-      }
-
-      if (session?.platform === 'ios') {
-        const distance = Math.hypot(
-          clientX - startPoint.clientX,
-          clientY - startPoint.clientY,
-        );
-        const pressDurationMs = Date.now() - startPoint.startedAt;
-
-        if (distance > SWIPE_THRESHOLD_PX && endPoint) {
-          sendInputSafe({
-            type: 'swipe',
-            x1: startPoint.imageX,
-            y1: startPoint.imageY,
-            x2: endPoint.x,
-            y2: endPoint.y,
-            durationMs: Math.max(1, pressDurationMs),
-          });
-          return;
-        }
-
-        if (pressDurationMs >= LONG_PRESS_THRESHOLD_MS) {
-          sendInputSafe({
-            type: 'longPress',
-            x: startPoint.imageX,
-            y: startPoint.imageY,
-            durationMs: pressDurationMs,
-          });
-          return;
-        }
-
-        sendInputSafe({ type: 'tap', x: startPoint.imageX, y: startPoint.imageY });
-        return;
-      }
-
-      if (!endPoint) return;
-
-      const distance = Math.hypot(
-        clientX - startPoint.clientX,
-        clientY - startPoint.clientY,
-      );
-
-      if (distance > SWIPE_THRESHOLD_PX) {
-        sendInputSafe({
-          type: 'swipe',
-          x1: startPoint.imageX,
-          y1: startPoint.imageY,
-          x2: endPoint.x,
-          y2: endPoint.y,
-          durationMs: Math.max(1, Date.now() - startPoint.startedAt),
-        });
-        return;
-      }
-
-      const pressDurationMs = Date.now() - startPoint.startedAt;
-      if (pressDurationMs >= LONG_PRESS_THRESHOLD_MS) {
-        sendInputSafe({
-          type: 'longPress',
-          x: endPoint.x,
-          y: endPoint.y,
-          durationMs: pressDurationMs,
-        });
-        return;
-      }
-
-      sendInputSafe({ type: 'tap', x: endPoint.x, y: endPoint.y });
-    },
-    [
-      extendGestureFeedback,
-      mapClientPointToImage,
-      releaseGestureFeedback,
-      sendInputSafe,
-      session?.platform,
-    ],
-  );
-
-  const handlePointerUp = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
-      finishPointerInteraction(event.pointerId, event.clientX, event.clientY);
-    },
-    [finishPointerInteraction],
-  );
-
-  const handlePointerCancel = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    const startPoint = pointerStartRef.current;
-    if (!matchesActivePointer(startPoint?.pointerId ?? null, event.pointerId)) {
-      return;
-    }
-    pointerStartRef.current = null;
-    releaseGestureFeedback();
-    if (!startPoint || !startPoint.didSendTouchDown) {
-      return;
-    }
-
-    sendInputSafe({
-      type: 'touchUp',
-      x: startPoint.currentImageX,
-      y: startPoint.currentImageY,
-    });
-  }, [releaseGestureFeedback, sendInputSafe]);
-
-  useEffect(() => {
-    const handleDocumentPointerUp = (event: globalThis.PointerEvent) => {
-      finishPointerInteraction(event.pointerId, event.clientX, event.clientY);
-    };
-    const handleDocumentPointerCancel = (event: globalThis.PointerEvent) => {
-      const startPoint = pointerStartRef.current;
-      if (
-        !startPoint ||
-        !matchesActivePointer(startPoint.pointerId, event.pointerId)
-      ) {
-        return;
-      }
-      pointerStartRef.current = null;
-      releaseGestureFeedback();
-      if (!startPoint.didSendTouchDown) return;
-
-      sendInputSafe({
-        type: 'touchUp',
-        x: startPoint.currentImageX,
-        y: startPoint.currentImageY,
-      });
-    };
-
-    document.addEventListener('pointerup', handleDocumentPointerUp);
-    document.addEventListener('pointercancel', handleDocumentPointerCancel);
-    return () => {
-      document.removeEventListener('pointerup', handleDocumentPointerUp);
-      document.removeEventListener(
-        'pointercancel',
-        handleDocumentPointerCancel,
-      );
-    };
-  }, [finishPointerInteraction, releaseGestureFeedback, sendInputSafe]);
-
-  const handleWheel = useCallback(
-    (event: WheelEvent<HTMLDivElement>) => {
-      if (!isRunning) return;
-
-      const now = Date.now();
-      if (now - lastWheelInputAtRef.current < WHEEL_INPUT_THROTTLE_MS) return;
-
-      const point = mapClientPointToImage(event.clientX, event.clientY, {
-        clampToBounds: true,
-        edgeSlopPx: 0,
-      });
-      if (!point) return;
-
-      event.preventDefault();
-      lastWheelInputAtRef.current = now;
-      containerRef.current?.focus();
-
-      const clientDistance = clamp(
-        Math.abs(event.deltaY),
-        WHEEL_SWIPE_MIN_DISTANCE_PX,
-        WHEEL_SWIPE_MAX_DISTANCE_PX,
-      );
-      const direction = event.deltaY >= 0 ? -1 : 1;
-      const endPoint = mapClientPointToImage(
-        event.clientX,
-        event.clientY + direction * clientDistance,
-        { clampToBounds: true, allowOutsideBounds: true },
-      );
-      if (!endPoint) return;
-
-      const feedbackStartPoint = getGestureFeedbackPoint(
-        event.clientX,
-        event.clientY,
-      );
-      const feedbackEndPoint = getGestureFeedbackPoint(
-        event.clientX,
-        event.clientY + direction * clientDistance,
-      );
-      if (feedbackStartPoint && feedbackEndPoint) {
-        showWheelGestureFeedback(feedbackStartPoint, feedbackEndPoint);
-      }
-
-      sendInputSafe({
-        type: 'swipe',
-        x1: point.x,
-        y1: point.y,
-        x2: endPoint.x,
-        y2: endPoint.y,
-        durationMs: WHEEL_SWIPE_DURATION_MS,
-      });
-    },
-    [
-      isRunning,
-      getGestureFeedbackPoint,
-      mapClientPointToImage,
-      sendInputSafe,
-      showWheelGestureFeedback,
-    ],
-  );
-
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      if (!isRunning) return;
-
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        sendInputSafe({
-          type: 'key',
-          key: session?.platform === 'ios' ? 'home' : 'back',
-        });
-        return;
-      }
-
-      if (event.key === 'Backspace') {
-        event.preventDefault();
-        sendInputSafe({ type: 'key', key: 'backspace' });
-        return;
-      }
-
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        sendInputSafe({ type: 'key', key: 'enter' });
-        return;
-      }
-
-      if (
-        event.key.length === 1 &&
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey
-      ) {
-        event.preventDefault();
-        sendInputSafe({ type: 'text', text: event.key });
-      }
-    },
-    [isRunning, sendInputSafe, session?.platform],
-  );
-
-  const handleHomeButton = useCallback(() => {
-    if (!isRunning) return;
-    sendInputSafe({ type: 'key', key: 'home' });
-  }, [isRunning, sendInputSafe]);
-
-  const handleBackButton = useCallback(() => {
-    if (!isRunning) return;
-
-    if (session?.platform !== 'ios') {
-      sendInputSafe({ type: 'key', key: 'back' });
-      return;
-    }
-
-    const surfaceElement =
-      imgRef.current ?? containerRef.current?.querySelector('canvas') ?? null;
-    const surface = getSurfaceIntrinsicSize(surfaceElement);
-    const { width, height } = resolveDeviceSize({
-      surface,
-      sessionWidth: session.width ?? null,
-      sessionHeight: session.height ?? null,
-      fallback: surface ?? { width: 0, height: 0 },
-    });
-    if (width <= 0 || height <= 0) return;
-
-    const y = Math.round(height / 2);
-    sendInputSafe({
-      type: 'swipe',
-      x1: 1,
-      y1: y,
-      x2: Math.round(width * 0.45),
-      y2: y,
-      durationMs: 220,
-    });
-  }, [isRunning, sendInputSafe, session]);
-
-  const handleShowKeyboardButton = useCallback(() => {
-    if (!isRunning) return;
-    void sendInput({ type: 'showKeyboard' })
-      .then(() => {
-        setInputNotice(
-          session?.platform === 'android'
-            ? 'Android keyboard request sent. If it stays hidden, type directly in the preview.'
-            : null,
-        );
-      })
-      .catch((error) => {
-        setInputNotice(formatError(error) ?? 'Keyboard request failed');
-      });
-  }, [isRunning, sendInput, session?.platform]);
-
-  const handleRotateButton = useCallback(
-    (direction: MobileRotationDirection) => {
-      if (!isRunning) return;
-      void rotate(direction)
-        .then(() => {
-          setPreviewRotationDeg((current) =>
-            normalizeRotationDegrees(
-              current + (direction === 'right' ? 90 : -90),
-            ),
-          );
-          setInputNotice(null);
-        })
-        .catch((error) => {
-          setInputNotice(formatError(error) ?? 'Rotation failed');
-        });
-    },
-    [isRunning, rotate],
-  );
-
   const inputPreparingOverlay = isInputPreparing ? (
     <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/45 backdrop-blur-[1px]">
       <div className="border-border bg-bg-0/95 text-ink-2 flex items-center gap-2 rounded-xl border px-3 py-2 text-xs shadow-lg">
@@ -4582,115 +2070,37 @@ export function MobilePreviewPane({
   const consoleIsBuild = consoleCommandId === buildCommandId;
   const consoleIsPrebuild = consoleCommandId === prebuildCommandId;
   const consoleRunning = consoleStatus?.status === 'running';
-  const devServerBody = (
-    <div className="bg-bg-0 flex h-full min-h-0 flex-col">
-      <div className="border-line bg-bg-1 flex items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-ink-1 text-sm font-medium">
-            {consoleIsPrebuild
-              ? `${platform === 'android' ? 'Android' : 'iOS'} prebuild`
-              : consoleIsBuild
-                ? `${platform === 'android' ? 'Android' : 'iOS'} build`
-                : 'Dev server'}{' '}
-            {consoleStatus?.status ?? 'stopped'}
-          </div>
-          <div className="text-ink-3 truncate text-xs">
-            {consoleStatus?.command ??
-              (consoleIsPrebuild
-                ? prebuildCommand
-                : consoleIsBuild
-                ? (buildCommand ?? 'No build command configured')
-                : `${devServerCommand} · port ${effectiveDevServerPort}`)}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-1">
-            <Button
-              size="xs"
-              variant="tab"
-              active={!consoleIsPrebuild && !consoleIsBuild}
-              onClick={() => setActiveConsoleCommandId(null)}
-            >
-              Metro
-            </Button>
-            <Button
-              size="xs"
-              variant="tab"
-              active={consoleIsPrebuild}
-              onClick={() => setActiveConsoleCommandId(prebuildCommandId)}
-            >
-              {platform === 'android' ? 'Android' : 'iOS'} prebuild
-              {prebuildStatus?.status ? ` · ${prebuildStatus.status}` : ''}
-            </Button>
-            <Button
-              size="xs"
-              variant="tab"
-              active={consoleIsBuild}
-              onClick={() => setActiveConsoleCommandId(buildCommandId)}
-            >
-              {platform === 'android' ? 'Android' : 'iOS'} build
-              {buildStatus?.status ? ` · ${buildStatus.status}` : ''}
-            </Button>
-          </div>
-        </div>
-        <Button
-          size="sm"
-          variant={consoleRunning ? 'secondary' : 'primary'}
-          onClick={
-            consoleIsPrebuild
-              ? handleStartStopPrebuild
-              : consoleIsBuild
-                ? handleStartStopBuild
-                : handleStartStopDevServer
-          }
-          disabled={
-            needsAppSelection ||
-            (consoleIsBuild && !buildCommand) ||
-            (consoleIsBuild
-              ? buildStarting || buildStopping
-              : consoleIsPrebuild
-                ? prebuildStarting
-              : devServerStarting || devServerStopping)
-          }
-          loading={
-            consoleIsBuild
-              ? buildStarting || buildStopping
-              : consoleIsPrebuild
-                ? prebuildStarting
-              : devServerStarting || devServerStopping
-          }
-        >
-          {consoleRunning
-            ? 'Stop'
-            : consoleIsPrebuild
-              ? 'Prebuild'
-              : consoleIsBuild
-                ? 'Build'
-                : 'Start dev server'}
-        </Button>
-      </div>
-      {runCommands.portsInUseError ? (
-        <div className="border-status-fail/30 bg-status-fail/10 text-status-fail border-b px-3 py-1.5 text-xs">
-          {runCommands.portsInUseError.message}
-        </div>
-      ) : null}
-      {needsAppSelection ? (
-        <EmptyState title="Choose mobile app" detail="Select an app first" />
-      ) : (
-        <InteractiveLog
-          log={devServerLog}
-          taskId={taskId}
-          runCommandId={consoleCommandId}
-          isRunning={consoleRunning}
-          workingDir={projectPath}
-          emptyText={
-            consoleIsPrebuild
-              ? `Run prebuild to generate ${platform} folder`
-              : consoleIsBuild
-                ? 'Run build to stream logs'
-                : 'Start dev server to stream logs'
-          }
-        />
-      )}
-    </div>
+  const renderDevServerBody = () => (
+    <DevServerTab
+      platform={platform}
+      taskId={taskId}
+      projectPath={projectPath}
+      consoleCommandId={consoleCommandId}
+      consoleStatus={consoleStatus}
+      consoleIsPrebuild={consoleIsPrebuild}
+      consoleIsBuild={consoleIsBuild}
+      consoleRunning={consoleRunning}
+      prebuildCommand={prebuildCommand}
+      prebuildCommandId={prebuildCommandId}
+      prebuildStatus={prebuildStatus}
+      prebuildStarting={prebuildStarting}
+      buildCommand={buildCommand}
+      buildCommandId={buildCommandId}
+      buildStatus={buildStatus}
+      buildStarting={buildStarting}
+      buildStopping={buildStopping}
+      devServerCommand={devServerCommand}
+      devServerStarting={devServerStarting}
+      devServerStopping={devServerStopping}
+      effectiveDevServerPort={effectiveDevServerPort}
+      needsAppSelection={needsAppSelection}
+      portsInUseError={runCommands.portsInUseError}
+      devServerLog={devServerLog}
+      setActiveConsoleCommandId={setActiveConsoleCommandId}
+      handleStartStopPrebuild={handleStartStopPrebuild}
+      handleStartStopBuild={handleStartStopBuild}
+      handleStartStopDevServer={handleStartStopDevServer}
+    />
   );
 
   const nativeLogSession = nativeLogs.session;
@@ -4703,48 +2113,16 @@ export function MobilePreviewPane({
     if (!deviceId) return;
     void nativeLogs.start({ platform, deviceId });
   };
-  const logsBody = (
-    <div className="bg-bg-0 flex h-full min-h-0 flex-col">
-      <div className="border-line bg-bg-1 flex items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="min-w-0">
-          <div className="text-ink-1 text-sm font-medium">
-            Device logs {nativeLogStatus}
-          </div>
-          <div className="text-ink-3 truncate text-xs">
-            {nativeLogSession?.command ??
-              (platform === 'ios' ? 'xcrun simctl log stream' : 'adb logcat')}
-          </div>
-        </div>
-      </div>
-      {nativeLogs.error || nativeLogSession?.error ? (
-        <div className="border-status-fail/30 bg-status-fail/10 text-status-fail border-b px-3 py-1.5 text-xs">
-          {formatError(nativeLogs.error) ?? nativeLogSession?.error}
-        </div>
-      ) : null}
-      {!deviceId ? (
-        <EmptyState title="No device selected" detail="Select a device first" />
-      ) : nativeLogs.logs.length === 0 ? (
-        <EmptyState
-          title="No device logs"
-          detail="Start logs to stream native output"
-        />
-      ) : (
-        <div className="min-h-0 flex-1 overflow-auto bg-zinc-950 p-3 font-mono text-[11px] leading-relaxed">
-          {nativeLogs.logs.map((entry, index) => (
-            <div
-              key={`${entry.timestamp}-${index}`}
-              className={clsx(
-                'whitespace-pre-wrap',
-                entry.stream === 'stderr' ? 'text-amber-200' : 'text-zinc-200',
-                entry.stream === 'system' && 'text-sky-200',
-              )}
-            >
-              {entry.text}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+  const renderLogsBody = () => (
+    <LogsTab
+      platform={platform}
+      deviceId={deviceId}
+      nativeLogStatus={nativeLogStatus}
+      nativeLogCommand={nativeLogSession?.command ?? null}
+      nativeLogSessionError={nativeLogSession?.error ?? null}
+      nativeLogError={nativeLogs.error}
+      logsStore={nativeLogs.logsStore}
+    />
   );
 
   const networkSession = networkProxy.session;
@@ -5049,7 +2427,7 @@ export function MobilePreviewPane({
     event.preventDefault();
     event.stopPropagation();
   };
-  const networkBody = (
+  const renderNetworkBody = () => (
     <div
       ref={networkPanelRef}
       onContextMenuCapture={handleNetworkContextMenuCapture}
@@ -5544,7 +2922,12 @@ export function MobilePreviewPane({
             status: httpsStatus,
             detail:
               httpsStatus === 'ready'
-                ? `${networkStats.total} requests · decrypt on`
+                ? (
+                    <NetworkRequestCountDetail
+                      store={networkProxy.requestsStore}
+                      showTunneled={showTunneledNetworkRequests}
+                    />
+                  )
                 : httpsStatus === 'blocked'
                   ? effectiveAndroidProjectPath
                     ? androidTrustConfigured
@@ -6144,7 +3527,7 @@ export function MobilePreviewPane({
     return null;
   }
 
-  const setupBody = (
+  const renderSetupBody = () => (
     <div className="bg-bg-1 min-h-0 flex-1 overflow-y-auto pb-4">
       <div className="border-line-soft border-b p-3.5">
         <div className="flex items-center gap-3">
@@ -6555,78 +3938,35 @@ export function MobilePreviewPane({
     updateEmbeddedDevToolsBounds,
   ]);
 
-  const devToolsBody = (
-    <div className="bg-bg-0 flex h-full min-h-0 flex-col">
-      <div className="border-line bg-bg-1 flex items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-ink-1 text-sm font-medium">React Native DevTools</div>
-          <div className="text-ink-3 truncate text-xs">
-            Metro {devToolsResult?.metroBaseUrl ?? `http://localhost:${effectiveDevServerPort}`} · Console
-          </div>
-          <div className="text-ink-4 mt-1 font-mono text-[10px]">
-            {devToolsTargets.length} target
-            {devToolsTargets.length === 1 ? '' : 's'}
-          </div>
-        </div>
-        {devToolsTargets.length > 1 ? (
-          <Select
-            value={devToolsTarget?.id ?? ''}
-            options={devToolsTargets.map((target) => ({
-              value: target.id,
-              label: target.title || target.deviceName || target.id,
-              description: target.deviceName ?? target.appId ?? undefined,
-            }))}
-            onChange={setSelectedDevToolsTargetId}
-            onOpenChange={handleDevToolsTargetMenuOpenChange}
-            className="max-w-[260px]"
-          />
-        ) : null}
-        <Button
-          size="sm"
-          variant="secondary"
-          loading={reactNativeDevTools.isFetching}
-          onClick={() => void reactNativeDevTools.refetch()}
-        >
-          Refresh
-        </Button>
-      </div>
-      {devToolsError ? (
-        <div className="border-status-warn/30 bg-status-warn/10 text-status-warn border-b px-3 py-1.5 text-xs">
-          {cleanPreviewError(devToolsError)}
-        </div>
-      ) : null}
-      {reactNativeDevTools.isLoading ? (
-        <EmptyState title="Finding DevTools target" detail="Checking Metro inspector" />
-      ) : devToolsFrontendUrl ? (
-        <div className="bg-bg-0 min-h-0 flex-1">
-          <div
-            ref={devToolsViewRef}
-            className="bg-bg-0 h-full min-h-[360px] w-full"
-          />
-        </div>
-      ) : (
-        <EmptyState
-          title="No RN DevTools target"
-          detail="Start Metro, launch app, make sure Hermes debug build is running"
-        />
-      )}
-    </div>
+  const renderDevToolsBody = () => (
+    <DevToolsTab
+      metroBaseUrl={devToolsResult?.metroBaseUrl ?? null}
+      effectiveDevServerPort={effectiveDevServerPort}
+      devToolsTargets={devToolsTargets}
+      devToolsTarget={devToolsTarget ?? null}
+      devToolsError={devToolsError}
+      devToolsFrontendUrl={devToolsFrontendUrl}
+      devToolsViewRef={devToolsViewRef}
+      isFetching={reactNativeDevTools.isFetching}
+      isLoading={reactNativeDevTools.isLoading}
+      onRefresh={() => void reactNativeDevTools.refetch()}
+      setSelectedDevToolsTargetId={setSelectedDevToolsTargetId}
+      handleDevToolsTargetMenuOpenChange={handleDevToolsTargetMenuOpenChange}
+    />
   );
 
-  const visibleActiveTab = getVisibleMobilePreviewPaneTab({
-    tab: activeTab,
-    networkEnabled: autoStartProxy,
-  });
+  // Only the active tab's element tree is built; the other four would be
+  // thrown away on every render.
   const inspectorBody =
     visibleActiveTab === 'setup'
-      ? setupBody
+      ? renderSetupBody()
       : visibleActiveTab === 'dev-server'
-      ? devServerBody
-      : visibleActiveTab === 'network'
-        ? networkBody
-        : visibleActiveTab === 'devtools'
-          ? devToolsBody
-        : logsBody;
+        ? renderDevServerBody()
+        : visibleActiveTab === 'network'
+          ? renderNetworkBody()
+          : visibleActiveTab === 'devtools'
+            ? renderDevToolsBody()
+            : renderLogsBody();
 
   let body = null;
   if (fatalSessionError) {
@@ -6656,10 +3996,7 @@ export function MobilePreviewPane({
             onFrameRendered={handlePreviewFrameRendered}
             surfaceStyle={previewSurfaceStyle}
           />
-          <GestureFeedbackOverlay
-            key={gestureFeedback?.id ?? 0}
-            feedback={gestureFeedback}
-          />
+          <GestureFeedbackOverlay store={gestureFeedbackStore} />
         </div>
       </div>
     );
@@ -6685,18 +4022,15 @@ export function MobilePreviewPane({
             width={null}
             height={null}
             subscribeH264Chunks={subscribeH264Chunks}
-            onFpsChange={setH264Fps}
+            onFpsChange={previewFpsStore.set}
             onFrameRendered={handlePreviewFrameRendered}
             surfaceStyle={previewSurfaceStyle}
           />
-          <GestureFeedbackOverlay
-            key={gestureFeedback?.id ?? 0}
-            feedback={gestureFeedback}
-          />
+          <GestureFeedbackOverlay store={gestureFeedbackStore} />
         </div>
       </div>
     );
-  } else if (frameUrl) {
+  } else if (hasImageFrame) {
     body = (
       <div className="flex h-full flex-col bg-zinc-950">
         <div
@@ -6713,23 +4047,14 @@ export function MobilePreviewPane({
           className="focus-visible:ring-acc relative flex min-h-0 flex-1 touch-none items-center justify-center p-4 outline-none focus-visible:ring-2"
         >
           {inputPreparingOverlay}
-          <img
-            ref={imgRef}
-            src={frameUrl}
-            alt="Mobile preview"
-            onLoad={() => {
-              if (session) {
-                notifyImageFrameRendered(handlePreviewFrameRendered, session.id);
-              }
-            }}
-            draggable={false}
-            className="max-h-full max-w-full rounded-xl shadow-2xl select-none"
-            style={previewSurfaceStyle}
+          <ImagePreviewSurface
+            imgRef={imgRef}
+            sessionId={session?.id ?? null}
+            subscribeImageFrames={subscribeImageFrames}
+            onFrameRendered={handlePreviewFrameRendered}
+            surfaceStyle={previewSurfaceStyle}
           />
-          <GestureFeedbackOverlay
-            key={gestureFeedback?.id ?? 0}
-            feedback={gestureFeedback}
-          />
+          <GestureFeedbackOverlay store={gestureFeedbackStore} />
         </div>
       </div>
     );
@@ -7036,7 +4361,12 @@ export function MobilePreviewPane({
             <Button variant="ghost" size="sm" disabled={!isRunning}>
               Reload
             </Button>
-            <Button variant="ghost" size="sm" icon={<Copy />} disabled={!frameUrl}>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Copy />}
+              disabled={!hasImageFrame}
+            >
               Screenshot
             </Button>
             <span className="bg-border mx-1 h-4 w-px" />
@@ -7068,10 +4398,11 @@ export function MobilePreviewPane({
                 }
               />
             ) : null}
-            <span className="text-ink-4 font-mono text-[10px]">
-              {previewMethodText ?? 'stream idle'}
-              {previewFpsText ? ` · ${previewFpsText}` : ''}
-            </span>
+            <PreviewStatusText
+              methodText={previewMethodText}
+              showFps={session?.status === 'streaming'}
+              fpsStore={previewFpsStore}
+            />
             <Dropdown
               trigger={<IconButton size="sm" icon={<MoreHorizontal />} tooltip="More" />}
               align="right"
@@ -7256,8 +4587,14 @@ export function MobilePreviewPane({
                   ['setup', `Setup ${allSetupReady ? '✓' : `${readySetupSteps}/${setupSteps.length}`}`],
                   ['dev-server', 'Metro'],
                   ['devtools', 'DevTools'],
-                  ['logs', `Logs ${nativeLogs.logs.length ? nativeLogs.logs.length : ''}`],
-                  ['network', `Network ${networkStats.failed || ''}`],
+                  ['logs', <NativeLogsTabLabel store={nativeLogs.logsStore} />],
+                  [
+                    'network',
+                    <NetworkTabLabel
+                      store={networkProxy.requestsStore}
+                      showTunneled={showTunneledNetworkRequests}
+                    />,
+                  ],
                 ] as const
               )
                 .filter(([tab]) =>

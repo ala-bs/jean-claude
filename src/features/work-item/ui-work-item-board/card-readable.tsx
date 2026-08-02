@@ -58,17 +58,18 @@ export function WorkItemBoardReadableCard({
     label,
     tone: getBoardTagTone(label, colorSettings.rules),
   }));
-  let plainShown = 0;
-  const visibleScopes = scopeEntries.filter((entry) => {
-    if (entry.tone) return true;
-    if (plainShown >= VISIBLE_SCOPE_LIMIT) return false;
-    plainShown += 1;
-    return true;
-  });
-  const hiddenScopeLabels = scopeEntries
-    .filter((entry) => !entry.tone)
+  const plainScopeIndexes = scopeEntries.flatMap((entry, index) =>
+    entry.tone ? [] : [index],
+  );
+  const shownPlainScopeIndexes = new Set(
+    plainScopeIndexes.slice(0, VISIBLE_SCOPE_LIMIT),
+  );
+  const visibleScopes = scopeEntries.filter(
+    (entry, index) => entry.tone || shownPlainScopeIndexes.has(index),
+  );
+  const hiddenScopeLabels = plainScopeIndexes
     .slice(VISIBLE_SCOPE_LIMIT)
-    .map((entry) => entry.label);
+    .map((index) => scopeEntries[index].label);
   const hiddenScopeCount = hiddenScopeLabels.length;
   const isBug = workItem.fields.workItemType === 'Bug';
   const tags = parseAzureWorkItemTags(workItem.fields.tags ?? '');
