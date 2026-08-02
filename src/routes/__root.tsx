@@ -25,6 +25,7 @@ import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
 import { resolveLastLocationRedirect } from '@/lib/navigation';
+import { resolveSetupState } from '@/lib/onboarding-setup-state';
 import { TaskMessageManager } from '@/features/agent/task-message-manager';
 import { useChangelogStore } from '@/stores/changelog';
 import { useCommands } from '@/common/hooks/use-commands';
@@ -282,17 +283,19 @@ function WorkActivityContainer() {
 }
 
 function OnboardingBootstrap() {
-  const { data: projects = [], isLoading: isLoadingProjects } = useProjects();
-  const setupWizardCompleted = useOnboardingStore(
-    (s) => s.setupWizardCompleted,
-  );
+  const { data: projects, isError: projectsFailed } = useProjects();
   const setupBackendSelected = useOnboardingStore(
     (s) => s.setupBackendSelected,
   );
   const setupWizardSkipped = useOnboardingStore((s) => s.setupWizardSkipped);
-  const { data: backendsSetting } = useBackendsSetting();
-  const setupBackendReady =
-    setupBackendSelected || (backendsSetting?.enabledBackends?.length ?? 0) > 0;
+  const { data: backendsSetting, isError: backendsFailed } =
+    useBackendsSetting();
+  const { isUnknown: isSetupStateUnknown, setupRequired } = resolveSetupState({
+    projects,
+    backendsSetting,
+    setupBackendSelected,
+    queriesFailed: projectsFailed || backendsFailed,
+  });
   const isChangelogOpen = useChangelogStore((s) => s.isOpen);
   const navigate = useNavigate();
   const pathname = useRouterState({
@@ -300,23 +303,19 @@ function OnboardingBootstrap() {
   });
 
   useEffect(() => {
-    if (isLoadingProjects) return;
-    const requiredSetupDone = projects.length > 0 && setupBackendReady;
-    if (requiredSetupDone && setupWizardCompleted) return;
-    if (requiredSetupDone) return;
+    if (isSetupStateUnknown) return;
+    if (!setupRequired) return;
     if (isOnboardingFlowPath(pathname)) return;
     if (isChangelogOpen) return;
     if (setupWizardSkipped) return;
     if (window.sessionStorage.getItem('jc-setup-wizard-skipped') === '1') return;
     void navigate({ to: '/onboarding/setup' });
   }, [
-    isLoadingProjects,
+    isSetupStateUnknown,
     isChangelogOpen,
     navigate,
     pathname,
-    projects.length,
-    setupWizardCompleted,
-    setupBackendReady,
+    setupRequired,
     setupWizardSkipped,
   ]);
 
@@ -447,14 +446,19 @@ function useCleanupNonActiveTasks() {
 
 function RootLayout() {
   useCleanupNonActiveTasks();
-  const { data: projects = [], isLoading: isLoadingProjects } = useProjects();
+  const { data: projects, isError: projectsFailed } = useProjects();
   const setupBackendSelected = useOnboardingStore(
     (s) => s.setupBackendSelected,
   );
   const setupWizardSkipped = useOnboardingStore((s) => s.setupWizardSkipped);
-  const { data: backendsSetting } = useBackendsSetting();
-  const setupBackendReady =
-    setupBackendSelected || (backendsSetting?.enabledBackends?.length ?? 0) > 0;
+  const { data: backendsSetting, isError: backendsFailed } =
+    useBackendsSetting();
+  const { isUnknown: isSetupStateUnknown, setupRequired } = resolveSetupState({
+    projects,
+    backendsSetting,
+    setupBackendSelected,
+    queriesFailed: projectsFailed || backendsFailed,
+  });
   const closeChangelog = useChangelogStore((s) => s.close);
   const closeOverlays = useOverlaysStore((s) => s.closeAll);
   const isMobilePreviewWorkspaceOpen = useMobilePreviewWorkspaceStore(
@@ -466,7 +470,6 @@ function RootLayout() {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  const setupRequired = projects.length === 0 || !setupBackendReady;
   const isSetupRoute = pathname.startsWith('/onboarding/setup');
   const isOnboardingFlowRoute = isOnboardingFlowPath(pathname);
   const setupSkippedThisSession =
@@ -474,7 +477,7 @@ function RootLayout() {
     window.sessionStorage.getItem('jc-setup-wizard-skipped') === '1';
   const hideContentForSetupDecision =
     !isOnboardingFlowRoute &&
-    (isLoadingProjects || (setupRequired && !setupSkippedThisSession));
+    (isSetupStateUnknown || (setupRequired && !setupSkippedThisSession));
   const suppressMobilePreviewWorkspace =
     isOnboardingFlowRoute || isSetupRoute || hideContentForSetupDecision;
 

@@ -16,7 +16,12 @@ import { routeTree } from './routeTree.gen';
 import { Toaster } from './common/ui/toast';
 
 
-const queryClient = new QueryClient();
+// All queries are backed by Electron IPC, not the network. Without
+// `networkMode: 'always'` react-query pauses every fetch when the OS reports
+// offline, leaving queries stuck at `data: undefined` forever.
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { networkMode: 'always' } },
+});
 
 // Use hash-based routing for Electron compatibility.
 // Browser history (pushState) doesn't work with file:// protocol in production builds -
