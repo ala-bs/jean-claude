@@ -1,14 +1,14 @@
 import clsx from 'clsx';
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
 
 /**
  * Lightweight SVG sparkline for inline usage charts.
  * No external dependencies — renders a polyline + optional area fill.
  */
 export function Sparkline({
-  data,
-  referenceData,
-  xData,
+  data: dataProp,
+  referenceData: referenceDataProp,
+  xData: xDataProp,
   xDomain,
   width = 180,
   height = 40,
@@ -21,6 +21,12 @@ export function Sparkline({
   positiveDeltaFillOpacity = 0.2,
   gapRanges,
   max: maxOverride,
+  normalize = 'zero',
+  strokeClassName,
+  fillClassName,
+  gradientFill = false,
+  strokePathLength,
+  shrink = true,
 }: {
   data: number[];
   referenceData?: number[];
@@ -37,7 +43,47 @@ export function Sparkline({
   positiveDeltaFillOpacity?: number;
   gapRanges?: { startMs: number; endMs: number }[];
   max?: number;
+  /**
+   * 'zero' scales from 0 to max (absolute magnitude reads correctly).
+   * 'minmax' scales from min to max (small variations stay visible).
+   */
+  normalize?: 'zero' | 'minmax';
+  /** Tailwind class applied to the stroke (stroke stays `currentColor`). */
+  strokeClassName?: string;
+  /**
+   * Area fill precedence: `fillClassName` wins, then `gradientFill`,
+   * then the flat `color` + `fillOpacity` pair. Only one is ever painted.
+   */
+  fillClassName?: string;
+  /** Fade the area fill from `color` to transparent instead of a flat opacity. */
+  gradientFill?: boolean;
+  /** Normalizes the path length so CSS stroke-dash animations work. */
+  strokePathLength?: number;
+  /** Set false to let the svg compress below its `width` in flex/grid rows. */
+  shrink?: boolean;
 }) {
+  const gradientId = useId();
+  // A single sample still draws a flat line instead of rendering nothing.
+  // Every parallel series is padded too, so index alignment is preserved.
+  const isSingleSample = dataProp.length === 1;
+  const data = useMemo(
+    () => (isSingleSample ? [dataProp[0]!, dataProp[0]!] : dataProp),
+    [dataProp, isSingleSample],
+  );
+  const referenceData = useMemo(
+    () =>
+      isSingleSample && referenceDataProp?.length === 1
+        ? [referenceDataProp[0]!, referenceDataProp[0]!]
+        : referenceDataProp,
+    [referenceDataProp, isSingleSample],
+  );
+  const xData = useMemo(
+    () =>
+      isSingleSample && xDataProp?.length === 1
+        ? [xDataProp[0]!, xDataProp[0]!]
+        : xDataProp,
+    [xDataProp, isSingleSample],
+  );
   const { points, referencePoints, areaPath, positiveDeltaPaths, gapRects } =
     useMemo(() => {
       if (data.length === 0) {
@@ -50,8 +96,10 @@ export function Sparkline({
         };
       }
 
-      const max =
-        maxOverride ?? Math.max(...data, ...(referenceData ?? []), 0.01);
+      const allValues = [...data, ...(referenceData ?? [])];
+      const max = Math.max(maxOverride ?? Math.max(...allValues, 0.01), 1e-9);
+      const min = normalize === 'minmax' ? Math.min(...allValues) : 0;
+      const valueRange = Math.max(max - min, 1e-9);
       const padding = strokeWidth;
       const drawHeight = height - padding * 2;
       const drawWidth = width - padding * 2;
@@ -61,9 +109,13 @@ export function Sparkline({
       const maxX = xDomain?.[1] ?? Math.max(...chartXData);
       const xRange = Math.max(maxX - minX, 1);
 
+      // A constant min/max series would otherwise divide by ~0 in minmax mode.
+      const isFlatMinMax = normalize === 'minmax' && max - min < 1e-9;
+
       const toCoordinates = (v: number, i: number) => {
         const x = padding + ((chartXData[i] - minX) / xRange) * drawWidth;
-        const y = padding + drawHeight - (v / max) * drawHeight;
+        const normalized = isFlatMinMax ? 0.5 : (v - min) / valueRange;
+        const y = padding + drawHeight - normalized * drawHeight;
         return { x, y };
       };
 
@@ -204,21 +256,44 @@ export function Sparkline({
       strokeWidth,
       maxOverride,
       gapRanges,
+      normalize,
     ]);
 
-  if (data.length < 2) {
+  if (data.length === 0) {
     return null;
   }
+
+  const hasAreaFill = Boolean(fillClassName) || gradientFill || fillOpacity > 0;
 
   return (
     <svg
       width={width}
       height={height}
-      className={clsx('shrink-0', className)}
+      className={clsx(shrink && 'shrink-0', className)}
       viewBox={`0 0 ${width} ${height}`}
+      aria-hidden
     >
-      {fillOpacity > 0 && (
-        <path d={areaPath} fill={color} opacity={fillOpacity} />
+      {gradientFill && (
+        <defs>
+          <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+      )}
+      {hasAreaFill && (
+        <path
+          d={areaPath}
+          className={fillClassName}
+          fill={
+            fillClassName
+              ? undefined
+              : gradientFill
+                ? `url(#${gradientId})`
+                : color
+          }
+          opacity={fillClassName || gradientFill ? undefined : fillOpacity}
+        />
       )}
       {gapRects.map((gap, i) => (
         <rect
@@ -255,10 +330,12 @@ export function Sparkline({
       <polyline
         points={points}
         fill="none"
-        stroke={color}
+        stroke={strokeClassName ? 'currentColor' : color}
         strokeWidth={strokeWidth}
         strokeLinecap="round"
         strokeLinejoin="round"
+        className={strokeClassName}
+        pathLength={strokePathLength}
       />
     </svg>
   );
