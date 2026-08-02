@@ -1027,6 +1027,7 @@ export function AddStepDialog({
               backend={backend}
               model={model}
               selectedPresetId={backendModelPresetId}
+              enabledBackends={enabledBackends}
               backendShortcut="cmd+j"
               modelShortcut="cmd+l"
               side="top"

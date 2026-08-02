@@ -28,6 +28,7 @@ export default defineConfig({
       'src/features/agent/ui-add-permission-modal/**/*.test.tsx',
       'src/features/agent/task-message-manager/**/*.test.tsx',
       'src/features/agent/ui-worktree-actions/**/*.test.ts',
+      'src/features/agent/utils-backend-model-selection/**/*.test.ts',
       'src/features/common/ui-inline-comments/**/*.test.ts',
       'src/features/common/ui-file-diff/**/*.test.ts',
       'src/features/common/ui-file-diff/**/*.test.tsx',
