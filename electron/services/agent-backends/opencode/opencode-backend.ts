@@ -1175,7 +1175,14 @@ export class OpenCodeBackend implements AgentBackend {
                 ? permissionPatterns
                 : [matchValue];
             const permissionDecisions = matchValues.map((value) =>
-              evaluatePermissionWithMatch(state.permissionRules, tool, value),
+              evaluatePermissionWithMatch(
+                state.permissionRules,
+                tool,
+                value,
+                tool === 'bash'
+                  ? String(req.input.command ?? '')
+                  : undefined,
+              ),
             );
             const permissionDecision =
               permissionDecisions.find((decision) => decision.action === 'deny') ??

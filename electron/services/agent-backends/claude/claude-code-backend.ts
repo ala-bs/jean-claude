@@ -578,6 +578,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       session.permissionRules,
       tool,
       matchValue,
+      tool === 'bash' ? String(input.command ?? '') : undefined,
     );
     const action = permissionDecision.action;
     if (action === 'allow' && !options.blockedPath) {

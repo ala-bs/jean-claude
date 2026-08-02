@@ -324,7 +324,17 @@ function getToolPermission(
   );
   if (index === -1) {
     const permissionDecision = ctx.permissionRules
-      ? evaluatePermissionWithMatch(ctx.permissionRules, tool, matchValue)
+      ? evaluatePermissionWithMatch(
+          ctx.permissionRules,
+          tool,
+          matchValue,
+          tool === 'bash'
+            ? String(
+                (toolUse.input as Record<string, unknown> | undefined)
+                  ?.command ?? '',
+              )
+            : undefined,
+        )
       : undefined;
     const permission =
       permissionDecision?.action === 'allow'

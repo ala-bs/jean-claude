@@ -451,6 +451,9 @@ export class VibeBackend implements AgentBackend {
       session.permissionRules,
       toolMatch.tool,
       toolMatch.matchValue,
+      toolMatch.tool === 'bash'
+        ? String(tool.input.command ?? '')
+        : undefined,
     );
     if (permissionDecision.action !== 'ask') {
       const optionId =

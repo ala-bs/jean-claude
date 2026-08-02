@@ -669,6 +669,7 @@ export class CopilotBackend implements AgentBackend {
     const action = evaluateCopilotPermission(
       session.permissionRules,
       candidates,
+      String(normalized.input.command ?? '') || undefined,
     );
 
     if (action === 'allow') {
@@ -1000,6 +1001,7 @@ function getPermissionCandidates(
 function evaluateCopilotPermission(
   rules: ResolvedPermissionRule[],
   candidates: { tool: string; matchValue: string }[],
+  rawCommand?: string,
 ) {
   let allowed = false;
   for (const candidate of candidates) {
@@ -1007,6 +1009,7 @@ function evaluateCopilotPermission(
       rules,
       candidate.tool,
       candidate.matchValue,
+      candidate.tool === 'bash' ? rawCommand : undefined,
     );
     if (action === 'deny') return 'deny';
     if (action === 'allow') allowed = true;

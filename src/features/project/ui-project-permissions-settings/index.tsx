@@ -1,20 +1,27 @@
 import { useCallback } from 'react';
 
+import type { PermissionAction } from '@shared/permission-types';
+import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
+
 import {
   type FlatRule,
   PermissionsEditor,
 } from '@/features/common/ui-permissions-editor';
+import {
+  getScriptEditAction,
+  ScriptEditToggle,
+} from '@/features/common/ui-script-edit-toggle';
 import {
   useAddProjectPermissionRule,
   useEditProjectPermissionRule,
   useProjectPermissions,
   useRemoveProjectPermissionRule,
 } from '@/hooks/use-project-permissions';
-import { useEditGlobalPermissionRule } from '@/hooks/use-global-permissions';
+import {
+  useEditGlobalPermissionRule,
+  useGlobalPermissions,
+} from '@/hooks/use-global-permissions';
 import { useToastStore } from '@/stores/toasts';
-import type { PermissionAction } from '@shared/permission-types';
-
-
 
 export function ProjectPermissionsSettings({
   projectPath,
@@ -22,6 +29,8 @@ export function ProjectPermissionsSettings({
   projectPath: string;
 }) {
   const { data: permissions, isLoading } = useProjectPermissions(projectPath);
+  const { data: globalPermissions, isLoading: isGlobalLoading } =
+    useGlobalPermissions();
   const addRule = useAddProjectPermissionRule(projectPath);
   const removeRule = useRemoveProjectPermissionRule(projectPath);
   const editRule = useEditProjectPermissionRule(projectPath);
@@ -115,24 +124,79 @@ export function ProjectPermissionsSettings({
     [migrateToGlobalRule, removeRule, addToast],
   );
 
-  return (
-    <PermissionsEditor
-      permissions={permissions}
-      isLoading={isLoading}
-      isBusy={
-        addRule.isPending ||
-        removeRule.isPending ||
-        editRule.isPending ||
-        migrateToGlobalRule.isPending
+  // Rules resolve as [...globalRules, ...projectRules] (last match wins), so
+  // the toggle reflects the effective state: project rule if present, else the
+  // global rule, else off.
+  const projectScriptEditAction = getScriptEditAction(permissions);
+  const globalScriptEditAction = getScriptEditAction(globalPermissions);
+  const effectiveScriptEditAction =
+    projectScriptEditAction ?? globalScriptEditAction;
+  const isScriptEditInherited =
+    projectScriptEditAction === undefined &&
+    globalScriptEditAction !== undefined;
+
+  const handleScriptEditToggle = useCallback(
+    (enabled: boolean) => {
+      const inheritsAllow = globalScriptEditAction === 'allow';
+
+      if (enabled) {
+        // With a global grant already in force, dropping the project rule
+        // returns the project to inheriting it — otherwise the toggle would
+        // be a one-way trip out of the inherited state.
+        if (inheritsAllow) removeRule.mutate({ tool: SCRIPT_EDIT_TOOL });
+        else
+          addRule.mutate({
+            toolName: SCRIPT_EDIT_TOOL,
+            input: {},
+            action: 'allow',
+          });
+        return;
       }
-      onAdd={handleAdd}
-      onRemove={handleRemove}
-      onEdit={handleEdit}
-      onMigrateToGlobal={(rule) => void handleMigrateToGlobal(rule)}
-      title="Permissions"
-      description="Project-level permission rules. These take precedence over global rules."
-      emptyTitle="No project permission rules configured."
-      emptyDescription="Add a rule above to control tool access for this project."
-    />
+
+      if (inheritsAllow) {
+        // Cancel the inherited grant with `ask`, not `deny`: off must mean
+        // "prompt me like before the feature existed", never "silently refuse".
+        addRule.mutate({
+          toolName: SCRIPT_EDIT_TOOL,
+          input: {},
+          action: 'ask',
+        });
+        return;
+      }
+
+      removeRule.mutate({ tool: SCRIPT_EDIT_TOOL });
+    },
+    [addRule, removeRule, globalScriptEditAction],
+  );
+
+  const isBusy =
+    addRule.isPending ||
+    removeRule.isPending ||
+    editRule.isPending ||
+    migrateToGlobalRule.isPending;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <ScriptEditToggle
+        checked={effectiveScriptEditAction === 'allow'}
+        onChange={handleScriptEditToggle}
+        inherited={isScriptEditInherited}
+        disabled={isBusy || isLoading || isGlobalLoading}
+        scopeLabel="Applies to this project and its worktrees (worktrees extend project rules)"
+      />
+      <PermissionsEditor
+        permissions={permissions}
+        isLoading={isLoading}
+        isBusy={isBusy}
+        onAdd={handleAdd}
+        onRemove={handleRemove}
+        onEdit={handleEdit}
+        onMigrateToGlobal={(rule) => void handleMigrateToGlobal(rule)}
+        title="Permissions"
+        description="Project-level permission rules. These take precedence over global rules."
+        emptyTitle="No project permission rules configured."
+        emptyDescription="Add a rule above to control tool access for this project."
+      />
+    </div>
   );
 }

@@ -1,9 +1,14 @@
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 
 import picomatch from 'picomatch';
 import writeFileAtomic from 'write-file-atomic';
 
+import {
+  analyzeScriptEditCommand,
+  SCRIPT_EDIT_TOOL,
+} from '@shared/script-edit-detect';
 import {
   DEFAULT_PROJECT_PROMPT_PREFACE_SETTING,
   isProjectPromptPrefaceSetting,
@@ -437,6 +442,11 @@ function expandSubpathPlaceholders(
   workingDir: string,
 ): ResolvedPermissionRule[] {
   return rules.map((rule) => {
+    // The script-edit toggle needs the working dir to verify that every file
+    // the snippet touches stays inside it.
+    if (rule.tool === SCRIPT_EDIT_TOOL) {
+      return { ...rule, subpathRoot: workingDir };
+    }
     if (rule.tool !== 'bash' || !rule.pattern.includes('{subpath}')) {
       return rule;
     }
@@ -525,11 +535,34 @@ export function evaluatePermission(
   rules: ResolvedPermissionRule[],
   toolKey: string,
   matchValue: string,
+  rawCommand?: string,
 ): PermissionEvalResult {
-  return evaluatePermissionWithMatch(rules, toolKey, matchValue).action;
+  return evaluatePermissionWithMatch(rules, toolKey, matchValue, rawCommand)
+    .action;
 }
 
+/**
+ * @param rawCommand - The unstripped bash command. Required for the
+ *   script-edit auto-allow path, which must see the heredoc body that
+ *   `normalizeToolRequest` sanitizes out of `matchValue`.
+ */
 export function evaluatePermissionWithMatch(
+  rules: ResolvedPermissionRule[],
+  toolKey: string,
+  matchValue: string,
+  rawCommand?: string,
+): PermissionEvalDetails {
+  const details = evaluateBasePermission(rules, toolKey, matchValue);
+
+  if (toolKey === 'bash' && details.action === 'ask' && rawCommand) {
+    const autoAllowed = evaluateScriptEdit(rules, rawCommand);
+    if (autoAllowed) return autoAllowed;
+  }
+
+  return details;
+}
+
+function evaluateBasePermission(
   rules: ResolvedPermissionRule[],
   toolKey: string,
   matchValue: string,
@@ -543,6 +576,143 @@ export function evaluatePermissionWithMatch(
   }
 
   return evaluateSinglePermission(rules, toolKey, matchValue);
+}
+
+/**
+ * Real path of `target`, resolving symlinks. For a path that does not exist
+ * yet (a file the script is about to create), resolve the deepest existing
+ * ancestor and re-append the missing tail, so a symlinked parent directory
+ * still gets caught.
+ *
+ * `realpath` is injectable so the containment rules can be tested without a
+ * real filesystem.
+ */
+export function realpathOrSelf(
+  target: string,
+  realpath: (value: string) => string = fsSync.realpathSync,
+): string {
+  let current = path.resolve(target);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return path.join(realpath(current), ...tail);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Resolve `target` against `root`, following symlinks.
+ *
+ * Returns the paths the caller must use for rule matching, or `null` when the
+ * target escapes the root. Both paths are returned because a symlink can stay
+ * inside the root while pointing at a guarded file (`link -> .jean-claude/...`)
+ * — matching rules against the lexical path alone would miss that, so callers
+ * must check BOTH.
+ */
+export function resolveWithinRoot({
+  root,
+  target,
+  realpath = fsSync.realpathSync,
+}: {
+  root: string;
+  target: string;
+  realpath?: (value: string) => string;
+}): { lexical: string; real: string } | null {
+  const lexical = path.resolve(root, target);
+  if (path.relative(root, lexical).startsWith('..')) return null;
+
+  const realRoot = realpathOrSelf(root, realpath);
+  const real = realpathOrSelf(lexical, realpath);
+  const relative = path.relative(realRoot, real);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+
+  return { lexical, real };
+}
+
+/** True when `target` stays inside `root`, lexically and after symlinks. */
+export function isContainedInRoot(params: {
+  root: string;
+  target: string;
+  realpath?: (value: string) => string;
+}): boolean {
+  return resolveWithinRoot(params) !== null;
+}
+
+/**
+ * Decide whether a bash command that would otherwise prompt can be
+ * auto-allowed because it is a safe, fully-static script edit.
+ *
+ * NOTE: this is a permission-time check; the script runs slightly later, so a
+ * path that is swapped for a symlink in between is a genuine (small) TOCTOU
+ * window — the same one every path-based permission rule already has.
+ */
+function evaluateScriptEdit(
+  rules: ResolvedPermissionRule[],
+  command: string,
+): PermissionEvalDetails | null {
+  // Last match wins, like every other rule. The toggle is scope-wide, so a
+  // narrowing pattern is meaningless and must not be read as a grant.
+  let toggle: ResolvedPermissionRule | undefined;
+  for (const rule of rules) {
+    if (rule.tool === SCRIPT_EDIT_TOOL && rule.pattern === '*') toggle = rule;
+  }
+  if (!toggle || toggle.action === 'ask') return null;
+
+  const analysis = analyzeScriptEditCommand(command);
+  if (!analysis.ok) {
+    dbg.agentPermission(`script edit not auto-allowed: ${analysis.reason}`);
+    return null;
+  }
+
+  // Deny is scoped to script edits, so it must be decided only once the
+  // command is known to be one — otherwise it would swallow every bash
+  // command that happens to need a prompt.
+  if (toggle.action === 'deny') {
+    return { action: 'deny', matchedRule: toggle };
+  }
+
+  const root = toggle.subpathRoot;
+  if (!root) return null;
+
+  const check = (targets: string[], tools: ('read' | 'edit' | 'write')[]): boolean =>
+    targets.every((target) => {
+      const resolved = resolveWithinRoot({ root, target });
+      if (!resolved) {
+        dbg.agentPermission(`script edit escapes working dir: ${target}`);
+        return false;
+      }
+      // The file must be one this agent could have touched with the real
+      // tools, so guards like `**/.jean-claude/**` still apply. A snippet
+      // write can both modify and create, so it must satisfy `edit` AND
+      // `write` — a guard the user put on only one of them still binds.
+      //
+      // Both the written path and its symlink target are matched: `ln -s
+      // .jean-claude/settings.local.json link` stays inside the root, so
+      // matching only the lexical path would walk straight through the guard.
+      const candidates = new Set([resolved.lexical, resolved.real]);
+      return tools.every((tool) =>
+        [...candidates].every((candidate) => {
+          const nested = evaluateSinglePermission(rules, tool, candidate);
+          if (nested.action !== 'allow') {
+            dbg.agentPermission(
+              `script edit blocked by ${tool} rules: ${candidate}`,
+            );
+            return false;
+          }
+          return true;
+        }),
+      );
+    });
+
+  if (!check(analysis.reads, ['read'])) return null;
+  if (!check(analysis.writes, ['edit', 'write'])) return null;
+
+  return { action: 'allow', matchedRule: toggle };
 }
 
 function evaluateSinglePermission(
@@ -1110,6 +1280,8 @@ export function compileForClaude(rules: ResolvedPermissionRule[]): {
   for (const rule of rules) {
     if (containsDigitRegex(rule.pattern)) continue;
     if (rule.tool === '*') continue; // Claude doesn't support wildcard tool
+    // Pseudo-tool: evaluated by our runtime, meaningless to the backend.
+    if (rule.tool === SCRIPT_EDIT_TOOL) continue;
     if (rule.subpathRoot) continue; // Subpath rules handled by runtime evaluator
     const claudeName = toolNameMap[rule.tool] ?? rule.tool;
 
@@ -1155,6 +1327,8 @@ export function compileForOpenCode(
       // External paths are canonicalized and evaluated by the adapter for each
       // request so replacing a directory with a symlink cannot reuse a grant.
       .filter((rule) => rule.tool !== 'external_directory')
+      // Pseudo-tool: evaluated by our runtime, meaningless to the backend.
+      .filter((rule) => rule.tool !== SCRIPT_EDIT_TOOL)
       .map((rule) => ({
         permission: rule.tool,
         pattern: rule.pattern,
@@ -1243,7 +1417,12 @@ export async function evaluateToolPermission({
   const settings = await readSettings(projectPath);
   const rules = resolveRules(settings, isWorktree, globalRules, workingDir);
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
-  return evaluatePermission(rules, tool, matchValue);
+  return evaluatePermission(
+    rules,
+    tool,
+    matchValue,
+    tool === 'bash' ? String(input.command ?? '') : undefined,
+  );
 }
 
 // ---------------------------------------------------------------------------

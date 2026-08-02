@@ -272,6 +272,9 @@ function normalizeEvent(
             ctx.permissionRules,
             normalizedRequest.tool,
             normalizedRequest.matchValue,
+            normalizedRequest.tool === 'bash'
+              ? String(permission.metadata.command ?? '')
+              : undefined,
           )
         : undefined;
       return [
@@ -833,7 +836,17 @@ function getToolPermission(
   }
 
   const permissionDecision = ctx.permissionRules
-    ? evaluatePermissionWithMatch(ctx.permissionRules, tool, matchValue)
+    ? evaluatePermissionWithMatch(
+        ctx.permissionRules,
+        tool,
+        matchValue,
+        tool === 'bash'
+          ? String(
+              (toolUse.input as Record<string, unknown> | undefined)?.command ??
+                '',
+            )
+          : undefined,
+      )
     : undefined;
   const permission =
     permissionDecision?.action === 'allow'
