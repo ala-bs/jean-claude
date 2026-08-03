@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowDownNarrowWide,
+  ArrowUpFromLine,
   Bot,
   Bug,
   CheckCircle2,
@@ -1159,7 +1160,7 @@ export function FeedItemCard({
                       <span className="text-[9.5px]">Conflicts</span>
                     </span>
                   )}
-                  {item.hasUncommittedChanges && (
+                  {item.hasUncommittedChanges && !prMerged && (
                     <button
                       type="button"
                       onClick={handleUncommittedClick}
@@ -1170,6 +1171,15 @@ export function FeedItemCard({
                       <CircleDotDashed className="h-2.5 w-2.5" />
                       <span className="text-[9.5px]">Uncommitted</span>
                     </button>
+                  )}
+                  {item.hasUnpushedCommits && !prMerged && (
+                    <span
+                      className="text-status-run flex items-center gap-0.5"
+                      title="Local commits not pushed to remote"
+                    >
+                      <ArrowUpFromLine className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">Unpushed</span>
+                    </span>
                   )}
                   {(item.activeThreadCount ?? 0) > 0 && (
                     <span className="text-status-pr flex items-center gap-0.5">
