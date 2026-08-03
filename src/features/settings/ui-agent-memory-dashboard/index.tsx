@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useState } from 'react';
+import { type KeyboardEvent, useMemo, useState } from 'react';
 import { RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
 
 import type {
@@ -17,6 +17,7 @@ import {
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { useActiveProjects } from '@/hooks/use-projects';
+import { useBackgroundJobsStore } from '@/stores/background-jobs';
 
 export type DashboardView = 'global' | 'project' | 'candidates' | 'evidence' | 'runs';
 
@@ -494,6 +495,10 @@ export function AgentMemoryDashboardView({
   );
 }
 
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function AgentMemoryDashboard() {
   const { data: projects = [] } = useActiveProjects();
   const queryClient = useQueryClient();
@@ -514,6 +519,26 @@ export function AgentMemoryDashboard() {
     // arrow-key tab navigation and refetching data that is mostly identical.
     placeholderData: keepPreviousData,
   });
+  const addRunningJob = useBackgroundJobsStore((state) => state.addRunningJob);
+  const markJobSucceeded = useBackgroundJobsStore((state) => state.markJobSucceeded);
+  const markJobFailed = useBackgroundJobsStore((state) => state.markJobFailed);
+  const jobs = useBackgroundJobsStore((state) => state.jobs);
+  // Mutation state is component-local, so it resets when settings are closed and
+  // reopened mid-extraction. The store is the durable signal.
+  const hasRunningExtraction = useMemo(
+    () =>
+      jobs.some((job) => job.type === 'agent-memory-extraction' && job.status === 'running'),
+    [jobs],
+  );
+  const startExtractionJob = (title: string) =>
+    addRunningJob({
+      type: 'agent-memory-extraction',
+      title,
+      projectId: selectedProjectId || null,
+      details: {
+        projectName: projects.find(({ id }) => id === selectedProjectId)?.name ?? null,
+      },
+    });
   const extract = useMutation({
     mutationFn: () => api.agentMemory.extractNow(selectedProjectId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-memory-dashboard'] }),
@@ -546,7 +571,7 @@ export function AgentMemoryDashboard() {
       view={view}
       projects={projects.map(({ id, name }) => ({ id, name }))}
       selectedProjectId={selectedProjectId}
-      isExtracting={extract.isPending}
+      isExtracting={extract.isPending || hasRunningExtraction}
       retryingRunId={
         retry.isPending && retry.variables
           ? `${retry.variables.scope}:${retry.variables.id}`
@@ -562,8 +587,25 @@ export function AgentMemoryDashboard() {
         setPage(0);
       }}
       onRefresh={() => void dashboardQuery.refetch()}
-      onExtract={() => extract.mutate()}
-      onRetry={(run) => retry.mutate(run)}
+      onExtract={() => {
+        const jobId = startExtractionJob('Extract agent memory');
+        extract
+          .mutateAsync()
+          .then((result) =>
+            markJobSucceeded(
+              jobId,
+              result.processed ? undefined : { warningMessage: 'Nothing to extract' },
+            ),
+          )
+          .catch((error: unknown) => markJobFailed(jobId, errorMessage(error)));
+      }}
+      onRetry={(run) => {
+        const jobId = startExtractionJob('Retry agent memory extraction');
+        retry
+          .mutateAsync(run)
+          .then(() => markJobSucceeded(jobId))
+          .catch((error: unknown) => markJobFailed(jobId, errorMessage(error)));
+      }}
       onPreviousPage={() => setPage((value) => Math.max(0, value - 1))}
       onNextPage={() => setPage((value) => value + 1)}
     />

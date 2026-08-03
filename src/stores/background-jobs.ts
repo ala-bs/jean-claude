@@ -22,7 +22,8 @@ export type BackgroundJobType =
   | 'commit'
   | 'merge'
   | 'worktree-cleanup'
-  | 'pipeline-run';
+  | 'pipeline-run'
+  | 'agent-memory-extraction';
 export type BackgroundJobStatus = 'running' | 'succeeded' | 'failed';
 
 interface BackgroundJobBase {
@@ -85,6 +86,12 @@ export type BackgroundJob =
     })
   | (BackgroundJobBase & {
       type: 'project-summary-generation';
+      details: {
+        projectName: string | null;
+      };
+    })
+  | (BackgroundJobBase & {
+      type: 'agent-memory-extraction';
       details: {
         projectName: string | null;
       };
@@ -218,6 +225,15 @@ type NewBackgroundJobInput =
     }
   | {
       type: 'project-summary-generation';
+      title: string;
+      taskId?: string | null;
+      projectId?: string | null;
+      details: {
+        projectName: string | null;
+      };
+    }
+  | {
+      type: 'agent-memory-extraction';
       title: string;
       taskId?: string | null;
       projectId?: string | null;
@@ -502,6 +518,8 @@ export function bgJobLabel(type: BackgroundJobType): string {
       return 'Cleaning up worktree…';
     case 'pipeline-run':
       return 'Running pipeline…';
+    case 'agent-memory-extraction':
+      return 'Extracting agent memory…';
   }
 }
 

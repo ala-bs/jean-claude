@@ -408,6 +408,16 @@ function JobDetails({ job }: { job: BackgroundJob }) {
         </div>
       );
     },
+    'agent-memory-extraction': (typedJob) => {
+      if (typedJob.type !== 'agent-memory-extraction') return null;
+      if (!typedJob.details.projectName) return null;
+
+      return (
+        <div className="text-ink-2 mt-1 space-y-0.5 text-xs">
+          <p>Project: {typedJob.details.projectName}</p>
+        </div>
+      );
+    },
     'logo-generation': (typedJob) => {
       if (typedJob.type !== 'logo-generation') return null;
 
