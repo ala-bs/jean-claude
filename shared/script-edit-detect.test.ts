@@ -34,6 +34,49 @@ describe('analyzeScriptEditCommand — python', () => {
     });
   });
 
+  it('accepts the read-modify-write idiom that rebinds a string var', () => {
+    const result = analyzeScriptEditCommand(
+      py(
+        "p = 'src/foo.ts'\ns = open(p).read()\ns = s.replace('a', 'b')\ns = s.replace('c', 'd')\nopen(p, 'w').write(s)",
+      ),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      reads: ['src/foo.ts'],
+      writes: ['src/foo.ts'],
+    });
+  });
+
+  it('reports every path a rebound variable pointed at', () => {
+    const result = analyzeScriptEditCommand(
+      py("p = 'a.txt'\nopen(p, 'w').write('x')\np = 'b.txt'\nopen(p, 'w').write('y')"),
+    );
+    expect(result).toMatchObject({ ok: true, writes: ['a.txt', 'b.txt'] });
+  });
+
+  it('uses the current value of a rebound path, not the stale one', () => {
+    const result = analyzeScriptEditCommand(
+      py("p = 'a.txt'\np = 'b.txt'\nopen(p, 'w').write('x')"),
+    );
+    expect(result).toMatchObject({ ok: true, writes: ['b.txt'] });
+  });
+
+  it('rejects rebinding used to revive `open` aliasing', () => {
+    expect(
+      analyzeScriptEditCommand(
+        py("w = 'x'\nw = open\nw('/tmp/pwned', 'w').write('y')"),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('rejects a rebound variable whose value is no longer static', () => {
+    expect(
+      analyzeScriptEditCommand(
+        py("p = 'a.txt'\ns = open(p).read()\np = s\nopen(p, 'w').write('x')"),
+      ).ok,
+    ).toBe(false);
+  });
+
   it('accepts inline -c snippets', () => {
     const result = analyzeScriptEditCommand(
       `python3 -c "open('a.txt', 'w').write('x')"`,
@@ -159,6 +202,16 @@ describe('analyzeScriptEditCommand — node', () => {
     [
       'reassignment',
       "const fs = require('fs')\nlet p = 'a.txt'\np += '/../../tmp/x'\nfs.writeFileSync(p,'y')",
+    ],
+    [
+      // Redeclaration is a SyntaxError in JS, so it must not be auto-allowed
+      // even though the python grammar accepts the same shape.
+      'redeclaration',
+      "const fs = require('fs')\nconst s = fs.readFileSync('a.ts','utf8')\nconst s = s.replace('a','b')\nfs.writeFileSync('a.ts',s)",
+    ],
+    [
+      'string shadowing the fs module',
+      "const fs = require('fs')\nfs.readFileSync('a.txt','utf8')\nconst fs = 'x'",
     ],
   ])('rejects %s', (_label, body) => {
     expect(

@@ -24,7 +24,7 @@
  *
  * Consequences, kept deliberately:
  *  - no blocks (`if`/`for`/`while`/`def`), no `;`, no line continuations
- *  - no rebinding: a name is bound exactly once
+ *  - rebinding only string  string (read-modify-write); never a module/handle
  *  - no aliasing of `open`/`fs`: they are keywords of the grammar
  *  - only literal or literal-bound paths
  *
@@ -282,9 +282,29 @@ class Parser {
   // -- bindings ------------------------------------------------------------
 
   private bind(name: string, binding: Binding): void {
-    // Single-assignment only. Rebinding (including `+=`, loop variables and
-    // aliasing) is what makes "the path is statically known" a lie.
-    if (this.bindings.has(name)) this.reject(`\`${name}\` is reassigned`);
+    // A string name may be re-bound to another statically known string: the
+    // grammar has no control flow, so evaluation stays linear and every path
+    // is still resolved (and containment-checked) at its use site. The common
+    // read-modify-write idiom (`s = s.replace(...)`) depends on this.
+    //
+    // Re-binding anything else — or shadowing a module/handle binding with a
+    // string — is still rejected: that is the aliasing the grammar forbids.
+    // (Python cannot produce an `fs` binding today, so that half is
+    // defense-in-depth for a future grammar, not a live check.)
+    //
+    // The relaxation is python-only, for TWO independent reasons — lifting the
+    // gate here alone would not give node the idiom:
+    //  1. node binds only through `const`/`let`, where a redeclaration is a
+    //     SyntaxError — accepting it would auto-allow a command that cannot run;
+    //  2. `parseNodeStatement` has no undeclared-assignment form at all, so the
+    //     legal `let s = …` / `s = s.replace(…)` shape never reaches `bind()`.
+    // Supporting node means adding that statement form as well.
+    const rebindable =
+      this.grammar.language === 'python' && binding.kind === 'string';
+    const existing = this.bindings.get(name);
+    if (existing && !(rebindable && existing.kind === 'string')) {
+      this.reject(`\`${name}\` is reassigned`);
+    }
     this.bindings.set(name, binding);
   }
 
