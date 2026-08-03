@@ -43,6 +43,35 @@ async function loadAndResize(
   return canvas;
 }
 
+function base64ToBlob(dataBase64: string, mimeType: string): Blob {
+  const binary = atob(dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
+}
+
+/**
+ * Re-encode base64 image bytes into another format (e.g. WebP/AVIF -> PNG for
+ * hosts that only accept a fixed extension allow list).
+ */
+export async function transcodeBase64Image(params: {
+  dataBase64: string;
+  sourceMimeType: string;
+  targetMimeType: 'image/png';
+}): Promise<{ dataBase64: string; mimeType: string }> {
+  const blob = base64ToBlob(params.dataBase64, params.sourceMimeType);
+  // Bytes are already downscaled by compressImage; keep dimensions as-is.
+  const canvas = await loadAndResize(blob, Number.MAX_SAFE_INTEGER);
+  const url = canvas.toDataURL(params.targetMimeType);
+  if (!url.startsWith(`data:${params.targetMimeType}`)) {
+    throw new Error(`Failed to convert image to ${params.targetMimeType}`);
+  }
+  return {
+    dataBase64: stripDataUriPrefix(url),
+    mimeType: params.targetMimeType,
+  };
+}
+
 /** Compress an image for both agent and storage using a single canvas load. */
 export async function compressImage(
   source: File | Blob,

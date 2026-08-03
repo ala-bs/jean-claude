@@ -24,7 +24,7 @@ import { useGenerateSummary, useTaskSummary } from '@/hooks/use-task-summary';
 import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 import {
   getAttachmentFileName,
-  getAttachmentPayload,
+  getAzureAttachmentPayload,
   MAX_FILE_SIZE,
   MAX_IMAGES,
   processImageFile,
@@ -487,9 +487,9 @@ export function PrCreationForm({
             for (const image of imagesToUpload) {
               // AVIF storage bytes render broken in Azure DevOps; pick a
               // format the host actually serves (GIF kept for animation).
-              const payload = getAttachmentPayload(image);
-              const mimeType = payload.mimeType;
               try {
+                const payload = await getAzureAttachmentPayload(image);
+                const mimeType = payload.mimeType;
                 const attachment =
                   await api.azureDevOps.uploadPullRequestAttachment({
                     providerId: repoProviderId,

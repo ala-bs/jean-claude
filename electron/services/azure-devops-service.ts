@@ -3147,6 +3147,8 @@ export async function removePullRequestTag(params: {
   }
 }
 
+const AZURE_ALLOWED_ATTACHMENT_EXTENSIONS = new Set(['png', 'gif', 'jpg']);
+
 export async function uploadPullRequestAttachment(params: {
   providerId: string;
   projectId: string;
@@ -3169,6 +3171,13 @@ export async function uploadPullRequestAttachment(params: {
   // (canvas re-encoding, fallbacks). Azure serves attachments with a content
   // type derived from the file name, so sniff the bytes and make them win.
   const sniffed = sniffImageExtension(data);
+  // Azure rejects anything outside its extension allow list, so fail with a
+  // clear message instead of uploading a name it will refuse.
+  if (sniffed && !AZURE_ALLOWED_ATTACHMENT_EXTENSIONS.has(sniffed)) {
+    throw new Error(
+      `Unsupported attachment format "${sniffed}": Azure DevOps only accepts PNG, GIF, JPG or JPEG images.`,
+    );
+  }
   const requestedName = params.fileName || 'image.png';
   const baseName = sniffed
     ? `${requestedName.replace(/\.[^./\\]+$/, '') || 'image'}.${sniffed}`

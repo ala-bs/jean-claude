@@ -118,6 +118,7 @@ vi.mock('@/lib/image-utils', async () => {
     MAX_IMAGES: 5,
     getAttachmentFileName: actual.getAttachmentFileName,
     getAttachmentPayload: actual.getAttachmentPayload,
+    getAzureAttachmentPayload: actual.getAzureAttachmentPayload,
     processImageFile: processImageFileSpy,
   };
 });

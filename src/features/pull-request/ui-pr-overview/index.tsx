@@ -38,7 +38,12 @@ import {
   isVideoFile,
   VideoGifConverter,
 } from '@/features/common/ui-video-gif-converter';
-import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
+import {
+  MAX_IMAGES,
+  getAttachmentFileName,
+  getAzureAttachmentPayload,
+  processImageFile,
+} from '@/lib/image-utils';
 import {
   type MentionDisplayNames,
   normalizeMentionId,
@@ -613,11 +618,18 @@ const PrDescriptionCard = memo(function PrDescriptionCard({
         const attachmentUrl = await uploadCacheRef.current.resolve({
           image,
           fileName,
-          upload: async () => (await uploadAttachment.mutateAsync({
-            fileName,
-            mimeType: image.mimeType || 'application/octet-stream',
-            dataBase64: image.data,
-          })).url,
+          upload: async () => {
+            // Azure only accepts PNG/GIF/JPG bytes; compressed variants are
+            // WebP/AVIF and must be converted first.
+            const payload = await getAzureAttachmentPayload(image);
+            return (
+              await uploadAttachment.mutateAsync({
+                fileName: getAttachmentFileName(fileName, payload.mimeType),
+                mimeType: payload.mimeType,
+                dataBase64: payload.dataBase64,
+              })
+            ).url;
+          },
         });
         finalDescription = finalDescription.replace(pattern, (match) => replaceMarkdownImageUrl(match, attachmentUrl));
       }

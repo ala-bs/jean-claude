@@ -52,7 +52,7 @@ import {
 import { api } from '@/lib/api';
 import {
   getAttachmentFileName,
-  getAttachmentPayload,
+  getAzureAttachmentPayload,
 } from '@/lib/image-utils';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import { isPrReviewChatStepMeta } from '@shared/types';
@@ -460,7 +460,7 @@ export function PrDetail({
 
   const handleUploadImage = useCallback(
     async (image: PromptImagePart, fileName: string) => {
-      const payload = getAttachmentPayload(image);
+      const payload = await getAzureAttachmentPayload(image);
       const mimeType = payload.mimeType || 'application/octet-stream';
       const attachment = await uploadAttachment.mutateAsync({
         // Extension must match the uploaded bytes: attachments are served with

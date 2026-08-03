@@ -1,7 +1,7 @@
 import { MAX_IMAGE_ATTACHMENT_BYTES } from '@shared/media-limits';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
-import { compressImage } from './image-compression';
+import { compressImage, transcodeBase64Image } from './image-compression';
 
 export const MAX_IMAGES = 5;
 export const MAX_FILE_SIZE = MAX_IMAGE_ATTACHMENT_BYTES;
@@ -66,6 +66,37 @@ export function getAttachmentPayload(image: {
     return { dataBase64: image.storageData, mimeType: image.storageMimeType };
   }
   return { dataBase64: image.data, mimeType: image.mimeType };
+}
+
+/**
+ * Azure DevOps rejects uploads whose extension is not in its allow list
+ * (PNG, GIF, JPG, JPEG, ...). WebP/AVIF variants must be re-encoded to PNG
+ * before upload.
+ */
+const AZURE_ALLOWED_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+]);
+
+export async function getAzureAttachmentPayload(image: {
+  data: string;
+  mimeType: string;
+  storageData?: string;
+  storageMimeType?: string;
+}): Promise<{ dataBase64: string; mimeType: string }> {
+  // Only GIF storage bytes win: they are the untouched original kept for
+  // animation, which a canvas re-encode would flatten to a single frame.
+  if (image.storageData && image.storageMimeType === 'image/gif') {
+    return { dataBase64: image.storageData, mimeType: image.storageMimeType };
+  }
+  const payload = { dataBase64: image.data, mimeType: image.mimeType };
+  if (AZURE_ALLOWED_MIME_TYPES.has(payload.mimeType)) return payload;
+  return transcodeBase64Image({
+    dataBase64: payload.dataBase64,
+    sourceMimeType: payload.mimeType,
+    targetMimeType: 'image/png',
+  });
 }
 
 export async function processImageFile(

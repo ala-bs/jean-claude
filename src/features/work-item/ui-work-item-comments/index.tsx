@@ -25,6 +25,7 @@ import { Dropdown } from '@/common/ui/dropdown';
 import {
   ALLOWED_IMAGE_TYPES,
   getAttachmentFileName,
+  getAzureAttachmentPayload,
   MAX_IMAGES,
   processImageFile,
 } from '@/lib/image-utils';
@@ -399,13 +400,13 @@ export function WorkItemComments({
           body: trimmedDraft,
           images,
           uploadImage: async (image, fileName) => {
-            const mimeType = image.storageMimeType ?? image.mimeType;
+            const payload = await getAzureAttachmentPayload(image);
             const { url } = await api.azureDevOps.uploadWorkItemAttachment({
               providerId,
               projectName,
-              filename: getAttachmentFileName(fileName, mimeType),
-              mimeType,
-              base64: image.storageData ?? image.data,
+              filename: getAttachmentFileName(fileName, payload.mimeType),
+              mimeType: payload.mimeType,
+              base64: payload.dataBase64,
             });
             return url;
           },
