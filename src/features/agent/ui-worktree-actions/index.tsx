@@ -31,6 +31,7 @@ import {
 import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
 import { Kbd } from '@/common/ui/kbd';
+import { formatKeyForDisplay } from '@/common/context/keyboard-bindings/utils';
 import { useAiSkillSlotsSetting } from '@/hooks/use-settings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useProject } from '@/hooks/use-projects';
@@ -398,6 +399,7 @@ export function WorktreeActions({
           title={commitButtonTitle}
         >
           Commit
+          <Kbd shortcut="cmd+shift+k" className="text-[9px]" />
         </Button>
 
         {showBranchActions && !isSelectedBranchProtected && (
@@ -414,6 +416,7 @@ export function WorktreeActions({
               }
             >
               <span className="truncate">Merge → {selectedBranch}</span>
+              <Kbd shortcut="cmd+shift+m" className="text-[9px]" />
             </Button>
         )}
 
@@ -459,7 +462,7 @@ export function WorktreeActions({
               size="sm"
               icon={<GitPullRequest />}
               className="shrink-0 bg-green-700 px-2 hover:bg-green-600"
-              title="Create pull request"
+              title={`Create pull request (${formatKeyForDisplay('cmd+shift+p')})`}
               aria-label="Create pull request"
             />
           ))}
