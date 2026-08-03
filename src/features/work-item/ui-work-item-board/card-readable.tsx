@@ -70,7 +70,6 @@ export function WorkItemBoardReadableCard({
   const hiddenScopeLabels = plainScopeIndexes
     .slice(VISIBLE_SCOPE_LIMIT)
     .map((index) => scopeEntries[index].label);
-  const hiddenScopeCount = hiddenScopeLabels.length;
   const isBug = workItem.fields.workItemType === 'Bug';
   const tags = parseAzureWorkItemTags(workItem.fields.tags ?? '');
   const stateTags = tags.flatMap((tag) => {
@@ -81,6 +80,17 @@ export function WorkItemBoardReadableCard({
     (tag) => !getBoardTagTone(tag, colorSettings.rules),
   );
   const sprint = iterationLeaf(workItem.fields.iterationPath);
+  // Single overflow badge for everything collapsed on the card (title labels + plain tags).
+  const hiddenLabels = [...hiddenScopeLabels, ...otherTags].filter(
+    (label, index, all) =>
+      all.findIndex(
+        (other) => other.toLocaleLowerCase() === label.toLocaleLowerCase(),
+      ) === index,
+  );
+  const hiddenCount = hiddenLabels.length;
+  const hasTagRow = stateTags.length > 0 || Boolean(bugProgress);
+  const showOverflowInScopeRow =
+    hiddenCount > 0 && !hasTagRow && scopeEntries.length > 0;
 
   return (
     <>
@@ -151,15 +161,15 @@ export function WorkItemBoardReadableCard({
               </span>
             ),
           )}
-          {hiddenScopeCount > 0 && (
-            <Tooltip content={hiddenScopeLabels.join(', ')}>
+          {showOverflowInScopeRow && (
+            <Tooltip content={hiddenLabels.join(', ')}>
               <span
                 tabIndex={0}
-                aria-label={`${hiddenScopeCount} more extracted labels: ${hiddenScopeLabels.join(', ')}`}
+                aria-label={`${hiddenCount} more labels: ${hiddenLabels.join(', ')}`}
                 onClick={(event) => event.stopPropagation()}
                 className="text-ink-3 cursor-default font-mono text-[10.5px] outline-none"
               >
-                +{hiddenScopeCount}
+                +{hiddenCount}
               </span>
             </Tooltip>
           )}
@@ -180,7 +190,7 @@ export function WorkItemBoardReadableCard({
       )}
 
       {/* 4 — only tags that change what you do next */}
-      {(stateTags.length > 0 || otherTags.length > 0 || bugProgress) && (
+      {(hasTagRow || (hiddenCount > 0 && !showOverflowInScopeRow)) && (
         <div className="flex flex-wrap items-center gap-1.5" aria-label="Tags">
           {bugProgress &&
             (onOpenChildBugs ? (
@@ -228,10 +238,17 @@ export function WorkItemBoardReadableCard({
               {state.label}
             </span>
           ))}
-          {otherTags.length > 0 && (
-            <span className="text-ink-3 font-mono text-[10.5px]" title={otherTags.join(', ')}>
-              +{otherTags.length}
-            </span>
+          {hiddenCount > 0 && !showOverflowInScopeRow && (
+            <Tooltip content={hiddenLabels.join(', ')}>
+              <span
+                tabIndex={0}
+                aria-label={`${hiddenCount} more labels: ${hiddenLabels.join(', ')}`}
+                onClick={(event) => event.stopPropagation()}
+                className="text-ink-3 cursor-default font-mono text-[10.5px] outline-none"
+              >
+                +{hiddenCount}
+              </span>
+            </Tooltip>
           )}
         </div>
       )}
