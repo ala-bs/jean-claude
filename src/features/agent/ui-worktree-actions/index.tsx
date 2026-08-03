@@ -400,17 +400,8 @@ export function WorktreeActions({
           Commit
         </Button>
 
-        {showBranchActions &&
-          (isSelectedBranchProtected ? (
-            <span
-              className="flex h-7 shrink-0 items-center gap-1 rounded border border-amber-800/50 bg-amber-950/30 px-2 text-xs text-amber-300"
-              title={`Branch "${selectedBranch}" is protected. Direct merges are blocked.`}
-            >
-              <Shield className="h-3.5 w-3.5 shrink-0" />
-              Protected
-            </span>
-          ) : (
-            <Button
+        {showBranchActions && !isSelectedBranchProtected && (
+          <Button
               onClick={() => setIsMergeConfirmOpen(true)}
               disabled={!canMerge}
               loading={mergeMutation.isPending}
@@ -424,7 +415,7 @@ export function WorktreeActions({
             >
               <span className="truncate">Merge → {selectedBranch}</span>
             </Button>
-          ))}
+        )}
 
         {showBranchActions &&
           hasRepoLink &&
