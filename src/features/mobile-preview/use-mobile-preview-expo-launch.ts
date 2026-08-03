@@ -3,6 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { MobilePreviewDevice } from '@shared/mobile-simulator-types';
 
 import {
+  clearCompletedExpoLaunch,
+  hasCompletedExpoLaunch,
+  markExpoLaunchCompleted,
+} from './mobile-preview-expo-launch-store';
+import {
   getMobilePreviewAutoLaunchDecision,
   type MobilePreviewAutoLaunchDecision,
 } from './utils-mobile-preview-auto-launch';
@@ -32,6 +37,7 @@ export function useMobilePreviewExpoLaunch({
   projectId,
   appPath,
   metroPort,
+  devServerPid = null,
   retryGeneration,
   isSelectedDeviceReady,
   isAppInstalled = null,
@@ -48,6 +54,7 @@ export function useMobilePreviewExpoLaunch({
   projectId: string;
   appPath: string;
   metroPort: number;
+  devServerPid?: number | null;
   retryGeneration: number;
   isSelectedDeviceReady: boolean;
   isAppInstalled?: boolean | null;
@@ -56,7 +63,9 @@ export function useMobilePreviewExpoLaunch({
   const [state, setState] = useState<MobilePreviewRuntimeLaunchState>({
     status: 'idle',
   });
-  const completedOwnerKeyRef = useRef<string | null>(null);
+  // Last owner key this instance launched, so an idle transition (runtime
+  // stopped) can drop it from the shared store.
+  const lastCompletedOwnerKeyRef = useRef<string | null>(null);
   // Kept in refs: these change while a launch is in flight (install-status
   // polling) and must not cancel + restart it.
   const isAppInstalledRef = useRef(isAppInstalled);
@@ -89,12 +98,16 @@ export function useMobilePreviewExpoLaunch({
       projectId,
       appPath,
       metroPort,
-      completedOwnerKey: completedOwnerKeyRef.current,
+      devServerPid,
+      hasCompletedLaunch: hasCompletedExpoLaunch,
       isSelectedDeviceReady,
       isAppInstalled: isAppInstalledRef.current,
     });
     if (decision.status === 'idle') {
-      completedOwnerKeyRef.current = null;
+      if (lastCompletedOwnerKeyRef.current) {
+        clearCompletedExpoLaunch(lastCompletedOwnerKeyRef.current);
+        lastCompletedOwnerKeyRef.current = null;
+      }
     }
     queueMicrotask(() => {
       if (active) setState(decision);
@@ -110,7 +123,8 @@ export function useMobilePreviewExpoLaunch({
       .launchExpo({ ...decision.params, requestId, appScheme: appSchemeRef.current })
       .then(() => {
         if (!active) return;
-        completedOwnerKeyRef.current = decision.ownerKey;
+        markExpoLaunchCompleted(decision.ownerKey);
+        lastCompletedOwnerKeyRef.current = decision.ownerKey;
         setState({
           status: 'ready',
           message: `Expo attached on :${metroPort}`,
@@ -130,6 +144,7 @@ export function useMobilePreviewExpoLaunch({
     };
   }, [
     appPath,
+    devServerPid,
     isExpoApp,
     isLoadingDevices,
     isRunningRuntime,

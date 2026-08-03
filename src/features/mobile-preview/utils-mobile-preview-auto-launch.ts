@@ -31,7 +31,9 @@ export function getMobilePreviewAutoLaunchDecision({
   projectId,
   appPath,
   metroPort,
-  completedOwnerKey,
+  devServerPid = null,
+  completedOwnerKey = null,
+  hasCompletedLaunch,
   isSelectedDeviceReady,
   isAppInstalled = null,
 }: {
@@ -46,7 +48,11 @@ export function getMobilePreviewAutoLaunchDecision({
   projectId: string;
   appPath: string;
   metroPort: number;
-  completedOwnerKey: string | null;
+  /** Restarting the dev server must re-attach even if the port is unchanged. */
+  devServerPid?: number | null;
+  completedOwnerKey?: string | null;
+  /** Shared across pane remounts so re-entering the workspace never relaunches. */
+  hasCompletedLaunch?: (ownerKey: string) => boolean;
   isSelectedDeviceReady: boolean;
   /** null while the install status is still unknown. */
   isAppInstalled?: boolean | null;
@@ -91,8 +97,9 @@ export function getMobilePreviewAutoLaunchDecision({
     selectedDevice.platform,
     selectedDevice.id,
     metroPort,
+    devServerPid ?? 'unknown-process',
   ].join('\u0000');
-  if (completedOwnerKey === ownerKey) {
+  if (completedOwnerKey === ownerKey || hasCompletedLaunch?.(ownerKey) === true) {
     return { status: 'ready', message: 'Expo app attached' };
   }
   return {

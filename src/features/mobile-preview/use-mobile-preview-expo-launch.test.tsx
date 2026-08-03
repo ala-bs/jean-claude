@@ -8,6 +8,7 @@ import type {
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { clearAllCompletedExpoLaunches } from './mobile-preview-expo-launch-store';
 import { useMobilePreviewExpoLaunch } from './use-mobile-preview-expo-launch';
 
 const apiMocks = vi.hoisted(() => ({
@@ -51,7 +52,28 @@ describe('useMobilePreviewExpoLaunch', () => {
   afterEach(() => {
     apiMocks.cancelExpoLaunch.mockClear();
     apiMocks.launchExpo.mockClear();
+    clearAllCompletedExpoLaunches();
     document.body.innerHTML = '';
+  });
+
+  it('does not relaunch the app when the pane remounts for the same runtime', async () => {
+    apiMocks.launchExpo.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true } as unknown as MobilePreviewExpoLaunchResult),
+    );
+    const container = document.createElement('div');
+    document.body.append(container);
+
+    const first = createRoot(container);
+    await act(async () => first.render(<Harness deviceId="device-1" />));
+    expect(apiMocks.launchExpo).toHaveBeenCalledTimes(1);
+    await act(async () => first.unmount());
+
+    const second = createRoot(container);
+    await act(async () => second.render(<Harness deviceId="device-1" />));
+
+    expect(apiMocks.launchExpo).toHaveBeenCalledTimes(1);
+
+    await act(async () => second.unmount());
   });
 
   it('cancels the active launch when the workspace closes', async () => {

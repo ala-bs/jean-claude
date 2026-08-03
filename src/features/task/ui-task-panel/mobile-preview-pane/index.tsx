@@ -1667,6 +1667,7 @@ export function MobilePreviewPane({
     projectId,
     appPath,
     metroPort: effectiveDevServerPort,
+    devServerPid: devServerStatus?.pid ?? null,
     retryGeneration: runtimeLaunchRetry,
     isSelectedDeviceReady: activeSessionDeviceReady,
     isAppInstalled:
