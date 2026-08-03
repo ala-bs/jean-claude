@@ -35,6 +35,13 @@ export const BUILTIN_SNIPPETS: PromptSnippet[] = [
 </work_item>
 
 {{/each}}
+**Source of truth — read this before anything else:**
+- The ONLY valid requirements are the ones written above in the work item descriptions and test cases. Nothing else is a requirement.
+- Do NOT invent, infer, extrapolate, or "complete" rules. Do not use general best practices, UX conventions, prior codebase patterns, your own expectations, or what "should obviously" happen as a criterion. If it is not written above, it is not a requirement and must not produce a MISMATCH/FAIL.
+- Never mark something as failing because the implementation differs from how you would have built it.
+- Every MISMATCH / FAIL must cite exactly where the rule comes from: the work item id + the sentence quoted verbatim, or the test case id + step number and its verbatim expected result. If you cannot produce that citation, it is not a mismatch — move it to the Observations section instead.
+- If a requirement is ambiguous, do not resolve the ambiguity yourself. Do not guess the intent. Report it in Observations.
+
 For each work item, produce a recap with:
 - MATCH: requirements that are correctly implemented
 - MISMATCH: requirements that are missing or incorrectly implemented
@@ -54,13 +61,15 @@ End with the following summary tables:
 
 Rules for this table:
 - One row per test case (not per work item). Never merge or skip rows.
-- **Spec Source**: where the expectation comes from. Quote the origin verbatim (trimmed to the relevant sentence), and name the artifact it came from, e.g. \`Test case #42, step 2: "Click Save"\` or \`Work item #17 description: "the badge must disappear once read"\`. Step numbers are 1-based for humans, so cite \`zero_based_index + 1\`. If the expectation is implied rather than written, mark it \`inferred from <artifact>\` and state what was inferred and why.
+- **Spec Source**: where the expectation comes from. Quote the origin verbatim (trimmed to the relevant sentence), and name the artifact it came from, e.g. \`Test case #42, step 2: "Click Save"\` or \`Work item #17 description: "the badge must disappear once read"\`. Step numbers are 1-based for humans, so cite \`zero_based_index + 1\`. This column is mandatory and must always be a verbatim quote from the work item description or test case — never a paraphrase, never your own wording. If no such quote exists, the row cannot be ❌ FAIL: set it to ⬚ NOT TESTED with Spec Source \`not specified\` and raise the point in Observations.
 - **Expected Behavior**: 2-4 sentences, not a fragment. Spell out the precondition / setup, the exact user action, the observable outcome (what appears, changes, is persisted, is emitted), and any edge condition or state transition the spec requires. Name concrete UI labels, fields, statuses, values, and side effects rather than saying "works correctly" or "behaves as expected".
 - **Actual Behavior**: what the current code actually does, with the file + function/symbol that implements (or fails to implement) it. On FAIL, state the concrete gap and where to fix it. On NOT TESTED, state precisely what blocked verification and what is needed (running app, credentials, device, data fixture...).
 - **Status**: ✅ PASS, ❌ FAIL, or ⬚ NOT TESTED — no ⚠️ PARTIAL in this table; a partially satisfied test case is ❌ FAIL.
 
 Formatting rules so the table stays valid: escape every \`|\` inside a cell as \`\\|\`, strip any HTML tags coming from work item descriptions and keep only their text, and never emit a raw newline inside a cell — use \`<br>\` instead. If a cell gets long, break it with \`<br>\` rather than shortening the explanation.
-{{/if}}`,
+{{/if}}
+
+Finally, add an **Observations** section (omit it if empty) — this is the only place where anything not explicitly written in the work items may appear. Use it for: ambiguous or contradictory requirements, expectations that seem implied but were never stated, behaviors in the code that look wrong or risky but are not covered by any requirement, and missing test coverage. Format each as a short bullet: what you noticed, why it is unclear/suspicious, and the question that needs answering. Keep these strictly out of the MISMATCH/FAIL results — they are notes, not verdicts.`,
     enabled: true,
     contexts: { newTask: true, newTaskStep: true },
     autocomplete: { enabled: false, slugs: [] },
