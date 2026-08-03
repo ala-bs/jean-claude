@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
 import type { FeedItem } from '@shared/feed-types';
+import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@/common/ui/dropdown', () => ({
@@ -57,7 +58,7 @@ vi.mock('./use-feed-item-project', () => ({
   useFeedItemProject: (item: FeedItem) => ({ name: item.projectName, color: item.projectColor }),
 }));
 
-import { FeedItemCard } from './feed-item-card';
+import { countRailCiStatuses, FeedItemCard } from './feed-item-card';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -103,5 +104,70 @@ describe('FeedItemCard PR workspace badge', () => {
 
     await act(() => root.render(<FeedItemCard item={item('agent')} />));
     expect(container.querySelector('[aria-label="PR Workspace"]')).toBeNull();
+  });
+});
+
+describe('countRailCiStatuses', () => {
+  function evaluation(
+    overrides: Partial<AzureDevOpsPolicyEvaluation> = {},
+  ): AzureDevOpsPolicyEvaluation {
+    return {
+      evaluationId: 'eval-1',
+      status: 'queued',
+      isBlocking: true,
+      configuration: {
+        id: 1,
+        isEnabled: true,
+        isBlocking: true,
+        type: { id: 'build', displayName: 'Build' },
+        settings: { buildDefinitionId: 123, displayName: 'CI' },
+      },
+      ...overrides,
+    };
+  }
+
+  it('counts an expired evaluation as expired, not running', () => {
+    // Azure keeps status=queued and the stale buildId on expiry — the old
+    // `queued && buildId` heuristic made these spin forever.
+    const counts = countRailCiStatuses([
+      evaluation({ context: { buildId: 42, isExpired: true } }),
+    ]);
+    expect(counts).toEqual({ running: 0, pending: 0, failed: 0, expired: 1 });
+  });
+
+  it('still counts a live queued build with a buildId as running', () => {
+    const counts = countRailCiStatuses([
+      evaluation({ context: { buildId: 42 } }),
+    ]);
+    expect(counts.running).toBe(1);
+    expect(counts.expired).toBe(0);
+  });
+
+  it('keeps a rejected evaluation failed even once it expires', () => {
+    const counts = countRailCiStatuses([
+      evaluation({ status: 'rejected', context: { isExpired: true } }),
+    ]);
+    expect(counts.failed).toBe(1);
+    expect(counts.expired).toBe(0);
+  });
+
+  it('counts a queued evaluation with no build as pending', () => {
+    expect(countRailCiStatuses([evaluation()]).pending).toBe(1);
+  });
+
+  it('ignores non-build policies', () => {
+    const counts = countRailCiStatuses([
+      evaluation({
+        context: { isExpired: true },
+        configuration: {
+          id: 2,
+          isEnabled: true,
+          isBlocking: true,
+          type: { id: 'work-item-linking', displayName: 'Work items' },
+          settings: { displayName: 'Work items' },
+        },
+      }),
+    ]);
+    expect(counts).toEqual({ running: 0, pending: 0, failed: 0, expired: 0 });
   });
 });

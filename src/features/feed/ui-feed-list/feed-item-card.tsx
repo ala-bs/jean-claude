@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowDownNarrowWide,
   Bot,
   Bug,
@@ -48,6 +49,7 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
+import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import {
   getPrStateColor,
   getPrStatusLabel,
@@ -326,6 +328,43 @@ function RailPrAutoCompleteButton({
   return <PrAutoComplete pr={pr} projectId={projectId} variant="compact" />;
 }
 
+/**
+ * Bucket build-policy evaluations for the compact PR rail indicator.
+ *
+ * Azure marks a stale evaluation with `context.isExpired` while leaving
+ * `status: 'queued'` and the previous run's `buildId` in place, so the
+ * `queued && buildId` running heuristic must be checked *after* expiry or
+ * stale CI spins forever. Failures are classified first so a rejected check
+ * stays red once it also expires, matching the PR checks panel summary.
+ */
+export function countRailCiStatuses(
+  evaluations: AzureDevOpsPolicyEvaluation[],
+) {
+  return evaluations.reduce(
+    (counts, evaluation) => {
+      if (!evaluation.configuration.settings.buildDefinitionId) {
+        return counts;
+      }
+
+      if (evaluation.status === 'rejected' || evaluation.status === 'broken') {
+        counts.failed += 1;
+      } else if (evaluation.context?.isExpired) {
+        counts.expired += 1;
+      } else if (
+        evaluation.status === 'running' ||
+        (evaluation.status === 'queued' && !!evaluation.context?.buildId)
+      ) {
+        counts.running += 1;
+      } else if (evaluation.status === 'queued') {
+        counts.pending += 1;
+      }
+
+      return counts;
+    },
+    { running: 0, pending: 0, failed: 0, expired: 0 },
+  );
+}
+
 function RailPrCiStatus({
   projectId,
   prId,
@@ -345,30 +384,7 @@ function RailPrCiStatus({
     },
   );
 
-  const ciCounts = evaluations.reduce(
-    (counts, evaluation) => {
-      if (!evaluation.configuration.settings.buildDefinitionId) {
-        return counts;
-      }
-
-      if (
-        evaluation.status === 'running' ||
-        (evaluation.status === 'queued' && !!evaluation.context?.buildId)
-      ) {
-        counts.running += 1;
-      } else if (evaluation.status === 'queued') {
-        counts.pending += 1;
-      } else if (
-        evaluation.status === 'rejected' ||
-        evaluation.status === 'broken'
-      ) {
-        counts.failed += 1;
-      }
-
-      return counts;
-    },
-    { running: 0, pending: 0, failed: 0 },
-  );
+  const ciCounts = countRailCiStatuses(evaluations);
 
   useEffect(() => {
     startTransition(() => setShouldPollCi(ciCounts.running > 0));
@@ -381,7 +397,8 @@ function RailPrCiStatus({
   if (
     ciCounts.running === 0 &&
     ciCounts.pending === 0 &&
-    ciCounts.failed === 0
+    ciCounts.failed === 0 &&
+    ciCounts.expired === 0
   ) {
     return null;
   }
@@ -389,21 +406,39 @@ function RailPrCiStatus({
   return (
     <span className="flex items-center gap-1">
       {ciCounts.running > 0 && (
-        <span className="flex items-center gap-0.5 text-blue-400">
+        <span
+          className="flex items-center gap-0.5 text-blue-400"
+          title={`${ciCounts.running} running`}
+        >
           <Loader2 className="h-2.5 w-2.5 animate-spin" />
           <span className="text-[9.5px]">{ciCounts.running}</span>
         </span>
       )}
       {ciCounts.pending > 0 && (
-        <span className="flex items-center gap-0.5 text-yellow-400">
+        <span
+          className="flex items-center gap-0.5 text-yellow-400"
+          title={`${ciCounts.pending} pending`}
+        >
           <MinusCircle className="h-2.5 w-2.5" />
           <span className="text-[9.5px]">{ciCounts.pending}</span>
         </span>
       )}
       {ciCounts.failed > 0 && (
-        <span className="text-status-fail flex items-center gap-0.5">
+        <span
+          className="text-status-fail flex items-center gap-0.5"
+          title={`${ciCounts.failed} failed`}
+        >
           <XCircle className="h-2.5 w-2.5" />
           <span className="text-[9.5px]">{ciCounts.failed}</span>
+        </span>
+      )}
+      {ciCounts.expired > 0 && (
+        <span
+          className="flex items-center gap-0.5 text-orange-400"
+          title={`${ciCounts.expired} expired`}
+        >
+          <AlertTriangle className="h-2.5 w-2.5" />
+          <span className="text-[9.5px]">{ciCounts.expired}</span>
         </span>
       )}
       <span className="text-ink-3 text-[9.5px]">CI</span>
