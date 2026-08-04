@@ -4252,7 +4252,7 @@ describe('agentService provider runtime', () => {
         behavior: 'allow',
         allowedDirectory: path.dirname(TEST_ALLOWED_DIRECTORY),
       }),
-    ).rejects.toThrow('not a valid parent choice');
+    ).rejects.toThrow('not a valid choice');
     expect(providerCalls.permissions).toEqual([]);
     expect(agentService.getPendingRequest('step-1')).not.toBeNull();
 

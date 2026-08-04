@@ -975,7 +975,7 @@ export function PermissionBar({
                       size="sm"
                       icon={<FolderTree />}
                     >
-                      Allow Parent for Session
+                      Allow Directory for Session
                       <ChevronDown className="h-3.5 w-3.5" />
                     </Button>
                   }
@@ -994,6 +994,9 @@ export function PermissionBar({
                         title={directory.path}
                       >
                         {directory.path}
+                        {directory.path === directoryAccess.requestedDirectory
+                          ? ' (Requested directory)'
+                          : ''}
                         {directory.isHome ? ' (Includes Home)' : ''}
                       </code>
                     </DropdownItem>

@@ -12,7 +12,7 @@ import {
 } from './directory-access';
 
 describe('directory access', () => {
-  it('offers existing parents only, excludes root, and marks home', () => {
+  it('offers existing directories only, excludes root, and marks home', () => {
     const home = fs.realpathSync.native(os.homedir());
     const missingParent = `.jc-missing-${process.pid}-${Date.now()}`;
     const requestedDirectory = path.join(home, missingParent, 'repo');
@@ -63,11 +63,13 @@ describe('directory access', () => {
         validateAllowedDirectory(access!, temporaryDirectory),
       ).not.toThrow();
       expect(() => validateAllowedDirectory(access!, os.homedir())).toThrow(
-        'not a valid parent choice',
+        'not a valid choice',
       );
-      expect(() =>
-        validateAllowedDirectory(access!, requestedDirectory),
-      ).toThrow('not a valid parent choice');
+      const canonicalRequested = fs.realpathSync.native(requestedDirectory);
+      expect(access?.parentDirectories[0]?.path).toBe(canonicalRequested);
+      expect(validateAllowedDirectory(access!, requestedDirectory)).toBe(
+        canonicalRequested,
+      );
     } finally {
       fs.rmSync(temporaryDirectory, { recursive: true, force: true });
     }

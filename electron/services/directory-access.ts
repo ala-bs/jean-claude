@@ -107,7 +107,7 @@ export function buildDirectoryAccess({
   const root = path.parse(normalizedDirectory).root;
   const home = canonicalizePath(path.resolve(os.homedir())) ?? path.resolve(os.homedir());
   const parentDirectories: DirectoryAccess['parentDirectories'] = [];
-  let current = path.dirname(normalizedDirectory);
+  let current = normalizedDirectory;
 
   while (current !== root) {
     if (
@@ -161,7 +161,7 @@ export function validateAllowedDirectory(
       (directory) => directory.path === normalized,
     )
   ) {
-    throw new Error('Allowed directory is not a valid parent choice');
+    throw new Error('Allowed directory is not a valid choice');
   }
 
   return normalized;

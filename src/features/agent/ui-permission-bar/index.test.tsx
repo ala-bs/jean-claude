@@ -65,8 +65,10 @@ function permissionBarElement({
   );
 }
 
-function renderPermissionBar() {
-  return renderToStaticMarkup(permissionBarElement());
+function renderPermissionBar(
+  props?: Parameters<typeof permissionBarElement>[0],
+) {
+  return renderToStaticMarkup(permissionBarElement(props));
 }
 
 function findButton(text: string) {
@@ -88,7 +90,7 @@ describe('PermissionBar directory access', () => {
   it('shows session parent action without broader persistence scopes', () => {
     const markup = renderPermissionBar();
 
-    expect(markup).toContain('Allow Parent for Session');
+    expect(markup).toContain('Allow Directory for Session');
     expect(markup).not.toContain('Allow Bash for Session');
     expect(markup).not.toContain('Allow for Project');
     expect(markup).not.toContain('Allow Globally');
@@ -102,16 +104,24 @@ describe('PermissionBar directory access', () => {
 
     try {
       await act(async () => {
-        root.render(permissionBarElement({ onRespond }));
+        root.render(
+          permissionBarElement({
+            onRespond,
+            parentDirectories: [{ path: '/outside/repo' }, { path: '/outside' }],
+          }),
+        );
       });
-      await act(async () => findButton('Allow Parent for Session')?.click());
-      await act(async () => findButton('/outside')?.click());
+      await act(async () => findButton('Allow Directory for Session')?.click());
+      expect(findButton('/outside/repo')?.textContent).toContain(
+        '(Requested directory)',
+      );
+      await act(async () => findButton('/outside/repo')?.click());
 
       expect(onRespond).toHaveBeenCalledWith('permission-1', {
         behavior: 'allow',
         updatedInput: { command: 'ls /outside/repo' },
         allowMode: 'session',
-        allowedDirectory: '/outside',
+        allowedDirectory: '/outside/repo',
       });
     } finally {
       await act(async () => root.unmount());
@@ -134,7 +144,7 @@ describe('PermissionBar directory access', () => {
           }),
         );
       });
-      await act(async () => findButton('Allow Parent for Session')?.click());
+      await act(async () => findButton('Allow Directory for Session')?.click());
       await act(async () => findButton('/Users/test')?.click());
       expect(onRespond).not.toHaveBeenCalled();
 
