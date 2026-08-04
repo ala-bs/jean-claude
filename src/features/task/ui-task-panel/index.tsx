@@ -962,6 +962,18 @@ function useStepModel(stepId: string | null): string | undefined {
   });
 }
 
+const HEADER_WORK_ITEM_VISIBLE_COUNT = 3;
+
+export function splitHeaderWorkItems(workItemIds: string[]) {
+  return {
+    visible: workItemIds.slice(0, HEADER_WORK_ITEM_VISIBLE_COUNT),
+    hiddenCount: Math.max(
+      0,
+      workItemIds.length - HEADER_WORK_ITEM_VISIBLE_COUNT,
+    ),
+  };
+}
+
 function TaskHeaderWorkItemChip({
   providerId,
   workItemId,
@@ -981,7 +993,7 @@ function TaskHeaderWorkItemChip({
     <WorkItemChip
       label={`#${workItemId}`}
       type={workItem?.fields.workItemType}
-      size="sm"
+      size="xs"
       onClick={
         workItemUrl ? () => window.open(workItemUrl, '_blank') : undefined
       }
@@ -992,6 +1004,57 @@ function TaskHeaderWorkItemChip({
           : `Work item #${workItemId}`
       }
     />
+  );
+}
+
+function TaskHeaderWorkItems({
+  providerId,
+  workItemIds,
+  workItemUrls,
+}: {
+  providerId: string | null;
+  workItemIds: string[];
+  workItemUrls?: string[] | null;
+}) {
+  const { visible, hiddenCount } = splitHeaderWorkItems(workItemIds);
+
+  return (
+    <>
+      {visible.map((workItemId, index) => (
+        <TaskHeaderWorkItemChip
+          key={workItemId}
+          providerId={providerId}
+          workItemId={workItemId}
+          workItemUrl={workItemUrls?.[index]}
+        />
+      ))}
+      {hiddenCount > 0 && (
+        <Dropdown
+          align="right"
+          trigger={
+            <button
+              type="button"
+              aria-label={`Show all ${workItemIds.length} linked work items`}
+              title={`${hiddenCount} more work items`}
+              className="text-ink-3 hover:text-ink-1 ring-line inline-flex cursor-pointer items-center rounded px-1.5 font-mono text-[9.5px] ring-1 transition-colors"
+            >
+              {`+${hiddenCount}`}
+            </button>
+          }
+        >
+          <div className="flex max-w-56 flex-wrap gap-1 p-1.5">
+            {workItemIds.map((workItemId, index) => (
+              <TaskHeaderWorkItemChip
+                key={workItemId}
+                providerId={providerId}
+                workItemId={workItemId}
+                workItemUrl={workItemUrls?.[index]}
+              />
+            ))}
+          </div>
+        </Dropdown>
+      )}
+    </>
   );
 }
 
@@ -2573,19 +2636,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               )}
 
               {/* Work item badges */}
-              {task.workItemIds &&
-                task.workItemIds.length > 0 &&
-                task.workItemIds.map((workItemId, index) => {
-                  const workItemUrl = task.workItemUrls?.[index];
-                  return (
-                    <TaskHeaderWorkItemChip
-                      key={workItemId}
-                      providerId={project.workItemProviderId}
-                      workItemId={workItemId}
-                      workItemUrl={workItemUrl}
-                    />
-                  );
-                })}
+              {task.workItemIds && task.workItemIds.length > 0 && (
+                <TaskHeaderWorkItems
+                  providerId={project.workItemProviderId}
+                  workItemIds={task.workItemIds}
+                  workItemUrls={task.workItemUrls}
+                />
+              )}
             </div>
 
             {/* Work items editor modal */}
