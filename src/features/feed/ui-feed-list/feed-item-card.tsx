@@ -888,7 +888,7 @@ export function FeedItemCard({
               )}
 
               {/* Title */}
-              <div className="flex items-start gap-1.5">
+              <div className="flex flex-wrap items-start gap-1.5">
                 {item.taskType === 'skill-creation' && (
                   <Bot className="text-status-pr mt-0.5 h-3.5 w-3.5 shrink-0" />
                 )}
@@ -912,6 +912,28 @@ export function FeedItemCard({
                 >
                   {itemTitle}
                 </span>
+                {item.source === 'task' && needsAttention && (
+                  <span
+                    className={clsx(
+                      'mt-px flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ring-1',
+                      needsPermission
+                        ? 'bg-status-run/10 text-status-run ring-status-run/25'
+                        : 'bg-status-azure/10 text-status-azure ring-status-azure/25',
+                    )}
+                  >
+                    {needsPermission ? (
+                      <>
+                        <ShieldQuestion className="h-2.5 w-2.5 shrink-0" />
+                        Waiting for permission
+                      </>
+                    ) : (
+                      <>
+                        <MessageSquare className="h-2.5 w-2.5 shrink-0" />
+                        Waiting for answer
+                      </>
+                    )}
+                  </span>
+                )}
               </div>
 
               {item.source === 'work-item' && item.workItemSummary && (
@@ -1001,9 +1023,8 @@ export function FeedItemCard({
                     hasQuestion ? 'text-status-azure' : 'text-status-run',
                   )}
                 >
-                  {needsPermission ? (
-                    <ShieldQuestion className="h-3 w-3 shrink-0" />
-                  ) : (
+                  {/* Icon omitted when the title-row badge already signals state */}
+                  {!needsAttention && (
                     <MessageSquare className="h-3 w-3 shrink-0" />
                   )}
                   <span className="min-w-0 truncate">
@@ -1011,30 +1032,6 @@ export function FeedItemCard({
                   </span>
                 </div>
               )}
-
-              {/* Permission/question indicator when no pending message text */}
-              {item.source === 'task' &&
-                !item.pendingMessage &&
-                needsAttention && (
-                  <div
-                    className={clsx(
-                      'flex items-center gap-1 pt-0.5 text-[11px]',
-                      hasQuestion ? 'text-status-azure' : 'text-status-run',
-                    )}
-                  >
-                    {needsPermission ? (
-                      <>
-                        <ShieldQuestion className="h-3 w-3 shrink-0" />
-                        <span>Waiting for permission</span>
-                      </>
-                    ) : (
-                      <>
-                        <MessageSquare className="h-3 w-3 shrink-0" />
-                        <span>Waiting for answer</span>
-                      </>
-                    )}
-                  </div>
-                )}
 
               {/* Pending review comments */}
               {item.source === 'task' && pendingCommentCount > 0 && (
@@ -1392,31 +1389,32 @@ function SubtaskRow({
           <span className="text-ink-2 min-w-0 flex-1 truncate text-[11.5px]">
             {child.title}
           </span>
+          {childNeedsAttention && (
+            <span
+              className={clsx(
+                'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ring-1',
+                childNeedsPermission
+                  ? 'bg-status-run/10 text-status-run ring-status-run/25'
+                  : 'bg-status-azure/10 text-status-azure ring-status-azure/25',
+              )}
+            >
+              {childNeedsPermission ? (
+                <>
+                  <ShieldQuestion className="h-2.5 w-2.5 shrink-0" />
+                  Waiting for permission
+                </>
+              ) : (
+                <>
+                  <MessageSquare className="h-2.5 w-2.5 shrink-0" />
+                  Waiting for answer
+                </>
+              )}
+            </span>
+          )}
           <span className="text-ink-4 shrink-0 font-mono text-[9px]">
             {formatRelativeTime(child.timestamp)}
           </span>
         </div>
-        {/* Permission/question indicator */}
-        {childNeedsAttention && (
-          <div
-            className={clsx(
-              'flex items-center gap-1 pt-0.5 text-[10px]',
-              childHasQuestion ? 'text-status-azure' : 'text-status-run',
-            )}
-          >
-            {childNeedsPermission ? (
-              <>
-                <ShieldQuestion className="h-2.5 w-2.5 shrink-0" />
-                <span>Waiting for permission</span>
-              </>
-            ) : (
-              <>
-                <MessageSquare className="h-2.5 w-2.5 shrink-0" />
-                <span>Waiting for answer</span>
-              </>
-            )}
-          </div>
-        )}
         {/* Background merge jobs */}
         {childMergeJobs.length > 0 && (
           <div className="bg-acc/10 ring-acc/20 mt-0.5 flex items-center gap-1.5 rounded px-2 py-0.5 ring-1">
