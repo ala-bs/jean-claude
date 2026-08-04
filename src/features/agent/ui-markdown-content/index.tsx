@@ -23,7 +23,7 @@ import {
 import { getImageDisplayWidth } from '@/lib/markdown-image-size';
 import { isGifBlobPreviewUrl } from '@/lib/blob-preview-url';
 import { MermaidDiagram } from '@/features/common/ui-mermaid-diagram';
-import { Modal } from '@/common/ui/modal';
+import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
 
 import {
   createGifFrameCache,
@@ -1531,22 +1531,13 @@ export function MarkdownContent({
         </div>
       )}
 
-      <Modal
-        isOpen={selectedImage !== null}
-        onClose={() => setSelectedImage(null)}
-        title={selectedImage?.alt || 'Image preview'}
-        size="xl"
-      >
-        {selectedImage && (
-          <div className="flex max-h-[75vh] w-full items-center justify-center">
-            <img
-              src={selectedImage.src}
-              alt={selectedImage.alt}
-              className="max-h-[75vh] w-full object-contain"
-            />
-          </div>
-        )}
-      </Modal>
+      {selectedImage && (
+        <ImagePreviewModal
+          imageUrl={selectedImage.src}
+          title={selectedImage.alt || 'Image preview'}
+          onClose={() => setSelectedImage(null)}
+        />
+      )}
     </>
   );
 }

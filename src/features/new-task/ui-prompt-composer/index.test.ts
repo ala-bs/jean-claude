@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
+import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
+
 import { PromptComposer } from './index';
 
 let editorPasteHandler: ((event: ClipboardEvent) => void) | undefined;
@@ -66,7 +68,10 @@ describe('PromptComposer image previews', () => {
 
     await act(async () => {
       root.render(
-        createElement(PromptComposer, {
+        createElement(
+          RootKeyboardBindings,
+          null,
+          createElement(PromptComposer, {
           template: '',
           workItems: [],
           images,
@@ -75,6 +80,7 @@ describe('PromptComposer image previews', () => {
           onImageAttach: vi.fn(),
           onImageRemove: vi.fn(),
         }),
+        ),
       );
     });
 
