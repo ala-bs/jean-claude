@@ -70,6 +70,7 @@ import type {
   PermissionScope,
   ResolvedPermissionRule,
 } from '@shared/permission-types';
+import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { AiUsageFeature } from '@shared/ai-usage-types';
 
@@ -688,15 +689,37 @@ export async function resolvePermissionRulesForStep({
   workingDir,
   isWorktree,
   sessionRules,
+  autoAccept = false,
 }: {
   projectPath: string;
   workingDir: string;
   isWorktree: boolean;
   sessionRules: PermissionScope;
+  /**
+   * Per-session auto-accept. Prompts for script edits (python/node heredoc
+   * snippets, `sed -i`) would be accepted anyway, so grant the script-edit
+   * rule directly and skip the round-trip. The rule still enforces its own
+   * containment checks against `workingDir`.
+   *
+   * Prepended, not appended: script-edit matching is last-match-wins, so an
+   * explicit `script_edit: deny` the user configured must still override this
+   * implicit grant.
+   */
+  autoAccept?: boolean;
 }): Promise<ResolvedPermissionRule[]> {
   const globalRules = await resolveGlobalRules();
   const settings = await readSettings(projectPath);
   return [
+    ...(autoAccept
+      ? [
+          {
+            tool: SCRIPT_EDIT_TOOL,
+            pattern: '*',
+            action: 'allow' as const,
+            subpathRoot: workingDir,
+          },
+        ]
+      : []),
     ...resolveRules(settings, isWorktree, globalRules, workingDir),
     ...flattenScope(sessionRules),
   ];
@@ -721,6 +744,10 @@ class AgentService {
    * ever emitted, so this only auto-allows what would have prompted the user.
    */
   private autoAcceptSteps = new Set<string>();
+
+  /** Ordering guards for concurrent permission-rule refreshes, per step. */
+  private permissionRefreshGeneration = new Map<string, number>();
+  private permissionRefreshQueue = new Map<string, Promise<void>>();
   private startingSteps = new Set<string>();
   private registeringSteps = new Set<string>();
   private pendingSessionRegistrations = new Set<Promise<void>>();
@@ -776,6 +803,11 @@ class AgentService {
     await Promise.all(
       entries.map(async ([stepId, session]) => {
         if (!session) return;
+        // Two refreshes for the same step (e.g. auto-accept toggled on then
+        // off) resolve concurrently and could otherwise land out of order,
+        // leaving the stale snapshot live. Last caller wins.
+        const generation = (this.permissionRefreshGeneration.get(stepId) ?? 0) + 1;
+        this.permissionRefreshGeneration.set(stepId, generation);
         const context = session.permissionContext;
         if (!context || !session.runHandle) return;
         if (
@@ -800,28 +832,37 @@ class AgentService {
           workingDir: context.workingDir,
           isWorktree: context.isWorktree,
           sessionRules,
+          autoAccept: this.autoAcceptSteps.has(stepId),
         });
 
-        // The run may have finished while we were resolving.
+        // The run may have finished while we were resolving, or a newer
+        // refresh may have superseded this one.
         if (this.sessions.get(stepId) !== session || !session.runHandle) return;
+        if (this.permissionRefreshGeneration.get(stepId) !== generation) return;
 
-        try {
-          await capability.implementation.update({
-            handle: session.runHandle,
-            rules,
+        const handle = session.runHandle;
+        // Serialize the pushes themselves so an older snapshot can never
+        // overtake a newer one inside the backend RPC.
+        const push = (this.permissionRefreshQueue.get(stepId) ?? Promise.resolve())
+          .then(async () => {
+            if (this.permissionRefreshGeneration.get(stepId) !== generation) return;
+            try {
+              await capability.implementation.update({ handle, rules });
+              dbg.agentPermission(
+                'Refreshed permission rules for live step %s (%d rules)',
+                stepId,
+                rules.length,
+              );
+            } catch (error) {
+              dbg.agentPermission(
+                'Failed pushing refreshed permission rules to step %s: %O',
+                stepId,
+                error,
+              );
+            }
           });
-          dbg.agentPermission(
-            'Refreshed permission rules for live step %s (%d rules)',
-            stepId,
-            rules.length,
-          );
-        } catch (error) {
-          dbg.agentPermission(
-            'Failed pushing refreshed permission rules to step %s: %O',
-            stepId,
-            error,
-          );
-        }
+        this.permissionRefreshQueue.set(stepId, push);
+        await push;
       }),
     );
   }
@@ -880,6 +921,8 @@ class AgentService {
     if (this.sessions.get(stepId) === session) {
       this.sessions.delete(stepId);
       this.autoAcceptSteps.delete(stepId);
+      this.permissionRefreshGeneration.delete(stepId);
+      this.permissionRefreshQueue.delete(stepId);
     }
   }
 
@@ -1567,6 +1610,7 @@ class AgentService {
       workingDir,
       isWorktree,
       sessionRules,
+      autoAccept: this.autoAcceptSteps.has(stepId),
     });
 
     const backendChanged = session.backendType !== session.requestedBackendType;
@@ -3671,16 +3715,37 @@ class AgentService {
    * already waiting for the user.
    */
   async setAutoAccept(stepId: string, enabled: boolean): Promise<void> {
-    const session = this.sessions.get(stepId);
+    // Never let a rule-push failure strand the queue handling below: a throw
+    // here would leave queued requests unemitted and hang the run.
+    const pushRules = async () => {
+      try {
+        await this.refreshPermissionRules({ scope: 'session', stepId });
+      } catch (error) {
+        dbg.agentPermission(
+          'Failed refreshing rules after auto-accept toggle for step %s: %O',
+          stepId,
+          error,
+        );
+      }
+    };
+
     if (!enabled) {
       this.autoAcceptSteps.delete(stepId);
+      // Drops the implicit script-edit grant back off the live rule set.
+      await pushRules();
       // Requests that arrived while auto-accept was on were queued but never
       // emitted, so re-surface whatever the run is now blocked on.
-      if (session) await this.emitQueueHeadRequest(session);
+      const current = this.sessions.get(stepId);
+      if (current) await this.emitQueueHeadRequest(current);
       return;
     }
     this.autoAcceptSteps.add(stepId);
+    // Pushes the implicit script-edit grant (heredoc snippets, `sed -i`) to
+    // the live run so they stop prompting. Backends without live rule updates
+    // simply keep prompting and get auto-accepted at the app layer.
+    await pushRules();
 
+    const session = this.sessions.get(stepId);
     if (!session) return;
     const pendingPermissions = session.pendingRequests.filter(
       (request) => request.type === 'permission',

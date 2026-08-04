@@ -3797,6 +3797,129 @@ describe('agentService provider runtime', () => {
     await startPromise;
   });
 
+  it('grants script edits (heredoc snippets) while session auto-accept is on', async () => {
+    resolveRulesMock.mockReturnValue([
+      { tool: 'bash', pattern: 'npm test', action: 'allow' },
+    ]);
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.setAutoAccept('step-1', true);
+    await agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    const { config } = providerCalls.runStarts[0] as {
+      config: AgentBackendConfig;
+    };
+    // Prepended before every resolved rule, so an explicit user
+    // `script_edit: deny` further down still wins (last match wins).
+    expect(config.permissionRules).toEqual([
+      {
+        tool: 'script_edit',
+        pattern: '*',
+        action: 'allow',
+        subpathRoot: expect.any(String),
+      },
+      { tool: 'bash', pattern: 'npm test', action: 'allow' },
+    ]);
+  });
+
+  it('pushes and revokes the script-edit grant on a live run', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'Bash',
+        input: { command: 'npm test' },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    await agentService.setAutoAccept('step-1', true);
+    await waitForAssertion(() => {
+      expect(providerCalls.permissionRuleUpdates).toHaveLength(1);
+    });
+    expect(
+      (
+        providerCalls.permissionRuleUpdates[0] as {
+          rules: { tool: string }[];
+        }
+      ).rules.some((rule) => rule.tool === 'script_edit'),
+    ).toBe(true);
+
+    await agentService.setAutoAccept('step-1', false);
+    await waitForAssertion(() => {
+      expect(providerCalls.permissionRuleUpdates).toHaveLength(2);
+    });
+    expect(
+      (
+        providerCalls.permissionRuleUpdates[1] as {
+          rules: { tool: string }[];
+        }
+      ).rules.some((rule) => rule.tool === 'script_edit'),
+    ).toBe(false);
+
+    release();
+    await startPromise;
+  });
+
+  it('toggles auto-accept without a live session', async () => {
+    await expect(
+      agentService.setAutoAccept('step-1', true),
+    ).resolves.toBeUndefined();
+    expect(providerCalls.permissionRuleUpdates).toEqual([]);
+    await expect(
+      agentService.setAutoAccept('step-1', false),
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps an explicit script_edit deny winning over session auto-accept', async () => {
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      sessionRules: { script_edit: 'deny' },
+    });
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.setAutoAccept('step-1', true);
+    await agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    const { config } = providerCalls.runStarts[0] as {
+      config: AgentBackendConfig;
+    };
+    const scriptEditRules = (config.permissionRules ?? []).filter(
+      (rule) => rule.tool === 'script_edit',
+    );
+    expect(scriptEditRules.at(-1)?.action).toBe('deny');
+  });
+
+  it('does not include the script-edit grant when auto-accept is off', async () => {
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+
+    await agentService.start('step-1');
+
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+    const { config } = providerCalls.runStarts[0] as {
+      config: AgentBackendConfig;
+    };
+    expect(
+      (config.permissionRules ?? []).some((rule) => rule.tool === 'script_edit'),
+    ).toBe(false);
+  });
+
   it('does not auto-accept questions when session auto-accept is on', async () => {
     const { handle, release } = createWaitingHandle({
       type: 'question',
