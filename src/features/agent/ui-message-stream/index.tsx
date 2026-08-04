@@ -161,8 +161,11 @@ export const MessageStream = memo(function MessageStream({
   onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const contentObserverRef = useRef<ResizeObserver | null>(null);
   const isNearBottomRef = useRef(true);
+  // Whether an automatic re-pin is still wanted. Set on focus/new message,
+  // cleared as soon as the user scrolls away from the bottom.
+  const shouldPinRef = useRef(true);
   const [processingCacheState, setProcessingCacheState] = useState<{
     key: string;
     cache: MessageStreamProcessingCache;
@@ -217,14 +220,61 @@ export const MessageStream = memo(function MessageStream({
 
   // Update near-bottom state on scroll
   const handleScroll = useCallback(() => {
-    isNearBottomRef.current = checkIfNearBottom();
+    const nearBottom = checkIfNearBottom();
+    isNearBottomRef.current = nearBottom;
+    if (!nearBottom) shouldPinRef.current = false;
   }, [checkIfNearBottom]);
+
+  // Scroll all the way down, including the padding reserved for the
+  // floating composer. Using scrollTop (not scrollIntoView on a sentinel that
+  // sits above the padding) guarantees we land at the true maximum offset.
+  const scrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }, []);
 
   // Reset scroll to bottom when switching tasks or steps
   useLayoutEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+    scrollToBottom();
     isNearBottomRef.current = true;
-  }, [taskId, stepId]);
+    shouldPinRef.current = true;
+  }, [taskId, stepId, scrollToBottom]);
+
+  // Content mounted below the fold (markdown, diffs, tool cards, images) can
+  // grow *after* the initial scroll, and the floating composer's height is
+  // measured asynchronously — both leave a gap at the bottom. Re-pin whenever
+  // the content box or the reserved padding changes while we're near bottom.
+  useLayoutEffect(() => {
+    if (isNearBottomRef.current) scrollToBottom();
+  }, [bottomPadding, scrollToBottom]);
+
+  // Ref callback (not an effect) so the observer attaches whenever the content
+  // node actually mounts — the stream renders a placeholder while messages are
+  // still loading, so the node does not exist on first commit.
+  const contentRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      contentObserverRef.current?.disconnect();
+      contentObserverRef.current = null;
+      if (!node) return;
+      const observer = new ResizeObserver(() => {
+        // Only re-pin while the user is parked at the bottom *and* hasn't
+        // scrolled away since the last focus/message — otherwise expanding a
+        // collapsed entry would yank them back down.
+        if (isNearBottomRef.current && shouldPinRef.current) scrollToBottom();
+      });
+      observer.observe(node);
+      // The container itself resizes on window/split/sidebar changes, which
+      // also opens a gap at the bottom.
+      if (scrollContainerRef.current) {
+        observer.observe(scrollContainerRef.current);
+      }
+      contentObserverRef.current = observer;
+    },
+    [scrollToBottom],
+  );
+
+  useEffect(() => () => contentObserverRef.current?.disconnect(), []);
 
   // Derive a boolean so the effect only fires when a banner appears/disappears
   const hasPendingBanner = !!pendingPermission || !!pendingQuestion;
@@ -233,9 +283,17 @@ export const MessageStream = memo(function MessageStream({
   // or a permission/question banner appears — but only if user is near bottom
   useEffect(() => {
     if (isNearBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+      // New content at the bottom re-arms automatic re-pinning so its
+      // late-mounting children (markdown, diffs, images) stay in view.
+      shouldPinRef.current = true;
+      scrollToBottom();
     }
-  }, [streamMessages.length, queuedPrompts.length, hasPendingBanner]);
+  }, [
+    streamMessages.length,
+    queuedPrompts.length,
+    hasPendingBanner,
+    scrollToBottom,
+  ]);
 
   const { openMenu: openContextMenu, portal: contextMenuPortal } =
     useMessageContextMenu();
@@ -404,7 +462,7 @@ export const MessageStream = memo(function MessageStream({
         style={bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined}
       >
         {contextMenuPortal}
-        <div className="relative">
+        <div ref={contentRef} className="relative">
           {streamMessages.map((streamMessage, index) => {
             // Prompt groups render as collapsible entries
             if (streamMessage.kind === 'prompt-group') {
@@ -560,7 +618,6 @@ export const MessageStream = memo(function MessageStream({
               />
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
       </div>
     </div>
