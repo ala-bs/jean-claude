@@ -104,6 +104,51 @@ describe('TaskMessageManager', () => {
     await act(async () => root.unmount());
   });
 
+  it('invalidates worktree changes on turn boundary but not on waiting', async () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <TaskMessageManager />
+        </QueryClientProvider>,
+      );
+    });
+
+    const diffInvalidations = () =>
+      invalidateSpy.mock.calls.filter(
+        (call) =>
+          Array.isArray(call[0]?.queryKey) &&
+          call[0].queryKey[0] === 'worktree-diff',
+      ).length;
+
+    act(() => {
+      apiMocks.agentEventHandler?.({
+        type: 'status',
+        taskId: 'task-1',
+        stepId: 'step-1',
+        status: 'waiting',
+      });
+    });
+    expect(diffInvalidations()).toBe(0);
+
+    act(() => {
+      apiMocks.agentEventHandler?.({
+        type: 'status',
+        taskId: 'task-1',
+        stepId: 'step-1',
+        status: 'completed',
+      });
+    });
+    expect(diffInvalidations()).toBe(1);
+
+    await act(async () => root.unmount());
+  });
+
   it('marks run-command statuses hydrated only after delayed status fetch settles', async () => {
     let resolveStatus!: (status: {
       isRunning: boolean;

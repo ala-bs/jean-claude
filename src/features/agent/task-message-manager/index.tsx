@@ -5,11 +5,32 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { invalidateTaskStatusResources } from '@/cache/status-invalidations';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
+import type { TaskStatus } from '@shared/types';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
 import { invalidateTaskFeed } from './feed-invalidations';
 
 const MESSAGE_UPDATE_FLUSH_MS = 300;
+
+function invalidateWorktreeChanges(queryClient: QueryClient, taskId: string) {
+  queryClient.invalidateQueries({ queryKey: ['worktree-diff', taskId] });
+  queryClient.invalidateQueries({
+    queryKey: ['worktree-file-content', taskId],
+  });
+  queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+  queryClient.invalidateQueries({
+    queryKey: ['worktree-local-changes', taskId],
+  });
+  queryClient.invalidateQueries({
+    queryKey: ['worktree-local-file-content', taskId],
+  });
+}
+
+function isTurnBoundary(status: TaskStatus): boolean {
+  return (
+    status === 'completed' || status === 'errored' || status === 'interrupted'
+  );
+}
 
 function invalidateWorktreeDiffIfNeeded(
   queryClient: QueryClient,
@@ -21,14 +42,11 @@ function invalidateWorktreeDiffIfNeeded(
     (entry.name === 'write' || entry.name === 'edit') &&
     entry.result
   ) {
-    queryClient.invalidateQueries({ queryKey: ['worktree-diff', taskId] });
-    queryClient.invalidateQueries({
-      queryKey: ['worktree-file-content', taskId],
-    });
+    invalidateWorktreeChanges(queryClient, taskId);
   }
 }
 
-function clearsTaskPendingRequest(status: string): boolean {
+function clearsTaskPendingRequest(status: TaskStatus): boolean {
   return (
     status === 'running' ||
     status === 'completed' ||
@@ -147,6 +165,11 @@ export function TaskMessageManager() {
           // Clear pending requests when agent resumes or reaches terminal state.
           if (clearsTaskPendingRequest(event.status)) {
             clearPendingRequestForTask(taskId);
+          }
+          // Turn boundary: refresh changes regardless of which tools ran.
+          // Agents can edit files via bash (sed/python), not just write/edit.
+          if (isTurnBoundary(event.status)) {
+            invalidateWorktreeChanges(queryClient, taskId);
           }
           // Also invalidate task queries so task-level status updates
           queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
