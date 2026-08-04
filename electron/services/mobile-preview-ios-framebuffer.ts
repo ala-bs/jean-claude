@@ -251,16 +251,27 @@ export async function findCoreSimulatorHelperSource(): Promise<string> {
     return process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE;
   }
 
-  for (const candidate of getCoreSimulatorHelperSourceCandidates()) {
+  const candidates = getCoreSimulatorHelperSourceCandidates();
+  for (const candidate of candidates) {
     try {
       await access(candidate, fsConstants.R_OK);
+      debug('iOS preview helper source resolved path=%s', candidate);
       return candidate;
     } catch {
       // Try next candidate.
     }
   }
 
-  throw new Error('CoreSimulator framebuffer helper source not found.');
+  debug(
+    'iOS preview helper source NOT FOUND cwd=%s __dirname=%s resourcesPath=%s candidates=%s',
+    process.cwd(),
+    __dirname,
+    process.resourcesPath ?? 'none',
+    candidates.join(', '),
+  );
+  throw new Error(
+    `CoreSimulator framebuffer helper source not found. Tried: ${candidates.join(', ')}`,
+  );
 }
 
 let orphanedHelperSweep: Promise<void> | null = null;
@@ -321,7 +332,15 @@ export async function buildCoreSimulatorFramebufferHelper(
   const outputPath = join(outputDir, CORE_SIMULATOR_HELPER_BINARY);
   await mkdir(outputDir, { recursive: true });
   await killOrphanedCoreSimulatorHelpers();
-  await runCommand(
+  debug(
+    'iOS preview compiling framebuffer helper source=%s developerDir=%s output=%s',
+    sourcePath,
+    developerDir,
+    outputPath,
+  );
+  const compileStartedAt = Date.now();
+  try {
+    await runCommand(
     'xcrun',
     [
       'clang',
@@ -343,7 +362,22 @@ export async function buildCoreSimulatorFramebufferHelper(
       '-o',
       outputPath,
     ],
-    { signal, timeoutMs: 20_000 },
+      { signal, timeoutMs: 20_000 },
+    );
+  } catch (error) {
+    debug(
+      'iOS preview framebuffer helper COMPILE FAILED source=%s developerDir=%s elapsedMs=%d error=%s',
+      sourcePath,
+      developerDir,
+      Date.now() - compileStartedAt,
+      error instanceof Error ? error.message : String(error),
+    );
+    throw error;
+  }
+  debug(
+    'iOS preview framebuffer helper compiled output=%s elapsedMs=%d',
+    outputPath,
+    Date.now() - compileStartedAt,
   );
   return outputPath;
 }
@@ -577,6 +611,13 @@ export async function createCoreSimulatorFramebufferStream(
         });
         stream.child.once('error', (error) => {
           const stderr = createdEntry.recentStderr.trim();
+          debug(
+            'iOS preview framebuffer helper process ERROR deviceId=%s consumers=%d error=%s stderr=%s',
+            params.deviceId,
+            createdEntry.consumers.size,
+            error.message,
+            stderr || 'none',
+          );
           for (const active of createdEntry.consumers.values()) {
             active.handleHelperFailure?.(
               `CoreSimulator framebuffer helper failed: ${error.message}.${stderr ? ` Stderr: ${stderr}` : ''} Falling back to simctl screenshots.`,
@@ -589,6 +630,14 @@ export async function createCoreSimulatorFramebufferStream(
             coreSimulatorPool.delete(poolKey);
           }
           const stderr = createdEntry.recentStderr.trim();
+          debug(
+            'iOS preview framebuffer helper process CLOSED deviceId=%s code=%s signal=%s consumers=%d stderr=%s',
+            params.deviceId,
+            code ?? 'unknown',
+            signal ?? 'none',
+            createdEntry.consumers.size,
+            stderr || 'none',
+          );
           for (const active of createdEntry.consumers.values()) {
             active.handleHelperFailure?.(
               `CoreSimulator framebuffer helper exited (code ${code ?? 'unknown'}, signal ${signal ?? 'none'}).${stderr ? ` Stderr: ${stderr}` : ''} Falling back to simctl screenshots.`,
@@ -650,6 +699,15 @@ export async function createCoreSimulatorFramebufferStream(
 
   const switchToScreenshotFallback = (reason: string) => {
     if (active.stopped || active.helperSettled || screenshotFallback) return;
+    debug(
+      'iOS preview FALLING BACK to simctl screenshots sessionId=%s deviceId=%s frameCount=%d warmResume=%s poolKey=%s reason=%s',
+      session.id,
+      params.deviceId,
+      active.frameCount,
+      shouldResumeWarmEntry,
+      poolKey,
+      reason,
+    );
     active.helperSettled = true;
     if (active.firstFrameTimer) {
       clearTimeout(active.firstFrameTimer);

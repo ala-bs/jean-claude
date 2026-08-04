@@ -555,9 +555,16 @@ export const iosIdbAdapter = {
           return ownIosStream(
             await createCoreSimulatorFramebufferStream(params, null),
           );
-        } catch {
+        } catch (error) {
           params.signal?.throwIfAborted();
           // Fall back to simctl screenshots below.
+          debug(
+            'iOS preview CoreSimulator framebuffer start FAILED, falling back to simctl screenshots deviceId=%s elapsedMs=%d error=%s stack=%s',
+            params.deviceId,
+            elapsedMs(startedAt),
+            error instanceof Error ? error.message : String(error),
+            error instanceof Error ? error.stack : '',
+          );
         }
       }
       if (isIosPreviewDisposed()) throw new Error('iOS preview is shutting down.');
