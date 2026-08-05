@@ -16,6 +16,7 @@ import {
   startTransition,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -24,9 +25,13 @@ import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
-import { getOwnerColor, normalizeOwnerName } from '@/features/work-item/utils-owner-color';
+import { getOwnerColor } from '@/features/work-item/utils-owner-color';
+import { getAssigneeDropdownOptions } from '@/lib/work-item-assignee-options';
+
+const EMPTY_STRING_ARRAY: string[] = [];
 import {
   useAddWorkItemComment,
+  useCurrentAzureUser,
   useRelatedTestCases,
   useUpdateWorkItemComment,
   useUpdateWorkItemField,
@@ -71,7 +76,7 @@ export function WorkItemPreview({
   showCommentsAside = false,
   readOnly = false,
   editableMetadata = false,
-  assigneeOptions = [],
+  assigneeOptions = EMPTY_STRING_ARRAY,
   iterationOptions = [],
   boardColumns = [],
   tagOptions = [],
@@ -177,6 +182,18 @@ export function WorkItemPreview({
       projectName: projectName ?? null,
       workItemType: workItem?.fields.workItemType ?? null,
     });
+  const { data: currentAzureUser } = useCurrentAzureUser(providerId ?? null);
+  // Board/preview assignee lists are display-name based (unlike the details
+  // panel, which keys owners by unique name) — keep the two value spaces apart.
+  const ownerDropdownOptions = useMemo(
+    () =>
+      getAssigneeDropdownOptions({
+        currentUserName: currentAzureUser?.displayName,
+        assignedTo: workItem?.fields.assignedTo,
+        assigneeOptions,
+      }),
+    [currentAzureUser?.displayName, workItem?.fields.assignedTo, assigneeOptions],
+  );
   const addComment = useAddWorkItemComment();
   const updateComment = useUpdateWorkItemComment();
   const updateState = useUpdateWorkItemState();
@@ -341,13 +358,7 @@ export function WorkItemPreview({
                   label="Owner"
                   value={assignedTo ?? ''}
                   emptyLabel="Unassigned"
-                  options={[
-                    '',
-                    ...(assignedTo ? [assignedTo] : []),
-                    ...assigneeOptions.filter(
-                      (assignee) => normalizeOwnerName(assignee) !== normalizeOwnerName(assignedTo ?? ''),
-                    ),
-                  ]}
+                  options={ownerDropdownOptions}
                   colorizeOwners
                   disabled={!canEditMetadata || !providerId}
                   onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.AssignedTo', value })}

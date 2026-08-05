@@ -48,6 +48,7 @@ import {
   useWorkItemById,
   useWorkItemComments,
   useWorkItemHistory,
+  useCurrentAzureUser,
   useWorkItemOwners,
   useWorkItemsByIds,
   useWorkItemStates,
@@ -197,6 +198,7 @@ export function getOwnerOptions(
   owners: Array<{ displayName: string; value: string }>,
   currentOwner?: string,
   currentOwnerValue?: string,
+  currentUser?: { displayName?: string | null; uniqueName?: string | null },
 ): Array<{ displayName: string; value: string }> {
   const ownersByKey = new Map<
     string,
@@ -218,11 +220,45 @@ export function getOwnerOptions(
       ownersByKey.set(normalized, { displayName, value });
     }
   }
-  const ownersList = [...ownersByKey.values()];
-  const current = currentValue ? ownersList.shift() : undefined;
+  const currentKey = currentValue ? normalizeOwnerName(currentValue) : null;
+  const meName = currentUser?.displayName?.trim() || '';
+  const meValue = currentUser?.uniqueName?.trim() || meName;
+  // Owners are keyed by unique name (email) when available, display name otherwise,
+  // so also match on display name to avoid listing the same person twice.
+  const meNameKey = meName ? normalizeOwnerName(meName) : null;
+  let meKey = meValue ? normalizeOwnerName(meValue) : null;
+  if (meKey && !ownersByKey.has(meKey) && meNameKey) {
+    const byName = [...ownersByKey.entries()].find(
+      ([, owner]) => normalizeOwnerName(owner.displayName) === meNameKey,
+    );
+    if (byName) meKey = byName[0];
+  }
+  if (meKey && !ownersByKey.has(meKey)) {
+    ownersByKey.set(meKey, { displayName: meName || meValue, value: meValue });
+  }
+  let me = meKey ? ownersByKey.get(meKey) : undefined;
+  let current =
+    currentKey && currentKey !== meKey ? ownersByKey.get(currentKey) : undefined;
+  // Same person reached through both value spaces (email vs display name):
+  // keep a single entry, preferring the one the work item is actually set to
+  // so the dropdown still shows it as selected.
+  if (
+    me &&
+    current &&
+    normalizeOwnerName(current.displayName) ===
+      normalizeOwnerName(me.displayName)
+  ) {
+    me = current;
+    current = undefined;
+  }
+  const pinnedKeys = new Set([meKey, currentKey].filter(Boolean) as string[]);
+  const ownersList = [...ownersByKey.entries()]
+    .filter(([key]) => !pinnedKeys.has(key))
+    .map(([, owner]) => owner);
   ownersList.sort((a, b) => a.displayName.localeCompare(b.displayName));
   return [
     { displayName: 'Unassigned', value: '' },
+    ...(me ? [me] : []),
     ...(current ? [current] : []),
     ...ownersList,
   ];
@@ -459,17 +495,25 @@ export function WorkItemDetails({
     providerId,
     projectName,
   });
+  const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
   const ownerOptions = useMemo(
     () =>
       getOwnerOptions(
         ownerQuery.data ?? [],
         workItem?.fields.assignedTo,
         workItem?.fields.assignedToUniqueName,
+        currentUser
+          ? {
+              displayName: currentUser.displayName,
+              uniqueName: currentUser.emailAddress,
+            }
+          : undefined,
       ),
     [
       ownerQuery.data,
       workItem?.fields.assignedTo,
       workItem?.fields.assignedToUniqueName,
+      currentUser,
     ],
   );
   const { data: iterations } = useIterations({
