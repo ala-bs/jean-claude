@@ -79,4 +79,15 @@ describe('board colors', () => {
     expect(sanitized.columnColors).toEqual({ done: 'green' });
     expect(sanitized.columnApply).toEqual({ done: 'tint' });
   });
+
+  it('defaults showPriority to false unless persisted as a boolean', () => {
+    expect(sanitizeBoardColorSettings(undefined).showPriority).toBe(false);
+    expect(sanitizeBoardColorSettings({}).showPriority).toBe(false);
+    expect(
+      sanitizeBoardColorSettings({ showPriority: 'yes' }).showPriority,
+    ).toBe(false);
+    expect(sanitizeBoardColorSettings({ showPriority: true }).showPriority).toBe(
+      true,
+    );
+  });
 });

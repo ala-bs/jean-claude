@@ -101,6 +101,16 @@ describe('azure board store', () => {
     expect(migrated.filtersByProject.project.workItemTypes).toEqual(['Bug']);
   });
 
+  it('defaults showPriority off for state persisted before v6', () => {
+    const migrated = migrateAzureBoardState({ filtersByProject: {} });
+    expect(migrated.colorSettings.showPriority).toBe(false);
+
+    const kept = migrateAzureBoardState({
+      colorSettings: { showPriority: true },
+    });
+    expect(kept.colorSettings.showPriority).toBe(true);
+  });
+
   it('migrates empty and existing multi-value type filters', () => {
     const migrated = migrateAzureBoardState({
       filtersByProject: {

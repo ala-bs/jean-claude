@@ -48,6 +48,15 @@ export type BoardColorSettings = {
   apply: BoardColumnApplyMode;
   /** Per-column apply overrides, keyed by normalized column name. */
   columnApply: Record<string, BoardColumnApplyMode>;
+  /** Show the Azure DevOps priority (P1–P4) badge on board cards. */
+  showPriority: boolean;
+};
+
+export const BOARD_PRIORITY_TONES: Partial<Record<number, string>> = {
+  1: 'oklch(0.72 0.18 25)',
+  2: 'oklch(0.78 0.15 70)',
+  3: 'oklch(0.78 0.12 240)',
+  4: 'var(--color-ink-2)',
 };
 
 export const DEFAULT_BOARD_COLOR_SETTINGS: BoardColorSettings = {
@@ -63,6 +72,7 @@ export const DEFAULT_BOARD_COLOR_SETTINGS: BoardColorSettings = {
   columnColors: {},
   apply: 'both',
   columnApply: {},
+  showPriority: false,
 };
 
 /** Persisted settings can be partial or hand-edited; never let them break the board. */
@@ -95,6 +105,10 @@ export function sanitizeBoardColorSettings(value: unknown): BoardColorSettings {
       ? (raw.apply as BoardColumnApplyMode)
       : DEFAULT_BOARD_COLOR_SETTINGS.apply,
     columnApply: records<BoardColumnApplyMode>(raw.columnApply, applyModes),
+    showPriority:
+      typeof raw.showPriority === 'boolean'
+        ? raw.showPriority
+        : DEFAULT_BOARD_COLOR_SETTINGS.showPriority,
   };
 }
 

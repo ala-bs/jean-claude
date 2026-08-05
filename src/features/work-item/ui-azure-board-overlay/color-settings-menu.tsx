@@ -185,6 +185,17 @@ export function BoardColorSettingsMenu({
           labels={{ tags: 'Tag matching', columns: 'Columns' }}
           onChange={onActiveTabChange}
         />
+        <label className="text-ink-2 mt-2.5 flex cursor-pointer items-center gap-2 text-[11.5px]">
+          <input
+            type="checkbox"
+            checked={settings.showPriority}
+            onChange={(event) =>
+              onChange({ ...settings, showPriority: event.target.checked })
+            }
+            className="accent-acc focus-visible:ring-acc h-3 w-3 rounded outline-none focus-visible:ring-2"
+          />
+          Show priority (P1–P4) on cards
+        </label>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3.5 pt-3 pb-3.5">

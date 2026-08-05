@@ -115,7 +115,7 @@ export const useAzureBoardStore = create<AzureBoardState>()(
     }),
     {
       name: 'azure-board',
-      version: 5,
+      version: 6,
       migrate: migrateAzureBoardState,
       merge: (persistedState, currentState) => {
         const persisted = (persistedState ?? {}) as Partial<AzureBoardState>;

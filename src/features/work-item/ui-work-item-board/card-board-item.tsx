@@ -15,6 +15,7 @@ import { isAzureWorkItemOutOfSprint, parseAzureWorkItemTags } from './utils';
 import {
   HighlightedSearchText,
   SelectionCheckbox,
+  WorkItemPriorityBadge,
   WorkItemTypeIcon,
 } from '../ui-work-item-shared';
 import { WorkItemBoardPrimaryHeading } from './card-primary-heading';
@@ -132,6 +133,9 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
       <span className="text-ink-3 font-mono text-[10px]">
         <HighlightedSearchText text={`#${workItem.id}`} search={search} />
       </span>
+      {colorSettings.showPriority && (
+        <WorkItemPriorityBadge priority={workItem.fields.priority} />
+      )}
       {isExactMatch && (
         <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
           Exact

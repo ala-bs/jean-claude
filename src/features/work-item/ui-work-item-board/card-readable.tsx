@@ -5,7 +5,11 @@ import clsx from 'clsx';
 
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
-import { HighlightedSearchText, WorkItemTypeIcon } from '../ui-work-item-shared';
+import {
+  HighlightedSearchText,
+  WorkItemPriorityBadge,
+  WorkItemTypeIcon,
+} from '../ui-work-item-shared';
 import { parseWorkItemTitle } from '@/lib/work-item-title-parser';
 import { Tooltip } from '@/common/ui/tooltip';
 
@@ -118,6 +122,9 @@ export function WorkItemBoardReadableCard({
           <HighlightedSearchText text={`${workItem.id}`} search={search} />
           {sprint ? ` · ${sprint}` : ''}
         </span>
+        {colorSettings.showPriority && (
+          <WorkItemPriorityBadge priority={workItem.fields.priority} />
+        )}
         {isExactMatch && (
           <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
             Exact
