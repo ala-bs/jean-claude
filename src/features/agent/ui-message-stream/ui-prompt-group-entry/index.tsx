@@ -44,8 +44,11 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 // ── Helpers ────────────────────────────────────────────────────────────
 
 const PROMPT_MAX_CHARS = 300;
+/** Assistant messages at least this long are surfaced in the collapsed view */
+const LONG_ASSISTANT_MESSAGE_MIN_CHARS = 280;
 const RECENT_RUNNING_MESSAGE_COUNT = 5;
 const EMPTY_DISPLAY_MESSAGES: DisplayMessage[] = [];
+const EMPTY_LONG_MESSAGES: Array<{ text: string; entryId: string }> = [];
 
 export function getResultDisplayTokenCount({
   usage,
@@ -430,6 +433,21 @@ function getLastAssistantMessage(
   }
 
   return null;
+}
+
+/** All substantial assistant messages, in order (used for collapsed view) */
+function getLongAssistantMessages(
+  childMessages: DisplayMessage[],
+): Array<{ text: string; entryId: string }> {
+  const messages: Array<{ text: string; entryId: string }> = [];
+  for (const dm of childMessages) {
+    if (dm.kind !== 'entry' || dm.entry.type !== 'assistant-message') continue;
+    const text = dm.entry.value.trim();
+    if (text.length < LONG_ASSISTANT_MESSAGE_MIN_CHARS) continue;
+    messages.push({ text, entryId: dm.entry.id });
+  }
+
+  return messages;
 }
 
 function getRunningStartDate({
@@ -884,6 +902,44 @@ function ResultBlock({
   );
 
   if (entryId && taskId) {
+    return (
+      <CommentableWrapper entryId={entryId} taskId={taskId}>
+        {content}
+      </CommentableWrapper>
+    );
+  }
+
+  return content;
+}
+
+/** Long assistant message shown in the collapsed view (no result styling) */
+function AssistantMessageBlock({
+  text,
+  entryId,
+  taskId,
+  onFilePathClick,
+}: {
+  text: string;
+  entryId: string;
+  taskId?: string;
+  onFilePathClick?: (
+    filePath: string,
+    lineStart?: number,
+    lineEnd?: number,
+  ) => void;
+}) {
+  const content = (
+    <div className="text-ink-2 font-mono text-xs leading-relaxed">
+      <div className="flex items-baseline gap-2">
+        <span className="text-ink-4 w-3 shrink-0 text-center">·</span>
+        <div className="min-w-0 flex-1">
+          <MarkdownContent content={text} onFilePathClick={onFilePathClick} />
+        </div>
+      </div>
+    </div>
+  );
+
+  if (taskId) {
     return (
       <CommentableWrapper entryId={entryId} taskId={taskId}>
         {content}
@@ -1359,6 +1415,25 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
     };
   }, [group.childMessages, group.durationMs, group.resultEntry]);
 
+  // Collapsed view: show every long assistant message, not just the last one.
+  // The one already rendered by ResultBlock is excluded to avoid duplication.
+  const shownResultEntryId = resultSummary?.entryId;
+  const shownResultText = resultSummary?.text;
+  const precedingLongMessages = useMemo(() => {
+    if (isActiveGroup || detailsExpanded) return EMPTY_LONG_MESSAGES;
+    const shownText = shownResultText?.trim();
+    const messages = getLongAssistantMessages(group.childMessages).filter(
+      (m) => m.entryId !== shownResultEntryId && m.text !== shownText,
+    );
+    return messages.length > 0 ? messages : EMPTY_LONG_MESSAGES;
+  }, [
+    isActiveGroup,
+    detailsExpanded,
+    group.childMessages,
+    shownResultEntryId,
+    shownResultText,
+  ]);
+
   const completedDurationLabel = useMemo(() => {
     if (isActiveGroup) return null;
 
@@ -1634,6 +1709,15 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
                     </div>
                   </div>
                 )}
+                {precedingLongMessages.map((m) => (
+                  <AssistantMessageBlock
+                    key={m.entryId}
+                    text={m.text}
+                    entryId={m.entryId}
+                    taskId={taskId}
+                    onFilePathClick={onFilePathClick}
+                  />
+                ))}
                 {resultSummary ? (
                   <ResultBlock
                     resultText={resultSummary.text}
