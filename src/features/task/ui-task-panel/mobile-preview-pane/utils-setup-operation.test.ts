@@ -123,6 +123,37 @@ describe('preview setup operation coordinator', () => {
     ).toBe(false);
   });
 
+  it('keeps a running iOS build when the command id is lost transiently', () => {
+    expect(
+      shouldStopPreviousIosBuild({
+        previousCommandId: 'ios-build-a',
+        currentCommandId: null,
+        previousStatus: 'running',
+        previousStarting: false,
+        keepPreviousCommand: true,
+      }),
+    ).toBe(false);
+    // still stops when the user actually switches to another device
+    expect(
+      shouldStopPreviousIosBuild({
+        previousCommandId: 'ios-build-a',
+        currentCommandId: 'ios-build-b',
+        previousStatus: 'running',
+        previousStarting: false,
+        keepPreviousCommand: false,
+      }),
+    ).toBe(true);
+    // no keep flag: a null current command id still stops the build
+    expect(
+      shouldStopPreviousIosBuild({
+        previousCommandId: 'ios-build-a',
+        currentCommandId: null,
+        previousStatus: 'running',
+        previousStarting: false,
+      }),
+    ).toBe(true);
+  });
+
   it('requires iOS Expo prebuild when native project is missing', () => {
     expect(
       getMobileAppSetupDecision({

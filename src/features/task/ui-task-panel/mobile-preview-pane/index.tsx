@@ -578,6 +578,14 @@ export function MobilePreviewPane({
     queueMicrotask(() => setActiveConsoleCommandId(null));
   }, [consoleCommandScope]);
   const currentIosBuildCommandId = platform === 'ios' && deviceId ? buildCommandId : null;
+  // Transient loss of the ios device id (re-render/rehydration) while the pane
+  // still targets ios must not tear down an in-flight build.
+  const isTransientIosCommandIdLoss =
+    retainSessions && platform === 'ios' && !deviceId;
+  const retainSessionsRef = useRef(retainSessions);
+  useEffect(() => {
+    retainSessionsRef.current = retainSessions;
+  }, [retainSessions]);
   const iosBuildLifecycleRef = useRef({
     statusByCommandId: runCommands.statusByCommandId,
     isCommandStarting: runCommands.isCommandStarting,
@@ -596,7 +604,13 @@ export function MobilePreviewPane({
   useEffect(() => {
     const previousCommandId = previousIosBuildCommandIdRef.current;
     previousIosBuildCommandIdRef.current = currentIosBuildCommandId;
-    if (previousCommandId && previousCommandId !== currentIosBuildCommandId) {
+    if (
+      previousCommandId &&
+      previousCommandId !== currentIosBuildCommandId &&
+      !isTransientIosCommandIdLoss
+    ) {
+      // cancel() makes a pending launch stop the command once it resolves, so
+      // it must be gated on the same condition as the stop below.
       iosBuildLaunchCoordinator.cancel(previousCommandId);
     }
     if (
@@ -609,14 +623,23 @@ export function MobilePreviewPane({
         previousStarting: previousCommandId
           ? runCommands.isCommandStarting(previousCommandId)
           : false,
+        keepPreviousCommand: isTransientIosCommandIdLoss,
       })
     ) {
       return;
     }
     void runCommands.stopCommand(previousCommandId!);
-  }, [currentIosBuildCommandId, iosBuildLaunchCoordinator, runCommands]);
+  }, [
+    currentIosBuildCommandId,
+    iosBuildLaunchCoordinator,
+    runCommands,
+    isTransientIosCommandIdLoss,
+  ]);
   useEffect(
     () => () => {
+      // Sessions retained (e.g. user switched to another task): keep in-flight
+      // iOS builds alive. Task completion/quit cleanup still stops them.
+      if (retainSessionsRef.current) return;
       iosBuildLaunchCoordinator.cancelAll();
       const lifecycle = iosBuildLifecycleRef.current;
       const commandIds = new Set(launchedIosBuildCommandIdsRef.current);

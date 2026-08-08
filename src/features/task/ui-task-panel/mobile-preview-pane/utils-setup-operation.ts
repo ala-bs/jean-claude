@@ -81,12 +81,16 @@ export function shouldStopPreviousIosBuild({
   currentCommandId,
   previousStatus,
   previousStarting,
+  keepPreviousCommand = false,
 }: {
   previousCommandId: string | null;
   currentCommandId: string | null;
   previousStatus: string | undefined;
   previousStarting: boolean;
+  /** Set when the current command id was lost transiently (see caller). */
+  keepPreviousCommand?: boolean;
 }) {
+  if (keepPreviousCommand) return false;
   return (
     !!previousCommandId &&
     previousCommandId !== currentCommandId &&
