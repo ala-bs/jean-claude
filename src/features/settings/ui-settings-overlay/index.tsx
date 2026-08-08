@@ -1,7 +1,6 @@
 import {
   AlertTriangle,
   Box,
-  Check,
   ChevronRight,
   Cpu,
   Diamond,
@@ -35,6 +34,7 @@ import {
   AppearanceSettings,
   CalendarSettings,
   EditorSettings,
+  EureciaSettings,
   MaintenanceSettings,
   MobilePreviewSettings,
   NotificationsSettings,
@@ -130,6 +130,7 @@ function getGlobalSections(): GlobalSection[] {
       : []),
     { id: 'usage', label: 'Usage Display' },
     { id: 'work-activity', label: 'Work Activity' },
+    { id: 'eurecia', label: 'Eurecia' },
     { id: 'agent-memory', label: 'Agent Memory', beta: true },
     { id: 'maintenance', label: 'Maintenance' },
   ];
@@ -464,6 +465,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
       items: [
         globalLeaf('tokens', undefined, 'Providers'),
         globalLeaf('general', 'usage', 'Usage Display'),
+        globalLeaf('general', 'eurecia'),
         globalLeaf('azure-devops'),
       ],
     },
@@ -527,6 +529,7 @@ const SETTINGS_SEARCH_ALIASES: Record<string, string> = {
   'global:general:notifications': 'alerts runs completion errors notify',
   'global:general:work-activity': 'activity logging retention history',
   'global:general:calendar': 'meetings reminders macos events',
+  'global:general:eurecia': 'timesheet tenant custom axes login authentication',
   'global:general:usage': 'rate limit status title bar tokens usage',
   'global:general:agent-memory': 'agent memory evidence extraction learning beta',
   'global:general:maintenance': 'cleanup gitignore housekeeping cache',
@@ -731,6 +734,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Meeting reminders from your macOS Calendar.';
       case 'usage':
         return 'Rate-limit pills shown in the title bar.';
+      case 'eurecia':
+        return 'Timesheet tenant configuration and authentication.';
       case 'agent-memory':
         return 'Opt in to beta preference evidence capture.';
       case 'maintenance':
@@ -766,6 +771,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <CalendarSettings />;
       case 'general:usage':
         return <UsageDisplaySettings />;
+      case 'general:eurecia':
+        return <EureciaSettings />;
       case 'general:agent-memory':
         return <AgentMemorySettings />;
       case 'general:maintenance':
@@ -1319,9 +1326,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                 color: 'oklch(0.55 0.01 280)',
               }}
             >
-              <span className="text-status-done flex items-center gap-1.5">
-                <Check size={12} strokeWidth={2.6} /> All changes saved
-              </span>
+              <span>Configuration</span>
               <span
                 style={{
                   width: 1,

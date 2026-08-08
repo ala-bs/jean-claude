@@ -936,6 +936,13 @@ export interface CalendarNotificationsSetting {
 
 export const DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES = 5;
 
+export interface EureciaSetting {
+  baseUrl: string;
+  axis1Label: string;
+  axis2Label: string;
+  axis3Label: string;
+}
+
 export interface AiSkillSlotConfig {
   backend: AgentBackendType;
   model: string;
@@ -1333,6 +1340,57 @@ function isCalendarNotificationsSetting(
   );
 }
 
+function isEureciaSetting(v: unknown): v is EureciaSetting {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const obj = v as Record<string, unknown>;
+  if (
+    Object.keys(obj).length !== 4 ||
+    ![
+      'baseUrl',
+      'axis1Label',
+      'axis2Label',
+      'axis3Label',
+    ].every((key) => key in obj)
+  ) {
+    return false;
+  }
+
+  const labels = [
+    obj.axis1Label,
+    obj.axis2Label,
+    obj.axis3Label,
+  ];
+  if (
+    !labels.every(
+      (label) =>
+        typeof label === 'string' &&
+        label === label.trim() &&
+        label.length > 0 &&
+        label.length <= 100 &&
+        !Array.from(label).some((character) => {
+          const code = character.charCodeAt(0);
+          return code <= 31 || code === 127;
+        }),
+    )
+  ) {
+    return false;
+  }
+
+  if (typeof obj.baseUrl !== 'string') return false;
+  if (obj.baseUrl !== obj.baseUrl.trim()) return false;
+  try {
+    const url = new URL(obj.baseUrl);
+    return (
+      url.protocol === 'https:' &&
+      url.username === '' &&
+      url.password === '' &&
+      (obj.baseUrl === url.origin || obj.baseUrl === `${url.origin}/`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 const VALID_SLOT_KEYS: AiSkillSlotKey[] = [
   'merge-commit-message',
   'commit-message',
@@ -1596,6 +1654,15 @@ export const SETTINGS_DEFINITIONS = {
       meetingJoinTarget: 'web',
     } as CalendarNotificationsSetting,
     validate: isCalendarNotificationsSetting,
+  },
+  eurecia: {
+    defaultValue: {
+      baseUrl: 'https://plateforme.eurecia.com',
+      axis1Label: 'Project',
+      axis2Label: 'Activity',
+      axis3Label: 'Role',
+    } as EureciaSetting,
+    validate: isEureciaSetting,
   },
   aiSkillSlots: {
     defaultValue: {

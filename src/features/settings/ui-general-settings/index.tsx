@@ -5,12 +5,14 @@ import {
   ExternalLink,
   FolderOpen,
   GitBranch,
+  LogIn,
+  LogOut,
   RefreshCw,
   Search,
   Star,
   Trash2,
 } from 'lucide-react';
-import { startTransition, useEffect, useState } from 'react';
+import { startTransition, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 
@@ -23,6 +25,7 @@ import {
   DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT,
   DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES,
   DEFAULT_TASK_NOTIFICATION_MODES,
+  type EureciaSetting,
   type ModelPreference,
   PRESET_EDITORS,
   type PrReviewAgentSetting,
@@ -42,6 +45,13 @@ import {
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
 import {
+  type EureciaSettingField,
+  isEureciaSettingDraftEquivalent,
+  parseEureciaSettingDraft,
+  serializeEureciaSettingDraft,
+  validateEureciaSettingForm,
+} from '@/lib/eurecia-setting-form';
+import {
   getEditorLabel,
   useAgentMemorySetting,
   useAppearanceSetting,
@@ -51,6 +61,7 @@ import {
   useCalendarNotificationsSetting,
   useEditorAutomationSetting,
   useEditorSetting,
+  useEureciaSetting,
   usePromptPrefaceSetting,
   usePrReviewAgentSetting,
   useRawMessageCleanupSetting,
@@ -65,6 +76,7 @@ import {
   useUpdateCalendarNotificationsSetting,
   useUpdateEditorAutomationSetting,
   useUpdateEditorSetting,
+  useUpdateEureciaSetting,
   useUpdatePromptPrefaceSetting,
   useUpdatePrReviewAgentSetting,
   useUpdateRawMessageCleanupSetting,
@@ -84,6 +96,11 @@ import {
   useCleanupClaudeProjects,
   useScanNonExistentProjects,
 } from '@/hooks/use-claude-projects-cleanup';
+import {
+  useLoginTimesheet,
+  useLogoutTimesheet,
+  useTimesheetAuthStatus,
+} from '@/hooks/use-timesheets';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import { AgentMemoryDashboard } from '@/features/settings/ui-agent-memory-dashboard';
 import { Button } from '@/common/ui/button';
@@ -107,6 +124,8 @@ const MEETING_JOIN_TARGET_OPTIONS = [
 ];
 
 const PR_REVIEW_DEFAULT_BACKEND_VALUE = '__project-default__';
+const EURECIA_DRAFT_STORAGE_KEY =
+  'jean-claude:settings:eurecia:draft';
 
 function getUtcDateInputValue(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -857,6 +876,8 @@ export function GeneralSettings() {
       <div className="border-line-soft my-8 border-t" />
       <WorkActivitySettings />
       <div className="border-line-soft my-8 border-t" />
+      <EureciaSettings />
+      <div className="border-line-soft my-8 border-t" />
       <MaintenanceSettings />
     </div>
   );
@@ -997,6 +1018,341 @@ function PrReviewAgentSettings() {
         </div>
       </div>
     </div>
+  );
+}
+
+export function EureciaSettings() {
+  const { data: setting, isLoading } = useEureciaSetting();
+  const updateSetting = useUpdateEureciaSetting();
+  const authStatus = useTimesheetAuthStatus('eurecia', !!setting);
+  const login = useLoginTimesheet();
+  const logout = useLogoutTimesheet();
+  const addToast = useToastStore((state) => state.addToast);
+  const [form, setForm] = useState<EureciaSetting | null>(null);
+  const formRef = useRef<EureciaSetting | null>(null);
+  const baselineRef = useRef<string | null>(null);
+
+  const clearStoredDraft = () => {
+    try {
+      sessionStorage.removeItem(EURECIA_DRAFT_STORAGE_KEY);
+    } catch {
+      // Storage may be unavailable in restricted browser contexts.
+    }
+  };
+
+  const readStoredDraft = () => {
+    try {
+      return parseEureciaSettingDraft(
+        sessionStorage.getItem(EURECIA_DRAFT_STORAGE_KEY),
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  const storeDraft = (draft: EureciaSetting) => {
+    try {
+      sessionStorage.setItem(
+        EURECIA_DRAFT_STORAGE_KEY,
+        serializeEureciaSettingDraft(draft),
+      );
+    } catch {
+      // Form remains usable when storage is unavailable.
+    }
+  };
+
+  useEffect(() => {
+    if (!setting) return;
+
+    const serializedSetting = JSON.stringify(setting);
+    const current = formRef.current;
+    if (!current) {
+      const storedDraft = readStoredDraft();
+      if (
+        storedDraft &&
+        !isEureciaSettingDraftEquivalent(storedDraft, setting)
+      ) {
+        formRef.current = storedDraft;
+        baselineRef.current = serializedSetting;
+        startTransition(() => setForm(storedDraft));
+        return;
+      }
+      clearStoredDraft();
+    } else if (isEureciaSettingDraftEquivalent(current, setting)) {
+      clearStoredDraft();
+    } else if (JSON.stringify(current) !== baselineRef.current) {
+      return;
+    }
+
+    formRef.current = setting;
+    baselineRef.current = serializedSetting;
+    startTransition(() => setForm(setting));
+  }, [setting]);
+
+  if (isLoading || !form || !setting) {
+    return (
+      <section aria-labelledby="eurecia-settings-heading">
+        <h2
+          id="eurecia-settings-heading"
+          className="text-ink-1 text-lg font-semibold"
+        >
+          Eurecia
+        </h2>
+        <p className="text-ink-3 mt-2 text-sm">Loading Eurecia settings...</p>
+      </section>
+    );
+  }
+
+  const validation = validateEureciaSettingForm(form);
+  const hasChanges = validation.value
+    ? JSON.stringify(validation.value) !== JSON.stringify(setting)
+    : true;
+  const isAuthPending = login.isPending || logout.isPending;
+  const isCheckingAuth = authStatus.isLoading || authStatus.isFetching;
+  const isConnected = authStatus.data?.authenticated ?? false;
+
+  const updateField = (field: EureciaSettingField, value: string) => {
+    const current = formRef.current;
+    if (!current) return;
+
+    const next = { ...current, [field]: value };
+    formRef.current = next;
+    setForm(next);
+    if (isEureciaSettingDraftEquivalent(next, setting)) {
+      clearStoredDraft();
+    } else {
+      storeDraft(next);
+    }
+  };
+
+  const save = async () => {
+    if (!validation.value) return;
+
+    try {
+      await updateSetting.mutateAsync(validation.value);
+      baselineRef.current = JSON.stringify(validation.value);
+      formRef.current = validation.value;
+      setForm(validation.value);
+      clearStoredDraft();
+      addToast({ type: 'success', message: 'Eurecia settings saved' });
+      await authStatus.refetch();
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? `Failed to save Eurecia settings: ${error.message}`
+            : 'Failed to save Eurecia settings',
+      });
+    }
+  };
+
+  const signIn = async () => {
+    try {
+      await login.mutateAsync('eurecia');
+      addToast({ type: 'success', message: 'Connected to Eurecia' });
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Eurecia sign-in failed',
+      });
+    } finally {
+      await authStatus.refetch();
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      await logout.mutateAsync('eurecia');
+      addToast({ type: 'success', message: 'Signed out of Eurecia' });
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Eurecia sign-out failed',
+      });
+    } finally {
+      await authStatus.refetch();
+    }
+  };
+
+  const fields: Array<{
+    field: EureciaSettingField;
+    label: string;
+    description: string;
+    placeholder?: string;
+  }> = [
+    {
+      field: 'baseUrl',
+      label: 'Tenant origin',
+      description: 'HTTPS origin for your Eurecia tenant, without a path.',
+      placeholder: 'https://plateforme.eurecia.com',
+    },
+    {
+      field: 'axis1Label',
+      label: 'Custom axis 1 heading',
+      description: 'Heading shown for the first custom axis.',
+    },
+    {
+      field: 'axis2Label',
+      label: 'Custom axis 2 heading',
+      description: 'Heading shown for the second custom axis.',
+    },
+    {
+      field: 'axis3Label',
+      label: 'Custom axis 3 heading',
+      description: 'Heading shown for the third custom axis.',
+    },
+  ];
+
+  return (
+    <section aria-labelledby="eurecia-settings-heading">
+      <h2
+        id="eurecia-settings-heading"
+        className="text-ink-1 text-lg font-semibold"
+      >
+        Eurecia
+      </h2>
+      <p className="text-ink-3 mt-1 text-sm">
+        Configure timesheet access. Axis options still load from Eurecia and
+        cascade based on earlier selections.
+      </p>
+
+      <div className="border-glass-border bg-bg-1/50 mt-4 rounded-lg border p-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          {fields.map(({ field, label, description, placeholder }) => {
+            const error = validation.errors[field];
+            const descriptionId = `eurecia-${field}-description`;
+            const errorId = `eurecia-${field}-error`;
+
+            return (
+              <div
+                key={field}
+                className={field === 'baseUrl' ? 'sm:col-span-2' : ''}
+              >
+                <label
+                  htmlFor={`eurecia-${field}`}
+                  className="text-ink-2 block text-sm font-medium"
+                >
+                  {label}
+                </label>
+                <p id={descriptionId} className="text-ink-3 mt-1 text-xs">
+                  {description}
+                </p>
+                <Input
+                  id={`eurecia-${field}`}
+                  value={form[field]}
+                  placeholder={placeholder}
+                  maxLength={field === 'baseUrl' ? undefined : 101}
+                  onChange={(event) => updateField(field, event.target.value)}
+                  disabled={updateSetting.isPending}
+                  error={!!error}
+                  aria-invalid={!!error}
+                  aria-describedby={
+                    error ? `${descriptionId} ${errorId}` : descriptionId
+                  }
+                  className="mt-2"
+                />
+                {error ? (
+                  <p
+                    id={errorId}
+                    className="text-status-err mt-1.5 text-xs"
+                    role="alert"
+                  >
+                    {error}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          {hasChanges ? (
+            <span
+              className="text-status-warn text-xs font-medium"
+              role="status"
+              aria-live="polite"
+            >
+              Unsaved changes
+            </span>
+          ) : (
+            <span />
+          )}
+          <Button
+            variant="primary"
+            onClick={save}
+            loading={updateSetting.isPending}
+            disabled={!validation.value || !hasChanges}
+          >
+            Save Eurecia Settings
+          </Button>
+        </div>
+      </div>
+
+      <div className="border-glass-border bg-bg-1/50 mt-3 rounded-lg border p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-ink-1 text-sm font-medium">Authentication</h3>
+            <div
+              className="text-ink-2 mt-1 flex items-center gap-2 text-sm"
+              role="status"
+              aria-live="polite"
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  isCheckingAuth
+                    ? 'bg-status-warn'
+                    : isConnected
+                      ? 'bg-status-done'
+                      : 'bg-ink-4'
+                }`}
+                aria-hidden="true"
+              />
+              {isCheckingAuth
+                ? 'Checking'
+                : isConnected
+                  ? 'Connected'
+                  : 'Not connected'}
+            </div>
+            {!isConnected && hasChanges ? (
+              <p className="text-ink-3 mt-1 text-xs">
+                Save valid Eurecia settings before signing in.
+              </p>
+            ) : null}
+          </div>
+
+          {isConnected ? (
+            <Button
+              onClick={signOut}
+              disabled={isAuthPending || updateSetting.isPending}
+              loading={logout.isPending}
+              icon={<LogOut />}
+              className="w-full sm:w-auto"
+            >
+              Sign Out
+            </Button>
+          ) : (
+            <Button
+              onClick={signIn}
+              disabled={
+                isAuthPending ||
+                updateSetting.isPending ||
+                hasChanges ||
+                !validation.value ||
+                isCheckingAuth
+              }
+              loading={login.isPending}
+              icon={<LogIn />}
+              className="w-full sm:w-auto"
+            >
+              Sign In
+            </Button>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

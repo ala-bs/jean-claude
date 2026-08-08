@@ -121,6 +121,7 @@ import { getImageMimeType } from '@shared/image-types';
 import type { GlobalPromptResponse } from '@shared/global-prompt-types';
 import { isValidTeamsJoinUrl } from '@shared/teams-url';
 import { parseAzureRemoteUrl } from '@shared/azure-remote-utils';
+import type { TimesheetProviderType } from '@shared/timesheet-types';
 import type { UsageProviderType } from '@shared/usage-types';
 
 
@@ -447,6 +448,7 @@ import { deleteProjectRetainingMemory } from '../services/project-deletion-servi
 import { detectProjectLogos } from '../services/project-logo-detection-service';
 import { detectProjects } from '../services/project-detection-service';
 import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
+import { eureciaSessionService } from '../services/eurecia-session-service';
 import { exitCurrentPreviewAfterReload } from '../services/reload-preview-service';
 import { fetchImageAsBase64 } from '../services/azure-image-proxy-service';
 import { generatePrDescriptionForTask } from '../services/pr-description-generation-service';
@@ -473,12 +475,14 @@ import { regenerateProjectSummary } from '../services/project-summary-generation
 import { resolveAiSkillSlot } from '../services/ai-skill-slot-resolver';
 import { runCommandService } from '../services/run-command-service';
 import { runReloadPreviewCommand } from '../services/reload-preview-service';
+import { setAppSetting } from './set-app-setting';
 import { stepPermissionService } from '../services/step-permission-service';
 import { StepService } from '../services/step-service';
 import { stopReloadPreviewActivities } from '../services/reload-preview-service';
 import { systemCalendarService } from '../services/system-calendar-service';
 import { taskRuntimeCleanupService } from '../services/task-runtime-cleanup-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
+import { timesheetService } from '../services/timesheet-service';
 import { TrackedPipelineRepository } from '../database/repositories/tracked-pipelines';
 import { UsageSnapshotRepository } from '../database/repositories/usage-snapshots';
 import { workActivityService } from '../services/work-activity-service';
@@ -489,6 +493,15 @@ import {
   prepareUsageDisplaySettingForSave,
   redactUsageDisplaySetting,
 } from './usage-display-settings';
+import {
+  validateAxisLookupRequest,
+  validateDraftParams,
+  validateDryRunRequest,
+  validateSaveRequest,
+  validateSheetRequest,
+  validateSyncParams,
+  validateTimesheetProvider,
+} from './timesheet-validation';
 import {
   registerStartPrCommandHandler,
   resetRunCommandLogs,
@@ -4705,6 +4718,17 @@ export function registerIpcHandlers() {
       if (key === 'agentMemory' && !SETTINGS_DEFINITIONS.agentMemory.validate(value)) {
         throw new Error('Invalid agentMemory settings');
       }
+      // Every persistence path goes through setAppSetting so a Eurecia change
+      // always invalidates the browser session, whichever branch runs.
+      const persist = () =>
+        setAppSetting({
+          key,
+          value,
+          persist: (settingKey, settingValue) =>
+            SettingsRepository.set(settingKey, settingValue),
+          invalidateEureciaSession: () =>
+            eureciaSessionService.invalidateForSettingChange(),
+        });
       if (
         key === 'agentMemory' &&
         !(value as AppSettings['agentMemory']).enabled
@@ -4718,14 +4742,14 @@ export function registerIpcHandlers() {
           extraction.suspendAndCancelAgentMemoryExtractions(),
         ]);
         try {
-          await SettingsRepository.set(key, value);
+          await persist();
         } catch (error) {
           extraction.resumeAgentMemoryExtractions();
           throw error;
         }
         return;
       }
-      await SettingsRepository.set(key, value);
+      await persist();
       if (
         key === 'agentMemory' &&
         (value as AppSettings['agentMemory']).enabled
@@ -5098,6 +5122,61 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('workActivity:deleteAll', () => {
     return workActivityService.deleteAll();
+  });
+
+  ipcMain.handle('timesheets:listAdapters', () => {
+    return timesheetService.listAdapters();
+  });
+
+  ipcMain.handle(
+    'timesheets:buildDraft',
+    (_, params: unknown) => {
+      return timesheetService.buildDraft(validateDraftParams(params));
+    },
+  );
+
+  ipcMain.handle('timesheets:sync', (_, params: unknown) => {
+    return timesheetService.sync(validateSyncParams(params));
+  });
+
+  ipcMain.handle('timesheets:authStatus', (_, provider: TimesheetProviderType) => {
+    validateTimesheetProvider(provider);
+    return eureciaSessionService.authStatus();
+  });
+
+  ipcMain.handle('timesheets:login', (_, provider: TimesheetProviderType) => {
+    validateTimesheetProvider(provider);
+    return eureciaSessionService.login();
+  });
+
+  ipcMain.handle('timesheets:logout', (_, provider: TimesheetProviderType) => {
+    validateTimesheetProvider(provider);
+    return eureciaSessionService.logout();
+  });
+
+  ipcMain.handle('timesheets:listSheets', (_, provider: TimesheetProviderType) => {
+    validateTimesheetProvider(provider);
+    return eureciaSessionService.listSheets();
+  });
+
+  ipcMain.handle('timesheets:inspectSheet', (_, value: unknown) => {
+    const { provider: _provider, ...params } = validateSheetRequest(value);
+    return eureciaSessionService.inspectSheet(params);
+  });
+
+  ipcMain.handle('timesheets:lookupAxisOptions', (_, value: unknown) => {
+    const { request } = validateAxisLookupRequest(value);
+    return eureciaSessionService.lookupAxisOptions(request);
+  });
+
+  ipcMain.handle('timesheets:dryRun', (_, value: unknown) => {
+    const { provider: _provider, ...params } = validateDryRunRequest(value);
+    return eureciaSessionService.dryRun(params);
+  });
+
+  ipcMain.handle('timesheets:save', (_, value: unknown) => {
+    const { provider: _provider, ...params } = validateSaveRequest(value);
+    return eureciaSessionService.save(params);
   });
 
   ipcMain.handle('agent:resources:getSnapshots', () => {

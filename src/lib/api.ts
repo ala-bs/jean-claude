@@ -201,6 +201,24 @@ import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
+import type {
+  TimesheetAction,
+  TimesheetAdapterCapability,
+  TimesheetAuthStatus,
+  TimesheetAxisLookupRequest,
+  TimesheetAxisLookupResult,
+  TimesheetDraftParams,
+  TimesheetDraftResult,
+  TimesheetDryRunResult,
+  TimesheetEditorModel,
+  TimesheetEntryInput,
+  TimesheetProviderType,
+  TimesheetRowDeletion,
+  TimesheetSaveResult,
+  TimesheetSheetSummary,
+  TimesheetSyncParams,
+  TimesheetSyncResult,
+} from '@shared/timesheet-types';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
 import type {
   WorkItemSummary,
@@ -1584,6 +1602,39 @@ export interface Api {
     deleteBefore: (before: string) => Promise<void>;
     deleteAll: () => Promise<void>;
   };
+  timesheets: {
+    listAdapters: () => Promise<TimesheetAdapterCapability[]>;
+    buildDraft: (params: TimesheetDraftParams) => Promise<TimesheetDraftResult>;
+    sync: (params: TimesheetSyncParams) => Promise<TimesheetSyncResult>;
+    authStatus: (provider: TimesheetProviderType) => Promise<TimesheetAuthStatus>;
+    login: (provider: TimesheetProviderType) => Promise<TimesheetAuthStatus>;
+    logout: (provider: TimesheetProviderType) => Promise<void>;
+    listSheets: (
+      provider: TimesheetProviderType,
+    ) => Promise<TimesheetSheetSummary[]>;
+    inspectSheet: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      navigationUrl: string;
+    }) => Promise<TimesheetEditorModel>;
+    lookupAxisOptions: (
+      params: TimesheetAxisLookupRequest & { provider: TimesheetProviderType },
+    ) => Promise<TimesheetAxisLookupResult>;
+    dryRun: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      entries: TimesheetEntryInput[];
+      deletions?: TimesheetRowDeletion[];
+      action: TimesheetAction;
+    }) => Promise<TimesheetDryRunResult>;
+    save: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      entries: TimesheetEntryInput[];
+      deletions?: TimesheetRowDeletion[];
+      action: TimesheetAction;
+    }) => Promise<TimesheetSaveResult>;
+  };
   rateLimitSwap: {
     getStatus: () => Promise<{
       active: boolean;
@@ -2742,6 +2793,45 @@ export const api: Api = hasWindowApi
         getRange: async () => [],
         deleteBefore: async () => {},
         deleteAll: async () => {},
+      },
+      timesheets: {
+        listAdapters: async () => [],
+        buildDraft: async (params) => ({
+          provider: params.provider,
+          displayName: params.provider,
+          entries: [],
+          warnings: [],
+        }),
+        sync: async (params) => ({
+          provider: params.provider,
+          status: 'unsupported',
+          externalIds: [],
+          message: 'API not available',
+        }),
+        authStatus: async () => ({
+          configured: false,
+          authenticated: false,
+          baseUrl: '',
+        }),
+        login: async () => {
+          throw new Error('API not available');
+        },
+        logout: async () => {},
+        listSheets: async () => [],
+        inspectSheet: async () => {
+          throw new Error('API not available');
+        },
+        lookupAxisOptions: async (params) => ({
+          axis: params.axis,
+          options: [],
+          selectedId: null,
+        }),
+        dryRun: async () => {
+          throw new Error('API not available');
+        },
+        save: async () => {
+          throw new Error('API not available');
+        },
       },
       rateLimitSwap: {
         getStatus: async () => ({ active: false, swaps: [] }),

@@ -74,6 +74,15 @@ import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
+import type {
+  TimesheetAction,
+  TimesheetAxisLookupRequest,
+  TimesheetDraftParams,
+  TimesheetEntryInput,
+  TimesheetProviderType,
+  TimesheetRowDeletion,
+  TimesheetSyncParams,
+} from '@shared/timesheet-types';
 import {
   START_PR_COMMAND_CHANNEL,
   type StartPrCommandParams,
@@ -1279,6 +1288,43 @@ contextBridge.exposeInMainWorld('api', {
     deleteBefore: (before: string) =>
       ipcRenderer.invoke('workActivity:deleteBefore', before),
     deleteAll: () => ipcRenderer.invoke('workActivity:deleteAll'),
+  },
+  timesheets: {
+    listAdapters: () => ipcRenderer.invoke('timesheets:listAdapters'),
+    buildDraft: (params: TimesheetDraftParams) =>
+      ipcRenderer.invoke('timesheets:buildDraft', params),
+    sync: (params: TimesheetSyncParams) =>
+      ipcRenderer.invoke('timesheets:sync', params),
+    authStatus: (provider: TimesheetProviderType) =>
+      ipcRenderer.invoke('timesheets:authStatus', provider),
+    login: (provider: TimesheetProviderType) =>
+      ipcRenderer.invoke('timesheets:login', provider),
+    logout: (provider: TimesheetProviderType) =>
+      ipcRenderer.invoke('timesheets:logout', provider),
+    listSheets: (provider: TimesheetProviderType) =>
+      ipcRenderer.invoke('timesheets:listSheets', provider),
+    inspectSheet: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      navigationUrl: string;
+    }) => ipcRenderer.invoke('timesheets:inspectSheet', params),
+    lookupAxisOptions: (
+      params: TimesheetAxisLookupRequest & { provider: TimesheetProviderType },
+    ) => ipcRenderer.invoke('timesheets:lookupAxisOptions', params),
+    dryRun: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      entries: TimesheetEntryInput[];
+      deletions?: TimesheetRowDeletion[];
+      action: TimesheetAction;
+    }) => ipcRenderer.invoke('timesheets:dryRun', params),
+    save: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      entries: TimesheetEntryInput[];
+      deletions?: TimesheetRowDeletion[];
+      action: TimesheetAction;
+    }) => ipcRenderer.invoke('timesheets:save', params),
   },
   rateLimitSwap: {
     getStatus: () =>

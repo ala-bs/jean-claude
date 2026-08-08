@@ -30,6 +30,7 @@ export function Modal({
   closeOnClickOutside = true,
   closeOnEscape = true,
   closeDisabled = false,
+  closeDisabledReason,
   contentRef,
   showHeader = true,
   contentClassName = 'min-h-0 overflow-y-auto p-4',
@@ -47,6 +48,7 @@ export function Modal({
   closeOnClickOutside?: boolean;
   closeOnEscape?: boolean;
   closeDisabled?: boolean;
+  closeDisabledReason?: string;
   contentRef?: RefObject<HTMLDivElement | null>;
   showHeader?: boolean;
   contentClassName?: string;
@@ -111,7 +113,14 @@ export function Modal({
   };
 
   return createPortal(
-    <FocusLock returnFocus>
+    <FocusLock
+      returnFocus
+      // Popovers render through their own portal; letting the lock pull focus
+      // back would steal it from their search inputs.
+      whiteList={(node) =>
+        !(node instanceof Element) || !node.closest('[data-focus-portal="true"]')
+      }
+    >
       <RemoveScroll>
         <div
           className={`bg-bg-0/50 fixed inset-0 flex items-center justify-center ${overlayClassName}`}
@@ -133,11 +142,21 @@ export function Modal({
                 ) : (
                   <div />
                 )}
-                {!closeDisabled && (
+                {/* Without a reason to show, a blocked close just disappears.
+                    With one, it stays as a disabled control that explains
+                    itself. */}
+                {closeDisabled && !closeDisabledReason ? null : (
                   <button
                     onClick={onClose}
-                    aria-label="Close dialog"
-                    className="text-ink-2 hover:bg-glass-medium hover:text-ink-1 rounded p-1"
+                    disabled={closeDisabled}
+                    aria-disabled={closeDisabled || undefined}
+                    aria-label={
+                      closeDisabled && closeDisabledReason
+                        ? `Close unavailable: ${closeDisabledReason}`
+                        : 'Close dialog'
+                    }
+                    title={closeDisabled ? closeDisabledReason : undefined}
+                    className="text-ink-2 hover:bg-glass-medium hover:text-ink-1 rounded p-1 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                   >
                     <X className="h-5 w-5" aria-hidden />
                   </button>

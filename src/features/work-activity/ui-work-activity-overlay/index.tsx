@@ -1,4 +1,5 @@
 import {
+  CalendarClock,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -8,8 +9,10 @@ import {
   X,
 } from 'lucide-react';
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
-import clsx from 'clsx';
 import { createPortal } from 'react-dom';
+// Keep multi-member imports before default imports per repository lint config.
+// eslint-disable-next-line sort-imports
+import clsx from 'clsx';
 import FocusLock from 'react-focus-lock';
 
 import {
@@ -17,16 +20,16 @@ import {
   groupWorkActivityEvents,
 } from '@shared/work-activity-utils';
 
+import { EureciaSyncDialog } from '@/features/work-activity/ui-eurecia-sync-dialog';
 import { IconButton } from '@/common/ui/icon-button';
 import { Modal } from '@/common/ui/modal';
-import { WorkItemPreview } from '@/features/work-item/ui-work-item-preview';
-import { WorkItemTypeIcon } from '@/features/work-item/ui-work-item-shared';
-
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useToastStore } from '@/stores/toasts';
 import { useWorkActivity } from '@/hooks/use-work-activity';
 import { useWorkItemById } from '@/hooks/use-work-items';
+import { WorkItemPreview } from '@/features/work-item/ui-work-item-preview';
+import { WorkItemTypeIcon } from '@/features/work-item/ui-work-item-shared';
 
 import type { WorkActivityEvent } from '@shared/work-activity-types';
 
@@ -77,6 +80,13 @@ function shiftWeek(date: Date, direction: -1 | 1) {
   const next = new Date(date);
   next.setUTCDate(next.getUTCDate() + direction * 7);
   return next;
+}
+
+function isSameWeekRange(
+  left: { start: string; end: string },
+  right: { start: string; end: string },
+) {
+  return left.start === right.start && left.end === right.end;
 }
 
 function formatDay(date: string) {
@@ -460,6 +470,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false);
   const [dayCopied, setDayCopied] = useState(false);
   const [rawCopied, setRawCopied] = useState(false);
+  const [isEureciaDialogOpen, setIsEureciaDialogOpen] = useState(false);
   const [previewWorkItem, setPreviewWorkItem] = useState<{
     id: string;
     providerId: string | null;
@@ -468,6 +479,11 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
     () => getWeekRange(selectedDate.toISOString()),
     [selectedDate],
   );
+  const currentWeekRange = useMemo(
+    () => getWeekRange(new Date().toISOString()),
+    [],
+  );
+  const isCurrentWeek = isSameWeekRange(range, currentWeekRange);
   const weekDays = useMemo(() => getWeekDays(range), [range]);
   const { data: events = [], isLoading, isError } = useWorkActivity(range);
   const previewWorkItemId = previewWorkItem
@@ -599,7 +615,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
         shortcut: 'escape',
         label: 'Close Work Activity Overlay',
         handler: () => {
-          if (previewWorkItem) return false;
+          if (previewWorkItem || isEureciaDialogOpen) return false;
           onClose();
           return true;
         },
@@ -647,15 +663,19 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
   }
 
   return createPortal(
-    <FocusLock disabled={!!previewWorkItem} returnFocus>
+    <FocusLock disabled={!!previewWorkItem || isEureciaDialogOpen} returnFocus>
       <div
         className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/60 p-4 backdrop-blur-md sm:p-6"
-        onClick={onClose}
+        onClick={() => {
+          if (!isEureciaDialogOpen) onClose();
+        }}
       >
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="work-activity-title"
+          aria-hidden={isEureciaDialogOpen ? true : undefined}
+          inert={isEureciaDialogOpen ? true : undefined}
           className="border-glass-border text-ink-1 relative flex h-[min(720px,calc(100vh-48px))] w-full max-w-[1350px] flex-col overflow-hidden rounded-[20px] border bg-[linear-gradient(180deg,oklch(0.175_0.014_275),oklch(0.135_0.012_275))] shadow-[0_50px_120px_-36px_oklch(0_0_0/0.85),0_0_0_1px_oklch(0_0_0/0.4)]"
           onClick={(event) => event.stopPropagation()}
         >
@@ -689,8 +709,13 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                   setSelectedDate((date) => shiftWeek(date, -1));
                 }}
               />
-              <div className="text-ink-1 min-w-32 px-2 text-center text-xs font-semibold tabular-nums">
-                {formatWeekLabel(range)}
+              <div className="min-w-36 px-2 text-center">
+                <div className="text-ink-1 text-xs font-semibold tabular-nums">
+                  {formatWeekLabel(range)}
+                </div>
+                <div className={clsx('text-[9px] font-semibold uppercase tracking-wide', isCurrentWeek ? 'text-status-azure' : 'text-ink-4')}>
+                  {isCurrentWeek ? 'Current week' : 'Selected week'}
+                </div>
               </div>
               <IconButton
                 variant="ghost"
@@ -702,6 +727,17 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
                   setSelectedDate((date) => shiftWeek(date, 1));
                 }}
               />
+              <button
+                type="button"
+                disabled={isCurrentWeek}
+                onClick={() => {
+                  setSelectedDay(null);
+                  setSelectedDate(new Date());
+                }}
+                className="text-ink-2 hover:text-ink-0 disabled:text-ink-4 h-7 rounded-md px-2 text-[11px] font-semibold transition-colors disabled:cursor-default"
+              >
+                This week
+              </button>
             </div>
 
             <button
@@ -712,6 +748,14 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
             >
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               {copied ? 'Copied' : 'Copy timesheet'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsEureciaDialogOpen(true)}
+              className="border-status-warning/45 bg-status-warning/10 text-status-warning hover:bg-status-warning/15 inline-flex h-[38px] items-center gap-2 rounded-[10px] border px-4 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <CalendarClock className="h-4 w-4" />
+              Eurecia
             </button>
             <button
               type="button"
@@ -1055,6 +1099,13 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
               />
             )}
           </Modal>
+          {isEureciaDialogOpen ? (
+            <EureciaSyncDialog
+              isOpen
+              onClose={() => setIsEureciaDialogOpen(false)}
+              range={range}
+            />
+          ) : null}
         </div>
       </div>
     </FocusLock>,

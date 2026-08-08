@@ -18,6 +18,7 @@ import {
   type CalendarNotificationsSetting,
   type EditorAutomationSetting,
   type EditorSetting,
+  type EureciaSetting,
   type ModelQuickSwitcherSetting,
   PRESET_EDITORS,
   type ProjectPromptPrefaceSetting,
@@ -548,6 +549,25 @@ export function useUpdateTaskEventNotificationsSetting() {
 
 export function useCalendarNotificationsSetting() {
   return useSetting('calendarNotifications');
+}
+
+export function useEureciaSetting() {
+  return useSetting('eurecia');
+}
+
+export function useUpdateEureciaSetting() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (value: EureciaSetting) => api.settings.set('eurecia', value),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ['settings', 'eurecia'],
+      });
+      await queryClient.resetQueries({
+        queryKey: ['timesheets', 'eurecia'],
+      });
+    },
+  });
 }
 
 export function useUpdateCalendarNotificationsSetting() {

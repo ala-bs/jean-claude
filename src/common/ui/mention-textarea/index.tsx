@@ -276,12 +276,12 @@ export const MentionTextarea = forwardRef<
     });
   }, []);
 
-  // Reposition whenever anything that affects geometry changes.
+  // Reposition whenever anything that affects geometry changes. Closing does
+  // not reset the state: rendering is already gated on isDropdownOpen, and a
+  // synchronous setState here would only cost an extra render pass. Reopening
+  // repositions before paint because this is a layout effect.
   useLayoutEffect(() => {
-    if (!isDropdownOpen) {
-      setDropdownPosition(null);
-      return;
-    }
+    if (!isDropdownOpen) return;
     updateDropdownPosition();
   }, [
     isDropdownOpen,
