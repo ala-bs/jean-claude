@@ -66,6 +66,7 @@ import {
   sendFallbackTouchLifecycleEvent,
   sendIdbUiInputEvent,
   sendIosHidKeyPress,
+  sendIosHidText,
   sendIosHidLifecycleEvent,
   showIosSoftwareKeyboard,
 } from './mobile-preview-ios-hid-input';
@@ -616,10 +617,26 @@ export const iosIdbAdapter = {
 
     if (event.type === 'text') {
       await runIosNonTouchInput(sessionId, (signal) =>
-        enqueueIosKeyboardInput(
-          () => pasteIosText(event.text, signal),
-          sessionId,
-        ),
+        enqueueIosKeyboardInput(async (isCurrent) => {
+          const paste = (text: string) => pasteIosText(text, signal);
+          // Prefer device-level HID typing: it does not steal focus from the
+          // app window the way Simulator paste (AppleScript) does. Paste stays
+          // available (and idb-independent) for unmappable characters.
+          try {
+            await assertIdbAvailable();
+          } catch {
+            if (!isCurrent()) return;
+            await paste(event.text);
+            return;
+          }
+          if (!isCurrent()) return;
+          await sendIosHidText({
+            deviceId,
+            text: event.text,
+            isCurrent,
+            paste,
+          });
+        }, sessionId),
       );
       return;
     }

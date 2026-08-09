@@ -35,6 +35,109 @@ const IOS_HID_HELPER_READY_TIMEOUT_MS = 2_000;
 const SHOW_IOS_KEYBOARD_TIMEOUT_MS = 3_000;
 const PASTE_IOS_TEXT_TIMEOUT_MS = 3_000;
 export const IOS_HID_BACKSPACE_KEYCODE = 42;
+export const IOS_HID_SHIFT_KEYCODE = 225;
+
+// USB HID usage codes for keys reachable from a US keyboard layout.
+const IOS_HID_UNSHIFTED_KEYCODES: Record<string, number> = {
+  ...Object.fromEntries(
+    Array.from({ length: 26 }, (_, index) => [
+      String.fromCharCode(97 + index),
+      4 + index,
+    ]),
+  ),
+  '1': 30,
+  '2': 31,
+  '3': 32,
+  '4': 33,
+  '5': 34,
+  '6': 35,
+  '7': 36,
+  '8': 37,
+  '9': 38,
+  '0': 39,
+  ' ': 44,
+  '\n': 40,
+  '\r': 40,
+  '\t': 43,
+  '-': 45,
+  '=': 46,
+  '[': 47,
+  ']': 48,
+  '\\': 49,
+  ';': 51,
+  "'": 52,
+  '`': 53,
+  ',': 54,
+  '.': 55,
+  '/': 56,
+};
+
+const IOS_HID_SHIFTED_KEYCODES: Record<string, number> = {
+  ...Object.fromEntries(
+    Array.from({ length: 26 }, (_, index) => [
+      String.fromCharCode(65 + index),
+      4 + index,
+    ]),
+  ),
+  '!': 30,
+  '@': 31,
+  '#': 32,
+  $: 33,
+  '%': 34,
+  '^': 35,
+  '&': 36,
+  '*': 37,
+  '(': 38,
+  ')': 39,
+  _: 45,
+  '+': 46,
+  '{': 47,
+  '}': 48,
+  '|': 49,
+  ':': 51,
+  '"': 52,
+  '~': 53,
+  '<': 54,
+  '>': 55,
+  '?': 56,
+};
+
+const iosHidShiftUsedDeviceIds = new Set<string>();
+
+type IosHidKeyStroke = { keycode: number; shift: boolean };
+
+export type IosTextChunk =
+  | { kind: 'hid'; strokes: IosHidKeyStroke[] }
+  | { kind: 'paste'; text: string };
+
+function mapCharToIosHidKeyStroke(char: string): IosHidKeyStroke | null {
+  const unshifted = IOS_HID_UNSHIFTED_KEYCODES[char];
+  if (unshifted !== undefined) return { keycode: unshifted, shift: false };
+  const shifted = IOS_HID_SHIFTED_KEYCODES[char];
+  if (shifted !== undefined) return { keycode: shifted, shift: true };
+  return null;
+}
+
+/**
+ * Splits text into runs typed through the HID stream and runs that have no
+ * US-layout keycode (emoji, accents, ...) and must go through Simulator paste.
+ * Chunking keeps focus-stealing paste limited to the characters that need it.
+ */
+export function splitTextForIosInput(text: string): IosTextChunk[] {
+  const chunks: IosTextChunk[] = [];
+  for (const char of text) {
+    const stroke = mapCharToIosHidKeyStroke(char);
+    const last = chunks.at(-1);
+    if (stroke) {
+      if (last?.kind === 'hid') last.strokes.push(stroke);
+      else chunks.push({ kind: 'hid', strokes: [stroke] });
+      continue;
+    }
+    if (last?.kind === 'paste') last.text += char;
+    else chunks.push({ kind: 'paste', text: char });
+  }
+  return chunks;
+}
 
 type IdbDescribeResponse = {
   screen_dimensions?: {
@@ -210,7 +313,9 @@ export function buildIdbInputArgs(
       ];
     case 'text':
       assertTextInput(event.text);
-      throw new Error('iOS text input is handled through Simulator paste.');
+      throw new Error(
+        'iOS text input is handled through HID keystrokes with Simulator paste fallback.',
+      );
     case 'showKeyboard':
       throw new Error(
         'iOS keyboard input is handled through Simulator keyboard shortcuts.',
@@ -504,6 +609,7 @@ export async function releaseIosHidHelper(deviceId: string): Promise<void> {
   }
   if (!helper || helper.isClosed()) return;
 
+  await releaseIosHidModifiers(deviceId, helper);
   await helper.stream.stop();
 }
 
@@ -559,23 +665,98 @@ export async function sendIosHidLifecycleEvent(
   return true;
 }
 
-export async function sendIosHidKeyPress(
+async function writeIosHidKeyEvents(
   deviceId: string,
-  keycode: number,
+  events: { type: 'keyDown' | 'keyUp'; keycode: number }[],
   isCurrent: () => boolean,
 ): Promise<void> {
   const helper = await getIosHidHelper(deviceId);
-  if (!isCurrent()) return;
-  const events = [
-    { type: 'keyDown', keycode },
-    { type: 'keyUp', keycode },
-  ];
+  if (!isCurrent() || events.length === 0) return;
   await new Promise<void>((resolve, reject) => {
     helper.stream.child.stdin.write(
       `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
       (error) => (error ? reject(error) : resolve()),
     );
   });
+}
+
+export async function sendIosHidKeyPress(
+  deviceId: string,
+  keycode: number,
+  isCurrent: () => boolean,
+): Promise<void> {
+  await writeIosHidKeyEvents(
+    deviceId,
+    [
+      { type: 'keyDown', keycode },
+      { type: 'keyUp', keycode },
+    ],
+    isCurrent,
+  );
+}
+
+/**
+ * Types text into the simulator through the idb HID stream, falling back to
+ * Simulator paste only for the runs of characters that have no US-layout
+ * keycode (emoji, accents, ...). Chunking keeps focus-stealing paste rare.
+ */
+export async function sendIosHidText(params: {
+  deviceId: string;
+  text: string;
+  isCurrent: () => boolean;
+  paste: (text: string) => Promise<void>;
+}): Promise<void> {
+  const { deviceId, text, isCurrent, paste } = params;
+  assertTextInput(text);
+  if (!text) return;
+
+  for (const chunk of splitTextForIosInput(text)) {
+    if (!isCurrent()) return;
+
+    if (chunk.kind === 'paste') {
+      await paste(chunk.text);
+      continue;
+    }
+
+    const events: { type: 'keyDown' | 'keyUp'; keycode: number }[] = [];
+    for (const stroke of chunk.strokes) {
+      if (stroke.shift) {
+        events.push({ type: 'keyDown', keycode: IOS_HID_SHIFT_KEYCODE });
+      }
+      events.push({ type: 'keyDown', keycode: stroke.keycode });
+      events.push({ type: 'keyUp', keycode: stroke.keycode });
+      if (stroke.shift) {
+        events.push({ type: 'keyUp', keycode: IOS_HID_SHIFT_KEYCODE });
+      }
+    }
+    if (chunk.strokes.some((stroke) => stroke.shift)) {
+      iosHidShiftUsedDeviceIds.add(deviceId);
+    }
+    await writeIosHidKeyEvents(deviceId, events, isCurrent);
+  }
+}
+
+/**
+ * Best-effort release of the shift modifier. A SIGTERM between the keyDown and
+ * keyUp lines of a batch would otherwise leave shift latched on the simulator.
+ */
+export async function releaseIosHidModifiers(
+  deviceId: string,
+  // Only use an already-running helper: teardown must never respawn one.
+  helper = activeHidHelpersByDeviceId.get(deviceId),
+): Promise<void> {
+  if (!iosHidShiftUsedDeviceIds.delete(deviceId)) return;
+  if (!helper || helper.isClosed()) return;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      helper.stream.child.stdin.write(
+        `${JSON.stringify({ type: 'keyUp', keycode: IOS_HID_SHIFT_KEYCODE })}\n`,
+        (error) => (error ? reject(error) : resolve()),
+      );
+    });
+  } catch {
+    // Modifier cleanup is best-effort during teardown.
+  }
 }
 
 export function prewarmIosHidInput(params: {

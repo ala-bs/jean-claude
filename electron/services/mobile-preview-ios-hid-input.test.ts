@@ -78,7 +78,7 @@ describe('mobile preview iOS HID input', () => {
     ]);
     expect(() =>
       buildIdbInputArgs('device-1', { type: 'text', text: 'hi' }),
-    ).toThrow(/Simulator paste/);
+    ).toThrow(/HID keystrokes/);
     expect(buildIdbInputArgs('device-1', { type: 'key', key: 'home' })).toEqual(
       ['ui', 'button', 'HOME', '--udid', 'device-1'],
     );
@@ -110,18 +110,147 @@ describe('mobile preview iOS HID input', () => {
     expect(runCommandMock).not.toHaveBeenCalledWith('idb', expect.any(Array));
   });
 
-  it('sends iOS text through Simulator paste to avoid keyboard layout remapping', async () => {
+  it('sends iOS text through HID keystrokes without activating Simulator', async () => {
+    process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE = join(
+      __dirname,
+      '../native/mobile-preview-ios-hid-helper.py',
+    );
+    const { writes } = mockReadyHidHelper();
+    runCommandMock.mockResolvedValue({ stdout: '', stderr: '' });
+
+    await iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'aB' });
+
+    expect(runCommandMock).not.toHaveBeenCalledWith(
+      'osascript',
+      expect.any(Array),
+      expect.anything(),
+    );
+    expect(writes.join('')).toBe(
+      [
+        '{"type":"keyDown","keycode":4}',
+        '{"type":"keyUp","keycode":4}',
+        '{"type":"keyDown","keycode":225}',
+        '{"type":"keyDown","keycode":5}',
+        '{"type":"keyUp","keycode":5}',
+        '{"type":"keyUp","keycode":225}',
+      ].join('\n') + '\n',
+    );
+  });
+
+  it('preserves order across concurrent HID text input', async () => {
+    process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE = join(
+      __dirname,
+      '../native/mobile-preview-ios-hid-helper.py',
+    );
+    const { writes } = mockReadyHidHelper();
+    runCommandMock.mockResolvedValue({ stdout: '', stderr: '' });
+
+    await Promise.all([
+      iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'a' }),
+      iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'b' }),
+    ]);
+
+    expect(
+      writes
+        .join('')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).keycode),
+    ).toEqual([4, 4, 5, 5]);
+  });
+
+  it('pastes only the unmappable run of mixed text', async () => {
+    process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE = join(
+      __dirname,
+      '../native/mobile-preview-ios-hid-helper.py',
+    );
+    const { writes } = mockReadyHidHelper();
+    runCommandMock.mockResolvedValue({ stdout: '', stderr: '' });
+
+    await iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'aéb' });
+
+    expect(runCommandMock).toHaveBeenCalledWith(
+      'osascript',
+      ['-e', expect.any(String), 'é'],
+      expect.anything(),
+    );
+    expect(
+      writes
+        .join('')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).keycode),
+    ).toEqual([4, 4, 5, 5]);
+  });
+
+  it('types newline and tab through HID instead of pasting', async () => {
+    process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE = join(
+      __dirname,
+      '../native/mobile-preview-ios-hid-helper.py',
+    );
+    const { writes } = mockReadyHidHelper();
+    runCommandMock.mockResolvedValue({ stdout: '', stderr: '' });
+
+    await iosIdbAdapter.sendInput('device-1', { type: 'text', text: '\n\t' });
+
+    expect(runCommandMock).not.toHaveBeenCalledWith(
+      'osascript',
+      expect.any(Array),
+      expect.anything(),
+    );
+    expect(
+      writes
+        .join('')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).keycode),
+    ).toEqual([40, 40, 43, 43]);
+  });
+
+  it('releases a latched shift modifier when the HID helper is torn down', async () => {
+    process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE = join(
+      __dirname,
+      '../native/mobile-preview-ios-hid-helper.py',
+    );
+    const { writes } = mockReadyHidHelper();
+    runCommandMock.mockResolvedValue({ stdout: '', stderr: '' });
+
+    await iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'A' });
+    await iosIdbAdapter.dispose();
+
+    expect(writes.join('').trim().split('\n').at(-1)).toBe(
+      '{"type":"keyUp","keycode":225}',
+    );
+  });
+
+  it('pastes text when the idb CLI is unavailable', async () => {
+    commandExistsMock.mockResolvedValue(false);
     runCommandMock.mockResolvedValue({ stdout: '', stderr: '' });
 
     await iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'a' });
 
-    expect(commandExistsMock).not.toHaveBeenCalledWith('idb');
     expect(runCommandMock).toHaveBeenCalledWith(
       'osascript',
       ['-e', expect.stringContaining('keystroke "v" using command down'), 'a'],
       { signal: expect.any(AbortSignal), timeoutMs: 3000 },
     );
-    expect(runCommandMock).not.toHaveBeenCalledWith('idb', expect.any(Array));
+  });
+
+  it('falls back to Simulator paste for text without a US keycode', async () => {
+    process.env.JC_MOBILE_PREVIEW_IOS_HELPER_SOURCE = join(
+      __dirname,
+      '../native/mobile-preview-ios-hid-helper.py',
+    );
+    mockReadyHidHelper();
+    runCommandMock.mockResolvedValue({ stdout: '', stderr: '' });
+
+    await iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'é' });
+
+    expect(runCommandMock).toHaveBeenCalledWith(
+      'osascript',
+      ['-e', expect.stringContaining('keystroke "v" using command down'), 'é'],
+      { signal: expect.any(AbortSignal), timeoutMs: 3000 },
+    );
   });
 
   it('serializes iOS text input to preserve character order and clipboard state', async () => {
@@ -129,7 +258,7 @@ describe('mobile preview iOS HID input', () => {
     runCommandMock.mockImplementation(
       (_command, args) =>
         new Promise((resolve) => {
-          if (args.at(-1) === 'a') {
+          if (args.at(-1) === 'é') {
             finishFirstPaste = () => resolve({ stdout: '', stderr: '' });
             return;
           }
@@ -137,16 +266,16 @@ describe('mobile preview iOS HID input', () => {
         }),
     );
 
-    const first = iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'a' });
-    const second = iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'b' });
+    const first = iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'é' });
+    const second = iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'ü' });
     await vi.waitFor(() => expect(finishFirstPaste).toBeTypeOf('function'));
 
     expect(runCommandMock).toHaveBeenCalledTimes(1);
     finishFirstPaste?.();
     await Promise.all([first, second]);
     expect(runCommandMock.mock.calls.map(([, args]) => args.at(-1))).toEqual([
-      'a',
-      'b',
+      'é',
+      'ü',
     ]);
   });
 
@@ -155,7 +284,7 @@ describe('mobile preview iOS HID input', () => {
     runCommandMock.mockImplementation(
       (_command, args) =>
         new Promise((resolve) => {
-          if (args.at(-1) === 'a') {
+          if (args.at(-1) === 'é') {
             releaseFirst = () => resolve({ stdout: '', stderr: '' });
             return;
           }
@@ -163,8 +292,8 @@ describe('mobile preview iOS HID input', () => {
         }),
     );
 
-    const first = iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'a' });
-    const second = iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'b' });
+    const first = iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'é' });
+    const second = iosIdbAdapter.sendInput('device-1', { type: 'text', text: 'ü' });
     await vi.waitFor(() => expect(releaseFirst).toBeTypeOf('function'));
     let disposed = false;
     const dispose = iosIdbAdapter.dispose().then(() => {
