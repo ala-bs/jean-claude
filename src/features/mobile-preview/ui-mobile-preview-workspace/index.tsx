@@ -274,7 +274,6 @@ export function MobilePreviewWorkspace({
           retainSessions
           variant="standalone"
           onSelectAppPath={canSelectProjectApp ? handleSelectAppPath : undefined}
-          onClose={onClose}
         />
       )}
     </section>

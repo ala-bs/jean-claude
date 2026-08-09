@@ -1,0 +1,81 @@
+import type { PreviewDerived, PreviewFacts } from './utils-setup-model';
+
+export const baseFacts: PreviewFacts = {
+  platform: 'ios',
+  deviceId: 'device-1',
+  appPath: 'apps/mobile',
+  isExpoApp: true,
+  autoStartProxy: false,
+  needsAppSelection: false,
+
+  selectedDeviceCanStart: true,
+  activeSessionDeviceReady: false,
+  selectedDevice: { name: 'iPhone 15', state: 'booted' },
+
+  sessionStatus: undefined,
+  isStarting: false,
+  isStopping: false,
+  hasActiveSession: false,
+  previewMethodText: null,
+
+  devServerRunning: false,
+  devServerStarting: false,
+  devServerStopping: false,
+  effectiveDevServerPort: 8081,
+  buildRunning: false,
+  buildStarting: false,
+  buildStopping: false,
+  normalizedBuildStatus: 'idle',
+  prebuildStatusStatus: undefined,
+  prebuildStarting: false,
+  prebuildStopping: false,
+  dependenciesInstallStatusStatus: 'stopped',
+  dependenciesInstallCommand: 'pnpm install',
+
+  androidProjectPath: null,
+  androidProjectExists: null,
+  inferredAndroidProjectPath: 'apps/mobile/android',
+  androidAppStatus: null,
+  iosAppStatus: null,
+  iosAppStatusError: null,
+  isIosAppStatusLoading: false,
+  androidCertGuidanceVisible: false,
+
+  networkStatus: 'stopped',
+  networkProxyErrorRaw: null,
+  networkSessionEnableMitm: undefined,
+  networkSessionProxyUrl: null,
+  networkCertificateInstalled: false,
+  proxyIsStarting: false,
+  proxyIsStopping: false,
+  proxyIsInstallingCertificate: false,
+  proxyIsPreparingAndroidAppTrust: false,
+  networkRunning: false,
+  showTunneledNetworkRequests: false,
+
+  nativeLogRunning: false,
+
+  formatDeviceState: (state) => state,
+};
+
+export const baseDerived: PreviewDerived = {
+  appReady: true,
+  deviceReady: true,
+  metroStatus: 'idle',
+  previewStatus: 'idle',
+  proxyStatus: 'idle',
+  httpsStatus: 'idle',
+  prebuildStatusValue: 'ready',
+  dependenciesInstallStatusValue: 'completed',
+  effectiveAndroidProjectPath: null,
+  needsExpoAndroidPrebuild: false,
+  needsExpoIosPrebuild: false,
+  prebuildDone: true,
+  androidAppInstalled: false,
+  androidTrustConfigured: false,
+  selectedAppInstalled: true,
+  appNeedsBuild: false,
+  iosAppReady: true,
+  iosBuildVerificationFailed: false,
+};
+

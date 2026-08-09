@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   Check,
   Circle,
   Copy,
@@ -12,7 +11,6 @@ import {
   PanelRight,
   Pin,
   PinOff,
-  Play,
   RotateCcw,
   RotateCw,
   Route,
@@ -22,8 +20,6 @@ import {
   X,
 } from 'lucide-react';
 import {
-} from '@yume-chan/scrcpy-decoder-webcodecs';
-import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   useCallback,
@@ -32,8 +28,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import {
-} from '@yume-chan/scrcpy';
 import clsx from 'clsx';
 
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
@@ -66,7 +60,6 @@ import {
   useMobilePreviewShowGestures,
 } from '@/stores/navigation';
 
-import { useMobilePreviewDeepLinksStore } from '@/stores/mobile-preview-deep-links';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
 import { api } from '@/lib/api';
@@ -85,15 +78,11 @@ import type {
 import type { CommandRunStatus } from '@shared/run-command-types';
 import {
   appendNetworkFilterToken,
-  getNetworkFacets,
   getNetworkHostname,
   getNetworkMethodClass,
   getNetworkPath,
   getNetworkStatusClass,
   getNetworkStatusLabel,
-  logNetworkFilterDebug,
-  matchesNetworkFilter,
-  matchesNetworkFilterToken,
   matchesNetworkPreset,
   type NetworkFilterContextMenuState,
   type NetworkFilterToken,
@@ -106,9 +95,7 @@ import {
   NetworkFilterContextMenu,
   NetworkRequestDetails,
 } from './ui-network-inspector';
-import {
-  useStreamListStoreWhen,
-} from '@/hooks/utils-stream-list-store';
+import { useNetworkInspector } from './use-network-inspector';
 import type { MobilePreviewProjectConfig } from '@shared/types';
 
 import {
@@ -125,16 +112,10 @@ import {
   shouldStopPreviousIosBuild,
 } from './utils-setup-operation';
 import {
-} from './utils-input';
-import {
   getVisibleMobilePreviewPaneTab,
   isMobilePreviewPaneTabVisible,
   type MobilePreviewPaneTab,
 } from './utils-tabs';
-import {
-} from './utils-rotation';
-import {
-} from './utils-frame-readiness';
 import {
   EmptyState,
   PlatformLogo,
@@ -142,36 +123,26 @@ import {
 } from './ui-common';
 import {
   NativeLogsTabLabel,
-  NetworkRequestCountDetail,
   NetworkTabLabel,
   PreviewStatusText,
 } from './ui-stream-readouts';
 import {
-  cleanPreviewError,
   formatError,
   getStreamStrategyLabel,
   getWaitingForFrameDetail,
 } from './utils-preview-error';
 import {
   canStartDevice,
-  formatAndroidImageTag,
-  formatAndroidScreenSpec,
   formatDeviceState,
-  getAndroidImageCompatibilityWarning,
   getDefaultAndroidProjectPath,
-  getIosDeviceChrome,
-  getOptionalPositiveInteger,
-  getPreferredAndroidSystemImage,
   getPreviewDeviceKey,
-  getSuggestedAndroidSystemImageId,
-  getSuggestedIosDeviceName,
-  isOptionalPositiveInteger,
-  parsePort,
 } from './utils-device-setup';
 import { useMobilePreviewInput } from './use-mobile-preview-input';
+import { ManageDevicesDialog } from './ui-manage-devices-dialog';
 import { DevServerTab } from './ui-dev-server-tab';
 import { DevToolsTab } from './ui-devtools-tab';
 import { LogsTab } from './ui-logs-tab';
+import { SetupTab } from './ui-setup-tab';
 import {
   GestureFeedbackOverlay,
   H264PreviewCanvas,
@@ -186,13 +157,23 @@ import {
 import {
   createPreviewFpsStore,
 } from './preview-fps-store';
+import { useMobilePreviewRecording } from './use-mobile-preview-recording';
+import { useMobilePreviewActions } from './use-mobile-preview-actions';
+import {
+  type PreviewDerived,
+  type PreviewFacts,
+  type PreviewStepKey,
+  getSetupModel,
+} from './utils-setup-model';
+import {
+  type PreviewStepActionIntent,
+  getSetupStepAction,
+} from './utils-setup-step-actions';
+import { runWorkspaceSetup } from './utils-run-workspace-setup';
 import { getDeviceCornerRadiusRatio } from './utils-device-frame';
 import { getMobilePreviewStandaloneLayoutClasses } from '@/features/mobile-preview/utils-mobile-preview-standalone-layout';
 import { useMobilePreviewAutoStart } from '@/features/mobile-preview/use-mobile-preview-auto-start';
 import { useMobilePreviewExpoLaunch } from '@/features/mobile-preview/use-mobile-preview-expo-launch';
-
-const EMPTY_DEEP_LINKS: Array<{ url: string; pinned: boolean }> = [];
-const FIRST_PREVIEW_FRAME_SETUP_WAIT_MS = 15_000;
 
 const FPS_OPTIONS = [
   { value: '15', label: '15 FPS' },
@@ -215,7 +196,6 @@ const TEXT_SIZE_OPTIONS = [
   { value: 'x-large', label: 'XL' },
 ];
 
-type MobilePreviewAction = 'deeplink' | 'port' | 'text-size';
 
 export function MobilePreviewPane({
   taskId,
@@ -245,7 +225,6 @@ export function MobilePreviewPane({
   isSelectingAppPath?: boolean;
   appSelectionError?: string | null;
   onSelectAppPath?: (appPath: string | null) => void;
-  onClose: () => void;
 }) {
   const isStandalone = variant === 'standalone';
   const [platform, setPlatform] = useState<MobilePlatform>('ios');
@@ -260,25 +239,6 @@ export function MobilePreviewPane({
   const [runtimeLaunchRetry, setRuntimeLaunchRetry] = useState(0);
   const [isStandaloneInspectorOpen, setIsStandaloneInspectorOpen] =
     useState(false);
-  const [activeAction, setActiveAction] = useState<MobilePreviewAction | null>(
-    null,
-  );
-  const [deeplinkUrl, setDeeplinkUrl] = useState('');
-  const deepLinks = useMobilePreviewDeepLinksStore(
-    (state) => state.linksByProject[projectId] ?? EMPTY_DEEP_LINKS,
-  );
-  const recordDeepLinkOpened = useMobilePreviewDeepLinksStore(
-    (state) => state.recordOpened,
-  );
-  const toggleDeepLinkPinned = useMobilePreviewDeepLinksStore(
-    (state) => state.togglePinned,
-  );
-  const removeDeepLink = useMobilePreviewDeepLinksStore((state) => state.remove);
-  const [hostPort, setHostPort] = useState('3000');
-  const [devicePort, setDevicePort] = useState('3000');
-  const [textSize, setTextSize] = useState<MobilePreviewTextSize>('normal');
-  const [isRunningAction, setIsRunningAction] = useState(false);
-  const [copiedDeviceId, setCopiedDeviceId] = useState(false);
   const [activeTab, setActiveTab] = useState<MobilePreviewPaneTab>('setup');
   const [devToolsLaunchError, setDevToolsLaunchError] = useState<string | null>(
     null,
@@ -298,38 +258,7 @@ export function MobilePreviewPane({
   const [resumeSetupAfterDependenciesInstall, setResumeSetupAfterDependenciesInstall] =
     useState(false);
   const [isManageDevicesOpen, setIsManageDevicesOpen] = useState(false);
-  const [isCreateAndroidDeviceOpen, setIsCreateAndroidDeviceOpen] =
-    useState(false);
   const [isCreateIosDeviceOpen, setIsCreateIosDeviceOpen] = useState(false);
-  const [manageCreatePlatform, setManageCreatePlatform] =
-    useState<MobilePlatform>('android');
-  const [managedSelectedDeviceKey, setManagedSelectedDeviceKey] = useState<
-    string | null
-  >(null);
-  const [androidDeviceName, setAndroidDeviceName] = useState('Pixel_8_API_35');
-  const [androidDeviceProfileId, setAndroidDeviceProfileId] =
-    useState('pixel_8');
-  const [androidSystemImageId, setAndroidSystemImageId] = useState('');
-  const [androidRamMb, setAndroidRamMb] = useState('');
-  const [androidVmHeapMb, setAndroidVmHeapMb] = useState('');
-  const [androidStorageMb, setAndroidStorageMb] = useState('');
-  const [androidHwKeyboard, setAndroidHwKeyboard] = useState(true);
-  const [deletingAndroidDeviceId, setDeletingAndroidDeviceId] = useState<
-    string | null
-  >(null);
-  const [iosDeviceName, setIosDeviceName] = useState('');
-  const [iosDeviceTypeId, setIosDeviceTypeId] = useState('');
-  const [iosRuntimeId, setIosRuntimeId] = useState('');
-  const [renamingIosDeviceId, setRenamingIosDeviceId] = useState<string | null>(
-    null,
-  );
-  const [iosRenameValue, setIosRenameValue] = useState('');
-  const [deletingIosDeviceId, setDeletingIosDeviceId] = useState<string | null>(
-    null,
-  );
-  const [erasingIosDeviceId, setErasingIosDeviceId] = useState<string | null>(
-    null,
-  );
   const [enableNetworkMitm, setEnableNetworkMitm] = useState(false);
   const [androidCertGuidanceVisible, setAndroidCertGuidanceVisible] =
     useState(false);
@@ -364,7 +293,6 @@ export function MobilePreviewPane({
   >(null);
   const [networkFilterContextMenu, setNetworkFilterContextMenu] =
     useState<NetworkFilterContextMenuState | null>(null);
-  const hasAutoSelectedNetworkRequestRef = useRef(false);
   const { width, setWidth, minWidth, maxWidth } = useMobilePreviewPaneWidth();
   const { fps, setFps } = useMobilePreviewFps();
   const { quality, setQuality } = useMobilePreviewQuality();
@@ -417,14 +345,8 @@ export function MobilePreviewPane({
     onWidthChange: setInspectorPaneWidth,
   });
   const containerRef = useRef<HTMLDivElement>(null);
-  const networkPanelRef = useRef<HTMLDivElement>(null);
-  const pendingNetworkContextMenuRef = useRef<HTMLElement | null>(null);
-  const suppressNetworkClickRef = useRef(false);
   const imgRef = useRef<HTMLImageElement>(null);
-  const mobileActionsMenuRef = useRef<{ toggle: () => void } | null>(null);
-  const deeplinkInputRef = useRef<HTMLInputElement>(null);
   const selectedDevicePreferenceKeyRef = useRef<string | null>(null);
-  const suggestedIosDeviceNameRef = useRef('');
   const previousIosBuildCommandIdRef = useRef<string | null>(null);
   const launchedIosBuildCommandIdsRef = useRef(new Set<string>());
   const [setupOperationCoordinator] = useState(
@@ -437,13 +359,6 @@ export function MobilePreviewPane({
   });
   const [previewFpsStore] = useState(createPreviewFpsStore);
   const [gestureFeedbackStore] = useState(createGestureFeedbackStore);
-  const [isRecording, setIsRecording] = useState(false);
-  const recordingRef = useRef<{
-    recorder: MediaRecorder;
-    stream: MediaStream;
-    timer: number;
-    chunks: Blob[];
-  } | null>(null);
   const selectedAppPath = mobilePreviewConfig?.selectedAppPath ?? null;
   const detectedApps = mobilePreviewConfig?.detectedApps ?? EMPTY_DETECTED_APPS;
   const validSelectedAppPath =
@@ -864,118 +779,25 @@ export function MobilePreviewPane({
   // proxy traffic cannot re-render the pane (and the preview surface) in the
   // background.
   const isNetworkTabVisible = visibleActiveTab === 'network';
-  const capturedNetworkRequests = useStreamListStoreWhen(
-    networkProxy.requestsStore,
-    isNetworkTabVisible,
-  );
-  const networkRequests = useMemo(
-    () =>
-      [...capturedNetworkRequests].sort(
-        (firstRequest, secondRequest) =>
-          Date.parse(secondRequest.startedAt) -
-          Date.parse(firstRequest.startedAt),
-      ),
-    [capturedNetworkRequests],
-  );
-  const displayedNetworkRequests = useMemo(
-    () =>
-      showTunneledNetworkRequests
-        ? networkRequests
-        : networkRequests.filter((request) => !request.tunnelOnly),
-    [networkRequests, showTunneledNetworkRequests],
-  );
-  const visibleNetworkRequests = useMemo(
-    () =>
-      displayedNetworkRequests
-        .filter((request) => matchesNetworkPreset(request, networkPreset))
-        .filter(
-          (request) =>
-            networkFacet === 'all' || getNetworkPath(request.url) === networkFacet,
-        )
-        .filter((request) => matchesNetworkFilter(request, networkFilter)),
-    [displayedNetworkRequests, networkFacet, networkFilter, networkPreset],
-  );
-  const networkFacets = useMemo(
-    () => getNetworkFacets(displayedNetworkRequests),
-    [displayedNetworkRequests],
-  );
-  const selectedNetworkRequest =
-    visibleNetworkRequests.find(
-      (request) => request.id === selectedNetworkRequestId,
-    ) ?? null;
-
-  useEffect(() => {
-    if (networkFilter.length === 0) return;
-    logNetworkFilterDebug('filter-applied', {
-      tokens: networkFilter,
-      displayedCount: displayedNetworkRequests.length,
-      visibleCount: visibleNetworkRequests.length,
-      hiddenSamples: displayedNetworkRequests
-        .filter(
-          (request) =>
-            matchesNetworkPreset(request, networkPreset) &&
-            (networkFacet === 'all' || getNetworkPath(request.url) === networkFacet) &&
-            !matchesNetworkFilter(request, networkFilter),
-        )
-        .slice(0, 8)
-        .map((request) => ({
-          method: request.method,
-          status: getNetworkStatusLabel(request),
-          host: getNetworkHostname(request.url),
-          path: getNetworkPath(request.url),
-          tokenResults: networkFilter.map((token) => ({
-            token,
-            matches: matchesNetworkFilterToken(request, token),
-          })),
-        })),
-      visibleSamples: visibleNetworkRequests.slice(0, 5).map((request) => ({
-        host: getNetworkHostname(request.url),
-        path: getNetworkPath(request.url),
-      })),
-    });
-  }, [
+  const {
+    pendingNetworkContextMenuRef,
+    suppressNetworkClickRef,
+    networkRequests,
     displayedNetworkRequests,
-    networkFacet,
-    networkFilter,
-    networkPreset,
     visibleNetworkRequests,
-  ]);
-
-  // These three reconcile the selection/facet against the visible requests. They
-  // must not run while the network tab is hidden: the request buffer is
-  // unsubscribed then, so the derived lists are empty and would otherwise clear
-  // the user's selected request and endpoint filter.
-  useEffect(() => {
-    if (!isNetworkTabVisible) return;
-    if (hasAutoSelectedNetworkRequestRef.current) return;
-    const firstRequest = visibleNetworkRequests[0];
-    if (!firstRequest) return;
-    hasAutoSelectedNetworkRequestRef.current = true;
-    queueMicrotask(() => setSelectedNetworkRequestId(firstRequest.id));
-  }, [isNetworkTabVisible, visibleNetworkRequests]);
-
-  useEffect(() => {
-    if (!isNetworkTabVisible) return;
-    if (!selectedNetworkRequestId) return;
-    if (
-      visibleNetworkRequests.some(
-        (request) => request.id === selectedNetworkRequestId,
-      )
-    ) {
-      return;
-    }
-
-    queueMicrotask(() =>
-      setSelectedNetworkRequestId(visibleNetworkRequests[0]?.id ?? null),
-    );
-  }, [isNetworkTabVisible, selectedNetworkRequestId, visibleNetworkRequests]);
-
-  useEffect(() => {
-    if (!isNetworkTabVisible) return;
-    if (networkFacet === 'all') return;
-    if (networkFacets.some((facet) => facet.path === networkFacet)) return;
-    queueMicrotask(() => setNetworkFacet('all'));
-  }, [isNetworkTabVisible, networkFacet, networkFacets]);
+    networkFacets,
+    selectedNetworkRequest,
+  } = useNetworkInspector({
+    isNetworkTabVisible,
+    requestsStore: networkProxy.requestsStore,
+    showTunneledNetworkRequests,
+    networkPreset,
+    networkFilter,
+    networkFacet,
+    selectedNetworkRequestId,
+    setSelectedNetworkRequestId,
+    setNetworkFacet,
+  });
 
   const {
     data: iosDevices = [],
@@ -1049,44 +871,6 @@ export function MobilePreviewPane({
     () => [...androidDevices, ...iosDevices],
     [androidDevices, iosDevices],
   );
-  const managedDeviceKey = `${platform}:${deviceId}`;
-  const selectedManagedDevice = useMemo(() => {
-    const preferredKey = managedSelectedDeviceKey ?? managedDeviceKey;
-    return (
-      allDevices.find(
-        (device) => `${device.platform}:${device.id}` === preferredKey,
-      ) ?? allDevices[0] ?? null
-    );
-  }, [allDevices, managedDeviceKey, managedSelectedDeviceKey]);
-  const managedDevicesByPlatform = useMemo(
-    () => ({
-      android: allDevices.filter((device) => device.platform === 'android'),
-      ios: allDevices.filter((device) => device.platform === 'ios'),
-    }),
-    [allDevices],
-  );
-  const isCreatingManagedDevice =
-    isCreateAndroidDeviceOpen || isCreateIosDeviceOpen;
-
-  useEffect(() => {
-    if (!isManageDevicesOpen) return undefined;
-
-    function handleManageDevicesEscape(event: globalThis.KeyboardEvent) {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (isCreatingManagedDevice) {
-        setIsCreateAndroidDeviceOpen(false);
-        setIsCreateIosDeviceOpen(false);
-      } else {
-        setIsManageDevicesOpen(false);
-      }
-    }
-
-    window.addEventListener('keydown', handleManageDevicesEscape, true);
-    return () =>
-      window.removeEventListener('keydown', handleManageDevicesEscape, true);
-  }, [isCreatingManagedDevice, isManageDevicesOpen]);
   const hasPendingVisibleDeviceDefaults =
     visibleDeviceIdsByPlatform.android === null ||
     visibleDeviceIdsByPlatform.ios === null;
@@ -1137,188 +921,9 @@ export function MobilePreviewPane({
     session.platform === platform &&
     session.deviceId === deviceId;
 
-  const androidProfileOptions = useMemo(
-    () =>
-      (androidManagement.profiles.data ?? []).map((profile) => ({
-        value: profile.id,
-        label: profile.name,
-        description: profile.manufacturer ?? undefined,
-      })),
-    [androidManagement.profiles.data],
-  );
-  const androidSystemImageOptions = useMemo(
-    () =>
-      (androidManagement.systemImages.data ?? []).map((image) => ({
-        value: image.id,
-        label: `API ${image.apiLevel} · ${image.tag} · ${image.abi}`,
-      })),
-    [androidManagement.systemImages.data],
-  );
-  const availableIosRuntimes = useMemo(
-    () => (iosManagement.runtimes.data ?? []).filter((runtime) => runtime.available),
-    [iosManagement.runtimes.data],
-  );
-  const iosDeviceTypes = useMemo(
-    () =>
-      (iosManagement.deviceTypes.data ?? []).filter(
-        (deviceType) =>
-          deviceType.productFamily === 'iPhone' ||
-          deviceType.name.toLowerCase().includes('iphone'),
-      ),
-    [iosManagement.deviceTypes.data],
-  );
-  const iosRuntimeOptions = useMemo(
-    () =>
-      availableIosRuntimes.map((runtime) => ({
-        value: runtime.id,
-        label: runtime.name,
-      })),
-    [availableIosRuntimes],
-  );
-  const iosDeviceTypeOptions = useMemo(
-    () =>
-      iosDeviceTypes.map((deviceType) => ({
-        value: deviceType.id,
-        label: deviceType.name,
-      })),
-    [iosDeviceTypes],
-  );
-  const selectedAndroidProfile = useMemo(
-    () =>
-      androidManagement.profiles.data?.find(
-        (profile) => profile.id === androidDeviceProfileId,
-      ) ?? null,
-    [androidDeviceProfileId, androidManagement.profiles.data],
-  );
-  const selectedAndroidSystemImage = useMemo(
-    () =>
-      androidManagement.systemImages.data?.find(
-        (image) => image.id === androidSystemImageId,
-      ) ?? null,
-    [androidSystemImageId, androidManagement.systemImages.data],
-  );
-  const selectedIosRuntime = useMemo(
-    () =>
-      availableIosRuntimes.find((runtime) => runtime.id === iosRuntimeId) ?? null,
-    [availableIosRuntimes, iosRuntimeId],
-  );
-  const selectedIosDeviceType = useMemo(
-    () =>
-      iosDeviceTypes.find((deviceType) => deviceType.id === iosDeviceTypeId) ?? null,
-    [iosDeviceTypeId, iosDeviceTypes],
-  );
-  const suggestedIosDeviceName = getSuggestedIosDeviceName({
-    deviceType: selectedIosDeviceType,
-    runtime: selectedIosRuntime,
-  });
-  const androidHostArch = androidManagement.toolStatus.data?.hostArch;
-  const androidImageCompatibilityWarning = getAndroidImageCompatibilityWarning(
-    androidHostArch,
-    selectedAndroidSystemImage?.abi,
-  );
-  const androidManagementError =
-    formatError(androidManagement.createDevice.error) ??
-    formatError(androidManagement.deleteDevice.error) ??
-    formatError(androidManagement.installSystemImage.error) ??
-    formatError(androidManagement.profiles.error) ??
-    formatError(androidManagement.systemImages.error) ??
-    formatError(androidManagement.toolStatus.error);
-  const iosManagementError =
-    formatError(iosManagement.createDevice.error) ??
-    formatError(iosManagement.deleteDevice.error) ??
-    formatError(iosManagement.eraseDevice.error) ??
-    formatError(iosManagement.renameDevice.error) ??
-    formatError(iosManagement.runtimes.error) ??
-    formatError(iosManagement.deviceTypes.error) ??
-    formatError(iosManagement.toolStatus.error);
-  const androidAdvancedNumbersAreValid = [
-    androidRamMb,
-    androidVmHeapMb,
-    androidStorageMb,
-  ].every(isOptionalPositiveInteger);
-  const trimmedAndroidDeviceName = androidDeviceName.trim();
-  const canCreateAndroidDevice =
-    trimmedAndroidDeviceName.length > 0 &&
-    androidAdvancedNumbersAreValid &&
-    androidProfileOptions.some((option) => option.value === androidDeviceProfileId) &&
-    androidSystemImageOptions.some(
-      (option) => option.value === androidSystemImageId,
-    );
-  const trimmedIosDeviceName = iosDeviceName.trim();
-  const canCreateIosDevice =
-    trimmedIosDeviceName.length > 0 &&
-    iosDeviceTypeOptions.some((option) => option.value === iosDeviceTypeId) &&
-    iosRuntimeOptions.some((option) => option.value === iosRuntimeId);
   const devicesErrorMessage =
     formatError(androidDevicesError) ?? formatError(iosDevicesError);
   const isLoadingDevices = isLoadingAndroidDevices || isLoadingIosDevices;
-
-  useEffect(() => {
-    if (
-      androidSystemImageId &&
-      androidSystemImageOptions.some((option) => option.value === androidSystemImageId)
-    ) {
-      return;
-    }
-    if (!androidHostArch) return;
-    const image = getPreferredAndroidSystemImage(
-      androidManagement.systemImages.data,
-      androidHostArch,
-    );
-    if (image) queueMicrotask(() => setAndroidSystemImageId(image.id));
-  }, [
-    androidHostArch,
-    androidManagement.systemImages.data,
-    androidSystemImageId,
-    androidSystemImageOptions,
-  ]);
-
-  useEffect(() => {
-    if (
-      androidDeviceProfileId &&
-      androidProfileOptions.some((option) => option.value === androidDeviceProfileId)
-    ) {
-      return;
-    }
-    const firstProfile = androidProfileOptions[0];
-    if (firstProfile) queueMicrotask(() => setAndroidDeviceProfileId(firstProfile.value));
-  }, [androidDeviceProfileId, androidProfileOptions]);
-
-  useEffect(() => {
-    if (
-      iosRuntimeId &&
-      iosRuntimeOptions.some((option) => option.value === iosRuntimeId)
-    ) {
-      return;
-    }
-    const firstRuntime = iosRuntimeOptions[0];
-    if (firstRuntime) queueMicrotask(() => setIosRuntimeId(firstRuntime.value));
-  }, [iosRuntimeId, iosRuntimeOptions]);
-
-  useEffect(() => {
-    if (
-      iosDeviceTypeId &&
-      iosDeviceTypeOptions.some((option) => option.value === iosDeviceTypeId)
-    ) {
-      return;
-    }
-    const firstDeviceType = iosDeviceTypeOptions[0];
-    if (firstDeviceType) {
-      queueMicrotask(() => setIosDeviceTypeId(firstDeviceType.value));
-    }
-  }, [iosDeviceTypeId, iosDeviceTypeOptions]);
-
-  useEffect(() => {
-    const previousSuggestedName = suggestedIosDeviceNameRef.current;
-    suggestedIosDeviceNameRef.current = suggestedIosDeviceName;
-    if (
-      !suggestedIosDeviceName ||
-      (iosDeviceName && iosDeviceName !== previousSuggestedName)
-    ) {
-      return;
-    }
-    queueMicrotask(() => setIosDeviceName(suggestedIosDeviceName));
-  }, [iosDeviceName, suggestedIosDeviceName]);
 
   useEffect(() => {
     selectedDevicePreferenceKeyRef.current = null;
@@ -1371,162 +976,6 @@ export function MobilePreviewPane({
     setDeviceId,
     visibleDevices,
   ]);
-
-  const handleCreateAndroidDevice = useCallback(async () => {
-    if (!canCreateAndroidDevice) return;
-    try {
-      await androidManagement.createDevice.mutateAsync({
-        name: trimmedAndroidDeviceName,
-        deviceProfileId: androidDeviceProfileId,
-        systemImageId: androidSystemImageId,
-        ramMb: getOptionalPositiveInteger(androidRamMb),
-        vmHeapMb: getOptionalPositiveInteger(androidVmHeapMb),
-        storageMb: getOptionalPositiveInteger(androidStorageMb),
-        hwKeyboard: androidHwKeyboard,
-      });
-      setVisibleDeviceIdsByPlatform((current) => ({
-        ...current,
-        android: [
-          ...new Set([
-            ...(current.android ?? androidDevices.map((device) => device.id)),
-            trimmedAndroidDeviceName,
-          ]),
-        ],
-      }));
-      selectPreviewDevice({
-        platform: 'android',
-        deviceId: trimmedAndroidDeviceName,
-      });
-      setIsCreateAndroidDeviceOpen(false);
-    } catch {
-      // Mutation error is rendered from React Query state.
-    }
-  }, [
-    androidDeviceProfileId,
-    androidHwKeyboard,
-    androidManagement.createDevice,
-    androidDevices,
-    androidRamMb,
-    androidStorageMb,
-    androidSystemImageId,
-    androidVmHeapMb,
-    canCreateAndroidDevice,
-    selectPreviewDevice,
-    setVisibleDeviceIdsByPlatform,
-    trimmedAndroidDeviceName,
-  ]);
-
-  const handleInstallSuggestedAndroidImage = useCallback(async () => {
-    try {
-      await androidManagement.installSystemImage.mutateAsync({
-        systemImageId: getSuggestedAndroidSystemImageId(androidHostArch),
-      });
-    } catch {
-      // Mutation error is rendered from React Query state.
-    }
-  }, [androidHostArch, androidManagement.installSystemImage]);
-
-  async function handleDeleteAndroidDevice(name: string) {
-    if (!window.confirm(`Delete Android device "${name}"?`)) return;
-    setDeletingAndroidDeviceId(name);
-    try {
-      await androidManagement.deleteDevice.mutateAsync(name);
-      setVisibleDeviceIdsByPlatform((current) => ({
-        ...current,
-        android: (current.android ?? androidDevices.map((device) => device.id)).filter(
-          (id) => id !== name,
-        ),
-      }));
-    } catch {
-      // Mutation error is rendered from React Query state.
-    } finally {
-      setDeletingAndroidDeviceId(null);
-    }
-  }
-
-  const handleCreateIosDevice = useCallback(async () => {
-    if (!canCreateIosDevice) return;
-    try {
-      const createdDeviceId = await iosManagement.createDevice.mutateAsync({
-        name: trimmedIosDeviceName,
-        deviceTypeId: iosDeviceTypeId,
-        runtimeId: iosRuntimeId,
-      });
-      if (createdDeviceId) {
-        setVisibleDeviceIdsByPlatform((current) => ({
-          ...current,
-          ios: [
-            ...new Set([
-              ...(current.ios ?? iosDevices.map((device) => device.id)),
-              createdDeviceId,
-            ]),
-          ],
-        }));
-        selectPreviewDevice({ platform: 'ios', deviceId: createdDeviceId });
-      }
-      setIsCreateIosDeviceOpen(false);
-    } catch {
-      // Mutation error is rendered from React Query state.
-    }
-  }, [
-    canCreateIosDevice,
-    iosDevices,
-    iosDeviceTypeId,
-    iosManagement.createDevice,
-    iosRuntimeId,
-    selectPreviewDevice,
-    setVisibleDeviceIdsByPlatform,
-    trimmedIosDeviceName,
-  ]);
-
-  async function handleDeleteIosDevice(deviceIdToDelete: string) {
-    if (!window.confirm('Delete this iOS simulator?')) return;
-    setDeletingIosDeviceId(deviceIdToDelete);
-    try {
-      await iosManagement.deleteDevice.mutateAsync(deviceIdToDelete);
-      setVisibleDeviceIdsByPlatform((current) => ({
-        ...current,
-        ios: (current.ios ?? iosDevices.map((device) => device.id)).filter(
-          (id) => id !== deviceIdToDelete,
-        ),
-      }));
-    } catch {
-      // Mutation error is rendered from React Query state.
-    } finally {
-      setDeletingIosDeviceId(null);
-    }
-  }
-
-  async function handleEraseIosDevice(deviceIdToErase: string) {
-    if (!window.confirm('Erase this iOS simulator content and settings?')) return;
-    setErasingIosDeviceId(deviceIdToErase);
-    try {
-      await iosManagement.eraseDevice.mutateAsync(deviceIdToErase);
-    } catch {
-      // Mutation error is rendered from React Query state.
-    } finally {
-      setErasingIosDeviceId(null);
-    }
-  }
-
-  async function handleRenameIosDevice(deviceIdToRename: string) {
-    const name = iosRenameValue.trim();
-    if (!name) return;
-    try {
-      await iosManagement.renameDevice.mutateAsync({
-        deviceId: deviceIdToRename,
-        name,
-      });
-      setRenamingIosDeviceId(null);
-      setIosRenameValue('');
-    } catch {
-      // Mutation error is rendered from React Query state.
-    }
-  }
-
-  useEffect(() => {
-    queueMicrotask(() => setCopiedDeviceId(false));
-  }, [deviceId]);
 
   useEffect(() => {
     if (isLoadingDevices) return;
@@ -1596,82 +1045,14 @@ export function MobilePreviewPane({
     session?.status === 'starting' ||
     session?.status === 'streaming';
   const hasActiveSession = !!session && session.status !== 'stopped';
-  const stopRecording = () => {
-    const recording = recordingRef.current;
-    if (!recording) return;
-    window.clearInterval(recording.timer);
-    recording.recorder.stop();
-    recordingRef.current = null;
-    setIsRecording(false);
-  };
-  const startRecording = () => {
-    if (!hasImageFrame || isRecording) return;
-    const source = containerRef.current?.querySelector('canvas, img') as
-      | HTMLCanvasElement
-      | HTMLImageElement
-      | null;
-    if (!source) return;
-    const sourceWidth = source instanceof HTMLCanvasElement ? source.width : source.naturalWidth;
-    const sourceHeight = source instanceof HTMLCanvasElement ? source.height : source.naturalHeight;
-    const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
-      .find((candidate) => MediaRecorder.isTypeSupported(candidate));
-    if (!sourceWidth || !sourceHeight || !mimeType) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = sourceWidth;
-    canvas.height = sourceHeight;
-    const context = canvas.getContext('2d');
-    if (!context) return;
-    const draw = () => {
-      context.drawImage(source, 0, 0, sourceWidth, sourceHeight);
-      const feedback = gestureFeedbackStore.get();
-      if (!showGestures || !feedback?.points.length) return;
-      const containerRect = containerRef.current?.getBoundingClientRect();
-      const surfaceRect = source.getBoundingClientRect();
-      if (!containerRect || !surfaceRect) return;
-      const scaleX = sourceWidth / surfaceRect.width;
-      const scaleY = sourceHeight / surfaceRect.height;
-      context.strokeStyle = '#7dd3fc';
-      context.lineWidth = 3 * scaleX;
-      context.lineCap = 'round';
-      context.beginPath();
-      feedback.points.forEach((point, index) => {
-        const x = (point.x + containerRect.left - surfaceRect.left) * scaleX;
-        const y = (point.y + containerRect.top - surfaceRect.top) * scaleY;
-        if (index === 0) context.moveTo(x, y);
-        else context.lineTo(x, y);
-      });
-      context.stroke();
-    };
-    const stream = canvas.captureStream(30);
-    const recorder = new MediaRecorder(stream, { mimeType });
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size) chunks.push(event.data);
-    };
-    recorder.onstop = async () => {
-      try {
-        const folder = mobilePreviewConfig?.mobilePreviewRecordingFolder ??
-          (await api.settings.get('mobilePreviewRecordingFolder'));
-        const defaultPath = folder
-          ? `${folder}/mobile-preview-${new Date().toISOString().replaceAll(':', '-')}.webm`
-          : undefined;
-        const blob = new Blob(chunks, { type: recorder.mimeType });
-        await api.dialog.saveFile({
-          defaultPath,
-          filters: [{ name: 'WebM video', extensions: ['webm'] }],
-          content: new Uint8Array(await blob.arrayBuffer()),
-        });
-      } finally {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-    };
-    draw();
-    recorder.start();
-    const timer = window.setInterval(draw, 1000 / 30);
-    recordingRef.current = { recorder, stream, timer, chunks };
-    setIsRecording(true);
-  };
-  useEffect(() => stopRecording, []);
+  const { isRecording, startRecording, stopRecording, captureScreenshot } =
+    useMobilePreviewRecording({
+      containerRef,
+      gestureFeedbackStore,
+      showGestures,
+      hasImageFrame,
+      recordingFolder: mobilePreviewConfig?.mobilePreviewRecordingFolder,
+    });
   const isInputPreparing = session?.inputStatus === 'starting';
   const displayError =
     session?.error ??
@@ -1864,122 +1245,48 @@ export function MobilePreviewPane({
     [selectPreviewDevice],
   );
 
-  const handleCopyDeviceId = useCallback(async () => {
-    if (!deviceId) return;
-    await navigator.clipboard.writeText(deviceId);
-    setCopiedDeviceId(true);
-    showActionNotice('Device UUID copied');
-  }, [deviceId, showActionNotice]);
-
-  const handleOpenDeeplink = useCallback(async () => {
-    if (!deviceId || !deeplinkUrl.trim()) return;
-    setIsRunningAction(true);
-    try {
-      await api.mobilePreview.openDeeplink({
-        platform,
-        deviceId,
-        url: deeplinkUrl.trim(),
-      });
-      recordDeepLinkOpened(projectId, deeplinkUrl);
-      showActionNotice('Deeplink opened');
-    } catch (error) {
-      setInputNotice(formatError(error) ?? 'Failed to open deeplink');
-    } finally {
-      setIsRunningAction(false);
-    }
-  }, [
-    deeplinkUrl,
-    deviceId,
-    platform,
-    projectId,
-    recordDeepLinkOpened,
-    showActionNotice,
-  ]);
-
-  const handleOpenDevMenu = useCallback(async () => {
-    if (!deviceId) return;
-    setIsRunningAction(true);
-    try {
-      await api.mobilePreview.openDevMenu({
-        platform,
-        deviceId,
-        metroPort: effectiveDevServerPort,
-      });
-      showActionNotice('Dev menu toggled on device');
-    } catch (error) {
-      setInputNotice(formatError(error) ?? 'Failed to open dev menu');
-    } finally {
-      setIsRunningAction(false);
-    }
-  }, [deviceId, effectiveDevServerPort, platform, showActionNotice]);
-
-  const handleReloadExpo = useCallback(async () => {
-    setIsRunningAction(true);
-    try {
-      await api.mobilePreview.reloadExpo({ metroPort: effectiveDevServerPort });
-      showActionNotice();
-    } catch (error) {
-      setInputNotice(formatError(error) ?? 'Failed to reload Expo');
-    } finally {
-      setIsRunningAction(false);
-    }
-  }, [effectiveDevServerPort, showActionNotice]);
-
-  const handleShowDeeplinkAction = useCallback(() => {
-    mobileActionsMenuRef.current?.toggle();
-    setActiveAction('deeplink');
-    requestAnimationFrame(() => {
-      deeplinkInputRef.current?.focus();
-    });
+  const handleCloseManageDevices = useCallback(() => {
+    setIsManageDevicesOpen(false);
+    // The dialog's create-mode state (platform, Android form) is local and
+    // resets on unmount, so this pane-level flag must reset with it. Otherwise
+    // reopening lands on the Android create form for a pending iOS device.
+    setIsCreateIosDeviceOpen(false);
   }, []);
 
-  const parsedHostPort = parsePort(hostPort);
-  const parsedDevicePort = parsePort(devicePort);
-  const canForwardPort = parsedHostPort !== null && parsedDevicePort !== null;
-
-  const handleForwardPort = useCallback(async () => {
-    if (
-      !deviceId ||
-      platform !== 'android' ||
-      parsedHostPort === null ||
-      parsedDevicePort === null
-    ) {
-      return;
-    }
-    setIsRunningAction(true);
-    try {
-      await api.mobilePreview.forwardPort({
-        platform,
-        deviceId,
-        hostPort: parsedHostPort,
-        devicePort: parsedDevicePort,
-      });
-      showActionNotice(
-        `Forwarded :${parsedDevicePort} -> localhost:${parsedHostPort}`,
-      );
-    } catch (error) {
-      setInputNotice(formatError(error) ?? 'Failed to forward port');
-    } finally {
-      setIsRunningAction(false);
-    }
-  }, [deviceId, parsedDevicePort, parsedHostPort, platform, showActionNotice]);
-
-  const handleSetTextSize = useCallback(async () => {
-    if (!deviceId) return;
-    setIsRunningAction(true);
-    try {
-      await api.mobilePreview.setTextSize({
-        platform,
-        deviceId,
-        size: textSize,
-      });
-      showActionNotice('Text size applied');
-    } catch (error) {
-      setInputNotice(formatError(error) ?? 'Failed to set text size');
-    } finally {
-      setIsRunningAction(false);
-    }
-  }, [deviceId, platform, showActionNotice, textSize]);
+  const {
+    activeAction,
+    setActiveAction,
+    deeplinkUrl,
+    setDeeplinkUrl,
+    hostPort,
+    setHostPort,
+    devicePort,
+    setDevicePort,
+    textSize,
+    setTextSize,
+    isRunningAction,
+    copiedDeviceId,
+    mobileActionsMenuRef,
+    deeplinkInputRef,
+    deepLinks,
+    toggleDeepLinkPinned,
+    removeDeepLink,
+    canForwardPort,
+    handleCopyDeviceId,
+    handleOpenDeeplink,
+    handleOpenDevMenu,
+    handleReloadExpo,
+    handleShowDeeplinkAction,
+    handleForwardPort,
+    handleSetTextSize,
+  } = useMobilePreviewActions({
+    platform,
+    deviceId,
+    projectId,
+    metroPort: effectiveDevServerPort,
+    setInputNotice,
+    showActionNotice,
+  });
   const inputPreparingOverlay = isInputPreparing ? (
     <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/45 backdrop-blur-[1px]">
       <div className="border-border bg-bg-0/95 text-ink-2 flex items-center gap-2 rounded-xl border px-3 py-2 text-xs shadow-lg">
@@ -2230,6 +1537,8 @@ export function MobilePreviewPane({
       nativeLogSessionError={nativeLogSession?.error ?? null}
       nativeLogError={nativeLogs.error}
       logsStore={nativeLogs.logsStore}
+      onStartStopNativeLogs={handleStartStopNativeLogs}
+      isNativeLogBusy={nativeLogs.isStarting || nativeLogs.isStopping}
     />
   );
 
@@ -2537,7 +1846,6 @@ export function MobilePreviewPane({
   };
   const renderNetworkBody = () => (
     <div
-      ref={networkPanelRef}
       onContextMenuCapture={handleNetworkContextMenuCapture}
       onMouseDownCapture={handleNetworkMouseDownCapture}
       onMouseUpCapture={handleNetworkMouseUpCapture}
@@ -2888,526 +2196,85 @@ export function MobilePreviewPane({
     dependenciesInstallStatus?.status === 'stopped'
       ? 'completed'
       : dependenciesInstallStatus?.status;
-  const setupSteps = [
-    {
-      key: 'app',
-      label: 'App selected',
-      status: appReady ? 'ready' : 'blocked',
-      detail: appReady ? appPath : 'Choose app first',
-      tab: null,
-    },
-    {
-      key: 'dependencies-install',
-      label: 'Dependencies installed',
-      status:
-        dependenciesInstallStatusValue === 'errored'
-          ? 'error'
-          : dependenciesInstallStatusValue === 'running'
-            ? 'running'
-            : dependenciesInstallStatusValue === 'completed'
-              ? 'ready'
-              : 'idle',
-      detail:
-        dependenciesInstallStatusValue === 'completed'
-          ? dependenciesInstallCommand
-          : dependenciesInstallStatusValue === 'running'
-            ? 'Installing dependencies...'
-            : dependenciesInstallStatusValue === 'errored'
-              ? 'Dependency install failed; check Metro tab logs'
-              : dependenciesInstallCommand,
-      tab: 'dev-server' as const,
-    },
-    {
-      key: 'device',
-      label: 'Device ready',
-      status: deviceReady ? 'ready' : deviceId ? 'blocked' : 'idle',
-      detail: selectedDevice
-        ? `${selectedDevice.name} · ${formatDeviceState(selectedDevice.state)}`
-        : activeSessionDeviceReady
-          ? `${deviceId} · active preview session`
-        : 'Select booted device',
-      tab: null,
-    },
-    ...((autoStartProxy && needsExpoAndroidPrebuild) || needsExpoIosPrebuild
-      ? [
-          {
-            key: 'prebuild',
-            label: `${platform === 'android' ? 'Android' : 'iOS'} project generated`,
-            status: prebuildStatusValue,
-            detail:
-              prebuildStatusValue === 'ready'
-                ? `${platform === 'android' ? inferredAndroidProjectPath : `${appPath === '.' ? '' : `${appPath}/`}ios`} · generated`
-                : prebuildStatusValue === 'running'
-                  ? 'Running expo prebuild...'
-                  : prebuildStatusValue === 'error'
-                    ? 'Prebuild failed; check Metro tab logs'
-                    : `Expo app has no ${platform} folder`,
-            tab: 'dev-server' as const,
-          },
-        ]
-      : []),
-    ...((platform === 'android' && effectiveAndroidProjectPath) || platform === 'ios'
-      ? [
-          {
-            key: 'install',
-            label: 'App installed',
-            status: iosAppStatusError
-              ? 'error'
-              : isIosAppStatusLoading ||
-                  normalizedBuildStatus === 'loading' ||
-                  buildStarting ||
-                  buildRunning
-              ? 'running'
-              : selectedAppInstalled
-              ? 'ready'
-              : appSetupDecision.needsBuild
-                ? 'blocked'
-                : 'idle',
-            detail:
-              platform === 'android'
-                ? androidAppStatus?.packageName
-                  ? androidAppInstalled
-                    ? `${androidAppStatus.packageName} · installed`
-                    : `${androidAppStatus.packageName} · build required`
-                  : 'Package id not detected; build optional'
-                : iosAppStatus?.bundleId
-                  ? iosSetupDecision.appReady
-                    ? `${iosAppStatus.bundleId} · installed`
-                    : `${iosAppStatus.bundleId} · build required`
-                  : isIosAppStatusLoading
-                    ? 'Checking simulator app status...'
-                    : normalizedBuildStatus === 'loading'
-                      ? 'Checking persisted build history...'
-                    : iosAppStatusError
-                      ? `Status check failed: ${iosAppStatusError}`
-                    : iosSetupDecision.buildVerificationFailed
-                      ? 'Build completed, but bundle id is still unresolved'
-                      : normalizedBuildStatus === 'errored'
-                        ? 'Build failed; check iOS build logs'
-                        : 'Bundle id not detected; build required',
-            tab: 'dev-server' as const,
-          },
-        ]
-      : []),
-    {
-      key: 'metro',
-      label: 'Metro running',
-      status: metroStatus,
-      detail: devServerRunning
-        ? `port ${effectiveDevServerPort} · live`
-        : devServerStarting
-          ? 'Starting dev server...'
-          : 'Not started',
-      tab: 'dev-server',
-    },
-    {
-      key: 'preview',
-      label: 'Preview streaming',
-      status: previewStatus,
-      detail: previewMethodText ?? (previewStatus === 'running' ? 'Starting stream...' : 'Not started'),
-      tab: null,
-    },
-    ...(autoStartProxy
-      ? [
-          {
-            key: 'proxy',
-            label: 'Proxy running',
-            status: proxyStatus,
-            detail: networkProxyError
-              ? cleanPreviewError(formatError(networkProxyError) ?? 'Proxy failed')
-              : networkStatus === 'running'
-                ? (networkSession?.proxyUrl ?? 'Proxy live')
-                : networkProxy.isStarting
-                  ? 'Starting proxy...'
-                  : platform === 'android'
-                    ? 'Android emulator proxy auto-configured'
-                    : 'iOS proxy routing automatic',
-            tab: 'network' as const,
-          },
-          {
-            key: 'https',
-            label: 'HTTPS decrypt ready',
-            status: httpsStatus,
-            detail:
-              httpsStatus === 'ready'
-                ? (
-                    <NetworkRequestCountDetail
-                      store={networkProxy.requestsStore}
-                      showTunneled={showTunneledNetworkRequests}
-                    />
-                  )
-                : httpsStatus === 'blocked'
-                  ? effectiveAndroidProjectPath
-                    ? androidTrustConfigured
-                      ? 'Build and install app on device'
-                      : 'Rebuild app so debug trust config applies'
-                    : 'Set Android project folder in project settings'
-                  : httpsStatus === 'running'
-                    ? 'Preparing certificate trust...'
-                    : !networkCertificateInstalled
-                      ? platform === 'android' && androidCertGuidanceVisible
-                        ? 'Finish CA install on Android, then restart app'
-                        : 'Install CA certificate to decrypt HTTPS'
-                      : networkStatus !== 'running'
-                        ? 'Start proxy with HTTPS decrypt'
-                        : 'Waiting for certificate trust',
-            tab: 'network' as const,
-          },
-        ]
-      : []),
-  ] as const;
-  const readySetupSteps = setupSteps.filter((step) => step.status === 'ready').length;
-  const incompleteSetupSteps = setupSteps.filter((step) => step.status !== 'ready');
-  const anySetupRunning = setupSteps.some((step) => step.status === 'running');
-  const anySetupStopping =
-    isStopping ||
-    devServerStopping ||
-    buildStopping ||
-    prebuildStopping ||
-    networkProxy.isStopping;
-  const canStopSetup = !!(
-    hasActiveSession ||
-    isStarting ||
-    devServerRunning ||
-    buildRunning ||
-    prebuildStatus?.status === 'running' ||
-    (nativeLogSession && nativeLogStatus === 'running') ||
-    (networkSession && networkStatus === 'running') ||
-    anySetupStopping
-  );
-  const allSetupReady = readySetupSteps === setupSteps.length;
-  const blockedSetupStep = setupSteps.find(
-    (step) => step.status === 'blocked' || step.status === 'error',
-  );
-  const nextSetupStep =
-    blockedSetupStep ??
-    incompleteSetupSteps.find((step) => step.status !== 'running') ??
-    incompleteSetupSteps[0] ??
-    null;
-  const missingSetupLabels = incompleteSetupSteps
-    .filter((step) => step.status !== 'running')
-    .map((step) => step.label);
-  const missingSetupDetail = missingSetupLabels.length
-    ? `Missing: ${missingSetupLabels.join(', ')}.`
-    : 'Setup is running.';
-  const ctaLabel = allSetupReady
-    ? 'Workspace ready'
-    : anySetupRunning
-      ? 'Starting workspace...'
-      : needsAppSelection
-        ? 'Continue setup'
-        : platform === 'ios' && iosAppStatusError
-          ? 'Retry app status'
-        : ((autoStartProxy && needsExpoAndroidPrebuild) || needsExpoIosPrebuild) &&
-            !prebuildDone
-          ? 'Run Expo prebuild'
-          : autoStartProxy && proxyStatus === 'error'
-            ? 'Restart proxy'
-            : autoStartProxy && httpsStatus === 'blocked'
-              ? 'Fix Android trust'
-              : nextSetupStep?.key === 'https'
-                  ? networkCertificateInstalled
-                    ? 'Finish HTTPS setup'
-                    : 'Install certificate'
-              : readySetupSteps > 2
-                ? 'Continue setup'
-                : 'Start workspace';
-  const ctaDisabled = allSetupReady || anySetupRunning || needsAppSelection || !deviceReady;
-  const setupHeadline = allSetupReady
-    ? 'Workspace ready'
-    : nextSetupStep
-      ? `Next: ${nextSetupStep.label}`
-    : readySetupSteps > 2
-      ? 'Resume mobile debug'
-      : 'Debug this app end-to-end';
-  const setupDetail = allSetupReady
-    ? autoStartProxy
-      ? 'Preview, Metro, proxy, and HTTPS decrypt are live.'
-      : 'Preview and Metro are live. Proxy stays manual.'
-    : nextSetupStep
-      ? `${nextSetupStep.detail}. ${missingSetupDetail}`
-    : autoStartProxy
-      ? 'One action starts Metro, preview, proxy, and HTTPS decrypt. Logs stay manual.'
-      : 'One action starts Metro and preview. Proxy stays manual.';
 
-  const handleStartWorkspace = useCallback(async ({
-    shouldAutoBuildIos,
-    shouldPrebuildAndroid,
-    shouldPrebuildIos,
-  }: {
+  const handleStartWorkspace = useCallback(async (options: {
     shouldAutoBuildIos: boolean;
     shouldPrebuildAndroid: boolean;
     shouldPrebuildIos: boolean;
   }) => {
-    if (needsAppSelection || !deviceReady) return;
-    const setupCoordinator = setupOperationCoordinator;
-    const setupOperation = setupCoordinator.begin(
-      getPreviewDeviceKey(platform, deviceId),
-    );
-      if (!setupOperation) return;
-
-      try {
-      if (dependenciesInstallStatusValue !== 'completed') {
-        if (dependenciesInstallStatusValue === 'errored') {
-          setInputNotice('Dependency install failed; check Metro tab logs');
-          return;
-        }
-        if (dependenciesInstallStatusValue !== 'running') {
-          setResumeSetupAfterDependenciesInstall(true);
-          await runCommands.startAdHocCommand({
-            runCommandId: dependenciesInstallCommandId,
-            name: 'Mobile dependencies install',
-            command: dependenciesInstallCommand,
-            ports: [],
-          });
-        }
-        return;
-      }
-
-      const setupEffectiveAndroidProjectPath = androidProjectPath
-        ? androidProjectExists === false
-          ? null
-          : androidProjectPath
-        : androidProjectExists === true
-          ? inferredAndroidProjectPath
-          : null;
-      if (
-        (autoStartProxy &&
-          shouldPrebuildAndroid &&
-          !setupEffectiveAndroidProjectPath) ||
-        shouldPrebuildIos
-      ) {
-        setResumeSetupAfterPrebuild(true);
-        await runCommands.startAdHocCommand({
-          runCommandId: prebuildCommandId,
-          name: platform === 'android' ? 'Expo Android prebuild' : 'Expo iOS prebuild',
-          command: prebuildCommand,
-          ports: [],
-        });
-        showActionNotice('Expo prebuild started; setup will continue when it finishes');
-        return;
-      }
-
-      if (!devServerRunning && !devServerStarting) {
-        void runCommands.startAdHocCommand({
-          runCommandId: devServerCommandId,
-          name: 'Mobile dev server',
-          command: devServerCommand,
-          ports: [configuredDevServerPort],
-          availablePort: { provider: 'args' },
-        });
-      }
-
-      let setupSessionId = session?.id ?? null;
-      if (
-        hasActiveSession &&
-        (!session ||
-          session.platform !== platform ||
-          session.deviceId !== deviceId)
-      ) {
-        setupCoordinator.cancel();
-        return;
-      }
-      if (!hasActiveSession) {
-        const startedSession = await start({
-          projectPath: effectiveProjectPath,
-          platform,
-          deviceId,
-          fps,
-          quality,
-        });
-        if (!setupCoordinator.isCurrent(setupOperation)) return;
-        if (
-          startedSession.platform !== platform ||
-          startedSession.deviceId !== deviceId ||
-          startedSession.status === 'stopped'
-        ) {
-          setupCoordinator.cancel();
-          return;
-        }
-        setupSessionId = startedSession.id;
-      }
-
-      if (
-        !setupSessionId ||
-        !setupCoordinator.bindSession(setupOperation, setupSessionId)
-      ) {
-        return;
-      }
-
-      if (platform === 'ios') {
-        const frameResult = await setupCoordinator.waitForFrame(
-          setupOperation,
-          setupSessionId,
-          FIRST_PREVIEW_FRAME_SETUP_WAIT_MS,
-        );
-        if (
-          frameResult === 'cancelled' ||
-          !setupCoordinator.isCurrent(setupOperation)
-        ) {
-          return;
-        }
-      }
-
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
-      if (
-        platform === 'ios' &&
-        shouldAutoBuildIos &&
-        buildCommand &&
-        !buildRunning &&
-        !buildStarting
-      ) {
-        setLaunchedIosBuildCommandIds((current) =>
-          current.includes(buildCommandId) ? current : [...current, buildCommandId],
-        );
-        setActiveConsoleCommandId(buildCommandId);
-        void iosBuildLaunchCoordinator.launch({
-          commandId: buildCommandId,
-          start: () =>
-            runCommands.startAdHocCommand({
-              runCommandId: buildCommandId,
-              name: 'iOS build',
-              command: buildCommand,
-              ports: [],
-            }),
-          stop: runCommands.stopCommand,
-        });
-      }
-
-      if (!autoStartProxy) {
-        if (
-          platform === 'android' &&
-          setupEffectiveAndroidProjectPath &&
-          androidAppMissing &&
-          buildCommand &&
-          !buildRunning &&
-          !buildStarting
-        ) {
-          setActiveConsoleCommandId(buildCommandId);
-          void runCommands.startAdHocCommand({
-            runCommandId: buildCommandId,
-            name: 'Android build',
-            command: buildCommand,
-            ports: [],
-          });
-        }
-        return;
-      }
-
-      if (platform === 'android' && !setupEffectiveAndroidProjectPath) {
-        if (shouldPrebuildAndroid) {
-          setResumeSetupAfterPrebuild(true);
-          await runCommands.startAdHocCommand({
-            runCommandId: prebuildCommandId,
-            name: 'Expo Android prebuild',
-            command: prebuildCommand,
-            ports: [],
-          });
-          showActionNotice('Expo prebuild started; setup will continue when it finishes');
-        } else {
-          showActionNotice('Checking Android project folder before proxy setup');
-        }
-        return;
-      }
-
-      if (!networkProxyParams) return;
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
-
-      if (proxyStatus === 'error' && networkSession) {
-        await networkProxy.stop(networkSession.id);
-        if (!setupCoordinator.isCurrent(setupOperation)) return;
-      }
-
-      if (!networkCertificateInstalled) {
-        if (networkSession && networkStatus === 'running') {
-          await networkProxy.stop(networkSession.id);
-          if (!setupCoordinator.isCurrent(setupOperation)) return;
-        }
-        if (!setupCoordinator.isCurrent(setupOperation)) return;
-        await networkProxy.installCertificate({ platform, deviceId });
-        if (!setupCoordinator.isCurrent(setupOperation)) return;
-        setEnableNetworkMitm(true);
-        if (platform === 'android') {
-          setAndroidCertGuidanceVisible(true);
-        }
-        await networkProxy.start({ ...networkProxyParams, enableMitm: true });
-      } else if (networkStatus !== 'running') {
-        if (!setupCoordinator.isCurrent(setupOperation)) return;
-        setEnableNetworkMitm(true);
-        await networkProxy.start({ ...networkProxyParams, enableMitm: true });
-      } else if (networkSession && !networkSession.enableMitm) {
-        await networkProxy.stop(networkSession.id);
-        if (!setupCoordinator.isCurrent(setupOperation)) return;
-        setEnableNetworkMitm(true);
-        await networkProxy.start({ ...networkProxyParams, enableMitm: true });
-      }
-
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
-      if (
-        platform === 'android' &&
-        setupEffectiveAndroidProjectPath &&
-        !androidTrustConfigured
-      ) {
-        const trustResult = await networkProxy.prepareAndroidAppTrust({
-          projectId,
-          taskId,
-          androidProjectPath: setupEffectiveAndroidProjectPath,
-        });
-        if (!setupCoordinator.isCurrent(setupOperation)) return;
-        setAndroidAppStatus((current) =>
-          current
-            ? { ...current, trustConfigured: true }
-            : {
-                appInstalled: null,
-                packageName: null,
-                trustConfigured: true,
-              },
-        );
-
-        if (
-          buildCommand &&
-          !buildRunning &&
-          !buildStarting &&
-          (trustResult.changed || androidAppMissing)
-        ) {
-          setActiveConsoleCommandId(buildCommandId);
-          void runCommands.startAdHocCommand({
-            runCommandId: buildCommandId,
-            name: 'Android build',
-            command: buildCommand,
-            ports: [],
-          });
-        }
-      } else if (
-        platform === 'android' &&
-        setupEffectiveAndroidProjectPath &&
-        androidAppMissing &&
-        buildCommand &&
-        !buildRunning &&
-        !buildStarting
-      ) {
-        setActiveConsoleCommandId(buildCommandId);
-        void runCommands.startAdHocCommand({
-          runCommandId: buildCommandId,
-          name: 'Android build',
-          command: buildCommand,
-          ports: [],
-        });
-      }
-    } catch (error) {
-      if (setupCoordinator.isCurrent(setupOperation)) {
-        setInputNotice(formatError(error) ?? 'Workspace setup failed');
-      }
-    } finally {
-      setupCoordinator.complete(setupOperation);
-    }
+    await runWorkspaceSetup({
+      facts: {
+        platform,
+        deviceId,
+        autoStartProxy,
+        needsAppSelection,
+        deviceReady,
+        // Recomputed by the saga rather than closed over here: React Compiler
+        // cannot preserve this useCallback's memoization if the callback reads
+        // the outer `effectiveAndroidProjectPath` derivation.
+        androidProjectPath,
+        androidProjectExists,
+        inferredAndroidProjectPath,
+        dependenciesInstallStatusValue,
+        dependenciesInstallCommandId,
+        dependenciesInstallCommand,
+        prebuildCommandId,
+        prebuildCommand,
+        devServerCommandId,
+        devServerCommand,
+        devServerRunning,
+        devServerStarting,
+        configuredDevServerPort,
+        buildCommandId,
+        buildCommand,
+        buildRunning,
+        buildStarting,
+        androidAppMissing,
+        androidTrustConfigured,
+        hasActiveSession,
+        session,
+        effectiveProjectPath,
+        fps,
+        quality,
+        projectId,
+        taskId,
+        proxyStatus,
+        networkStatus,
+        networkSession,
+        networkProxyParams,
+        networkCertificateInstalled,
+      },
+      port: {
+        startAdHocCommand: runCommands.startAdHocCommand,
+        stopCommand: runCommands.stopCommand,
+        startPreviewSession: start,
+        startNetworkProxy: networkProxy.start,
+        stopNetworkProxy: networkProxy.stop,
+        installCertificate: networkProxy.installCertificate,
+        prepareAndroidAppTrust: networkProxy.prepareAndroidAppTrust,
+        setInputNotice,
+        showActionNotice,
+        setResumeSetupAfterDependenciesInstall,
+        setResumeSetupAfterPrebuild,
+        setActiveConsoleCommandId,
+        setLaunchedIosBuildCommandIds,
+        setEnableNetworkMitm,
+        setAndroidCertGuidanceVisible,
+        setAndroidAppStatus,
+      },
+      coordinator: setupOperationCoordinator,
+      iosBuildCoordinator: iosBuildLaunchCoordinator,
+      options,
+    });
   }, [
+    androidProjectExists,
+    androidProjectPath,
+    inferredAndroidProjectPath,
     buildCommand,
     buildCommandId,
     buildRunning,
     buildStarting,
     androidAppMissing,
-    androidProjectExists,
     androidTrustConfigured,
     autoStartProxy,
     devServerCommand,
@@ -3423,8 +2290,6 @@ export function MobilePreviewPane({
     effectiveProjectPath,
     fps,
     hasActiveSession,
-    androidProjectPath,
-    inferredAndroidProjectPath,
     iosBuildLaunchCoordinator,
     needsAppSelection,
     networkCertificateInstalled,
@@ -3505,387 +2370,157 @@ export function MobilePreviewPane({
     resumeSetupAfterPrebuild,
   ]);
 
-  function getSetupStepAction(stepKey: (typeof setupSteps)[number]['key']) {
-    if (stepKey === 'dependencies-install') {
-      return {
-        label:
-          dependenciesInstallStatusValue === 'running' ? 'Stop' : 'Run',
-        onClick: () => {
-          if (dependenciesInstallStatusValue === 'running') {
-            setResumeSetupAfterDependenciesInstall(false);
-            void runCommands.stopCommand(dependenciesInstallCommandId);
-            return;
-          }
-          setResumeSetupAfterDependenciesInstall(false);
-          void runCommands.startAdHocCommand({
-            runCommandId: dependenciesInstallCommandId,
-            name: 'Mobile dependencies install',
-            command: dependenciesInstallCommand,
-            ports: [],
-          });
-        },
-        disabled: runCommands.isCommandStarting(dependenciesInstallCommandId),
-        loading: runCommands.isCommandStarting(dependenciesInstallCommandId),
-        variant: dependenciesInstallStatusValue === 'running' ? 'secondary' : 'primary',
-      } as const;
+  const previewFacts: PreviewFacts = {
+    platform,
+    deviceId,
+    appPath,
+    isExpoApp,
+    autoStartProxy,
+    needsAppSelection,
+    selectedDeviceCanStart,
+    activeSessionDeviceReady,
+    selectedDevice: selectedDevice
+      ? { name: selectedDevice.name, state: selectedDevice.state }
+      : null,
+    sessionStatus: session?.status,
+    isStarting,
+    isStopping,
+    hasActiveSession,
+    previewMethodText,
+    devServerRunning,
+    devServerStarting,
+    devServerStopping,
+    effectiveDevServerPort,
+    buildRunning,
+    buildStarting,
+    buildStopping,
+    normalizedBuildStatus,
+    prebuildStatusStatus: prebuildStatus?.status,
+    prebuildStarting,
+    prebuildStopping,
+    dependenciesInstallStatusStatus: dependenciesInstallStatus?.status,
+    dependenciesInstallCommand,
+    androidProjectPath,
+    androidProjectExists,
+    inferredAndroidProjectPath,
+    androidAppStatus,
+    iosAppStatus,
+    iosAppStatusError,
+    isIosAppStatusLoading,
+    androidCertGuidanceVisible,
+    networkStatus,
+    networkProxyErrorRaw: networkProxyError,
+    networkSessionEnableMitm: networkSession?.enableMitm,
+    networkSessionProxyUrl: networkSession?.proxyUrl,
+    networkCertificateInstalled,
+    proxyIsStarting: networkProxy.isStarting,
+    proxyIsStopping: networkProxy.isStopping,
+    proxyIsInstallingCertificate: networkProxy.isInstallingCertificate,
+    proxyIsPreparingAndroidAppTrust: networkProxy.isPreparingAndroidAppTrust,
+    networkRunning: !!(networkSession && networkStatus === 'running'),
+    showTunneledNetworkRequests,
+    nativeLogRunning: !!(nativeLogSession && nativeLogStatus === 'running'),
+    formatDeviceState,
+  };
+  const previewDerived: PreviewDerived = {
+    appReady,
+    deviceReady,
+    metroStatus,
+    previewStatus,
+    proxyStatus,
+    httpsStatus,
+    prebuildStatusValue,
+    dependenciesInstallStatusValue,
+    effectiveAndroidProjectPath,
+    needsExpoAndroidPrebuild,
+    needsExpoIosPrebuild,
+    prebuildDone,
+    androidAppInstalled,
+    androidTrustConfigured,
+    selectedAppInstalled,
+    appNeedsBuild: appSetupDecision.needsBuild,
+    iosAppReady: iosSetupDecision.appReady,
+    iosBuildVerificationFailed: iosSetupDecision.buildVerificationFailed,
+  };
+
+  const setupModel = getSetupModel(previewFacts, previewDerived);
+  const { setupSteps, readySetupSteps, allSetupReady } = setupModel;
+
+  const handleStartStopDependenciesInstall = () => {
+    setResumeSetupAfterDependenciesInstall(false);
+    if (dependenciesInstallStatusValue === 'running') {
+      void runCommands.stopCommand(dependenciesInstallCommandId);
+      return;
     }
-    if (stepKey === 'prebuild') {
-      return {
-        label: prebuildStatus?.status === 'running' ? 'Stop' : 'Run',
-        onClick: handleStartStopPrebuild,
-        disabled: prebuildStarting,
-        loading: prebuildStarting,
-        variant: prebuildStatus?.status === 'running' ? 'secondary' : 'primary',
-      } as const;
-    }
-    if (stepKey === 'install') {
-      if (platform === 'ios' && iosAppStatusError) {
-        return {
-          label: 'Retry',
-          onClick: () => setIosAppStatusRefreshNonce((current) => current + 1),
-          disabled: isIosAppStatusLoading,
-          loading: isIosAppStatusLoading,
-          variant: 'primary',
-        } as const;
-      }
-      return {
-        label: buildRunning
-          ? 'Stop'
-          : selectedAppInstalled || normalizedBuildStatus === 'completed'
-            ? 'Rebuild'
-            : 'Build',
-        onClick: handleStartStopBuild,
-          disabled:
-            !buildCommand ||
-            needsAppSelection ||
-            (platform === 'ios' && !deviceId) ||
-            normalizedBuildStatus === 'loading' ||
-            buildStarting ||
-            buildStopping,
-        loading: buildStarting || buildStopping,
-        variant: buildRunning ? 'secondary' : 'primary',
-      } as const;
-    }
-    if (stepKey === 'metro') {
-      return {
-        label: devServerRunning ? 'Stop' : 'Start',
-        onClick: handleStartStopDevServer,
-        disabled: needsAppSelection || devServerStarting || devServerStopping,
-        loading: devServerStarting || devServerStopping,
-        variant: devServerRunning ? 'secondary' : 'primary',
-      } as const;
-    }
-    if (stepKey === 'preview') {
-      return {
-        label: hasActiveSession ? 'Stop' : 'Start',
-        onClick: handleStartStop,
-        disabled:
-          isStopping ||
-          (!hasActiveSession &&
-            (!deviceId || !deviceReady || isStarting || needsAppSelection)),
-        loading: isStarting || isStopping,
-        variant: hasActiveSession ? 'secondary' : 'primary',
-      } as const;
-    }
-    if (stepKey === 'logs') {
-      return {
-        label: nativeLogSession && nativeLogStatus === 'running' ? 'Stop' : 'Start',
-        onClick: handleStartStopNativeLogs,
-        disabled: !deviceId || nativeLogs.isStarting || nativeLogs.isStopping,
-        loading: nativeLogs.isStarting || nativeLogs.isStopping,
-        variant:
-          nativeLogSession && nativeLogStatus === 'running' ? 'secondary' : 'primary',
-      } as const;
-    }
-    if (stepKey === 'proxy') {
-      return {
-        label: networkSession && networkStatus === 'running' ? 'Stop' : 'Start',
-        onClick: handleStartStopNetworkProxy,
-        disabled:
-          !networkProxyStartParams ||
-          networkProxy.isStarting ||
-          networkProxy.isStopping ||
-          networkProxy.isInstallingCertificate,
-        loading: networkProxy.isStarting || networkProxy.isStopping,
-        variant:
-          networkSession && networkStatus === 'running' ? 'secondary' : 'primary',
-      } as const;
-    }
-    if (stepKey === 'https') {
-      return {
-        label:
-          platform === 'android' && !androidTrustConfigured ? 'Trust app' : 'Install cert',
-        onClick:
-          platform === 'android' && !androidTrustConfigured
-            ? handlePrepareAndroidAppTrust
-            : handleInstallNetworkCertificate,
-        disabled:
-          !deviceId ||
-          !networkProxyStartParams ||
-          networkProxy.isInstallingCertificate ||
-          networkProxy.isPreparingAndroidAppTrust ||
-          networkProxy.isStarting ||
-          networkProxy.isStopping,
-        loading:
-          networkProxy.isInstallingCertificate ||
-          networkProxy.isPreparingAndroidAppTrust,
-        variant: 'secondary',
-      } as const;
-    }
-    return null;
+    void runCommands.startAdHocCommand({
+      runCommandId: dependenciesInstallCommandId,
+      name: 'Mobile dependencies install',
+      command: dependenciesInstallCommand,
+      ports: [],
+    });
+  };
+
+  const setupStepActionHandlers: Record<PreviewStepActionIntent, () => void> = {
+    'dependencies-install-toggle': handleStartStopDependenciesInstall,
+    'prebuild-toggle': handleStartStopPrebuild,
+    'ios-app-status-retry': () =>
+      setIosAppStatusRefreshNonce((current) => current + 1),
+    'build-toggle': handleStartStopBuild,
+    'dev-server-toggle': handleStartStopDevServer,
+    'preview-toggle': handleStartStop,
+    'proxy-toggle': handleStartStopNetworkProxy,
+    'android-app-trust': handlePrepareAndroidAppTrust,
+    'install-network-certificate': handleInstallNetworkCertificate,
+  };
+
+  function getStepAction(stepKey: PreviewStepKey) {
+    const action = getSetupStepAction(stepKey, previewFacts, previewDerived, {
+      dependenciesInstallStarting: runCommands.isCommandStarting(
+        dependenciesInstallCommandId,
+      ),
+      hasBuildCommand: !!buildCommand,
+      hasNetworkProxyStartParams: !!networkProxyStartParams,
+    });
+    if (!action) return null;
+    return { ...action, onClick: setupStepActionHandlers[action.intent] };
   }
 
   const renderSetupBody = () => (
-    <div className="bg-bg-1 min-h-0 flex-1 overflow-y-auto pb-4">
-      <div className="border-line-soft border-b p-3.5">
-        <div className="flex items-center gap-3">
-          <div className="relative flex size-12 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950">
-            <svg className="absolute inset-0 size-12 -rotate-90" viewBox="0 0 48 48" aria-hidden="true">
-              <circle cx="24" cy="24" r="20" fill="none" stroke="var(--color-bg-3)" strokeWidth="4" />
-              <circle
-                cx="24"
-                cy="24"
-                r="20"
-                fill="none"
-                stroke={blockedSetupStep ? 'var(--color-status-fail)' : 'var(--color-acc)'}
-                strokeDasharray={Math.PI * 40}
-                strokeDashoffset={Math.PI * 40 * (1 - readySetupSteps / setupSteps.length)}
-                strokeLinecap="round"
-                strokeWidth="4"
-              />
-            </svg>
-            {blockedSetupStep ? (
-              <AlertTriangle className="text-status-fail size-4" />
-            ) : allSetupReady ? (
-              <Check className="text-status-done size-4" />
-            ) : (
-              <span className="text-ink-0 font-mono text-sm font-semibold">
-                {readySetupSteps}
-              </span>
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-ink-0 text-sm font-semibold">{setupHeadline}</div>
-            <div className="text-ink-3 mt-0.5 text-[11px] leading-relaxed">
-              {setupDetail}
-            </div>
-          </div>
-        </div>
-        <div className="mt-3 flex gap-2">
-          <Button
-            className="min-w-0 flex-1 justify-center"
-            variant={allSetupReady ? 'secondary' : 'primary'}
-            icon={anySetupRunning ? <Loader2 className="animate-spin" /> : <Play />}
-            disabled={ctaDisabled}
-            loading={anySetupRunning}
-            onClick={() => {
-              if (platform === 'ios' && iosAppStatusError) {
-                setIosAppStatusRefreshNonce((current) => current + 1);
-                return;
-              }
-              void handleStartWorkspace({
-                shouldAutoBuildIos: iosSetupDecision.shouldAutoBuild,
-                shouldPrebuildAndroid: needsExpoAndroidPrebuild,
-                shouldPrebuildIos: needsExpoIosPrebuild,
-              });
-            }}
-          >
-            {ctaLabel}
-          </Button>
-          <Button
-            className="shrink-0 justify-center"
-            variant="secondary"
-            disabled={!canStopSetup || anySetupStopping}
-            loading={anySetupStopping}
-            onClick={() => void handleStopAll()}
-          >
-            Stop all
-          </Button>
-        </div>
-        <div className="text-ink-4 mt-2 flex items-center justify-between text-[10px]">
-          <span>{readySetupSteps} of {setupSteps.length} ready</span>
-        </div>
-      </div>
-
-      {detectedApps.length > 1 ? (
-        <div className="border-line-soft border-b p-3">
-          <div className="text-ink-4 mb-1 text-[9px] font-semibold tracking-wide uppercase">
-            Project app
-          </div>
-          <Select
-            value={selectedDetectedApp ? appPath : (validSelectedAppPath ?? '')}
-            options={[{ value: '', label: 'Choose app' }, ...appOptions]}
-            onChange={(value) => onSelectAppPath?.(value || null)}
-            disabled={
-              hasActiveSession || !onSelectAppPath || isSelectingAppPath
-            }
-            size="sm"
-            className="w-full justify-between"
-          />
-          <div className="text-ink-4 mt-1.5 truncate font-mono text-[10px]">
-            {selectedDetectedApp
-              ? appPath
-              : (validSelectedAppPath ?? 'Select app to continue setup')}
-          </div>
-          {appSelectionError ? (
-            <div
-              className="text-status-fail mt-1.5 text-[10px]"
-              role="alert"
-            >
-              {appSelectionError}
-            </div>
-          ) : isSelectingAppPath ? (
-            <div className="text-ink-4 mt-1.5 text-[10px]" role="status">
-              Updating project app...
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="text-ink-4 px-3 pt-3 pb-1 text-[9px] font-semibold tracking-wide uppercase">
-        Workspace
-      </div>
-      <div className="border-line mx-3 overflow-hidden rounded-md border bg-zinc-950/45">
-        {setupSteps.map((step) => {
-          const action = getSetupStepAction(step.key);
-          return (
-          <div
-            key={step.key}
-            onClick={() => step.tab && setActiveTab(step.tab)}
-            className={clsx(
-              'border-line-soft flex w-full items-center gap-2.5 border-b px-3 py-2 text-left last:border-b-0',
-              step.tab ? 'cursor-pointer hover:bg-bg-2' : 'cursor-default',
-            )}
-          >
-            <span
-              className={clsx(
-                'flex size-5 shrink-0 items-center justify-center rounded-full border',
-                step.status === 'ready' && 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
-                step.status === 'running' && 'border-acc/30 bg-acc-soft text-acc-ink',
-                (step.status === 'blocked' || step.status === 'error') &&
-                  'border-status-fail/30 bg-status-fail/10 text-status-fail',
-                step.status === 'idle' && 'border-zinc-800 text-ink-4',
-              )}
-            >
-              {step.status === 'ready' ? (
-                <Check className="size-3" />
-              ) : step.status === 'running' ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : step.status === 'blocked' || step.status === 'error' ? (
-                <AlertTriangle className="size-3" />
-              ) : null}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="text-ink-1 block text-[12px] font-medium">
-                {step.label}
-              </span>
-              <span
-                className={clsx(
-                  'block whitespace-normal break-all font-mono text-[10px] leading-4',
-                  step.status === 'blocked' || step.status === 'error'
-                    ? 'text-status-fail'
-                    : 'text-ink-4',
-                )}
-              >
-                {step.detail}
-              </span>
-            </span>
-            {action ? (
-              <Button
-                size="xs"
-                variant={action.variant}
-                disabled={action.disabled}
-                loading={action.loading}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  action.onClick();
-                }}
-                className="min-w-[64px] shrink-0 justify-center"
-              >
-                {action.label}
-              </Button>
-            ) : null}
-          </div>
-          );
-        })}
-      </div>
-
-      {platform === 'ios' ? (
-        <div className="border-line bg-bg-0 mx-3 mt-3 flex items-center justify-between gap-3 rounded-md border p-3">
-          <div>
-            <div className="text-ink-1 text-xs font-semibold">iOS app</div>
-            <div className="text-ink-4 mt-0.5 font-mono text-[10px]">
-              {iosAppStatus?.bundleId ?? 'Bundle id unresolved'}
-            </div>
-          </div>
-          <Button
-            size="xs"
-            variant="secondary"
-            disabled={!iosSetupDecision.appReady || isRestartingIosApp}
-            loading={isRestartingIosApp}
-            onClick={handleRestartIosApp}
-          >
-            Restart app
-          </Button>
-        </div>
-      ) : null}
-
-      {platform === 'android' && androidCertGuidanceVisible ? (
-        <div className="border-line bg-bg-0 mx-3 mt-3 rounded-md border p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-ink-1 text-xs font-semibold">
-                Finish certificate install on Android
-              </div>
-              <div className="text-ink-4 mt-0.5 text-[10px]">
-                Complete these steps on emulator/device.
-              </div>
-            </div>
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => setAndroidCertGuidanceVisible(false)}
-            >
-              Hide
-            </Button>
-          </div>
-          <div className="mt-3">
-            <Button
-              size="xs"
-              variant="secondary"
-              disabled={!deviceId || !effectiveAndroidProjectPath || isRestartingAndroidApp}
-              loading={isRestartingAndroidApp}
-              onClick={handleRestartAndroidApp}
-            >
-              Restart app
-            </Button>
-          </div>
-          <div className="text-ink-3 mt-3 space-y-2 text-[11px] leading-relaxed">
-            <div className="flex gap-2">
-              <span className="text-ink-4 font-mono">1.</span>
-              <span>
-                If Android did not open settings, go to <span className="text-ink-1">Settings</span> → <span className="text-ink-1">Security & privacy</span> → <span className="text-ink-1">More security settings</span>.
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-ink-4 font-mono">2.</span>
-              <span>
-                Open <span className="text-ink-1">Encryption & credentials</span> → <span className="text-ink-1">Install a certificate</span> → <span className="text-ink-1">CA certificate</span>.
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-ink-4 font-mono">3.</span>
-              <span>
-                Choose <span className="text-ink-1">Jean-Claude CA</span>, accept warning, then relaunch app.
-              </span>
-            </div>
-            <div className="border-line-soft text-ink-4 border-t pt-2 text-[10px]">
-              Android app HTTPS also needs <span className="text-ink-2">Trust app</span> + rebuild once so debug builds trust user CAs.
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
+    <SetupTab
+      model={setupModel}
+      getStepAction={getStepAction}
+      platform={platform}
+      appOptions={appOptions}
+      appPath={appPath}
+      appSelectionError={appSelectionError}
+      androidCertGuidanceVisible={androidCertGuidanceVisible}
+      detectedApps={detectedApps}
+      deviceId={deviceId}
+      effectiveAndroidProjectPath={effectiveAndroidProjectPath}
+      hasActiveSession={hasActiveSession}
+      iosAppStatus={iosAppStatus}
+      iosAppStatusError={iosAppStatusError}
+      iosSetupDecision={iosSetupDecision}
+      isRestartingAndroidApp={isRestartingAndroidApp}
+      isRestartingIosApp={isRestartingIosApp}
+      isSelectingAppPath={isSelectingAppPath}
+      needsExpoAndroidPrebuild={needsExpoAndroidPrebuild}
+      needsExpoIosPrebuild={needsExpoIosPrebuild}
+      networkRequestsStore={networkProxy.requestsStore}
+      onHideAndroidCertGuidance={() => setAndroidCertGuidanceVisible(false)}
+      onRestartAndroidApp={handleRestartAndroidApp}
+      onRestartIosApp={handleRestartIosApp}
+      onRetryIosAppStatus={() =>
+        setIosAppStatusRefreshNonce((current) => current + 1)
+      }
+      onSelectAppPath={onSelectAppPath}
+      onStartWorkspace={handleStartWorkspace}
+      onStopAll={handleStopAll}
+      setActiveTab={setActiveTab}
+      showTunneledNetworkRequests={showTunneledNetworkRequests}
+      selectedDetectedApp={selectedDetectedApp}
+      validSelectedAppPath={validSelectedAppPath}
+    />
   );
 
   const devToolsResult = reactNativeDevTools.data ?? null;
@@ -3978,7 +2613,7 @@ export function MobilePreviewPane({
         setIsDevToolsViewOpen(true);
         // Apply the visibility/bounds the UI wants right now; the view may
         // have been created while a different tab was showing.
-        if (devToolsViewRef.current) updateEmbeddedDevToolsBounds();
+        updateEmbeddedDevToolsBounds();
         return api.mobilePreview.setEmbeddedReactNativeDevToolsVisibility({
           viewId: devToolsViewId,
           visible:
@@ -4466,7 +3101,12 @@ export function MobilePreviewPane({
           )}
         >
           <div className="border-line-soft flex h-[38px] shrink-0 items-center gap-1 border-b px-3">
-            <Button variant="ghost" size="sm" disabled={!isRunning}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!isRunning}
+              onClick={() => void handleReloadExpo()}
+            >
               Reload
             </Button>
             <Button
@@ -4474,6 +3114,7 @@ export function MobilePreviewPane({
               size="sm"
               icon={<Copy />}
               disabled={!hasImageFrame}
+              onClick={() => void captureScreenshot()}
             >
               Screenshot
             </Button>
@@ -4745,596 +3386,26 @@ export function MobilePreviewPane({
                 tooltip="Close inspector"
                 onClick={() => setIsStandaloneInspectorOpen(false)}
               />
-            ) : (
-              <IconButton size="sm" icon={<X />} tooltip="Clear" />
-            )}
+            ) : null}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">{inspectorBody}</div>
         </aside>
       </div>
       {isManageDevicesOpen ? (
-        <div
-          className="absolute inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-[2px]"
-          onMouseDown={() => setIsManageDevicesOpen(false)}
-        >
-          <div
-            className="border-line bg-bg-1 flex h-[620px] max-h-[88vh] w-[880px] max-w-[94vw] flex-col overflow-hidden rounded-[14px] border shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_40px_90px_-24px_rgba(0,0,0,0.72)]"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="border-line-soft flex h-[58px] shrink-0 items-center gap-3 border-b px-[18px]">
-              <span className="bg-acc-soft text-acc-ink flex size-[30px] items-center justify-center rounded-lg">
-                <Settings className="size-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-ink-0 text-[15px] font-semibold">
-                    {isCreatingManagedDevice ? 'New device' : 'Manage devices'}
-                  </span>
-                  {!isCreatingManagedDevice ? (
-                    <span className="text-ink-4 font-mono text-[11px]">
-                      {allDevices.length} devices
-                    </span>
-                  ) : null}
-                </div>
-                <div className="text-ink-3 mt-0.5 text-xs">
-                  {isCreatingManagedDevice
-                    ? 'Choose the display first, then configure runtime and storage'
-                    : 'Checked devices show in the device switcher'}
-                </div>
-              </div>
-              {!isCreatingManagedDevice ? (
-                <div className="text-ink-3 flex items-center gap-1.5 text-[11.5px]">
-                  <span className="bg-acc text-bg-0 flex size-3.5 items-center justify-center rounded-[3px]">
-                    <Check className="size-2.5" strokeWidth={3} />
-                  </span>
-                  {visibleDevices.length} in switcher
-                </div>
-              ) : null}
-              <IconButton
-                onClick={() => {
-                  if (isCreatingManagedDevice) {
-                    setIsCreateAndroidDeviceOpen(false);
-                    setIsCreateIosDeviceOpen(false);
-                  } else {
-                    setIsManageDevicesOpen(false);
-                  }
-                }}
-                size="sm"
-                icon={<X />}
-                tooltip={isCreatingManagedDevice ? 'Cancel' : 'Close'}
-              />
-            </div>
-            {isCreatingManagedDevice ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="border-line-soft flex shrink-0 items-center gap-3 border-b px-[18px] py-3">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setIsCreateAndroidDeviceOpen(false);
-                      setIsCreateIosDeviceOpen(false);
-                    }}
-                  >
-                    Back
-                  </Button>
-                  <div className="min-w-0 flex-1" />
-                  <div className="border-line bg-bg-0 flex rounded-md border p-0.5">
-                    {(['android', 'ios'] as const).map((createPlatform) => (
-                      <button
-                        key={createPlatform}
-                        type="button"
-                        onClick={() => {
-                          setManageCreatePlatform(createPlatform);
-                          setIsCreateAndroidDeviceOpen(createPlatform === 'android');
-                          setIsCreateIosDeviceOpen(createPlatform === 'ios');
-                        }}
-                        className={clsx(
-                          'rounded px-3 py-1.5 text-xs font-medium transition-colors',
-                          manageCreatePlatform === createPlatform
-                            ? 'bg-bg-3 text-ink-1'
-                            : 'text-ink-3 hover:text-ink-1',
-                        )}
-                      >
-                        {createPlatform === 'android' ? 'Android' : 'iOS'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex min-h-0 flex-1 max-[760px]:flex-col">
-                  <div className="min-w-0 flex-1 overflow-y-auto p-[22px]">
-                    <div className="text-ink-0 text-[13px] font-semibold">
-                      {manageCreatePlatform === 'android'
-                        ? 'Device profile'
-                        : 'Device type'}
-                      <span className="text-ink-3 ml-2 text-[11.5px] font-normal">
-                        {manageCreatePlatform === 'android'
-                          ? `${androidManagement.profiles.data?.length ?? 0} options`
-                          : `${iosDeviceTypes.length} options`}
-                      </span>
-                    </div>
-                    <p className="text-ink-3 mt-1 mb-4 max-w-[440px] text-xs leading-relaxed">
-                      The profile sets screen size, resolution and density. Pick the display where the app will actually run.
-                    </p>
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(132px,1fr))] gap-2">
-                      {manageCreatePlatform === 'android'
-                        ? (androidManagement.profiles.data ?? []).map((profile) => {
-                            const selected = profile.id === androidDeviceProfileId;
-                            const screen = profile.screen;
-                            const aspect = screen
-                              ? Math.min(screen.width, screen.height) /
-                                Math.max(screen.width, screen.height)
-                              : 0.46;
-                            const isTablet = aspect > 0.62;
-                            return (
-                              <button
-                                key={profile.id}
-                                type="button"
-                                onClick={() => setAndroidDeviceProfileId(profile.id)}
-                                className={clsx(
-                                  'relative flex min-h-[148px] flex-col items-center gap-2.5 rounded-[10px] border px-2.5 pt-3.5 pb-3 text-center transition-colors',
-                                  selected
-                                    ? 'border-acc-line bg-acc-soft'
-                                    : 'border-line-soft bg-bg-0 hover:bg-bg-2',
-                                )}
-                              >
-                                <span
-                                  className={clsx(
-                                    'absolute top-2 right-2 flex size-4 items-center justify-center rounded-full border',
-                                    selected
-                                      ? 'border-acc bg-acc text-bg-0'
-                                      : 'border-line opacity-30',
-                                  )}
-                                >
-                                  {selected ? <Check className="size-2.5" strokeWidth={3} /> : null}
-                                </span>
-                                <span
-                                  className={clsx(
-                                    'mt-2 flex items-center justify-center rounded-md border p-[4px]',
-                                    selected ? 'border-acc-line shadow-[0_0_0_3px_var(--color-acc-soft)]' : 'border-line',
-                                  )}
-                                  style={{
-                                    width: Math.max(26, Math.round(60 * aspect)),
-                                    height: 60,
-                                    borderRadius: isTablet ? 5 : 7,
-                                  }}
-                                >
-                                  <span
-                                    className={clsx(
-                                      'block h-full w-full rounded-[3px]',
-                                      selected ? 'bg-acc-soft' : 'bg-bg-3',
-                                    )}
-                                  />
-                                </span>
-                                <span className="text-ink-1 mt-1 line-clamp-2 text-xs font-semibold">
-                                  {profile.name}
-                                </span>
-                                <span className="text-ink-4 font-mono text-[9.5px]">
-                                  {formatAndroidScreenSpec(screen)}
-                                </span>
-                                <span className="text-ink-3 text-[9px] font-semibold tracking-wide uppercase">
-                                  {isTablet ? 'Tablet' : 'Phone'}
-                                </span>
-                              </button>
-                            );
-                          })
-                        : iosDeviceTypes.map((deviceType) => {
-                            const selected = deviceType.id === iosDeviceTypeId;
-                            const chrome = getIosDeviceChrome(deviceType);
-                            return (
-                              <button
-                                key={deviceType.id}
-                                type="button"
-                                onClick={() => setIosDeviceTypeId(deviceType.id)}
-                                className={clsx(
-                                  'relative flex min-h-[148px] flex-col items-center gap-2.5 rounded-[10px] border px-2.5 pt-3.5 pb-3 text-center transition-colors',
-                                  selected
-                                    ? 'border-acc-line bg-acc-soft'
-                                    : 'border-line-soft bg-bg-0 hover:bg-bg-2',
-                                )}
-                              >
-                                <span
-                                  className={clsx(
-                                    'absolute top-2 right-2 flex size-4 items-center justify-center rounded-full border',
-                                    selected
-                                      ? 'border-acc bg-acc text-bg-0'
-                                      : 'border-line opacity-30',
-                                  )}
-                                >
-                                  {selected ? <Check className="size-2.5" strokeWidth={3} /> : null}
-                                </span>
-                                <span
-                                  className={clsx(
-                                    'mt-2 flex items-center justify-center rounded-md border p-[4px]',
-                                    selected ? 'border-acc-line shadow-[0_0_0_3px_var(--color-acc-soft)]' : 'border-line',
-                                  )}
-                                  style={{
-                                    width: Math.round(chrome.height * chrome.aspect),
-                                    height: chrome.height,
-                                    borderRadius: chrome.hasHomeButton ? 6 : 8,
-                                  }}
-                                >
-                                  <span
-                                    className={clsx(
-                                      'relative block h-full w-full overflow-hidden rounded-[4px]',
-                                      selected ? 'bg-acc-soft' : 'bg-bg-3',
-                                    )}
-                                  >
-                                    {chrome.hasDynamicIsland ? (
-                                      <span className="bg-bg-0/80 absolute top-[5px] left-1/2 h-[4px] w-[34%] -translate-x-1/2 rounded-full" />
-                                    ) : null}
-                                    {chrome.hasClassicNotch ? (
-                                      <span className="bg-bg-0/80 absolute top-0 left-1/2 h-[7px] w-[42%] -translate-x-1/2 rounded-b-md" />
-                                    ) : null}
-                                    {chrome.hasHomeButton ? (
-                                      <span className="border-line absolute bottom-[4px] left-1/2 size-[6px] -translate-x-1/2 rounded-full border" />
-                                    ) : null}
-                                    <span className="bg-line/70 absolute top-[14px] left-[-2px] h-[10px] w-[2px] rounded-l" />
-                                    <span className="bg-line/70 absolute top-[18px] right-[-2px] h-[14px] w-[2px] rounded-r" />
-                                  </span>
-                                </span>
-                                <span className="text-ink-1 mt-1 line-clamp-2 text-xs font-semibold">
-                                  {deviceType.name}
-                                </span>
-                                <span className="text-ink-4 font-mono text-[9.5px]">
-                                  {deviceType.screen
-                                    ? `${deviceType.screen.width} x ${deviceType.screen.height}`
-                                    : (deviceType.productFamily ?? 'iPhone')}
-                                </span>
-                                <span className="text-ink-3 text-[9px] font-semibold tracking-wide uppercase">
-                                  Phone
-                                </span>
-                              </button>
-                            );
-                          })}
-                    </div>
-                  </div>
-                  <div className="border-line-soft bg-bg-0 flex w-[340px] shrink-0 flex-col border-l max-[760px]:min-h-[320px] max-[760px]:w-full max-[760px]:border-t max-[760px]:border-l-0">
-                    <div className="min-h-0 flex-1 overflow-y-auto p-5">
-                      <div className="text-ink-4 mb-3 text-[10px] font-semibold tracking-wide uppercase">
-                        Configuration
-                      </div>
-                      <label className="text-ink-3 mb-1.5 block text-[11px] font-medium">
-                        Name <span className="text-ink-4 font-normal">optional</span>
-                      </label>
-                      <Input
-                        value={manageCreatePlatform === 'android' ? androidDeviceName : iosDeviceName}
-                        onChange={(event) => {
-                          if (manageCreatePlatform === 'android') {
-                            setAndroidDeviceName(event.target.value);
-                          } else {
-                            setIosDeviceName(event.target.value);
-                          }
-                        }}
-                        placeholder={manageCreatePlatform === 'android' ? 'Pixel_8_API_35' : 'iPhone 16 Pro iOS 18.5'}
-                        className="h-9 font-mono text-xs"
-                      />
-                      <div className="mt-4">
-                        <label className="text-ink-3 mb-1.5 block text-[11px] font-medium">
-                          {manageCreatePlatform === 'android' ? 'System image' : 'Runtime'}
-                        </label>
-                        {manageCreatePlatform === 'android' ? (
-                          <Select
-                            value={androidSystemImageId}
-                            options={
-                              androidSystemImageOptions.length > 0
-                                ? androidSystemImageOptions
-                                : [{ value: '', label: 'No system images' }]
-                            }
-                            onChange={setAndroidSystemImageId}
-                            disabled={androidSystemImageOptions.length === 0}
-                            size="sm"
-                            className="w-full justify-between"
-                          />
-                        ) : (
-                          <Select
-                            value={iosRuntimeId}
-                            options={
-                              iosRuntimeOptions.length > 0
-                                ? iosRuntimeOptions
-                                : [{ value: '', label: 'No iOS runtimes' }]
-                            }
-                            onChange={setIosRuntimeId}
-                            disabled={iosRuntimeOptions.length === 0}
-                            size="sm"
-                            className="w-full justify-between"
-                          />
-                        )}
-                      </div>
-                      {manageCreatePlatform === 'android' ? (
-                        <>
-                          <div className="mt-5 flex items-center gap-2">
-                            <span className="text-ink-4 text-[10px] font-semibold tracking-wide uppercase">
-                              Advanced
-                            </span>
-                            <span className="bg-line-soft h-px flex-1" />
-                          </div>
-                          <div className="mt-3 grid grid-cols-3 gap-2">
-                            <Input value={androidRamMb} onChange={(event) => setAndroidRamMb(event.target.value)} inputMode="numeric" placeholder="RAM" className="h-9 text-xs" />
-                            <Input value={androidVmHeapMb} onChange={(event) => setAndroidVmHeapMb(event.target.value)} inputMode="numeric" placeholder="Heap" className="h-9 text-xs" />
-                            <Input value={androidStorageMb} onChange={(event) => setAndroidStorageMb(event.target.value)} inputMode="numeric" placeholder="Storage" className="h-9 text-xs" />
-                          </div>
-                          <label className="text-ink-2 mt-3 flex items-center gap-2 text-xs">
-                            <input type="checkbox" checked={androidHwKeyboard} onChange={(event) => setAndroidHwKeyboard(event.currentTarget.checked)} className="accent-acc size-3.5" />
-                            Hardware keyboard
-                          </label>
-                        </>
-                      ) : null}
-                      <div className="text-ink-4 mt-5 mb-2 text-[10px] font-semibold tracking-wide uppercase">
-                        Summary
-                      </div>
-                      <div className="border-line-soft bg-bg-1 rounded-md border p-3 text-[11.5px]">
-                        {(manageCreatePlatform === 'android'
-                          ? [
-                              ['Device', selectedAndroidProfile?.name ?? 'Unknown profile'],
-                              ['Display', formatAndroidScreenSpec(selectedAndroidProfile?.screen ?? null)],
-                              ['System image', selectedAndroidSystemImage ? `API ${selectedAndroidSystemImage.apiLevel} · ${formatAndroidImageTag(selectedAndroidSystemImage.tag)} · ${selectedAndroidSystemImage.abi}` : 'No image selected'],
-                              ['Host arch', androidHostArch ?? 'unknown'],
-                            ]
-                          : [
-                              ['Device', selectedIosDeviceType?.name ?? 'Unknown device type'],
-                              ['Runtime', selectedIosRuntime?.name ?? 'No runtime selected'],
-                            ]
-                        ).map(([label, value]) => (
-                          <div key={label} className="flex items-baseline gap-3 py-1">
-                            <span className="text-ink-4 w-20 shrink-0">{label}</span>
-                            <span className="text-ink-1 flex-1 text-right font-mono break-words">{value}</span>
-                          </div>
-                        ))}
-                      </div>
-                      {manageCreatePlatform === 'android' && androidImageCompatibilityWarning ? (
-                        <div className="border-status-warn/30 bg-status-warn/10 text-status-warn mt-3 flex gap-1.5 rounded-md border px-2 py-1.5 text-[11px] leading-snug">
-                          <AlertTriangle className="mt-0.5 size-3 shrink-0" />
-                          <span>{androidImageCompatibilityWarning}</span>
-                        </div>
-                      ) : null}
-                      {manageCreatePlatform === 'android' && androidManagement.systemImages.data?.length === 0 ? (
-                        <div className="border-line text-ink-3 mt-3 rounded-md border border-dashed p-2 text-[11px] leading-snug">
-                          <div className="mb-2">No Android system images installed.</div>
-                          <Button
-                            size="sm"
-                            loading={androidManagement.installSystemImage.isPending}
-                            onClick={handleInstallSuggestedAndroidImage}
-                          >
-                            Install Android 35 image
-                          </Button>
-                          <div className="text-ink-4 mt-2">
-                            Downloads are large. If licenses block install, run <code>sdkmanager --licenses</code> once.
-                          </div>
-                        </div>
-                      ) : null}
-                      {manageCreatePlatform === 'ios' && iosManagement.toolStatus.data?.missingTools.includes('xcrun') ? (
-                        <div className="border-status-warn/30 bg-status-warn/10 text-status-warn mt-3 rounded-md border p-2 text-[11px] leading-snug">
-                          Missing xcrun. Run <code>xcode-select --install</code>, then restart Jean-Claude.
-                        </div>
-                      ) : null}
-                      {manageCreatePlatform === 'ios' && availableIosRuntimes.length === 0 ? (
-                        <div className="border-line text-ink-3 mt-3 rounded-md border border-dashed p-2 text-[11px] leading-snug">
-                          No available iOS runtimes. Install one from Xcode Settings &gt; Platforms.
-                        </div>
-                      ) : null}
-                      {manageCreatePlatform === 'android' && androidManagementError ? (
-                        <div className="text-status-fail mt-3 text-[11px] leading-snug">{cleanPreviewError(androidManagementError)}</div>
-                      ) : null}
-                      {manageCreatePlatform === 'ios' && iosManagementError ? (
-                        <div className="text-status-fail mt-3 text-[11px] leading-snug">{cleanPreviewError(iosManagementError)}</div>
-                      ) : null}
-                    </div>
-                    <div className="border-line-soft flex shrink-0 gap-2 border-t p-4">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setIsCreateAndroidDeviceOpen(false);
-                          setIsCreateIosDeviceOpen(false);
-                        }}
-                      >
-                        Cancel
-                      </Button>
-                      <div className="flex-1" />
-                      {manageCreatePlatform === 'android' ? (
-                        <Button size="sm" variant="primary" loading={androidManagement.createDevice.isPending} disabled={!canCreateAndroidDevice || androidManagement.createDevice.isPending} onClick={handleCreateAndroidDevice}>
-                          Create device
-                        </Button>
-                      ) : (
-                        <Button size="sm" variant="primary" loading={iosManagement.createDevice.isPending} disabled={!canCreateIosDevice || iosManagement.createDevice.isPending} onClick={handleCreateIosDevice}>
-                          Create device
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex min-h-0 flex-1 max-[700px]:flex-col">
-                <div className="border-line-soft bg-bg-0 flex w-[300px] shrink-0 flex-col border-r max-[700px]:h-[220px] max-[700px]:w-full max-[700px]:border-r-0 max-[700px]:border-b">
-                  <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-                    {(['android', 'ios'] as const).map((devicePlatform) => {
-                      const platformDevices = managedDevicesByPlatform[devicePlatform];
-                      if (platformDevices.length === 0) return null;
-                      return (
-                        <div key={devicePlatform} className="mb-1.5">
-                          <div className="text-ink-4 px-1.5 py-2 text-[10px] font-semibold tracking-wide uppercase">
-                            {devicePlatform === 'android' ? 'Android' : 'iOS'} · {platformDevices.length}
-                          </div>
-                          {platformDevices.map((device) => {
-                            const selected = selectedManagedDevice?.id === device.id && selectedManagedDevice.platform === device.platform;
-                            const visibleDeviceIds = visibleDeviceIdsByPlatform[device.platform];
-                            const checked = visibleDeviceIds === null || visibleDeviceIds.includes(device.id);
-                            return (
-                              <button
-                                key={`${device.platform}:${device.id}`}
-                                type="button"
-                                onClick={() => setManagedSelectedDeviceKey(`${device.platform}:${device.id}`)}
-                                className={clsx(
-                                  'mb-0.5 grid w-full grid-cols-[16px_8px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2 text-left transition-colors',
-                                  selected ? 'border-line bg-bg-3' : 'border-transparent hover:bg-bg-2',
-                                )}
-                              >
-                                <span
-                                  role="checkbox"
-                                  aria-checked={checked}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setVisibleDeviceIdsByPlatform((current) => {
-                                      const currentIds = current[device.platform] ?? managedDevicesByPlatform[device.platform].map((platformDevice) => platformDevice.id);
-                                      return {
-                                        ...current,
-                                        [device.platform]: checked ? currentIds.filter((id) => id !== device.id) : [...new Set([...currentIds, device.id])],
-                                      };
-                                    });
-                                  }}
-                                  className={clsx(
-                                    'flex size-4 items-center justify-center rounded-[3px] border',
-                                    checked ? 'border-acc bg-acc text-bg-0' : 'border-line bg-bg-1',
-                                  )}
-                                >
-                                  {checked ? <Check className="size-2.5" strokeWidth={3} /> : null}
-                                </span>
-                                <span className={clsx('size-[7px] rounded-full', device.state === 'booted' ? 'bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.7)]' : 'bg-ink-4')} />
-                                <span className="min-w-0">
-                                  <span className="text-ink-1 block truncate text-[12.5px] font-medium">{device.name}</span>
-                                  <span className="text-ink-4 block truncate font-mono text-[10px]">{device.osVersion ?? formatDeviceState(device.state)}</span>
-                                </span>
-                                <PlatformLogo platform={device.platform} />
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
-                    {allDevices.length === 0 ? (
-                      <div className="text-ink-4 p-3 text-xs">No devices yet.</div>
-                    ) : null}
-                  </div>
-                  <div className="border-line-soft shrink-0 border-t p-2.5">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="w-full justify-center"
-                      onClick={() => {
-                        const nextPlatform = platform ?? 'android';
-                        setManageCreatePlatform(nextPlatform);
-                        setIsCreateAndroidDeviceOpen(nextPlatform === 'android');
-                        setIsCreateIosDeviceOpen(nextPlatform === 'ios');
-                      }}
-                    >
-                      New device
-                    </Button>
-                  </div>
-                </div>
-                {selectedManagedDevice ? (
-                  <div className="min-w-0 flex-1 overflow-y-auto p-6">
-                    <div className="mb-5 flex items-center gap-3.5">
-                      <span className="border-line bg-bg-1 flex h-[54px] w-[25px] shrink-0 items-center justify-center rounded-lg border p-[3px]">
-                        <span className="bg-bg-3 h-full w-full rounded-[4px]" />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-ink-0 truncate text-[17px] font-semibold">{selectedManagedDevice.name}</span>
-                          <PlatformLogo platform={selectedManagedDevice.platform} />
-                        </div>
-                        <div className="mt-1 flex items-center gap-2">
-                          <span className={clsx('size-[7px] rounded-full', selectedManagedDevice.state === 'booted' ? 'bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.7)]' : 'bg-ink-4')} />
-                          <span className="text-ink-4 font-mono text-[11px]">{formatDeviceState(selectedManagedDevice.state)}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="text-ink-4 mb-2.5 text-[10px] font-semibold tracking-wide uppercase">Specification</div>
-                    <div className="border-line-soft bg-bg-0 mb-5 rounded-md border px-3.5 py-1.5 text-[11.5px]">
-                      {[
-                        ['Handle', selectedManagedDevice.id],
-                        ['OS', selectedManagedDevice.osVersion ?? (selectedManagedDevice.platform === 'android' ? 'Android' : 'iOS')],
-                        ['State', formatDeviceState(selectedManagedDevice.state)],
-                        ['Platform', selectedManagedDevice.platform === 'android' ? 'Android' : 'iOS'],
-                      ].map(([label, value]) => (
-                        <div key={label} className="border-line-soft flex items-baseline gap-3 border-b py-2 last:border-b-0">
-                          <span className="text-ink-3 w-[70px] shrink-0">{label}</span>
-                          <span className="text-ink-1 flex-1 text-right font-mono break-all">{value}</span>
-                        </div>
-                      ))}
-                    </div>
-                    {renamingIosDeviceId === selectedManagedDevice.id ? (
-                      <div className="border-line-soft bg-bg-0 mb-4 flex flex-wrap items-center gap-2 rounded-md border p-2">
-                        <Input value={iosRenameValue} onChange={(event) => setIosRenameValue(event.target.value)} className="h-8 min-w-44 flex-1 text-xs" />
-                        <Button size="sm" variant="primary" loading={iosManagement.renameDevice.isPending} disabled={!iosRenameValue.trim() || iosManagement.renameDevice.isPending} onClick={() => handleRenameIosDevice(selectedManagedDevice.id)}>Save</Button>
-                        <Button size="sm" variant="ghost" onClick={() => { setRenamingIosDeviceId(null); setIosRenameValue(''); }}>Cancel</Button>
-                      </div>
-                    ) : null}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        onClick={() => {
-                          setVisibleDeviceIdsByPlatform((current) => {
-                            const currentIds =
-                              current[selectedManagedDevice.platform] ??
-                              managedDevicesByPlatform[
-                                selectedManagedDevice.platform
-                              ].map((platformDevice) => platformDevice.id);
-                            return {
-                              ...current,
-                              [selectedManagedDevice.platform]: [
-                                ...new Set([...currentIds, selectedManagedDevice.id]),
-                              ],
-                            };
-                          });
-                          handleSelectDevice(selectedManagedDevice);
-                          setIsManageDevicesOpen(false);
-                        }}
-                      >
-                        Select device
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          const visibleDeviceIds = visibleDeviceIdsByPlatform[selectedManagedDevice.platform];
-                          const checked = visibleDeviceIds === null || visibleDeviceIds.includes(selectedManagedDevice.id);
-                          setVisibleDeviceIdsByPlatform((current) => {
-                            const currentIds = current[selectedManagedDevice.platform] ?? managedDevicesByPlatform[selectedManagedDevice.platform].map((platformDevice) => platformDevice.id);
-                            return {
-                              ...current,
-                              [selectedManagedDevice.platform]: checked ? currentIds.filter((id) => id !== selectedManagedDevice.id) : [...new Set([...currentIds, selectedManagedDevice.id])],
-                            };
-                          });
-                        }}
-                      >
-                        Toggle switcher
-                      </Button>
-                      {selectedManagedDevice.platform === 'ios' ? (
-                        <>
-                          <Button size="sm" variant="ghost" onClick={() => { setRenamingIosDeviceId(selectedManagedDevice.id); setIosRenameValue(selectedManagedDevice.name); }}>Rename</Button>
-                          <Button size="sm" variant="ghost" loading={iosManagement.eraseDevice.isPending && erasingIosDeviceId === selectedManagedDevice.id} onClick={() => handleEraseIosDevice(selectedManagedDevice.id)}>Erase</Button>
-                          <Button size="sm" variant="ghost" loading={iosManagement.deleteDevice.isPending && deletingIosDeviceId === selectedManagedDevice.id} onClick={() => handleDeleteIosDevice(selectedManagedDevice.id)}>Delete</Button>
-                        </>
-                      ) : selectedManagedDevice.state === 'shutdown' ? (
-                        <Button size="sm" variant="ghost" loading={androidManagement.deleteDevice.isPending && deletingAndroidDeviceId === selectedManagedDevice.id} onClick={() => handleDeleteAndroidDevice(selectedManagedDevice.id)}>Delete</Button>
-                      ) : null}
-                    </div>
-                    {androidManagementError || iosManagementError ? (
-                      <div className="text-status-fail mt-4 text-[11px] leading-snug">
-                        {cleanPreviewError(androidManagementError ?? iosManagementError ?? '')}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="text-ink-4 flex flex-1 items-center justify-center text-xs">Select a device</div>
-                )}
-              </div>
-            )}
-            {!isCreatingManagedDevice ? (
-              <div className="border-line flex h-12 shrink-0 items-center justify-end border-t px-4">
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => setIsManageDevicesOpen(false)}
-                >
-                  Done
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        </div>
+        <ManageDevicesDialog
+          platform={platform}
+          deviceId={deviceId}
+          allDevices={allDevices}
+          visibleDevices={visibleDevices}
+          androidManagement={androidManagement}
+          iosManagement={iosManagement}
+          visibleDeviceIdsByPlatform={visibleDeviceIdsByPlatform}
+          setVisibleDeviceIdsByPlatform={setVisibleDeviceIdsByPlatform}
+          isCreateIosDeviceOpen={isCreateIosDeviceOpen}
+          setIsCreateIosDeviceOpen={setIsCreateIosDeviceOpen}
+          onSelectPreviewDevice={selectPreviewDevice}
+          onClose={handleCloseManageDevices}
+        />
       ) : null}
     </div>
   );

@@ -80,6 +80,8 @@ export function PaneResizer({
     };
   }, []);
 
+  // Event-handler only: reading a ref during render is unsound (and would not
+  // re-render on change), so `aria-valuenow` uses the committed `width` prop.
   const currentWidth = () => liveWidth.current ?? width;
 
   const setWidth = (next: number) => {
@@ -93,7 +95,7 @@ export function PaneResizer({
       role="separator"
       aria-orientation="vertical"
       aria-label={label}
-      aria-valuenow={currentWidth()}
+      aria-valuenow={width}
       aria-valuemin={PANE_MIN_WIDTH}
       aria-valuemax={PANE_MAX_WIDTH}
       tabIndex={0}
