@@ -36,6 +36,142 @@ function createQuery(run?: () => Promise<void>) {
   };
 }
 
+function createMessageQuery(messages: unknown[]) {
+  let index = 0;
+  return {
+    async next() {
+      if (index >= messages.length) return { done: true as const, value: undefined };
+      return { done: false as const, value: messages[index++] };
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+}
+
+async function collectEvents(session: { events: AsyncIterable<unknown> }) {
+  const events: unknown[] = [];
+  for await (const event of session.events) events.push(event);
+  return events;
+}
+
+describe('ClaudeCodeBackend background-task results', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+  });
+
+  const notificationResult = {
+    type: 'result',
+    subtype: 'success',
+    origin: { kind: 'task-notification' },
+    num_turns: 0,
+    result: '',
+  };
+  const assistantText = {
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'still working' }] },
+  };
+  const realResult = { type: 'result', subtype: 'success', num_turns: 3, result: 'done' };
+
+  async function runMessages(messages: unknown[]) {
+    queryMock.mockImplementation(() => createMessageQuery(messages));
+    const backend = makeBackend();
+    try {
+      const session = await backend.start(
+        { type: 'claude-code', cwd: '/worktree', interactionMode: 'ask' },
+        [{ type: 'text', text: 'go' }],
+      );
+      return (await collectEvents(session)) as { type: string }[];
+    } finally {
+      await backend.dispose();
+    }
+  }
+
+  it('does not complete the turn on a background task-notification result', async () => {
+    const events = await runMessages([notificationResult, assistantText, realResult]);
+    // The no-op notification result must produce neither a UI result entry nor
+    // a completion; only the real result completes the turn.
+    expect(events.map((event) => event.type)).toEqual([
+      'entry', // synthetic user prompt
+      'entry', // assistant text
+      'entry', // real result entry
+      'complete',
+    ]);
+  });
+
+  it('persists the raw message of a withheld result', async () => {
+    const persistRaw = vi.fn(async () => 'raw-1');
+    queryMock.mockImplementation(() => createMessageQuery([notificationResult, realResult]));
+    const backend = new ClaudeCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw,
+    });
+    try {
+      const session = await backend.start(
+        { type: 'claude-code', cwd: '/worktree', interactionMode: 'ask' },
+        [{ type: 'text', text: 'go' }],
+      );
+      await collectEvents(session);
+      expect(persistRaw).toHaveBeenCalledTimes(2);
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('replays the withheld result when the run ends without any real result', async () => {
+    const events = await runMessages([assistantText, notificationResult]);
+    expect(events.filter((event) => event.type === 'complete')).toHaveLength(1);
+    // Replayed last, after the live activity.
+    expect(events[events.length - 1]?.type).toBe('complete');
+  });
+
+  it('does not replay after a real result already completed the turn', async () => {
+    const events = await runMessages([realResult, notificationResult]);
+    expect(events.filter((event) => event.type === 'complete')).toHaveLength(1);
+  });
+
+  it('does not replay a withheld result after a terminal error', async () => {
+    queryMock.mockImplementation(() => ({
+      async next() {
+        return { done: false as const, value: notificationResult };
+      },
+      [Symbol.asyncIterator]() {
+        let sent = false;
+        return {
+          next: async () => {
+            if (!sent) {
+              sent = true;
+              return { done: false as const, value: notificationResult };
+            }
+            throw new Error('SDK exploded');
+          },
+        };
+      },
+    }));
+
+    const backend = makeBackend();
+    try {
+      const session = await backend.start(
+        { type: 'claude-code', cwd: '/worktree', interactionMode: 'ask' },
+        [{ type: 'text', text: 'go' }],
+      );
+      const events = (await collectEvents(session)) as { type: string }[];
+      expect(events.filter((event) => event.type === 'complete')).toHaveLength(0);
+      expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('keeps completing on a notification-triggered turn that did real work', async () => {
+    const events = await runMessages([
+      { ...realResult, origin: { kind: 'task-notification' } },
+    ]);
+    expect(events.filter((event) => event.type === 'complete')).toHaveLength(1);
+  });
+});
+
 describe('ClaudeCodeBackend directory access', () => {
   beforeEach(() => {
     queryMock.mockReset();

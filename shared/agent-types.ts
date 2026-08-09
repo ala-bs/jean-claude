@@ -105,6 +105,11 @@ export interface AgentMessage {
   };
   // SDK-provided per-model usage stats (available on result messages)
   modelUsage?: Record<string, ModelUsage>;
+  // SDK-provided origin of a result message. `task-notification` results are
+  // emitted when a background task notifies the agent — they are not the end
+  // of the user-facing turn.
+  origin?: { kind?: string };
+  num_turns?: number;
 }
 
 export interface AssistantMessage {
