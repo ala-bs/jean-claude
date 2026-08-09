@@ -4,7 +4,11 @@ import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import type { RunStatus } from '@shared/run-command-types';
 
 import {
+  clearStepScrollPosition,
+  DEFAULT_CACHE_LIMIT,
   getQuestionDraftKey,
+  getStepScrollPosition,
+  setStepScrollPosition,
   useTaskMessagesStore,
 } from './task-messages';
 
@@ -19,6 +23,42 @@ describe('task messages store', () => {
       questionResponsesInFlight: {},
       areRunCommandStatusesHydrated: false,
     });
+  });
+
+  it('keeps the scroll position across an unload/reload refetch', () => {
+    const store = useTaskMessagesStore.getState();
+    store.loadStep('step-1', 'task-1', [], 'completed');
+    setStepScrollPosition('step-1', 320);
+
+    store.unloadStep('step-1');
+    store.loadStep('step-1', 'task-1', [], 'completed');
+
+    expect(getStepScrollPosition('step-1')).toBe(320);
+
+    clearStepScrollPosition('step-1');
+    expect(getStepScrollPosition('step-1')).toBeUndefined();
+  });
+
+  it('drops scroll positions for steps evicted by the cache limit', () => {
+    useTaskMessagesStore.setState({ cacheLimit: 2 });
+    try {
+      const store = useTaskMessagesStore.getState();
+
+      store.loadStep('step-a', 'task-1', [], 'completed');
+      setStepScrollPosition('step-a', 100);
+      store.loadStep('step-b', 'task-1', [], 'completed');
+      setStepScrollPosition('step-b', 200);
+      store.loadStep('step-c', 'task-1', [], 'completed');
+      setStepScrollPosition('step-c', 300);
+
+      expect(useTaskMessagesStore.getState().steps['step-a']).toBeUndefined();
+      expect(getStepScrollPosition('step-a')).toBeUndefined();
+      expect(getStepScrollPosition('step-c')).toBe(300);
+    } finally {
+      clearStepScrollPosition('step-b');
+      clearStepScrollPosition('step-c');
+      useTaskMessagesStore.setState({ cacheLimit: DEFAULT_CACHE_LIMIT });
+    }
   });
 
   it('keeps question drafts until explicitly cleared', () => {

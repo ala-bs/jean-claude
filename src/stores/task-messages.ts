@@ -248,7 +248,38 @@ interface TaskMessagesStore {
   getRunningStepIds: () => string[];
 }
 
-const DEFAULT_CACHE_LIMIT = 25;
+export const DEFAULT_CACHE_LIMIT = 25;
+
+/**
+ * Message-stream scroll offsets, keyed by stepId — same key space and same
+ * lifetime as `steps`, so eviction/unload below drops them too.
+ *
+ * Deliberately outside the Zustand state: offsets change on every wheel tick
+ * and must never trigger a re-render of the stream we are scrolling.
+ */
+const stepScrollPositions = new Map<string, number>();
+
+export function getStepScrollPosition(stepId: string): number | undefined {
+  return stepScrollPositions.get(stepId);
+}
+
+export function setStepScrollPosition(stepId: string, offset: number): void {
+  stepScrollPositions.set(stepId, offset);
+}
+
+/** Forget an offset (e.g. the user is parked at the bottom again). */
+export function clearStepScrollPosition(stepId: string): void {
+  stepScrollPositions.delete(stepId);
+}
+
+/**
+ * Drop offsets for steps evicted from the message cache. Only the evicted ids
+ * are removed — a step can be briefly absent from `steps` while refetching
+ * (unloadStep + reload), and its offset must survive that window.
+ */
+function pruneScrollPositions(evictedStepIds: Iterable<string>): void {
+  for (const stepId of evictedStepIds) stepScrollPositions.delete(stepId);
+}
 
 function evictIfNeeded(
   steps: Record<string, TaskState>,
@@ -280,6 +311,9 @@ function evictIfNeeded(
       evictedTaskIds.add(state.taskId);
     }
   }
+
+  // Saved scroll offsets for evicted steps are no longer meaningful
+  pruneScrollPositions(idsToEvict);
 
   // Clear review comments for tasks that have no remaining loaded steps
   for (const taskId of evictedTaskIds) {
@@ -946,6 +980,11 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
     set((state) => {
       const { [stepId]: _removed, ...rest } = state.steps;
       void _removed; // Intentionally unused - destructuring to exclude from rest
+      // Scroll offsets are intentionally NOT dropped here: unloadStep doubles
+      // as "invalidate and refetch" for the step the user is currently looking
+      // at, and losing the offset there would be a visible regression. Offsets
+      // for steps that never come back are reaped by pruneScrollPositions on
+      // the next load.
       return { steps: rest };
     });
   },

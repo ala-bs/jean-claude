@@ -46,9 +46,16 @@ import { QueuedPromptEntry } from './ui-queued-prompt-entry';
 import { SkillEntry } from './ui-skill-entry';
 import { SubagentEntry } from './ui-subagent-entry';
 import type { ToolUseByName } from '@shared/normalized-message-v2';
+import {
+  clearStepScrollPosition,
+  getStepScrollPosition,
+  setStepScrollPosition,
+} from '@/stores/task-messages';
 
 // Threshold in pixels - if user is within this distance from bottom, auto-scroll
 const SCROLL_THRESHOLD = 10;
+// How long the content may stall (stop growing) before we give up restoring
+const RESTORE_IDLE_MS = 750;
 
 function addToolCopyItems(
   items: ContextMenuItem[],
@@ -166,6 +173,13 @@ export const MessageStream = memo(function MessageStream({
   // Whether an automatic re-pin is still wanted. Set on focus/new message,
   // cleared as soon as the user scrolls away from the bottom.
   const shouldPinRef = useRef(true);
+  // Step whose offset we are currently tracking
+  const scrollKeyRef = useRef(stepId ?? null);
+  // Offset we still want to land on while lazy content finishes mounting
+  const pendingRestoreRef = useRef<number | null>(null);
+  const restoreDeadlineRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Last scrollHeight seen while restoring, to detect "content stopped growing"
+  const restoreHeightRef = useRef(0);
   const [processingCacheState, setProcessingCacheState] = useState<{
     key: string;
     cache: MessageStreamProcessingCache;
@@ -218,11 +232,27 @@ export const MessageStream = memo(function MessageStream({
     return distanceFromBottom <= SCROLL_THRESHOLD;
   }, []);
 
-  // Update near-bottom state on scroll
+  // Update near-bottom state on scroll, and remember the offset so refocusing
+  // this task/step restores where the user left off.
   const handleScroll = useCallback(() => {
     const nearBottom = checkIfNearBottom();
     isNearBottomRef.current = nearBottom;
     if (!nearBottom) shouldPinRef.current = false;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    // While a restore is in flight the offsets we see are our own (and are
+    // clamped to a still-growing content box) — persisting them would
+    // overwrite the real saved offset with a bogus one.
+    if (pendingRestoreRef.current !== null) return;
+    const key = scrollKeyRef.current;
+    if (!key) return;
+    if (nearBottom) {
+      // Parked at the bottom is the default behaviour — nothing to restore.
+      clearStepScrollPosition(key);
+    } else {
+      setStepScrollPosition(key, container.scrollTop);
+    }
   }, [checkIfNearBottom]);
 
   // Scroll all the way down, including the padding reserved for the
@@ -234,12 +264,99 @@ export const MessageStream = memo(function MessageStream({
     container.scrollTop = container.scrollHeight;
   }, []);
 
-  // Reset scroll to bottom when switching tasks or steps
+  // Leave restore mode. `reachedTarget` matters: when we give up short of the
+  // target the container is clamped at the bottom, so re-arming the pin from
+  // that position would auto-scroll to the true bottom on the next resize —
+  // and that scroll event would then wipe the saved offset. Give-ups therefore
+  // leave pinning off and the stored offset intact.
+  const endPendingRestore = useCallback(
+    ({ reachedTarget }: { reachedTarget: boolean }) => {
+      if (restoreDeadlineRef.current !== null) {
+        clearTimeout(restoreDeadlineRef.current);
+        restoreDeadlineRef.current = null;
+      }
+      if (pendingRestoreRef.current === null) return;
+      pendingRestoreRef.current = null;
+      const nearBottom = checkIfNearBottom();
+      isNearBottomRef.current = nearBottom;
+      shouldPinRef.current = reachedTarget && nearBottom;
+    },
+    [checkIfNearBottom],
+  );
+
+  // Idle deadline: restore mode ends once the content stops growing for
+  // RESTORE_IDLE_MS. Resize ticks are the only thing driving
+  // applyPendingRestore, so if the content stalls short of the target (entries
+  // re-collapsed, narrower window, fewer messages than when the offset was
+  // saved) nothing else would ever end the restore — leaving saving and
+  // auto-pin disabled, and yanking the user later if the stream grows again.
+  const startRestoreDeadline = useCallback(() => {
+    if (restoreDeadlineRef.current !== null) {
+      clearTimeout(restoreDeadlineRef.current);
+    }
+    restoreDeadlineRef.current = setTimeout(() => {
+      endPendingRestore({ reachedTarget: false });
+    }, RESTORE_IDLE_MS);
+  }, [endPendingRestore]);
+
+  // Re-apply the saved offset until the content is tall enough to hold it.
+  const applyPendingRestore = useCallback(() => {
+    const target = pendingRestoreRef.current;
+    if (target === null) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const { scrollHeight } = container;
+    const maxScroll = Math.max(scrollHeight - container.clientHeight, 0);
+    container.scrollTop = Math.min(target, maxScroll);
+    if (maxScroll >= target) {
+      // The content can accommodate the target offset — restore succeeded
+      endPendingRestore({ reachedTarget: true });
+      return;
+    }
+    // Still growing: give lazy content another idle window to mount
+    if (scrollHeight !== restoreHeightRef.current) {
+      restoreHeightRef.current = scrollHeight;
+      startRestoreDeadline();
+    }
+  }, [endPendingRestore, startRestoreDeadline]);
+
+  // Any user intent to move the viewport wins over a pending restore
+  const cancelPendingRestore = useCallback(() => {
+    endPendingRestore({ reachedTarget: false });
+  }, [endPendingRestore]);
+
+  // Restore the previous offset when refocusing a task/step, otherwise land at
+  // the bottom. The restore target is kept "pending" because content below the
+  // fold mounts lazily: scrollHeight is usually too small on first commit, so
+  // the ResizeObserver below re-applies it until it fits.
   useLayoutEffect(() => {
-    scrollToBottom();
-    isNearBottomRef.current = true;
-    shouldPinRef.current = true;
-  }, [taskId, stepId, scrollToBottom]);
+    const key = stepId ?? null;
+    scrollKeyRef.current = key;
+    const saved = key ? getStepScrollPosition(key) : undefined;
+    if (saved === undefined) {
+      cancelPendingRestore();
+      scrollToBottom();
+      isNearBottomRef.current = true;
+      shouldPinRef.current = true;
+      return;
+    }
+    pendingRestoreRef.current = saved;
+    restoreHeightRef.current = 0;
+    isNearBottomRef.current = false;
+    shouldPinRef.current = false;
+    startRestoreDeadline();
+    applyPendingRestore();
+  }, [
+    taskId,
+    stepId,
+    scrollToBottom,
+    applyPendingRestore,
+    startRestoreDeadline,
+    cancelPendingRestore,
+  ]);
+
+  // Never leave a restore timer running past unmount
+  useEffect(() => cancelPendingRestore, [cancelPendingRestore]);
 
   // Content mounted below the fold (markdown, diffs, tool cards, images) can
   // grow *after* the initial scroll, and the floating composer's height is
@@ -258,6 +375,10 @@ export const MessageStream = memo(function MessageStream({
       contentObserverRef.current = null;
       if (!node) return;
       const observer = new ResizeObserver(() => {
+        if (pendingRestoreRef.current !== null) {
+          applyPendingRestore();
+          return;
+        }
         // Only re-pin while the user is parked at the bottom *and* hasn't
         // scrolled away since the last focus/message — otherwise expanding a
         // collapsed entry would yank them back down.
@@ -271,7 +392,7 @@ export const MessageStream = memo(function MessageStream({
       }
       contentObserverRef.current = observer;
     },
-    [scrollToBottom],
+    [scrollToBottom, applyPendingRestore],
   );
 
   useEffect(() => () => contentObserverRef.current?.disconnect(), []);
@@ -458,6 +579,10 @@ export const MessageStream = memo(function MessageStream({
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
+        onWheel={cancelPendingRestore}
+        onTouchMove={cancelPendingRestore}
+        onMouseDown={cancelPendingRestore}
+        onKeyDown={cancelPendingRestore}
         className="min-w-0 flex-1 overflow-auto"
         style={bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined}
       >
