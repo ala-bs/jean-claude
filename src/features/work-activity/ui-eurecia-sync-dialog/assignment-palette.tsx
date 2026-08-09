@@ -51,7 +51,7 @@ export function AssignmentPalette({
   onRemoveProject: (axis1Id: string) => void;
   /** Projects added by hand and not used by any row, so removing them is safe. */
   removableProjectIds: string[];
-  width: number;
+  width: number | string;
 }) {
   return (
     <div

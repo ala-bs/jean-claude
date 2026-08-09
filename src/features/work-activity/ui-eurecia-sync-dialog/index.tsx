@@ -8,7 +8,7 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -328,11 +328,18 @@ export function EureciaSyncDialog({
     });
   }, [axisLabelMap, setAxisLabelCache]);
 
-  function labelFor(axis: TimesheetAxisIndex, id: string) {
-    if (!id) return 'Unassigned';
-    const key = `${axis}:${id}`;
-    return axisLabelMap.get(key) ?? axisLabelCache[key] ?? cleanEureciaAxisLabel(id);
-  }
+  // Stable identity: this is passed down to every grid block and rail, so an
+  // unstable one would defeat their memoization.
+  const labelFor = useCallback(
+    (axis: TimesheetAxisIndex, id: string) => {
+      if (!id) return 'Unassigned';
+      const key = `${axis}:${id}`;
+      return (
+        axisLabelMap.get(key) ?? axisLabelCache[key] ?? cleanEureciaAxisLabel(id)
+      );
+    },
+    [axisLabelCache, axisLabelMap],
+  );
 
   // Every axis-1 value Eurecia exposed for this sheet, however it reached us.
   const availableAxis1 = useMemo(() => {
@@ -1928,6 +1935,7 @@ function EditorStage({
   const weekDates = useMemo(() => activeWeek?.dates ?? [], [activeWeek]);
 
   const [confirmingSave, setConfirmingSave] = useState(false);
+  const editorRef = useRef<HTMLDivElement | null>(null);
 
   const armedSelection = useMemo<TimesheetAxisSelection | null>(() => {
     if (!editable || !armedKey) return null;
@@ -2107,10 +2115,17 @@ function EditorStage({
 
   return (
     <div
+      ref={editorRef}
       className={clsx(
         'relative flex min-h-0 flex-1 flex-col',
         savePending && 'cursor-wait',
       )}
+      style={
+        {
+          '--eurecia-palette-w': `${paletteWidth}px`,
+          '--eurecia-rail-w': `${railWidth}px`,
+        } as React.CSSProperties
+      }
       aria-busy={savePending}
       inert={savePending ? true : undefined}
     >
@@ -2307,13 +2322,15 @@ function EditorStage({
           onAddProject={onAddProject}
           onRemoveProject={onRemoveProject}
           removableProjectIds={removableProjectIds}
-          width={paletteWidth}
+          width="var(--eurecia-palette-w)"
         />
         <PaneResizer
           edge="left"
           width={paletteWidth}
           onWidthChange={onPaletteWidthChange}
           label="Resize assignments pane"
+          cssVar="--eurecia-palette-w"
+          containerRef={editorRef}
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -2369,10 +2386,12 @@ function EditorStage({
           width={railWidth}
           onWidthChange={onRailWidthChange}
           label="Resize details pane"
+          cssVar="--eurecia-rail-w"
+          containerRef={editorRef}
         />
         {selectedEntry && selectedEntryIndex !== null ? (
           <EntryDetailRail
-            width={railWidth}
+            width="var(--eurecia-rail-w)"
             entry={selectedEntry}
             index={selectedEntryIndex}
             dateLabel={formatDate(selectedEntry.date)}
@@ -2389,7 +2408,7 @@ function EditorStage({
           />
         ) : selectedRemoteRow ? (
           <RemoteRowDetailRail
-            width={railWidth}
+            width="var(--eurecia-rail-w)"
             row={selectedRemoteRow}
             dateLabel={formatDate(selectedRemoteRow.date)}
             axisLabels={editor.data.axisLabels}
@@ -2406,7 +2425,7 @@ function EditorStage({
           />
         ) : (
           <WeekSummaryRail
-            width={railWidth}
+            width="var(--eurecia-rail-w)"
             assignments={assignments}
             usage={weekUsage}
             issues={issues}

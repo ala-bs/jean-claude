@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, Pencil, Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 import type {
@@ -85,7 +86,7 @@ function RailShell({
   onClose?: () => void;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  width: number;
+  width: number | string;
 }) {
   return (
     <aside
@@ -156,7 +157,7 @@ export function EntryDetailRail({
   onRemove,
   onClose,
 }: {
-  width: number;
+  width: number | string;
   entry: InitializedTimesheetEntry;
   index: number;
   dateLabel: string;
@@ -260,22 +261,13 @@ export function EntryDetailRail({
         );
       })}
 
-      <Field
-        label="Comment"
-        hint={`${entry.comment.length}/${COMMENT_MAX_LENGTH}`}
-      >
-        <textarea
-          value={entry.comment}
-          rows={5}
-          placeholder="What you worked on..."
-          onChange={(event) =>
-            onChange(index, {
-              comment: event.target.value.slice(0, COMMENT_MAX_LENGTH),
-            })
-          }
-          className="border-line bg-bg-2 text-ink-1 w-full resize-none rounded border px-2 py-1.5 text-xs leading-relaxed"
-        />
-      </Field>
+      {/* Keyed so switching entries remounts the buffer instead of racing it. */}
+      <CommentField
+        key={`${index}:${entry.date}:${entry.rowIndex ?? 'new'}`}
+        index={index}
+        comment={entry.comment}
+        onChange={onChange}
+      />
 
       <button
         type="button"
@@ -285,6 +277,91 @@ export function EntryDetailRail({
         <Trash2 className="h-3.5 w-3.5" /> Delete entry
       </button>
     </RailShell>
+  );
+}
+
+/**
+ * Typing a comment used to rewrite the whole ledger on every keystroke, which
+ * re-rendered the entire dialog. The text is kept locally and pushed up after a
+ * short idle, or immediately on blur.
+ */
+function CommentField({
+  index,
+  comment,
+  onChange,
+}: {
+  index: number;
+  comment: string;
+  onChange: (
+    index: number,
+    values: Partial<Pick<TimesheetEntryInput, 'comment'>>,
+  ) => void;
+}) {
+  const [draft, setDraft] = useState(comment);
+  const committed = useRef(comment);
+  const draftRef = useRef(comment);
+  const latest = useRef({ index, onChange });
+
+  useEffect(() => {
+    latest.current = { index, onChange };
+  });
+
+  // Only a genuine external edit replaces the buffer. Skipping the echo of our
+  // own commit keeps keystrokes typed while the ledger re-rendered.
+  useEffect(() => {
+    if (comment === committed.current) return;
+    committed.current = comment;
+    draftRef.current = comment;
+    setDraft(comment);
+  }, [comment]);
+
+  useEffect(() => {
+    if (draft === committed.current) return;
+    const timer = setTimeout(() => {
+      committed.current = draft;
+      latest.current.onChange(latest.current.index, { comment: draft });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [draft]);
+
+  // Unmounting without a blur (a sheet refetch dropping the rail) must not
+  // swallow the last keystrokes.
+  useEffect(
+    () => () => {
+      if (draftRef.current === committed.current) return;
+      committed.current = draftRef.current;
+      latest.current.onChange(latest.current.index, {
+        comment: draftRef.current,
+      });
+    },
+    [],
+  );
+
+  const flush = () => {
+    if (draft === committed.current) return;
+    committed.current = draft;
+    onChange(index, { comment: draft });
+  };
+
+  return (
+    <Field label="Comment" hint={`${draft.length}/${COMMENT_MAX_LENGTH}`}>
+      <textarea
+        value={draft}
+        rows={5}
+        placeholder="What you worked on..."
+        onChange={(event) => {
+          const next = event.target.value.slice(0, COMMENT_MAX_LENGTH);
+          draftRef.current = next;
+          setDraft(next);
+        }}
+        onBlur={flush}
+        // ⌘⏎ saves from inside this field, so the buffer must land first.
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) flush();
+        }}
+        className="border-line bg-bg-2 text-ink-1 w-full resize-none rounded border px-2 py-1.5 text-xs leading-relaxed"
+      />
+    </Field>
   );
 }
 
@@ -301,7 +378,7 @@ export function RemoteRowDetailRail({
   onToggleDeletion,
   onClose,
 }: {
-  width: number;
+  width: number | string;
   row: TimesheetRemoteRow;
   dateLabel: string;
   axisLabels: TimesheetAxisLabels;
@@ -391,7 +468,7 @@ export function WeekSummaryRail({
   totalFraction,
   targetFraction,
 }: {
-  width: number;
+  width: number | string;
   assignments: TimesheetAssignment[];
   usage: Map<string, number>;
   issues: Array<{ date: string; label: string; detail: string }>;

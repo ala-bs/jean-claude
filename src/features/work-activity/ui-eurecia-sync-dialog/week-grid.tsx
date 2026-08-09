@@ -1,5 +1,5 @@
 import { Copy, Lock, Plus, Trash2, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 import type { TimesheetRemoteRow } from '@shared/timesheet-types';
@@ -16,6 +16,10 @@ import {
 
 export type WeekGridEntry = { entry: InitializedTimesheetEntry; index: number };
 
+// Shared empties keep day rows referentially stable when a day has no rows.
+const EMPTY_REMOTE_ROWS: TimesheetRemoteRow[] = [];
+const EMPTY_ENTRIES: WeekGridEntry[] = [];
+
 type DragState = {
   fromDay: number;
   toDay: number;
@@ -23,18 +27,30 @@ type DragState = {
   toSlot: number;
 };
 
+// Intl formatters are expensive to build; the grid re-renders on every drag
+// move, so they are created once and the results memoized per date.
+const DOW_FORMAT = new Intl.DateTimeFormat(undefined, {
+  weekday: 'short',
+  timeZone: 'UTC',
+});
+const DOM_FORMAT = new Intl.DateTimeFormat(undefined, {
+  day: 'numeric',
+  timeZone: 'UTC',
+});
+const MAX_CACHED_DAY_HEADERS = 400;
+const dayHeaderCache = new Map<string, { dow: string; dom: string }>();
+
 function formatDayHeader(date: string) {
+  const cached = dayHeaderCache.get(date);
+  if (cached) return cached;
+  if (dayHeaderCache.size >= MAX_CACHED_DAY_HEADERS) dayHeaderCache.clear();
   const value = new Date(`${date}T00:00:00Z`);
-  return {
-    dow: new Intl.DateTimeFormat(undefined, {
-      weekday: 'short',
-      timeZone: 'UTC',
-    }).format(value),
-    dom: new Intl.DateTimeFormat(undefined, {
-      day: 'numeric',
-      timeZone: 'UTC',
-    }).format(value),
+  const header = {
+    dow: DOW_FORMAT.format(value),
+    dom: DOM_FORMAT.format(value),
   };
+  dayHeaderCache.set(date, header);
+  return header;
 }
 
 export function WeekGrid({
@@ -79,11 +95,35 @@ export function WeekGrid({
   const latest = useRef<{
     onPaint: typeof onPaint;
     dates: string[];
-  } | null>(null);
+    editable: boolean;
+    armedColor: string | null;
+  }>({ onPaint, dates, editable, armedColor });
 
   useEffect(() => {
-    latest.current = { onPaint, dates };
+    latest.current = { onPaint, dates, editable, armedColor };
   });
+
+  // Stable across renders so memoized day rows survive a drag move.
+  const handleDragStart = useCallback((dayIndex: number, slot: number) => {
+    if (!latest.current.editable || !latest.current.armedColor) return;
+    const next = {
+      fromDay: dayIndex,
+      toDay: dayIndex,
+      fromSlot: slot,
+      toSlot: slot,
+    };
+    dragRef.current = next;
+    setDrag(next);
+  }, []);
+
+  const handleDragOver = useCallback((dayIndex: number, slot: number) => {
+    const active = dragRef.current;
+    if (!active) return;
+    if (active.toDay === dayIndex && active.toSlot === slot) return;
+    const next = { ...active, toDay: dayIndex, toSlot: slot };
+    dragRef.current = next;
+    setDrag(next);
+  }, []);
 
   useEffect(() => {
     const stop = () => {
@@ -116,50 +156,45 @@ export function WeekGrid({
         drag && 'select-none',
       )}
     >
-      {dates.map((date, dayIndex) => (
-        <DayRow
-          key={date}
-          date={date}
-          dayIndex={dayIndex}
-          isToday={date === today}
-          remoteRows={remoteByDate.get(date) ?? []}
-          entries={entriesByDate.get(date) ?? []}
-          selectedIndex={selectedIndex}
-          selectedRemoteRowIndex={selectedRemoteRowIndex}
-          armedColor={armedColor}
-          editable={editable}
-          drag={drag}
-          labelFor={labelFor}
-          onSelect={onSelect}
-          onSelectRemote={onSelectRemote}
-          onRemove={onRemove}
-          onFillDay={onFillDay}
-          onClearDay={onClearDay}
-          onSpreadDay={onSpreadDay}
-          onDragStart={(slot) => {
-            if (!editable || !armedColor) return;
-            const next = {
-              fromDay: dayIndex,
-              toDay: dayIndex,
-              fromSlot: slot,
-              toSlot: slot,
-            };
-            dragRef.current = next;
-            setDrag(next);
-          }}
-          onDragOver={(slot) => {
-            if (!dragRef.current) return;
-            const next = { ...dragRef.current, toDay: dayIndex, toSlot: slot };
-            dragRef.current = next;
-            setDrag(next);
-          }}
-        />
-      ))}
+      {dates.map((date, dayIndex) => {
+        // Only the days covered by the drag get new props, so untouched rows
+        // stay memoized while the pointer moves.
+        const inDrag =
+          drag !== null &&
+          dayIndex >= Math.min(drag.fromDay, drag.toDay) &&
+          dayIndex <= Math.max(drag.fromDay, drag.toDay);
+        return (
+          <DayRow
+            key={date}
+            date={date}
+            dayIndex={dayIndex}
+            isToday={date === today}
+            remoteRows={remoteByDate.get(date) ?? EMPTY_REMOTE_ROWS}
+            entries={entriesByDate.get(date) ?? EMPTY_ENTRIES}
+            selectedIndex={selectedIndex}
+            selectedRemoteRowIndex={selectedRemoteRowIndex}
+            armedColor={armedColor}
+            editable={editable}
+            dragging={drag !== null}
+            dragSlotLo={inDrag ? Math.min(drag.fromSlot, drag.toSlot) : -1}
+            dragSlotHi={inDrag ? Math.max(drag.fromSlot, drag.toSlot) : -1}
+            labelFor={labelFor}
+            onSelect={onSelect}
+            onSelectRemote={onSelectRemote}
+            onRemove={onRemove}
+            onFillDay={onFillDay}
+            onClearDay={onClearDay}
+            onSpreadDay={onSpreadDay}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+          />
+        );
+      })}
     </div>
   );
 }
 
-function DayRow({
+const DayRow = memo(function DayRow({
   date,
   dayIndex,
   isToday,
@@ -169,7 +204,9 @@ function DayRow({
   selectedRemoteRowIndex,
   armedColor,
   editable,
-  drag,
+  dragging,
+  dragSlotLo,
+  dragSlotHi,
   labelFor,
   onSelect,
   onSelectRemote,
@@ -189,7 +226,10 @@ function DayRow({
   selectedRemoteRowIndex: number | null;
   armedColor: string | null;
   editable: boolean;
-  drag: DragState | null;
+  dragging: boolean;
+  /** Painted slot range for this day, or -1/-1 when the drag misses it. */
+  dragSlotLo: number;
+  dragSlotHi: number;
   labelFor: (axis: 1 | 2 | 3, id: string) => string;
   onSelect: (index: number | null) => void;
   onSelectRemote: (row: TimesheetRemoteRow) => void;
@@ -197,8 +237,8 @@ function DayRow({
   onFillDay: (date: string) => void;
   onClearDay: (date: string) => void;
   onSpreadDay: (date: string) => void;
-  onDragStart: (slot: number) => void;
-  onDragOver: (slot: number) => void;
+  onDragStart: (dayIndex: number, slot: number) => void;
+  onDragOver: (dayIndex: number, slot: number) => void;
 }) {
   const { dow, dom } = formatDayHeader(date);
   const remoteFraction = remoteRows.reduce(
@@ -214,12 +254,8 @@ function DayRow({
   const free = Math.max(0, TIMESHEET_SLOTS_PER_DAY - used);
   const complete = total >= 1;
 
-  const dayLo = drag ? Math.min(drag.fromDay, drag.toDay) : -1;
-  const dayHi = drag ? Math.max(drag.fromDay, drag.toDay) : -1;
-  const slotLo = drag ? Math.min(drag.fromSlot, drag.toSlot) : -1;
-  const slotHi = drag ? Math.max(drag.fromSlot, drag.toSlot) : -1;
-  const dragging = Boolean(drag) && dayIndex >= dayLo && dayIndex <= dayHi;
-  const dragSlots = dragging ? slotHi - slotLo + 1 : 0;
+  const inDrag = dragSlotLo >= 0;
+  const dragSlots = inDrag ? dragSlotHi - dragSlotLo + 1 : 0;
   const painting = editable && Boolean(armedColor);
 
   return (
@@ -305,8 +341,8 @@ function DayRow({
             }}
           >
             {Array.from({ length: TIMESHEET_SLOTS_PER_DAY }).map((_, slot) => {
-              const inRange = dragging && slot >= slotLo && slot <= slotHi;
-              const isFirstInRange = inRange && slot === slotLo;
+              const inRange = inDrag && slot >= dragSlotLo && slot <= dragSlotHi;
+              const isFirstInRange = inRange && slot === dragSlotLo;
               return (
                 <div
                   key={slot}
@@ -314,10 +350,10 @@ function DayRow({
                   onMouseDown={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    onDragStart(slot);
+                    onDragStart(dayIndex, slot);
                   }}
                   onClick={(event) => event.stopPropagation()}
-                  onMouseEnter={() => onDragOver(slot)}
+                  onMouseEnter={() => onDragOver(dayIndex, slot)}
                   className={clsx(
                     'group/slot grid cursor-copy place-items-center rounded-md transition-colors',
                     inRange
@@ -342,7 +378,7 @@ function DayRow({
                         dragSlots * TIMESHEET_SLOT_FRACTION,
                       )}
                     </span>
-                  ) : !drag ? (
+                  ) : !dragging ? (
                     <span
                       className="rounded bg-black/60 px-1 font-mono text-[10px] opacity-0 transition-opacity group-hover/slot:opacity-90"
                       style={{ color: armedColor ?? undefined }}
@@ -386,7 +422,7 @@ function DayRow({
       ) : null}
     </div>
   );
-}
+});
 
 function IconAction({
   label,
