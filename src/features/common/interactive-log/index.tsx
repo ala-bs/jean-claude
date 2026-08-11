@@ -132,7 +132,7 @@ export function InteractiveLog({
         ignoreBrowserShortcuts &&
         (e.ctrlKey || e.metaKey) &&
         !e.altKey &&
-        (e.key === 'a' || e.key === 'f')
+        (e.key === 'a' || e.key === 'f' || e.key === 'k')
       ) {
         return;
       }

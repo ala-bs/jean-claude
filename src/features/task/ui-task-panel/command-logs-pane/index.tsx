@@ -360,6 +360,16 @@ export function CommandLogsPane({
     void restartCommand(commandId);
   }, [pendingConfirm, restartCommand]);
 
+  const clearActiveLogs = useCallback(() => {
+    if (!activeCommandId) return;
+    const generation = resetRunCommandLogs(taskId, activeCommandId);
+    void api.runCommands.resetLogs({
+      taskId,
+      runCommandId: activeCommandId,
+      generation,
+    });
+  }, [activeCommandId, resetRunCommandLogs, taskId]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -380,6 +390,12 @@ export function CommandLogsPane({
         if (key === 'a' && !event.shiftKey && !isInteractiveTarget(target)) {
           event.preventDefault();
           if (pane) selectActiveLog(pane);
+          return;
+        }
+
+        if (key === 'k' && !event.shiftKey) {
+          event.preventDefault();
+          clearActiveLogs();
           return;
         }
 
@@ -406,7 +422,13 @@ export function CommandLogsPane({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeCommandId, isActiveRunning, requestRestartActiveCommand, taskId]);
+  }, [
+    activeCommandId,
+    clearActiveLogs,
+    isActiveRunning,
+    requestRestartActiveCommand,
+    taskId,
+  ]);
 
   const focusPaneInput = useCallback((event: MouseEvent) => {
     if (isInteractiveTarget(event.target)) return;
@@ -467,18 +489,10 @@ export function CommandLogsPane({
             <Kbd shortcut="cmd+shift+u" />
           </Button>
           <IconButton
-            onClick={() => {
-              if (!activeCommandId) return;
-              const generation = resetRunCommandLogs(taskId, activeCommandId);
-              void api.runCommands.resetLogs({
-                taskId,
-                runCommandId: activeCommandId,
-                generation,
-              });
-            }}
+            onClick={clearActiveLogs}
             size="sm"
             icon={<Trash2 />}
-            tooltip="Clear logs"
+            tooltip="Clear logs (⌘K)"
           />
           <IconButton
             onClick={onClose}
