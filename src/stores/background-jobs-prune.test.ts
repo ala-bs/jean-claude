@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  type BackgroundJob,
   prunePersistedJobs,
   resetBudgetOverflowWarning,
-  type BackgroundJob,
 } from './background-jobs';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');

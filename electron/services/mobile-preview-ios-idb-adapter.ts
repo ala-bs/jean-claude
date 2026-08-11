@@ -66,8 +66,8 @@ import {
   sendFallbackTouchLifecycleEvent,
   sendIdbUiInputEvent,
   sendIosHidKeyPress,
-  sendIosHidText,
   sendIosHidLifecycleEvent,
+  sendIosHidText,
   showIosSoftwareKeyboard,
 } from './mobile-preview-ios-hid-input';
 import {

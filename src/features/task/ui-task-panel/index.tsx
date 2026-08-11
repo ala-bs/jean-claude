@@ -4001,6 +4001,18 @@ const TaskInputFooter = memo(function TaskInputFooter({
                   modeDisabled={isRunning}
                   modelDisabled={isRunning}
                 />
+                <div className="bg-glass-light flex h-7 items-center rounded-md">
+                  <AutoAcceptToggle
+                    enabled={autoAcceptEnabled}
+                    onToggle={toggleAutoAccept}
+                    disabled={
+                      !activeStepId ||
+                      isTaskCompleted ||
+                      isPrReviewChatStepMeta(activeStep?.meta)
+                    }
+                    size="sm"
+                  />
+                </div>
               </>
             }
             controlsBeforeButtons={tokenControls}

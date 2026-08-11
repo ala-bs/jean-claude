@@ -39,6 +39,7 @@ import {
 import {
   useAddWorkItemComment,
   useBoardColumns,
+  useCurrentAzureUser,
   useIterations,
   useLinkedPullRequestStatuses,
   useRelatedTestCases,
@@ -48,7 +49,6 @@ import {
   useWorkItemById,
   useWorkItemComments,
   useWorkItemHistory,
-  useCurrentAzureUser,
   useWorkItemOwners,
   useWorkItemsByIds,
   useWorkItemStates,

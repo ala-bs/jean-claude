@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getSetupModel,
   type PreviewDerived,
   type PreviewFacts,
   type PreviewStepKey,
-  getSetupModel,
 } from './utils-setup-model';
 import { baseDerived, baseFacts } from './utils-preview-fixtures';
 
