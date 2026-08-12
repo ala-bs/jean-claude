@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   Archive,
   Check,
+  ChevronsLeftRight,
   Circle,
   Loader2,
   Pencil,
@@ -37,9 +38,13 @@ const STEP_X_RANGE_FALLBACK = 88;
 
 function getStepNodeWidth({ step, index }: { step: TaskStep; index: number }) {
   const estimatedCharWidth = 5.3;
+  // Group chips render a range label ("10–14") instead of a single index.
+  const indexLength = isArchivedGroupId(step.id)
+    ? String(index + 1).length * 2 + 1
+    : String(index + 1).length;
   const baseWidth =
     30 +
-    String(index + 1).length * estimatedCharWidth +
+    indexLength * estimatedCharWidth +
     (step.archivedAt ? 0 : step.name.length) * estimatedCharWidth;
   return Math.max(
     MIN_NODE_WIDTH,
@@ -295,13 +300,11 @@ export function buildStepGraphLayout(steps: TaskStep[]) {
     edges,
     width: Math.max(
       GRAPH_PADDING * 2 + MIN_NODE_WIDTH,
-      ...Array.from(positions.values(), (pos, idx) => {
-        const step = sortedSteps[idx];
-        const width = step
-          ? (nodeWidthById.get(step.id) ?? MIN_NODE_WIDTH)
-          : MIN_NODE_WIDTH;
-        return pos.x + width + GRAPH_PADDING;
-      }),
+      ...Array.from(
+        positions.entries(),
+        ([stepId, pos]) =>
+          pos.x + (nodeWidthById.get(stepId) ?? MIN_NODE_WIDTH) + GRAPH_PADDING,
+      ),
     ),
     height:
       GRAPH_PADDING * 2 +
@@ -310,6 +313,115 @@ export function buildStepGraphLayout(steps: TaskStep[]) {
     addButtonY: latestCreatedPosition?.y ?? GRAPH_PADDING,
     hasCycle,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Archived run collapsing                                            */
+/* ------------------------------------------------------------------ */
+
+export const ARCHIVED_GROUP_PREFIX = 'archived-group:';
+
+export function isArchivedGroupId(id: string) {
+  return id.startsWith(ARCHIVED_GROUP_PREFIX);
+}
+
+export function buildCollapsedSteps({
+  steps,
+  expandedGroupIds,
+  activeStepId,
+}: {
+  steps: TaskStep[];
+  expandedGroupIds: Set<string>;
+  activeStepId?: string | null;
+}) {
+  const sorted = [...steps].sort(compareStepOrder);
+  const displayIndexById = new Map(sorted.map((step, i) => [step.id, i]));
+  // Layout places nodes on a createdAt axis; only collapse runs that are also
+  // contiguous there, otherwise the group node would overlap steps that sit
+  // chronologically between its members.
+  const createdIndexById = new Map(
+    [...sorted]
+      .sort((a, b) => {
+        const cmp = a.createdAt.localeCompare(b.createdAt);
+        return cmp !== 0 ? cmp : compareStepOrder(a, b);
+      })
+      .map((step, i) => [step.id, i]),
+  );
+  const groups = new Map<
+    string,
+    { stepIds: string[]; startIndex: number; endIndex: number }
+  >();
+  const expandedRunFirstIds = new Set<string>();
+  const result: TaskStep[] = [];
+
+  let i = 0;
+  while (i < sorted.length) {
+    if (!sorted[i].archivedAt) {
+      result.push(sorted[i]);
+      i += 1;
+      continue;
+    }
+
+    let j = i;
+    while (j < sorted.length && sorted[j].archivedAt) j += 1;
+    const run = sorted.slice(i, j);
+
+    const createdIndexes = run
+      .map((step) => createdIndexById.get(step.id) ?? 0)
+      .sort((a, b) => a - b);
+    const isCreatedContiguous = createdIndexes.every(
+      (value, k) => k === 0 || value === createdIndexes[k - 1] + 1,
+    );
+
+    if (run.length < 2 || !isCreatedContiguous) {
+      result.push(...run);
+      i = j;
+      continue;
+    }
+
+    const groupId = `${ARCHIVED_GROUP_PREFIX}${run[0].id}`;
+    groups.set(groupId, {
+      stepIds: run.map((step) => step.id),
+      startIndex: i,
+      endIndex: j - 1,
+    });
+
+    const holdsActiveStep = run.some((step) => step.id === activeStepId);
+
+    if (expandedGroupIds.has(groupId) || holdsActiveStep) {
+      expandedRunFirstIds.add(run[0].id);
+      result.push(...run);
+    } else {
+      const last = run[run.length - 1];
+      result.push({
+        ...last,
+        id: groupId,
+        name: `${run.length} archived`,
+        archivedAt: null,
+        dependsOn: run[0].dependsOn,
+      });
+    }
+    i = j;
+  }
+
+  const idMap = new Map<string, string>();
+  for (const [groupId, group] of groups) {
+    if (expandedRunFirstIds.has(group.stepIds[0])) continue;
+    for (const stepId of group.stepIds) idMap.set(stepId, groupId);
+  }
+
+  const collapsedSteps = result.map((step) => {
+    if (step.dependsOn.length === 0) return step;
+    const deps = Array.from(
+      new Set(step.dependsOn.map((dep) => idMap.get(dep) ?? dep)),
+    ).filter((dep) => dep !== step.id);
+    const unchanged =
+      deps.length === step.dependsOn.length &&
+      deps.every((dep, k) => dep === step.dependsOn[k]);
+    return unchanged ? step : { ...step, dependsOn: deps };
+  });
+
+  return { steps: collapsedSteps, groups, displayIndexById, expandedRunFirstIds };
 }
 
 function getEdgeClass({
@@ -413,16 +525,22 @@ const CHIP_STYLES: Record<TaskStepStatus, string> = {
 function StepChip({
   step,
   index,
+  indexLabel,
+  isArchivedGroup,
   isActive,
   onClick,
   onAddAfter,
+  onCollapse,
   onContextMenu,
 }: {
   step: TaskStep;
   index: number;
+  indexLabel?: string;
+  isArchivedGroup?: boolean;
   isActive: boolean;
   onClick: () => void;
   onAddAfter?: (stepId: string) => void;
+  onCollapse?: () => void;
   onContextMenu?: (event: React.MouseEvent) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -444,23 +562,49 @@ function StepChip({
         variant="unstyled"
         onClick={onClick}
         onContextMenu={onContextMenu}
+        aria-expanded={isArchivedGroup ? false : undefined}
         className={clsx(
           'h-full w-full gap-1 rounded-md px-1.5 py-0.5 text-[10px] leading-none transition-all duration-300 ease-out',
           CHIP_STYLES[step.status],
           isActive &&
             'ring-acc/70 ring-offset-bg-0 shadow-[0_0_10px_0_oklch(0.72_0.20_295_/_0.3),0_0_3px_0_oklch(0.72_0.20_295_/_0.2)] ring-[1.5px] ring-offset-[1.5px] brightness-125',
-          step.archivedAt && 'opacity-45 grayscale',
+          (step.archivedAt || isArchivedGroup) && 'opacity-45 grayscale',
         )}
-        title={step.archivedAt ? `${step.name} (archived)` : step.name}
+        title={
+          isArchivedGroup
+            ? `${step.name} — click to expand`
+            : step.archivedAt
+              ? `${step.name} (archived)`
+              : step.name
+        }
       >
-        <StepTypeIcon step={step} />
+        {isArchivedGroup ? (
+          <Archive className="h-2.5 w-2.5 shrink-0" />
+        ) : (
+          <StepTypeIcon step={step} />
+        )}
         <span className="flex min-w-0 items-center gap-0.5">
-          <span className="text-[9px] opacity-40">{index + 1}</span>
-          {!step.archivedAt && (
+          <span className="text-[9px] opacity-40">
+            {indexLabel ?? index + 1}
+          </span>
+          {(!step.archivedAt || isArchivedGroup) && (
             <span className="min-w-0 truncate">{step.name}</span>
           )}
         </span>
       </Button>
+      {onCollapse && (
+        <Button
+          variant="unstyled"
+          onClick={(event) => {
+            event.stopPropagation();
+            onCollapse();
+          }}
+          className="border-line bg-bg-1 text-ink-2 hover:border-glass-border-strong hover:text-ink-1 absolute top-1/2 -left-1.5 z-10 h-3.5 w-3.5 -translate-y-1/2 rounded-full border p-0 opacity-0 transition-all group-hover/step:opacity-100 focus-visible:opacity-100"
+          title="Collapse archived steps"
+        >
+          <ChevronsLeftRight className="h-2 w-2" />
+        </Button>
+      )}
       {onAddAfter && (
         <Button
           variant="unstyled"
@@ -501,16 +645,59 @@ export function StepFlowBar({
   const { openMenu, portal } = useMessageContextMenu({
     overlayId: 'step-context-menu',
   });
-  const layout = useMemo(() => buildStepGraphLayout(steps ?? []), [steps]);
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const collapsed = useMemo(
+    () =>
+      buildCollapsedSteps({
+        steps: steps ?? [],
+        expandedGroupIds,
+        activeStepId,
+      }),
+    [steps, expandedGroupIds, activeStepId],
+  );
+  const layout = useMemo(
+    () => buildStepGraphLayout(collapsed.steps),
+    [collapsed.steps],
+  );
+
+  const knownGroupIds = collapsed.groups;
+  const toggleGroup = useCallback(
+    (groupId: string) => {
+      setExpandedGroupIds((previous) => {
+        // Group ids derive from step ids, so archiving/unarchiving can leave
+        // entries pointing at groups that no longer exist — drop them here.
+        const next = new Set(
+          Array.from(previous).filter((id) => knownGroupIds.has(id)),
+        );
+        if (next.has(groupId)) next.delete(groupId);
+        else next.add(groupId);
+        return next;
+      });
+    },
+    [knownGroupIds],
+  );
 
   const handleStepClick = useCallback(
-    (stepId: string) => setActiveStepId(stepId),
-    [setActiveStepId],
+    (stepId: string) => {
+      if (isArchivedGroupId(stepId)) {
+        toggleGroup(stepId);
+        return;
+      }
+      setActiveStepId(stepId);
+    },
+    [setActiveStepId, toggleGroup],
   );
 
   const handleStepContextMenu = useCallback(
     (event: React.MouseEvent, step: TaskStep) => {
-      if (step.archivedAt || isPrReviewChatStepMeta(step.meta)) return;
+      if (
+        step.archivedAt ||
+        isArchivedGroupId(step.id) ||
+        isPrReviewChatStepMeta(step.meta)
+      )
+        return;
       openMenu(event, [
         {
           label: 'Rename step',
@@ -609,6 +796,23 @@ export function StepFlowBar({
             const pos = layout.positions.get(step.id);
             if (!pos) return null;
 
+            const group = collapsed.groups.get(step.id);
+            const isGroup = !!group;
+            const indexLabel = isGroup
+              ? `${group.startIndex + 1}–${group.endIndex + 1}`
+              : `${(collapsed.displayIndexById.get(step.id) ?? index) + 1}`;
+            const expandedRunGroupId = collapsed.expandedRunFirstIds.has(
+              step.id,
+            )
+              ? `${ARCHIVED_GROUP_PREFIX}${step.id}`
+              : undefined;
+            // Never offer collapse when it would hide the active step.
+            const canCollapseRun =
+              !!expandedRunGroupId &&
+              !collapsed.groups
+                .get(expandedRunGroupId)
+                ?.stepIds.includes(activeStepId ?? '');
+
             return (
               <div
                 key={step.id}
@@ -623,9 +827,16 @@ export function StepFlowBar({
                 <StepChip
                   step={step}
                   index={index}
+                  indexLabel={indexLabel}
+                  isArchivedGroup={isGroup}
                   isActive={activeStepId === step.id}
                   onClick={() => handleStepClick(step.id)}
-                  onAddAfter={onAddStepAfter}
+                  onAddAfter={isGroup ? undefined : onAddStepAfter}
+                  onCollapse={
+                    expandedRunGroupId && canCollapseRun
+                      ? () => toggleGroup(expandedRunGroupId)
+                      : undefined
+                  }
                   onContextMenu={(event) => handleStepContextMenu(event, step)}
                 />
               </div>
