@@ -34,6 +34,7 @@ import {
 import {
   markDocumentStale,
   markResourceChanged,
+  markResourceDeleted,
   markResourceStale,
   setResourceSuccess,
 } from './cache-actions';
@@ -455,7 +456,7 @@ function compactFeedPatch(
 }
 
 function markDeletedEntityResource(resourceKey: string) {
-  markResourceChanged(resourceKey);
+  markResourceDeleted(resourceKey);
   setResourceSuccess(resourceKey);
 }
 

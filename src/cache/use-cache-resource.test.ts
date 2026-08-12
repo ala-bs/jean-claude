@@ -13,6 +13,7 @@ import type { ResourceMeta } from './cache-types';
 import {
   isResourceFresh,
   markResourceChanged,
+  markResourceDeleted,
   markResourceStale,
 } from './cache-actions';
 
@@ -124,6 +125,62 @@ describe('ensureResource', () => {
       status: 'success',
       stale: true,
     });
+  });
+
+  it('still ingests a changed-during-load result when nothing is cached yet', async () => {
+    // Otherwise the consumer keeps `data === undefined` + stale meta and renders
+    // "Loading..." forever while cache events keep bumping the change version.
+    let resolveLoad: (value: string) => void = () => {};
+    const load = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+    const ingest = vi.fn();
+
+    const promise = ensureResource({
+      key: 'resource:1',
+      load,
+      ingest,
+      hasCachedData: () => false,
+    });
+    await Promise.resolve();
+
+    markResourceChanged('resource:1');
+    resolveLoad('first-result');
+    await expect(promise).resolves.toBe('first-result');
+
+    expect(ingest).toHaveBeenCalledWith('first-result');
+    expect(cache$.resources['resource:1'].get()).toMatchObject({
+      status: 'success',
+      stale: true,
+    });
+  });
+
+  it('does not resurrect an entity deleted during the load', async () => {
+    let resolveLoad: (value: string) => void = () => {};
+    const load = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+    const ingest = vi.fn();
+
+    const promise = ensureResource({
+      key: 'resource:1',
+      load,
+      ingest,
+      hasCachedData: () => false,
+    });
+    await Promise.resolve();
+
+    markResourceDeleted('resource:1');
+    resolveLoad('pre-delete-result');
+    await expect(promise).resolves.toBe('pre-delete-result');
+
+    expect(ingest).not.toHaveBeenCalled();
   });
 
   it('stores error metadata when loader throws', async () => {

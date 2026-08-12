@@ -1,5 +1,6 @@
 import {
   getResourceChangeVersion,
+  getResourceDeletionVersion,
   isResourceFresh,
   markResourceStale,
   releaseResource,
@@ -18,6 +19,9 @@ import { useValue } from '@legendapp/state/react';
 
 // One pending promise per resource key prevents duplicate concurrent loads.
 const pendingResources = new Map<string, Promise<unknown>>();
+
+// How long a resource may report loading before we log diagnostics.
+const STUCK_LOADING_WARN_MS = 8000;
 
 type ResourceResultMeta = Pick<
   ResourceMeta,
@@ -85,6 +89,8 @@ export type EnsureResourceOptions<T> = {
   force?: boolean;
   load: () => Promise<T>;
   ingest?: (data: T) => void;
+  /** True when the cache already holds renderable data for this resource. */
+  hasCachedData?: () => boolean;
 };
 
 export function clearPendingResources() {
@@ -146,6 +152,7 @@ export async function ensureResource<T>({
   force = false,
   load,
   ingest,
+  hasCachedData,
 }: EnsureResourceOptions<T>): Promise<T | undefined> {
   const current = cache$.resources[key].get();
   if (!force && isResourceFresh(current, staleTime)) {
@@ -158,12 +165,27 @@ export async function ensureResource<T>({
   }
 
   const changeVersionAtLoadStart = getResourceChangeVersion(key);
+  const deletionVersionAtLoadStart = getResourceDeletionVersion(key);
 
   const promise = Promise.resolve()
     .then(load)
     .then((data) => {
       setResourceSuccess(key);
       if (getResourceChangeVersion(key) !== changeVersionAtLoadStart) {
+        // Changed mid-flight: this payload may be older than what the event
+        // already applied, so normally we drop it and refetch. But when nothing
+        // is cached yet, dropping it leaves `data === undefined` + stale meta,
+        // which renders "Loading..." forever for resources that get frequent
+        // cache events (e.g. a running task patched every few hundred ms).
+        // Showing slightly stale data and refreshing beats an endless spinner.
+        // Never rescue across a delete: the delete path empties the cache too,
+        // so it looks exactly like "nothing cached yet" and would resurrect a
+        // deleted entity from a pre-delete payload.
+        const deletedDuringLoad =
+          getResourceDeletionVersion(key) !== deletionVersionAtLoadStart;
+        if (!deletedDuringLoad && data != null && hasCachedData?.() === false) {
+          ingest?.(data);
+        }
         markResourceStale(key);
       } else {
         ingest?.(data);
@@ -236,14 +258,23 @@ export function useCacheResource<TData, TSelected = TData>({
     return cache$.documents[key].data.get() as TSelected | undefined;
   });
 
+  const selectRef = useLatestRef(select);
+  const hasCachedData = useCallback(() => {
+    const selector = selectRef.current;
+    return selector
+      ? selector() !== undefined
+      : cache$.documents[key].data.get() !== undefined;
+  }, [key, selectRef]);
+
   const loadResource = useCallback(() => {
     return ensureResource({
       key,
       staleTime,
       load: () => loadRef.current(),
       ingest: (loadedData) => ingestRef.current?.(loadedData),
+      hasCachedData,
     });
-  }, [ingestRef, key, loadRef, staleTime]);
+  }, [hasCachedData, ingestRef, key, loadRef, staleTime]);
 
   useEffect(() => {
     if (!enabled) {
@@ -298,18 +329,37 @@ export function useCacheResource<TData, TSelected = TData>({
       force: true,
       load: () => loadRef.current(),
       ingest: (loadedData) => ingestRef.current?.(loadedData),
+      hasCachedData,
     });
-  }, [ingestRef, key, loadRef, staleTime]);
+  }, [hasCachedData, ingestRef, key, loadRef, staleTime]);
 
   const error = metaError ? new Error(metaError) : null;
+  const isLoading = isResourceLoading({
+    enabled,
+    meta,
+    hasData: data !== undefined,
+  });
+
+  // Watchdog: a resource should never stay loading for long. Log enough state
+  // to diagnose the remaining stuck-loading reports instead of guessing.
+  // Meta is read through a ref so a reload loop (which mutates meta on every
+  // iteration) can't keep resetting the timer — that loop is what we're hunting.
+  const metaRef = useLatestRef(meta);
+  useEffect(() => {
+    if (!isLoading) return;
+    const timer = setTimeout(() => {
+      console.warn('[cache] resource stuck loading', {
+        key,
+        meta: metaRef.current,
+        hasPending: pendingResources.has(key),
+      });
+    }, STUCK_LOADING_WARN_MS);
+    return () => clearTimeout(timer);
+  }, [isLoading, key, metaRef]);
 
   return {
     data,
-    isLoading: isResourceLoading({
-      enabled,
-      meta,
-      hasData: data !== undefined,
-    }),
+    isLoading,
     isFetching: enabled && metaStatus === 'loading',
     isError: metaStatus === 'error',
     error,

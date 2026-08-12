@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 
 // Hoisted outside component to avoid recreation on every render
 const STEP_NOT_FOUND_RETRY_MS = 400;
+const STUCK_LOADING_RETRY_MS = 4000;
 
 const DEFAULT_TASK_STATE: TaskState = {
   taskId: '',
@@ -209,6 +210,26 @@ export function useTaskMessages({
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
   }, [enabled, stepId, isLoaded, stepState?.status, fetchPendingRequest]);
+
+  // Watchdog: if the step never lands in the store (stale-aborted fetch, a
+  // fetch that was never started), log state and retry instead of stranding
+  // the feed on a spinner forever. Cleared as soon as the step loads.
+  useEffect(() => {
+    if (!enabled || !stepId || isLoaded) return;
+    const timer = setInterval(() => {
+      // A slow-but-live fetch is left alone (and not logged): retrying would
+      // bump the generation and discard a nearly-complete response. Only
+      // stranded steps — fetch aborted as stale, or never started — are revived.
+      if (fetchingRef.current === stepId) return;
+      console.warn('[task-messages] step stranded without a fetch, retrying', {
+        stepId,
+        taskId,
+        generation: fetchGenerationRef.current,
+      });
+      fetchMessages();
+    }, STUCK_LOADING_RETRY_MS);
+    return () => clearInterval(timer);
+  }, [enabled, stepId, taskId, isLoaded, fetchMessages]);
 
   const state = stepState ?? DEFAULT_TASK_STATE;
 

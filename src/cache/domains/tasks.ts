@@ -2,6 +2,7 @@ import type { Task } from '@shared/types';
 
 import { applyEntityPatch, mergeEntitySnapshot } from '../entity-merge';
 import {
+  markResourceDeleted,
   markResourceStale,
   setIndexResource,
   setResourceSuccess,
@@ -122,6 +123,9 @@ export function removeTask(
   { deleteResource = true }: { deleteResource?: boolean } = {},
 ) {
   cache$.tasks[taskId].delete();
+  // Bump the deletion version so an in-flight load started before this removal
+  // can never resurrect the task.
+  markResourceDeleted(taskResourceKey(taskId));
 
   if (deleteResource) {
     cache$.resources[taskResourceKey(taskId)].delete();
