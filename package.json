@@ -147,6 +147,10 @@
       {
         "from": "electron/native/mobile-preview-ios-hid-helper.py",
         "to": "native/mobile-preview-ios-hid-helper.py"
+      },
+      {
+        "from": "electron/native/mobile-preview-mac-keyboard-layout.m",
+        "to": "native/mobile-preview-mac-keyboard-layout.m"
       }
     ],
     "mac": {

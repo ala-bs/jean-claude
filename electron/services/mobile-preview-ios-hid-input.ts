@@ -28,6 +28,11 @@ import { runCommand, spawnManaged } from './mobile-preview-process';
 import { access } from 'node:fs/promises';
 import { assertDeviceId } from './mobile-preview-ios-simctl';
 import { constants as fsConstants } from 'node:fs';
+import {
+  getHostIosHidKeymap,
+  type IosHidKeymap,
+  type IosHidKeyStroke,
+} from './mobile-preview-ios-keyboard-layout';
 import { join } from 'node:path';
 
 const IOS_HID_HELPER_SOURCE = 'mobile-preview-ios-hid-helper.py';
@@ -102,31 +107,220 @@ const IOS_HID_SHIFTED_KEYCODES: Record<string, number> = {
   '?': 56,
 };
 
-const iosHidShiftUsedDeviceIds = new Set<string>();
+// The simulator interprets HID usage codes with the *host* keyboard layout
+// (Simulator mirrors the Mac's current input source). Sending US-position codes
+// while the Mac is on AZERTY types the wrong characters, so we need a per-layout
+// char -> physical-key table. Characters missing here fall back to paste.
+const FRENCH_LETTER_KEYCODES: Record<string, number> = {
+  a: 20,
+  z: 26,
+  e: 8,
+  r: 21,
+  t: 23,
+  y: 28,
+  u: 24,
+  i: 12,
+  o: 18,
+  p: 19,
+  q: 4,
+  s: 22,
+  d: 7,
+  f: 9,
+  g: 10,
+  h: 11,
+  j: 13,
+  k: 14,
+  l: 15,
+  m: 51,
+  w: 29,
+  x: 27,
+  c: 6,
+  v: 25,
+  b: 5,
+  n: 17,
+};
 
-type IosHidKeyStroke = { keycode: number; shift: boolean };
+const IOS_HID_FRENCH_UNSHIFTED_KEYCODES: Record<string, number> = {
+  ...FRENCH_LETTER_KEYCODES,
+  ' ': 44,
+  '\n': 40,
+  '\r': 40,
+  '\t': 43,
+  ',': 16,
+  ';': 54,
+  ':': 55,
+  '!': 56,
+  ')': 45,
+  '-': 46,
+  '^': 47,
+  $: 48,
+  ù: 52,
+  '@': 53,
+};
+
+const IOS_HID_FRENCH_SHIFTED_KEYCODES: Record<string, number> = {
+  ...Object.fromEntries(
+    Object.entries(FRENCH_LETTER_KEYCODES).map(([char, keycode]) => [
+      char.toUpperCase(),
+      keycode,
+    ]),
+  ),
+  '1': 30,
+  '2': 31,
+  '3': 32,
+  '4': 33,
+  '5': 34,
+  '6': 35,
+  '7': 36,
+  '8': 37,
+  '9': 38,
+  '0': 39,
+  '.': 54,
+  '/': 55,
+  '?': 16,
+  _: 46,
+  '*': 48,
+  '%': 52,
+  '#': 53,
+};
+
+export type IosHidLayout = 'us' | 'french';
+
+// AZERTY input sources. Deliberately an exact-match list: "CanadianFrench" and
+// "SwissFrench" are QWERTY/QWERTZ and must keep the US table.
+const AZERTY_INPUT_SOURCE_IDS = new Set([
+  'com.apple.keylayout.French',
+  'com.apple.keylayout.French-numerical',
+  'com.apple.keylayout.French-PC',
+  'com.apple.keylayout.Belgian',
+]);
+
+const HOST_KEYBOARD_LAYOUT_TTL_MS = 5_000;
+const HOST_KEYBOARD_LAYOUT_TIMEOUT_MS = 1_000;
+
+let cachedIosHidLayout: { layout: IosHidLayout; readAt: number } | null = null;
+
+export function resetIosHidLayoutCacheForTests(): void {
+  cachedIosHidLayout = null;
+}
+
+export function resolveIosHidLayoutFromInputSourceId(
+  inputSourceId: string | undefined,
+): IosHidLayout {
+  if (!inputSourceId) return 'us';
+  return AZERTY_INPUT_SOURCE_IDS.has(inputSourceId.trim()) ? 'french' : 'us';
+}
+
+function getIosHidLayoutOverride(): IosHidLayout | null {
+  const override = process.env.JC_MOBILE_PREVIEW_IOS_KEYBOARD_LAYOUT;
+  if (override === undefined) return null;
+  if (override === 'us' || override === 'french') return override;
+  debug('iOS HID ignoring unknown keyboard layout override=%s', override);
+  return null;
+}
+
+/** Last known layout, without blocking. Used only as a mapping fallback. */
+function getCachedIosHidLayout(): IosHidLayout {
+  return getIosHidLayoutOverride() ?? cachedIosHidLayout?.layout ?? 'us';
+}
+
+/**
+ * Reads the Mac's current input source. The user can switch layouts mid-session
+ * (⌃Space), so the value is only cached for a few seconds.
+ */
+export async function getHostKeyboardLayout(): Promise<IosHidLayout> {
+  const override = getIosHidLayoutOverride();
+  if (override) return override;
+  if (
+    cachedIosHidLayout &&
+    Date.now() - cachedIosHidLayout.readAt < HOST_KEYBOARD_LAYOUT_TTL_MS
+  ) {
+    return cachedIosHidLayout.layout;
+  }
+  if (process.platform !== 'darwin') return 'us';
+
+  let layout = cachedIosHidLayout?.layout ?? 'us';
+  try {
+    const { stdout } = await runCommand(
+      'defaults',
+      [
+        'read',
+        `${process.env.HOME ?? ''}/Library/Preferences/com.apple.HIToolbox.plist`,
+        'AppleCurrentKeyboardLayoutInputSourceID',
+      ],
+      { timeoutMs: HOST_KEYBOARD_LAYOUT_TIMEOUT_MS },
+    );
+    layout = resolveIosHidLayoutFromInputSourceId(stdout.trim());
+    cachedIosHidLayout = { layout, readAt: Date.now() };
+  } catch (error) {
+    // Keep the previous value; a transient failure must not latch to US.
+    debug(
+      'iOS HID host keyboard layout read failed, using %s: %s',
+      layout,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  return layout;
+}
+
+const iosHidShiftUsedDeviceIds = new Set<string>();
 
 export type IosTextChunk =
   | { kind: 'hid'; strokes: IosHidKeyStroke[] }
   | { kind: 'paste'; text: string };
 
-function mapCharToIosHidKeyStroke(char: string): IosHidKeyStroke | null {
-  const unshifted = IOS_HID_UNSHIFTED_KEYCODES[char];
+/**
+ * Either a live map read from the host keyboard layout (preferred, covers every
+ * layout) or a static per-layout table used when the native helper is
+ * unavailable.
+ */
+export type IosHidLayoutSource = IosHidLayout | IosHidKeymap;
+
+/**
+ * Resolves how characters map to physical keys for the *current* host layout.
+ * Prefers the native UCKeyTranslate dump; falls back to the static US/AZERTY
+ * tables when it cannot be built (missing Xcode, non-macOS, ...).
+ */
+export async function resolveIosHidLayoutSource(): Promise<IosHidLayoutSource> {
+  // The env override is an escape hatch: it must win over the native helper.
+  const override = getIosHidLayoutOverride();
+  if (override) return override;
+  return (await getHostIosHidKeymap()) ?? (await getHostKeyboardLayout());
+}
+
+export function mapCharToIosHidKeyStroke(
+  char: string,
+  source: IosHidLayoutSource = getCachedIosHidLayout(),
+): IosHidKeyStroke | null {
+  if (typeof source !== 'string') return source.get(char) ?? null;
+  const layout = source;
+  const unshiftedMap =
+    layout === 'french'
+      ? IOS_HID_FRENCH_UNSHIFTED_KEYCODES
+      : IOS_HID_UNSHIFTED_KEYCODES;
+  const shiftedMap =
+    layout === 'french'
+      ? IOS_HID_FRENCH_SHIFTED_KEYCODES
+      : IOS_HID_SHIFTED_KEYCODES;
+  const unshifted = unshiftedMap[char];
   if (unshifted !== undefined) return { keycode: unshifted, shift: false };
-  const shifted = IOS_HID_SHIFTED_KEYCODES[char];
+  const shifted = shiftedMap[char];
   if (shifted !== undefined) return { keycode: shifted, shift: true };
   return null;
 }
 
 /**
- * Splits text into runs typed through the HID stream and runs that have no
- * US-layout keycode (emoji, accents, ...) and must go through Simulator paste.
- * Chunking keeps focus-stealing paste limited to the characters that need it.
+ * Splits text into runs typed through the HID stream and runs that have no key
+ * on the host layout (emoji, dead-key accents, ...) and must go through
+ * Simulator paste. Chunking keeps focus-stealing paste limited to those chars.
  */
-export function splitTextForIosInput(text: string): IosTextChunk[] {
+export function splitTextForIosInput(
+  text: string,
+  source: IosHidLayoutSource = getCachedIosHidLayout(),
+): IosTextChunk[] {
   const chunks: IosTextChunk[] = [];
   for (const char of text) {
-    const stroke = mapCharToIosHidKeyStroke(char);
+    const stroke = mapCharToIosHidKeyStroke(char, source);
     const last = chunks.at(-1);
     if (stroke) {
       if (last?.kind === 'hid') last.strokes.push(stroke);
@@ -710,7 +904,10 @@ export async function sendIosHidText(params: {
   assertTextInput(text);
   if (!text) return;
 
-  for (const chunk of splitTextForIosInput(text)) {
+  const layoutSource = await resolveIosHidLayoutSource();
+  if (!isCurrent()) return;
+
+  for (const chunk of splitTextForIosInput(text, layoutSource)) {
     if (!isCurrent()) return;
 
     if (chunk.kind === 'paste') {
@@ -763,6 +960,8 @@ export function prewarmIosHidInput(params: {
   deviceId: string;
   onSession: (patch: Partial<MobilePreviewSession>) => void;
 }): void {
+  // Compile/read the host layout up front so the first keystroke is not cold.
+  void resolveIosHidLayoutSource().catch(() => undefined);
   void getIosHidHelper(params.deviceId)
     .then(() => {
       params.onSession({ inputStatus: 'ready' });

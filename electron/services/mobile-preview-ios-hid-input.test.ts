@@ -11,6 +11,10 @@ vi.mock('./mobile-preview-window-utils', () => ({
 vi.mock('../lib/debug', () => ({
   dbg: { mobilePreview: vi.fn() },
 }));
+vi.mock('./mobile-preview-ios-keyboard-layout', () => ({
+  getHostIosHidKeymap: vi.fn().mockResolvedValue(null),
+  resetIosHidKeymapCacheForTests: vi.fn(),
+}));
 
 import {
   commandExistsMock,
@@ -21,13 +25,129 @@ import {
   spawnManagedMock,
 } from './mobile-preview-ios-test-helpers';
 import { describe, expect, it, vi } from 'vitest';
-import { buildIdbInputArgs } from './mobile-preview-ios-hid-input';
+import {
+  buildIdbInputArgs,
+  getHostKeyboardLayout,
+  mapCharToIosHidKeyStroke,
+  resetIosHidLayoutCacheForTests,
+  resolveIosHidLayoutFromInputSourceId,
+  resolveIosHidLayoutSource,
+  splitTextForIosInput,
+} from './mobile-preview-ios-hid-input';
+import {
+  getHostIosHidKeymap,
+  resetIosHidKeymapCacheForTests,
+} from './mobile-preview-ios-keyboard-layout';
+import { beforeEach } from 'vitest';
+
+const getHostIosHidKeymapMock = vi.mocked(getHostIosHidKeymap);
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 describe('mobile preview iOS HID input', () => {
   installIosPreviewTestHooks();
+
+  beforeEach(() => {
+    vi.stubEnv('JC_MOBILE_PREVIEW_IOS_KEYBOARD_LAYOUT', 'us');
+    resetIosHidLayoutCacheForTests();
+    resetIosHidKeymapCacheForTests();
+  });
+
+  it('prefers a live host keymap over the static tables', async () => {
+    vi.stubEnv('JC_MOBILE_PREVIEW_IOS_KEYBOARD_LAYOUT', '');
+    const keymap = new Map([['a', { keycode: 20, shift: false }]]);
+    getHostIosHidKeymapMock.mockResolvedValue(keymap);
+    expect(await resolveIosHidLayoutSource()).toBe(keymap);
+
+    // Chars absent from the live keymap still go through Simulator paste.
+    expect(splitTextForIosInput('a€', keymap)).toEqual([
+      { kind: 'hid', strokes: [{ keycode: 20, shift: false }] },
+      { kind: 'paste', text: '€' },
+    ]);
+
+    // Static tables are the fallback when the helper is unavailable.
+    getHostIosHidKeymapMock.mockResolvedValue(null);
+    expect(await resolveIosHidLayoutSource()).toBe('us');
+  });
+
+  it('lets the env override win over the live keymap', async () => {
+    getHostIosHidKeymapMock.mockResolvedValue(
+      new Map([['a', { keycode: 20, shift: false }]]),
+    );
+    vi.stubEnv('JC_MOBILE_PREVIEW_IOS_KEYBOARD_LAYOUT', 'french');
+    expect(await resolveIosHidLayoutSource()).toBe('french');
+  });
+
+  it('detects AZERTY input sources only for real AZERTY layouts', () => {
+    expect(
+      resolveIosHidLayoutFromInputSourceId('com.apple.keylayout.French'),
+    ).toBe('french');
+    expect(
+      resolveIosHidLayoutFromInputSourceId('com.apple.keylayout.Belgian'),
+    ).toBe('french');
+    // QWERTY / QWERTZ layouts that merely contain "French".
+    expect(
+      resolveIosHidLayoutFromInputSourceId('com.apple.keylayout.CanadianFrench'),
+    ).toBe('us');
+    expect(
+      resolveIosHidLayoutFromInputSourceId('com.apple.keylayout.SwissFrench'),
+    ).toBe('us');
+    expect(resolveIosHidLayoutFromInputSourceId(undefined)).toBe('us');
+  });
+
+  it('maps chars per host keyboard layout', () => {
+    expect(mapCharToIosHidKeyStroke('a', 'us')).toEqual({
+      keycode: 4,
+      shift: false,
+    });
+    // On AZERTY hosts 'a' lives on the US 'q' key (usage 20).
+    expect(mapCharToIosHidKeyStroke('a', 'french')).toEqual({
+      keycode: 20,
+      shift: false,
+    });
+    expect(mapCharToIosHidKeyStroke('1', 'french')).toEqual({
+      keycode: 30,
+      shift: true,
+    });
+    expect(mapCharToIosHidKeyStroke('-', 'french')).toEqual({
+      keycode: 46,
+      shift: false,
+    });
+  });
+
+  it('splits unmapped AZERTY chars into paste chunks', () => {
+    expect(splitTextForIosInput('az{b', 'french')).toEqual([
+      {
+        kind: 'hid',
+        strokes: [
+          { keycode: 20, shift: false },
+          { keycode: 26, shift: false },
+        ],
+      },
+      { kind: 'paste', text: '{' },
+      { kind: 'hid', strokes: [{ keycode: 5, shift: false }] },
+    ]);
+  });
+
+  it('reads and caches the host keyboard layout, ignoring bad overrides', async () => {
+    vi.stubEnv('JC_MOBILE_PREVIEW_IOS_KEYBOARD_LAYOUT', 'fr');
+    runCommandMock.mockResolvedValue({
+      stdout: 'com.apple.keylayout.French\n',
+      stderr: '',
+    });
+
+    expect(await getHostKeyboardLayout()).toBe('french');
+    expect(await getHostKeyboardLayout()).toBe('french');
+    expect(
+      runCommandMock.mock.calls.filter(([command]) => command === 'defaults'),
+    ).toHaveLength(1);
+
+    // A failed read keeps the last known layout instead of latching to US.
+    resetIosHidLayoutCacheForTests();
+    runCommandMock.mockRejectedValue(new Error('boom'));
+    expect(await getHostKeyboardLayout()).toBe('us');
+  });
 
   it('builds tap args', () => {
     expect(
