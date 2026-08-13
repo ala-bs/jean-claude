@@ -53,9 +53,9 @@ export function ManageDevicesDialog({
   visibleDevices: MobilePreviewDevice[];
   androidManagement: ReturnType<typeof useAndroidDeviceManagement>;
   iosManagement: ReturnType<typeof useIosDeviceManagement>;
-  visibleDeviceIdsByPlatform: NonNullable<
-    ReturnType<typeof useMobilePreviewDeviceSelection>['visibleDeviceIdsByPlatform']
-  >;
+  visibleDeviceIdsByPlatform: ReturnType<
+    typeof useMobilePreviewDeviceSelection
+  >['visibleDeviceIdsByPlatform'];
   setVisibleDeviceIdsByPlatform: ReturnType<
     typeof useMobilePreviewDeviceSelection
   >['setVisibleDeviceIdsByPlatform'];

@@ -381,15 +381,11 @@ export function MobilePreviewPane({
     selectedDevice: savedSelectedDevice,
     setSelectedDevice: setSavedSelectedDevice,
     setVisibleDeviceIdsByPlatform,
-    visibleDeviceIdsByPlatform: savedVisibleDeviceIdsByPlatform,
+    visibleDeviceIdsByPlatform,
   } = useMobilePreviewDeviceSelection({
     key: devicePreferenceKey,
     legacyKey: legacyDevicePreferenceKey,
   });
-  const visibleDeviceIdsByPlatform = useMemo(
-    () => savedVisibleDeviceIdsByPlatform ?? { android: null, ios: null },
-    [savedVisibleDeviceIdsByPlatform],
-  );
   const androidProjectPath =
     mobilePreviewConfig?.androidProjectPath ??
     getDefaultAndroidProjectPath({ appPath, detectedApps });

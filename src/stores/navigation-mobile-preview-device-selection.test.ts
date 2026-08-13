@@ -17,7 +17,7 @@ describe('mobile preview device selection migration', () => {
     document.body.innerHTML = '';
     useNavigationStore.setState({
       mobilePreviewSelectedDeviceByKey: {},
-      mobilePreviewVisibleDeviceIdsByKey: {},
+      mobilePreviewVisibleDeviceIdsByPlatform: { android: null, ios: null },
     });
   });
 
@@ -33,9 +33,7 @@ describe('mobile preview device selection migration', () => {
       mobilePreviewSelectedDeviceByKey: {
         [legacyKey]: selectedDevice,
       },
-      mobilePreviewVisibleDeviceIdsByKey: {
-        [legacyKey]: visibleDeviceIdsByPlatform,
-      },
+      mobilePreviewVisibleDeviceIdsByPlatform: visibleDeviceIdsByPlatform,
     });
     let observed:
       | ReturnType<typeof useMobilePreviewDeviceSelection>
@@ -61,13 +59,10 @@ describe('mobile preview device selection migration', () => {
     expect(state.mobilePreviewSelectedDeviceByKey[taskKey]).toEqual(
       selectedDevice,
     );
-    expect(state.mobilePreviewVisibleDeviceIdsByKey[taskKey]).toEqual(
-      visibleDeviceIdsByPlatform,
-    );
     expect(state.mobilePreviewSelectedDeviceByKey[legacyKey]).toEqual(
       selectedDevice,
     );
-    expect(state.mobilePreviewVisibleDeviceIdsByKey[legacyKey]).toEqual(
+    expect(state.mobilePreviewVisibleDeviceIdsByPlatform).toEqual(
       visibleDeviceIdsByPlatform,
     );
 

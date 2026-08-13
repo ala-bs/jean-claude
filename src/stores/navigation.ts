@@ -256,11 +256,10 @@ interface NavigationState {
   // App-level: mobile preview favorite devices by platform
   mobilePreviewFavoriteDeviceIdsByPlatform: Record<MobilePlatform, string[]>;
 
-  // App-level: mobile preview device preferences by project/app key
-  mobilePreviewVisibleDeviceIdsByKey: Record<
-    string,
-    MobilePreviewVisibleDeviceIdsByPlatform
-  >;
+  // App-level: mobile preview visible devices by platform (global setting)
+  mobilePreviewVisibleDeviceIdsByPlatform: MobilePreviewVisibleDeviceIdsByPlatform;
+
+  // Per-task/app key: mobile preview selected device
   mobilePreviewSelectedDeviceByKey: Record<
     string,
     MobilePreviewSelectedDevice | null
@@ -307,7 +306,6 @@ interface NavigationState {
     deviceId: string,
   ) => void;
   setMobilePreviewVisibleDeviceIds: (
-    key: string,
     update: MobilePreviewVisibleDeviceIdsUpdate,
   ) => void;
   setMobilePreviewSelectedDevice: (
@@ -370,7 +368,7 @@ const useStore = create<NavigationState>()(
       mobilePreviewAutoStartProxy: false,
       mobilePreviewShowGestures: true,
       mobilePreviewFavoriteDeviceIdsByPlatform: { ios: [], android: [] },
-      mobilePreviewVisibleDeviceIdsByKey: {},
+      mobilePreviewVisibleDeviceIdsByPlatform: { ios: null, android: null },
       mobilePreviewSelectedDeviceByKey: {},
       workItemCommentsPaneWidth: DEFAULT_WORK_ITEM_COMMENTS_PANE_WIDTH,
       skillsRailWidth: DEFAULT_SKILLS_RAIL_WIDTH,
@@ -470,19 +468,14 @@ const useStore = create<NavigationState>()(
           };
         }),
 
-      setMobilePreviewVisibleDeviceIds: (key, update) =>
+      setMobilePreviewVisibleDeviceIds: (update) =>
         set((state) => {
-          const current = state.mobilePreviewVisibleDeviceIdsByKey[key] ?? {
+          const current = state.mobilePreviewVisibleDeviceIdsByPlatform ?? {
             android: null,
             ios: null,
           };
           const next = typeof update === 'function' ? update(current) : update;
-          return {
-            mobilePreviewVisibleDeviceIdsByKey: {
-              ...state.mobilePreviewVisibleDeviceIdsByKey,
-              [key]: next,
-            },
-          };
+          return { mobilePreviewVisibleDeviceIdsByPlatform: next };
         }),
 
       setMobilePreviewSelectedDevice: (key, device) =>
@@ -509,42 +502,22 @@ const useStore = create<NavigationState>()(
 
       migrateMobilePreviewDeviceSelection: (key, legacyKey) =>
         set((state) => {
-          const hasVisibleSelection = Object.hasOwn(
-            state.mobilePreviewVisibleDeviceIdsByKey,
-            key,
-          );
           const hasSelectedDevice = Object.hasOwn(
             state.mobilePreviewSelectedDeviceByKey,
             key,
           );
-          const legacyVisibleSelection =
-            state.mobilePreviewVisibleDeviceIdsByKey[legacyKey];
           const hasLegacySelectedDevice = Object.hasOwn(
             state.mobilePreviewSelectedDeviceByKey,
             legacyKey,
           );
-          if (
-            (hasVisibleSelection || legacyVisibleSelection === undefined) &&
-            (hasSelectedDevice || !hasLegacySelectedDevice)
-          ) {
+          if (hasSelectedDevice || !hasLegacySelectedDevice) {
             return state;
           }
           return {
-            mobilePreviewVisibleDeviceIdsByKey:
-              hasVisibleSelection || legacyVisibleSelection === undefined
-                ? state.mobilePreviewVisibleDeviceIdsByKey
-                : {
-                    ...state.mobilePreviewVisibleDeviceIdsByKey,
-                    [key]: legacyVisibleSelection,
-                  },
-            mobilePreviewSelectedDeviceByKey:
-              hasSelectedDevice || !hasLegacySelectedDevice
-                ? state.mobilePreviewSelectedDeviceByKey
-                : {
-                    ...state.mobilePreviewSelectedDeviceByKey,
-                    [key]:
-                      state.mobilePreviewSelectedDeviceByKey[legacyKey] ?? null,
-                  },
+            mobilePreviewSelectedDeviceByKey: {
+              ...state.mobilePreviewSelectedDeviceByKey,
+              [key]: state.mobilePreviewSelectedDeviceByKey[legacyKey] ?? null,
+            },
           };
         }),
 
@@ -992,9 +965,33 @@ const useStore = create<NavigationState>()(
           android: [],
           ...persistedState.mobilePreviewFavoriteDeviceIdsByPlatform,
         };
-        merged.mobilePreviewVisibleDeviceIdsByKey = {
-          ...persistedState.mobilePreviewVisibleDeviceIdsByKey,
+        const legacyVisibleDeviceIdsByKey = (
+          persistedState as {
+            mobilePreviewVisibleDeviceIdsByKey?: Record<
+              string,
+              MobilePreviewVisibleDeviceIdsByPlatform
+            >;
+          }
+        ).mobilePreviewVisibleDeviceIdsByKey;
+        const persistedVisibleDeviceIds =
+          persistedState.mobilePreviewVisibleDeviceIdsByPlatform ??
+          // Legacy: per project/app key map -> first non-null list per platform
+          Object.values(legacyVisibleDeviceIdsByKey ?? {}).reduce<
+            MobilePreviewVisibleDeviceIdsByPlatform
+          >(
+            (acc, entry) => ({
+              ios: acc.ios ?? entry?.ios ?? null,
+              android: acc.android ?? entry?.android ?? null,
+            }),
+            { ios: null, android: null },
+          );
+        merged.mobilePreviewVisibleDeviceIdsByPlatform = {
+          ios: persistedVisibleDeviceIds.ios ?? null,
+          android: persistedVisibleDeviceIds.android ?? null,
         };
+        // Drop legacy per-key map so it stops being re-persisted
+        delete (merged as { mobilePreviewVisibleDeviceIdsByKey?: unknown })
+          .mobilePreviewVisibleDeviceIdsByKey;
         merged.mobilePreviewSelectedDeviceByKey = {
           ...persistedState.mobilePreviewSelectedDeviceByKey,
         };
@@ -1667,11 +1664,7 @@ export function useMobilePreviewDeviceSelection({
   legacyKey?: string;
 }) {
   const visibleDeviceIdsByPlatform = useStore(
-    (state) =>
-      state.mobilePreviewVisibleDeviceIdsByKey[key] ??
-      (legacyKey
-        ? (state.mobilePreviewVisibleDeviceIdsByKey[legacyKey] ?? null)
-        : null),
+    (state) => state.mobilePreviewVisibleDeviceIdsByPlatform,
   );
   const selectedDevice = useStore(
     (state) => {
@@ -1699,11 +1692,7 @@ export function useMobilePreviewDeviceSelection({
     }
   }, [key, legacyKey, migrateDeviceSelection]);
 
-  const setVisibleDeviceIdsByPlatform = useCallback(
-    (update: MobilePreviewVisibleDeviceIdsUpdate) =>
-      setVisibleDeviceIdsAction(key, update),
-    [key, setVisibleDeviceIdsAction],
-  );
+  const setVisibleDeviceIdsByPlatform = setVisibleDeviceIdsAction;
   const setSelectedDevice = useCallback(
     (device: MobilePreviewSelectedDevice | null) =>
       setSelectedDeviceAction(key, device),

@@ -84,6 +84,49 @@ describe('navigation store', () => {
     ).toMatchObject({ activeView: undefined, rightPane: null });
   });
 
+  it('collapses legacy per-key visible device lists into one global setting', async () => {
+    localStorage.setItem(
+      'navigation',
+      JSON.stringify({
+        state: {
+          mobilePreviewVisibleDeviceIdsByKey: {
+            'project-1:.': { android: null, ios: ['ios-1'] },
+            'task-1:.': { android: ['android-1'], ios: null },
+          },
+        },
+        version: 0,
+      }),
+    );
+
+    const { useNavigationStore } = await import('./navigation');
+
+    const state = useNavigationStore.getState();
+    expect(state.mobilePreviewVisibleDeviceIdsByPlatform).toEqual({
+      android: ['android-1'],
+      ios: ['ios-1'],
+    });
+    expect(
+      (state as { mobilePreviewVisibleDeviceIdsByKey?: unknown })
+        .mobilePreviewVisibleDeviceIdsByKey,
+    ).toBeUndefined();
+  });
+
+  it('shares visible device lists across tasks', async () => {
+    const { useNavigationStore } = await import('./navigation');
+
+    useNavigationStore.getState().setMobilePreviewVisibleDeviceIds({
+      android: ['android-1'],
+      ios: null,
+    });
+
+    expect(
+      useNavigationStore.getState().mobilePreviewVisibleDeviceIdsByPlatform,
+    ).toEqual({ android: ['android-1'], ios: null });
+    expect(localStorage.getItem('navigation')).toContain(
+      '"mobilePreviewVisibleDeviceIdsByPlatform"',
+    );
+  });
+
   it('copies legacy project app device preferences to each task without deleting legacy data', async () => {
     const { useNavigationStore } = await import('./navigation');
     const legacyKey = 'project-1:apps/mobile';
@@ -92,18 +135,14 @@ describe('navigation store', () => {
     const visibleIds = { android: ['android-1'], ios: ['ios-1'] };
     const selectedDevice = { platform: 'ios' as const, deviceId: 'ios-1' };
     const store = useNavigationStore.getState();
-    store.setMobilePreviewVisibleDeviceIds(legacyKey, visibleIds);
+    store.setMobilePreviewVisibleDeviceIds(visibleIds);
     store.setMobilePreviewSelectedDevice(legacyKey, selectedDevice);
 
     store.migrateMobilePreviewDeviceSelection(firstTaskKey, legacyKey);
     store.migrateMobilePreviewDeviceSelection(secondTaskKey, legacyKey);
 
     const state = useNavigationStore.getState();
-    expect(state.mobilePreviewVisibleDeviceIdsByKey).toMatchObject({
-      [legacyKey]: visibleIds,
-      [firstTaskKey]: visibleIds,
-      [secondTaskKey]: visibleIds,
-    });
+    expect(state.mobilePreviewVisibleDeviceIdsByPlatform).toEqual(visibleIds);
     expect(state.mobilePreviewSelectedDeviceByKey).toMatchObject({
       [legacyKey]: selectedDevice,
       [firstTaskKey]: selectedDevice,
@@ -114,15 +153,11 @@ describe('navigation store', () => {
   it('does not overwrite task-scoped device preferences during migration', async () => {
     const { useNavigationStore } = await import('./navigation');
     const store = useNavigationStore.getState();
-    store.setMobilePreviewVisibleDeviceIds('project-1:.', {
-      android: ['legacy'],
-      ios: null,
-    });
     store.setMobilePreviewSelectedDevice('project-1:.', {
       platform: 'android',
       deviceId: 'legacy',
     });
-    store.setMobilePreviewVisibleDeviceIds('task-1:.', {
+    store.setMobilePreviewVisibleDeviceIds({
       android: ['task'],
       ios: null,
     });
@@ -131,9 +166,9 @@ describe('navigation store', () => {
     store.migrateMobilePreviewDeviceSelection('task-1:.', 'project-1:.');
 
     const state = useNavigationStore.getState();
-    expect(state.mobilePreviewVisibleDeviceIdsByKey['task-1:.']?.android).toEqual(
-      ['task'],
-    );
+    expect(state.mobilePreviewVisibleDeviceIdsByPlatform.android).toEqual([
+      'task',
+    ]);
     expect(state.mobilePreviewSelectedDeviceByKey['task-1:.']).toBeNull();
   });
 });
