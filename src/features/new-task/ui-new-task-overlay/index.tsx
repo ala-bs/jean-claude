@@ -136,6 +136,7 @@ import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
 import { useProjectSkills } from '@/hooks/use-skills';
+import { NewTaskMoreMenu } from '@/features/new-task/ui-new-task-more-menu';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 
@@ -2235,6 +2236,10 @@ export function NewTaskOverlay({
                       />
                     </div>
                   )}
+
+                {!isNoteMode && selectedProjectId && (
+                  <NewTaskMoreMenu projectId={selectedProjectId} />
+                )}
               </div>
 
               <div className="flex-1" />
