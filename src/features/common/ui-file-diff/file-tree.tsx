@@ -452,6 +452,11 @@ function TreeNodeRow({
     const folderPaths = node.folderPaths ?? [node.path];
     const isExpanded = folderPaths.every((path) => expandedFolders.has(path));
     const togglePath = folderPaths[folderPaths.length - 1] ?? node.path;
+    const descendantPaths = reviewedPaths ? filePathsUnder(node.path) : [];
+    const isFolderFullyReviewed =
+      Boolean(reviewedPaths) &&
+      descendantPaths.length > 0 &&
+      descendantPaths.every((path) => reviewedPaths?.has(path) && !stalePaths?.has(path));
     return (
       <div>
         <button
@@ -466,7 +471,9 @@ function TreeNodeRow({
           }}
           aria-expanded={isExpanded}
           className={clsx(
-            'text-ink-2 relative flex h-[26px] w-full items-center gap-1.5 px-2 text-left text-[13px] transition-colors hover:bg-glass-medium/50',
+            'relative flex h-[26px] w-full items-center gap-1.5 px-2 text-left text-[13px] transition-colors hover:bg-glass-medium/50',
+            isFolderFullyReviewed ? 'text-status-done' : 'text-ink-2',
+            isFolderFullyReviewed && !stickyFolders && 'bg-status-done-soft',
             stickyFolders && 'bg-bg-0 sticky z-10',
           )}
           style={
@@ -479,6 +486,9 @@ function TreeNodeRow({
               : { paddingLeft }
           }
         >
+          {isFolderFullyReviewed && stickyFolders && (
+            <span className="bg-status-done-soft pointer-events-none absolute inset-0" aria-hidden />
+          )}
           {guides}
           {isExpanded ? (
             <ChevronDown className="text-ink-3 h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -554,8 +564,9 @@ function TreeNodeRow({
           ? 'text-ink-0 bg-glass-medium shadow-[inset_2px_0_0_var(--acc)]'
           : isMultiSelected
             ? 'bg-acc-soft text-ink-0'
-            : 'text-ink-1 hover:bg-glass-medium/50',
-        isReviewed && !isStale && !isSelected && !isMultiSelected && 'opacity-45',
+            : isReviewed && !isStale
+              ? 'text-status-done bg-status-done-soft hover:bg-status-done-soft'
+              : 'text-ink-1 hover:bg-glass-medium/50',
       )}
       style={{ paddingLeft: 8 + depth * indent + (showReview ? 6 : 21) }}
     >
