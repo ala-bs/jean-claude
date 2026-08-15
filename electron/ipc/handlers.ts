@@ -3274,6 +3274,9 @@ export function registerIpcHandlers() {
   ipcMain.handle('providers:findById', (_, id: string) =>
     ProviderRepository.findById(id),
   );
+  ipcMain.handle('providers:findByTokenId', (_, tokenId: string) =>
+    ProviderRepository.findByTokenId(tokenId),
+  );
   ipcMain.handle('providers:create', (_, data: NewProvider) =>
     ProviderRepository.create(data),
   );

@@ -14,7 +14,15 @@ import { useState } from 'react';
 
 
 import { api, type ProviderProject, type ProviderRepo } from '@/lib/api';
-import { useDeleteProvider, useProviderDetails } from '@/hooks/use-providers';
+import {
+  useDeleteProvider,
+  useProvider,
+  useProviderDetails,
+  useUpdateProvider,
+} from '@/hooks/use-providers';
+import { Select } from '@/common/ui/select';
+import { cleanIpcError } from '@/lib/ipc-error';
+import { useTokensByProviderType } from '@/hooks/use-tokens';
 import { Button } from '@/common/ui/button';
 import { getRandomColor } from '@/lib/colors';
 import { IconButton } from '@/common/ui/icon-button';
@@ -271,7 +279,43 @@ export function OrganizationDetailsPane({
 }) {
   const { data, isLoading, error } = useProviderDetails(provider.id);
   const deleteProvider = useDeleteProvider();
+  const updateProvider = useUpdateProvider();
+  const { data: tokens } = useTokensByProviderType(provider.type);
+  // Parent holds a snapshot of the provider, so read the live row for the token
+  const { data: freshProvider } = useProvider(provider.id);
+  const currentTokenId = freshProvider?.tokenId ?? provider.tokenId;
   const modal = useModal();
+  const [tokenError, setTokenError] = useState<string | null>(null);
+
+  const tokenOptions = (tokens ?? []).map((token) => ({
+    value: token.id,
+    label: token.label,
+    description: token.expiresAt
+      ? `Expires ${token.expiresAt.split('T')[0]}`
+      : undefined,
+  }));
+
+  // A null tokenId (or one pointing at a deleted token) must not silently
+  // display the first option as if it were assigned.
+  const hasValidToken = tokenOptions.some(
+    (option) => option.value === currentTokenId,
+  );
+  const selectOptions = hasValidToken
+    ? tokenOptions
+    : [{ value: '', label: 'No token assigned' }, ...tokenOptions];
+
+  const handleTokenChange = async (tokenId: string) => {
+    if (!tokenId || tokenId === currentTokenId) return;
+    setTokenError(null);
+    try {
+      await updateProvider.mutateAsync({
+        id: provider.id,
+        data: { tokenId },
+      });
+    } catch (err) {
+      setTokenError(cleanIpcError(err) || 'Failed to update token');
+    }
+  };
 
   const handleDeleteClick = () => {
     modal.confirm({
@@ -328,6 +372,30 @@ export function OrganizationDetailsPane({
             size="sm"
           />
         </div>
+      </div>
+
+      {/* Token */}
+      <div className="border-glass-border border-b px-4 py-3">
+        <h4 className="text-ink-3 mb-2 text-xs font-medium tracking-wide uppercase">
+          Token
+        </h4>
+        {tokenOptions.length === 0 ? (
+          <p className="text-ink-3 text-xs">
+            No tokens available — add one in Settings &gt; Tokens.
+          </p>
+        ) : (
+          <Select
+            value={hasValidToken ? (currentTokenId ?? '') : ''}
+            options={selectOptions}
+            onChange={handleTokenChange}
+            disabled={updateProvider.isPending}
+            label="Token used by this organization"
+            className="w-full justify-between"
+          />
+        )}
+        {tokenError && (
+          <p className="text-status-fail mt-2 text-xs">{tokenError}</p>
+        )}
       </div>
 
       {/* Content */}

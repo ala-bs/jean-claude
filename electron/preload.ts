@@ -403,6 +403,8 @@ contextBridge.exposeInMainWorld('api', {
   providers: {
     findAll: () => ipcRenderer.invoke('providers:findAll'),
     findById: (id: string) => ipcRenderer.invoke('providers:findById', id),
+    findByTokenId: (tokenId: string) =>
+      ipcRenderer.invoke('providers:findByTokenId', tokenId),
     create: (data: unknown) => ipcRenderer.invoke('providers:create', data),
     update: (id: string, data: unknown) =>
       ipcRenderer.invoke('providers:update', id, data),

@@ -855,6 +855,7 @@ export interface Api {
   providers: {
     findAll: () => Promise<Provider[]>;
     findById: (id: string) => Promise<Provider | undefined>;
+    findByTokenId: (tokenId: string) => Promise<Provider[]>;
     create: (data: NewProvider) => Promise<Provider>;
     update: (id: string, data: UpdateProvider) => Promise<Provider>;
     delete: (id: string) => Promise<void>;
@@ -2392,6 +2393,7 @@ export const api: Api = hasWindowApi
       providers: {
         findAll: async () => [],
         findById: async () => undefined,
+        findByTokenId: async () => [],
         create: async () => {
           throw new Error('API not available');
         },
