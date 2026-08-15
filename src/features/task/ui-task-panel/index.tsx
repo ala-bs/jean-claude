@@ -1,5 +1,6 @@
 import {
   Bug,
+  ChevronsDownUp,
   ExternalLink,
   FolderSymlink,
   FolderTree,
@@ -47,9 +48,11 @@ import type {
 } from '@shared/agent-memory-types';
 import {
   AVAILABLE_BACKENDS,
+  getModelLabel,
   getModelsForBackend,
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
+import { ComposerCollapsedBar } from '@/features/agent/ui-composer-collapsed-bar';
 import { DiffViewMode, useUIStore } from '@/stores/ui';
 import {
   Dropdown,
@@ -61,6 +64,7 @@ import { formatModelName, getModelFromEntry } from '@/hooks/use-model';
 
 import {
   getDefaultInteractionModeForBackend,
+  getInteractionModeOptions,
   type InteractionMode,
   isPrReviewChatStepMeta,
   type ModelPreference,
@@ -1423,6 +1427,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const overflowMenuRef = useRef<{ toggle: () => void } | null>(null);
   const runButtonRef = useRef<{ toggle: () => void } | null>(null);
 
+  // Composer collapse — only meaningful while the review/diff view is open,
+  // where every pixel given back to the diff counts.
+  const [composerCollapsed, setComposerCollapsed] = useState(false);
+  const isComposerCollapsed = isDiffViewOpen && composerCollapsed;
+  const collapseComposer = useCallback(() => setComposerCollapsed(true), []);
+  const expandComposer = useCallback(() => setComposerCollapsed(false), []);
+
   // Track floating footer height so scroll containers can add matching bottom padding
   const [footerHeight, setFooterHeight] = useState(0);
   const footerObserverRef = useRef<ResizeObserver | null>(null);
@@ -2229,6 +2240,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         }
         setReviewMode('changes');
         openDiffView();
+      },
+    },
+    isDiffViewOpen && {
+      label: isComposerCollapsed ? 'Expand Composer' : 'Collapse Composer',
+      shortcut: 'cmd+/',
+      section: 'Task',
+      handler: () => {
+        setComposerCollapsed((collapsed) => !collapsed);
       },
     },
     {
@@ -3090,6 +3109,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   <FeatureMapSaveAction step={activeStep} />
                 )}
                 <TaskInputFooter
+                  collapsed={isComposerCollapsed}
+                  onExpand={expandComposer}
+                  onCollapse={isDiffViewOpen ? collapseComposer : undefined}
                   taskId={taskId}
                   activeStepId={activeStepId}
                   isRunning={isAgentBusy}
@@ -3559,6 +3581,9 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onStop,
   projectRoot,
   getCompletionContextBeforePrompt,
+  collapsed = false,
+  onExpand,
+  onCollapse,
 }: {
   taskId: string;
   activeStepId: string | null;
@@ -3574,6 +3599,10 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onStop: () => Promise<void>;
   projectRoot: string | null;
   getCompletionContextBeforePrompt: () => string;
+  /** Collapse the composer to a single line (used while reviewing a diff). */
+  collapsed?: boolean;
+  onExpand?: () => void;
+  onCollapse?: () => void;
 }) {
   const { data: task } = useTask(taskId);
   const { data: footerProject } = useProject(task?.projectId ?? '');
@@ -3954,6 +3983,17 @@ const TaskInputFooter = memo(function TaskInputFooter({
     </div>
   );
 
+  const collapseButton = onCollapse ? (
+    <button
+      type="button"
+      onClick={onCollapse}
+      title="Collapse composer — ⌘/"
+      className="text-ink-4 hover:text-ink-1 flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors"
+    >
+      <ChevronsDownUp className="h-3.5 w-3.5" />
+    </button>
+  ) : null;
+
   const tokenControls = (
     <TaskMessageUsageControls
       stepId={activeStepId}
@@ -3961,6 +4001,29 @@ const TaskInputFooter = memo(function TaskInputFooter({
       contextWindow={contextWindow}
     />
   );
+
+  if (collapsed && onExpand) {
+    return (
+      <div ref={containerRef} className="mx-3 mb-3">
+        <ComposerCollapsedBar
+          draft={promptDraft}
+          queuedCount={queuedPrompts.length}
+          isRunning={isRunning}
+          modeLabel={
+            getInteractionModeOptions({ backend: effectiveBackend }).find(
+              (option) => option.value === effectiveMode,
+            )?.label ?? effectiveMode
+          }
+          modelLabel={getModelLabel(
+            effectiveModel,
+            effectiveBackend,
+            dynamicModels,
+          )}
+          onExpand={onExpand}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -4035,7 +4098,12 @@ const TaskInputFooter = memo(function TaskInputFooter({
                 </div>
               </>
             }
-            controlsBeforeButtons={tokenControls}
+            controlsBeforeButtons={
+              <>
+                {tokenControls}
+                {collapseButton}
+              </>
+            }
             buttonSize="sm"
             textareaClassName="bg-transparent px-1 py-0 text-sm leading-[20px]"
           />
@@ -4068,7 +4136,16 @@ const TaskInputFooter = memo(function TaskInputFooter({
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
-            controlsAboveButtons={selectorGroup}
+            controlsAboveButtons={
+              collapseButton ? (
+                <div className="flex items-center gap-1.5">
+                  {selectorGroup}
+                  {collapseButton}
+                </div>
+              ) : (
+                selectorGroup
+              )
+            }
             controlsBeforeButtons={tokenControls}
             buttonSize="sm"
             fillAvailableHeight
