@@ -6,6 +6,8 @@ import type {
   TimesheetEntryDraft,
   TimesheetEntryInput,
   TimesheetRemoteRow,
+  TimesheetRowDeletion,
+  TimesheetRowUpdate,
   TimesheetSheetSummary,
 } from '@shared/timesheet-types';
 import { isTimesheetRemoteRowOccupied } from '@shared/timesheet-utils';
@@ -13,7 +15,55 @@ import { isTimesheetRemoteRowOccupied } from '@shared/timesheet-utils';
 export type InitializedTimesheetEntry = TimesheetEntryInput & {
   sourceDescription: string;
   items: TimesheetDraftItem[];
+  /**
+   * The saved row this entry rewrites, when it was derived from one. Such a
+   * pair is sent as an in-place row update instead of a delete + re-add.
+   */
+  replaces?: TimesheetRowDeletion;
 };
+
+/**
+ * Splits the staged ledger into what the write API takes. A staged deletion
+ * whose row is rewritten by exactly one entry becomes an in-place update, which
+ * keeps the row (and its Eurecia identity) instead of dropping and recreating it.
+ */
+export function splitStagedWrites({
+  entries,
+  deletions,
+}: {
+  entries: InitializedTimesheetEntry[];
+  deletions: TimesheetRowDeletion[];
+}) {
+  const pending = [...deletions];
+  const updates: TimesheetRowUpdate[] = [];
+  const remaining: InitializedTimesheetEntry[] = [];
+  for (const entry of entries) {
+    const replaces = entry.replaces;
+    const index = replaces
+      ? pending.findIndex(
+          (deletion) =>
+            deletion.date === replaces.date &&
+            deletion.rowIndex === replaces.rowIndex,
+        )
+      : -1;
+    if (!replaces || index === -1) {
+      remaining.push(entry);
+      continue;
+    }
+    pending.splice(index, 1);
+    updates.push({
+      target: replaces,
+      values: {
+        fraction: entry.fraction,
+        axis1Id: entry.axis1Id,
+        axis2Id: entry.axis2Id,
+        axis3Id: entry.axis3Id,
+        comment: entry.comment,
+      },
+    });
+  }
+  return { entries: remaining, deletions: pending, updates };
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_CAPACITY_BREAKDOWN_DAYS = 366;
@@ -28,8 +78,21 @@ export function getDefaultTimesheetFraction(
 export function initializeTimesheetEntries(
   drafts: TimesheetEntryDraft[],
   remoteRows: TimesheetRemoteRow[],
-): { entries: InitializedTimesheetEntry[]; blockedDates: string[] } {
+): {
+  entries: InitializedTimesheetEntry[];
+  blockedDates: string[];
+  fullyDeclaredDates: string[];
+} {
+  // Days Eurecia already declares in full leave nothing to paint: seeding them
+  // would add unassignable rows and push the week over its capacity.
+  const declaredCapacity = getOccupiedDailyCapacity(remoteRows);
+  const isFullyDeclared = (date: string) =>
+    (declaredCapacity.get(date)?.fraction ?? 0) >= 1;
+  const fullyDeclaredDates = [
+    ...new Set(drafts.filter(({ date }) => isFullyDeclared(date)).map(({ date }) => date)),
+  ].sort();
   const indexedDrafts = drafts
+    .filter(({ date }) => !isFullyDeclared(date))
     .map((draft, index) => ({ draft, index }))
     .sort(
       (left, right) =>
@@ -53,7 +116,9 @@ export function initializeTimesheetEntries(
         4,
     )
     .map(([date]) => date);
-  if (blockedDates.length > 0) return { entries: [], blockedDates };
+  if (blockedDates.length > 0) {
+    return { entries: [], blockedDates, fullyDeclaredDates };
+  }
 
   const rowsByDate = new Map<string, TimesheetRemoteRow[]>();
   for (const row of remoteRows) {
@@ -69,6 +134,7 @@ export function initializeTimesheetEntries(
   const nextRowByDate = new Map<string, number>();
   return {
     blockedDates,
+    fullyDeclaredDates,
     entries: indexedDrafts.map(({ draft }) => {
       const count = counts.get(draft.date) ?? 1;
       const fraction = getDefaultTimesheetFraction(count);

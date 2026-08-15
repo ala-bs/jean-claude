@@ -92,8 +92,21 @@ function blankRow(rowIndex: number, { withFullDay = true } = {}) {
   `;
 }
 
-function openHtml(rows: string) {
-  return `<html><body>
+/**
+ * Eurecia exposes sheet-level actions as buttons that set `validate` before
+ * submitting: 2 = save, 4 = submit for approval, 5 = cancel a submission.
+ */
+function actionButtons(codes: string[]) {
+  return codes
+    .map((code) => `<a onclick="$('#validate').val('${code}');">act</a>`)
+    .join('');
+}
+
+const EDITABLE_ACTIONS = actionButtons(['2', '4']);
+const SUBMITTED_ACTIONS = actionButtons(['5']);
+
+function openHtml(rows: string, actions = EDITABLE_ACTIONS) {
+  return `<html><body>${actions}
     <form action="/eurecia/timesheet/Open.do?param=private-sheet-token" method="post" enctype="multipart/form-data">
       <input name="org.apache.struts.taglib.html.TOKEN" value="private-csrf-token">
       <input name="idTimeSheet" value="internal-timesheet-123">
@@ -247,6 +260,358 @@ const ACTION_URL = `${ORIGIN}/eurecia/timesheet/Open.do?param=private-sheet-toke
 const rerendered = (body: string) =>
   response({ url: ACTION_URL, body, contentType: 'text/html' });
 
+describe('Eurecia timesheet row updates', () => {
+  const target = {
+    date: '2026-07-01',
+    rowIndex: 0,
+    fraction: 0.25 as const,
+    axis1Id: 'existing-axis-1',
+    axis2Id: 'existing-axis-2',
+    axis3Id: 'existing-axis-3',
+    comment: 'Existing',
+  };
+
+  it('rewrites a saved row in place with a single post', async () => {
+    const { service, sheet, writeBodies } = await savingService({
+      openBodies: [ONE_FREE_ROW],
+      writeResponses: [savedRedirect(openHtml(`${savedRow(0)}${blankRow(1)}`))],
+    });
+
+    const result = await service.save({
+      sheetId: sheet.id,
+      entries: [],
+      action: 'save',
+      updates: [
+        {
+          target,
+          values: {
+            fraction: 0.25,
+            axis1Id: 'axis-1',
+            axis2Id: 'axis-2',
+            axis3Id: 'axis-3',
+            comment: 'Written by tests',
+          },
+        },
+      ],
+    });
+
+    expect(result.summary).toMatchObject({
+      entryCount: 0,
+      addedRowCount: 0,
+      deletedRowCount: 0,
+      updatedRowCount: 1,
+    });
+    // No delete/add round trips: the edit rides the save post.
+    expect(writeBodies).toHaveLength(1);
+    const body = writeBodies[0];
+    expect(fieldValues(body, rowControl('imputationStructureId3', 0))).toEqual([
+      'axis-3',
+    ]);
+    expect(fieldValues(body, rowControl('comment', 0))).toEqual([
+      'Written by tests',
+    ]);
+  });
+
+  it('accounts for a changed fraction in the declared totals check', async () => {
+    const raiseTo = (fraction: 0.25 | 0.5) => ({
+      target,
+      values: {
+        fraction,
+        axis1Id: 'axis-1',
+        axis2Id: 'axis-2',
+        axis3Id: 'axis-3',
+        comment: 'Written by tests',
+      },
+    });
+
+    const applied = await savingService({
+      openBodies: [ONE_FREE_ROW],
+      writeResponses: [
+        savedRedirect(openHtml(`${savedRow(0, '0.5')}${blankRow(1)}`)),
+      ],
+    });
+    const result = await applied.service.save({
+      sheetId: applied.sheet.id,
+      entries: [],
+      action: 'save',
+      updates: [raiseTo(0.5)],
+    });
+    expect(result.summary.updatedRowCount).toBe(1);
+
+    // The same reload no longer confirms a save that asked for a different day
+    // count, so the expected delta is really being compared.
+    const ignored = await savingService({
+      openBodies: [ONE_FREE_ROW],
+      writeResponses: [
+        savedRedirect(openHtml(`${savedRow(0, '0.5')}${blankRow(1)}`)),
+      ],
+    });
+    await expect(
+      ignored.service.save({
+        sheetId: ignored.sheet.id,
+        entries: [],
+        action: 'save',
+        updates: [raiseTo(0.25)],
+      }),
+    ).rejects.toThrow(/expected 0.25 day\(s\) declared, found 0.5/);
+  });
+
+  it('rejects two rows on one day swapping values without being written', async () => {
+    // Both rows already hold the other's values, so a per-day existence check
+    // would confirm a save Eurecia never applied.
+    const rowA = (rowIndex: number, axis1Id: string) => `
+      <span id="dateActivite_${rowIndex}">01/07/2026</span>
+      <input name="${rowControl('generatedItem', rowIndex)}" value="false">
+      <input name="${rowControl('daysWorked_int', rowIndex)}" value="0">
+      <input name="${rowControl('daysWorked_fraction', rowIndex)}" value="0.25">
+      <input name="${rowControl('imputationStructureId1', rowIndex)}" value="${axis1Id}">
+      <input name="${rowControl('imputationStructureId2', rowIndex)}" value="axis-2">
+      <input name="${rowControl('imputationStructureId3', rowIndex)}" value="axis-3">
+      <textarea name="${rowControl('comment', rowIndex)}">Shared</textarea>
+    `;
+    const unchanged = openHtml(`${rowA(0, 'project-x')}${rowA(1, 'project-y')}`);
+    const { service, sheet } = await savingService({
+      openBodies: [unchanged],
+      writeResponses: [savedRedirect(unchanged)],
+    });
+    const swap = (rowIndex: number, from: string, to: string) => ({
+      target: {
+        date: '2026-07-01',
+        rowIndex,
+        fraction: 0.25 as const,
+        axis1Id: from,
+        axis2Id: 'axis-2',
+        axis3Id: 'axis-3',
+        comment: 'Shared',
+      },
+      values: {
+        fraction: 0.25 as const,
+        axis1Id: to,
+        axis2Id: 'axis-2',
+        axis3Id: 'axis-3',
+        comment: 'Shared',
+      },
+    });
+
+    await expect(
+      service.save({
+        sheetId: sheet.id,
+        entries: [],
+        action: 'save',
+        updates: [
+          swap(0, 'project-x', 'project-y'),
+          swap(1, 'project-y', 'project-x'),
+        ],
+      }),
+    ).rejects.toThrow(/did not apply the row update/i);
+  });
+
+  it('refuses an update that would push the day past one declared day', async () => {
+    const { service, sheet, writeFetch } = await savingService({
+      openBodies: [openHtml(`${occupiedRow(0)}${occupiedRow(1)}${blankRow(2)}`)],
+      writeResponses: [],
+    });
+
+    await expect(
+      service.save({
+        sheetId: sheet.id,
+        entries: [],
+        action: 'save',
+        updates: [
+          {
+            target,
+            values: {
+              fraction: 1,
+              axis1Id: 'axis-1',
+              axis2Id: 'axis-2',
+              axis3Id: 'axis-3',
+              comment: 'Written by tests',
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow(/cannot declare more than one day/i);
+    // Nothing was posted: the sheet is rejected before it is touched.
+    expect(writeFetch).not.toHaveBeenCalled();
+  });
+
+  it('fails when the reloaded row does not carry the new values', async () => {
+    const { service, sheet } = await savingService({
+      openBodies: [ONE_FREE_ROW],
+      writeResponses: [savedRedirect(ONE_FREE_ROW)],
+    });
+
+    await expect(
+      service.save({
+        sheetId: sheet.id,
+        entries: [],
+        action: 'save',
+        updates: [
+          {
+            target,
+            values: {
+              fraction: 0.25,
+              axis1Id: 'axis-1',
+              axis2Id: 'axis-2',
+              axis3Id: 'axis-3',
+              comment: 'Written by tests',
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow(/did not apply the row update/i);
+  });
+
+  it('refuses to update a row that no longer matches the sheet', async () => {
+    const { service, sheet } = await savingService({
+      openBodies: [ONE_FREE_ROW],
+      writeResponses: [],
+    });
+
+    await expect(
+      service.save({
+        sheetId: sheet.id,
+        entries: [],
+        action: 'save',
+        updates: [
+          {
+            target: { ...target, axis1Id: 'moved-axis-1' },
+            values: {
+              fraction: 0.25,
+              axis1Id: 'axis-1',
+              axis2Id: 'axis-2',
+              axis3Id: 'axis-3',
+              comment: 'Written by tests',
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow(/no longer on the sheet/i);
+  });
+});
+
+describe('Eurecia timesheet submit for approval', () => {
+  it('submits an already-saved sheet without entries', async () => {
+    const saved = openHtml(`${occupiedRow(0)}${savedRow(1)}`);
+    const { service, sheet, writeBodies } = await savingService({
+      openBodies: [saved],
+      writeResponses: [
+        savedRedirect(
+          openHtml(`${occupiedRow(0)}${savedRow(1)}`, SUBMITTED_ACTIONS),
+        ),
+      ],
+    });
+
+    const result = await service.save({
+      sheetId: sheet.id,
+      entries: [],
+      action: 'submit-for-approval',
+    });
+
+    expect(result.summary).toMatchObject({
+      action: 'submit-for-approval',
+      entryCount: 0,
+      addedRowCount: 0,
+      savedRowIndices: [],
+    });
+    expect(fieldValues(writeBodies[0], 'validate')).toEqual(['4']);
+    expect(fieldValues(writeBodies[0], 'btnApply')).toEqual(['clicked']);
+  });
+
+  it('saves and verifies pending entries before submitting them', async () => {
+    const saved = openHtml(`${occupiedRow(0)}${savedRow(1)}`);
+    const { service, sheet, writeBodies } = await savingService({
+      openBodies: [ONE_FREE_ROW],
+      writeResponses: [
+        // The write lands while the sheet is still editable, so its rows can be
+        // verified; only then is the sheet submitted.
+        savedRedirect(saved),
+        savedRedirect(openHtml(`${occupiedRow(0)}${savedRow(1)}`, SUBMITTED_ACTIONS)),
+      ],
+    });
+
+    const result = await service.save({
+      sheetId: sheet.id,
+      entries: [entry({ rowIndex: 1 })],
+      action: 'submit-for-approval',
+    });
+
+    expect(result.summary).toMatchObject({ action: 'submit-for-approval', entryCount: 1 });
+    expect(writeBodies).toHaveLength(2);
+    expect(fieldValues(writeBodies[0], 'validate')).toEqual(['2']);
+    expect(fieldValues(writeBodies[1], 'validate')).toEqual(['4']);
+  });
+
+  it('does not submit when the written entries are missing from the saved sheet', async () => {
+    const { service, sheet, writeBodies } = await savingService({
+      openBodies: [ONE_FREE_ROW],
+      writeResponses: [savedRedirect(ONE_FREE_ROW)],
+    });
+
+    await expect(
+      service.save({
+        sheetId: sheet.id,
+        entries: [entry({ rowIndex: 1 })],
+        action: 'submit-for-approval',
+      }),
+    ).rejects.toThrow(/did not apply the timesheet save/i);
+    // The sheet stays editable: no submit was attempted on an unverified write.
+    expect(writeBodies).toHaveLength(1);
+  });
+
+  it('does not check declared totals against the read-only submitted sheet', async () => {
+    // Eurecia disables the duration controls once a sheet is submitted, so its
+    // rows read back as zero days even though nothing was lost.
+    const lockedRow = `
+      <span id="dateActivite_0">01/07/2026</span>
+      <input name="${rowControl('generatedItem', 0)}" value="false">
+      <input name="${rowControl('imputationStructureId1', 0)}" value="axis-1">
+      <input name="${rowControl('imputationStructureId2', 0)}" value="axis-2">
+      <input name="${rowControl('imputationStructureId3', 0)}" value="axis-3">
+      <textarea name="${rowControl('comment', 0)}">Written by tests</textarea>
+    `;
+    const { service, sheet } = await savingService({
+      openBodies: [openHtml(`${occupiedRow(0)}${blankRow(1)}`)],
+      writeResponses: [
+        savedRedirect(openHtml(lockedRow, SUBMITTED_ACTIONS)),
+      ],
+    });
+
+    const result = await service.save({
+      sheetId: sheet.id,
+      entries: [],
+      action: 'submit-for-approval',
+    });
+
+    expect(result.summary.action).toBe('submit-for-approval');
+  });
+
+  it('fails when the reloaded sheet is still submittable', async () => {
+    const saved = openHtml(`${occupiedRow(0)}${savedRow(1)}`);
+    const { service, sheet } = await savingService({
+      openBodies: [saved],
+      writeResponses: [savedRedirect(saved)],
+    });
+
+    await expect(
+      service.save({ sheetId: sheet.id, entries: [], action: 'submit-for-approval' }),
+    ).rejects.toThrow(/did not submit the timesheet/i);
+  });
+
+  it('refuses to submit a sheet that no longer offers the action', async () => {
+    const { service, sheet } = await savingService({
+      openBodies: [
+        openHtml(`${occupiedRow(0)}${savedRow(1)}`, SUBMITTED_ACTIONS),
+      ],
+      writeResponses: [],
+    });
+
+    await expect(
+      service.save({ sheetId: sheet.id, entries: [], action: 'submit-for-approval' }),
+    ).rejects.toThrow(/cannot be submitted for approval/i);
+  });
+});
+
 describe('Eurecia timesheet save', () => {
   it('posts entries into an existing blank row', async () => {
     const { service, sheet, fetch, writeBodies } = await savingService({
@@ -346,8 +711,41 @@ describe('Eurecia timesheet save', () => {
       'true',
       'true',
     ]);
+    // Ticking the box alone leaves Eurecia showing "Nb jours" 0, so the day
+    // count is posted with it.
     expect(fieldValues(writeBodies[0], rowControl('daysWorked_int', 0))).toEqual(
-      [],
+      ['1'],
+    );
+    expect(
+      fieldValues(writeBodies[0], rowControl('daysWorked_fraction', 0)),
+    ).toEqual(['0.0']);
+  });
+
+  it('posts the day count even when Eurecia renders it disabled', async () => {
+    // Eurecia disables the day inputs on full-day rows, so they never reach the
+    // parsed form; the save has to add them back.
+    const rowWithoutDurationControls = `
+      <span id="dateActivite_0">01/07/2026</span>
+      <input name="${rowControl('fullDay', 0)}" value="false">
+      <input name="${rowControl('generatedItem', 0)}" value="true">
+      <input name="${rowControl('imputationStructureId1', 0)}" value="">
+      <input name="${rowControl('imputationStructureId2', 0)}" value="">
+      <input name="${rowControl('imputationStructureId3', 0)}" value="">
+      <textarea name="${rowControl('comment', 0)}"></textarea>
+    `;
+    const { service, sheet, writeBodies } = await savingService({
+      openBodies: [openHtml(rowWithoutDurationControls)],
+      writeResponses: [savedRedirect(openHtml(fullDayRow(0)))],
+    });
+
+    await service.save({
+      sheetId: sheet.id,
+      entries: [entry({ rowIndex: 0, fraction: 1 })],
+      action: 'save',
+    });
+
+    expect(fieldValues(writeBodies[0], rowControl('daysWorked_int', 0))).toEqual(
+      ['1'],
     );
   });
 

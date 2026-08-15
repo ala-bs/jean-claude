@@ -7,6 +7,7 @@ import {
   parseTimesheetBrowse,
   parseTimesheetEditorModel,
   parseTimesheetForm,
+  parseTimesheetSubmissionState,
   prepareTimesheetDryRun,
 } from './eurecia-protocol-client';
 import type { EureciaRowColumn } from './eurecia-protocol-client';
@@ -205,6 +206,52 @@ function getEditorParseError(html: string) {
   }
   throw new Error('Expected editor parsing to fail.');
 }
+
+describe('Eurecia sheet submission state', () => {
+  const action = (markup: string) => `<html><body>${markup}</body></html>`;
+
+  it('reads the actions an editable sheet offers, whatever the quoting', () => {
+    expect(
+      parseTimesheetSubmissionState({
+        html: action(
+          `<a onclick="$('#validate').val('2');">save</a>` +
+            `<button onclick='$("#validate") .val( "4" );'>submit</button>`,
+        ),
+      }),
+    ).toEqual({ known: true, canSave: true, canSubmit: true, submitted: false });
+  });
+
+  it('reports a submitted sheet only when the submit action is gone', () => {
+    expect(
+      parseTimesheetSubmissionState({
+        html: action(`<a onclick="$('#validate').val('5');">cancel</a>`),
+      }),
+    ).toMatchObject({ known: true, canSubmit: false, submitted: true });
+    // A sheet offering both is still submittable, so it is not "submitted".
+    expect(
+      parseTimesheetSubmissionState({
+        html: action(
+          `<a onclick="$('#validate').val('4');">submit</a>` +
+            `<a onclick="$('#validate').val('5');">cancel</a>`,
+        ),
+      }),
+    ).toMatchObject({ canSubmit: true, submitted: false });
+  });
+
+  it('reports an unknown state instead of guessing when no action is found', () => {
+    expect(
+      parseTimesheetSubmissionState({ html: action('<p>no actions here</p>') }),
+    ).toEqual({ known: false, canSave: false, canSubmit: false, submitted: false });
+  });
+
+  it('ignores validate codes that are not attached to an action', () => {
+    expect(
+      parseTimesheetSubmissionState({
+        html: action(`<script>$('#validate').val('4');</script>`),
+      }),
+    ).toMatchObject({ known: false, canSubmit: false });
+  });
+});
 
 describe('Eurecia timesheet form protocol', () => {
   it('parses only literal Browse table rows and normalizes their dates', () => {
@@ -469,6 +516,7 @@ describe('Eurecia timesheet form protocol', () => {
     expect(model).toEqual({
       axisLabels: { axis1: 'Client', axis2: 'Mission', axis3: 'Role' },
       axisOptions: { axis1: [], axis2: [], axis3: [] },
+      submission: { known: false, canSave: false, canSubmit: false, submitted: false },
       rows: [
         {
           rowIndex: 0,

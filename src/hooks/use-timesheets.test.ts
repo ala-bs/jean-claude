@@ -224,6 +224,7 @@ describe('useTimesheetSheet', () => {
     const editor = {
       axisLabels: { axis1: 'Project', axis2: 'Activity', axis3: 'Role' },
       axisOptions: { axis1: [], axis2: [], axis3: [] },
+      submission: { known: true, canSave: true, canSubmit: true, submitted: false },
       rows: [],
     };
     const inspect = vi

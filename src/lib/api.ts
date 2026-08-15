@@ -214,6 +214,7 @@ import type {
   TimesheetEntryInput,
   TimesheetProviderType,
   TimesheetRowDeletion,
+  TimesheetRowUpdate,
   TimesheetSaveResult,
   TimesheetSheetSummary,
   TimesheetSyncParams,
@@ -1640,6 +1641,7 @@ export interface Api {
       sheetId: string;
       entries: TimesheetEntryInput[];
       deletions?: TimesheetRowDeletion[];
+      updates?: TimesheetRowUpdate[];
       action: TimesheetAction;
     }) => Promise<TimesheetSaveResult>;
   };

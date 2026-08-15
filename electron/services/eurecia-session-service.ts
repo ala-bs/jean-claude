@@ -8,6 +8,7 @@ import type {
   TimesheetAxisOption,
   TimesheetEntryInput,
   TimesheetRowDeletion,
+  TimesheetRowUpdate,
   TimesheetSheetSummary,
 } from '@shared/timesheet-types';
 import type { EureciaSetting } from '@shared/types';
@@ -1486,6 +1487,7 @@ export function createEureciaSessionService({
       entries: TimesheetEntryInput[];
       action: TimesheetAction;
       deletions?: TimesheetRowDeletion[];
+      updates?: TimesheetRowUpdate[];
     }) {
       const { readService, epoch: operationEpoch } = await context();
       const operation = createOperationController();

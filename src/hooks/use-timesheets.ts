@@ -7,6 +7,7 @@ import type {
   TimesheetEntryInput,
   TimesheetProviderType,
   TimesheetRowDeletion,
+  TimesheetRowUpdate,
   TimesheetSyncParams,
 } from '@shared/timesheet-types';
 
@@ -141,6 +142,7 @@ export function useSaveTimesheet() {
       sheetId: string;
       entries: TimesheetEntryInput[];
       deletions?: TimesheetRowDeletion[];
+      updates?: TimesheetRowUpdate[];
       action: TimesheetAction;
     }) => api.timesheets.save(params),
     onSuccess: (_result, params) => {

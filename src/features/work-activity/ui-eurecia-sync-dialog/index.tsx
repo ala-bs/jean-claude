@@ -6,6 +6,7 @@ import {
   Loader2,
   LogIn,
   RefreshCw,
+  SendHorizontal,
   ShieldCheck,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -70,6 +71,7 @@ import {
   planSlotPaint,
   resolveSelectedSheet,
   slotsToFraction,
+  splitStagedWrites,
   TIMESHEET_SLOTS_PER_DAY,
   type TimesheetAssignment,
 } from './utils';
@@ -167,13 +169,14 @@ export function EureciaSyncDialog({
   const [entries, setEntries] = useState<InitializedTimesheetEntry[]>([]);
   const [ledgerIdentity, setLedgerIdentity] = useState('');
   const [blockedDates, setBlockedDates] = useState<string[]>([]);
-  const action: TimesheetAction = 'save';
   const [axisOptions, setAxisOptions] = useState<
     Array<Record<TimesheetAxisIndex, TimesheetAxisOption[]>>
   >([]);
   const [axisErrors, setAxisErrors] = useState<Record<string, string>>({});
   const [paletteAxisError, setPaletteAxisError] = useState('');
   const [outOfRangeDraftCount, setOutOfRangeDraftCount] = useState(0);
+  // Days Eurecia already fills: their Work Activity drafts are not seeded.
+  const [fullyDeclaredDates, setFullyDeclaredDates] = useState<string[]>([]);
   const [pendingLookups, setPendingLookups] = useState(0);
   const axisLookupScheduler = useRef(createConcurrencyLimiter(4));
   const initializationKey = useRef('');
@@ -254,7 +257,14 @@ export function EureciaSyncDialog({
   const inspectionInitializing =
     inspectionReady && ledgerIdentity !== initializationIdentity;
   const inspectionLoading = inspectionPending || inspectionInitializing;
-  const isSelectedSheetDraft = selectedSheet?.status.toLowerCase().includes('nouvelle') ?? false;
+  const looksLikeDraftStatus =
+    selectedSheet?.status.toLowerCase().includes('nouvelle') ?? false;
+  // Eurecia itself says whether the sheet still accepts writes; the status label
+  // is only a fallback for a page whose action buttons could not be read (and
+  // for the moment before the sheet is inspected).
+  const isSelectedSheetDraft = settledEditorData?.submission.known
+    ? settledEditorData.submission.canSave
+    : looksLikeDraftStatus;
   // A "Nouvelle" sheet can already hold saved-but-unsubmitted rows, so declared
   // rows come from the parsed grid rather than from the sheet status.
   const occupiedRows = useMemo(
@@ -459,6 +469,17 @@ export function EureciaSyncDialog({
     ledgerIdentity === initializationIdentity &&
     // Removing saved rows is a change on its own, with or without new entries.
     (entries.length > 0 || pendingDeletions.length > 0) &&
+    blockedDates.length === 0 &&
+    invalidTotals.length === 0 &&
+    outsideSheetDates.length === 0 &&
+    longCommentCount === 0 &&
+    pendingLookups === 0;
+  // Submitting saves and submits in one post, so it stays available when there
+  // is nothing pending — as long as Eurecia still offers the submit action.
+  const canSubmit =
+    inspectionReady &&
+    ledgerIdentity === initializationIdentity &&
+    (settledEditorData?.submission.canSubmit ?? false) &&
     blockedDates.length === 0 &&
     invalidTotals.length === 0 &&
     outsideSheetDates.length === 0 &&
@@ -719,8 +740,9 @@ export function EureciaSyncDialog({
   }
 
   /**
-   * Eurecia cannot update a row in place, so editing a declared row stages its
-   * deletion and adds an editable copy that is written back on save.
+   * Editing a declared row stages its removal and adds an editable copy. The
+   * copy keeps a `replaces` marker, so the save can rewrite the row in place
+   * instead of deleting and recreating it.
    */
   function editRemoteRow(row: TimesheetRemoteRow) {
     if (isStagedForDeletion(row)) return;
@@ -736,6 +758,7 @@ export function EureciaSyncDialog({
         axis1Id: row.axis1Id,
         axis2Id: row.axis2Id,
         axis3Id: row.axis3Id,
+        replaces: deletionOf(row),
       },
     ];
     const nextDeletions = [...pendingDeletions, deletionOf(row)];
@@ -746,8 +769,19 @@ export function EureciaSyncDialog({
     resetSaveState();
   }
 
+  const selectEntry = useCallback((index: number | null) => {
+    setSelectedRemoteRow(null);
+    setSelectedEntryIndex(index);
+  }, []);
+
   function entryInputs(value: InitializedTimesheetEntry[]) {
-    return value.map(({ sourceDescription: _sourceDescription, ...entry }) => entry);
+    return value.map(
+      ({
+        sourceDescription: _sourceDescription,
+        replaces: _replaces,
+        ...entry
+      }) => entry,
+    );
   }
 
   /** Any ledger edit drops the previous save receipt and backend error. */
@@ -1007,10 +1041,16 @@ export function EureciaSyncDialog({
       freeRowCount: editor.data.rows.filter((row) => !row.occupied).length,
     });
     resetAxisLookupState(getSheetIdentity(selectedSheet));
-    const sheetDrafts = draft.data.entries.filter(
-      ({ date }) => date >= selectedSheet.start && date <= selectedSheet.end,
-    );
-    const skippedDraftCount = draft.data.entries.length - sheetDrafts.length;
+    // Submitted sheets are read-only, so seeded drafts could never be painted
+    // or saved: they would only render as phantom unassigned rows.
+    const sheetDrafts = isSelectedSheetDraft
+      ? draft.data.entries.filter(
+          ({ date }) => date >= selectedSheet.start && date <= selectedSheet.end,
+        )
+      : [];
+    const skippedDraftCount = isSelectedSheetDraft
+      ? draft.data.entries.length - sheetDrafts.length
+      : 0;
     if (skippedDraftCount > 0) {
       console.info('[eurecia] draft entries outside sheet range ignored', {
         skippedDraftCount,
@@ -1022,6 +1062,7 @@ export function EureciaSyncDialog({
     setEntries(initialized.entries);
     setLedgerIdentity(initializationIdentity);
     setBlockedDates(initialized.blockedDates);
+    setFullyDeclaredDates(initialized.fullyDeclaredDates);
     setAxisOptions(
       initialized.entries.map(() => ({ 1: [], 2: [], 3: [] })),
     );
@@ -1276,6 +1317,7 @@ export function EureciaSyncDialog({
             axis1Id: row.axis1Id,
             axis2Id: row.axis2Id,
             axis3Id: row.axis3Id,
+            replaces: deletionOf(row),
           });
           nextAxisOptions.push(emptyAxisOptions());
           continue;
@@ -1450,22 +1492,34 @@ export function EureciaSyncDialog({
     resetSaveState();
   }
 
-  async function commitSave() {
-    if (!selectedSheet || save.isPending || !canSave) return;
-    const requestEntries = entryInputs(entries);
+  async function commitSave(action: TimesheetAction = 'save') {
+    if (!selectedSheet || save.isPending) return;
+    if (action === 'save' ? !canSave : !canSubmit) return;
+    // Rewritten rows are updated in place, so their staged deletion is dropped.
+    const staged = splitStagedWrites({ entries, deletions: pendingDeletions });
     try {
       const result = await save.mutateAsync({
         provider: 'eurecia',
         sheetId: selectedSheet.id,
-        entries: requestEntries,
-        deletions: pendingDeletions,
+        entries: entryInputs(staged.entries),
+        deletions: staged.deletions,
+        updates: staged.updates,
         action,
       });
-      const { entryCount, deletedRowCount } = result.summary;
+      const { entryCount, deletedRowCount, updatedRowCount } = result.summary;
       addToast({
         type: 'success',
         message: [
-          `Saved ${entryCount} ${entryCount === 1 ? 'entry' : 'entries'} to Eurecia`,
+          action === 'submit-for-approval'
+            ? `Submitted the sheet for approval${
+                entryCount > 0
+                  ? ` with ${entryCount} new ${entryCount === 1 ? 'entry' : 'entries'}`
+                  : ''
+              }`
+            : `Saved ${entryCount} ${entryCount === 1 ? 'entry' : 'entries'} to Eurecia`,
+          updatedRowCount > 0
+            ? ` · ${updatedRowCount} ${updatedRowCount === 1 ? 'row' : 'rows'} updated`
+            : '',
           deletedRowCount > 0
             ? ` · ${deletedRowCount} ${deletedRowCount === 1 ? 'row' : 'rows'} removed`
             : '',
@@ -1583,6 +1637,7 @@ export function EureciaSyncDialog({
             dailyTotals={dailyTotals}
             editable={isSelectedSheetDraft}
             outOfRangeDraftCount={outOfRangeDraftCount}
+            fullyDeclaredDates={fullyDeclaredDates}
             workActivityRange={range}
             assignments={assignments}
             armedKey={armedKey}
@@ -1591,10 +1646,7 @@ export function EureciaSyncDialog({
             weekIndex={weekIndex}
             onWeekIndexChange={setWeekIndex}
             selectedEntryIndex={selectedEntryIndex}
-            onSelectEntry={(index) => {
-              setSelectedRemoteRow(null);
-              setSelectedEntryIndex(index);
-            }}
+            onSelectEntry={selectEntry}
             selectedRemoteRow={selectedRemoteRow}
             pendingDeletions={pendingDeletions}
             onEditRemoteRow={editRemoteRow}
@@ -1674,6 +1726,7 @@ export function EureciaSyncDialog({
             savePending={save.isPending}
             saveError={save.isError ? getErrorMessage(save.error) : ''}
             canSave={canSave}
+            canSubmit={canSubmit}
             onBack={() => {
               setStage('sheet');
               initializationKey.current = '';
@@ -1703,7 +1756,8 @@ export function EureciaSyncDialog({
             pooledAxisOptions={pooledAxisOptions}
             onUpdateEntry={updateEntry}
             onRemoveEntry={removeEntry}
-            onSave={() => void commitSave()}
+            onSave={() => void commitSave('save')}
+            onSubmitForApproval={() => void commitSave('submit-for-approval')}
           />
         )}
       </div>
@@ -1822,6 +1876,7 @@ function EditorStage({
   dailyTotals,
   editable,
   outOfRangeDraftCount,
+  fullyDeclaredDates,
   workActivityRange,
   assignments,
   armedKey,
@@ -1852,6 +1907,7 @@ function EditorStage({
   savePending,
   saveError,
   canSave,
+  canSubmit,
   onBack,
   onRetryInspect,
   onSelectSheet,
@@ -1866,6 +1922,7 @@ function EditorStage({
   onUpdateEntry,
   onRemoveEntry,
   onSave,
+  onSubmitForApproval,
 }: {
   editor: ReturnType<typeof useTimesheetSheet>;
   draft: ReturnType<typeof useTimesheetDraft>;
@@ -1877,6 +1934,7 @@ function EditorStage({
   dailyTotals: Map<string, number>;
   editable: boolean;
   outOfRangeDraftCount: number;
+  fullyDeclaredDates: string[];
   workActivityRange: { start: string; end: string };
   assignments: TimesheetAssignment[];
   armedKey: string | null;
@@ -1907,6 +1965,7 @@ function EditorStage({
   savePending: boolean;
   saveError: string;
   canSave: boolean;
+  canSubmit: boolean;
   onBack: () => void;
   onRetryInspect: () => void;
   onSelectSheet: (id: string) => void;
@@ -1927,6 +1986,7 @@ function EditorStage({
   ) => void;
   onRemoveEntry: (index: number) => void;
   onSave: () => void;
+  onSubmitForApproval: () => void;
 }) {
   const lastWeekIndex = Math.max(0, weeks.length - 1);
   const resolvedWeekIndex =
@@ -1934,7 +1994,10 @@ function EditorStage({
   const activeWeek = weeks[resolvedWeekIndex];
   const weekDates = useMemo(() => activeWeek?.dates ?? [], [activeWeek]);
 
-  const [confirmingSave, setConfirmingSave] = useState(false);
+  // null = no confirmation open; otherwise the action awaiting confirmation.
+  const [confirmingSave, setConfirmingSave] = useState<TimesheetAction | null>(
+    null,
+  );
   const editorRef = useRef<HTMLDivElement | null>(null);
 
   const armedSelection = useMemo<TimesheetAxisSelection | null>(() => {
@@ -1962,11 +2025,40 @@ function EditorStage({
         return;
       }
       event.preventDefault();
-      setConfirmingSave(true);
+      setConfirmingSave('save');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [canSave, confirmingSave, savePending]);
+
+  // Escape unwinds the editor one step at a time: it first disarms the picked
+  // assignment, then drops the selection, and only then reaches the Modal that
+  // closes the overlay. Capture phase, so the Modal never sees a handled key.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || confirmingSave) return;
+      if (armedKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        onArm(null);
+        return;
+      }
+      if (selectedEntryIndex !== null || selectedRemoteRow) {
+        event.preventDefault();
+        event.stopPropagation();
+        onSelectEntry(null);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [
+    armedKey,
+    confirmingSave,
+    onArm,
+    onSelectEntry,
+    selectedEntryIndex,
+    selectedRemoteRow,
+  ]);
 
   useEffect(() => {
     if (!editable) return;
@@ -1984,7 +2076,6 @@ function EditorStage({
         if (assignment) onArm(assignment.key);
         return;
       }
-      if (event.key === 'Escape') onSelectEntry(null);
       if (
         (event.key === 'Backspace' || event.key === 'Delete') &&
         selectedEntryIndex !== null
@@ -2260,7 +2351,9 @@ function EditorStage({
         </div>
       </div>
 
-      {(!editable || outOfRangeDraftCount > 0) && (
+      {(!editable ||
+        outOfRangeDraftCount > 0 ||
+        fullyDeclaredDates.length > 0) && (
         <div className="border-line-soft shrink-0 space-y-2 border-b px-3.5 py-2">
           {!editable ? (
             <StatusMessage tone="warning">
@@ -2269,6 +2362,15 @@ function EditorStage({
               {(editor.data.axisLabels.axis1 || 'project').toLowerCase()} options
               cannot be edited here. Pick a sheet still marked{' '}
               <strong>Nouvelle</strong> to build entries.
+            </StatusMessage>
+          ) : null}
+          {fullyDeclaredDates.length > 0 ? (
+            <StatusMessage>
+              Eurecia already declares a full day on{' '}
+              {fullyDeclaredDates.map(formatDate).join(', ')}, so the Work
+              Activity {fullyDeclaredDates.length === 1 ? 'draft' : 'drafts'} for{' '}
+              {fullyDeclaredDates.length === 1 ? 'that day' : 'those days'} were
+              skipped.
             </StatusMessage>
           ) : null}
           {outOfRangeDraftCount > 0 ? (
@@ -2456,8 +2558,22 @@ function EditorStage({
         <div className="flex-1" />
         <button
           type="button"
+          disabled={!canSubmit || savePending}
+          onClick={() => setConfirmingSave('submit-for-approval')}
+          title={
+            canSubmit
+              ? 'Save pending changes and submit the sheet for approval'
+              : 'This sheet cannot be submitted for approval'
+          }
+          className="border-line text-ink-1 hover:text-ink-0 inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <SendHorizontal className="h-4 w-4" />
+          Submit for approval
+        </button>
+        <button
+          type="button"
           disabled={!canSave || savePending}
-          onClick={() => setConfirmingSave(true)}
+          onClick={() => setConfirmingSave('save')}
           className="bg-status-azure text-bg-0 inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
         >
           {savePending ? (
@@ -2474,13 +2590,16 @@ function EditorStage({
 
       {confirmingSave ? (
         <SaveConfirmation
+          action={confirmingSave}
           entryCount={entries.length}
           deletionCount={pendingDeletions.length}
           pending={savePending}
-          onCancel={() => setConfirmingSave(false)}
+          onCancel={() => setConfirmingSave(null)}
           onConfirm={() => {
-            setConfirmingSave(false);
-            onSave();
+            const action = confirmingSave;
+            setConfirmingSave(null);
+            if (action === 'submit-for-approval') onSubmitForApproval();
+            else onSave();
           }}
         />
       ) : null}
@@ -2489,12 +2608,14 @@ function EditorStage({
 }
 
 function SaveConfirmation({
+  action,
   entryCount,
   deletionCount,
   pending,
   onCancel,
   onConfirm,
 }: {
+  action: TimesheetAction;
   entryCount: number;
   deletionCount: number;
   pending: boolean;
@@ -2502,6 +2623,7 @@ function SaveConfirmation({
   onConfirm: () => void;
 }) {
   const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const isSubmit = action === 'submit-for-approval';
 
   useEffect(() => {
     confirmRef.current?.focus();
@@ -2532,7 +2654,9 @@ function SaveConfirmation({
       className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 p-6"
       role="dialog"
       aria-modal="true"
-      aria-label="Confirm Eurecia save"
+      aria-label={
+        isSubmit ? 'Confirm Eurecia submission' : 'Confirm Eurecia save'
+      }
     >
       <div className="border-line bg-bg-1 w-full max-w-md space-y-4 rounded-xl border p-5 shadow-2xl">
         <div>
@@ -2540,7 +2664,7 @@ function SaveConfirmation({
             Confirm
           </div>
           <h3 className="text-ink-0 mt-1 text-lg font-semibold">
-            Save to Eurecia?
+            {isSubmit ? 'Submit sheet for approval?' : 'Save to Eurecia?'}
           </h3>
         </div>
         <p className="text-ink-2 text-sm leading-relaxed">
@@ -2551,7 +2675,10 @@ function SaveConfirmation({
                 deletionCount === 1 ? 'row' : 'rows'
               }`
             : ''}
-          . It does not submit the sheet for approval.
+          .{' '}
+          {isSubmit
+            ? 'It then submits the whole sheet for approval, which locks it until a manager or you cancel the submission in Eurecia.'
+            : 'It does not submit the sheet for approval.'}
         </p>
         <div className="flex justify-end gap-2">
           <button
@@ -2572,7 +2699,7 @@ function SaveConfirmation({
             className="bg-status-azure text-bg-0 inline-flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
           >
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Save to Eurecia
+            {isSubmit ? 'Submit for approval' : 'Save to Eurecia'}
             <kbd className="border-bg-0/30 rounded border px-1 font-mono text-[9px]">
               ⏎
             </kbd>

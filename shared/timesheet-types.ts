@@ -77,6 +77,16 @@ export type TimesheetEditorModel = {
   axisLabels: TimesheetAxisLabels;
   axisOptions: TimesheetAxisOptions;
   rows: TimesheetRemoteRow[];
+  /** Sheet-level actions the Eurecia editor still offers. */
+  submission: TimesheetSubmissionState;
+};
+
+export type TimesheetSubmissionState = {
+  /** False when no sheet-level action was recognized on the page. */
+  known: boolean;
+  canSave: boolean;
+  canSubmit: boolean;
+  submitted: boolean;
 };
 
 export type TimesheetEntryInput = TimesheetEntryValues & {
@@ -95,6 +105,17 @@ export type TimesheetRowDeletion = Omit<TimesheetEntryValues, 'fraction'> & {
   date: string;
   rowIndex: number;
   fraction: TimesheetDayFraction | 0;
+};
+
+/**
+ * An in-place rewrite of a saved row. Eurecia re-posts the whole editor form,
+ * so a row is updated by overwriting its controls — no delete/re-add needed.
+ * `target` identifies the row exactly like a deletion does (content match with
+ * `rowIndex` as a hint), because Eurecia renumbers rows on every add/delete.
+ */
+export type TimesheetRowUpdate = {
+  target: TimesheetRowDeletion;
+  values: TimesheetEntryValues;
 };
 
 export type TimesheetDryRunSummary = {
@@ -117,6 +138,7 @@ export type TimesheetSaveSummary = {
   entryCount: number;
   addedRowCount: number;
   deletedRowCount: number;
+  updatedRowCount: number;
   savedRowIndices: number[];
   dates: string[];
 };

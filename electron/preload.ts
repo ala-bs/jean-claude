@@ -81,6 +81,7 @@ import type {
   TimesheetEntryInput,
   TimesheetProviderType,
   TimesheetRowDeletion,
+  TimesheetRowUpdate,
   TimesheetSyncParams,
 } from '@shared/timesheet-types';
 import {
@@ -1325,6 +1326,7 @@ contextBridge.exposeInMainWorld('api', {
       sheetId: string;
       entries: TimesheetEntryInput[];
       deletions?: TimesheetRowDeletion[];
+      updates?: TimesheetRowUpdate[];
       action: TimesheetAction;
     }) => ipcRenderer.invoke('timesheets:save', params),
   },

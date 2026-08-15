@@ -23,6 +23,7 @@ import {
   planSlotPaint,
   resolveSelectedSheet,
   slotsToFraction,
+  splitStagedWrites,
 } from './utils';
 
 function draft(id: string, date = '2026-07-13'): TimesheetEntryDraft {
@@ -54,6 +55,62 @@ function row(rowIndex: number, date = '2026-07-13'): TimesheetRemoteRow {
   };
 }
 
+describe('splitStagedWrites', () => {
+  const target = {
+    date: '2026-07-13',
+    rowIndex: 4,
+    fraction: 1 as const,
+    axis1Id: 'axis-1',
+    axis2Id: 'axis-2',
+    axis3Id: 'axis-3',
+    comment: 'Saved',
+  };
+  const copy = (fraction: 0.5 | 1) => ({
+    date: target.date,
+    fraction,
+    axis1Id: 'axis-1',
+    axis2Id: 'axis-2',
+    axis3Id: 'axis-3',
+    comment: 'Saved',
+    sourceDraftIds: [],
+    sourceDescription: 'Replaces a saved Eurecia row',
+    items: [],
+    replaces: target,
+  });
+
+  it('turns one deletion and its rewrite into an in-place update', () => {
+    const result = splitStagedWrites({
+      entries: [copy(0.5)],
+      deletions: [target],
+    });
+
+    expect(result.deletions).toEqual([]);
+    expect(result.entries).toEqual([]);
+    expect(result.updates).toEqual([
+      { target, values: expect.objectContaining({ fraction: 0.5 }) },
+    ]);
+  });
+
+  it('only the first of two rewrites of one row becomes the update', () => {
+    // A saved row split in two: one piece reuses the row, the other needs a new
+    // one, so the staged deletion must be consumed exactly once.
+    const result = splitStagedWrites({
+      entries: [copy(0.5), copy(0.5)],
+      deletions: [target],
+    });
+
+    expect(result.updates).toHaveLength(1);
+    expect(result.entries).toHaveLength(1);
+    expect(result.deletions).toEqual([]);
+  });
+
+  it('keeps a deletion that nothing rewrites', () => {
+    const result = splitStagedWrites({ entries: [], deletions: [target] });
+
+    expect(result).toEqual({ entries: [], deletions: [target], updates: [] });
+  });
+});
+
 describe('initializeTimesheetEntries', () => {
   it.each([
     [1, [1]],
@@ -69,13 +126,52 @@ describe('initializeTimesheetEntries', () => {
     expect(result.entries.map(({ fraction }) => fraction)).toEqual(expected);
   });
 
+  it('drops drafts for days Eurecia already declares in full', () => {
+    const result = initializeTimesheetEntries(
+      [draft('a', '2026-07-13'), draft('b', '2026-07-14')],
+      [
+        {
+          ...row(0, '2026-07-13'),
+          fraction: 1,
+          axis1Id: 'axis-1',
+          occupied: true,
+        },
+        row(1, '2026-07-14'),
+      ],
+    );
+
+    expect(result.entries.map(({ date }) => date)).toEqual(['2026-07-14']);
+  });
+
+  it('keeps drafts for partially declared days', () => {
+    const result = initializeTimesheetEntries(
+      [draft('a', '2026-07-13')],
+      [
+        {
+          ...row(0, '2026-07-13'),
+          fraction: 0.5,
+          axis1Id: 'axis-1',
+          occupied: true,
+        },
+        row(1, '2026-07-13'),
+      ],
+    );
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].rowIndex).toBe(1);
+  });
+
   it('blocks a date with more than four drafts', () => {
     const result = initializeTimesheetEntries(
       Array.from({ length: 5 }, (_, index) => draft(String(index))),
       [],
     );
 
-    expect(result).toEqual({ entries: [], blockedDates: ['2026-07-13'] });
+    expect(result).toEqual({
+      entries: [],
+      blockedDates: ['2026-07-13'],
+      fullyDeclaredDates: [],
+    });
   });
 
   it('sorts dates stably', () => {

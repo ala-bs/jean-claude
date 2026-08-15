@@ -7,6 +7,7 @@ import type {
   TimesheetEditorModel,
   TimesheetEntryInput,
   TimesheetRowDeletion,
+  TimesheetRowUpdate,
   TimesheetSaveResult,
   TimesheetSheetSummary,
 } from '@shared/timesheet-types';
@@ -369,9 +370,10 @@ function buildDryRun({
         controls: {
           fullDay: entry.fraction === 1 ? ['true', 'true'] : ['false'],
           generatedItem: ['false'],
-          daysWorked_int: entry.fraction === 1 ? [] : ['0'],
+          // Mirrors buildRowControls: the day count always travels with the row.
+          daysWorked_int: entry.fraction === 1 ? ['1'] : ['0'],
           daysWorked_fraction:
-            entry.fraction === 1 ? [] : [String(entry.fraction)],
+            entry.fraction === 1 ? ['0.0'] : [String(entry.fraction)],
           imputationStructureId1: [entry.axis1Id],
           imputationStructureId2: [entry.axis2Id],
           imputationStructureId3: [entry.axis3Id],
@@ -416,12 +418,11 @@ function buildRowControls({
       ? { fullDay: isFullDay ? ['true', 'true'] : ['false'] }
       : {}),
     generatedItem: ['false'],
-    ...(supportsFullDay && isFullDay
-      ? { daysWorked_int: [], daysWorked_fraction: [] }
-      : {
-          daysWorked_int: [isFullDay ? '1' : '0'],
-          daysWorked_fraction: [isFullDay ? '0.0' : String(entry.fraction)],
-        }),
+    // The day count always travels with the row. In the browser Eurecia fills
+    // it from a "ClickFullDay" round trip; a save that only ticks the box lands
+    // as "Journée standard" checked with "Nb jours" left at 0.
+    daysWorked_int: [isFullDay ? '1' : '0'],
+    daysWorked_fraction: [isFullDay ? '0.0' : String(entry.fraction)],
     imputationStructureId1: [entry.axis1Id],
     imputationStructureId2: [entry.axis2Id],
     imputationStructureId3: [entry.axis3Id],
@@ -836,12 +837,14 @@ export function createEureciaReadService({
       entries,
       action,
       deletions = [],
+      updates = [],
       signal,
     }: {
       sheetId: string;
       entries: TimesheetEntryInput[];
       action: TimesheetAction;
       deletions?: TimesheetRowDeletion[];
+      updates?: TimesheetRowUpdate[];
       signal?: AbortSignal;
     }): Promise<TimesheetSaveResult> {
       if (!writeFetch) {
@@ -858,18 +861,74 @@ export function createEureciaReadService({
           'Eurecia sheet must be inspected from latest Browse result before saving.',
         );
       }
+      if (action === 'submit-for-approval' && !inspected.editor.submission.canSubmit) {
+        throw new Error(
+          'Eurecia sheet cannot be submitted for approval. Refresh and try again.',
+        );
+      }
       // Deleted rows free capacity, so validation runs against the sheet as it
-      // will look once the deletions are applied.
-      const dryRun = buildDryRun({
-        sheetId,
-        entries,
-        action,
-        ...inspected,
-        editor: {
-          ...inspected.editor,
-          rows: withoutDeletedRows(inspected.editor.rows, deletions),
-        },
-      });
+      // will look once the deletions are applied. A deletion-only or submit-only
+      // write has nothing to validate, and the dry run rejects empty entries.
+      const dryRun = entries.length
+        ? buildDryRun({
+            sheetId,
+            entries,
+            action,
+            ...inspected,
+            editor: {
+              ...inspected.editor,
+              rows: withoutDeletedRows(inspected.editor.rows, deletions),
+            },
+          })
+        : null;
+
+      // Targets are resolved before anything is written: a stale or duplicated
+      // target must fail while the sheet is still untouched, since deletions and
+      // added rows are already committed by the time the save post runs.
+      const preflightRows = withoutDeletedRows(inspected.editor.rows, deletions);
+      const preflightTargets = new Set<number>();
+      for (const update of updates) {
+        const index = findDeletionIndex(preflightRows, update.target);
+        if (index === -1) {
+          throw new Error(
+            `Eurecia row for ${update.target.date} is no longer on the sheet. Refresh before saving.`,
+          );
+        }
+        if (preflightTargets.has(preflightRows[index].rowIndex)) {
+          throw new Error('Eurecia row cannot be updated twice in one save.');
+        }
+        preflightTargets.add(preflightRows[index].rowIndex);
+      }
+
+      // The dry run only sees new entries, so day capacity is checked here for
+      // the writes it cannot see. Eurecia declares at most one day per date.
+      const plannedTotals = new Map<string, number>();
+      for (const row of preflightRows) {
+        if (!row.occupied && !isTimesheetRemoteRowOccupied(row)) continue;
+        plannedTotals.set(row.date, (plannedTotals.get(row.date) ?? 0) + row.fraction);
+      }
+      for (const update of updates) {
+        plannedTotals.set(
+          update.target.date,
+          (plannedTotals.get(update.target.date) ?? 0) +
+            update.values.fraction -
+            update.target.fraction,
+        );
+      }
+      for (const entry of entries) {
+        plannedTotals.set(
+          entry.date,
+          (plannedTotals.get(entry.date) ?? 0) + entry.fraction,
+        );
+      }
+      for (const [date, total] of plannedTotals) {
+        if (total > 1.001) {
+          throw new Error(
+            `Eurecia sheet cannot declare more than one day for ${date}: this save would declare ${total}.`,
+          );
+        }
+      }
+
       const navigationUrl = listed.navigationUrl;
       const expectedRevision = beginSheetInspection({ sheetId, navigationUrl });
 
@@ -1075,9 +1134,45 @@ export function createEureciaReadService({
         });
       }
 
+      // Saved rows are rewritten in place: Eurecia re-posts the whole form, so
+      // overwriting an occupied row's controls is all an edit takes.
+      const updatedRowIndices: number[] = [];
+      for (const update of updates) {
+        const index = findDeletionIndex(page.editor.rows, update.target);
+        if (index === -1) {
+          throw new Error(
+            `Eurecia row for ${update.target.date} is no longer on the sheet. Refresh before saving.`,
+          );
+        }
+        const { rowIndex } = page.editor.rows[index];
+        if (updatedRowIndices.includes(rowIndex)) {
+          throw new Error('Eurecia row cannot be updated twice in one save.');
+        }
+        updatedRowIndices.push(rowIndex);
+        rowUpdates.push({
+          rowIndex,
+          controls: buildRowControls({
+            entry: {
+              date: update.target.date,
+              sourceDraftIds: [],
+              ...update.values,
+            },
+            fields: page.form.fields,
+            rowIndex,
+          }),
+        });
+      }
+
+      // A submit that also writes rows is split in two: the sheet is saved and
+      // verified while it is still editable, then submitted. A submitted sheet
+      // comes back read-only (Eurecia disables the duration controls), so rows
+      // parse as zero days and cannot confirm anything.
+      const hasWrites = rowUpdates.length > 0;
+      const writeAction: TimesheetAction =
+        action === 'submit-for-approval' && hasWrites ? 'save' : action;
       const savePost = prepareTimesheetSave({
         form: page.form,
-        action,
+        action: writeAction,
         rowUpdates,
       });
       // Eurecia answers a save with the reloaded sheet, so the write is confirmed
@@ -1091,22 +1186,90 @@ export function createEureciaReadService({
             dateEntries.reduce((sum, entry) => sum + entry.fraction, 0),
         );
       }
+      // An update swaps one declared fraction for another on the same day.
+      for (const update of updates) {
+        expectedTotals.set(
+          update.target.date,
+          (expectedTotals.get(update.target.date) ?? 0) +
+            update.values.fraction -
+            update.target.fraction,
+        );
+      }
       dbg.timesheet('save: posting sheet', {
+        action: writeAction,
         rows: rowUpdates.map(({ rowIndex }) => rowIndex),
         fieldCount: savePost.fields.length,
       });
-      const reloaded = await post({ page, fields: savePost.fields });
-      const totalsAfter = declaredTotalsByDate(reloaded.editor.rows);
-      for (const [date, expected] of expectedTotals) {
-        const actual = totalsAfter.get(date) ?? 0;
-        if (Math.abs(actual - expected) > 0.001) {
-          dbg.timesheet('save: rejected', { date, expected, actual });
-          throw new Error(
-            `Eurecia did not apply the timesheet save for ${date}: expected ${expected} day(s) declared, found ${actual}.`,
-          );
+      let reloaded = await post({ page, fields: savePost.fields });
+
+      // Nothing was written, so there is nothing to measure: a submit-only post
+      // is confirmed on the sheet state alone.
+      if (hasWrites) {
+        const totalsAfter = declaredTotalsByDate(reloaded.editor.rows);
+        for (const [date, expected] of expectedTotals) {
+          const actual = totalsAfter.get(date) ?? 0;
+          if (Math.abs(actual - expected) > 0.001) {
+            dbg.timesheet('save: rejected', { date, expected, actual });
+            throw new Error(
+              `Eurecia did not apply the timesheet save for ${date}: expected ${expected} day(s) declared, found ${actual}.`,
+            );
+          }
         }
+        // An axis-only edit leaves the day totals untouched, so each updated row
+        // is confirmed on the row it targeted, not on any row of that day: two
+        // rows swapping values would otherwise confirm each other.
+        updates.forEach((update, index) => {
+          const rowIndex = updatedRowIndices[index];
+          const row = reloaded.editor.rows.find(
+            (candidate) => candidate.rowIndex === rowIndex,
+          );
+          const applied =
+            row &&
+            row.date === update.target.date &&
+            row.fraction === update.values.fraction &&
+            row.axis1Id === update.values.axis1Id &&
+            row.axis2Id === update.values.axis2Id &&
+            row.axis3Id === update.values.axis3Id &&
+            row.comment === update.values.comment;
+          if (!applied) {
+            dbg.timesheet('save: update rejected', {
+              date: update.target.date,
+              rowIndex,
+            });
+            throw new Error(
+              `Eurecia did not apply the row update for ${update.target.date}.`,
+            );
+          }
+        });
       }
-      dbg.timesheet('save: confirmed', { dates: [...expectedTotals.keys()] });
+
+      if (action === 'submit-for-approval' && writeAction === 'save') {
+        dbg.timesheet('save: submitting verified sheet', {
+          rowCount: reloaded.editor.rows.length,
+        });
+        reloaded = await post({
+          page: reloaded,
+          fields: prepareTimesheetSave({
+            form: reloaded.form,
+            action: 'submit-for-approval',
+            rowUpdates: [],
+          }).fields,
+        });
+      }
+      if (
+        action === 'submit-for-approval' &&
+        !reloaded.editor.submission.submitted
+      ) {
+        dbg.timesheet('save: submit rejected', reloaded.editor.submission);
+        throw new Error(
+          'Eurecia did not submit the timesheet for approval. Check the sheet in Eurecia.',
+        );
+      }
+      dbg.timesheet('save: confirmed', {
+        dates: [...expectedTotals.keys()],
+        submitted: reloaded.editor.submission.submitted,
+        verifiedWrites: hasWrites,
+      });
       const editor = inspectSheetHtml({
         sheetId,
         navigationUrl,
@@ -1123,12 +1286,13 @@ export function createEureciaReadService({
           entryCount: entries.length,
           addedRowCount,
           deletedRowCount,
+          updatedRowCount: updatedRowIndices.length,
           savedRowIndices: rowUpdates
             .map(({ rowIndex }) => rowIndex)
             .sort((left, right) => left - right),
           dates: [...entriesByDate.keys()].sort(),
         },
-        warnings: dryRun.warnings.filter(
+        warnings: (dryRun?.warnings ?? []).filter(
           (warning) => !warning.includes('inferred rows cannot be added'),
         ),
         editor,

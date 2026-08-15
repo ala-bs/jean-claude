@@ -112,6 +112,14 @@ describe('timesheet IPC validation', () => {
     expect(() => validateSaveRequest({ ...base, action: 'delete' })).toThrow(
       'action',
     );
+    // A submit needs no entries: the sheet may already be fully saved.
+    expect(
+      validateSaveRequest({
+        ...base,
+        entries: [],
+        action: 'submit-for-approval',
+      }),
+    ).toMatchObject({ entries: [], action: 'submit-for-approval' });
     expect(() =>
       validateSaveRequest({
         ...base,

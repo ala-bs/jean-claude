@@ -3,8 +3,10 @@ import type {
   TimesheetAxisLookupRequest,
   TimesheetDraftParams,
   TimesheetEntryInput,
+  TimesheetEntryValues,
   TimesheetProviderType,
   TimesheetRowDeletion,
+  TimesheetRowUpdate,
   TimesheetSyncParams,
 } from '@shared/timesheet-types';
 
@@ -220,15 +222,44 @@ function validateDeletion(value: unknown): TimesheetRowDeletion {
   };
 }
 
+function validateRowUpdate(value: unknown): TimesheetRowUpdate {
+  const input = record(value, 'Timesheet row update');
+  const values = record(input.values, 'Timesheet row update values');
+  if (!ALLOWED_FRACTIONS.has(values.fraction as number)) {
+    throw new Error('Timesheet row update fraction is invalid.');
+  }
+  return {
+    target: validateDeletion(input.target),
+    values: {
+      fraction: values.fraction as TimesheetEntryValues['fraction'],
+      axis1Id: string(values.axis1Id, 'Timesheet axis 1 ID', { allowEmpty: true }),
+      axis2Id: string(values.axis2Id, 'Timesheet axis 2 ID', { allowEmpty: true }),
+      axis3Id: string(values.axis3Id, 'Timesheet axis 3 ID', { allowEmpty: true }),
+      comment: string(values.comment, 'Timesheet comment', {
+        allowEmpty: true,
+        max: MAX_COMMENT_LENGTH,
+      }),
+    },
+  };
+}
+
 export function validateSaveRequest(value: unknown) {
   const input = record(value, 'Timesheet save');
   const deletions = input.deletions ?? [];
+  const updates = input.updates ?? [];
   if (!Array.isArray(deletions) || deletions.length > MAX_ENTRIES) {
     throw new Error('Timesheet save deletions are invalid.');
   }
+  if (!Array.isArray(updates) || updates.length > MAX_ENTRIES) {
+    throw new Error('Timesheet save updates are invalid.');
+  }
   if (
     !Array.isArray(input.entries) ||
-    (input.entries.length === 0 && deletions.length === 0) ||
+    // A submit-for-approval carries no entries when the sheet is already saved.
+    (input.entries.length === 0 &&
+      deletions.length === 0 &&
+      updates.length === 0 &&
+      input.action !== 'submit-for-approval') ||
     input.entries.length > MAX_ENTRIES
   ) {
     throw new Error('Timesheet save entries are invalid.');
@@ -241,6 +272,7 @@ export function validateSaveRequest(value: unknown) {
     sheetId: string(input.sheetId, 'Timesheet sheet ID'),
     entries: input.entries.map(validateEntry),
     deletions: deletions.map(validateDeletion),
+    updates: updates.map(validateRowUpdate),
     action: input.action as TimesheetAction,
   };
 }

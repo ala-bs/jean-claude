@@ -660,6 +660,34 @@ export function parseTimesheetEditorModel({
     axisLabels: { ...axisLabels },
     axisOptions: readInlineAxisOptions($),
     rows,
+    submission: parseTimesheetSubmissionState({ html }),
+  };
+}
+
+/**
+ * Reads which sheet-level actions the editor still offers. Eurecia encodes them
+ * as the `validate` value each button writes before submitting the form:
+ * `2` = save, `4` = save + submit for approval, `5` = cancel a submission.
+ * A submitted sheet only offers `5`, which is how a submit is confirmed.
+ */
+export function parseTimesheetSubmissionState({ html }: { html: string }) {
+  const $ = load(html);
+  const codes = new Set<string>();
+  $('[onclick*="#validate"], [onclick*="validate"]').each((_index, element) => {
+    const onclick = $(element).attr('onclick') ?? '';
+    for (const match of onclick.matchAll(
+      /#validate['"]\s*\)\s*\.val\(\s*['"](\d+)['"]\s*\)/g,
+    )) {
+      codes.add(match[1]);
+    }
+  });
+  return {
+    // No recognizable action at all means the page shape changed: report an
+    // unknown state rather than guessing, so callers refuse to act on it.
+    known: codes.size > 0,
+    canSave: codes.has('2'),
+    canSubmit: codes.has('4'),
+    submitted: codes.size > 0 && !codes.has('4') && codes.has('5'),
   };
 }
 
@@ -728,6 +756,30 @@ function replaceFieldValues({
   });
 }
 
+const DURATION_COLUMNS = new Set<EureciaRowColumn>([
+  'daysWorked_int',
+  'daysWorked_fraction',
+]);
+
+/**
+ * Whether a missing control may be appended to the post. Only the day count of
+ * a full day qualifies: Eurecia disables those inputs once "Journée standard"
+ * is ticked, so they never reach the parsed form even though the server expects
+ * them. Anything else missing is a control Eurecia deliberately withheld.
+ */
+function isAppendableDurationControl({
+  column,
+  controls,
+}: {
+  column: string;
+  controls: Partial<Record<EureciaRowColumn, string[]>>;
+}) {
+  return (
+    DURATION_COLUMNS.has(column as EureciaRowColumn) &&
+    controls.daysWorked_int?.[0] === '1'
+  );
+}
+
 export function prepareTimesheetDryRun({
   form,
   action,
@@ -770,14 +822,20 @@ export function prepareTimesheetDryRun({
 
   for (const update of rowUpdates) {
     for (const [column, values] of Object.entries(update.controls)) {
-      fields = replaceFieldValues({
-        fields,
-        name: getEureciaRowFieldName({
-          column: column as EureciaRowColumn,
-          rowIndex: update.rowIndex,
-        }),
-        values,
+      const name = getEureciaRowFieldName({
+        column: column as EureciaRowColumn,
+        rowIndex: update.rowIndex,
       });
+      // Day counts are rendered disabled on full-day rows, so the dry run has
+      // to append them the same way the save does.
+      if (
+        isAppendableDurationControl({ column, controls: update.controls }) &&
+        !fields.some((field) => field.name === name)
+      ) {
+        fields = [...fields, ...values.map((value) => ({ name, value }))];
+        continue;
+      }
+      fields = replaceFieldValues({ fields, name, values });
     }
   }
   fields.push({ name: 'btnApply', value: 'clicked' });
@@ -916,7 +974,16 @@ export function prepareTimesheetSave({
         column: column as EureciaRowColumn,
         rowIndex: update.rowIndex,
       });
-      if (!fields.some((field) => field.name === name)) continue;
+      if (!fields.some((field) => field.name === name)) {
+        // Eurecia renders the day count disabled on full-day rows, so it never
+        // reaches the parsed form. It still has to be posted, or the row saves
+        // as "Journée standard" checked with zero days.
+        if (!isAppendableDurationControl({ column, controls: update.controls })) {
+          continue;
+        }
+        fields = [...fields, ...values.map((value) => ({ name, value }))];
+        continue;
+      }
       fields = replaceFieldValues({ fields, name, values });
     }
   }

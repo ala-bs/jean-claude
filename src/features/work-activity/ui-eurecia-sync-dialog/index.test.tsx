@@ -61,14 +61,28 @@ const draftQueryKey = [
   { provider: 'eurecia', start: range.start, end: range.end },
 ] as const;
 
+const SUBMITTED_STATE = {
+  known: true,
+  canSave: false,
+  canSubmit: false,
+  submitted: true,
+} as const;
+
 function editorModel(
   label: string,
   rowIndex: number,
   occupiedFraction: 0 | 0.25 = 0,
+  submission: TimesheetEditorModel['submission'] = {
+    known: true,
+    canSave: true,
+    canSubmit: true,
+    submitted: false,
+  },
 ): TimesheetEditorModel {
   return {
     axisLabels: { axis1: label, axis2: '', axis3: '' },
     axisOptions: { axis1: [], axis2: [], axis3: [] },
+    submission,
     rows: [
       {
         rowIndex,
@@ -139,7 +153,7 @@ function seedDialogQueries(
   );
 }
 
-async function renderDialog(queryClient: QueryClient) {
+async function renderDialog(queryClient: QueryClient, onClose = vi.fn()) {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -153,7 +167,7 @@ async function renderDialog(queryClient: QueryClient) {
           null,
           createElement(EureciaSyncDialog, {
             isOpen: true,
-            onClose: vi.fn(),
+            onClose,
             range,
           }),
         ),
@@ -246,14 +260,15 @@ describe('EureciaSyncDialog inspection initialization', () => {
     expect(lookup).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveInspection(editorModel('Fresh project', 9, 0.25));
+      resolveInspection(editorModel('Fresh project', 9, 0.25, SUBMITTED_STATE));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(document.body.textContent).toContain('1 draft entry');
+    // The sheet is read-only, so its drafts are not seeded as paintable rows.
+    expect(document.body.textContent).toContain('0 draft entries');
     expect(document.body.textContent).toContain('occupied-Fresh project');
     expect(document.body.textContent).toContain('25%');
     expect(document.body.textContent).not.toContain('occupied-Cached project');
@@ -368,6 +383,50 @@ describe('EureciaSyncDialog inspection initialization', () => {
 
     expect(document.body.textContent).toContain('Add Template project');
     expect(document.body.textContent).not.toContain('occupied-Template project');
+  });
+
+  it('disarms the picked assignment on Escape before closing the dialog', async () => {
+    vi.spyOn(api.timesheets, 'lookupAxisOptions').mockResolvedValue({
+      axis: 1,
+      options: [{ id: 'project-a', label: 'Project A' }],
+      selectedId: null,
+    });
+    const onClose = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: Number.POSITIVE_INFINITY } },
+    });
+    seedDialogQueries(queryClient, editorModel('Project', 3), 100);
+    queryClient.setQueryData(draftQueryKey, { ...draft, entries: [] }, { updatedAt: 100 });
+    queryClient.setQueryData(
+      ['timesheets', 'eurecia', 'sheets'],
+      [{ ...sheet, status: 'Nouvelle' }],
+      { updatedAt: 100 },
+    );
+
+    await renderDialog(queryClient, onClose);
+    await enterEditor();
+    await addProjectAndFillFirstDay('Project A');
+
+    const armed = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].some(
+        (button) =>
+          button.getAttribute('aria-pressed') === 'true' &&
+          button.textContent?.includes('Project A'),
+      );
+    // Picking a project from the palette arms it for painting.
+    expect(armed()).toBe(true);
+
+    const escape = () =>
+      act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        );
+      });
+
+    // First Escape only leaves the painting mode.
+    await escape();
+    expect(armed()).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('lets Nouvelle manual entries be edited and removed', async () => {
@@ -546,6 +605,7 @@ describe('EureciaSyncDialog inspection initialization', () => {
       {
         axisLabels: { axis1: 'Project', axis2: '', axis3: '' },
         axisOptions: { axis1: [], axis2: [], axis3: [] },
+      submission: { known: true, canSave: true, canSubmit: true, submitted: false },
         rows: [
           {
             rowIndex: 7,
@@ -684,7 +744,7 @@ describe('EureciaSyncDialog inspection initialization', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { staleTime: Number.POSITIVE_INFINITY } },
     });
-    seedDialogQueries(queryClient, editorModel('Project', 3, 0.25), 100);
+    seedDialogQueries(queryClient, editorModel('Project', 3, 0.25, SUBMITTED_STATE), 100);
     queryClient.setQueryData(
       ['timesheets', 'eurecia', 'sheets'],
       [{ ...sheet, status: 'À Valider' }],
@@ -697,6 +757,56 @@ describe('EureciaSyncDialog inspection initialization', () => {
     expect(document.body.textContent).toContain('À Valider');
     expect(document.body.textContent).toContain('read-only');
     expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the sheet status when the page actions cannot be read', async () => {
+    // No recognizable action on the page: a "Nouvelle" sheet stays editable
+    // instead of silently losing its drafts.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: Number.POSITIVE_INFINITY } },
+    });
+    seedDialogQueries(
+      queryClient,
+      editorModel('Project', 3, 0, {
+        known: false,
+        canSave: false,
+        canSubmit: false,
+        submitted: false,
+      }),
+      100,
+    );
+    queryClient.setQueryData(
+      ['timesheets', 'eurecia', 'sheets'],
+      [{ ...sheet, status: 'Nouvelle' }],
+      { updatedAt: 100 },
+    );
+
+    await renderDialog(queryClient);
+    await enterEditor();
+
+    expect(document.body.textContent).toContain('1 draft entry');
+    expect(document.body.textContent).not.toContain('read-only');
+  });
+
+  it('does not seed draft rows on a submitted sheet', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: Number.POSITIVE_INFINITY } },
+    });
+    seedDialogQueries(queryClient, editorModel('Project', 3, 0.25, SUBMITTED_STATE), 100);
+    queryClient.setQueryData(
+      ['timesheets', 'eurecia', 'sheets'],
+      [{ ...sheet, status: 'À Valider' }],
+      { updatedAt: 100 },
+    );
+
+    await renderDialog(queryClient);
+    await enterEditor();
+
+    expect(document.body.textContent).toContain('0 draft entries');
+    expect(document.body.textContent).not.toContain('Unassigned');
+    // The drafts were skipped as read-only, not reported as out of range.
+    expect(document.body.textContent).not.toContain('falls outside this sheet');
+    expect(document.body.textContent).toContain('read-only');
   });
 
   it('ignores Work Activity drafts that fall outside the selected sheet', async () => {
@@ -935,7 +1045,8 @@ describe('EureciaSyncDialog inspection initialization', () => {
         action: 'save',
         entryCount: 1,
         addedRowCount: 0,
-        deletedRowCount: 1,
+        updatedRowCount: 0,
+      deletedRowCount: 1,
         savedRowIndices: [0],
         dates: ['2026-07-13'],
       },
@@ -982,16 +1093,20 @@ describe('EureciaSyncDialog inspection initialization', () => {
     ].find((button) => button.textContent?.includes('Save to Eurecia'));
     await act(async () => commit?.click());
 
+    // The edited row is rewritten in place rather than deleted and re-added.
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({
-        entries: [
-          expect.objectContaining({
-            date: '2026-07-13',
-            fraction: 0.5,
-            axis1Id: 'occupied-Saved project',
-          }),
+        entries: [],
+        deletions: [],
+        updates: [
+          {
+            target: expect.objectContaining({ rowIndex: 4, fraction: 0.25 }),
+            values: expect.objectContaining({
+              fraction: 0.5,
+              axis1Id: 'occupied-Saved project',
+            }),
+          },
         ],
-        deletions: [expect.objectContaining({ rowIndex: 4, fraction: 0.25 })],
       }),
     );
   });
@@ -1004,7 +1119,8 @@ describe('EureciaSyncDialog inspection initialization', () => {
         action: 'save',
         entryCount: 0,
         addedRowCount: 0,
-        deletedRowCount: 1,
+        updatedRowCount: 0,
+      deletedRowCount: 1,
         savedRowIndices: [],
         dates: ['2026-07-13'],
       },
