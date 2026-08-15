@@ -39,14 +39,26 @@ import { Select } from '@/common/ui/select';
 
 
 import {
+  MOBILE_PREVIEW_DEVICE_ASSIGNMENTS_QUERY_KEY,
   useAndroidDeviceManagement,
   useIosDeviceManagement,
+  useMobilePreviewDeviceAssignments,
   useMobilePreviewDevices,
   useMobilePreviewNativeLogs,
   useMobilePreviewNetworkProxy,
   useMobilePreviewSession,
   useReactNativeDevTools,
 } from '@/hooks/use-mobile-preview';
+import { useTasks } from '@/hooks/use-tasks';
+
+import { useQueryClient } from '@tanstack/react-query';
+
+import { DeviceRailRow } from './ui-device-rail-row';
+import { PreviewNotice, PreviewNoticeStack } from './ui-preview-notices';
+import {
+  buildMobilePreviewDeviceTaskMap,
+  resolveDeviceRowTaskInfo,
+} from './utils-device-assignments';
 
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useRunCommands } from '@/hooks/use-run-commands';
@@ -116,11 +128,7 @@ import {
   isMobilePreviewPaneTabVisible,
   type MobilePreviewPaneTab,
 } from './utils-tabs';
-import {
-  EmptyState,
-  PlatformLogo,
-  PreviewErrorState,
-} from './ui-common';
+import { EmptyState, PreviewErrorState } from './ui-common';
 import {
   NativeLogsTabLabel,
   NetworkTabLabel,
@@ -2885,6 +2893,32 @@ export function MobilePreviewPane({
     }
     return firstDevice.name.localeCompare(secondDevice.name);
   });
+  // Device -> task associations across every task, so a row can show that a
+  // device belongs to some other task than the one this pane is rendering.
+  const { data: deviceAssignments } = useMobilePreviewDeviceAssignments();
+  const { data: allTasks } = useTasks();
+  const deviceAssignmentsQueryClient = useQueryClient();
+  // The assignments query only polls, so without this a stopped session keeps
+  // reading "Live" on its device row until the next tick.
+  useEffect(() => {
+    void deviceAssignmentsQueryClient.invalidateQueries({
+      queryKey: MOBILE_PREVIEW_DEVICE_ASSIGNMENTS_QUERY_KEY,
+    });
+  }, [deviceAssignmentsQueryClient, session?.status, hasActiveSession]);
+  const currentTask = useMemo(
+    () => allTasks?.find((task) => task.id === taskId),
+    [allTasks, taskId],
+  );
+  const deviceTaskMap = useMemo(
+    () =>
+      buildMobilePreviewDeviceTaskMap({
+        assignments: deviceAssignments ?? [],
+        tasks: allTasks ?? [],
+        currentTaskId: taskId,
+      }),
+    [deviceAssignments, allTasks, taskId],
+  );
+
   const standaloneLayout = getMobilePreviewStandaloneLayoutClasses({
     isStandalone,
     isInspectorOpen: isStandaloneInspectorOpen,
@@ -2907,63 +2941,65 @@ export function MobilePreviewPane({
           )}
         />
       ) : null}
-      {inputNotice ? (
-        <div className="border-status-fail/30 bg-status-fail/10 text-status-fail flex items-start gap-2 border-b px-3 py-2 font-mono text-[11px]">
-          <span className="min-w-0 flex-1">{inputNotice}</span>
-          <button
-            type="button"
-            className="text-status-fail/70 hover:text-status-fail shrink-0"
-            aria-label="Dismiss notice"
-            onClick={() => setInputNotice(null)}
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      ) : null}
-      {autoPreviewStartError ? (
-        <div
-          className="border-status-fail/30 bg-status-fail/10 text-status-fail flex items-center gap-2 border-b px-3 py-1.5 font-mono text-[10.5px]"
-          role="alert"
-        >
-          <span className="min-w-0 flex-1">{autoPreviewStartError}</span>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={retryAutoPreviewStart}
-          >
-            Retry preview
-          </Button>
-        </div>
-      ) : null}
-      {runtimeLaunchState.status !== 'idle' &&
-      runtimeLaunchState.status !== 'ready' ? (
-        <div
-          className={clsx(
-            'border-b px-3 py-1.5 font-mono text-[10.5px]',
-            runtimeLaunchState.status === 'error'
-              ? 'border-status-fail/30 bg-status-fail/10 text-status-fail'
-              : runtimeLaunchState.status === 'unsupported'
-                ? 'border-status-warn/30 bg-status-warn/10 text-status-warn'
-                : 'border-line-soft bg-bg-1 text-ink-3',
-          )}
-          role={runtimeLaunchState.status === 'error' ? 'alert' : 'status'}
-        >
-          <div className="flex items-center gap-2">
-            {runtimeLaunchState.status === 'launching' ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : null}
-            <span className="min-w-0 flex-1">{runtimeLaunchState.message}</span>
-            {runtimeLaunchState.status === 'error' ? (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => setRuntimeLaunchRetry((value) => value + 1)}
-              >
-                Retry
-              </Button>
-            ) : null}
-          </div>
-        </div>
+      {inputNotice ||
+      autoPreviewStartError ||
+      (runtimeLaunchState.status !== 'idle' &&
+        runtimeLaunchState.status !== 'ready') ? (
+        <PreviewNoticeStack insetLeft={!isStandalone}>
+          {inputNotice ? (
+            <PreviewNotice
+              tone="error"
+              role="alert"
+              onDismiss={() => setInputNotice(null)}
+            >
+              {inputNotice}
+            </PreviewNotice>
+          ) : null}
+          {autoPreviewStartError ? (
+            <PreviewNotice
+              tone="error"
+              role="alert"
+              action={
+                <Button variant="ghost" size="xs" onClick={retryAutoPreviewStart}>
+                  Retry preview
+                </Button>
+              }
+            >
+              {autoPreviewStartError}
+            </PreviewNotice>
+          ) : null}
+          {runtimeLaunchState.status !== 'idle' &&
+          runtimeLaunchState.status !== 'ready' ? (
+            <PreviewNotice
+              tone={
+                runtimeLaunchState.status === 'error'
+                  ? 'error'
+                  : runtimeLaunchState.status === 'unsupported'
+                    ? 'warn'
+                    : 'info'
+              }
+              role={runtimeLaunchState.status === 'error' ? 'alert' : 'status'}
+              icon={
+                runtimeLaunchState.status === 'launching' ? (
+                  <Loader2 className="size-3 shrink-0 animate-spin" />
+                ) : null
+              }
+              action={
+                runtimeLaunchState.status === 'error' ? (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setRuntimeLaunchRetry((value) => value + 1)}
+                  >
+                    Retry
+                  </Button>
+                ) : null
+              }
+            >
+              {runtimeLaunchState.message}
+            </PreviewNotice>
+          ) : null}
+        </PreviewNoticeStack>
       ) : null}
       {actionTray}
       {networkFilterContextMenu ? (
@@ -3039,50 +3075,27 @@ export function MobilePreviewPane({
                     device.platform,
                     device.id,
                   );
-                  const previewActive =
-                    activeSessionDeviceKeys.has(deviceKey) ||
-                    (selectedPreviewDeviceKey === deviceKey &&
-                      (isStarting || activeSessionDeviceReady));
+                  const taskInfo = resolveDeviceRowTaskInfo({
+                    assignedTask: deviceTaskMap.get(deviceKey),
+                    // This pane knows its own session is coming up before the
+                    // cross-task assignments query catches up.
+                    isLocallyActive:
+                      activeSessionDeviceKeys.has(deviceKey) ||
+                      (selectedPreviewDeviceKey === deviceKey &&
+                        (isStarting || activeSessionDeviceReady)),
+                    isStarting,
+                    currentTaskId: taskId,
+                    currentTask,
+                  });
                   return (
-                    <button
+                    <DeviceRailRow
                       key={device.id}
-                      type="button"
-                      onClick={() => handleSelectDevice(device)}
-                      className={clsx(
-                        'grid w-full grid-cols-[8px_minmax(0,1fr)_auto] items-center gap-2 rounded-[5px] px-2 py-1.5 text-left transition-colors',
-                        standaloneLayout.deviceButton,
-                        selected
-                          ? 'bg-acc-soft shadow-[inset_2px_0_0_var(--color-acc)]'
-                          : 'hover:bg-bg-2',
-                      )}
-                    >
-                      <span
-                        className={clsx(
-                          'h-[7px] w-[7px] rounded-full',
-                          device.state === 'booted'
-                            ? 'bg-emerald-300 shadow-[0_0_7px_var(--color-status-done)]'
-                            : 'bg-ink-4',
-                        )}
-                      />
-                      <span className="min-w-0">
-                        <span className="text-ink-1 block truncate text-[12px] font-medium">
-                          {device.name}
-                        </span>
-                        <span className="text-ink-4 block truncate font-mono text-[10px]">
-                          {device.osVersion ?? formatDeviceState(device.state)}
-                        </span>
-                      </span>
-                      <span className="flex items-center gap-1.5">
-                        {previewActive ? (
-                          <span
-                            aria-label="Preview active"
-                            className="bg-status-done size-1.5 animate-pulse rounded-full shadow-[0_0_7px_var(--color-status-done)]"
-                            title="Preview active"
-                          />
-                        ) : null}
-                        <PlatformLogo platform={device.platform} />
-                      </span>
-                    </button>
+                      device={device}
+                      selected={selected}
+                      taskInfo={taskInfo}
+                      onSelect={() => handleSelectDevice(device)}
+                      className={standaloneLayout.deviceButton}
+                    />
                   );
                 })}
               </div>

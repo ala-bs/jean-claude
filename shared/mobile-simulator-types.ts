@@ -138,6 +138,22 @@ export type MobilePreviewListSessionsParams = {
   taskId: string;
 };
 
+/**
+ * Which task a device is associated with, across all tasks.
+ *
+ * `isActive` means a preview session is live on the device right now; when it
+ * is false the association is the remembered "last task that used this device".
+ * There is no exclusivity — a device is simply attributed to its latest task.
+ */
+export type MobilePreviewDeviceAssignment = {
+  platform: MobilePlatform;
+  deviceId: string;
+  taskId: string;
+  isActive: boolean;
+  status: MobilePreviewStatus | null;
+  lastUsedAt: string | null;
+};
+
 export type MobilePreviewAttachSessionParams = {
   taskId: string;
   sessionId: string;

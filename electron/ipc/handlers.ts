@@ -5423,6 +5423,9 @@ export function registerIpcHandlers() {
     (_, params: MobilePreviewListSessionsParams) =>
       mobilePreviewService.listSessions(params),
   );
+  ipcMain.handle('mobilePreview:listDeviceAssignments', () =>
+    mobilePreviewService.listDeviceAssignments(),
+  );
   ipcMain.handle('mobilePreview:getAndroidToolStatus', () =>
     mobilePreviewService.getAndroidToolStatus(),
   );

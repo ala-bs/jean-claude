@@ -26,6 +26,31 @@ export type PreviewIosBuildCoordinator = ReturnType<
   typeof createIosBuildLaunchCoordinator
 >;
 
+/**
+ * Why a single `runWorkspaceSetup` pass stopped where it did.
+ *
+ * The saga deliberately runs at most one long-running step per invocation, so
+ * "it stopped early" is normal — but *which* gate stopped it is the only way to
+ * tell an expected hand-off (waiting on a resume effect) from a stall.
+ */
+export type RunWorkspaceSetupStop =
+  | 'needs-app-selection'
+  | 'device-not-ready'
+  | 'operation-superseded'
+  | 'dependencies-install-errored'
+  | 'dependencies-install-pending'
+  | 'prebuild-started'
+  | 'session-device-mismatch'
+  | 'session-superseded'
+  | 'session-not-bound'
+  | 'frame-wait-cancelled'
+  | 'proxy-disabled'
+  | 'android-project-missing'
+  | 'no-proxy-params'
+  | 'cancelled'
+  | 'failed'
+  | 'completed';
+
 type AdHocCommandParams = Omit<
   StartAdHocRunCommandParams,
   'taskId' | 'projectId' | 'workingDir'
@@ -146,6 +171,8 @@ export type RunWorkspaceSetupOptions = {
  * It is a saga, not a reducer: it re-checks `coordinator.isCurrent(operation)`
  * after every await and early-returns so the two "resume" effects in the pane
  * can pick setup back up once a long-running command finishes.
+ *
+ * Returns where it stopped — see {@link RunWorkspaceSetupStop}.
  */
 export async function runWorkspaceSetup({
   facts,
@@ -159,7 +186,7 @@ export async function runWorkspaceSetup({
   coordinator: PreviewSetupCoordinator;
   iosBuildCoordinator: PreviewIosBuildCoordinator;
   options: RunWorkspaceSetupOptions;
-}): Promise<void> {
+}): Promise<RunWorkspaceSetupStop> {
   const { shouldAutoBuildIos, shouldPrebuildAndroid, shouldPrebuildIos } =
     options;
   const {
@@ -175,12 +202,13 @@ export async function runWorkspaceSetup({
     androidAppMissing,
   } = facts;
 
-  if (needsAppSelection || !deviceReady) return;
+  if (needsAppSelection) return 'needs-app-selection';
+  if (!deviceReady) return 'device-not-ready';
   const setupCoordinator = coordinator;
   const setupOperation = setupCoordinator.begin(
     getPreviewDeviceKey(platform, deviceId),
   );
-  if (!setupOperation) return;
+  if (!setupOperation) return 'operation-superseded';
 
   const setupEffectiveAndroidProjectPath = facts.androidProjectPath
     ? facts.androidProjectExists === false
@@ -218,7 +246,7 @@ export async function runWorkspaceSetup({
     if (facts.dependenciesInstallStatusValue !== 'completed') {
       if (facts.dependenciesInstallStatusValue === 'errored') {
         port.setInputNotice('Dependency install failed; check Metro tab logs');
-        return;
+        return 'dependencies-install-errored';
       }
       // Set the resume flag for the already-running case too, otherwise setup
       // silently never resumes when the install was started elsewhere.
@@ -231,7 +259,7 @@ export async function runWorkspaceSetup({
           ports: [],
         });
       }
-      return;
+      return 'dependencies-install-pending';
     }
 
     if (
@@ -251,7 +279,7 @@ export async function runWorkspaceSetup({
       port.showActionNotice(
         'Expo prebuild started; setup will continue when it finishes',
       );
-      return;
+      return 'prebuild-started';
     }
 
     if (!facts.devServerRunning && !facts.devServerStarting) {
@@ -274,7 +302,7 @@ export async function runWorkspaceSetup({
         facts.session.deviceId !== deviceId)
     ) {
       setupCoordinator.cancel();
-      return;
+      return 'session-device-mismatch';
     }
     if (!facts.hasActiveSession) {
       const startedSession = await port.startPreviewSession({
@@ -284,14 +312,16 @@ export async function runWorkspaceSetup({
         fps: facts.fps,
         quality: facts.quality,
       });
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
+      if (!setupCoordinator.isCurrent(setupOperation)) {
+        return 'operation-superseded';
+      }
       if (
         startedSession.platform !== platform ||
         startedSession.deviceId !== deviceId ||
         startedSession.status === 'stopped'
       ) {
         setupCoordinator.cancel();
-        return;
+        return 'session-superseded';
       }
       setupSessionId = startedSession.id;
     }
@@ -300,7 +330,7 @@ export async function runWorkspaceSetup({
       !setupSessionId ||
       !setupCoordinator.bindSession(setupOperation, setupSessionId)
     ) {
-      return;
+      return 'session-not-bound';
     }
 
     if (platform === 'ios') {
@@ -313,11 +343,13 @@ export async function runWorkspaceSetup({
         frameResult === 'cancelled' ||
         !setupCoordinator.isCurrent(setupOperation)
       ) {
-        return;
+        return 'frame-wait-cancelled';
       }
     }
 
-    if (!setupCoordinator.isCurrent(setupOperation)) return;
+    if (!setupCoordinator.isCurrent(setupOperation)) {
+      return 'operation-superseded';
+    }
     if (
       platform === 'ios' &&
       shouldAutoBuildIos &&
@@ -355,7 +387,7 @@ export async function runWorkspaceSetup({
       ) {
         startAndroidBuild(buildCommand);
       }
-      return;
+      return 'proxy-disabled';
     }
 
     if (platform === 'android' && !setupEffectiveAndroidProjectPath) {
@@ -375,43 +407,59 @@ export async function runWorkspaceSetup({
           'Checking Android project folder before proxy setup',
         );
       }
-      return;
+      return 'android-project-missing';
     }
 
     const networkProxyParams = facts.networkProxyParams;
-    if (!networkProxyParams) return;
-    if (!setupCoordinator.isCurrent(setupOperation)) return;
+    if (!networkProxyParams) return 'no-proxy-params';
+    if (!setupCoordinator.isCurrent(setupOperation)) {
+      return 'operation-superseded';
+    }
 
     if (facts.proxyStatus === 'error' && facts.networkSession) {
       await port.stopNetworkProxy(facts.networkSession.id);
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
+      if (!setupCoordinator.isCurrent(setupOperation)) {
+        return 'operation-superseded';
+      }
     }
 
     if (!facts.networkCertificateInstalled) {
       if (facts.networkSession && facts.networkStatus === 'running') {
         await port.stopNetworkProxy(facts.networkSession.id);
-        if (!setupCoordinator.isCurrent(setupOperation)) return;
+        if (!setupCoordinator.isCurrent(setupOperation)) {
+          return 'operation-superseded';
+        }
       }
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
+      if (!setupCoordinator.isCurrent(setupOperation)) {
+        return 'operation-superseded';
+      }
       await port.installCertificate({ platform, deviceId });
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
+      if (!setupCoordinator.isCurrent(setupOperation)) {
+        return 'operation-superseded';
+      }
       port.setEnableNetworkMitm(true);
       if (platform === 'android') {
         port.setAndroidCertGuidanceVisible(true);
       }
       await port.startNetworkProxy({ ...networkProxyParams, enableMitm: true });
     } else if (facts.networkStatus !== 'running') {
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
+      if (!setupCoordinator.isCurrent(setupOperation)) {
+        return 'operation-superseded';
+      }
       port.setEnableNetworkMitm(true);
       await port.startNetworkProxy({ ...networkProxyParams, enableMitm: true });
     } else if (facts.networkSession && !facts.networkSession.enableMitm) {
       await port.stopNetworkProxy(facts.networkSession.id);
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
+      if (!setupCoordinator.isCurrent(setupOperation)) {
+        return 'operation-superseded';
+      }
       port.setEnableNetworkMitm(true);
       await port.startNetworkProxy({ ...networkProxyParams, enableMitm: true });
     }
 
-    if (!setupCoordinator.isCurrent(setupOperation)) return;
+    if (!setupCoordinator.isCurrent(setupOperation)) {
+      return 'operation-superseded';
+    }
     if (
       platform === 'android' &&
       setupEffectiveAndroidProjectPath &&
@@ -422,7 +470,9 @@ export async function runWorkspaceSetup({
         taskId: facts.taskId,
         androidProjectPath: setupEffectiveAndroidProjectPath,
       });
-      if (!setupCoordinator.isCurrent(setupOperation)) return;
+      if (!setupCoordinator.isCurrent(setupOperation)) {
+        return 'operation-superseded';
+      }
       port.setAndroidAppStatus((current) =>
         current
           ? { ...current, trustConfigured: true }
@@ -451,10 +501,13 @@ export async function runWorkspaceSetup({
     ) {
       startAndroidBuild(buildCommand);
     }
+
+    return 'completed';
   } catch (error) {
     if (setupCoordinator.isCurrent(setupOperation)) {
       port.setInputNotice(formatError(error) ?? 'Workspace setup failed');
     }
+    return 'failed';
   } finally {
     setupCoordinator.complete(setupOperation);
   }

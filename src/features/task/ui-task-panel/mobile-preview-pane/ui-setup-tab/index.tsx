@@ -1,5 +1,12 @@
-import { AlertTriangle, Check, Loader2, Play } from 'lucide-react';
-import type { ComponentProps } from 'react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  Loader2,
+  Play,
+  Square,
+} from 'lucide-react';
+import { type ComponentProps, useState } from 'react';
 import clsx from 'clsx';
 
 import { Button } from '@/common/ui/button';
@@ -104,35 +111,35 @@ export function SetupTab({
     setupDetail,
   } = model;
 
+  // The setup saga advances at most one long step per press, so Start must stay
+  // reachable while things are already running — `canStopSetup` alone is true as
+  // soon as Metro is up, and swapping to a lone Stop there would strand the user
+  // mid-setup with no way to continue.
+  const isStopMode = canStopSetup && allSetupReady;
+  const showStopEscape = canStopSetup && !allSetupReady;
+
+  // A newly blocked step expands the details by default so the failure is never
+  // hidden, but the user can still collapse it. Derived during render rather
+  // than synced by an effect, which would cascade renders.
+  const blockedSetupStepKey = blockedSetupStep?.key ?? null;
+  const [detailsChoice, setDetailsChoice] = useState<{
+    open: boolean;
+    forStepKey: string | null;
+  }>({ open: false, forStepKey: null });
+  const isDetailsOpen =
+    detailsChoice.forStepKey === blockedSetupStepKey
+      ? detailsChoice.open
+      : Boolean(blockedSetupStepKey);
+
   return (
     <div className="bg-bg-1 min-h-0 flex-1 overflow-y-auto pb-4">
       <div className="border-line-soft border-b p-3.5">
-        <div className="flex items-center gap-3">
-          <div className="relative flex size-12 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950">
-            <svg className="absolute inset-0 size-12 -rotate-90" viewBox="0 0 48 48" aria-hidden="true">
-              <circle cx="24" cy="24" r="20" fill="none" stroke="var(--color-bg-3)" strokeWidth="4" />
-              <circle
-                cx="24"
-                cy="24"
-                r="20"
-                fill="none"
-                stroke={blockedSetupStep ? 'var(--color-status-fail)' : 'var(--color-acc)'}
-                strokeDasharray={Math.PI * 40}
-                strokeDashoffset={Math.PI * 40 * (1 - readySetupSteps / setupSteps.length)}
-                strokeLinecap="round"
-                strokeWidth="4"
-              />
-            </svg>
-            {blockedSetupStep ? (
-              <AlertTriangle className="text-status-fail size-4" />
-            ) : allSetupReady ? (
-              <Check className="text-status-done size-4" />
-            ) : (
-              <span className="text-ink-0 font-mono text-sm font-semibold">
-                {readySetupSteps}
-              </span>
-            )}
-          </div>
+        <div className="flex items-start gap-2.5">
+          {blockedSetupStep ? (
+            <AlertTriangle className="text-status-fail mt-0.5 size-4 shrink-0" />
+          ) : allSetupReady ? (
+            <Check className="text-status-done mt-0.5 size-4 shrink-0" />
+          ) : null}
           <div className="min-w-0 flex-1">
             <div className="text-ink-0 text-sm font-semibold">{setupHeadline}</div>
             <div className="text-ink-3 mt-0.5 text-[11px] leading-relaxed">
@@ -141,38 +148,55 @@ export function SetupTab({
           </div>
         </div>
         <div className="mt-3 flex gap-2">
-          <Button
-            className="min-w-0 flex-1 justify-center"
-            variant={allSetupReady ? 'secondary' : 'primary'}
-            icon={anySetupRunning ? <Loader2 className="animate-spin" /> : <Play />}
-            disabled={ctaDisabled}
-            loading={anySetupRunning}
-            onClick={() => {
-              if (platform === 'ios' && iosAppStatusError) {
-                onRetryIosAppStatus();
-                return;
-              }
-              void onStartWorkspace({
-                shouldAutoBuildIos: iosSetupDecision.shouldAutoBuild,
-                shouldPrebuildAndroid: needsExpoAndroidPrebuild,
-                shouldPrebuildIos: needsExpoIosPrebuild,
-              });
-            }}
-          >
-            {ctaLabel}
-          </Button>
-          <Button
-            className="shrink-0 justify-center"
-            variant="secondary"
-            disabled={!canStopSetup || anySetupStopping}
-            loading={anySetupStopping}
-            onClick={() => void onStopAll()}
-          >
-            Stop all
-          </Button>
-        </div>
-        <div className="text-ink-4 mt-2 flex items-center justify-between text-[10px]">
-          <span>{readySetupSteps} of {setupSteps.length} ready</span>
+          {isStopMode ? (
+            <Button
+              className="min-w-0 flex-1 justify-center"
+              variant="danger"
+              icon={<Square />}
+              disabled={anySetupStopping}
+              loading={anySetupStopping}
+              onClick={() => void onStopAll()}
+            >
+              {anySetupStopping ? 'Stopping…' : 'Stop'}
+            </Button>
+          ) : (
+            <>
+              <Button
+                className="min-w-0 flex-1 justify-center"
+                variant="primary"
+                icon={
+                  anySetupRunning ? <Loader2 className="animate-spin" /> : <Play />
+                }
+                disabled={ctaDisabled}
+                loading={anySetupRunning}
+                onClick={() => {
+                  if (platform === 'ios' && iosAppStatusError) {
+                    onRetryIosAppStatus();
+                    return;
+                  }
+                  void onStartWorkspace({
+                    shouldAutoBuildIos: iosSetupDecision.shouldAutoBuild,
+                    shouldPrebuildAndroid: needsExpoAndroidPrebuild,
+                    shouldPrebuildIos: needsExpoIosPrebuild,
+                  });
+                }}
+              >
+                {ctaLabel}
+              </Button>
+              {showStopEscape ? (
+                <Button
+                  className="shrink-0 justify-center"
+                  variant="secondary"
+                  icon={<Square />}
+                  aria-label="Stop everything"
+                  title="Stop everything"
+                  disabled={anySetupStopping}
+                  loading={anySetupStopping}
+                  onClick={() => void onStopAll()}
+                />
+              ) : null}
+            </>
+          )}
         </div>
       </div>
 
@@ -211,10 +235,51 @@ export function SetupTab({
         </div>
       ) : null}
 
-      <div className="text-ink-4 px-3 pt-3 pb-1 text-[9px] font-semibold tracking-wide uppercase">
-        Workspace
-      </div>
-      <div className="border-line mx-3 overflow-hidden rounded-md border bg-zinc-950/45">
+      <button
+        type="button"
+        onClick={() =>
+          setDetailsChoice({ open: !isDetailsOpen, forStepKey: blockedSetupStepKey })
+        }
+        aria-expanded={isDetailsOpen}
+        className="border-line-soft hover:bg-bg-2 flex w-full items-center gap-2.5 border-b px-3 py-2.5 text-left"
+      >
+        <span aria-hidden className="flex shrink-0 gap-[3px]">
+          {setupSteps.map((step, index) => (
+            <span
+              key={step.key}
+              className={clsx(
+                'h-[3px] w-3.5 rounded-full transition-colors',
+                blockedSetupStep && index >= readySetupSteps
+                  ? 'bg-status-fail/40'
+                  : index < readySetupSteps
+                    ? allSetupReady
+                      ? 'bg-status-done'
+                      : 'bg-acc'
+                    : 'bg-bg-3',
+              )}
+            />
+          ))}
+        </span>
+        <span className="text-ink-2 min-w-0 flex-1 truncate text-[11.5px]">
+          {blockedSetupStep ? blockedSetupStep.label : 'Workspace'}
+        </span>
+        <span className="text-ink-4 shrink-0 font-mono text-[10px]">
+          {readySetupSteps}/{setupSteps.length}
+        </span>
+        <ChevronDown
+          className={clsx(
+            'text-ink-4 size-3.5 shrink-0 transition-transform',
+            !isDetailsOpen && '-rotate-90',
+          )}
+        />
+      </button>
+
+      <div
+        className={clsx(
+          'border-line mx-3 mt-3 overflow-hidden rounded-md border bg-zinc-950/45',
+          !isDetailsOpen && 'hidden',
+        )}
+      >
         {setupSteps.map((step) => {
           const action = getStepAction(step.key);
           return (

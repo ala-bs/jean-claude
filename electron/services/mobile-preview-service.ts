@@ -13,6 +13,7 @@ import {
   type MobilePreviewAttachSessionParams,
   type MobilePreviewDetachSessionParams,
   type MobilePreviewDevice,
+  type MobilePreviewDeviceAssignment,
   type MobilePreviewForwardPortParams,
   type MobilePreviewFrameEvent,
   type MobilePreviewInputEvent,
@@ -41,7 +42,10 @@ import {
 } from './mobile-preview-dev-menu';
 import { androidAdapter } from './mobile-preview-android-adapter';
 import { iosIdbAdapter } from './mobile-preview-ios-idb-adapter';
-import { TaskRepository } from '../database/repositories';
+import {
+  MobilePreviewDeviceUsageRepository,
+  TaskRepository,
+} from '../database/repositories';
 
 type MobilePreviewAdapter = {
   dispose?: () => Promise<void>;
@@ -143,12 +147,56 @@ type MobilePreviewEmitter = {
   sendToAllWindows: (channel: string, payload: unknown) => void;
 };
 
+/**
+ * Persistence for the "last task that used this device" association shown in
+ * the device rail. Injected so the service stays testable without a database.
+ */
+export type MobilePreviewDeviceUsageStore = {
+  list: () => Promise<
+    Array<{
+      platform: MobilePlatform;
+      deviceId: string;
+      taskId: string;
+      lastUsedAt: string;
+    }>
+  >;
+  record: (params: {
+    platform: MobilePlatform;
+    deviceId: string;
+    taskId: string;
+  }) => Promise<void>;
+};
+
+function createInMemoryDeviceUsageStore(): MobilePreviewDeviceUsageStore {
+  const usage = new Map<
+    string,
+    {
+      platform: MobilePlatform;
+      deviceId: string;
+      taskId: string;
+      lastUsedAt: string;
+    }
+  >();
+  return {
+    list: async () => Array.from(usage.values()),
+    record: async ({ platform, deviceId, taskId }) => {
+      usage.set(`${platform}:${deviceId}`, {
+        platform,
+        deviceId,
+        taskId,
+        lastUsedAt: new Date().toISOString(),
+      });
+    },
+  };
+}
+
 type MobilePreviewServiceOptions = {
   adapters: Record<MobilePlatform, MobilePreviewAdapter>;
   emitter: MobilePreviewEmitter;
   lifecycle?: MobilePreviewLifecycle;
   logger?: Pick<typeof console, 'error'>;
   validateTaskCanStart: (taskId: string) => Promise<void>;
+  deviceUsageStore?: MobilePreviewDeviceUsageStore;
 };
 
 type SenderAttachment = {
@@ -247,6 +295,7 @@ export function createMobilePreviewService({
   lifecycle,
   logger = console,
   validateTaskCanStart,
+  deviceUsageStore = createInMemoryDeviceUsageStore(),
 }: MobilePreviewServiceOptions) {
   const sessions = new Map<string, ActiveSession>();
   const latestStartIdsByDevice = new Map<string, number>();
@@ -497,6 +546,52 @@ export function createMobilePreviewService({
             session.status !== 'stopped' &&
             session.taskId === params.taskId,
         );
+    },
+
+    /**
+     * Device -> task associations across every task, for the device rail.
+     *
+     * A live session always wins over the persisted "last used" row, so a
+     * device that is currently streaming is attributed to the task streaming
+     * on it rather than to whoever used it previously.
+     */
+    async listDeviceAssignments(): Promise<MobilePreviewDeviceAssignment[]> {
+      const assignments = new Map<string, MobilePreviewDeviceAssignment>();
+
+      const usageRows = await deviceUsageStore.list().catch((error) => {
+        logger.error('Failed to list mobile preview device usage', error);
+        return [];
+      });
+      usageRows.forEach((row) => {
+        // The column is TEXT; the Kysely type is a compile-time assertion only.
+        // Drop anything that is not a platform this build understands rather
+        // than forwarding it across IPC to renderer code that switches on it.
+        if (row.platform !== 'ios' && row.platform !== 'android') return;
+        assignments.set(`${row.platform}:${row.deviceId}`, {
+          platform: row.platform,
+          deviceId: row.deviceId,
+          taskId: row.taskId,
+          isActive: false,
+          status: null,
+          lastUsedAt: row.lastUsedAt,
+        });
+      });
+
+      Array.from(sessions.values()).forEach((activeSession) => {
+        const { session } = activeSession;
+        if (session.status === 'stopped') return;
+        const deviceKey = `${activeSession.platform}:${activeSession.deviceId}`;
+        assignments.set(deviceKey, {
+          platform: activeSession.platform,
+          deviceId: activeSession.deviceId,
+          taskId: session.taskId,
+          isActive: true,
+          status: session.status,
+          lastUsedAt: assignments.get(deviceKey)?.lastUsedAt ?? null,
+        });
+      });
+
+      return Array.from(assignments.values());
     },
 
     async attachSession(
@@ -783,6 +878,17 @@ export function createMobilePreviewService({
         };
         activeSession = nextActiveSession;
         sessions.set(session.id, nextActiveSession);
+        // Remember the association so the device rail can still attribute this
+        // device to a task once the session ends. Never fail a start over it.
+        void deviceUsageStore
+          .record({
+            platform: params.platform,
+            deviceId: nextSession.deviceId,
+            taskId: nextSession.taskId,
+          })
+          .catch((error) => {
+            logger.error('Failed to record mobile preview device usage', error);
+          });
         if (webContents && !isWebContentsDestroyed(webContents)) {
           attachWebContents(nextActiveSession, webContents);
         }
@@ -1050,4 +1156,10 @@ export const mobilePreviewService = createMobilePreviewService({
     onBeforeQuit: (callback) => app.on('before-quit', callback),
   },
   validateTaskCanStart: validatePersistedMobilePreviewTaskCanStart,
+  deviceUsageStore: {
+    list: () => MobilePreviewDeviceUsageRepository.listAll(),
+    record: async (params) => {
+      await MobilePreviewDeviceUsageRepository.recordUsage(params);
+    },
+  },
 });

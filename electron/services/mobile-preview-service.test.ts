@@ -26,6 +26,10 @@ const taskRepository = vi.hoisted(() => ({
 vi.mock('../database/repositories', () => ({
   ProjectRepository: { findById: vi.fn() },
   TaskRepository: taskRepository,
+  MobilePreviewDeviceUsageRepository: {
+    listAll: vi.fn(async () => []),
+    recordUsage: vi.fn(async () => undefined),
+  },
 }));
 vi.mock('./run-command-service', () => ({
   runCommandService: { getRunStatus: vi.fn() },
@@ -1896,5 +1900,95 @@ describe('mobile preview service', () => {
     createService({ lifecycle: { onBeforeQuit } });
 
     expect(onBeforeQuit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('listDeviceAssignments', () => {
+  function createAssignmentService(
+    deviceUsageStore: Parameters<
+      typeof createMobilePreviewService
+    >[0]['deviceUsageStore'],
+  ) {
+    const adapter = {
+      listDevices: async () => [],
+      startStream: async () => {
+        throw new Error('not used');
+      },
+      sendInput: async () => {},
+      openDeeplink: async () => {},
+      setTextSize: async () => {},
+      setColorScheme: async () => {},
+      rotate: async () => {},
+    } as never;
+
+    return createMobilePreviewService({
+      adapters: { ios: adapter, android: adapter },
+      emitter: {
+        sendToWebContents: () => {},
+        sendToAllWindows: () => {},
+      },
+      validateTaskCanStart: async () => undefined,
+      deviceUsageStore,
+    });
+  }
+
+  it('reports persisted usage as an inactive association', async () => {
+    const service = createAssignmentService({
+      list: async () => [
+        {
+          platform: 'ios',
+          deviceId: 'device-1',
+          taskId: 'task-1',
+          lastUsedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      record: async () => {},
+    });
+
+    await expect(service.listDeviceAssignments()).resolves.toEqual([
+      {
+        platform: 'ios',
+        deviceId: 'device-1',
+        taskId: 'task-1',
+        isActive: false,
+        status: null,
+        lastUsedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('drops rows whose platform this build does not understand', async () => {
+    const service = createAssignmentService({
+      list: async () => [
+        {
+          platform: 'web' as never,
+          deviceId: 'device-1',
+          taskId: 'task-1',
+          lastUsedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      record: async () => {},
+    });
+
+    await expect(service.listDeviceAssignments()).resolves.toEqual([]);
+  });
+
+  it('degrades to an empty list when persistence fails', async () => {
+    const logger = { error: vi.fn() };
+    const service = createMobilePreviewService({
+      adapters: { ios: {} as never, android: {} as never },
+      emitter: { sendToWebContents: () => {}, sendToAllWindows: () => {} },
+      validateTaskCanStart: async () => undefined,
+      logger,
+      deviceUsageStore: {
+        list: async () => {
+          throw new Error('db offline');
+        },
+        record: async () => {},
+      },
+    });
+
+    await expect(service.listDeviceAssignments()).resolves.toEqual([]);
+    expect(logger.error).toHaveBeenCalled();
   });
 });

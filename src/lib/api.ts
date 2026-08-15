@@ -130,6 +130,7 @@ import type {
   MobilePreviewAttachSessionParams,
   MobilePreviewDetachSessionParams,
   MobilePreviewDevice,
+  MobilePreviewDeviceAssignment,
   MobilePreviewExpoLaunchParams,
   MobilePreviewExpoLaunchResult,
   MobilePreviewForwardPortParams,
@@ -1461,6 +1462,7 @@ export interface Api {
     listSessions: (
       params: MobilePreviewListSessionsParams,
     ) => Promise<MobilePreviewSession[]>;
+    listDeviceAssignments: () => Promise<MobilePreviewDeviceAssignment[]>;
     getAndroidToolStatus: () => Promise<MobilePreviewAndroidToolStatus>;
     listAndroidDeviceProfiles: () => Promise<
       MobilePreviewAndroidDeviceProfile[]
@@ -2653,6 +2655,7 @@ export const api: Api = hasWindowApi
       mobilePreview: {
         listDevices: async () => [],
         listSessions: async () => [],
+        listDeviceAssignments: async () => [],
         getAndroidToolStatus: async () => ({
           hostArch: 'unknown',
           sdkRoot: null,

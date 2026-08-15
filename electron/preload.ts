@@ -1056,6 +1056,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('mobilePreview:listDevices', platform),
     listSessions: (params: MobilePreviewListSessionsParams) =>
       ipcRenderer.invoke('mobilePreview:listSessions', params),
+    listDeviceAssignments: () =>
+      ipcRenderer.invoke('mobilePreview:listDeviceAssignments'),
     getAndroidToolStatus: () =>
       ipcRenderer.invoke('mobilePreview:getAndroidToolStatus'),
     listAndroidDeviceProfiles: () =>

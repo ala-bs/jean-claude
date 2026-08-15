@@ -190,7 +190,7 @@ async function run({
   iosBuildCoordinator?: PreviewIosBuildCoordinator;
   options?: Partial<typeof baseOptions>;
 }) {
-  await runWorkspaceSetup({
+  return runWorkspaceSetup({
     facts: { ...baseFacts, ...facts },
     port,
     coordinator,
@@ -199,6 +199,38 @@ async function run({
     options: { ...baseOptions, ...options },
   });
 }
+
+describe('runWorkspaceSetup stop reasons', () => {
+  it('reports the gate that ended each pass', async () => {
+    const cases: Array<[Partial<RunWorkspaceSetupFacts>, string]> = [
+      [{ needsAppSelection: true }, 'needs-app-selection'],
+      [{ deviceReady: false }, 'device-not-ready'],
+      // An unrun deps command reads as `undefined`, not 'completed', so the
+      // very first Start of a session is consumed by the dependency install.
+      [{ dependenciesInstallStatusValue: undefined }, 'dependencies-install-pending'],
+      [{ dependenciesInstallStatusValue: 'running' }, 'dependencies-install-pending'],
+      [{ dependenciesInstallStatusValue: 'errored' }, 'dependencies-install-errored'],
+    ];
+
+    for (const [facts, expected] of cases) {
+      const { port } = createRecordingPort();
+      const { coordinator } = createFakeCoordinator();
+      await expect(run({ facts, port, coordinator })).resolves.toBe(expected);
+    }
+  });
+
+  it('reaches the end of the saga once dependencies are installed', async () => {
+    const { port } = createRecordingPort();
+    const { coordinator } = createFakeCoordinator();
+    await expect(
+      run({
+        facts: { dependenciesInstallStatusValue: 'completed' },
+        port,
+        coordinator,
+      }),
+    ).resolves.not.toBe('dependencies-install-pending');
+  });
+});
 
 describe('runWorkspaceSetup', () => {
   it('does nothing when the app is not selected', async () => {

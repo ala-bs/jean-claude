@@ -67,6 +67,31 @@ export function useMobilePreviewDevices(
   });
 }
 
+export const MOBILE_PREVIEW_DEVICE_ASSIGNMENTS_QUERY_KEY = [
+  'mobile-preview-device-assignments',
+] as const;
+
+/**
+ * Device -> task associations across every task.
+ *
+ * Unlike `useMobilePreviewSession`, this is deliberately not scoped to a single
+ * task: the device rail needs to show that a device belongs to some *other*
+ * task. Refetched on an interval because sessions can start and stop from any
+ * task's pane, not just this one.
+ */
+export function useMobilePreviewDeviceAssignments({
+  enabled = true,
+  refetchIntervalMs = 5000,
+}: { enabled?: boolean; refetchIntervalMs?: number } = {}) {
+  return useQuery({
+    queryKey: MOBILE_PREVIEW_DEVICE_ASSIGNMENTS_QUERY_KEY,
+    queryFn: () => api.mobilePreview.listDeviceAssignments(),
+    enabled,
+    refetchInterval: enabled ? refetchIntervalMs : false,
+    staleTime: 1000,
+  });
+}
+
 export function useReactNativeDevTools({
   metroPort,
   panel = 'console',
