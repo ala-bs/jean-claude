@@ -179,6 +179,7 @@ import {
 } from './utils-setup-step-actions';
 import { runWorkspaceSetup } from './utils-run-workspace-setup';
 import { getDeviceCornerRadiusRatio } from './utils-device-frame';
+import { waitForDevToolsReattach } from './utils-devtools-reattach';
 import { getMobilePreviewStandaloneLayoutClasses } from '@/features/mobile-preview/utils-mobile-preview-standalone-layout';
 import { useMobilePreviewAutoStart } from '@/features/mobile-preview/use-mobile-preview-auto-start';
 import { useMobilePreviewExpoLaunch } from '@/features/mobile-preview/use-mobile-preview-expo-launch';
@@ -258,6 +259,7 @@ export function MobilePreviewPane({
   const devToolsShouldShowRef = useRef(false);
   const devToolsOpenRequestRef = useRef(0);
   const devToolsTargetMenuOpenRef = useRef(false);
+  const devToolsReattachRequestRef = useRef(0);
   const [activeConsoleCommandId, setActiveConsoleCommandId] = useState<
     string | null
   >(null);
@@ -483,6 +485,53 @@ export function MobilePreviewPane({
     enabled: isDevServerRunning || activeTab === 'devtools',
     pollUntilTargetMs: 5000,
   });
+  // Probing Metro directly (instead of through the query) keeps the cache — and
+  // therefore the embedded view's URL — untouched while we wait. Every resolve
+  // mints a new launchId, so going through the query would tear down and reload
+  // the DevTools view on every single poll.
+  const probeDevToolsTargetIds = useCallback(async () => {
+    const result = await api.mobilePreview.resolveReactNativeDevTools({
+      metroPort: effectiveDevServerPort,
+      panel: 'console',
+    });
+    return (result.targets ?? []).map((target) => target.id);
+  }, [effectiveDevServerPort]);
+  const refetchDevTools = reactNativeDevTools.refetch;
+  // Restarting the app kills its Hermes CDP target, so the embedded DevTools
+  // view is left attached to a dead session. Wait (the app needs time to boot
+  // and re-register with Metro), then refetch exactly once: the fresh launchId
+  // in the resolved URL is what makes the embedded view reload.
+  const reattachDevToolsAfterRestart = useCallback(
+    async (previousTargetIds: string[]) => {
+      const requestId = devToolsReattachRequestRef.current + 1;
+      devToolsReattachRequestRef.current = requestId;
+      const isCancelled = () =>
+        devToolsReattachRequestRef.current !== requestId;
+      const status = await waitForDevToolsReattach({
+        previousTargetIds,
+        pollTargetIds: probeDevToolsTargetIds,
+        isCancelled,
+      });
+      if (status === 'cancelled') return;
+      // Refetch on timeout too: Metro can reuse a target id for the relaunched
+      // app, in which case the wait "fails" even though DevTools must reload.
+      await refetchDevTools();
+      if (status === 'timeout' && !isCancelled()) {
+        setInputNotice(
+          'App restarted but no new DevTools target appeared. Use Refresh in the DevTools tab.',
+        );
+      }
+    },
+    [probeDevToolsTargetIds, refetchDevTools],
+  );
+  // Unmount, or switching device/platform, must abandon an in-flight wait —
+  // otherwise it would reload the *next* device's DevTools view.
+  useEffect(
+    () => () => {
+      devToolsReattachRequestRef.current += 1;
+    },
+    [platform, deviceId],
+  );
   useEffect(() => {
     const targets = reactNativeDevTools.data?.targets ?? [];
     if (targets.length === 0) {
@@ -1685,6 +1734,11 @@ export function MobilePreviewPane({
     void (async () => {
       setIsRestartingAndroidApp(true);
       try {
+        // Snapshot live targets before the app dies, so "a target id we have
+        // not seen" really means the relaunched app.
+        const targetIdsBeforeRestart = await probeDevToolsTargetIds().catch(
+          () => [],
+        );
         const result = await api.mobilePreview.restartAndroidApp({
           projectId,
           taskId,
@@ -1692,6 +1746,7 @@ export function MobilePreviewPane({
           deviceId,
         });
         showActionNotice(`${result.packageName} restarted`);
+        void reattachDevToolsAfterRestart(targetIdsBeforeRestart);
       } catch (error) {
         setInputNotice(formatError(error) ?? 'Failed to restart Android app');
       } finally {
@@ -1705,6 +1760,10 @@ export function MobilePreviewPane({
     void (async () => {
       setIsRestartingIosApp(true);
       try {
+        // Snapshot live targets before the app dies (see Android handler).
+        const targetIdsBeforeRestart = await probeDevToolsTargetIds().catch(
+          () => [],
+        );
         const result = await api.mobilePreview.restartIosApp({
           projectId,
           taskId,
@@ -1712,6 +1771,7 @@ export function MobilePreviewPane({
           deviceId,
         });
         showActionNotice(`${result.bundleId} restarted`);
+        void reattachDevToolsAfterRestart(targetIdsBeforeRestart);
       } catch (error) {
         setInputNotice(formatError(error) ?? 'Failed to restart iOS app');
       } finally {
