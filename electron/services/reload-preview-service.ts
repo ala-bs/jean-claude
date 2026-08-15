@@ -681,6 +681,44 @@ export async function launchReloadedPreview(params: {
   );
 }
 
+/**
+ * Hands the preview over to a freshly built replacement process.
+ *
+ * Ordering is load-bearing for persisted renderer state. All ~21 zustand
+ * `persist` stores (feed pins, Azure board config, UI settings) live in
+ * localStorage, which Chromium buffers in memory and commits to its LevelDB
+ * store asynchronously. The replacement reads that LevelDB while booting — and
+ * `launchPreview` only resolves once it has *finished* booting — so any flush
+ * performed around `exitCurrentApp` is already too late: the new process read
+ * the old bytes. Worse, the outgoing process then dies via `app.exit(0)`, which
+ * skips graceful renderer teardown entirely, so the buffered writes are simply
+ * dropped. That is why config loss was intermittent — it turned on whether a
+ * background commit happened to land before the reload.
+ *
+ * So we flush *first*, before the replacement is even spawned.
+ *
+ * `flushStorage` (`session.flushStorageData()`) returns `void` and does not
+ * await the commit — it posts the work to Chromium's storage sequence — hence
+ * the short settle delay afterwards. Best-effort by nature: a flush failure is
+ * reported and the handoff continues, since the alternative is stranding the
+ * user with no running app.
+ *
+ * Known residual gaps, deliberately not addressed here:
+ *
+ * - The outgoing renderer stays alive until `exitCurrentApp`, so anything the
+ *   user changes *during* the rebuild is buffered after our flush and still
+ *   dies with `app.exit(0)`. This covers the common flow (change something,
+ *   then hit Reload), not that tail.
+ * - Both processes share one `userData` dir during the overlap: the
+ *   single-instance lock is released, but Chromium's LocalStorage LevelDB LOCK
+ *   is not. If the replacement cannot open the locked DB it may come up with an
+ *   empty store — which no amount of flushing fixes. The renderer-side boot
+ *   warning in `src/lib/debug-local-storage.ts` is what will confirm or rule
+ *   that out.
+ */
+/** Empirical, not derived: `flushStorageData()` reports no completion. */
+export const RELOAD_PREVIEW_FLUSH_SETTLE_MS = 250;
+
 export async function orchestrateReloadedPreview(params: {
   cwd: string;
   timeoutMs: number;
@@ -688,11 +726,26 @@ export async function orchestrateReloadedPreview(params: {
   reacquireSingleInstanceLock: () => boolean;
   launchPreview?: typeof launchReloadedPreview;
   exitCurrentApp: () => void;
+  flushStorage?: () => void;
+  onFlushError?: (error: unknown) => void;
+  flushSettleMs?: number;
+  waitForFlush?: (durationMs: number) => Promise<void>;
   lockRecoveryIntervalMs?: number;
   lockRecoveryMaxAttempts?: number;
   waitForLockRecovery?: (durationMs: number) => Promise<void>;
 }): Promise<void> {
   const launchPreview = params.launchPreview ?? launchReloadedPreview;
+
+  if (params.flushStorage) {
+    try {
+      params.flushStorage();
+      await (params.waitForFlush ?? wait)(
+        params.flushSettleMs ?? RELOAD_PREVIEW_FLUSH_SETTLE_MS,
+      );
+    } catch (error) {
+      params.onFlushError?.(error);
+    }
+  }
 
   params.releaseSingleInstanceLock();
   try {

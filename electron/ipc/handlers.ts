@@ -14,6 +14,7 @@ import {
   dialog,
   ipcMain,
   Notification,
+  session,
   shell,
 } from 'electron';
 
@@ -7356,6 +7357,16 @@ export function registerIpcHandlers() {
         timeoutMs: 30_000,
         releaseSingleInstanceLock: () => app.releaseSingleInstanceLock(),
         reacquireSingleInstanceLock: () => app.requestSingleInstanceLock(),
+        // Commit buffered localStorage (every persisted zustand store) before
+        // the replacement boots and reads it. Best-effort: see the ordering
+        // note on orchestrateReloadedPreview.
+        flushStorage: () => session.defaultSession.flushStorageData(),
+        onFlushError: (error) => {
+          dbg.ipc(
+            'app:reloadPreview — failed to flush storage before handoff: %s',
+            error instanceof Error ? error.message : String(error),
+          );
+        },
         exitCurrentApp: () => {
           exitCurrentPreviewAfterReload({
             notifyRestarting: () => {
