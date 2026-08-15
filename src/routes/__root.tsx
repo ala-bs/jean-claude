@@ -20,7 +20,10 @@ import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-m
 import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { OverlayHost } from '@/layout/ui-overlay-host';
-import { pruneOrphanedDiffReviewState } from '@/stores/diff-review';
+import {
+  pruneOrphanedDiffReviewState,
+  pruneStalePrReviewState,
+} from '@/stores/diff-review';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
@@ -407,6 +410,10 @@ function PipelinesOverlayContainer() {
 /** Clean up persisted store data for tasks that no longer exist or are completed */
 function useCleanupNonActiveTasks() {
   useEffect(() => {
+    // PR review state expires by age and has no bearing on the task list, so
+    // it must not sit behind the fetch below (or its empty-list bail-out).
+    pruneStalePrReviewState();
+
     void api.tasks.findAll().then((tasks) => {
       // Never prune from an empty list: a transient failure would wipe every
       // persisted per-task store (drafts, comments, review state).

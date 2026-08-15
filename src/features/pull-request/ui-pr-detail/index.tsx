@@ -14,7 +14,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DiffFileTree,
   normalizeAzureChangeType,
+  ReviewProgress,
 } from '@/features/common/ui-file-diff';
+import {
+  diffFileSignature,
+  prReviewScopeId,
+  useDiffReview,
+} from '@/stores/diff-review';
 import {
   containsAzureDevOpsMention,
   type MentionDisplayNames,
@@ -551,6 +557,75 @@ export function PrDetail({
     }));
   }, [files]);
 
+  /**
+   * Fingerprint of each file's current diff, so a file marked reviewed that
+   * changed afterwards (force-push, new commit) surfaces as "changed since
+   * reviewed" instead of staying green. Only the open file carries a content
+   * hash — that's the only content we have loaded.
+   */
+  const prRevision = useMemo(
+    // Sorted so a provider reshuffling the commit list can't read as a change.
+    // Any push adds or rewrites a sha, which is the signal we want: it marks
+    // every reviewed file as needing another look. That is deliberately
+    // conservative — the PR moved, so the previous pass is no longer proof.
+    () =>
+      commits
+        .map((commit) => commit.commitId)
+        .sort()
+        .join(','),
+    [commits],
+  );
+  const diffSignatures = useMemo(() => {
+    const map = new Map<string, string>();
+    // Until the commit list lands we can't tell one revision of the PR from
+    // another, so record nothing rather than a signature that's about to move.
+    if (!prRevision) return map;
+    for (const file of diffFiles) {
+      map.set(
+        file.path,
+        diffFileSignature({
+          ...file,
+          revision: prRevision,
+          // Only the open file has content loaded, and only once it has
+          // settled — hashing the empty placeholder would go stale on arrival.
+          content:
+            file.path === selectedFile && !isHeadLoading
+              ? headContent
+              : undefined,
+        }),
+      );
+    }
+    return map;
+  }, [diffFiles, selectedFile, headContent, isHeadLoading, prRevision]);
+  const reviewScopeId = useMemo(
+    () => prReviewScopeId({ projectId: stateProjectId, prId }),
+    [stateProjectId, prId],
+  );
+  const {
+    reviewed,
+    stale,
+    treatment,
+    setReviewed,
+    cycleTreatment,
+  } = useDiffReview(reviewScopeId, diffSignatures);
+  /**
+   * Marking a file before the commit list lands would store a blank signature,
+   * which can never be compared and so would exempt that file from staleness
+   * for good. Withhold the checkboxes for that (brief) window instead.
+   */
+  const canReview = Boolean(prRevision);
+  const reviewedCount = useMemo(
+    () =>
+      diffFiles.filter(
+        (file) => reviewed.has(file.path) && !stale.has(file.path),
+      ).length,
+    [diffFiles, reviewed, stale],
+  );
+  const staleCount = useMemo(
+    () => diffFiles.filter((file) => stale.has(file.path)).length,
+    [diffFiles, stale],
+  );
+
   const commentStatusCountByFile = useMemo(() => {
     return getCommentStatusCountByPrFile({ files, threads });
   }, [files, threads]);
@@ -854,27 +929,48 @@ export function PrDetail({
                   <Loader2 className="text-ink-3 h-5 w-5 animate-spin" />
                 </div>
               ) : (
-                <DiffFileTree
-                  files={diffFiles}
-                  selectedPath={selectedFile}
-                  onSelectFile={setSelectedFile}
-                  commentStatusCountByFile={
-                    activeCommentMode === 'task'
-                      ? undefined
-                      : commentStatusCountByFile
-                  }
-                  commentCountByFile={
-                    activeCommentMode === 'task'
-                      ? taskReviewCommentCountByFile
-                      : undefined
-                  }
-                  draftCountByFile={
-                    activeCommentMode === 'task'
-                      ? taskReviewDraftCountByFile
-                      : draftCountByFile
-                  }
-                  llmThreadCountByFile={prReviewChatCountByFile}
-                />
+                <>
+                  {canReview && diffFiles.length > 0 && (
+                    <div className="shrink-0">
+                      <ReviewProgress
+                        reviewedCount={reviewedCount}
+                        staleCount={staleCount}
+                        totalCount={diffFiles.length}
+                        treatment={treatment}
+                        onCycleTreatment={cycleTreatment}
+                      />
+                    </div>
+                  )}
+                  {/* stickyFolders delegates scrolling to this wrapper */}
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <DiffFileTree
+                      files={diffFiles}
+                      selectedPath={selectedFile}
+                      onSelectFile={setSelectedFile}
+                      commentStatusCountByFile={
+                        activeCommentMode === 'task'
+                          ? undefined
+                          : commentStatusCountByFile
+                      }
+                      commentCountByFile={
+                        activeCommentMode === 'task'
+                          ? taskReviewCommentCountByFile
+                          : undefined
+                      }
+                      draftCountByFile={
+                        activeCommentMode === 'task'
+                          ? taskReviewDraftCountByFile
+                          : draftCountByFile
+                      }
+                      llmThreadCountByFile={prReviewChatCountByFile}
+                      reviewedPaths={canReview ? reviewed : undefined}
+                      stalePaths={canReview ? stale : undefined}
+                      onToggleReviewed={canReview ? setReviewed : undefined}
+                      reviewedTreatment={treatment}
+                      stickyFolders
+                    />
+                  </div>
+                </>
               )}
               {/* Resize handle */}
               <div

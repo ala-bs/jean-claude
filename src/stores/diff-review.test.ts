@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   diffFileSignature,
   isStaleSignature,
+  PR_REVIEW_MAX_AGE_MS,
+  prReviewScopeId,
   useDiffReviewStore,
 } from './diff-review';
 
@@ -138,5 +140,85 @@ describe('diff review store', () => {
 
     expect(reviewedOf(TASK)['a.ts']).toBeDefined();
     expect(reviewedOf('gone')['b.ts']).toBeUndefined();
+  });
+
+  it('keeps pull request review state when pruning tasks', () => {
+    const store = useDiffReviewStore.getState();
+    const scope = prReviewScopeId({ projectId: 'proj-1', prId: 42 });
+    store.setReviewed(scope, [{ path: 'a.ts', signature: 'v1' }], true, 10);
+
+    store.pruneTasks(new Set([TASK]));
+
+    expect(reviewedOf(scope)['a.ts']).toBeDefined();
+  });
+
+  it('expires pull request review state that has gone untouched', () => {
+    const store = useDiffReviewStore.getState();
+    const old = prReviewScopeId({ projectId: 'proj-1', prId: 1 });
+    const recent = prReviewScopeId({ projectId: 'proj-1', prId: 2 });
+    const now = 1_000_000_000_000;
+    store.setReviewed(
+      old,
+      [{ path: 'a.ts', signature: 'v1' }],
+      true,
+      now - PR_REVIEW_MAX_AGE_MS - 1,
+    );
+    store.setReviewed(recent, [{ path: 'b.ts', signature: 'v1' }], true, now);
+
+    store.prunePrScopes(now - PR_REVIEW_MAX_AGE_MS);
+
+    expect(reviewedOf(old)['a.ts']).toBeUndefined();
+    expect(reviewedOf(recent)['b.ts']).toBeDefined();
+  });
+
+  it('keeps a pull request scope that has no reviewed files left', () => {
+    const store = useDiffReviewStore.getState();
+    const scope = prReviewScopeId({ projectId: 'proj-1', prId: 1 });
+    store.setReviewed(scope, [{ path: 'a.ts', signature: 'v1' }], true, 10);
+    store.setReviewed(scope, [{ path: 'a.ts', signature: 'v1' }], false, 20);
+    store.setTabs(scope, ['a.ts']);
+
+    store.prunePrScopes(Number.MAX_SAFE_INTEGER);
+
+    expect(useDiffReviewStore.getState().tabsByTask[scope]).toEqual(['a.ts']);
+  });
+
+  it('keeps pull request tabs and groups when pruning tasks', () => {
+    const store = useDiffReviewStore.getState();
+    const scope = prReviewScopeId({ projectId: 'proj-1', prId: 7 });
+    store.setTabs(scope, ['a.ts']);
+    store.setGroups(scope, [{ id: 'g1', label: 'G', paths: ['a.ts'] }]);
+
+    store.pruneTasks(new Set([TASK]));
+
+    const state = useDiffReviewStore.getState();
+    expect(state.tabsByTask[scope]).toEqual(['a.ts']);
+    expect(state.groupsByTask[scope]).toHaveLength(1);
+  });
+
+  it('detects a new pull request revision as a change', () => {
+    const before = diffFileSignature({ status: 'edit', revision: 'sha1' });
+    const after = diffFileSignature({
+      status: 'edit',
+      revision: 'sha1,sha2',
+    });
+
+    expect(before).not.toEqual(after);
+    expect(isStaleSignature(before, after)).toBe(true);
+  });
+
+  it('leaves signatures without a revision unchanged', () => {
+    expect(diffFileSignature({ status: 'modified', additions: 1 })).toBe(
+      's:modified:1:0',
+    );
+  });
+
+  it('leaves task review state alone when expiring pull requests', () => {
+    const store = useDiffReviewStore.getState();
+    store.setReviewed(TASK, [{ path: 'a.ts', signature: 'v1' }], true, 1);
+
+    store.prunePrScopes(Number.MAX_SAFE_INTEGER);
+
+    expect(reviewedOf(TASK)['a.ts']).toBeDefined();
   });
 });

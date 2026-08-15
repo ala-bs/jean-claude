@@ -704,13 +704,20 @@ function buildTree(files: DiffFile[]): TreeNode[] {
   const folderMap = new Map<string, TreeNode>();
 
   for (const file of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
-    const parts = file.path.split('/');
+    // Pull request paths are repo-absolute ("/src/a.ts"); worktree paths are
+    // relative ("src/a.ts"). Split off any leading slash and put it back on the
+    // first segment, so folder paths stay a true prefix of their files' paths
+    // instead of producing an empty root segment that matches nothing.
+    const rooted = file.path.startsWith('/');
+    const parts = (rooted ? file.path.slice(1) : file.path).split('/');
     let currentLevel = root;
     let currentPath = '';
 
     for (let index = 0; index < parts.length - 1; index++) {
       const part = parts[index];
-      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      currentPath = currentPath
+        ? `${currentPath}/${part}`
+        : `${rooted ? '/' : ''}${part}`;
       let folder = folderMap.get(currentPath);
       if (!folder) {
         folder = { name: part, path: currentPath, type: 'folder', children: [] };

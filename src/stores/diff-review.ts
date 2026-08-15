@@ -31,13 +31,23 @@ export function diffFileSignature({
   additions = 0,
   deletions = 0,
   content,
+  revision,
 }: {
   status: string;
   additions?: number;
   deletions?: number;
   content?: string | null;
+  /**
+   * Opaque marker for the revision the diff was read at. Pull request changes
+   * carry no line counts, so `status` alone almost never moves — without this,
+   * a file reviewed from the tree could never be detected as changed. Callers
+   * with real diff stats (worktree diffs) can omit it.
+   */
+  revision?: string;
 }) {
-  const stats = `s:${status}:${additions}:${deletions}`;
+  const stats =
+    `s:${status}:${additions}:${deletions}` +
+    (revision ? `:r:${hashContent(revision)}` : '');
   return content == null ? stats : `${stats}#c:${hashContent(content)}`;
 }
 
@@ -63,6 +73,23 @@ export function isStaleSignature(stored: string, current: string) {
   return false;
 }
 
+/**
+ * Review state is keyed by an opaque scope id. Tasks use their task id; pull
+ * requests use this prefixed key so the two never collide and so PR scopes are
+ * skipped by task pruning (a PR is not a task, it would be wiped otherwise).
+ */
+export const PR_REVIEW_SCOPE_PREFIX = 'pr:';
+
+export function prReviewScopeId({
+  projectId,
+  prId,
+}: {
+  projectId: string;
+  prId: number;
+}) {
+  return `${PR_REVIEW_SCOPE_PREFIX}${projectId}:${prId}`;
+}
+
 const EMPTY_PATHS: string[] = [];
 const EMPTY_GROUPS: DiffTabGroup[] = [];
 const EMPTY_REVIEWED: Record<string, ReviewedFileRecord> = {};
@@ -86,7 +113,15 @@ interface DiffReviewState {
   setGroups: (taskId: string, groups: DiffTabGroup[]) => void;
   setTreatment: (treatment: ReviewedTreatment) => void;
   pruneTasks: (activeTaskIds: Set<string>) => void;
+  prunePrScopes: (cutoff: number) => void;
 }
+
+/**
+ * PR review state has no lifecycle signal to hang cleanup on — a merged PR is
+ * still fetchable and a reviewer may come back to it — so it expires by age
+ * instead: a PR untouched for this long drops out of storage.
+ */
+export const PR_REVIEW_MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
 
 export const useDiffReviewStore = create<DiffReviewState>()(
   persist(
@@ -124,14 +159,43 @@ export const useDiffReviewStore = create<DiffReviewState>()(
         set((state) => {
           const keep = <T,>(record: Record<string, T>) =>
             Object.fromEntries(
-              Object.entries(record).filter(([taskId]) =>
-                activeTaskIds.has(taskId),
+              Object.entries(record).filter(
+                ([scopeId]) =>
+                  scopeId.startsWith(PR_REVIEW_SCOPE_PREFIX) ||
+                  activeTaskIds.has(scopeId),
               ),
             );
           return {
             reviewedByTask: keep(state.reviewedByTask),
             tabsByTask: keep(state.tabsByTask),
             groupsByTask: keep(state.groupsByTask),
+          };
+        }),
+
+      prunePrScopes: (cutoff) =>
+        set((state) => {
+          const expired = new Set(
+            Object.entries(state.reviewedByTask)
+              .filter(([scopeId]) => scopeId.startsWith(PR_REVIEW_SCOPE_PREFIX))
+              .filter(([, records]) => {
+                const times = Object.values(records).map((r) => r.reviewedAt);
+                // No reviewed files means no timestamp to age out on. Leave it
+                // alone rather than reading "empty" as "ancient" — the scope's
+                // tabs and groups hang off the same key.
+                if (times.length === 0) return false;
+                return Math.max(...times) < cutoff;
+              })
+              .map(([scopeId]) => scopeId),
+          );
+          if (expired.size === 0) return state;
+          const drop = <T,>(record: Record<string, T>) =>
+            Object.fromEntries(
+              Object.entries(record).filter(([scopeId]) => !expired.has(scopeId)),
+            );
+          return {
+            reviewedByTask: drop(state.reviewedByTask),
+            tabsByTask: drop(state.tabsByTask),
+            groupsByTask: drop(state.groupsByTask),
           };
         }),
     }),
@@ -163,6 +227,9 @@ export function useDiffReview(
     if (!signatures) return out;
     for (const [path, record] of Object.entries(records)) {
       const current = signatures.get(path);
+      // An empty stored signature means the diff wasn't known when the file was
+      // marked; there's nothing to compare against, so don't cry "changed".
+      if (!record.signature) continue;
       if (current && isStaleSignature(record.signature, current)) out.add(path);
     }
     return out;
@@ -285,4 +352,9 @@ export function useDiffTabs(taskId: string) {
 
 export function pruneOrphanedDiffReviewState(activeTaskIds: Set<string>) {
   useDiffReviewStore.getState().pruneTasks(activeTaskIds);
+}
+
+/** Drop review state for pull requests untouched for {@link PR_REVIEW_MAX_AGE_MS}. */
+export function pruneStalePrReviewState(now = Date.now()) {
+  useDiffReviewStore.getState().prunePrScopes(now - PR_REVIEW_MAX_AGE_MS);
 }

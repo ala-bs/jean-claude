@@ -254,3 +254,75 @@ describe('DiffFileTree sticky folders', () => {
     });
   });
 });
+
+describe('repo-absolute paths', () => {
+  function renderReview(paths: string[], reviewed: string[] = []) {
+    const container = document.createElement('div');
+    container.innerHTML = renderToStaticMarkup(
+      <DiffFileTree
+        files={paths.map((path) => ({ path, status: 'modified' as const }))}
+        selectedPath={null}
+        onSelectFile={() => undefined}
+        reviewedPaths={new Set(reviewed)}
+        onToggleReviewed={() => undefined}
+      />,
+    );
+    return container;
+  }
+
+  /**
+   * Folder rows label their checkbox with the files it covers, which pins the
+   * folder->files mapping directly rather than inferring it from counter text.
+   */
+  function folderCoverage(container: HTMLElement) {
+    return [...container.querySelectorAll('[role="checkbox"][title]')]
+      .map((node) => node.getAttribute('title'))
+      .filter((title): title is string => Boolean(title?.startsWith('Mark all')));
+  }
+
+  it('maps a folder to the files beneath it for leading-slash paths', () => {
+    const container = renderReview(['/src/one.ts', '/src/two.ts']);
+    expect(folderCoverage(container)).toEqual(['Mark all 2 files reviewed']);
+    expect(container.textContent).toContain('0/2');
+  });
+
+  it('reflects reviewed files in the folder counter', () => {
+    const text = renderReview(
+      ['/src/one.ts', '/src/two.ts'],
+      ['/src/one.ts'],
+    ).textContent;
+    expect(text).toContain('1/2');
+  });
+
+  it('scopes counters to their own folder across sibling roots', () => {
+    const container = renderReview([
+      '/src/one.ts',
+      '/src/two.ts',
+      '/docs/readme.md',
+    ]);
+    // Exactly two folder rows — no nameless root wrapper covering all three.
+    expect(folderCoverage(container).sort()).toEqual([
+      'Mark all 1 files reviewed',
+      'Mark all 2 files reviewed',
+    ]);
+  });
+
+  it('renders a root-level file with no folder row', () => {
+    const container = renderReview(['/README.md']);
+    expect(folderCoverage(container)).toEqual([]);
+    expect(container.textContent).toContain('README.md');
+  });
+
+  it('still counts relative worktree paths', () => {
+    const container = renderReview(['src/one.ts', 'src/two.ts']);
+    expect(folderCoverage(container)).toEqual(['Mark all 2 files reviewed']);
+  });
+
+  it('keeps rooted and relative trees from sharing a folder row', () => {
+    const container = renderReview(['/src/one.ts', 'src/two.ts']);
+    expect(folderCoverage(container).sort()).toEqual([
+      'Mark all 1 files reviewed',
+      'Mark all 1 files reviewed',
+    ]);
+  });
+});
