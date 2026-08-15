@@ -4912,7 +4912,15 @@ export function registerIpcHandlers() {
     if (!isValidTeamsJoinUrl(url)) {
       throw new Error('Invalid Teams meeting URL');
     }
-    await shell.openExternal(url);
+    try {
+      await shell.openExternal(url);
+    } catch (error) {
+      // The Teams desktop app may not be installed, in which case there is no
+      // handler registered for msteams://. Fall back to the web URL so the
+      // user can still join the meeting.
+      if (!url.startsWith('msteams://')) throw error;
+      await shell.openExternal(`https://${url.slice('msteams://'.length)}`);
+    }
   });
 
   ipcMain.handle('calendar:listUpcomingMeetings', async () => {

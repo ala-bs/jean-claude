@@ -51,6 +51,8 @@ export default defineConfig({
       'src/features/pull-request/**/*.test.tsx',
       'src/features/task/**/*.test.ts',
       'src/features/task/**/*.test.tsx',
+      'src/features/calendar/**/*.test.ts',
+      'src/features/calendar/**/*.test.tsx',
       'src/features/feed/**/*.test.tsx',
       'src/features/work-item/ui-azure-board-overlay/**/*.test.tsx',
       'src/features/work-item/ui-work-item-board/**/*.test.ts',
