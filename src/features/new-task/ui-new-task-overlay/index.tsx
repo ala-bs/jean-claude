@@ -67,6 +67,10 @@ import {
 } from '@/stores/new-task-draft';
 import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import {
+  deleteAttachmentFiles,
+  findMissingAttachmentPaths,
+} from '@/lib/prompt-attachment-cleanup';
+import {
   KeyboardLayerProvider,
   useKeyboardLayer,
 } from '@/common/context/keyboard-bindings';
@@ -1499,9 +1503,17 @@ export function NewTaskOverlay({
     ).trim();
     if (!content) return;
 
+    // Notes carry only the prompt text, so any attachments are discarded here
+    // and their temp files would otherwise leak.
+    const draftState = useNewTaskDraftStore.getState().drafts[draftKey];
+
     try {
       await createNoteMutation.mutateAsync({ content });
       clearDraft();
+      void deleteAttachmentFiles({
+        projectPath: draftState?.projectPath,
+        files: draftState?.files,
+      });
       setTimeout(() => {
         promptInputRef.current?.focus();
       }, 50);
@@ -1540,8 +1552,16 @@ export function NewTaskOverlay({
       },
     });
 
+    // Built from the selected work items, not the draft's attachments, so any
+    // attached files are discarded and their temp copies must be reclaimed.
+    const discardedDraft = useNewTaskDraftStore.getState().drafts[draftKey];
+
     void triggerAnimation();
     clearDraft();
+    void deleteAttachmentFiles({
+      projectPath: discardedDraft?.projectPath,
+      files: discardedDraft?.files,
+    });
     onClose();
 
     void createVerificationNoteMutation
@@ -1565,6 +1585,7 @@ export function NewTaskOverlay({
     addRunningJob,
     createVerificationNoteMutation,
     clearDraft,
+    draftKey,
     onClose,
     triggerAnimation,
     markJobSucceeded,
@@ -1658,21 +1679,63 @@ export function NewTaskOverlay({
 
   const handleFileAttach = useCallback(
     (file: PromptFilePart) => {
+      const projectPath = selectedProject?.path;
       updateDraft((prev) => ({
         files: [...(prev?.files ?? []), file],
+        // Recorded so a discarded draft can reclaim these temp files.
+        ...(projectPath ? { projectPath } : {}),
       }));
     },
-    [updateDraft],
+    [updateDraft, selectedProject?.path],
   );
 
   const handleFileRemove = useCallback(
     (index: number) => {
+      // Read the entry from current store state before updating, so the
+      // updater stays side-effect free.
+      const removed =
+        useNewTaskDraftStore.getState().drafts[draftKey]?.files?.[index];
+
       updateDraft((prev) => ({
         files: (prev?.files ?? []).filter((_, i) => i !== index),
       }));
+
+      // Unsent attachment — reclaim its temp file. The main process refuses
+      // paths outside the managed tmp dir, so original user files are safe.
+      void deleteAttachmentFiles({
+        projectPath: selectedProject?.path ?? null,
+        files: removed ? [removed] : [],
+      });
     },
-    [updateDraft],
+    [updateDraft, selectedProject?.path, draftKey],
   );
+
+  // Persisted attachments can point at files deleted since the draft was
+  // written; drop those pills quietly when the overlay opens.
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      const files =
+        useNewTaskDraftStore.getState().drafts[draftKey]?.files ?? [];
+      if (files.length === 0) return;
+
+      const missing = await findMissingAttachmentPaths(files);
+      if (cancelled || missing.size === 0) return;
+
+      // Functional update: files attached while the checks were in flight
+      // must survive.
+      updateDraft((prev) => ({
+        files: (prev?.files ?? []).filter(
+          (file) => !missing.has(file.filePath),
+        ),
+      }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draftKey, updateDraft]);
 
   const searchInputValue = draft?.workItemsFilter ?? '';
 

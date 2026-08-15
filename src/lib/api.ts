@@ -1268,6 +1268,14 @@ export interface Api {
       projectPath: string,
       sourcePath: string,
     ) => Promise<{ filePath: string; filename: string }>;
+    /**
+     * Deletes an attachment file. Only succeeds for files inside
+     * `<projectPath>/.jean-claude/tmp`; externally referenced paths are refused.
+     */
+    deleteAttachmentFile: (
+      projectPath: string,
+      filePath: string,
+    ) => Promise<boolean>;
     getPathForFile: (file: File) => string | null;
   };
   settings: {
@@ -2541,6 +2549,7 @@ export const api: Api = hasWindowApi
         listProjectFiles: async () => [],
         writeAttachmentFile: async () => '',
         copyAttachmentFile: async () => ({ filePath: '', filename: '' }),
+        deleteAttachmentFile: async () => false,
         getPathForFile: () => null,
       },
       settings: {

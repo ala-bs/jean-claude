@@ -5,6 +5,8 @@ import * as path from 'path';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
+import { deleteAttachmentFile } from './attachment-file-deletion';
+
 
 import {
   app,
@@ -4530,6 +4532,21 @@ export function registerIpcHandlers() {
         await fs.writeFile(filePath, content, 'utf-8');
       }
       return filePath;
+    },
+  );
+
+  // Deletes an attachment file, but ONLY when it lives inside the managed
+  // `<projectPath>/.jean-claude/tmp` directory. Attachments can also reference
+  // a user's original file path (see processAttachmentFile's oversized-file
+  // branch), and those must never be removed.
+  ipcMain.handle(
+    'fs:deleteAttachmentFile',
+    async (_, projectPath: string, filePath: string) => {
+      const deleted = await deleteAttachmentFile({ projectPath, filePath });
+      if (!deleted) {
+        dbg.ipc('fs:deleteAttachmentFile refused or failed: %s', filePath);
+      }
+      return deleted;
     },
   );
 

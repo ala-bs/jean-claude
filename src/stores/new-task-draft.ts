@@ -14,6 +14,7 @@ import type {
   ModelPreference,
   ThinkingEffort,
 } from '@shared/types';
+import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 
 export type InputMode = 'search' | 'prompt';
 export type SearchStep = 'select' | 'compose';
@@ -39,8 +40,10 @@ export interface NewTaskDraft {
   prompt: string;
   /** Image attachments for the initial prompt (transient, not persisted) */
   images: PromptImagePart[];
-  /** File attachments for the initial prompt (transient, not persisted) */
+  /** File attachments for the initial prompt (persisted as paths) */
   files: PromptFilePart[];
+  /** Project path owning `files`, so discarded drafts can reclaim them. */
+  projectPath: string;
   // Shared state
   createWorktree: boolean;
   useExistingBranch: boolean;
@@ -73,7 +76,7 @@ interface NewTaskDraftState {
 
 const useStore = create<NewTaskDraftState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       selectedProjectId: null,
       drafts: {},
 
@@ -101,17 +104,30 @@ const useStore = create<NewTaskDraftState>()(
           return { drafts: rest };
         }),
 
-      clearAllDrafts: () => set({ drafts: {}, selectedProjectId: null }),
+      // Only reachable from the explicit "discard draft" action, so the
+      // attachments here were never sent and their temp files are unreferenced.
+      clearAllDrafts: () => {
+        const discarded = Object.values(get().drafts);
+        set({ drafts: {}, selectedProjectId: null });
+
+        for (const draft of discarded) {
+          void deleteAttachmentFiles({
+            projectPath: draft?.projectPath,
+            files: draft?.files,
+          });
+        }
+      },
     }),
     {
       name: 'new-task-draft',
       partialize: (state) => ({
         ...state,
-        // Strip images (large base64 blobs) from persisted drafts
+        // Strip images (large base64 blobs) from persisted drafts. File
+        // attachments are just {filePath, filename} and are kept.
         drafts: Object.fromEntries(
           Object.entries(state.drafts).map(([key, draft]) => [
             key,
-            draft ? { ...draft, images: undefined, files: undefined } : draft,
+            draft ? { ...draft, images: undefined } : draft,
           ]),
         ),
       }),

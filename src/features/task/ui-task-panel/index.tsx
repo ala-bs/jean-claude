@@ -179,7 +179,11 @@ import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useSkills } from '@/hooks/use-skills';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import { useTaskPrompt } from '@/stores/task-prompts';
+import {
+  reconcileTaskPromptFiles,
+  useTaskPrompt,
+} from '@/stores/task-prompts';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 import { useToastStore } from '@/stores/toasts';
 import { useWorkItemById } from '@/hooks/use-work-items';
@@ -3644,9 +3648,23 @@ const TaskInputFooter = memo(function TaskInputFooter({
 
   const {
     text: promptDraft,
+    files: promptDraftFiles,
     setDraft: setPromptDraft,
+    setFiles: setPromptDraftFiles,
     clearDraft: clearPromptDraft,
   } = useTaskPrompt(taskId);
+
+  const handlePromptFilesChange = useCallback(
+    (update: (prev: PromptFilePart[]) => PromptFilePart[]) =>
+      setPromptDraftFiles(update, projectRoot),
+    [setPromptDraftFiles, projectRoot],
+  );
+
+  // Persisted attachments can point at files that were deleted since; drop
+  // those pills quietly on mount.
+  useEffect(() => {
+    void reconcileTaskPromptFiles(taskId);
+  }, [taskId]);
 
   // Review comments — pending pills in composer
   const reviewComments = useReviewComments(taskId);
@@ -3979,6 +3997,8 @@ const TaskInputFooter = memo(function TaskInputFooter({
             projectRoot={projectRoot}
             value={promptDraft}
             onValueChange={setPromptDraft}
+            files={promptDraftFiles}
+            onFilesChange={handlePromptFilesChange}
             supportsImages={backendSupportsImages(activeStep?.agentBackend)}
             projectId={task?.projectId}
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}
@@ -4041,6 +4061,8 @@ const TaskInputFooter = memo(function TaskInputFooter({
             projectRoot={projectRoot}
             value={promptDraft}
             onValueChange={setPromptDraft}
+            files={promptDraftFiles}
+            onFilesChange={handlePromptFilesChange}
             supportsImages={backendSupportsImages(activeStep?.agentBackend)}
             projectId={task?.projectId}
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}

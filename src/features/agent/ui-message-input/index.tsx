@@ -20,6 +20,7 @@ import {
   PromptTextareaRef,
 } from '@/features/common/ui-prompt-textarea';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
+import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 import { Button } from '@/common/ui/button';
 import type { ComponentSize } from '@/common/ui/styles';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
@@ -50,6 +51,8 @@ export function MessageInput({
   projectRoot = null,
   value: externalValue,
   onValueChange,
+  files: externalFiles,
+  onFilesChange,
   supportsImages = true,
   projectId,
   getCompletionContextBeforePrompt,
@@ -78,6 +81,17 @@ export function MessageInput({
   projectRoot?: string | null;
   value?: string;
   onValueChange?: (value: string) => void;
+  /** Controlled file attachments. Falls back to internal state when omitted. */
+  files?: PromptFilePart[];
+  /**
+   * Applies a functional update to the controlled file list. Takes an updater
+   * rather than the resolved array so concurrent attaches (a multi-file drop
+   * resolves one file at a time) each build on fresh state instead of on a
+   * stale render snapshot. Only used when `files` is provided.
+   */
+  onFilesChange?: (
+    update: (prev: PromptFilePart[]) => PromptFilePart[],
+  ) => void;
   /** Whether the current backend supports image attachments (default: true) */
   supportsImages?: boolean;
   /** Project ID for FIM completion context */
@@ -133,15 +147,63 @@ export function MessageInput({
     setImages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  const [attachedFiles, setAttachedFiles] = useState<PromptFilePart[]>([]);
+  const [internalFiles, setInternalFiles] = useState<PromptFilePart[]>([]);
+  const areFilesControlled = externalFiles !== undefined;
+  const attachedFiles = areFilesControlled ? externalFiles : internalFiles;
 
-  const handleFileAttach = useCallback((file: PromptFilePart) => {
-    setAttachedFiles((prev) => [...prev, file]);
-  }, []);
+  // Mirrors the uncontrolled list so successive updates within one tick build
+  // on the latest value without a setState updater (which React may invoke
+  // twice, and which must stay free of side effects).
+  const internalFilesRef = useRef<PromptFilePart[]>(internalFiles);
 
-  const handleFileRemove = useCallback((index: number) => {
-    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  const updateFiles = useCallback(
+    (next: (prev: PromptFilePart[]) => PromptFilePart[]) => {
+      if (areFilesControlled) {
+        // The owner resolves this against its own fresh state.
+        onFilesChange?.(next);
+        return;
+      }
+      const resolved = next(internalFilesRef.current);
+      internalFilesRef.current = resolved;
+      setInternalFiles(resolved);
+    },
+    [areFilesControlled, onFilesChange],
+  );
+
+  const handleFileAttach = useCallback(
+    (file: PromptFilePart) => {
+      updateFiles((prev) => [...prev, file]);
+    },
+    [updateFiles],
+  );
+
+  // Receives the entry removed by the updater below. A ref rather than a local
+  // so the callback stays free of captured mutable state.
+  const removedFileRef = useRef<PromptFilePart | undefined>(undefined);
+
+  const handleFileRemove = useCallback(
+    (index: number) => {
+      // Capture the removed entry from inside the updater so it comes from the
+      // same list the filter ran against — two removals in one tick must not
+      // both resolve to the first file. Both paths apply the updater
+      // synchronously, so the ref is set by the time we read it.
+      removedFileRef.current = undefined;
+      updateFiles((prev) => {
+        removedFileRef.current = prev[index];
+        return prev.filter((_, i) => i !== index);
+      });
+      const removed = removedFileRef.current;
+
+      // The attachment was never sent, so its temp file is unreferenced. The
+      // main process only deletes files inside the managed tmp dir, so files
+      // attached by their original path are left alone.
+      void deleteAttachmentFiles({
+        projectPath: projectRoot,
+        files: removed ? [removed] : [],
+      });
+    },
+    [projectRoot, updateFiles],
+  );
 
   const handleSubmit = useCallback(async () => {
     if (forceDisabled || isSubmitting) return;
@@ -191,7 +253,9 @@ export function MessageInput({
 
     setValue('');
     setImages([]);
-    setAttachedFiles([]);
+    // Files are cleared but intentionally NOT deleted from disk: the sent
+    // message references their paths and the agent may still read them.
+    updateFiles(() => []);
     // Reset textarea height
     textareaRef.current?.resetHeight();
   }, [
@@ -208,6 +272,7 @@ export function MessageInput({
     snippetVariableContext,
     featureMap,
     isSubmitting,
+    updateFiles,
   ]);
 
   const handleEnterKey = useCallback(

@@ -944,6 +944,8 @@ contextBridge.exposeInMainWorld('api', {
       ),
     copyAttachmentFile: (projectPath: string, sourcePath: string) =>
       ipcRenderer.invoke('fs:copyAttachmentFile', projectPath, sourcePath),
+    deleteAttachmentFile: (projectPath: string, filePath: string) =>
+      ipcRenderer.invoke('fs:deleteAttachmentFile', projectPath, filePath),
     getPathForFile: (file: File) => webUtils.getPathForFile(file) || null,
   },
   shell: {
