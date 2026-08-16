@@ -709,6 +709,8 @@ const STRIP_LEADING_KEYWORDS = new Set([
   'done',
   'fi',
   'esac',
+  // fish block terminator (`for f in ...; echo $f; end`), also zsh `foreach`.
+  'end',
   'time',
   'function',
   '!',

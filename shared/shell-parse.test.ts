@@ -116,6 +116,12 @@ describe('parseCompoundCommand flow control and assignments', () => {
     ]);
   });
 
+  it('strips the fish-style `end` block terminator', () => {
+    expect(
+      parseCompoundCommand('for f in a.md b.md; echo -n "$f "; grep -c foo $f; end'),
+    ).toEqual(['echo -n "$f "', 'grep -c foo $f']);
+  });
+
   it('strips if/while/until scaffolding', () => {
     expect(parseCompoundCommand('if [ -f a ]; then rm a; else ls; fi')).toEqual(
       ['[ -f a ]', 'rm a', 'ls'],
