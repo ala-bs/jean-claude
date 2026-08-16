@@ -1579,6 +1579,11 @@ contextBridge.exposeInMainWorld('api', {
     cleanup: (params: { paths: string[]; contentHash: string }) =>
       ipcRenderer.invoke('claudeProjects:cleanup', params),
   },
+  unusedWorktrees: {
+    scan: () => ipcRenderer.invoke('unusedWorktrees:scan'),
+    cleanup: (params: { paths: string[] }) =>
+      ipcRenderer.invoke('unusedWorktrees:cleanup', params),
+  },
   completion: {
     complete: (params: {
       prompt: string;

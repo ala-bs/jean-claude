@@ -241,7 +241,7 @@ export function generateWorktreeName(prompt: string): string {
 /**
  * Gets the base worktrees directory for Jean-Claude: ~/.jean-claude/worktrees/
  */
-function getWorktreesBaseDir(): string {
+export function getWorktreesBaseDir(): string {
   const homeDir = app.getPath('home');
   return path.join(homeDir, '.jean-claude', 'worktrees');
 }

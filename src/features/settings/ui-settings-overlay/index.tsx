@@ -42,6 +42,7 @@ import {
   UsageDisplaySettings,
   WorkActivitySettings,
 } from '@/features/settings/ui-general-settings';
+import { SettingsErrorBoundary } from '@/features/settings/ui-settings-error-boundary';
 import {
   BackendConfigSettings,
   OpenCodeProcessModeSettings,
@@ -532,7 +533,7 @@ const SETTINGS_SEARCH_ALIASES: Record<string, string> = {
   'global:general:eurecia': 'timesheet tenant custom axes login authentication',
   'global:general:usage': 'rate limit status title bar tokens usage',
   'global:general:agent-memory': 'agent memory evidence extraction learning beta',
-  'global:general:maintenance': 'cleanup gitignore housekeeping cache',
+  'global:general:maintenance': 'cleanup gitignore housekeeping cache worktrees unused prune disk space',
   'global:coding-agents:presets': 'models defaults thinking effort agent model presets',
   'global:coding-agents:process-mode': 'opencode server managed process lifecycle',
   'global:coding-agents:prompt-preface': 'instructions system prompt preface custom prompt',
@@ -671,7 +672,12 @@ function GlobalContent({ selection }: { selection: ActiveSelection }) {
   if (fillHeight) {
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        <GlobalContentInner selection={selection} />
+        <SettingsErrorBoundary
+          key={`${selection.sectionId}:${selection.subId ?? ''}`}
+          sectionLabel={`${selection.sectionId}:${selection.subId ?? ''}`}
+        >
+          <GlobalContentInner selection={selection} />
+        </SettingsErrorBoundary>
       </div>
     );
   }
@@ -712,7 +718,12 @@ function GlobalContent({ selection }: { selection: ActiveSelection }) {
           </div>
         </div>
       )}
-      <GlobalContentInner selection={selection} />
+      <SettingsErrorBoundary
+        key={`${selection.sectionId}:${selection.subId ?? ''}`}
+        sectionLabel={`${selection.sectionId}:${selection.subId ?? ''}`}
+      >
+        <GlobalContentInner selection={selection} />
+      </SettingsErrorBoundary>
     </div>
   );
 }
@@ -832,8 +843,39 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
     case 'debug':
       return <DebugDatabase />;
     default:
-      return null;
+      // Previously `return null`, which rendered a silently blank panel and
+      // made mis-routed selections impossible to diagnose.
+      return (
+        <EmptySettingsContent
+          reason="No settings content is registered for this selection."
+          detail={`sectionId=${selection.sectionId} subId=${selection.subId ?? '—'}`}
+        />
+      );
   }
+}
+
+/**
+ * Visible fallback for settings selections that map to no content. Renders the
+ * offending selection so a blank panel is always self-explanatory.
+ */
+function EmptySettingsContent({
+  reason,
+  detail,
+}: {
+  reason: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-4">
+      <div className="text-sm font-semibold text-amber-200">
+        Nothing to show here
+      </div>
+      <div className="text-ink-2 mt-1 text-sm">{reason}</div>
+      <pre className="text-ink-3 mt-2 rounded bg-black/30 p-2 font-mono text-xs">
+        {detail}
+      </pre>
+    </div>
+  );
 }
 
 /* ── Resolve project menu item from section selection ── */
@@ -1302,17 +1344,32 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                   fillHeight ? { padding: 0 } : { padding: '28px 40px 44px' }
                 }
               >
-                {displayedActiveTab === 'global' && (
-                  <GlobalContent selection={globalSelection} />
-                )}
-
-                {displayedActiveTab === 'project' && resolvedProject && (
-                  <ProjectContent
-                    projectId={resolvedProject.id}
-                    selection={projectSelection}
-                    onProjectDeleted={handleProjectDeleted}
-                  />
-                )}
+                <SettingsErrorBoundary
+                  key={
+                    displayedActiveTab === 'global'
+                      ? `global:${globalSelection.sectionId}:${globalSelection.subId ?? ''}`
+                      : `project:${projectSelection.sectionId}:${projectSelection.subId ?? ''}`
+                  }
+                  sectionLabel={
+                    displayedActiveTab === 'global'
+                      ? `global:${globalSelection.sectionId}:${globalSelection.subId ?? ''}`
+                      : `project:${projectSelection.sectionId}:${projectSelection.subId ?? ''}`
+                  }
+                >
+                  {displayedActiveTab === 'global' ? (
+                    <GlobalContent selection={globalSelection} />
+                  ) : resolvedProject ? (
+                    <ProjectContent
+                      projectId={resolvedProject.id}
+                      selection={projectSelection}
+                      onProjectDeleted={handleProjectDeleted}
+                    />
+                  ) : (
+                    <div className="text-ink-3 text-sm">
+                      No project selected.
+                    </div>
+                  )}
+                </SettingsErrorBoundary>
               </div>
             </div>
 

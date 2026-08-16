@@ -311,6 +311,10 @@ import {
   updateProjectCommitIgnore,
 } from '../services/worktree-service';
 import {
+  cleanupUnusedWorktrees,
+  scanUnusedWorktrees,
+} from '../services/unused-worktree-service';
+import {
   cleanupProjectLogoPath,
   cleanupProjectLogos,
   deleteGeneratedProjectLogo,
@@ -6212,6 +6216,39 @@ export function registerIpcHandlers() {
 
       dbg.ipc('claudeProjects:cleanup removed %d projects', removedCount);
       return { success: true, removedCount };
+    },
+  );
+
+  // Unused worktrees maintenance
+  ipcMain.handle('unusedWorktrees:scan', async () => {
+    dbg.ipc('unusedWorktrees:scan');
+    const result = await scanUnusedWorktrees();
+    dbg.ipc(
+      'unusedWorktrees:scan found %d unused of %d worktrees',
+      result.worktrees.length,
+      result.totalWorktrees,
+    );
+    return result;
+  });
+
+  ipcMain.handle(
+    'unusedWorktrees:cleanup',
+    async (_, params: { paths: string[] }) => {
+      dbg.ipc('unusedWorktrees:cleanup paths=%o', params.paths);
+      const { updatedTasks, ...result } = await cleanupUnusedWorktrees(
+        params.paths,
+      );
+      // Cleanup clears worktreePath/branchName on completed tasks; without an
+      // emit the renderer keeps serving a task row pointing at a deleted
+      // directory until the app restarts.
+      for (const task of updatedTasks) emitTaskUpsert(task);
+      dbg.ipc(
+        'unusedWorktrees:cleanup removed=%d failed=%d skipped=%d',
+        result.removed.length,
+        result.failed.length,
+        result.skipped.length,
+      );
+      return result;
     },
   );
 

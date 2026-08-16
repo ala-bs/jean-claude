@@ -39,6 +39,7 @@ import {
   type DesktopNotificationStatus,
   type NonExistentClaudeProject,
 } from '@/lib/api';
+import { UnusedWorktreesCleanup } from '@/features/settings/ui-unused-worktrees-cleanup';
 import {
   AVAILABLE_BACKENDS,
   getModelsForBackend,
@@ -414,6 +415,8 @@ export function MaintenanceSettings() {
   return (
     <div className="space-y-8">
       <RawMessageCleanupSettings />
+      <div className="border-line-soft border-t" />
+      <UnusedWorktreesCleanup />
       <div className="border-line-soft border-t" />
       <ClaudeProjectsCleanup />
       <GlobalGitignoreSetup />

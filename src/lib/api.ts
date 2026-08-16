@@ -6,6 +6,10 @@ import type {
 } from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
+  CleanupUnusedWorktreesResult,
+  UnusedWorktreeScanResult,
+} from '@shared/worktree-cleanup-types';
+import type {
   AgentMemoryCaptureWarning,
   AgentMemoryDashboard,
   AgentMemoryExtractionRun,
@@ -324,6 +328,12 @@ export interface ClaudeProjectsCleanupResult {
   removedCount: number;
   error?: string;
 }
+
+export type {
+  CleanupUnusedWorktreesResult,
+  UnusedWorktreeInfo,
+  UnusedWorktreeScanResult,
+} from '@shared/worktree-cleanup-types';
 
 export interface AzureDevOpsOrganization {
   id: string;
@@ -1839,6 +1849,12 @@ export interface Api {
       contentHash: string;
     }) => Promise<ClaudeProjectsCleanupResult>;
   };
+  unusedWorktrees: {
+    scan: () => Promise<UnusedWorktreeScanResult>;
+    cleanup: (params: {
+      paths: string[];
+    }) => Promise<CleanupUnusedWorktreesResult>;
+  };
   completion: {
     complete: (params: {
       prompt: string;
@@ -2989,6 +3005,21 @@ export const api: Api = hasWindowApi
           success: false,
           removedCount: 0,
           error: 'API not available',
+        }),
+      },
+      unusedWorktrees: {
+        scan: async () => ({
+          worktrees: [],
+          scannedProjects: 0,
+          totalWorktrees: 0,
+          activeWorktrees: 0,
+          errors: [],
+        }),
+        cleanup: async () => ({
+          removed: [],
+          skipped: [],
+          failed: [],
+          freedBytes: 0,
         }),
       },
       completion: {
