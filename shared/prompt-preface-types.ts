@@ -20,7 +20,7 @@ export interface PromptPrefaceEntry {
 export type PromptPrefaceSetting = PromptPrefaceEntry[];
 
 export interface ProjectPromptPrefaceSetting {
-  mode: 'inherit' | 'override';
+  mode: 'inherit' | 'extend' | 'override';
   entries: PromptPrefaceEntry[];
 }
 
@@ -124,7 +124,9 @@ export function isProjectPromptPrefaceSetting(
 ): value is ProjectPromptPrefaceSetting {
   if (!isRecord(value)) return false;
   return (
-    (value.mode === 'inherit' || value.mode === 'override') &&
+    (value.mode === 'inherit' ||
+      value.mode === 'extend' ||
+      value.mode === 'override') &&
     isPromptPrefaceSetting(value.entries)
   );
 }
@@ -140,10 +142,8 @@ export function normalizePromptPrefaceSetting(
 
 export function normalizeProjectPromptPrefaceSetting({
   value,
-  globalEntries = [],
 }: {
   value: unknown;
-  globalEntries?: PromptPrefaceEntry[];
 }): ProjectPromptPrefaceSetting | null {
   if (isProjectPromptPrefaceSetting(value)) return value;
   if (!isLegacyPromptPrefaceSetting(value) || !isRecord(value)) return null;
@@ -161,18 +161,27 @@ export function normalizeProjectPromptPrefaceSetting({
   }
 
   return {
-    mode: 'override',
-    entries: [
-      ...(mode === 'extend'
-        ? globalEntries.map((globalEntry) => ({
-            ...globalEntry,
-            placement: value.placement,
-            frequency: value.frequency,
-          }))
-        : []),
-      ...(entry ? [entry] : []),
-    ],
+    mode,
+    entries: entry ? [entry] : [],
   };
+}
+
+/**
+ * Resolves the effective preface list for a project:
+ * - inherit: global only
+ * - extend: global entries first, then the project's own entries
+ * - override: project only
+ */
+export function mergePromptPreface({
+  global,
+  project,
+}: {
+  global: PromptPrefaceSetting;
+  project: ProjectPromptPrefaceSetting;
+}): PromptPrefaceSetting {
+  if (project.mode === 'override') return project.entries;
+  if (project.mode === 'extend') return [...global, ...project.entries];
+  return global;
 }
 
 export function applyPromptPrefaceToParts({

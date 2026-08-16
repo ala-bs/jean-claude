@@ -307,21 +307,18 @@ export async function seedDefaultProjectPermissions(
 
 export async function readProjectPromptPreface(
   rootDir: string,
-  globalEntries: import('@shared/prompt-preface-types').PromptPrefaceEntry[] = [],
 ): Promise<import('@shared/prompt-preface-types').ProjectPromptPrefaceSetting> {
   const settings = await readSettings(rootDir);
   if (!settings.promptPreface) return DEFAULT_PROJECT_PROMPT_PREFACE_SETTING;
   return (
     normalizeProjectPromptPrefaceSetting({
       value: settings.promptPreface,
-      globalEntries,
     }) ?? DEFAULT_PROJECT_PROMPT_PREFACE_SETTING
   );
 }
 
 export async function migrateProjectPromptPreface(
   rootDir: string,
-  globalEntries: import('@shared/prompt-preface-types').PromptPrefaceEntry[] = [],
 ): Promise<boolean> {
   return withProjectWriteLock(rootDir, async () => {
     const settings = await readSettings(rootDir);
@@ -330,7 +327,6 @@ export async function migrateProjectPromptPreface(
 
     const normalized = normalizeProjectPromptPrefaceSetting({
       value: settings.promptPreface,
-      globalEntries,
     });
     if (!normalized) return false;
 

@@ -4,10 +4,6 @@ import { Kysely, Migrator, sql, SqliteDialect } from 'kysely';
 import { app } from 'electron';
 import Database from 'better-sqlite3';
 
-import type { PromptPrefaceEntry } from '@shared/prompt-preface-types';
-
-
-
 import { dbg } from '../lib/debug';
 
 import { Database as DatabaseSchema } from './schema';
@@ -155,34 +151,16 @@ async function ensureRunCommandEnvVarsSchema(): Promise<void> {
   }
 }
 
-async function getGlobalPromptPrefaceEntries(): Promise<PromptPrefaceEntry[]> {
-  const row = await db
-    .selectFrom('settings')
-    .select('value')
-    .where('key', '=', 'promptPreface')
-    .executeTakeFirst();
-
-  if (!row) return [];
-
-  try {
-    const parsed = JSON.parse(row.value);
-    return Array.isArray(parsed) ? (parsed as PromptPrefaceEntry[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 async function migrateProjectPromptPrefaces(): Promise<void> {
   const { migrateProjectPromptPreface } = await import(
     '../services/permission-settings-service'
   );
-  const globalEntries = await getGlobalPromptPrefaceEntries();
   const projects = await db.selectFrom('projects').select('path').execute();
   let migratedCount = 0;
 
   for (const project of projects) {
     try {
-      if (await migrateProjectPromptPreface(project.path, globalEntries)) {
+      if (await migrateProjectPromptPreface(project.path)) {
         migratedCount += 1;
       }
     } catch (error) {
