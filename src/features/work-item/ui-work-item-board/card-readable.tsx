@@ -132,7 +132,7 @@ export function WorkItemBoardReadableCard({
         )}
         {outOfSprintLabel && (
           <span
-            className="max-w-24 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase"
+            className="max-w-24 truncate rounded border-status-run/20 bg-status-run/10 border px-1.5 py-px text-[9px] font-semibold tracking-wide text-status-run uppercase"
             title={`Iteration: ${workItem.fields.iterationPath}`}
           >
             {outOfSprintLabel}

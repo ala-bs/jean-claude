@@ -38,7 +38,7 @@ export function DeletePrWorkspaceDialog({
     >
       <div className="flex gap-3">
         <AlertTriangle
-          className="mt-0.5 h-5 w-5 shrink-0 text-red-300"
+          className="mt-0.5 h-5 w-5 text-status-fail shrink-0"
           aria-hidden
         />
         <div>
@@ -53,7 +53,7 @@ export function DeletePrWorkspaceDialog({
             branches, agents, and commands. This action cannot be undone.
           </p>
           {error && (
-            <p className="mt-3 text-sm text-red-300" role="alert">
+            <p className="mt-3 text-status-fail text-sm" role="alert">
               {error.message}
             </p>
           )}

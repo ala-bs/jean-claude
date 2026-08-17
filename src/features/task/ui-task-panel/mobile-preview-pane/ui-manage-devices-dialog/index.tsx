@@ -911,7 +911,7 @@ export function ManageDevicesDialog({
                             >
                               {checked ? <Check className="size-2.5" strokeWidth={3} /> : null}
                             </span>
-                            <span className={clsx('size-[7px] rounded-full', device.state === 'booted' ? 'bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.7)]' : 'bg-ink-4')} />
+                            <span className={clsx('size-[7px] rounded-full', device.state === 'booted' ? 'bg-status-run shadow-[0_0_8px_color-mix(in_srgb,var(--color-status-run)_70%,transparent)]' : 'bg-ink-4')} />
                             <span className="min-w-0">
                               <span className="text-ink-1 block truncate text-[12.5px] font-medium">{device.name}</span>
                               <span className="text-ink-4 block truncate font-mono text-[10px]">{device.osVersion ?? formatDeviceState(device.state)}</span>
@@ -955,7 +955,7 @@ export function ManageDevicesDialog({
                       <PlatformLogo platform={selectedManagedDevice.platform} />
                     </div>
                     <div className="mt-1 flex items-center gap-2">
-                      <span className={clsx('size-[7px] rounded-full', selectedManagedDevice.state === 'booted' ? 'bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.7)]' : 'bg-ink-4')} />
+                      <span className={clsx('size-[7px] rounded-full', selectedManagedDevice.state === 'booted' ? 'bg-status-run shadow-[0_0_8px_color-mix(in_srgb,var(--color-status-run)_70%,transparent)]' : 'bg-ink-4')} />
                       <span className="text-ink-4 font-mono text-[11px]">{formatDeviceState(selectedManagedDevice.state)}</span>
                     </div>
                   </div>

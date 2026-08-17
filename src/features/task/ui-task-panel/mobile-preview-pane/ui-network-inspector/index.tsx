@@ -65,7 +65,7 @@ export function NetworkFacetButton({
       <span
         className={clsx(
           'h-1.5 w-1.5 shrink-0 rounded-full',
-          failed ? 'bg-status-fail' : 'bg-emerald-300',
+          failed ? 'bg-status-fail' : 'bg-status-done',
         )}
       />
       <span className="min-w-0 flex-1 truncate text-xs">{label}</span>
@@ -103,7 +103,7 @@ export function NetworkFilterChip({
         <span
           className={clsx(
             'h-1.5 w-1.5 rounded-full',
-            tone === 'danger' ? 'bg-status-fail' : 'bg-emerald-300',
+            tone === 'danger' ? 'bg-status-fail' : 'bg-status-done',
           )}
         />
       ) : null}
@@ -536,16 +536,16 @@ export function NetworkRequestDetails({
   const timingSections: Array<[string, number, string]> = request.decrypted
     ? [
         ['DNS', 4, 'bg-ink-4'],
-        ['Connect', 12, 'bg-sky-300'],
+        ['Connect', 12, 'bg-status-azure'],
         ['TLS', tlsDuration, 'bg-cyan-300'],
-        ['Waiting (TTFB)', waitingDuration, 'bg-amber-400'],
-        ['Download', downloadDuration, 'bg-emerald-300'],
+        ['Waiting (TTFB)', waitingDuration, 'bg-status-run'],
+        ['Download', downloadDuration, 'bg-status-done'],
       ]
     : [
         ['DNS', 4, 'bg-ink-4'],
-        ['Connect', 12, 'bg-sky-300'],
-        ['Waiting (TTFB)', waitingDuration, 'bg-amber-400'],
-        ['Download', downloadDuration, 'bg-emerald-300'],
+        ['Connect', 12, 'bg-status-azure'],
+        ['Waiting (TTFB)', waitingDuration, 'bg-status-run'],
+        ['Download', downloadDuration, 'bg-status-done'],
       ];
   const rawTimingTotal =
     4 + 12 + tlsDuration + waitingDuration + downloadDuration;

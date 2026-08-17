@@ -1270,7 +1270,7 @@ function getPullRequestState(status?: AzureDevOpsPullRequestStatus):
     return {
       label: 'Draft',
       color: 'neutral',
-      className: '!bg-amber-300 !font-semibold !text-amber-950',
+      className: '!bg-status-run !text-bg-0 !font-semibold',
     };
   }
   switch (status.status) {

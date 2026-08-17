@@ -448,7 +448,7 @@ export function WorktreeActions({
               href={pullRequestUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-green-700 text-white transition-colors hover:bg-green-600"
+              className="flex h-7 w-7 shrink-0 items-center justify-center bg-status-done text-on-acc rounded transition-colors hover:brightness-95"
               title="View pull request"
               aria-label="View pull request"
             >
@@ -461,7 +461,7 @@ export function WorktreeActions({
               variant="primary"
               size="sm"
               icon={<GitPullRequest />}
-              className="shrink-0 bg-green-700 px-2 hover:bg-green-600"
+              className="bg-status-done shrink-0 px-2 hover:brightness-95"
               title={`Create pull request (${formatKeyForDisplay('cmd+shift+p')})`}
               aria-label="Create pull request"
             />
@@ -527,7 +527,7 @@ export function WorktreeActions({
             placeholder="Select branch..."
           />
           {isSelectedBranchProtected ? (
-            <div className="flex items-center gap-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 px-2 py-1.5 text-xs text-amber-300">
+            <div className="flex items-center gap-1.5 rounded-md border-status-run/40 bg-status-run/10 text-status-run border px-2 py-1.5 text-xs">
               <Shield className="h-3.5 w-3.5 shrink-0" />
               <span>This branch is protected. Direct merges are blocked.</span>
             </div>

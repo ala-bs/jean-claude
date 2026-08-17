@@ -90,7 +90,7 @@ export function RunButton({
       <Kbd
         shortcut="cmd+l"
         className={clsx(
-          isLogsPaneOpen && 'border-white/25 bg-white/10 text-white/90',
+          isLogsPaneOpen && 'border-glass-border-strong bg-glass-medium text-ink-0',
         )}
       />
     </Button>

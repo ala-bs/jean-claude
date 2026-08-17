@@ -48,7 +48,7 @@ export function ReviewProgress({
       </span>
       {staleCount > 0 && (
         <span
-          className="shrink-0 rounded-full bg-amber-500/15 px-1.5 font-mono text-[9.5px] text-amber-400"
+          className="shrink-0 bg-status-run/15 text-status-run rounded-full px-1.5 font-mono text-[9.5px]"
           title={`${staleCount} file${staleCount > 1 ? 's' : ''} changed since you reviewed ${staleCount > 1 ? 'them' : 'it'}`}
         >
           {staleCount} changed

@@ -24,7 +24,7 @@ const VOTE_STATUS_CONFIG: Record<
     label: 'Approved*',
     className: 'text-status-done',
   },
-  waiting: { label: 'Reviewing', className: 'text-blue-400' },
+  waiting: { label: 'Reviewing', className: 'text-status-azure' },
   rejected: { label: 'Rejected', className: 'text-status-fail' },
   none: { label: 'Pending', className: 'text-ink-3' },
 };

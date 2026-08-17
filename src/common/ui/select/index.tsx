@@ -292,7 +292,7 @@ export const Select = forwardRef<
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate">{selectedOption?.label}</span>
           {selectedOption?.badge && (
-            <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+            <span className="rounded-full border-status-run/20 bg-status-run/10 border px-1.5 py-px text-[9px] font-semibold tracking-wide text-status-run uppercase">
               {selectedOption.badge}
             </span>
           )}
@@ -375,7 +375,7 @@ export const Select = forwardRef<
                           {option.label}
                         </span>
                         {option.badge && (
-                          <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+                          <span className="rounded-full border-status-run/20 bg-status-run/10 border px-1.5 py-px text-[9px] font-semibold tracking-wide text-status-run uppercase">
                             {option.badge}
                           </span>
                         )}

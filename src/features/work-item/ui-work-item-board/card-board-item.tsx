@@ -143,7 +143,7 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
       )}
       {isOutOfSprint && (
         <span
-          className="max-w-28 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase"
+          className="max-w-28 truncate rounded border-status-run/20 bg-status-run/10 border px-1.5 py-px text-[9px] font-semibold tracking-wide text-status-run uppercase"
           title={`Iteration: ${workItem.fields.iterationPath}`}
         >
           {workItem.fields.iterationPath?.split(/[\\/]/).at(-1)}
@@ -223,11 +223,11 @@ export const WorkItemBoardCard = memo(function WorkItemBoardCard({
           ? 'bg-bg-1 relative gap-1.5 rounded-lg border border-transparent px-3 py-2.5'
           : 'gap-1.5 rounded border p-2',
         isExactMatch
-          ? 'border border-acc bg-acc/15 shadow-[0_0_0_2px_oklch(0.78_0.18_295_/_0.45),0_0_28px_oklch(0.78_0.18_295_/_0.35)]'
+          ? 'border border-acc bg-acc/15 shadow-[0_0_0_2px_color-mix(in_srgb,var(--color-acc)_45%,transparent),0_0_28px_color-mix(in_srgb,var(--color-acc)_35%,transparent)]'
           : isHighlighted
             ? 'border !border-acc'
             : isRelatedBug
-              ? 'border border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_oklch(0.72_0.18_25_/_0.12)]'
+              ? 'border border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-status-fail)_12%,transparent)]'
               : isEditorial
                 ? 'hover:bg-bg-2'
                 : 'hover:bg-bg-2 border-line',

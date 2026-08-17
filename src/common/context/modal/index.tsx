@@ -197,7 +197,7 @@ function ModalRenderer({
           <button
             onClick={handleClose}
             disabled={isLoading}
-            className="bg-acc text-ink-0 flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium hover:bg-blue-500 disabled:opacity-50"
+            className="bg-acc text-ink-0 flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium hover:bg-acc/80 disabled:opacity-50"
           >
             {loadingAction === 'close' && (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -251,8 +251,8 @@ function ModalRenderer({
             className={clsx(
               'text-ink-0 flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-50',
               variant === 'danger'
-                ? 'bg-red-600 hover:bg-red-500'
-                : 'bg-acc hover:bg-blue-500',
+                ? 'bg-status-fail hover:bg-status-fail/80'
+                : 'bg-acc hover:bg-acc/80',
             )}
           >
             {loadingAction === 'confirm' && (
@@ -300,8 +300,8 @@ function ModalRenderer({
         closeOnEscape={!isLoading}
       >
         <div className="flex gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500/10">
-            <AlertCircle className="h-5 w-5 text-red-400" aria-hidden />
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-status-fail/10">
+            <AlertCircle className="h-5 w-5 text-status-fail" aria-hidden />
           </div>
           <div className="text-ink-1 text-sm">{content}</div>
         </div>

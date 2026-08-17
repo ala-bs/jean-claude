@@ -547,7 +547,7 @@ export function CommandRow({
                 onChange={handlePortConflictStrategyChange}
               />
               {portOverrideValidationError && (
-                <p className="text-xs text-red-400" role="alert">
+                <p className="text-status-fail text-xs" role="alert">
                   {portOverrideValidationError}
                 </p>
               )}

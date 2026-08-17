@@ -225,11 +225,11 @@ function SubCommandBreakdown({
           >
             <span className="mt-0.5 shrink-0" title={sub.action}>
               {isAllowed ? (
-                <Check className="h-3.5 w-3.5 text-green-400" />
+                <Check className="h-3.5 w-3.5 text-status-done" />
               ) : isDenied ? (
-                <X className="h-3.5 w-3.5 text-red-400" />
+                <X className="h-3.5 w-3.5 text-status-fail" />
               ) : (
-                <TriangleAlert className="h-3.5 w-3.5 text-yellow-400" />
+                <TriangleAlert className="h-3.5 w-3.5 text-status-run" />
               )}
             </span>
             <code
@@ -243,10 +243,10 @@ function SubCommandBreakdown({
             <span
               className={`mt-0.5 min-w-0 max-w-[45%] shrink rounded px-1.5 py-0.5 text-[11px] truncate ${
                 isAllowed
-                  ? 'bg-green-400/10 text-green-300'
+                  ? 'bg-status-done/10 text-status-done'
                   : isDenied
-                    ? 'bg-red-400/10 text-red-300'
-                    : 'bg-yellow-400/10 text-yellow-300'
+                    ? 'bg-status-fail/10 text-status-fail'
+                    : 'bg-status-run/10 text-status-run'
               }`}
               title={
                 grantedPattern
@@ -790,10 +790,10 @@ export function PermissionBar({
                 <span
                   className={`rounded px-1.5 py-0.5 font-medium ${
                     request.permissionEvaluation.action === 'deny'
-                      ? 'bg-red-400/10 text-red-300'
+                      ? 'bg-status-fail/10 text-status-fail'
                       : request.permissionEvaluation.action === 'allow'
-                        ? 'bg-green-400/10 text-green-300'
-                        : 'bg-yellow-400/10 text-yellow-300'
+                        ? 'bg-status-done/10 text-status-done'
+                        : 'bg-status-run/10 text-status-run'
                   }`}
                 >
                   {request.permissionEvaluation.action}
@@ -816,7 +816,7 @@ export function PermissionBar({
               </div>
             )}
             {isRiskyCommand && (
-              <div className="mt-2 flex items-center gap-1.5 text-xs text-orange-300">
+              <div className="mt-2 flex items-center gap-1.5 text-status-run text-xs">
                 <TriangleAlert className="h-3.5 w-3.5" />
                 Destructive or privileged command. Review before granting.
               </div>

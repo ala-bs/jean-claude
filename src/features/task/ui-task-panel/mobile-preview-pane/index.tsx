@@ -2125,7 +2125,7 @@ export function MobilePreviewPane({
                           request.error ||
                             (request.status !== null && request.status >= 400)
                             ? 'bg-status-fail'
-                            : 'bg-emerald-300',
+                            : 'bg-status-done',
                         )}
                         style={{ width: `${durationWidth}%` }}
                       />

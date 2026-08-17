@@ -161,7 +161,7 @@ export function PermissionPartModal({
           )}
         </fieldset>
 
-        {error && <p className="text-xs text-red-300">{error}</p>}
+        {error && <p className="text-status-fail text-xs">{error}</p>}
 
         <div className="border-glass-border flex items-center justify-end gap-2 border-t pt-4">
           <button
@@ -173,7 +173,7 @@ export function PermissionPartModal({
           <button
             onClick={() => void handleSubmit()}
             disabled={!trimmed || isSubmitting}
-            className="bg-acc hover:bg-acc flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="bg-acc hover:bg-acc flex items-center gap-1.5 rounded px-3 py-1.5 text-on-acc text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Shield className="h-3.5 w-3.5" />
             {isSubmitting ? 'Allowing…' : 'Allow part'}

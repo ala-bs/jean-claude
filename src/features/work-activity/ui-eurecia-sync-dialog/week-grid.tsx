@@ -535,7 +535,7 @@ function EntryBlock({
         gridColumn: `span ${slots}`,
         background: `linear-gradient(90deg, color-mix(in oklch, ${color} 22%, var(--color-bg-1)), color-mix(in oklch, ${color} 13%, var(--color-bg-1)))`,
         boxShadow: selected
-          ? `inset 0 0 0 1.5px ${color}, 0 4px 14px oklch(0 0 0 / .35)`
+          ? `inset 0 0 0 1.5px ${color}, 0 4px 14px var(--color-scrim)`
           : `inset 0 0 0 1px color-mix(in oklch, ${color} 32%, transparent)`,
       }}
     >

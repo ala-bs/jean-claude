@@ -38,8 +38,8 @@ export const NativeLogsList = memo(function NativeLogsList({
           key={`${entry.timestamp}-${index}`}
           className={clsx(
             'whitespace-pre-wrap',
-            entry.stream === 'stderr' ? 'text-amber-200' : 'text-zinc-200',
-            entry.stream === 'system' && 'text-sky-200',
+            entry.stream === 'stderr' ? 'text-status-run' : 'text-ink-1',
+            entry.stream === 'system' && 'text-status-azure',
           )}
         >
           {entry.text}

@@ -33,7 +33,7 @@ export function AutoAcceptToggle({
           : 'Auto-accept all permissions for this session'
       }
       className={clsx(
-        enabled && 'text-amber-500 dark:text-amber-400',
+        enabled && 'text-status-run',
         !enabled && 'text-muted-foreground',
       )}
     />

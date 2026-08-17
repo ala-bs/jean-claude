@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Box,
+  Check,
   ChevronRight,
   Cpu,
   Diamond,

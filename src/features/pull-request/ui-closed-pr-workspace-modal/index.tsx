@@ -96,7 +96,7 @@ export function ClosedPrWorkspaceModal() {
       {!decision && loadError && (
         <div className="p-5">
           <div className="flex gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-400/10 text-red-300">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center bg-status-fail/10 text-status-fail rounded-lg">
               <AlertCircle className="h-4.5 w-4.5" aria-hidden />
             </div>
             <div>
@@ -132,7 +132,7 @@ export function ClosedPrWorkspaceModal() {
       {decision && (
         <div>
           <header className="border-glass-border flex gap-3 border-b px-5 py-4">
-            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300/15 bg-amber-300/[0.07] text-amber-200">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border-status-run/15 bg-status-run/5 text-status-run border">
               <GitPullRequestClosed className="h-4.5 w-4.5" aria-hidden />
             </div>
             <div className="min-w-0">
@@ -160,8 +160,8 @@ export function ClosedPrWorkspaceModal() {
               </div>
             </section>
 
-            <section className="flex gap-3 rounded-lg border border-red-300/10 bg-red-300/[0.025] p-3.5">
-              <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-red-300/80" aria-hidden />
+            <section className="flex gap-3 rounded-lg border-status-fail/10 bg-status-fail/5 border p-3.5">
+              <Trash2 className="mt-0.5 h-4 w-4 text-status-fail/80 shrink-0" aria-hidden />
               <div>
                 <h3 className="text-ink-1 text-sm font-medium">Delete all</h3>
                 <p className="text-ink-3 mt-1 text-xs leading-5">
@@ -172,7 +172,7 @@ export function ClosedPrWorkspaceModal() {
             </section>
 
             {resolution.error && (
-              <p className="pt-1 text-xs text-red-300" role="alert">
+              <p className="pt-1 text-status-fail text-xs" role="alert">
                 {resolution.error instanceof Error
                   ? resolution.error.message
                   : 'Failed to resolve PR workspace'}
@@ -180,10 +180,10 @@ export function ClosedPrWorkspaceModal() {
             )}
             {loadError && (
               <div
-                className="flex items-center justify-between gap-3 rounded-md border border-red-300/15 bg-red-300/[0.04] px-3 py-2"
+                className="flex items-center justify-between gap-3 rounded-md border-status-fail/15 bg-status-fail/5 border px-3 py-2"
                 role="alert"
               >
-                <span className="text-xs text-red-300">
+                <span className="text-status-fail text-xs">
                   Decision status could not be refreshed.
                 </span>
                 <Button
@@ -192,7 +192,7 @@ export function ClosedPrWorkspaceModal() {
                   size="sm"
                   loading={isFetching}
                   onClick={() => refetch()}
-                  className="text-red-200 hover:text-red-100"
+                  className="text-status-fail hover:text-status-fail/80"
                 >
                   Retry
                 </Button>

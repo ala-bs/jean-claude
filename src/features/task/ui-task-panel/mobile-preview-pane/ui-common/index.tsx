@@ -61,7 +61,7 @@ export function PreviewErrorState({ message }: { message: string }) {
 
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <div className="border-border/70 bg-bg-1/70 w-full max-w-[520px] overflow-hidden rounded-2xl border shadow-[0_22px_80px_oklch(0_0_0_/_0.32)]">
+      <div className="border-border/70 bg-bg-1/70 w-full max-w-[520px] overflow-hidden rounded-2xl border shadow-[0_22px_80px_var(--color-scrim)]">
         <div className="border-border/60 flex items-start gap-3 border-b p-4">
           <div className="bg-status-warn/15 text-status-warn mt-0.5 rounded-xl p-2">
             <AlertTriangle className="h-4 w-4" />

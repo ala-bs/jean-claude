@@ -39,7 +39,7 @@ export function ReviewCheck({
           event.preventDefault();
           onToggle(true);
         }}
-        className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-[3px] border border-amber-500/70 bg-amber-500/15 text-amber-400"
+        className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-[3px] border-status-run/70 bg-status-run/15 text-status-run border"
         style={{ width: size, height: size }}
       >
         <RotateCcw

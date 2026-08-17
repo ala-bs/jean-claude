@@ -454,9 +454,9 @@ const ACTION_GLOW: Record<PermissionAction, string> = {
 
 const ACTION_CHIP_CLASSES: Record<PermissionAction, string> = {
   allow:
-    'border-emerald-400/30 bg-emerald-400/12 shadow-[inset_0_0_0_1px_rgba(84,211,151,0.08),0_0_18px_-10px_rgba(84,211,151,0.9)]',
-  ask: 'border-amber-400/35 bg-amber-400/12 shadow-[inset_0_0_0_1px_rgba(236,177,74,0.08),0_0_18px_-10px_rgba(236,177,74,0.9)]',
-  deny: 'border-red-400/35 bg-red-400/12 shadow-[inset_0_0_0_1px_rgba(243,103,79,0.08),0_0_18px_-10px_rgba(243,103,79,0.9)]',
+    'border-status-done/30 bg-status-done/10 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-status-done)_8%,transparent),0_0_18px_-10px_color-mix(in_srgb,var(--color-status-done)_90%,transparent)]',
+  ask: 'border-status-run/35 bg-status-run/10 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-status-run)_8%,transparent),0_0_18px_-10px_color-mix(in_srgb,var(--color-status-run)_90%,transparent)]',
+  deny: 'border-status-fail/35 bg-status-fail/10 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-status-fail)_8%,transparent),0_0_18px_-10px_color-mix(in_srgb,var(--color-status-fail)_90%,transparent)]',
 };
 
 function getActionStyle(action: PermissionAction) {

@@ -377,7 +377,7 @@ function SummaryText({
     command:
       'rounded border border-cyan-700/50 bg-cyan-900/30 px-1 py-0.5 text-cyan-200',
     pattern:
-      'rounded border border-green-700/50 bg-green-900/30 px-1 py-0.5 text-green-200',
+      'rounded border-status-done/50 bg-status-done/15 text-status-done border px-1 py-0.5',
     default: 'rounded bg-bg-1 px-1 py-0.5 text-ink-1',
   };
 
@@ -589,7 +589,7 @@ function CompactDiffPreview({
       tabIndex={onClick ? 0 : undefined}
       className={clsx(
         'text-ink-1 w-full rounded bg-panel-scrim-soft p-2 text-left font-mono text-xs',
-        onClick && 'cursor-pointer hover:bg-blue-500/5',
+        onClick && 'cursor-pointer hover:bg-status-azure/5',
       )}
       title={onClick ? `Open full diff for ${filePath}` : undefined}
     >
@@ -606,8 +606,8 @@ function CompactDiffPreview({
               <tr
                 key={`${index}-${line.oldLineNumber ?? 'x'}-${line.newLineNumber ?? 'x'}-${line.content}`}
                 className={clsx(
-                  line.type === 'addition' && 'bg-green-500/20',
-                  line.type === 'deletion' && 'bg-red-500/20',
+                  line.type === 'addition' && 'bg-status-done/20',
+                  line.type === 'deletion' && 'bg-status-fail/20',
                 )}
               >
                 <td
@@ -907,7 +907,7 @@ function ToolEntry({
             {isError ? 'Error' : 'Result'}
           </div>
           {isError ? (
-            <pre className="text-ink-1 max-h-64 overflow-auto rounded bg-red-900/20 p-2 whitespace-pre-wrap">
+            <pre className="text-ink-1 max-h-64 overflow-auto rounded bg-status-fail/10 p-2 whitespace-pre-wrap">
               {formattedResult}
             </pre>
           ) : (
@@ -922,7 +922,7 @@ function ToolEntry({
       {hasResult && hasDiffView && isError && (
         <div>
           <div className="text-status-fail mb-1 font-medium">Error</div>
-          <pre className="text-ink-1 max-h-64 overflow-auto rounded bg-red-900/20 p-2 whitespace-pre-wrap">
+          <pre className="text-ink-1 max-h-64 overflow-auto rounded bg-status-fail/10 p-2 whitespace-pre-wrap">
             {formattedResult}
           </pre>
         </div>
@@ -1130,7 +1130,7 @@ export function CompactingEntry({ isComplete }: { isComplete: boolean }) {
       {/* Dot - orange/amber for compacting */}
       <div
         className={clsx(
-          'absolute top-2.5 -left-1 h-2 w-2 rounded-full bg-amber-500',
+          'absolute top-2.5 -left-1 h-2 w-2 bg-status-run rounded-full',
           !isComplete &&
             'animate-pulse shadow-[0_0_6px_theme(colors.amber.500/40)]',
         )}
@@ -1139,13 +1139,13 @@ export function CompactingEntry({ isComplete }: { isComplete: boolean }) {
         <div className="flex items-center gap-2">
           {!isComplete && (
             <Loader2
-              className="h-3 w-3 shrink-0 animate-spin text-amber-400"
+              className="h-3 w-3 shrink-0 text-status-run animate-spin"
               aria-hidden
             />
           )}
           {isComplete && (
             <PackageOpen
-              className="h-3 w-3 shrink-0 text-amber-400"
+              className="h-3 w-3 text-status-run shrink-0"
               aria-hidden
             />
           )}

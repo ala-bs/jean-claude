@@ -11,9 +11,9 @@ import type {
 
 
 const severityText: Record<LogSeverity, string> = {
-  error: 'text-red-400',
-  warning: 'text-amber-300/90',
-  success: 'text-emerald-400/90',
+  error: 'text-status-fail',
+  warning: 'text-status-run/90',
+  success: 'text-status-done/90',
   info: 'text-neutral-400',
   plain: 'text-neutral-300',
 };
@@ -52,10 +52,10 @@ function GroupRow({
           {node.title}
         </span>
         {node.severity === 'error' && (
-          <XCircle className="h-2.5 w-2.5 shrink-0 text-red-400" />
+          <XCircle className="h-2.5 w-2.5 text-status-fail shrink-0" />
         )}
         {node.severity === 'warning' && (
-          <AlertTriangle className="h-2.5 w-2.5 shrink-0 text-amber-400" />
+          <AlertTriangle className="h-2.5 w-2.5 text-status-run shrink-0" />
         )}
         {node.detail && (
           <span className="shrink-0 text-neutral-500">{node.detail}</span>
@@ -90,8 +90,8 @@ function LineRow({
     <div
       className={clsx(
         'flex',
-        isError && 'border-l-2 border-l-red-500 bg-red-500/10',
-        isWarning && 'border-l-2 border-l-amber-500/70 bg-amber-500/[0.06]',
+        isError && 'border-l-status-fail bg-status-fail/10 border-l-2',
+        isWarning && 'border-l-status-run/70 bg-status-run/5 border-l-2',
         !isError && !isWarning && 'border-l-2 border-l-transparent',
       )}
     >
@@ -111,7 +111,7 @@ function LineRow({
       <span
         className={clsx(
           'min-w-0 flex-1 pr-3 break-all whitespace-pre-wrap',
-          node.kind === 'command' && 'text-sky-300/90',
+          node.kind === 'command' && 'text-status-azure/90',
           node.kind !== 'command' && severityText[node.severity],
         )}
       >

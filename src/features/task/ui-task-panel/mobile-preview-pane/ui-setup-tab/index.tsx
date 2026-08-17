@@ -294,7 +294,7 @@ export function SetupTab({
             <span
               className={clsx(
                 'flex size-5 shrink-0 items-center justify-center rounded-full border',
-                step.status === 'ready' && 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+                step.status === 'ready' && 'border-status-done/30 bg-status-done/10 text-status-done',
                 step.status === 'running' && 'border-acc/30 bg-acc-soft text-acc-ink',
                 (step.status === 'blocked' || step.status === 'error') &&
                   'border-status-fail/30 bg-status-fail/10 text-status-fail',

@@ -94,8 +94,8 @@ export function GlobalPromptFromBackModal() {
   if (!currentPrompt || !ownsArbitration) return null;
 
   const IconComponent = hasInput ? KeyRound : AlertTriangle;
-  const iconColorClass = hasInput ? 'text-blue-500' : 'text-yellow-500';
-  const iconBgClass = hasInput ? 'bg-blue-500/20' : 'bg-yellow-500/20';
+  const iconColorClass = hasInput ? 'text-status-azure' : 'text-status-run';
+  const iconBgClass = hasInput ? 'bg-status-azure/20' : 'bg-status-run/20';
   const defaultAcceptLabel = hasInput ? 'Submit' : 'Accept';
 
   return (
@@ -158,7 +158,7 @@ export function GlobalPromptFromBackModal() {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 placeholder={currentPrompt.inputPlaceholder}
-                className="bg-bg-0 border-glass-border text-ink-0 w-full rounded-md border px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                className="bg-bg-0 border-glass-border text-ink-0 w-full rounded-md border px-3 py-2 text-sm focus:border-acc focus:ring-1 focus:ring-acc focus:outline-none"
               />
             </form>
           )}
@@ -176,7 +176,7 @@ export function GlobalPromptFromBackModal() {
           <button
             onClick={() => handleResponse(true)}
             autoFocus={!hasInput}
-            className="bg-acc text-ink-0 flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium hover:bg-blue-500"
+            className="bg-acc text-ink-0 flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium hover:bg-acc/80"
           >
             {currentPrompt.acceptLabel ?? defaultAcceptLabel}
             {!hasInput && <Kbd shortcut="cmd+enter" className="text-[9px]" />}

@@ -47,7 +47,7 @@ export function DiffReviewBar({
       </span>
       <div className="flex-1" />
       {isStale ? (
-        <span className="flex items-center gap-1.5 text-xs text-amber-400">
+        <span className="flex items-center gap-1.5 text-status-run text-xs">
           <RotateCcw className="h-3.5 w-3.5" strokeWidth={2.6} />
           Changed since you reviewed it
         </span>
@@ -68,7 +68,7 @@ export function DiffReviewBar({
         className={clsx(
           'flex h-7 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors',
           isStale
-            ? 'border-amber-500/70 bg-amber-500/15 text-amber-400'
+            ? 'border-status-run/70 bg-status-run/15 text-status-run'
             : isReviewed
               ? 'border-glass-border text-ink-2 hover:text-ink-0'
               : 'border-status-done bg-status-done-soft text-status-done',

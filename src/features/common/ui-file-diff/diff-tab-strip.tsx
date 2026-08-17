@@ -520,7 +520,7 @@ function DiffTab({
       <span className="min-w-0 truncate">{fileName(file.path)}</span>
       {isStale ? (
         <RotateCcw
-          className="h-2.5 w-2.5 shrink-0 text-amber-400"
+          className="h-2.5 w-2.5 text-status-run shrink-0"
           strokeWidth={3}
           aria-label="Changed since reviewed"
         />

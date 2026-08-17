@@ -53,7 +53,7 @@ export function DeviceRailRow({
           isLive
             ? 'bg-status-done animate-pulse shadow-[0_0_7px_var(--color-status-done)]'
             : isBooted
-              ? 'bg-emerald-300 shadow-[0_0_7px_var(--color-status-done)]'
+              ? 'bg-status-done shadow-[0_0_7px_var(--color-status-done)]'
               : 'bg-ink-4',
         )}
       />

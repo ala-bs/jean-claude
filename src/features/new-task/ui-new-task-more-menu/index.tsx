@@ -33,9 +33,9 @@ export function NewTaskMoreMenu({ projectId }: { projectId: string | null }) {
           aria-label="More actions"
           className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-[5px] px-2 py-[5px] text-xs font-medium"
           style={{
-            background: 'oklch(1 0 0 / 0.03)',
-            border: '1px solid oklch(1 0 0 / 0.07)',
-            color: 'oklch(0.78 0.01 280)',
+            background: 'var(--color-glass-subtle)',
+            border: '1px solid var(--color-glass-border)',
+            color: 'var(--color-ink-2)',
           }}
         >
           {isReloading ? (

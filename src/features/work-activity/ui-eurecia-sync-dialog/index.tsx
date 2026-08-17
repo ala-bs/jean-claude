@@ -1542,7 +1542,7 @@ export function EureciaSyncDialog({
       ariaLabel="Prepare Eurecia timesheet"
       size="xl"
       overlayClassName="z-[10001] p-2 sm:p-5"
-      panelClassName="h-[min(860px,calc(100vh-16px))] border border-line bg-[linear-gradient(180deg,oklch(0.17_0.012_275),oklch(0.125_0.01_275))] sm:h-[min(860px,calc(100vh-40px))]"
+      panelClassName="h-[min(860px,calc(100vh-16px))] border border-line bg-[linear-gradient(180deg,var(--color-bg-1),var(--color-bg-0))] sm:h-[min(860px,calc(100vh-40px))]"
       contentClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0"
       closeDisabled={isPending}
       closeDisabledReason={

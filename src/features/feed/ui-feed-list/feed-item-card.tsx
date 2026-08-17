@@ -472,7 +472,7 @@ function RailPrCiStatus({
       )}
       {ciCounts.expired > 0 && (
         <span
-          className="flex items-center gap-0.5 text-orange-400"
+          className="flex items-center text-status-run gap-0.5"
           title={`${ciCounts.expired} expired`}
         >
           <AlertTriangle className="h-2.5 w-2.5" />
@@ -1166,7 +1166,7 @@ export function FeedItemCard({
                   </span>
                   <span>{prStatusLabel}</span>
                   {prWaitingForAuthor && (
-                    <span className="flex items-center gap-0.5 text-amber-400">
+                    <span className="flex items-center text-status-run gap-0.5">
                       <Hand className="h-2.5 w-2.5" />
                       <span className="text-[9.5px]">Waiting for author</span>
                     </span>
