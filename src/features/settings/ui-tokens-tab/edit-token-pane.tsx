@@ -8,6 +8,8 @@ import { Input } from '@/common/ui/input';
 import type { Token } from '@shared/types';
 import { useGetAzureDevOpsTokenExpiration } from '@/hooks/use-azure-devops';
 import { useModal } from '@/common/context/modal';
+import { useProvidersByTokenId } from '@/hooks/use-providers';
+import { cleanIpcError } from '@/lib/ipc-error';
 
 
 
@@ -36,6 +38,12 @@ export function EditTokenPane({
   const updateToken = useUpdateToken();
   const deleteToken = useDeleteToken();
   const getExpiration = useGetAzureDevOpsTokenExpiration();
+  const { data: usedByProviders, isLoading: isLoadingUsage } =
+    useProvidersByTokenId(token.id);
+  const usageCount = usedByProviders?.length ?? 0;
+  const isInUse = usageCount > 0;
+  // Usage is unknown until the query settles, so don't offer delete yet
+  const canDelete = !isInUse && !isLoadingUsage;
 
   useEffect(() => {
     currentDraftRef.current = { label, newToken, expiresAt };
@@ -60,19 +68,27 @@ export function EditTokenPane({
   };
 
   const handleDeleteClick = () => {
+    if (!canDelete) return;
     modal.confirm({
       title: 'Delete Token',
       content: (
         <>
-          Are you sure you want to delete <strong>{token.label}</strong>? Any
-          providers using this token will be disconnected.
+          Are you sure you want to delete <strong>{token.label}</strong>? This
+          action cannot be undone.
         </>
       ),
       confirmLabel: 'Delete',
       variant: 'danger',
+      // The modal has no catch of its own: a rejection here would leave it
+      // open with no feedback, so surface the failure in the pane instead.
       onConfirm: async () => {
-        await deleteToken.mutateAsync(token.id);
-        onClose();
+        setError(null);
+        try {
+          await deleteToken.mutateAsync(token.id);
+          onClose();
+        } catch (err) {
+          setError(cleanIpcError(err));
+        }
       },
     });
   };
@@ -190,12 +206,28 @@ export function EditTokenPane({
             </div>
           )}
 
+          {isInUse && (
+            <div className="border-glass-border bg-glass-medium/40 text-ink-3 rounded-lg border px-3 py-2 text-xs">
+              Used by {usageCount} organization{usageCount > 1 ? 's' : ''}:{' '}
+              <span className="text-ink-2">
+                {usedByProviders?.map((p) => p.label).join(', ')}
+              </span>
+              . Assign another token to{' '}
+              {usageCount > 1 ? 'them' : 'it'} before deleting.
+            </div>
+          )}
+
           <div className="flex gap-2">
             <IconButton
               onClick={handleDeleteClick}
               icon={<Trash2 />}
               variant="danger"
-              tooltip="Delete token"
+              disabled={!canDelete}
+              tooltip={
+                isInUse
+                  ? `Can't delete: used by ${usageCount} organization${usageCount > 1 ? 's' : ''}`
+                  : 'Delete token'
+              }
             />
             {(hasChanges || updateToken.isPending) && (
               <span className="text-ink-3 flex flex-1 items-center text-xs">

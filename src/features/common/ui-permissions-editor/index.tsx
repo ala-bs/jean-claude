@@ -16,10 +16,16 @@ import clsx from 'clsx';
 import type React from 'react';
 
 
+import {
+  containsDigitRegex,
+  matchPermissionPattern,
+} from '@shared/permission-pattern';
 import type {
   PermissionAction,
   PermissionScope,
 } from '@shared/permission-types';
+import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
+
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
 import { Select } from '@/common/ui/select';
@@ -90,8 +96,13 @@ const TOOL_GUIDANCE: Record<
 > = {
   bash: {
     placeholder: 'git status*',
-    hint: 'Exact command or prefix with * wildcard. A specific command pattern is required.',
-    examples: ['git *', 'npm run build', 'pnpm install*', 'ls -la'],
+    hint: 'Exact command, * wildcard, or \\d digit regex. A specific command pattern is required.',
+    examples: [
+      'git *',
+      'deploy --id \\d+',
+      'deploy --id \\d{4}',
+      'pnpm install*',
+    ],
   },
   read: {
     placeholder: '/path/to/file',
@@ -240,6 +251,9 @@ function groupPermissions(scope: PermissionScope): ToolGroup[] {
   const groups: Map<string, FlatRule[]> = new Map();
 
   for (const [tool, config] of Object.entries(scope)) {
+    // Pseudo-tool owned by the "Auto-allow script edits" switch — showing it
+    // as a raw rule row would duplicate that control.
+    if (tool === SCRIPT_EDIT_TOOL) continue;
     if (!groups.has(tool)) groups.set(tool, []);
     const bucket = groups.get(tool)!;
 
@@ -278,6 +292,9 @@ function globLikeMatches(
   isBash: boolean,
 ): boolean {
   if (pattern === '*') return true;
+  if (containsDigitRegex(pattern)) {
+    return matchPermissionPattern(pattern, value, isBash);
+  }
   const regex = pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*+/g, (stars) => (isBash || stars.length > 1 ? '.*' : '[^/]*'))
@@ -289,13 +306,18 @@ function globLikeMatches(
 function materializePattern(tool: string, pattern: string): string {
   const fill = tool === 'bash' ? 'hello' : 'example';
   return pattern
+    .replace(/\\d\{(\d+)\}/g, (_, count: string) =>
+      '1'.repeat(Math.min(Number(count), 32)),
+    )
+    .replace(/\\d\+/g, '123')
+    .replace(/\\d/g, '1')
     .replace(/\*+/g, fill)
     .replace(/\?/g, 'x')
     .replace(/\{subpath\}/g, 'src/app.ts');
 }
 
 function getLiteralPrefix(pattern: string): string {
-  const wildcardIndex = pattern.search(/[?*{]/);
+  const wildcardIndex = pattern.search(/\\d|[?*{]/);
   return wildcardIndex === -1 ? pattern : pattern.slice(0, wildcardIndex);
 }
 
@@ -363,7 +385,7 @@ function buildPatternExamples(tool: string, pattern: string) {
   const generated = materializePattern(tool, trimmed);
   const samples =
     TOOL_SAMPLE_VALUES[tool] ?? TOOL_GUIDANCE[tool]?.examples ?? [];
-  const hasWildcard = /[*?{]/.test(trimmed);
+  const hasWildcard = /\\d|[*?{]/.test(trimmed);
   const candidates = Array.from(
     new Set([
       ...buildNearMatchCandidates(tool, trimmed),
@@ -737,12 +759,14 @@ function RuleActionMenu({
   rule,
   onAction,
   onRemove,
+  onMigrateToGlobal,
   onClose,
   isBusy,
 }: {
   rule: FlatRule;
   onAction: (action: PermissionAction) => void;
   onRemove: () => void;
+  onMigrateToGlobal?: () => void;
   onClose: () => void;
   isBusy: boolean;
 }) {
@@ -789,6 +813,25 @@ function RuleActionMenu({
         );
       })}
       <div className="bg-glass-border/60 mx-1 my-1 h-px" />
+      {onMigrateToGlobal && (
+        <button
+          type="button"
+          onClick={() => {
+            onMigrateToGlobal();
+            onClose();
+          }}
+          disabled={isBusy}
+          className="text-ink-1 hover:bg-bg-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium transition-colors disabled:opacity-50"
+        >
+          <Globe className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">
+            Migrate to global
+            <span className="text-ink-4 text-[11px] font-normal">
+              {' · '}Applies to all projects
+            </span>
+          </span>
+        </button>
+      )}
       <button
         type="button"
         onClick={() => {
@@ -812,6 +855,7 @@ function RuleChip({
   onCloseMenu,
   onRemove,
   onEdit,
+  onMigrateToGlobal,
   isBusy,
 }: {
   rule: FlatRule;
@@ -823,6 +867,7 @@ function RuleChip({
     pattern: string | null;
     action: PermissionAction;
   }) => void;
+  onMigrateToGlobal?: () => void;
   isBusy: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -893,6 +938,7 @@ function RuleChip({
           rule={rule}
           onAction={(action) => onEdit({ pattern: rule.pattern, action })}
           onRemove={onRemove}
+          onMigrateToGlobal={onMigrateToGlobal}
           onClose={onCloseMenu}
           isBusy={isBusy}
         />
@@ -913,6 +959,7 @@ function ToolGroupCard({
   setOpenMenuKey,
   onRemove,
   onEdit,
+  onMigrateToGlobal,
   isBusy,
 }: {
   group: ToolGroup;
@@ -929,6 +976,7 @@ function ToolGroupCard({
     rule: FlatRule,
     update: { pattern: string | null; action: PermissionAction },
   ) => void;
+  onMigrateToGlobal?: (rule: FlatRule) => void;
   isBusy: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -967,6 +1015,9 @@ function ToolGroupCard({
                 onCloseMenu={() => setOpenMenuKey(null)}
                 onRemove={() => onRemove(rule)}
                 onEdit={(update) => onEdit(rule, update)}
+                onMigrateToGlobal={
+                  onMigrateToGlobal ? () => onMigrateToGlobal(rule) : undefined
+                }
                 isBusy={isBusy}
               />
             );
@@ -1011,6 +1062,7 @@ export function PermissionsEditor({
   onAdd,
   onRemove,
   onEdit,
+  onMigrateToGlobal,
   title: _title,
   description: _description,
   emptyTitle,
@@ -1029,6 +1081,7 @@ export function PermissionsEditor({
     rule: FlatRule,
     update: { pattern: string | null; action: PermissionAction },
   ) => void;
+  onMigrateToGlobal?: (rule: FlatRule) => void;
   title: string;
   description: string;
   emptyTitle: string;
@@ -1342,6 +1395,7 @@ export function PermissionsEditor({
               setOpenMenuKey={setOpenMenuKey}
               onRemove={handleRemove}
               onEdit={handleEdit}
+              onMigrateToGlobal={onMigrateToGlobal}
               isBusy={isBusy}
             />
           ))}

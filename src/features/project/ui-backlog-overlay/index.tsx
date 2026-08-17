@@ -41,18 +41,18 @@ import { Select } from '@/common/ui/select';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useBackgroundNewTaskJobForBacklogItem } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
+import { useLatestRef } from '@/hooks/use-latest-ref';
 import { useModal } from '@/common/context/modal';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
 
-
-
-function BacklogTodoRow({
+const BacklogTodoRow = React.memo(function BacklogTodoRow({
   todo,
+  index,
   isSelected,
   isEditing,
   editValue,
-  dragOverId,
+  isDragOver,
   triggerRefs,
   onSelect,
   onEditChange,
@@ -67,21 +67,22 @@ function BacklogTodoRow({
   onDragEnd,
 }: {
   todo: ProjectTodo;
+  index: number;
   isSelected: boolean;
   isEditing: boolean;
   editValue: string;
-  dragOverId: string | null;
+  isDragOver: boolean;
   triggerRefs: React.RefObject<Map<string, HTMLButtonElement>>;
-  onSelect: (e: React.MouseEvent) => void;
+  onSelect: (e: React.MouseEvent, index: number) => void;
   onEditChange: (value: string) => void;
   onEditBlur: () => void;
-  onStartEdit: () => void;
-  onConvertToTask: () => void;
-  onDelete: () => void;
-  onDragStart: () => void;
-  onDragOver: (e: React.DragEvent) => void;
+  onStartEdit: (todo: ProjectTodo) => void;
+  onConvertToTask: (todo: ProjectTodo) => void;
+  onDelete: (todo: ProjectTodo) => void;
+  onDragStart: (todoId: string) => void;
+  onDragOver: (e: React.DragEvent, todoId: string) => void;
   onDragLeave: () => void;
-  onDrop: (e: React.DragEvent) => void;
+  onDrop: (e: React.DragEvent, todoId: string) => void;
   onDragEnd: () => void;
 }) {
   const isCreating = useBackgroundNewTaskJobForBacklogItem({
@@ -92,20 +93,20 @@ function BacklogTodoRow({
     <div
       data-selected={isSelected}
       draggable={!isEditing && !isCreating}
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
+      onDragStart={() => onDragStart(todo.id)}
+      onDragOver={(e) => onDragOver(e, todo.id)}
       onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      onDrop={(e) => onDrop(e, todo.id)}
       onDragEnd={onDragEnd}
-      onClick={onSelect}
+      onClick={(e) => onSelect(e, index)}
       onDoubleClick={(e) => {
         if (isEditing || isCreating) return;
         if (e.target instanceof Element && e.target.closest('button')) return;
-        onStartEdit();
+        onStartEdit(todo);
       }}
       className={clsx(
         'group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm',
-        dragOverId === todo.id
+        isDragOver
           ? 'border-acc border-t-2'
           : 'border-t-2 border-transparent',
         isSelected ? 'bg-glass-medium' : 'hover:bg-glass-medium/50',
@@ -172,17 +173,20 @@ function BacklogTodoRow({
           }
           align="right"
         >
-          <DropdownItem onClick={onStartEdit} icon={<Pencil size={14} />}>
+          <DropdownItem
+            onClick={() => onStartEdit(todo)}
+            icon={<Pencil size={14} />}
+          >
             Edit
           </DropdownItem>
           <DropdownItem
-            onClick={onConvertToTask}
+            onClick={() => onConvertToTask(todo)}
             icon={<ArrowRight size={14} />}
           >
             Convert to task
           </DropdownItem>
           <DropdownItem
-            onClick={onDelete}
+            onClick={() => onDelete(todo)}
             icon={<Trash2 size={14} />}
             variant="danger"
           >
@@ -192,7 +196,7 @@ function BacklogTodoRow({
       )}
     </div>
   );
-}
+});
 
 const BacklogQuickAddInput = React.forwardRef<
   HTMLTextAreaElement,
@@ -268,6 +272,12 @@ const BacklogQuickAddInput = React.forwardRef<
     />
   );
 });
+
+/** Stable function identity that always calls the latest closure. */
+function useStableCallback<T extends (...args: never[]) => unknown>(fn: T): T {
+  const ref = useLatestRef(fn);
+  return useCallback((...args: never[]) => ref.current(...args), [ref]) as T;
+}
 
 /** Build a range set from `from` to `to` inclusive. */
 function rangeSet(from: number, to: number): Set<number> {
@@ -765,6 +775,13 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
     setDragOverId(null);
   }, []);
 
+  // Stable identities for row props so memoized rows don't re-render on
+  // every keystroke / todos change.
+  const saveEditRef = useStableCallback(saveEdit);
+  const handleDropRef = useStableCallback(handleDrop);
+  const handleDeleteRef = useStableCallback(handleDelete);
+  const handleConvertToTaskRef = useStableCallback(handleConvertToTask);
+
   // Handle backdrop click
   const handleOverlayClick = useCallback(() => {
     onClose();
@@ -828,21 +845,22 @@ export function BacklogOverlay({ onClose }: { onClose: () => void }) {
                 <BacklogTodoRow
                   key={todo.id}
                   todo={todo}
+                  index={index}
                   isSelected={selectedIndices.has(index)}
                   isEditing={editingId === todo.id}
-                  editValue={editValue}
-                  dragOverId={dragOverId}
+                  editValue={editingId === todo.id ? editValue : ''}
+                  isDragOver={dragOverId === todo.id}
                   triggerRefs={triggerRefs}
-                  onSelect={(e) => handleRowClick(e, index)}
+                  onSelect={handleRowClick}
                   onEditChange={setEditValue}
-                  onEditBlur={saveEdit}
-                  onStartEdit={() => startEdit(todo)}
-                  onConvertToTask={() => handleConvertToTask(todo)}
-                  onDelete={() => handleDelete(todo)}
-                  onDragStart={() => handleDragStart(todo.id)}
-                  onDragOver={(e) => handleDragOver(e, todo.id)}
+                  onEditBlur={saveEditRef}
+                  onStartEdit={startEdit}
+                  onConvertToTask={handleConvertToTaskRef}
+                  onDelete={handleDeleteRef}
+                  onDragStart={handleDragStart}
+                  onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
-                  onDrop={(e) => handleDrop(e, todo.id)}
+                  onDrop={handleDropRef}
                   onDragEnd={handleDragEnd}
                 />
               ))

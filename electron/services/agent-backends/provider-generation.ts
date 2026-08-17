@@ -144,6 +144,7 @@ async function generateWithClaudeCode({
   cwd,
   allowedTools,
   allowedToolPatterns,
+  toolPolicy,
   abortController,
   usageContext,
 }: Parameters<TextGenerationCapability['generate']>[0] & {
@@ -162,6 +163,13 @@ async function generateWithClaudeCode({
         allowedToolPatterns,
         skillName,
       ),
+      ...(toolPolicy === 'none'
+        ? {
+            tools: [],
+            disallowedTools: CLAUDE_CODE_TOOLS,
+            canUseTool: denyToolUse,
+          }
+        : {}),
       model: model !== 'default' ? model : undefined,
       abortController,
       ...(thinkingEffort === 'low' ||
@@ -244,6 +252,7 @@ async function generateWithOpenCode({
   cwd,
   allowedTools,
   allowedToolPatterns,
+  toolPolicy,
   abortController,
   usageContext,
 }: Parameters<TextGenerationCapability['generate']>[0] & {
@@ -264,7 +273,7 @@ async function generateWithOpenCode({
 
   const directory = cwd ?? homedir();
   const permission = buildOpenCodePermissions(
-    allowedTools,
+    toolPolicy === 'none' ? [] : allowedTools,
     allowedToolPatterns,
     skillName,
   );
@@ -293,6 +302,7 @@ async function generateWithOpenCode({
       sessionID: sessionId,
       directory,
       parts: [{ type: 'text', text: promptWithStructuredFallback }],
+      ...(toolPolicy === 'none' ? { tools: OPEN_CODE_DISABLED_TOOLS } : {}),
       ...(outputSchema && {
         format: {
           type: 'json_schema' as const,
@@ -961,6 +971,48 @@ function buildOpenCodePermissions(
   }
 
   return permissions;
+}
+
+const CLAUDE_CODE_TOOLS = [
+  'Read',
+  'Bash',
+  'Edit',
+  'Write',
+  'Glob',
+  'Grep',
+  'WebFetch',
+  'WebSearch',
+  'Task',
+  'Skill',
+  'NotebookEdit',
+  'TodoWrite',
+  'AskUserQuestion',
+];
+
+const OPEN_CODE_DISABLED_TOOLS = Object.fromEntries(
+  [
+    'read',
+    'bash',
+    'edit',
+    'write',
+    'patch',
+    'glob',
+    'grep',
+    'webfetch',
+    'websearch',
+    'task',
+    'skill',
+    'todowrite',
+    'question',
+  ].map((tool) => [tool, false]),
+);
+
+async function denyToolUse(toolName: string) {
+  return {
+    behavior: 'deny' as const,
+    message: `Tools are disabled for this generation request (${toolName})`,
+    interrupt: true,
+  };
 }
 
 function buildClaudeCodeAllowedTools(

@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api';
 import { invalidateFeedResource } from '@/cache/feed-cache';
+import { syncFeedWorktreeFlags } from '@/hooks/use-worktree-diff';
 import { useToastStore } from '@/stores/toasts';
 
 export function useCreatePullRequest() {
@@ -22,7 +23,14 @@ export function useCreatePullRequest() {
       }
       queryClient.invalidateQueries({ queryKey: ['tasks', params.taskId] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      // PR creation can commit + push on the server; refresh the feed worktree
+      // badges from the authoritative worktree status. Skipped when the
+      // worktree was removed, since status then reports the project repo.
+      if (!params.deleteWorktree) {
+        void syncFeedWorktreeFlags(params.taskId);
+      }
       invalidateFeedResource(queryClient, 'pullRequests');
+      invalidateFeedResource(queryClient, 'tasks');
       queryClient.invalidateQueries({ queryKey: ['pull-requests'] });
       queryClient.invalidateQueries({
         queryKey: ['all-projects-pull-requests'],

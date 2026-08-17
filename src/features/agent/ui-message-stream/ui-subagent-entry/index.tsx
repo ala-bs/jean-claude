@@ -121,7 +121,20 @@ export const SubagentEntry = memo(function SubagentEntry({
       {/* Clickable header */}
       <div
         className="flex cursor-pointer flex-col gap-0.5 py-1.5 pr-3 hover:bg-white/5"
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={(event) => {
+          const selection = window.getSelection();
+          if (
+            selection &&
+            !selection.isCollapsed &&
+            selection.toString().trim() &&
+            [selection.anchorNode, selection.focusNode].some(
+              (node) => node && event.currentTarget.contains(node),
+            )
+          ) {
+            return;
+          }
+          setIsExpanded((current) => !current);
+        }}
       >
         {/* Main row: icon + description + status */}
         <div className="flex items-center gap-2">

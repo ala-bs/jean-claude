@@ -1,7 +1,13 @@
+// Side-effect import: patches localStorage on evaluation. Must stay the FIRST
+// import in this file — module bodies run after their imports, so anything
+// evaluated earlier (react-scan, the persisted stores pulled in via ./app)
+// would read and write localStorage before the wrapper is installed.
+// eslint-disable-next-line import/order
+import './lib/debug-local-storage';
+
 import { createRoot } from 'react-dom/client';
 import { scan } from 'react-scan';
 import { StrictMode } from 'react';
-
 
 import App from './app';
 

@@ -36,6 +36,7 @@ describe('QuestionOptions', () => {
             requestId: 'request-1',
             questions: [
               {
+                key: 'Choose one',
                 type: 'single_choice',
                 question: 'Choose one',
                 header: 'Choice',
@@ -85,6 +86,7 @@ describe('QuestionOptions', () => {
               requestId: `request-${type}`,
               questions: [
                 {
+                  key: 'Choose one',
                   type,
                   question: 'Choose one',
                   header: 'Choice',
@@ -122,6 +124,7 @@ describe('QuestionOptions', () => {
             requestId: `request-recommended-${type}`,
             questions: [
               {
+                key: 'Choose one',
                 type,
                 question: 'Choose one',
                 header: 'Choice',

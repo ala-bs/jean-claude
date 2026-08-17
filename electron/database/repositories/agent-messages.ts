@@ -80,6 +80,29 @@ export const AgentMessageRepository = {
       .map((row) => JSON.parse(row.data) as NormalizedEntry);
   },
 
+  findLatestResultByStepId: async (stepId: string): Promise<string | null> => {
+    const row = await db
+      .selectFrom('agent_messages')
+      .select(['agent_messages.data'])
+      .where('agent_messages.stepId', '=', stepId)
+      .where('agent_messages.type', '=', 'result')
+      .orderBy('agent_messages.messageIndex', 'desc')
+      // executeTakeFirst does not add a LIMIT, so without this every result row
+      // for the step is loaded just to read the newest one.
+      .limit(1)
+      .executeTakeFirst();
+    if (!row?.data) return null;
+
+    try {
+      const entry = JSON.parse(row.data) as NormalizedEntry;
+      return entry.type === 'result' && typeof entry.value === 'string'
+        ? entry.value
+        : null;
+    } catch {
+      return null;
+    }
+  },
+
   /**
    * Get the count of normalized entries for a step.
    */

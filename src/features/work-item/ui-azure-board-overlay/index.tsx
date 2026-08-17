@@ -1,6 +1,6 @@
 /* eslint-disable sort-imports */
 import { LayoutDashboard, X } from 'lucide-react';
-import { useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 
@@ -17,13 +17,18 @@ export function AzureBoardOverlay({ onClose }: { onClose: () => void }) {
     exclusive: true,
     passthrough: ['global-nav'],
   });
+  const escapeInterceptorRef = useRef<(() => boolean) | null>(null);
+  const handleEscape = useCallback(() => {
+    if (escapeInterceptorRef.current?.()) return;
+    onClose();
+  }, [onClose]);
   useCommands(
     'azure-board-overlay',
     [
       {
         label: 'Close Azure Board',
         shortcut: 'escape',
-        handler: onClose,
+        handler: handleEscape,
         hideInCommandPalette: true,
       },
     ],
@@ -63,6 +68,7 @@ export function AzureBoardOverlay({ onClose }: { onClose: () => void }) {
               key={project.id}
               project={project}
               onClose={onClose}
+              escapeInterceptorRef={escapeInterceptorRef}
               headerLeading={
                 <>
                   <LayoutDashboard className="text-acc-ink h-4 w-4" />
@@ -71,6 +77,7 @@ export function AzureBoardOverlay({ onClose }: { onClose: () => void }) {
                     value={project.id}
                     onChange={setSelectedProjectId}
                     label="Select Azure Board project"
+                    layer={layer}
                     className="max-w-40"
                     options={projects.map((candidate) => ({
                       value: candidate.id,

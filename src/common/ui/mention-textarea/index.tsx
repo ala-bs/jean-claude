@@ -1,6 +1,19 @@
-import { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import type { TextareaHTMLAttributes } from 'react';
+
+const DROPDOWN_MAX_HEIGHT = 192;
+const DROPDOWN_MIN_WIDTH = 224;
+const VIEWPORT_MARGIN = 8;
 
 
 
@@ -216,6 +229,85 @@ export const MentionTextarea = forwardRef<
     activeOptionRef.current?.scrollIntoView({ block: 'nearest' });
   }, [activeIndex]);
 
+  const [dropdownPosition, setDropdownPosition] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
+
+  const isDropdownOpen = Boolean(
+    query && (suggestions.length > 0 || isSearching),
+  );
+
+  const updateDropdownPosition = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const rect = textarea.getBoundingClientRect();
+
+    // Textarea scrolled out of view: hide instead of floating over unrelated UI.
+    if (rect.bottom < 0 || rect.top > window.innerHeight) {
+      setDropdownPosition(null);
+      return;
+    }
+
+    const width = Math.max(rect.width, DROPDOWN_MIN_WIDTH);
+    const spaceAbove = rect.top - VIEWPORT_MARGIN;
+    const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_MARGIN;
+    const openUp = spaceBelow < DROPDOWN_MAX_HEIGHT && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(
+      80,
+      Math.min(DROPDOWN_MAX_HEIGHT, openUp ? spaceAbove : spaceBelow),
+    );
+    const left = Math.min(
+      Math.max(VIEWPORT_MARGIN, rect.left),
+      Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN),
+    );
+
+    setDropdownPosition({
+      // Anchor to the edge nearest the textarea so a short list stays attached.
+      ...(openUp
+        ? { bottom: window.innerHeight - rect.top + 4 }
+        : { top: rect.bottom + 4 }),
+      left,
+      width,
+      maxHeight,
+    });
+  }, []);
+
+  // Reposition whenever anything that affects geometry changes. Closing does
+  // not reset the state: rendering is already gated on isDropdownOpen, and a
+  // synchronous setState here would only cost an extra render pass. Reopening
+  // repositions before paint because this is a layout effect.
+  useLayoutEffect(() => {
+    if (!isDropdownOpen) return;
+    updateDropdownPosition();
+  }, [
+    isDropdownOpen,
+    suggestions.length,
+    isSearching,
+    value,
+    updateDropdownPosition,
+  ]);
+
+  // Subscribe to scroll/resize/textarea-resize only while open.
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    const textarea = textareaRef.current;
+    window.addEventListener('scroll', updateDropdownPosition, true);
+    window.addEventListener('resize', updateDropdownPosition);
+    const observer = textarea
+      ? new ResizeObserver(updateDropdownPosition)
+      : null;
+    if (textarea && observer) observer.observe(textarea);
+    return () => {
+      window.removeEventListener('scroll', updateDropdownPosition, true);
+      window.removeEventListener('resize', updateDropdownPosition);
+      observer?.disconnect();
+    };
+  }, [isDropdownOpen, updateDropdownPosition]);
+
   const updateQuery = (textarea: HTMLTextAreaElement, nextValue: string) => {
     const cursor = textarea.selectionStart;
     const prefix = nextValue.slice(0, cursor);
@@ -282,40 +374,52 @@ export const MentionTextarea = forwardRef<
           onBlur?.(event);
         }}
       />
-      {query && (suggestions.length > 0 || isSearching) && (
-        <div className="border-glass-border bg-bg-1 absolute bottom-full left-0 z-50 mb-1 max-h-48 min-w-56 overflow-auto rounded-lg border py-1 shadow-lg">
-          {isSearching && (
-            <div className="text-ink-3 flex items-center gap-2 px-3 py-2 text-xs">
-              <span className="border-ink-4 border-t-ink-1 h-3 w-3 animate-spin rounded-full border" />
-              Loading people...
-            </div>
-          )}
-          {suggestions.map((option, index) => (
-            <button
-              key={option.id}
-              ref={index === activeIndex ? activeOptionRef : undefined}
-              type="button"
-              className={clsx(
-                'flex w-full flex-col px-3 py-1.5 text-left text-xs',
-                index === activeIndex
-                  ? 'bg-glass-medium text-ink-0'
-                  : 'text-ink-2',
-              )}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                selectSuggestion(option);
-              }}
-            >
-              <span className="font-medium">{option.displayName}</span>
-              {option.uniqueName && (
-                <span className="text-ink-3 text-[11px]">
-                  {option.uniqueName}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
+      {isDropdownOpen &&
+        dropdownPosition &&
+        createPortal(
+          <div
+            className="border-glass-border bg-bg-1 fixed z-[10020] overflow-auto rounded-lg border py-1 shadow-lg"
+            style={{
+              top: dropdownPosition.top,
+              bottom: dropdownPosition.bottom,
+              left: dropdownPosition.left,
+              width: dropdownPosition.width,
+              maxHeight: dropdownPosition.maxHeight,
+            }}
+          >
+            {isSearching && (
+              <div className="text-ink-3 flex items-center gap-2 px-3 py-2 text-xs">
+                <span className="border-ink-4 border-t-ink-1 h-3 w-3 animate-spin rounded-full border" />
+                Loading people...
+              </div>
+            )}
+            {suggestions.map((option, index) => (
+              <button
+                key={option.id}
+                ref={index === activeIndex ? activeOptionRef : undefined}
+                type="button"
+                className={clsx(
+                  'flex w-full flex-col px-3 py-1.5 text-left text-xs',
+                  index === activeIndex
+                    ? 'bg-glass-medium text-ink-0'
+                    : 'text-ink-2',
+                )}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  selectSuggestion(option);
+                }}
+              >
+                <span className="font-medium">{option.displayName}</span>
+                {option.uniqueName && (
+                  <span className="text-ink-3 text-[11px]">
+                    {option.uniqueName}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 });

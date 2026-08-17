@@ -35,4 +35,76 @@ describe('splitLogTextLinks', () => {
       { type: 'text', text: ').' },
     ]);
   });
+
+  it('detects absolute file paths without a working dir', () => {
+    expect(splitLogTextLinks('at /Users/me/app/src/a.ts:12:3')).toEqual([
+      { type: 'text', text: 'at ' },
+      {
+        type: 'file',
+        text: '/Users/me/app/src/a.ts:12:3',
+        path: '/Users/me/app/src/a.ts',
+        line: 12,
+      },
+    ]);
+  });
+
+  it('ignores relative paths when no working dir is known', () => {
+    expect(splitLogTextLinks('ERR src/a.ts:4')).toEqual([
+      { type: 'text', text: 'ERR src/a.ts:4' },
+    ]);
+  });
+
+  it('detects relative paths when a working dir is known', () => {
+    expect(
+      splitLogTextLinks('ERR ./src/a.ts:4', { hasWorkingDir: true }),
+    ).toEqual([
+      { type: 'text', text: 'ERR ' },
+      { type: 'file', text: './src/a.ts:4', path: './src/a.ts', line: 4 },
+    ]);
+  });
+
+  it('ignores word pairs, dates and repo slugs', () => {
+    for (const noise of [
+      'use and/or here',
+      'built 2024/01/02 ok',
+      'cloning org/repo now',
+      'set key/value pairs',
+    ]) {
+      expect(splitLogTextLinks(noise, { hasWorkingDir: true })).toEqual([
+        { type: 'text', text: noise },
+      ]);
+    }
+  });
+
+  it('links bracketed relative paths and keeps punctuation outside', () => {
+    expect(
+      splitLogTextLinks('[vite] (src/a.ts)', { hasWorkingDir: true }),
+    ).toEqual([
+      { type: 'text', text: '[vite] (' },
+      { type: 'file', text: 'src/a.ts', path: 'src/a.ts' },
+      { type: 'text', text: ')' },
+    ]);
+  });
+
+  it('detects home-relative paths without a working dir', () => {
+    expect(splitLogTextLinks('cfg ~/notes/a.ts')).toEqual([
+      { type: 'text', text: 'cfg ' },
+      { type: 'file', text: '~/notes/a.ts', path: '~/notes/a.ts' },
+    ]);
+  });
+
+  it('does not treat URL paths as file paths', () => {
+    expect(
+      splitLogTextLinks('see https://example.com/a/b.ts', {
+        hasWorkingDir: true,
+      }),
+    ).toEqual([
+      { type: 'text', text: 'see ' },
+      {
+        type: 'link',
+        text: 'https://example.com/a/b.ts',
+        url: 'https://example.com/a/b.ts',
+      },
+    ]);
+  });
 });

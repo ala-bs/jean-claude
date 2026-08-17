@@ -6,6 +6,14 @@ import type {
   UpdateSourceInstallParams,
 } from '@shared/source-management-types';
 import type {
+  AgentMemoryCaptureWarning,
+  AgentMemoryDashboard,
+  AgentMemoryExtractionRun,
+  AgentMemoryFollowUpCapture,
+  AgentMemoryPromptCapture,
+  AgentMemoryQueuedPromptCapture,
+} from '@shared/agent-memory-types';
+import type {
   AppNotification,
   TaskNotificationTarget,
 } from '@shared/notification-types';
@@ -19,16 +27,72 @@ import type {
   GlobalPromptResponse,
 } from '@shared/global-prompt-types';
 import type {
+  MobileColorScheme,
+  MobilePlatform,
+  MobilePreviewAndroidAppRestartParams,
+  MobilePreviewAndroidAppStatusParams,
+  MobilePreviewAndroidAppTrustParams,
+  MobilePreviewAndroidCreateDeviceParams,
+  MobilePreviewAndroidInstallSystemImageParams,
+  MobilePreviewAttachSessionParams,
+  MobilePreviewDetachSessionParams,
+  MobilePreviewExpoLaunchParams,
+  MobilePreviewForwardPortParams,
+  MobilePreviewFrameEvent,
+  MobilePreviewInputEvent,
+  MobilePreviewIosAppRequestParams,
+  MobilePreviewIosAppStatusCancelParams,
+  MobilePreviewIosAppStatusRequestParams,
+  MobilePreviewIosCreateDeviceParams,
+  MobilePreviewIosRenameDeviceParams,
+  MobilePreviewListSessionsParams,
+  MobilePreviewNativeLogEvent,
+  MobilePreviewNativeLogSessionEvent,
+  MobilePreviewNativeLogStartParams,
+  MobilePreviewNetworkProxyCertificateParams,
+  MobilePreviewNetworkProxyEvent,
+  MobilePreviewNetworkProxySessionEvent,
+  MobilePreviewNetworkProxyStartParams,
+  MobilePreviewOpenDeeplinkParams,
+  MobilePreviewOpenDevMenuParams,
+  MobilePreviewPacketCaptureEvent,
+  MobilePreviewPacketCaptureSessionEvent,
+  MobilePreviewPacketCaptureStartParams,
+  MobilePreviewReloadExpoParams,
+  MobilePreviewSessionEvent,
+  MobilePreviewSetTextSizeParams,
+  MobilePreviewStartParams,
+  MobileRotationDirection,
+  ReactNativeDevToolsEmbeddedBoundsParams,
+  ReactNativeDevToolsEmbeddedCloseParams,
+  ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedVisibilityParams,
+  ReactNativeDevToolsOpenParams,
+  ReactNativeDevToolsResolveParams,
+} from '@shared/mobile-simulator-types';
+import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
+import type {
+  TimesheetAction,
+  TimesheetAxisLookupRequest,
+  TimesheetDraftParams,
+  TimesheetEntryInput,
+  TimesheetProviderType,
+  TimesheetRowDeletion,
+  TimesheetRowUpdate,
+  TimesheetSyncParams,
+} from '@shared/timesheet-types';
+import {
+  START_PR_COMMAND_CHANNEL,
+  type StartPrCommandParams,
+} from '@shared/run-command-types';
 import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import type { DebugLogEntry } from '@shared/debug-log-types';
-import type { RecordPreferenceEvidenceParams } from '@shared/preference-memory-types';
-
-
+import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
 
@@ -59,6 +123,8 @@ contextBridge.exposeInMainWorld('api', {
     create: (data: unknown) => ipcRenderer.invoke('projects:create', data),
     update: (id: string, data: unknown) =>
       ipcRenderer.invoke('projects:update', id, data),
+    detectMobilePreview: (projectId: string) =>
+      ipcRenderer.invoke('projects:detectMobilePreview', projectId),
     detectAzureRemote: (projectPath: string) =>
       ipcRenderer.invoke('projects:detectAzureRemote', projectPath),
     uploadLogo: (projectId: string, sourcePath: string) =>
@@ -106,20 +172,39 @@ contextBridge.exposeInMainWorld('api', {
     getSkills: (projectId: string) =>
       ipcRenderer.invoke('projects:getSkills', projectId),
   },
-  preferenceMemory: {
+  agentMemory: {
     getDashboard: (params: {
-      projectId: string;
-      page?: number;
+      projectId?: string;
+      evidencePage?: number;
+      extractionRunPage?: number;
       pageSize?: number;
-    }) => ipcRenderer.invoke('preferenceMemory:getDashboard', params),
-    consolidate: (projectId: string) =>
-      ipcRenderer.invoke('preferenceMemory:consolidate', projectId),
-    recordEvidence: (params: RecordPreferenceEvidenceParams) =>
-      ipcRenderer.invoke('preferenceMemory:recordEvidence', params),
+    }): Promise<AgentMemoryDashboard> =>
+      ipcRenderer.invoke('agentMemory:getDashboard', params),
+    extractNow: (
+      projectId: string,
+    ): Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }> =>
+      ipcRenderer.invoke('agentMemory:extractNow', projectId),
+    retryRun: (params: {
+      projectId?: string;
+      runId: string;
+      scope: 'project' | 'global';
+    }): Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }> =>
+      ipcRenderer.invoke('agentMemory:retryRun', params),
+    onCaptureWarning: (
+      callback: (warning: AgentMemoryCaptureWarning) => void,
+    ) => {
+      const handler = (_: unknown, warning: AgentMemoryCaptureWarning) =>
+        callback(warning);
+      ipcRenderer.on('agentMemory:captureWarning', handler);
+      return () =>
+        ipcRenderer.removeListener('agentMemory:captureWarning', handler);
+    },
   },
   tasks: {
     focused: (taskId: string) => ipcRenderer.send('tasks:focused', taskId),
     findAll: () => ipcRenderer.invoke('tasks:findAll'),
+    listPendingPrWorkspaceDecisions: () =>
+      ipcRenderer.invoke('tasks:listPendingPrWorkspaceDecisions'),
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('tasks:findByProjectId', projectId),
     findAllActive: () => ipcRenderer.invoke('tasks:findAllActive'),
@@ -133,46 +218,27 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tasks:update', id, data),
     updatePendingMessage: (id: string, pendingMessage: string | null) =>
       ipcRenderer.invoke('tasks:updatePendingMessage', id, pendingMessage),
+    setSourceBranch: (params: { taskId: string; sourceBranch: string }) =>
+      ipcRenderer.invoke('tasks:setSourceBranch', params),
     delete: (id: string, options?: { deleteWorktree?: boolean }) =>
       ipcRenderer.invoke('tasks:delete', id, options),
+    deletePrWorkspaceTask: (params: { taskId: string }) =>
+      ipcRenderer.invoke('tasks:deletePrWorkspaceTask', params),
+    deleteAllPrWorkspaces: (params: {
+      projectId: string;
+      pullRequestId: number;
+    }) => ipcRenderer.invoke('tasks:deleteAllPrWorkspaces', params),
+    resolveClosedPrWorkspace: (params: {
+      projectId: string;
+      pullRequestId: number;
+      action: 'keep' | 'delete';
+    }) => ipcRenderer.invoke('tasks:resolveClosedPrWorkspace', params),
     toggleUserCompleted: (id: string) =>
       ipcRenderer.invoke('tasks:toggleUserCompleted', id),
     complete: (id: string, options: { cleanupWorktree?: boolean }) =>
       ipcRenderer.invoke('tasks:complete', id, options),
     clearUserCompleted: (id: string) =>
       ipcRenderer.invoke('tasks:clearUserCompleted', id),
-    addSessionAllowedTool: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => ipcRenderer.invoke('tasks:addSessionAllowedTool', id, toolName, input),
-    removeSessionAllowedTool: (
-      id: string,
-      toolName: string,
-      pattern?: string,
-    ) =>
-      ipcRenderer.invoke(
-        'tasks:removeSessionAllowedTool',
-        id,
-        toolName,
-        pattern,
-      ),
-    allowForProject: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => ipcRenderer.invoke('tasks:allowForProject', id, toolName, input),
-    allowForProjectWorktrees: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) =>
-      ipcRenderer.invoke('tasks:allowForProjectWorktrees', id, toolName, input),
-    allowGlobally: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => ipcRenderer.invoke('tasks:allowGlobally', id, toolName, input),
     reorder: (projectId: string, activeIds: string[], completedIds: string[]) =>
       ipcRenderer.invoke('tasks:reorder', projectId, activeIds, completedIds),
     worktree: {
@@ -254,21 +320,10 @@ contextBridge.exposeInMainWorld('api', {
         ipcRenderer.invoke('tasks:worktree:getBranches', taskId),
       pushBranch: (taskId: string, params?: { commitUnstaged?: boolean }) =>
         ipcRenderer.invoke('tasks:worktree:pushBranch', taskId, params),
+      pullBranch: (taskId: string) =>
+        ipcRenderer.invoke('tasks:worktree:pullBranch', taskId),
       delete: (taskId: string, options?: { keepBranch?: boolean }) =>
         ipcRenderer.invoke('tasks:worktree:delete', taskId, options),
-      cleanupAfterCompletion: (
-        taskId: string,
-        params: {
-          worktreePath: string;
-          branchName: string;
-          keepBranch?: boolean;
-        },
-      ) =>
-        ipcRenderer.invoke(
-          'tasks:worktree:cleanupAfterCompletion',
-          taskId,
-          params,
-        ),
     },
     summary: {
       get: (taskId: string) => ipcRenderer.invoke('tasks:summary:get', taskId),
@@ -286,6 +341,8 @@ contextBridge.exposeInMainWorld('api', {
       projectId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('tasks:createPrReviewTask', params),
+    startPrCommand: (params: StartPrCommandParams) =>
+      ipcRenderer.invoke(START_PR_COMMAND_CHANNEL, params),
   },
   steps: {
     findByTaskId: (taskId: string) =>
@@ -311,12 +368,43 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('steps:resolvePrompt', stepId),
     setMode: (stepId: string, mode: string) =>
       ipcRenderer.invoke('steps:setMode', stepId, mode),
+    setAutoAccept: (stepId: string, enabled: boolean) =>
+      ipcRenderer.invoke('steps:setAutoAccept', stepId, enabled),
+    getAutoAccept: (stepId: string) =>
+      ipcRenderer.invoke('steps:getAutoAccept', stepId),
     submitPrReview: (stepId: string) =>
       ipcRenderer.invoke('steps:submitPrReview', stepId),
+    addSessionAllowedTool: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => ipcRenderer.invoke('steps:addSessionAllowedTool', params),
+    removeSessionAllowedTool: (params: {
+      stepId: string;
+      toolName: string;
+      pattern?: string;
+    }) => ipcRenderer.invoke('steps:removeSessionAllowedTool', params),
+    allowForProject: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => ipcRenderer.invoke('steps:allowForProject', params),
+    allowForProjectWorktrees: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => ipcRenderer.invoke('steps:allowForProjectWorktrees', params),
+    allowGlobally: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => ipcRenderer.invoke('steps:allowGlobally', params),
   },
   providers: {
     findAll: () => ipcRenderer.invoke('providers:findAll'),
     findById: (id: string) => ipcRenderer.invoke('providers:findById', id),
+    findByTokenId: (tokenId: string) =>
+      ipcRenderer.invoke('providers:findByTokenId', tokenId),
     create: (data: unknown) => ipcRenderer.invoke('providers:create', data),
     update: (id: string, data: unknown) =>
       ipcRenderer.invoke('providers:update', id, data),
@@ -439,13 +527,21 @@ contextBridge.exposeInMainWorld('api', {
       workItemId: number;
       text: string;
     }) => ipcRenderer.invoke('azureDevOps:addWorkItemComment', params),
-    updateWorkItemComment: (params: {
+     updateWorkItemComment: (params: {
       providerId: string;
       projectName: string;
       workItemId: number;
       commentId: number;
       text: string;
-    }) => ipcRenderer.invoke('azureDevOps:updateWorkItemComment', params),
+     }) => ipcRenderer.invoke('azureDevOps:updateWorkItemComment', params),
+     setWorkItemCommentReaction: (params: {
+       providerId: string;
+       projectName: string;
+       workItemId: number;
+       commentId: number;
+       reactionType: 'like' | 'dislike' | 'heart' | 'hooray' | 'smile' | 'confused';
+       engaged: boolean;
+     }) => ipcRenderer.invoke('azureDevOps:setWorkItemCommentReaction', params),
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;
@@ -588,6 +684,7 @@ contextBridge.exposeInMainWorld('api', {
       workItemId: number;
     }) => ipcRenderer.invoke('azureDevOps:unlinkWorkItemFromPr', params),
     addPullRequestComment: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -595,6 +692,7 @@ contextBridge.exposeInMainWorld('api', {
       content: string;
     }) => ipcRenderer.invoke('azureDevOps:addPullRequestComment', params),
     addPullRequestFileComment: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -602,9 +700,11 @@ contextBridge.exposeInMainWorld('api', {
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) => ipcRenderer.invoke('azureDevOps:addPullRequestFileComment', params),
     addThreadReply: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -702,6 +802,11 @@ contextBridge.exposeInMainWorld('api', {
     openImageFile: () => ipcRenderer.invoke('dialog:openImageFile'),
     openFiles: () => ipcRenderer.invoke('dialog:openFiles'),
     openApplication: () => ipcRenderer.invoke('dialog:openApplication'),
+    saveFile: (params: {
+      defaultPath?: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+      content?: Uint8Array;
+    }) => ipcRenderer.invoke('dialog:saveFile', params),
   },
   settings: {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
@@ -750,6 +855,20 @@ contextBridge.exposeInMainWorld('api', {
         newPattern,
         action,
       ),
+  },
+  permissionEvents: {
+    onChanged: (
+      callback: (
+        event: import('@shared/permission-types').PermissionsChangedEvent,
+      ) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        event: import('@shared/permission-types').PermissionsChangedEvent,
+      ) => callback(event);
+      ipcRenderer.on('permissions:changed', handler);
+      return () => ipcRenderer.removeListener('permissions:changed', handler);
+    },
   },
   projectPermissions: {
     get: (projectPath: string) =>
@@ -828,11 +947,15 @@ contextBridge.exposeInMainWorld('api', {
       ),
     copyAttachmentFile: (projectPath: string, sourcePath: string) =>
       ipcRenderer.invoke('fs:copyAttachmentFile', projectPath, sourcePath),
+    deleteAttachmentFile: (projectPath: string, filePath: string) =>
+      ipcRenderer.invoke('fs:deleteAttachmentFile', projectPath, filePath),
     getPathForFile: (file: File) => webUtils.getPathForFile(file) || null,
   },
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) =>
       ipcRenderer.invoke('shell:openInEditor', dirPath, folderContext),
+    openPath: (targetPath: string) =>
+      ipcRenderer.invoke('shell:openPath', targetPath),
     openTeamsJoinUrl: (url: string) =>
       ipcRenderer.invoke('shell:openTeamsJoinUrl', url),
     getAvailableEditors: () => ipcRenderer.invoke('shell:getAvailableEditors'),
@@ -871,16 +994,30 @@ contextBridge.exposeInMainWorld('api', {
     stopAll: () => ipcRenderer.invoke(AGENT_CHANNELS.STOP_ALL),
     respond: (stepId: string, requestId: string, response: unknown) =>
       ipcRenderer.invoke(AGENT_CHANNELS.RESPOND, stepId, requestId, response),
-    sendMessage: (stepId: string, parts: unknown[]) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.SEND_MESSAGE, stepId, parts),
-    queuePrompt: (stepId: string, parts: unknown[]) =>
-      ipcRenderer.invoke(AGENT_CHANNELS.QUEUE_PROMPT, stepId, parts),
-    updateQueuedPrompt: (stepId: string, promptId: string, content: string) =>
+    sendMessage: (
+      stepId: string,
+      parts: unknown[],
+      capture?: AgentMemoryFollowUpCapture,
+    ) =>
+      ipcRenderer.invoke(AGENT_CHANNELS.SEND_MESSAGE, stepId, parts, capture),
+    queuePrompt: (
+      stepId: string,
+      parts: unknown[],
+      capture?: AgentMemoryQueuedPromptCapture,
+    ) =>
+      ipcRenderer.invoke(AGENT_CHANNELS.QUEUE_PROMPT, stepId, parts, capture),
+    updateQueuedPrompt: (
+      stepId: string,
+      promptId: string,
+      content: string,
+      capture?: AgentMemoryPromptCapture,
+    ) =>
       ipcRenderer.invoke(
         AGENT_CHANNELS.UPDATE_QUEUED_PROMPT,
         stepId,
         promptId,
         content,
+        capture,
       ),
     cancelQueuedPrompt: (stepId: string, promptId: string) =>
       ipcRenderer.invoke(AGENT_CHANNELS.CANCEL_QUEUED_PROMPT, stepId, promptId),
@@ -914,6 +1051,212 @@ contextBridge.exposeInMainWorld('api', {
       const handler = (_: unknown, event: unknown) => callback(event);
       ipcRenderer.on(AGENT_CHANNELS.EVENT, handler);
       return () => ipcRenderer.removeListener(AGENT_CHANNELS.EVENT, handler);
+    },
+  },
+  mobilePreview: {
+    listDevices: (platform: MobilePlatform) =>
+      ipcRenderer.invoke('mobilePreview:listDevices', platform),
+    listSessions: (params: MobilePreviewListSessionsParams) =>
+      ipcRenderer.invoke('mobilePreview:listSessions', params),
+    listDeviceAssignments: () =>
+      ipcRenderer.invoke('mobilePreview:listDeviceAssignments'),
+    getAndroidToolStatus: () =>
+      ipcRenderer.invoke('mobilePreview:getAndroidToolStatus'),
+    listAndroidDeviceProfiles: () =>
+      ipcRenderer.invoke('mobilePreview:listAndroidDeviceProfiles'),
+    listAndroidSystemImages: () =>
+      ipcRenderer.invoke('mobilePreview:listAndroidSystemImages'),
+    createAndroidDevice: (params: MobilePreviewAndroidCreateDeviceParams) =>
+      ipcRenderer.invoke('mobilePreview:createAndroidDevice', params),
+    deleteAndroidDevice: (name: string) =>
+      ipcRenderer.invoke('mobilePreview:deleteAndroidDevice', name),
+    installAndroidSystemImage: (
+      params: MobilePreviewAndroidInstallSystemImageParams,
+    ) => ipcRenderer.invoke('mobilePreview:installAndroidSystemImage', params),
+    getIosToolStatus: () =>
+      ipcRenderer.invoke('mobilePreview:getIosToolStatus'),
+    listIosRuntimes: () =>
+      ipcRenderer.invoke('mobilePreview:listIosRuntimes'),
+    listIosDeviceTypes: () =>
+      ipcRenderer.invoke('mobilePreview:listIosDeviceTypes'),
+    createIosDevice: (params: MobilePreviewIosCreateDeviceParams) =>
+      ipcRenderer.invoke('mobilePreview:createIosDevice', params),
+    deleteIosDevice: (deviceId: string) =>
+      ipcRenderer.invoke('mobilePreview:deleteIosDevice', deviceId),
+    eraseIosDevice: (deviceId: string) =>
+      ipcRenderer.invoke('mobilePreview:eraseIosDevice', deviceId),
+    renameIosDevice: (params: MobilePreviewIosRenameDeviceParams) =>
+      ipcRenderer.invoke('mobilePreview:renameIosDevice', params),
+    getIosAppStatus: (params: MobilePreviewIosAppStatusRequestParams) =>
+      ipcRenderer.invoke('mobilePreview:getIosAppStatus', params),
+    cancelIosAppStatus: (params: MobilePreviewIosAppStatusCancelParams) =>
+      ipcRenderer.invoke('mobilePreview:cancelIosAppStatus', params),
+    restartIosApp: (params: MobilePreviewIosAppRequestParams) =>
+      ipcRenderer.invoke('mobilePreview:restartIosApp', params),
+    launchExpo: (params: MobilePreviewExpoLaunchParams) =>
+      ipcRenderer.invoke('mobilePreview:launchExpo', params),
+    cancelExpoLaunch: (requestId: string) =>
+      ipcRenderer.invoke('mobilePreview:cancelExpoLaunch', requestId),
+    start: (params: MobilePreviewStartParams) =>
+      ipcRenderer.invoke('mobilePreview:start', params),
+    attachSession: (params: MobilePreviewAttachSessionParams) =>
+      ipcRenderer.invoke('mobilePreview:attachSession', params),
+    detachSession: (params: MobilePreviewDetachSessionParams) =>
+      ipcRenderer.invoke('mobilePreview:detachSession', params),
+    stop: (sessionId: string) =>
+      ipcRenderer.invoke('mobilePreview:stop', sessionId),
+    sendInput: (sessionId: string, event: MobilePreviewInputEvent) =>
+      ipcRenderer.invoke('mobilePreview:sendInput', sessionId, event),
+    openDeeplink: (params: MobilePreviewOpenDeeplinkParams) =>
+      ipcRenderer.invoke('mobilePreview:openDeeplink', params),
+    openDevMenu: (params: MobilePreviewOpenDevMenuParams) =>
+      ipcRenderer.invoke('mobilePreview:openDevMenu', params),
+    reloadExpo: (params: MobilePreviewReloadExpoParams) =>
+      ipcRenderer.invoke('mobilePreview:reloadExpo', params),
+    forwardPort: (params: MobilePreviewForwardPortParams) =>
+      ipcRenderer.invoke('mobilePreview:forwardPort', params),
+    setTextSize: (params: MobilePreviewSetTextSizeParams) =>
+      ipcRenderer.invoke('mobilePreview:setTextSize', params),
+    setColorScheme: (sessionId: string, scheme: MobileColorScheme) =>
+      ipcRenderer.invoke('mobilePreview:setColorScheme', sessionId, scheme),
+    rotate: (sessionId: string, direction: MobileRotationDirection) =>
+      ipcRenderer.invoke('mobilePreview:rotate', sessionId, direction),
+    startNativeLogs: (params: MobilePreviewNativeLogStartParams) =>
+      ipcRenderer.invoke('mobilePreview:startNativeLogs', params),
+    stopNativeLogs: (sessionId: string) =>
+      ipcRenderer.invoke('mobilePreview:stopNativeLogs', sessionId),
+    startNetworkProxy: (params: MobilePreviewNetworkProxyStartParams) =>
+      ipcRenderer.invoke('mobilePreview:startNetworkProxy', params),
+    stopNetworkProxy: (sessionId: string) =>
+      ipcRenderer.invoke('mobilePreview:stopNetworkProxy', sessionId),
+    startPacketCapture: (params: MobilePreviewPacketCaptureStartParams) =>
+      ipcRenderer.invoke('mobilePreview:startPacketCapture', params),
+    stopPacketCapture: (sessionId: string) =>
+      ipcRenderer.invoke('mobilePreview:stopPacketCapture', sessionId),
+    resolveReactNativeDevTools: (params: ReactNativeDevToolsResolveParams) =>
+      ipcRenderer.invoke('mobilePreview:resolveReactNativeDevTools', params),
+    openReactNativeDevTools: (params: ReactNativeDevToolsOpenParams) =>
+      ipcRenderer.invoke('mobilePreview:openReactNativeDevTools', params),
+    openEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedOpenParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:openEmbeddedReactNativeDevTools',
+        params,
+      ),
+    setEmbeddedReactNativeDevToolsBounds: (
+      params: ReactNativeDevToolsEmbeddedBoundsParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:setEmbeddedReactNativeDevToolsBounds',
+        params,
+      ),
+    setEmbeddedReactNativeDevToolsVisibility: (
+      params: ReactNativeDevToolsEmbeddedVisibilityParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:setEmbeddedReactNativeDevToolsVisibility',
+        params,
+      ),
+    closeEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedCloseParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:closeEmbeddedReactNativeDevTools',
+        params,
+      ),
+    installNetworkProxyCertificate: (
+      params: MobilePreviewNetworkProxyCertificateParams,
+    ) =>
+      ipcRenderer.invoke(
+        'mobilePreview:installNetworkProxyCertificate',
+        params,
+      ),
+    prepareAndroidAppTrust: (params: MobilePreviewAndroidAppTrustParams) =>
+      ipcRenderer.invoke('mobilePreview:prepareAndroidAppTrust', params),
+    getAndroidAppStatus: (params: MobilePreviewAndroidAppStatusParams) =>
+      ipcRenderer.invoke('mobilePreview:getAndroidAppStatus', params),
+    restartAndroidApp: (params: MobilePreviewAndroidAppRestartParams) =>
+      ipcRenderer.invoke('mobilePreview:restartAndroidApp', params),
+    onNativeLogSession: (
+      callback: (event: MobilePreviewNativeLogSessionEvent) => void,
+    ) => {
+      const handler = (_: unknown, event: MobilePreviewNativeLogSessionEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:nativeLogSession', handler);
+      return () =>
+        ipcRenderer.removeListener('mobilePreview:nativeLogSession', handler);
+    },
+    onNativeLog: (callback: (event: MobilePreviewNativeLogEvent) => void) => {
+      const handler = (_: unknown, event: MobilePreviewNativeLogEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:nativeLog', handler);
+      return () =>
+        ipcRenderer.removeListener('mobilePreview:nativeLog', handler);
+    },
+    onNetworkProxySession: (
+      callback: (event: MobilePreviewNetworkProxySessionEvent) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        event: MobilePreviewNetworkProxySessionEvent,
+      ) => callback(event);
+      ipcRenderer.on('mobilePreview:networkProxySession', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'mobilePreview:networkProxySession',
+          handler,
+        );
+    },
+    onNetworkProxyRequest: (
+      callback: (event: MobilePreviewNetworkProxyEvent) => void,
+    ) => {
+      const handler = (_: unknown, event: MobilePreviewNetworkProxyEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:networkProxyRequest', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'mobilePreview:networkProxyRequest',
+          handler,
+        );
+    },
+    onPacketCaptureSession: (
+      callback: (event: MobilePreviewPacketCaptureSessionEvent) => void,
+    ) => {
+      const handler = (
+        _: unknown,
+        event: MobilePreviewPacketCaptureSessionEvent,
+      ) => callback(event);
+      ipcRenderer.on('mobilePreview:packetCaptureSession', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'mobilePreview:packetCaptureSession',
+          handler,
+        );
+    },
+    onPacketCaptureRequest: (
+      callback: (event: MobilePreviewPacketCaptureEvent) => void,
+    ) => {
+      const handler = (_: unknown, event: MobilePreviewPacketCaptureEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:packetCaptureRequest', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'mobilePreview:packetCaptureRequest',
+          handler,
+        );
+    },
+    onFrame: (callback: (event: MobilePreviewFrameEvent) => void) => {
+      const handler = (_: unknown, event: MobilePreviewFrameEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:frame', handler);
+      return () => ipcRenderer.removeListener('mobilePreview:frame', handler);
+    },
+    onSession: (callback: (event: MobilePreviewSessionEvent) => void) => {
+      const handler = (_: unknown, event: MobilePreviewSessionEvent) =>
+        callback(event);
+      ipcRenderer.on('mobilePreview:session', handler);
+      return () => ipcRenderer.removeListener('mobilePreview:session', handler);
     },
   },
   debug: {
@@ -952,6 +1295,44 @@ contextBridge.exposeInMainWorld('api', {
     deleteBefore: (before: string) =>
       ipcRenderer.invoke('workActivity:deleteBefore', before),
     deleteAll: () => ipcRenderer.invoke('workActivity:deleteAll'),
+  },
+  timesheets: {
+    listAdapters: () => ipcRenderer.invoke('timesheets:listAdapters'),
+    buildDraft: (params: TimesheetDraftParams) =>
+      ipcRenderer.invoke('timesheets:buildDraft', params),
+    sync: (params: TimesheetSyncParams) =>
+      ipcRenderer.invoke('timesheets:sync', params),
+    authStatus: (provider: TimesheetProviderType) =>
+      ipcRenderer.invoke('timesheets:authStatus', provider),
+    login: (provider: TimesheetProviderType) =>
+      ipcRenderer.invoke('timesheets:login', provider),
+    logout: (provider: TimesheetProviderType) =>
+      ipcRenderer.invoke('timesheets:logout', provider),
+    listSheets: (provider: TimesheetProviderType) =>
+      ipcRenderer.invoke('timesheets:listSheets', provider),
+    inspectSheet: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      navigationUrl: string;
+    }) => ipcRenderer.invoke('timesheets:inspectSheet', params),
+    lookupAxisOptions: (
+      params: TimesheetAxisLookupRequest & { provider: TimesheetProviderType },
+    ) => ipcRenderer.invoke('timesheets:lookupAxisOptions', params),
+    dryRun: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      entries: TimesheetEntryInput[];
+      deletions?: TimesheetRowDeletion[];
+      action: TimesheetAction;
+    }) => ipcRenderer.invoke('timesheets:dryRun', params),
+    save: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      entries: TimesheetEntryInput[];
+      deletions?: TimesheetRowDeletion[];
+      updates?: TimesheetRowUpdate[];
+      action: TimesheetAction;
+    }) => ipcRenderer.invoke('timesheets:save', params),
   },
   rateLimitSwap: {
     getStatus: () =>
@@ -1016,26 +1397,20 @@ contextBridge.exposeInMainWorld('api', {
   runCommands: {
     startCommand: (params: {
       taskId: string;
-      projectId: string;
-      workingDir: string;
       runCommandId: string;
     }) =>
       ipcRenderer.invoke('project:commands:run:startCommand', {
         taskId: params.taskId,
-        projectId: params.projectId,
-        workingDir: params.workingDir,
         runCommandId: params.runCommandId,
       }),
+    startAdHocCommand: (params: StartAdHocRunCommandParams) =>
+      ipcRenderer.invoke('project:commands:run:startAdHocCommand', params),
     startGroup: (params: {
       taskId: string;
-      projectId: string;
-      workingDir: string;
       runCommandIds: string[];
     }) =>
       ipcRenderer.invoke('project:commands:run:startGroup', {
         taskId: params.taskId,
-        projectId: params.projectId,
-        workingDir: params.workingDir,
         runCommandIds: params.runCommandIds,
       }),
     stopCommand: (params: { taskId: string; runCommandId: string }) =>

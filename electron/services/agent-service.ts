@@ -4,12 +4,16 @@
 // Handles session lifecycle, message persistence, IPC forwarding,
 // prompt queueing, notifications, and session allow tools.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { BrowserWindow } from 'electron';
+import { createHash } from 'node:crypto';
 import { nanoid } from 'nanoid';
 
 import {
   AGENT_CHANNELS,
   type AgentQuestion,
+  DECIDE_FOR_ME,
+  getStableQuestionKeys,
   type PermissionResponse,
   type QuestionResponse,
   type QueuedPrompt,
@@ -33,6 +37,17 @@ import {
   type RunAgentCapability,
 } from '@shared/agent-backend-provider-types';
 import {
+  type AgentMemoryFollowUpCapture,
+  type AgentMemoryPromptCapture,
+  type AgentMemoryQuestionResponseDetail,
+  agentMemoryQuestionResponseDetailInputSchema,
+  type AgentMemoryQueuedPromptCapture,
+} from '@shared/agent-memory-types';
+import {
+  deriveAgentMemoryPromptCaptureFromSubmittedContent,
+  reconcileAgentMemoryPromptCaptureWithDiagnostics,
+} from '@shared/agent-memory-review-reconciliation';
+import {
   getDefaultInteractionModeForBackend,
   normalizeInteractionModeForBackend,
 } from '@shared/types';
@@ -47,9 +62,17 @@ import {
   type TaskStepType,
   type ThinkingEffort,
 } from '@shared/types';
+import type {
+  NormalizedEntry,
+} from '@shared/normalized-message-v2';
+import type {
+  PermissionsChangedEvent,
+  PermissionScope,
+  ResolvedPermissionRule,
+} from '@shared/permission-types';
+import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { AiUsageFeature } from '@shared/ai-usage-types';
-import type { NormalizedEntry } from '@shared/normalized-message-v2';
 
 import {
   AgentMessageRepository,
@@ -69,6 +92,14 @@ import {
   readSettings,
   resolveRules,
 } from './permission-settings-service';
+import {
+  captureAgentMemoryEventSafe,
+  captureAgentMemoryPromptSubmissionSafe,
+} from './agent-memory-capture-service';
+import {
+  emitPermissionsChanged,
+  onPermissionsChanged,
+} from './permission-event-service';
 import {
   emitStepUpsert,
   emitTaskPatch,
@@ -91,7 +122,6 @@ import { dbg } from '../lib/debug';
 import { generateTaskName } from './name-generation-service';
 import { getAgentBackendProvider } from './agent-backends/providers';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
-import { mutateTaskSessionRules } from './task-session-rules-service';
 import { normalizeThinkingEffortForModel } from '../../shared/thinking-settings';
 import { notificationService } from './notification-service';
 import { OpenCodeBackend } from './agent-backends/opencode/opencode-backend';
@@ -99,6 +129,9 @@ import { pathExists } from '../lib/fs';
 import { QuestionBrokerService } from './question-broker-service';
 import { resolveGlobalRules } from './global-permissions-service';
 import { SettingsRepository } from '../database/repositories/settings';
+import { shellEditTracker } from './shell-edit-tracker';
+import { startAgentWithPrReviewLifecycle } from './pr-review-task-service';
+import { stepPermissionService } from './step-permission-service';
 import { StepService } from './step-service';
 import { TaskStepRepository } from '../database/repositories/task-steps';
 
@@ -106,6 +139,181 @@ import { TaskStepRepository } from '../database/repositories/task-steps';
  *  Keeps full PromptPart[] (with image base64) out of the QueuedPrompt.content
  *  field which crosses IPC to the renderer for display. */
 const queuedPromptParts = new Map<string, PromptPart[]>();
+const queuedPromptCaptures = new Map<string, AgentMemoryPromptCapture>();
+const MAX_PENDING_QUEUED_PROMPT_SUBMISSIONS = 256;
+const MAX_QUEUED_PROMPT_TOMBSTONES = 2_048;
+const queuedPromptSubmissionTombstones = new Map<string, string>();
+
+type CanonicalQuestionMemoryDetail = AgentMemoryQuestionResponseDetail & {
+  question: string;
+};
+
+class QuestionResponseValidationError extends Error {
+  // `reason` is a fixed internal enum string, never user or agent content, so
+  // it is safe to surface. Without it the toast is unactionable and the real
+  // cause is only visible with DEBUG enabled.
+  constructor(requestId: string, reason?: string) {
+    super(
+      reason
+        ? `Invalid question response for request ${requestId} (${reason})`
+        : `Invalid question response for request ${requestId}`,
+    );
+    this.name = 'QuestionResponseValidationError';
+  }
+}
+
+function questionMemoryAnswerFromDetail({
+  question,
+  detail,
+}: {
+  question: NormalizedQuestion;
+  detail: AgentMemoryQuestionResponseDetail;
+}): { answer: string } | { error: string } {
+  const optionLabels = new Set(question.options.map((option) => option.label));
+  if (detail.selectedLabels.some((label) => !optionLabels.has(label))) {
+    return { error: 'invalid-selected-label' };
+  }
+  if (
+    detail.customAnswer &&
+    question.allowFreeform === false &&
+    detail.customAnswer !== DECIDE_FOR_ME
+  ) {
+    return { error: 'custom-answer-disabled' };
+  }
+
+  const note = detail.notes ? `Notes: ${detail.notes}` : null;
+  const isMulti = question.type === 'multi_choice' || question.multiSelect;
+  const isText =
+    question.type === 'text' ||
+    (!question.type && question.options.length === 0);
+
+  if (isMulti) {
+    const parts = [...detail.selectedLabels, detail.customAnswer, note]
+      .map((part) => part?.trim())
+      .filter((part): part is string => Boolean(part));
+    return { answer: JSON.stringify(parts) };
+  }
+
+  if (isText) {
+    if (detail.selectedLabels.length > 0) {
+      return { error: 'text-question-has-selected-labels' };
+    }
+  } else if (
+    detail.selectedLabels.length > 1 ||
+    (detail.selectedLabels.length === 1 && detail.customAnswer)
+  ) {
+    return { error: 'invalid-single-choice-detail' };
+  }
+
+  return {
+    answer: [detail.selectedLabels[0], detail.customAnswer, note]
+      .map((part) => part?.trim())
+      .filter((part): part is string => Boolean(part))
+      .join(', '),
+  };
+}
+
+function canonicalizeQuestionResponse({
+  request,
+  response,
+}: {
+  request: NormalizedQuestionRequest;
+  response: QuestionResponse;
+}): {
+  answers: Record<string, string>;
+  memoryDetails: CanonicalQuestionMemoryDetail[];
+  questionKeys: string[];
+} {
+  const reject = (reason: string, questionIndex?: number): never => {
+    dbg.agent(
+      questionIndex === undefined
+        ? 'Rejecting question response request=%s reason=%s'
+        : 'Rejecting question response request=%s questionIndex=%d reason=%s',
+      request.requestId,
+      ...(questionIndex === undefined
+        ? [reason]
+        : [questionIndex, reason]),
+    );
+    throw new QuestionResponseValidationError(request.requestId, reason);
+  };
+
+  if (!Array.isArray(response.memoryDetails)) {
+    return reject('invalid-details');
+  }
+  if (
+    !response.answers ||
+    typeof response.answers !== 'object' ||
+    Array.isArray(response.answers)
+  ) {
+    return reject('invalid-answer-map');
+  }
+
+  const questionKeys = getStableQuestionKeys(request.questions);
+  const questionIndexByKey = new Map(
+    questionKeys.map((questionKey, index) => [questionKey, index]),
+  );
+  const parsedDetails = response.memoryDetails.map((detail) => {
+    const parsed =
+      agentMemoryQuestionResponseDetailInputSchema.safeParse(detail);
+    if (!parsed.success) {
+      return reject('invalid-detail-shape');
+    }
+    return parsed.data;
+  });
+  const detailByKey = new Map<string, AgentMemoryQuestionResponseDetail>();
+  for (const detail of parsedDetails) {
+    if (!questionIndexByKey.has(detail.questionKey)) {
+      return reject('unknown-question-key');
+    }
+    if (detailByKey.has(detail.questionKey)) {
+      return reject('duplicate-detail');
+    }
+    detailByKey.set(detail.questionKey, detail);
+  }
+
+  const answers: Record<string, string> = {};
+  const memoryDetails: CanonicalQuestionMemoryDetail[] = [];
+  for (const [questionIndex, question] of request.questions.entries()) {
+    const questionKey = questionKeys[questionIndex];
+    const rendererAnswer = response.answers[questionKey];
+    const detail = detailByKey.get(questionKey);
+    if (rendererAnswer === undefined) {
+      if (detail) return reject('detail-without-answer', questionIndex);
+      if (question.required ?? true) {
+        return reject('missing-required-answer', questionIndex);
+      }
+      continue;
+    }
+    if (!detail) return reject('answer-without-detail', questionIndex);
+
+    const expected = questionMemoryAnswerFromDetail({
+      question,
+      detail,
+    });
+    if ('error' in expected) {
+      return reject(expected.error, questionIndex);
+    }
+    if (rendererAnswer !== expected.answer) {
+      return reject('delivered-answer-mismatch', questionIndex);
+    }
+
+    answers[questionKey] = expected.answer;
+    memoryDetails.push({
+      ...detail,
+      questionKey,
+      question: question.question,
+    });
+  }
+  return {
+    answers,
+    memoryDetails,
+    // Every question key in the backend's original order, including skipped
+    // optional questions. Backends (e.g. OpenCode) map answers positionally, so
+    // omitting a skipped question would shift later answers onto the wrong
+    // questions.
+    questionKeys,
+  };
+}
 
 function appendPromptParts(
   existingParts: PromptPart[],
@@ -134,6 +342,56 @@ function appendPromptParts(
   }
 
   return combinedParts;
+}
+
+function capturesMatch(
+  rendererCapture: AgentMemoryPromptCapture,
+  serverCapture: AgentMemoryPromptCapture,
+): boolean {
+  return JSON.stringify(rendererCapture) === JSON.stringify(serverCapture);
+}
+
+function diagnosticIdHash(id: string): string {
+  return createHash('sha256').update(id).digest('hex').slice(0, 12);
+}
+
+function admitAgentMemoryPromptCapture({
+  capture,
+  content,
+  source,
+  stepId,
+}: {
+  capture: AgentMemoryPromptCapture;
+  content: string;
+  source: 'immediate' | 'queued';
+  stepId: string;
+}): AgentMemoryPromptCapture {
+  const admission = deriveAgentMemoryPromptCaptureFromSubmittedContent(
+    capture,
+    content,
+  );
+  const diagnostics = admission.diagnostics;
+  if (
+    diagnostics.rejectedCommentIds.length > 0 ||
+    diagnostics.rejectedCommentsWithoutId > 0 ||
+    diagnostics.metadataMismatchCommentIds.length > 0 ||
+    diagnostics.unrepresentedRendererCommentIds.length > 0
+  ) {
+    dbg.agent('Agent Memory prompt admission metadata mismatch: %O', {
+      event: 'agent-memory-prompt-admission-mismatch',
+      source,
+      stepId,
+      hasReviewXml: diagnostics.hasReviewXml,
+      rejectedXmlCommentIdHashes:
+        diagnostics.rejectedCommentIds.map(diagnosticIdHash),
+      rejectedCommentsWithoutId: diagnostics.rejectedCommentsWithoutId,
+      metadataMismatchCommentIdHashes:
+        diagnostics.metadataMismatchCommentIds.map(diagnosticIdHash),
+      unrepresentedRendererCommentIdHashes:
+        diagnostics.unrepresentedRendererCommentIds.map(diagnosticIdHash),
+    });
+  }
+  return admission.capture;
 }
 
 function replacePromptText(parts: PromptPart[], content: string): PromptPart[] {
@@ -256,7 +514,101 @@ interface ActiveSession {
     source?: 'backend' | 'jc-mcp';
   }>;
   hasTerminalError: boolean;
+  /**
+   * True once a terminal `result`/`error` event was handled for the current
+   * turn while the backend stream is still open. Background subagents keep
+   * streaming after the main turn reports a result, so activity arriving after
+   * this flag is set means the step is actually still running.
+   */
+  turnFinalized: boolean;
+  /**
+   * Terminal status we reported for the last finalized turn, kept so that a
+   * step reactivated by post-result activity can be closed again if the stream
+   * ends without emitting another `result`.
+   */
+  lastTerminalStatus: 'completed' | 'errored' | null;
   stopRequested: boolean;
+  /** Context needed to re-resolve permission rules while the run is live. */
+  permissionContext?: {
+    projectPath: string;
+    workingDir: string;
+    isWorktree: boolean;
+  };
+  agentMemoryCaptureEligible: boolean;
+  previousResultFallback: string | null;
+  queuedPromptIdsBySubmissionId: Map<string, string>;
+  /** Identifies this session's shell-edit tracking, see `shellEditTracker`. */
+  shellEditToken?: object;
+}
+
+function queuedPromptTombstoneKey(stepId: string, submissionId: string): string {
+  return `${stepId}\0${submissionId}`;
+}
+
+function rememberQueuedPromptTombstone(
+  stepId: string,
+  submissionId: string,
+  promptId: string,
+): void {
+  const tombstoneKey = queuedPromptTombstoneKey(stepId, submissionId);
+  queuedPromptSubmissionTombstones.delete(tombstoneKey);
+  queuedPromptSubmissionTombstones.set(tombstoneKey, promptId);
+  while (queuedPromptSubmissionTombstones.size > MAX_QUEUED_PROMPT_TOMBSTONES) {
+    const oldestTombstoneKey = queuedPromptSubmissionTombstones.keys().next()
+      .value;
+    if (!oldestTombstoneKey) break;
+    queuedPromptSubmissionTombstones.delete(oldestTombstoneKey);
+  }
+}
+
+function tombstoneQueuedPromptSubmissionIds(
+  session: ActiveSession,
+  promptId: string,
+): void {
+  for (const [submissionId, queuedPromptId] of
+    session.queuedPromptIdsBySubmissionId) {
+    if (queuedPromptId === promptId) {
+      session.queuedPromptIdsBySubmissionId.delete(submissionId);
+      rememberQueuedPromptTombstone(session.stepId, submissionId, promptId);
+    }
+  }
+}
+
+function tombstoneAllQueuedPromptSubmissionIds(session: ActiveSession): void {
+  for (const [submissionId, promptId] of
+    session.queuedPromptIdsBySubmissionId) {
+    rememberQueuedPromptTombstone(session.stepId, submissionId, promptId);
+  }
+  session.queuedPromptIdsBySubmissionId.clear();
+}
+
+function rememberPendingQueuedPromptSubmission(
+  session: ActiveSession,
+  submissionId: string,
+  promptId: string,
+): void {
+  session.queuedPromptIdsBySubmissionId.delete(submissionId);
+  session.queuedPromptIdsBySubmissionId.set(submissionId, promptId);
+  while (
+    session.queuedPromptIdsBySubmissionId.size >
+    MAX_PENDING_QUEUED_PROMPT_SUBMISSIONS
+  ) {
+    const oldestSubmissionId = session.queuedPromptIdsBySubmissionId
+      .keys()
+      .next().value;
+    if (!oldestSubmissionId) break;
+    const oldestPromptId = session.queuedPromptIdsBySubmissionId.get(
+      oldestSubmissionId,
+    );
+    session.queuedPromptIdsBySubmissionId.delete(oldestSubmissionId);
+    if (oldestPromptId) {
+      rememberQueuedPromptTombstone(
+        session.stepId,
+        oldestSubmissionId,
+        oldestPromptId,
+      );
+    }
+  }
 }
 
 function getUsageFeatureForStep(type: TaskStepType): AiUsageFeature {
@@ -289,18 +641,16 @@ function assertPrReviewAgentRunAllowed({
   step: TaskStep;
   provider: AgentBackendProvider;
 }) {
-  if (task.type !== 'pr-review' && !isPrReviewChatStepMeta(step.meta)) {
-    return;
-  }
+  if (!isPrReviewChatStepMeta(step.meta)) return;
 
   if (task.type !== 'pr-review') {
     throw new Error('PR review chat steps can only run under PR review tasks');
   }
-  if (!isPrReviewChatStepMeta(step.meta)) {
-    throw new Error('PR review tasks can only run PR review chat steps');
-  }
   if (task.pullRequestId !== String(step.meta.pullRequestId)) {
     throw new Error('PR review chat step pull request does not match review task');
+  }
+  if (step.interactionMode !== 'ask') {
+    throw new Error('PR review chat steps must use ask interaction mode');
   }
   if (!provider.capabilities.agent.permissions.supported) {
     throw new Error(
@@ -308,26 +658,102 @@ function assertPrReviewAgentRunAllowed({
     );
   }
 
-  const actualRules = JSON.stringify(task.sessionRules ?? {});
-  const expectedRules = JSON.stringify(buildReadOnlyPrReviewSessionRules());
+  const canonicalizeRules = (rules: TaskStep['sessionRules']) =>
+    flattenScope(rules)
+      .map(({ tool, pattern, action }) => ({ tool, pattern, action }))
+      .sort(
+        (left, right) =>
+          left.tool.localeCompare(right.tool) ||
+          left.pattern.localeCompare(right.pattern) ||
+          left.action.localeCompare(right.action),
+      );
+  const actualRules = JSON.stringify(canonicalizeRules(step.sessionRules ?? {}));
+  const expectedRules = JSON.stringify(
+    canonicalizeRules(buildReadOnlyPrReviewSessionRules()),
+  );
   if (actualRules !== expectedRules) {
-    throw new Error('PR review tasks must use read-only session rules');
+    throw new Error('PR review chat steps must use read-only session rules');
   }
+}
+
+/**
+ * Resolve the backend-agnostic permission rules for a run: global rules,
+ * project/worktree rules from `.jean-claude/settings.local.json`, and the
+ * step's own session rules, in precedence order.
+ *
+ * Used both when a run starts and whenever persisted rules change while the
+ * run is live.
+ */
+export async function resolvePermissionRulesForStep({
+  projectPath,
+  workingDir,
+  isWorktree,
+  sessionRules,
+  autoAccept = false,
+}: {
+  projectPath: string;
+  workingDir: string;
+  isWorktree: boolean;
+  sessionRules: PermissionScope;
+  /**
+   * Per-session auto-accept. Prompts for script edits (python/node heredoc
+   * snippets, `sed -i`) would be accepted anyway, so grant the script-edit
+   * rule directly and skip the round-trip. The rule still enforces its own
+   * containment checks against `workingDir`.
+   *
+   * Prepended, not appended: script-edit matching is last-match-wins, so an
+   * explicit `script_edit: deny` the user configured must still override this
+   * implicit grant.
+   */
+  autoAccept?: boolean;
+}): Promise<ResolvedPermissionRule[]> {
+  const globalRules = await resolveGlobalRules();
+  const settings = await readSettings(projectPath);
+  return [
+    ...(autoAccept
+      ? [
+          {
+            tool: SCRIPT_EDIT_TOOL,
+            pattern: '*',
+            action: 'allow' as const,
+            subpathRoot: workingDir,
+          },
+        ]
+      : []),
+    ...resolveRules(settings, isWorktree, globalRules, workingDir),
+    ...flattenScope(sessionRules),
+  ];
 }
 
 class AgentService {
   private sessions: Map<string, ActiveSession> = new Map(); // key is stepId
   private stepStopPromises = new Map<string, Promise<void>>();
+  private backendRunCompletions = new Map<
+    string,
+    { owner: symbol; promise: Promise<void> }
+  >();
+  private backendRunContext = new AsyncLocalStorage<symbol>();
   private runStopPromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private runDisposePromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private runCleanupPromises = new WeakMap<AgentRunHandle, Promise<void>>();
   private resultUpdateUsageQueues = new Map<string, Promise<void>>();
   private requestResponsePromises = new Map<string, Promise<void>>();
+  /**
+   * Steps with per-session auto-accept enabled. In-memory only: cleared when
+   * the app restarts. Deny rules still run in the backend before a request is
+   * ever emitted, so this only auto-allows what would have prompted the user.
+   */
+  private autoAcceptSteps = new Set<string>();
+
+  /** Ordering guards for concurrent permission-rule refreshes, per step. */
+  private permissionRefreshGeneration = new Map<string, number>();
+  private permissionRefreshQueue = new Map<string, Promise<void>>();
   private startingSteps = new Set<string>();
   private registeringSteps = new Set<string>();
   private pendingSessionRegistrations = new Set<Promise<void>>();
   private stopAllActive = false;
   private stopAllPromise: Promise<void> | null = null;
+  private stepStartPromises = new Map<string, Promise<void>>();
   private mainWindow: BrowserWindow | null = null;
   private focusedTaskId: string | null = null;
   private pendingImageAttachments = new Map<string, PromptImagePart[]>();
@@ -337,12 +763,108 @@ class AgentService {
   );
 
   constructor() {
+    onPermissionsChanged((event) => {
+      void this.refreshPermissionRules(event).catch((error) => {
+        dbg.agentPermission(
+          'Failed refreshing permission rules for live sessions: %O',
+          error,
+        );
+      });
+    });
     agentResourceMonitorService.setSnapshotListener((snapshot) => {
       this.emitEvent(snapshot.taskId, snapshot.stepId, {
         type: 'resource-snapshot',
         snapshot,
       });
     });
+  }
+
+  /**
+   * Re-resolve permission rules for every live session affected by a
+   * persisted permission change and push the fresh snapshot into its backend.
+   *
+   * Global changes affect every active session; project/worktree changes only
+   * affect sessions whose project matches `projectPath`; session changes affect
+   * the single step they name.
+   */
+  private async refreshPermissionRules(
+    event: PermissionsChangedEvent,
+  ): Promise<void> {
+    const entries =
+      event.scope === 'session'
+        ? ([[event.stepId, this.sessions.get(event.stepId)]] as Array<
+            [string, ActiveSession | undefined]
+          >)
+        : ([...this.sessions.entries()] as Array<
+            [string, ActiveSession | undefined]
+          >);
+    if (entries.length === 0) return;
+
+    await Promise.all(
+      entries.map(async ([stepId, session]) => {
+        if (!session) return;
+        // Two refreshes for the same step (e.g. auto-accept toggled on then
+        // off) resolve concurrently and could otherwise land out of order,
+        // leaving the stale snapshot live. Last caller wins.
+        const generation = (this.permissionRefreshGeneration.get(stepId) ?? 0) + 1;
+        this.permissionRefreshGeneration.set(stepId, generation);
+        const context = session.permissionContext;
+        if (!context || !session.runHandle) return;
+        if (
+          (event.scope === 'project' || event.scope === 'worktree') &&
+          (!event.projectPath || event.projectPath !== context.projectPath)
+        ) {
+          return;
+        }
+
+        const capability =
+          session.provider.capabilities.agent.permissionRuleUpdates;
+        if (!capability?.supported) return;
+
+        const step = await TaskStepRepository.findById(stepId);
+        if (!step) return;
+        const sessionRules = isPrReviewChatStepMeta(step.meta)
+          ? buildReadOnlyPrReviewSessionRules()
+          : (step.sessionRules ?? {});
+
+        const rules = await resolvePermissionRulesForStep({
+          projectPath: context.projectPath,
+          workingDir: context.workingDir,
+          isWorktree: context.isWorktree,
+          sessionRules,
+          autoAccept: this.autoAcceptSteps.has(stepId),
+        });
+
+        // The run may have finished while we were resolving, or a newer
+        // refresh may have superseded this one.
+        if (this.sessions.get(stepId) !== session || !session.runHandle) return;
+        if (this.permissionRefreshGeneration.get(stepId) !== generation) return;
+
+        const handle = session.runHandle;
+        // Serialize the pushes themselves so an older snapshot can never
+        // overtake a newer one inside the backend RPC.
+        const push = (this.permissionRefreshQueue.get(stepId) ?? Promise.resolve())
+          .then(async () => {
+            if (this.permissionRefreshGeneration.get(stepId) !== generation) return;
+            try {
+              await capability.implementation.update({ handle, rules });
+              dbg.agentPermission(
+                'Refreshed permission rules for live step %s (%d rules)',
+                stepId,
+                rules.length,
+              );
+            } catch (error) {
+              dbg.agentPermission(
+                'Failed pushing refreshed permission rules to step %s: %O',
+                stepId,
+                error,
+              );
+            }
+          });
+        this.permissionRefreshQueue.set(stepId, push);
+        await push;
+      }),
+    );
   }
 
   setMainWindow(window: BrowserWindow) {
@@ -392,8 +914,15 @@ class AgentService {
   }
 
   private deleteSession(stepId: string, session: ActiveSession): void {
+    tombstoneAllQueuedPromptSubmissionIds(session);
+    if (session.shellEditToken) {
+      shellEditTracker.end(stepId, session.shellEditToken);
+    }
     if (this.sessions.get(stepId) === session) {
       this.sessions.delete(stepId);
+      this.autoAcceptSteps.delete(stepId);
+      this.permissionRefreshGeneration.delete(stepId);
+      this.permissionRefreshQueue.delete(stepId);
     }
   }
 
@@ -448,28 +977,13 @@ class AgentService {
     this.emitEvent(taskId, stepId, { type: 'status', status: 'waiting' });
 
     if (request.type === 'question' && request.questionRequest) {
-      const questions: AgentQuestion[] = request.questionRequest.questions.map(
-        (q: NormalizedQuestion) => ({
-          question: q.question,
-          header: q.header,
-          options: q.options.map((o) => ({
-            label: o.label,
-            description: o.description,
-            ...(o.recommended !== undefined
-              ? { recommended: o.recommended }
-              : {}),
-          })),
-          multiSelect: q.multiSelect,
-          allowFreeform: q.allowFreeform,
-        }),
-      );
       this.emitEvent(taskId, stepId, {
         type: 'question',
         requestId: request.requestId,
         ...(request.questionRequest.contextReminder
           ? { contextReminder: request.questionRequest.contextReminder }
           : {}),
-        questions,
+        questions: this.toAgentQuestions(request.questionRequest.questions),
       });
       await this.notifyTaskEvent({
         taskId,
@@ -552,6 +1066,47 @@ class AgentService {
       dbg.agent('Failed to persist synthetic entry: %O', error);
     }
     this.emitEvent(taskId, session.stepId, { type: 'entry', entry });
+  }
+
+  /**
+   * Emits one authoritative edit entry covering every file changed during the
+   * turn, shell commands and Edit/Write tool uses alike.
+   */
+  private async emitTurnEditEntry(
+    stepId: string,
+    session: ActiveSession,
+  ): Promise<void> {
+    let files;
+    try {
+      files = await shellEditTracker.captureTurn(stepId);
+    } catch (error) {
+      dbg.agent('Failed to capture turn diff: %O', error);
+      return;
+    }
+    if (!files?.length) return;
+    await this.persistAndEmitSyntheticEntry(session.taskId, session, {
+      id: nanoid(),
+      date: new Date().toISOString(),
+      isSynthetic: true,
+      type: 'tool-use',
+      toolId: `turn-edit-${nanoid()}`,
+      name: 'edit',
+      input: {
+        filePath: files[0]!.filePath,
+        oldString: '',
+        newString: '',
+        files: files.map((file) => ({
+          filePath: file.filePath,
+          type: file.type,
+          patch: file.patch,
+          additions: file.additions,
+          deletions: file.deletions,
+          before: file.before,
+          after: file.after,
+        })),
+        isTurnSummary: true,
+      },
+    });
   }
 
   /**
@@ -804,7 +1359,13 @@ class AgentService {
       abortController: new AbortController(),
       pendingRequests: [],
       hasTerminalError: false,
+      turnFinalized: false,
+      lastTerminalStatus: null,
       stopRequested: false,
+      agentMemoryCaptureEligible:
+        task.type === 'agent' && (step.type === 'agent' || step.type === 'fork'),
+      previousResultFallback: step.output,
+      queuedPromptIdsBySubmissionId: new Map(),
     };
 
     this.sessions.set(stepId, session);
@@ -817,6 +1378,51 @@ class AgentService {
       existingMessageCount,
     );
     return session;
+  }
+
+  private trackBackendRun(
+    stepId: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const owner = Symbol(stepId);
+    const promise = this.backendRunContext.run(owner, operation);
+    const trackedRun = { owner, promise };
+    this.backendRunCompletions.set(stepId, trackedRun);
+    void promise.then(
+      () => {
+        if (this.backendRunCompletions.get(stepId) === trackedRun) {
+          this.backendRunCompletions.delete(stepId);
+        }
+      },
+      () => {
+        if (this.backendRunCompletions.get(stepId) === trackedRun) {
+          this.backendRunCompletions.delete(stepId);
+        }
+      },
+    );
+    return promise;
+  }
+
+  private async waitForBackendRun(
+    stepId: string,
+    trackedRun = this.backendRunCompletions.get(stepId),
+  ): Promise<void> {
+    if (!trackedRun || this.backendRunContext.getStore() === trackedRun.owner) {
+      return;
+    }
+    await trackedRun.promise;
+  }
+
+  private async waitForPreviousBackendRun(stepId: string): Promise<void> {
+    try {
+      await this.waitForBackendRun(stepId);
+    } catch (error) {
+      dbg.agentSession(
+        'Previous backend run for step %s failed before replacement: %O',
+        stepId,
+        error,
+      );
+    }
   }
 
   private async stopRunHandle(runHandle: AgentRunHandle): Promise<void> {
@@ -914,6 +1520,7 @@ class AgentService {
       generateNameOnInit?: boolean;
       initialPrompt?: string;
       isInitialPrompt?: boolean;
+      onRunStarting?: () => void;
     },
   ): Promise<void> {
     if (session.stopRequested) return;
@@ -957,6 +1564,10 @@ class AgentService {
       workingDir = step.meta.workspacePath;
     }
 
+    // Baseline snapshot so shell commands that edit files (sed -i, scripts,
+    // heredoc redirects) still show up in the prompt-group diff summary.
+    session.shellEditToken = shellEditTracker.begin({ stepId, workingDir });
+
     dbg.agentSession(
       'runBackend for step %s (task %s): backend=%s, cwd=%s, resuming=%s',
       stepId,
@@ -970,6 +1581,8 @@ class AgentService {
 
     // Create new abort controller for this query iteration
     session.abortController = new AbortController();
+    session.turnFinalized = false;
+    session.lastTerminalStatus = null;
 
     if (options?.generateNameOnInit && task.name === null) {
       // NOTE: fire-and-forget
@@ -984,12 +1597,21 @@ class AgentService {
 
     // Load backend-agnostic permissions and compile for the target backend.
     const isWorktree = !!task.worktreePath;
-    const globalRules = await resolveGlobalRules();
-    const settings = await readSettings(project.path);
-    const rules = [
-      ...resolveRules(settings, isWorktree, globalRules, workingDir),
-      ...flattenScope(task.sessionRules ?? {}),
-    ];
+    const sessionRules = isPrReviewChatStepMeta(step.meta)
+      ? buildReadOnlyPrReviewSessionRules()
+      : (step.sessionRules ?? {});
+    session.permissionContext = {
+      projectPath: project.path,
+      workingDir,
+      isWorktree,
+    };
+    const rules = await resolvePermissionRulesForStep({
+      projectPath: project.path,
+      workingDir,
+      isWorktree,
+      sessionRules,
+      autoAccept: this.autoAcceptSteps.has(stepId),
+    });
 
     const backendChanged = session.backendType !== session.requestedBackendType;
     const modelPreference =
@@ -1007,6 +1629,7 @@ class AgentService {
 
     let jcMcpRegistrationId: string | null = null;
     let runHandle: AgentRunHandle | null = null;
+    let resourceMonitorOwner: symbol | undefined;
     try {
       let mcpServers: AgentBackendConfig['mcpServers'];
       if (session.backendType !== 'codex') {
@@ -1085,7 +1708,7 @@ class AgentService {
             ? normalizedThinkingEffort
             : undefined,
         sessionId: session.sdkSessionId ?? undefined,
-        persistedSessionRules: task.sessionRules ?? {},
+        persistedSessionRules: sessionRules,
         permissionRules: rules,
         mcpServers,
       };
@@ -1102,12 +1725,13 @@ class AgentService {
         config,
         parts: effectiveParts,
       });
+      options?.onRunStarting?.();
       runHandle = await session.runStartPromise;
 
       session.runHandle = runHandle;
       session.runStartPromise = undefined;
 
-      agentResourceMonitorService.start({
+      resourceMonitorOwner = agentResourceMonitorService.start({
         taskId,
         stepId,
         backend: session.backendType,
@@ -1120,17 +1744,31 @@ class AgentService {
           break;
         }
 
-        await this.processEvent(stepId, session, event);
+        await this.processEvent(stepId, session, event, runHandle);
       }
     } finally {
+      // An interrupted turn still changed files, and no `result` event will
+      // arrive to report them. Emits nothing when the turn ended normally,
+      // because the `result` handler already consumed the diff.
+      if (session.abortController.signal.aborted) {
+        await this.emitTurnEditEntry(stepId, session);
+      }
       if (jcMcpRegistrationId) {
         await this.jcMcpBridgeService.unregisterStep(stepId, jcMcpRegistrationId);
       }
-      await agentResourceMonitorService.stop(stepId);
+      if (resourceMonitorOwner) {
+        await agentResourceMonitorService.stop(stepId, resourceMonitorOwner);
+      }
       if (runHandle) {
         await this.cleanupRunHandle(runHandle);
       }
     }
+
+    // A step reactivated by post-result background activity may never get a
+    // second `result` (the stream just ends). Drain anything queued during that
+    // window, or close the step so it doesn't stay stuck on "running". Runs
+    // after cleanup so it can safely start a follow-up run.
+    await this.closeReactivatedStep(stepId, session, runHandle);
   }
 
   private enqueueResultUpdateUsage(
@@ -1208,7 +1846,9 @@ class AgentService {
   }
 
   private toAgentQuestions(questions: NormalizedQuestion[]): AgentQuestion[] {
-    return questions.map((q) => ({
+    const questionKeys = getStableQuestionKeys(questions);
+    return questions.map((q, index) => ({
+      key: questionKeys[index],
       ...(q.id !== undefined ? { id: q.id } : {}),
       ...(q.type !== undefined ? { type: q.type } : {}),
       question: q.question,
@@ -1269,12 +1909,161 @@ class AgentService {
   /**
    * Process a single event from the backend event stream.
    */
+  /**
+   * The Claude backend reports a `result` for the main turn while background
+   * subagents (and the follow-up turn they trigger) keep streaming on the same
+   * run handle. When live activity arrives after we already finalized the turn,
+   * flip the step back to `running` so the UI stops showing it as done.
+   */
+  private async reactivateAfterFinalizedTurn(
+    stepId: string,
+    session: ActiveSession,
+    runHandle: AgentRunHandle | null,
+  ): Promise<void> {
+    if (!session.turnFinalized) return;
+    if (session.stopRequested || session.hasTerminalError) return;
+    if (this.sessions.get(stepId) !== session) return;
+    // Late events from a superseded run handle must not resurrect the step.
+    if (session.runHandle !== runHandle) return;
+    if (session.abortController.signal.aborted) return;
+
+    const step = await TaskStepRepository.findById(stepId);
+    if (!step) return;
+    session.turnFinalized = false;
+    if (step.status === 'running') return;
+
+    dbg.agentSession(
+      'Step %s received activity after result — restoring running state',
+      stepId,
+    );
+    await StepService.update(stepId, { status: 'running' });
+    // A pending permission/question keeps the task on `waiting` even though the
+    // step is running — don't let the sync clobber that.
+    if (session.pendingRequests.length === 0) {
+      await StepService.syncTaskStatus(session.taskId);
+    }
+    this.emitEvent(session.taskId, stepId, {
+      type: 'status',
+      status: session.pendingRequests.length > 0 ? 'waiting' : 'running',
+    });
+  }
+
+  /** Pop the next queued prompt and its associated parts/capture metadata. */
+  private takeNextQueuedPrompt(session: ActiveSession): {
+    prompt: QueuedPrompt;
+    parts: PromptPart[];
+    capture: ReturnType<typeof queuedPromptCaptures.get>;
+  } | null {
+    const prompt = session.queuedPrompts.shift();
+    if (!prompt) return null;
+    const parts =
+      queuedPromptParts.get(prompt.id) ?? textPrompt(prompt.content);
+    const capture = queuedPromptCaptures.get(prompt.id);
+    queuedPromptParts.delete(prompt.id);
+    queuedPromptCaptures.delete(prompt.id);
+    tombstoneQueuedPromptSubmissionIds(session, prompt.id);
+    return { prompt, parts, capture };
+  }
+
+  /**
+   * Runs once the backend stream ends. Only does something when the step was
+   * flipped back to `running` by post-result activity (background subagents)
+   * and no second `result` arrived: drains a prompt queued during that window,
+   * otherwise restores the terminal status so the step can't stay stuck.
+   */
+  private async closeReactivatedStep(
+    stepId: string,
+    session: ActiveSession,
+    runHandle: AgentRunHandle | null,
+  ): Promise<void> {
+    // Ownership guards run BEFORE consuming the session-scoped terminal state,
+    // so a superseded run frame can't swallow the current run's status.
+    if (this.sessions.get(stepId) !== session) return;
+    if (session.runHandle !== runHandle) return;
+
+    const status = session.lastTerminalStatus;
+    session.lastTerminalStatus = null;
+    if (!status || session.turnFinalized) return;
+
+    if (session.stopRequested || session.hasTerminalError) return;
+    if (session.abortController.signal.aborted) return;
+
+    // A prompt queued while the step was reactivated would otherwise be lost,
+    // because only the `result` handler drains the queue.
+    const queued = this.takeNextQueuedPrompt(session);
+    if (queued && status === 'errored') {
+      // Mirror the result handler: an errored turn discards the queue.
+      this.emitEvent(session.taskId, stepId, {
+        type: 'queue-update',
+        queuedPrompts: session.queuedPrompts,
+      });
+    }
+    if (queued && status === 'completed') {
+      dbg.agentSession(
+        'Step %s draining prompt queued after post-result activity',
+        stepId,
+      );
+      this.emitEvent(session.taskId, stepId, {
+        type: 'queue-update',
+        queuedPrompts: session.queuedPrompts,
+      });
+      if (queued.capture && session.agentMemoryCaptureEligible) {
+        void captureAgentMemoryPromptSubmissionSafe({
+          source: 'queued-prompt',
+          sourceId: `queued-prompt:${queued.prompt.id}`,
+          projectId: session.projectId,
+          taskId: session.taskId,
+          stepId,
+          userText: queued.capture.userText,
+          previousAgentResult: session.previousResultFallback,
+          reviews: queued.capture.reviews,
+        });
+      }
+      await this.runBackend(stepId, queued.parts, session);
+      return;
+    }
+
+    const step = await TaskStepRepository.findById(stepId);
+    if (!step || step.status !== 'running') return;
+
+    dbg.agentSession(
+      'Step %s stream ended after post-result activity — restoring %s',
+      stepId,
+      status,
+    );
+    this.clearPendingRequests(session);
+    if (status === 'errored') {
+      await StepService.errorStep(stepId);
+    } else {
+      // Dependent steps were already auto-started at the premature `result`,
+      // so the returned ids are intentionally ignored here.
+      await StepService.completeStep(stepId);
+    }
+    await this.markTaskUnreadIfBackground(session.taskId);
+    this.emitEvent(session.taskId, stepId, { type: 'status', status });
+  }
+
   private async processEvent(
     stepId: string,
     session: ActiveSession,
     event: AgentEvent,
+    runHandle: AgentRunHandle | null = null,
   ): Promise<void> {
     const { taskId } = session;
+
+    // Any live activity after a finalized turn means background work (usually a
+    // subagent) is still running on this handle. Permission/question events
+    // count too — otherwise a post-result prompt would land on a step the UI
+    // still shows as completed.
+    if (
+      event.type === 'entry' ||
+      event.type === 'entry-update' ||
+      event.type === 'tool-result' ||
+      event.type === 'permission-request' ||
+      event.type === 'question'
+    ) {
+      await this.reactivateAfterFinalizedTurn(stepId, session, runHandle);
+    }
 
     switch (event.type) {
       case 'session-id': {
@@ -1393,6 +2182,15 @@ class AgentService {
           type: 'permission',
           permissionRequest: request,
         });
+        if (this.autoAcceptSteps.has(stepId)) {
+          dbg.agentPermission(
+            'Auto-accepting request %s for step %s (session auto-accept)',
+            request.requestId,
+            stepId,
+          );
+          void this.autoAcceptRequest(stepId, session, request.requestId);
+          break;
+        }
         if (shouldEmit) {
           await this.emitPendingRequest(session, session.pendingRequests[0]);
         }
@@ -1427,6 +2225,8 @@ class AgentService {
         }
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
+        await this.emitTurnEditEntry(stepId, session);
+
         const resultEntryId = nanoid();
 
         const resultModel = result.model ?? session.currentModel;
@@ -1448,7 +2248,7 @@ class AgentService {
           });
         }
 
-        // Sync session-allowed tools back to the task
+        // Sync provider-reported session tools back to the current step.
         const sessionAllowedToolsCapability =
           session.provider.capabilities.agent.sessionAllowedTools;
         if (sessionAllowedToolsCapability.supported && session.runHandle) {
@@ -1456,28 +2256,22 @@ class AgentService {
             handle: session.runHandle,
           });
           if (tools.length > 0) {
-            await mutateTaskSessionRules(taskId, (rules) => {
-              // Convert accumulated string[] ("tool:matchValue" | "tool") → PermissionScope
-              for (const entry of tools) {
-                const colonIdx = entry.indexOf(':');
-                if (colonIdx !== -1) {
-                  const tool = entry.slice(0, colonIdx);
-                  const matchValue = entry.slice(colonIdx + 1);
-                  rules[tool] = buildToolPermissionConfig({
-                    existing: rules[tool],
-                    matchValue,
-                  });
-                } else {
-                  rules[entry] = 'allow';
-                }
-              }
-              return rules;
-            });
+            await stepPermissionService.syncSessionAllowedTools({ stepId, tools });
           }
         }
 
+        // Keep the fallback fresh so later prompt captures (including the
+        // post-result drain path) attribute the right previous result.
+        session.previousResultFallback =
+          result.text ?? session.previousResultFallback;
+
         // Check for queued prompts
         const nextPrompt = session.queuedPrompts.shift();
+        if (nextPrompt && result.isError) {
+          queuedPromptParts.delete(nextPrompt.id);
+          queuedPromptCaptures.delete(nextPrompt.id);
+          tombstoneQueuedPromptSubmissionIds(session, nextPrompt.id);
+        }
         if (nextPrompt && !result.isError) {
           dbg.agentSession('Step %s processing next queued prompt', stepId);
           this.emitEvent(taskId, stepId, {
@@ -1488,7 +2282,22 @@ class AgentService {
           const queuedParts =
             queuedPromptParts.get(nextPrompt.id) ??
             textPrompt(nextPrompt.content);
+          const capture = queuedPromptCaptures.get(nextPrompt.id);
           queuedPromptParts.delete(nextPrompt.id);
+          queuedPromptCaptures.delete(nextPrompt.id);
+          tombstoneQueuedPromptSubmissionIds(session, nextPrompt.id);
+          if (capture && session.agentMemoryCaptureEligible) {
+            void captureAgentMemoryPromptSubmissionSafe({
+              source: 'queued-prompt',
+              sourceId: `queued-prompt:${nextPrompt.id}`,
+              projectId: session.projectId,
+              taskId,
+              stepId,
+              userText: capture.userText,
+              previousAgentResult: result.text ?? null,
+              reviews: capture.reviews,
+            });
+          }
           return await this.runBackend(stepId, queuedParts, session);
         }
 
@@ -1527,6 +2336,10 @@ class AgentService {
         if (await this.shouldAbortTerminalHandling(stepId, session)) break;
 
         this.emitEvent(taskId, stepId, { type: 'status', status });
+        // Background subagents may still stream on this run handle; any further
+        // activity flips the step back to running.
+        session.turnFinalized = true;
+        session.lastTerminalStatus = status;
 
         // Auto-start dependent steps whose dependencies are now satisfied
         for (const autoStepId of autoStartStepIds) {
@@ -1535,7 +2348,14 @@ class AgentService {
             autoStepId,
             taskId,
           );
-          this.start(autoStepId).catch((err) => {
+          startAgentWithPrReviewLifecycle(
+            autoStepId,
+            (authoritativeStepId) => this.start(authoritativeStepId),
+            {
+              findStepById: TaskStepRepository.findById,
+              findTaskById: TaskRepository.findById,
+            },
+          ).catch((err) => {
             void this.handleAutoStartFailure(autoStepId, err);
           });
         }
@@ -1561,6 +2381,8 @@ class AgentService {
         dbg.agent('Backend error for step %s: %s', stepId, event.error);
         session.hasTerminalError = true;
         this.clearPendingRequests(session);
+
+        await this.emitTurnEditEntry(stepId, session);
 
         // Emit a synthetic error entry so the user sees the error in the timeline
         await this.persistAndEmitSyntheticEntry(taskId, session, {
@@ -1622,6 +2444,23 @@ class AgentService {
       }
 
       case 'mode-change': {
+        const step = await TaskStepRepository.findById(stepId);
+        if (step && isPrReviewChatStepMeta(step.meta)) {
+          if (event.mode !== 'ask') {
+            const modeCapability =
+              session.provider.capabilities.agent.runtimeModeSwitch;
+            if (!modeCapability.supported || !session.runHandle) {
+              throw new Error(
+                'PR review chat backend changed mode and cannot restore read-only mode',
+              );
+            }
+            await modeCapability.implementation.setMode({
+              handle: session.runHandle,
+              mode: 'ask',
+            });
+          }
+          break;
+        }
         const updatedStep = await TaskStepRepository.update(stepId, {
           interactionMode: event.mode,
         });
@@ -1642,6 +2481,11 @@ class AgentService {
   async start(stepId: string): Promise<void> {
     const completeRegistration = this.admitSessionRegistration(stepId, 'ignore');
     if (!completeRegistration) return;
+    const pendingStop = this.stepStopPromises.get(stepId);
+    if (pendingStop) {
+      await pendingStop;
+    }
+
     // Check if already running
     if (this.sessions.has(stepId)) {
       dbg.agentSession('Ignoring duplicate start for running step %s', stepId);
@@ -1658,11 +2502,17 @@ class AgentService {
     }
 
     this.startingSteps.add(stepId);
+    let finishStart!: () => void;
+    const startPromise = new Promise<void>((resolve) => {
+      finishStart = resolve;
+    });
+    this.stepStartPromises.set(stepId, startPromise);
 
     let session: ActiveSession | null = null;
     let runningStep: Awaited<ReturnType<typeof TaskStepRepository.findById>>;
 
     try {
+      await this.waitForPreviousBackendRun(stepId);
       runningStep = await TaskStepRepository.findById(stepId);
       if (!runningStep) {
         throw new Error(`Step ${stepId} not found`);
@@ -1768,13 +2618,28 @@ class AgentService {
 
       dbg.agentSession('Starting agent for step %s', stepId);
       const activeSession = session;
-      void this.runBackend(stepId, parts, activeSession, {
-        generateNameOnInit: isFirstStep,
-        initialPrompt: step.promptTemplate,
-        isInitialPrompt: true,
-      })
-        .catch(async (error: unknown) => {
-          if (activeSession.stopRequested) return;
+      let markRunStarting!: () => void;
+      const runStarting = new Promise<void>((resolve) => {
+        markRunStarting = resolve;
+      });
+      this.trackBackendRun(stepId, () =>
+        this.runBackend(stepId, parts, activeSession, {
+          generateNameOnInit: isFirstStep,
+          initialPrompt: step.promptTemplate,
+          isInitialPrompt: true,
+          onRunStarting: markRunStarting,
+        })
+          .catch(async (error: unknown) => {
+            const isCurrentSession = () =>
+              this.sessions.get(stepId) === activeSession;
+            if (!isCurrentSession()) {
+              dbg.agent(
+                'Ignoring stale start failure for replaced step %s: %O',
+                stepId,
+                error,
+              );
+              return;
+            }
           const errorMessage =
             error instanceof Error ? error.message : 'Unknown error';
           dbg.agent('Step %s start failed: %s', stepId, errorMessage);
@@ -1788,13 +2653,16 @@ class AgentService {
             value: errorMessage,
             isError: true,
           });
+          if (!isCurrentSession()) return;
 
           await StepService.errorStep(stepId);
+          if (!isCurrentSession()) return;
           this.emitEvent(activeSession.taskId, stepId, {
             type: 'status',
             status: 'errored',
             error: errorMessage,
           });
+          if (!isCurrentSession()) return;
           await this.notifyTaskEvent({
             taskId: activeSession.taskId,
             stepId,
@@ -1803,13 +2671,25 @@ class AgentService {
             title: 'Task Failed',
             body: 'Task "{taskName}" encountered an error',
           });
-        })
-        .finally(() => {
-          this.deleteSession(stepId, activeSession);
-        });
+          })
+          .finally(() => {
+            markRunStarting();
+            this.deleteSession(stepId, activeSession);
+          }),
+      );
+      await runStarting;
     } catch (error) {
       if (!session) {
         throw error;
+      }
+      const isCurrentSession = () => this.sessions.get(stepId) === session;
+      if (!isCurrentSession()) {
+        dbg.agent(
+          'Ignoring stale startup failure for replaced step %s: %O',
+          stepId,
+          error,
+        );
+        return;
       }
 
       if (session.stopRequested) return;
@@ -1826,13 +2706,16 @@ class AgentService {
         value: errorMessage,
         isError: true,
       });
+      if (!isCurrentSession()) return;
 
       await StepService.errorStep(stepId);
+      if (!isCurrentSession()) return;
       this.emitEvent(session.taskId, stepId, {
         type: 'status',
         status: 'errored',
         error: errorMessage,
       });
+      if (!isCurrentSession()) return;
       await this.notifyTaskEvent({
         taskId: session.taskId,
         stepId,
@@ -1844,7 +2727,11 @@ class AgentService {
       this.deleteSession(stepId, session);
     } finally {
       completeRegistration();
-      this.startingSteps.delete(stepId);
+      if (this.stepStartPromises.get(stepId) === startPromise) {
+        this.startingSteps.delete(stepId);
+        this.stepStartPromises.delete(stepId);
+      }
+      finishStart();
     }
   }
 
@@ -1854,12 +2741,21 @@ class AgentService {
   ): Promise<void> {
     const existingStop = this.stepStopPromises.get(stepId);
     if (existingStop) {
+      const backendRun = this.backendRunCompletions.get(stepId);
+      if (
+        backendRun &&
+        this.backendRunContext.getStore() === backendRun.owner
+      ) {
+        return;
+      }
       await existingStop;
       return;
     }
 
     const stopPromise = this.performStop(stepId, options).finally(() => {
-      this.stepStopPromises.delete(stepId);
+      if (this.stepStopPromises.get(stepId) === stopPromise) {
+        this.stepStopPromises.delete(stepId);
+      }
     });
     this.stepStopPromises.set(stepId, stopPromise);
     await stopPromise;
@@ -1871,8 +2767,15 @@ class AgentService {
   ): Promise<void> {
     dbg.agentSession('Stopping step %s', stepId);
 
-    const session = this.sessions.get(stepId);
+    let session = this.sessions.get(stepId);
     if (!session) {
+      await this.stepStartPromises.get(stepId);
+      session = this.sessions.get(stepId);
+    }
+
+    const backendRun = this.backendRunCompletions.get(stepId);
+    if (!session) {
+      await this.waitForBackendRun(stepId, backendRun);
       dbg.agentSession('No session found for step %s, nothing to stop', stepId);
       return;
     }
@@ -1882,8 +2785,10 @@ class AgentService {
     const { taskId } = session;
 
     // Clear queued prompts and their stored parts
+    tombstoneAllQueuedPromptSubmissionIds(session);
     for (const prompt of session.queuedPrompts) {
       queuedPromptParts.delete(prompt.id);
+      queuedPromptCaptures.delete(prompt.id);
     }
     session.queuedPrompts = [];
     this.emitEvent(taskId, stepId, {
@@ -1900,6 +2805,9 @@ class AgentService {
 
     // Stop the provider run even if stop races with backend startup completing.
     await this.stopCurrentRunHandle(stepId, session);
+    if (!this.stopAllActive) {
+      await this.waitForBackendRun(stepId, backendRun);
+    }
     await agentResourceMonitorService.stop(stepId);
 
     if (options.reason !== 'shutdown') {
@@ -2088,21 +2996,26 @@ class AgentService {
       if (allowedDirectory) {
         await respondToProvider();
         try {
-          await mutateTaskSessionRules(taskId, (rules) => {
-            const directoryPattern =
-              toDirectoryPermissionPattern(allowedDirectory);
-            rules.external_directory = buildToolPermissionConfig({
-              existing: rules.external_directory,
-              matchValue: directoryPattern,
-            });
-            return rules;
+          const step = await TaskStepRepository.findById(stepId);
+          if (!step) throw new Error(`Step ${stepId} not found`);
+          const sessionRules = { ...(step.sessionRules ?? {}) };
+          sessionRules.external_directory = buildToolPermissionConfig({
+            existing: sessionRules.external_directory,
+            matchValue: toDirectoryPermissionPattern(allowedDirectory),
           });
+          const updatedStep = await TaskStepRepository.update(stepId, {
+            sessionRules,
+          });
+          emitStepUpsert(updatedStep);
+          // Keep the live session's rule snapshot in step with the DB, like
+          // every other sessionRules write.
+          emitPermissionsChanged({ scope: 'session', stepId });
         } catch (error) {
           // Provider already resumed; keep request resolved rather than showing
           // a stale card that cannot be answered again.
           dbg.agentPermission(
-            'Directory allowed for current provider session but failed to persist for task %s: %O',
-            taskId,
+            'Directory allowed for current provider session but failed to persist for step %s: %O',
+            stepId,
             error,
           );
         }
@@ -2111,8 +3024,15 @@ class AgentService {
       }
     } else {
       const questionResponse = response as QuestionResponse;
+      if (!request.questionRequest) {
+        throw new QuestionResponseValidationError(requestId);
+      }
+      const canonicalResponse = canonicalizeQuestionResponse({
+        request: request.questionRequest,
+        response: questionResponse,
+      });
       if (request.source === 'jc-mcp') {
-        this.questionBroker.answerRequest(requestId, questionResponse.answers);
+        this.questionBroker.answerRequest(requestId, canonicalResponse.answers);
       } else {
         if (!session.runHandle) {
           throw new Error(`No active run handle for step ${stepId}`);
@@ -2125,12 +3045,48 @@ class AgentService {
         await questionCapability.respond({
           handle: session.runHandle,
           requestId,
-          answer: questionResponse.answers,
+          answer: canonicalResponse.answers,
           metadata: {
             wasFreeform: questionResponse.wasFreeform,
             wasFreeformByQuestion: questionResponse.wasFreeformByQuestion,
+            questionKeys: canonicalResponse.questionKeys,
           },
         });
+      }
+
+      if (session.agentMemoryCaptureEligible) {
+        const createdAt = new Date().toISOString();
+        for (const detail of canonicalResponse.memoryDetails) {
+          // "Decide for me" is an explicit deferral, not a stated preference.
+          // It still has to reach the agent, so it stays in the delivered
+          // answer, but recording it would teach memory a preference the user
+          // never expressed.
+          const capturedCustomAnswer =
+            detail.customAnswer === DECIDE_FOR_ME ? null : detail.customAnswer;
+          const text = [
+            ...detail.selectedLabels,
+            capturedCustomAnswer,
+            detail.notes,
+          ]
+            .filter((value): value is string => Boolean(value))
+            .join('\n');
+          if (!text) continue;
+          void captureAgentMemoryEventSafe({
+            source: 'question-answer',
+            sourceId: `question:${requestId}:${detail.questionKey}`,
+            projectId: session.projectId,
+            taskId,
+            stepId,
+            text,
+            context: {
+              question: detail.question,
+              selectedLabels: detail.selectedLabels,
+              customAnswer: capturedCustomAnswer,
+              notes: detail.notes,
+            },
+            createdAt,
+          });
+        }
       }
     }
 
@@ -2148,6 +3104,14 @@ class AgentService {
       return;
     }
     session.pendingRequests.splice(resolvedRequestIndex, 1);
+    if (request.type === 'permission') {
+      // The renderer clears its own banner when the user answers, but nothing
+      // does so when main resolves a request on its own (auto-accept).
+      this.emitEvent(taskId, stepId, {
+        type: 'permission-resolved',
+        requestId,
+      });
+    }
     dbg.agentPermission(
       'Resolved %s request (remaining pending: %d)',
       request.type,
@@ -2179,16 +3143,122 @@ class AgentService {
     this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
   }
 
-  async sendMessage(stepId: string, parts: PromptPart[]): Promise<void> {
+  async beginSendMessage(
+    stepId: string,
+    parts: PromptPart[],
+    capture?: AgentMemoryFollowUpCapture,
+  ): Promise<{ started: Promise<void>; completion: Promise<void> }> {
     const completeRegistration = this.admitSessionRegistration(stepId, 'reject');
-    if (!completeRegistration) return;
-    let session: ActiveSession | null = null;
+    if (!completeRegistration) {
+      throw new Error(`Failed to register session for step ${stepId}`);
+    }
+
+    // Agent Memory capture context is resolved before the session is replaced:
+    // the previous result must be read against the OLD session state.
+    const admittedCapture = capture
+      ? {
+          ...admitAgentMemoryPromptCapture({
+            capture,
+            content: getPromptText(parts),
+            source: 'immediate',
+            stepId,
+          }),
+          submissionId: capture.submissionId,
+        }
+      : undefined;
+    const activeSession = this.sessions.get(stepId);
+    const previousResultFallback = activeSession?.previousResultFallback ?? null;
+    let previousResultSnapshot: Promise<string | null> | undefined;
+    if (
+      admittedCapture &&
+      (!activeSession || activeSession.agentMemoryCaptureEligible)
+    ) {
+      try {
+        previousResultSnapshot = Promise.resolve(
+          AgentMessageRepository.findLatestResultByStepId(stepId),
+        ).catch((error) => {
+          dbg.agent(
+            'Failed to load previous Agent Memory context for step %s: %O',
+            stepId,
+            error,
+          );
+          return null;
+        });
+      } catch (error) {
+        dbg.agent(
+          'Failed to load previous Agent Memory context for step %s: %O',
+          stepId,
+          error,
+        );
+        previousResultSnapshot = Promise.resolve(null);
+      }
+    }
+    const captureContext = admittedCapture
+      ? {
+          admittedCapture,
+          previousResultFallback,
+          previousResultSnapshot,
+        }
+      : undefined;
     try {
-      // If session exists and running, stop it first
-      if (this.sessions.has(stepId)) {
+      if (this.isRunningOrStarting(stepId)) {
         await this.stop(stepId);
       }
 
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      this.startingSteps.add(stepId);
+      this.stepStartPromises.set(stepId, started);
+      await this.waitForPreviousBackendRun(stepId);
+      const completion = this.trackBackendRun(stepId, () =>
+        this.performSendMessage(
+          stepId,
+          parts,
+          markStarted,
+          completeRegistration,
+          captureContext,
+        ).finally(() => {
+          completeRegistration();
+          markStarted();
+          if (this.stepStartPromises.get(stepId) === started) {
+            this.startingSteps.delete(stepId);
+            this.stepStartPromises.delete(stepId);
+          }
+        }),
+      );
+      return { started, completion };
+    } catch (error) {
+      completeRegistration();
+      throw error;
+    }
+  }
+
+  async sendMessage(
+    stepId: string,
+    parts: PromptPart[],
+    capture?: AgentMemoryFollowUpCapture,
+  ): Promise<void> {
+    const { completion } = await this.beginSendMessage(stepId, parts, capture);
+    await completion;
+  }
+
+  private async performSendMessage(
+    stepId: string,
+    parts: PromptPart[],
+    markStarted: () => void,
+    completeRegistration: () => void,
+    captureContext?: {
+      admittedCapture: ReturnType<typeof admitAgentMemoryPromptCapture> & {
+        submissionId: string;
+      };
+      previousResultFallback: string | null;
+      previousResultSnapshot?: Promise<string | null>;
+    },
+  ): Promise<void> {
+    let session: ActiveSession | null = null;
+    try {
       // Create new session (will pick up existing sessionId for resume)
       session = await this.createSession(stepId);
       const { taskId } = session;
@@ -2199,12 +3269,50 @@ class AgentService {
       this.emitEvent(taskId, stepId, { type: 'status', status: 'running' });
       completeRegistration();
 
+      if (captureContext && session.agentMemoryCaptureEligible) {
+        const {
+          admittedCapture,
+          previousResultFallback,
+          previousResultSnapshot,
+        } = captureContext;
+        const captureProjectId = session.projectId;
+        const capturedSession = session;
+        void (previousResultSnapshot ?? Promise.resolve(null)).then(
+          (previousAgentResult) =>
+            captureAgentMemoryPromptSubmissionSafe({
+              source: 'follow-up-prompt',
+              sourceId: `follow-up-prompt:${admittedCapture.submissionId}`,
+              projectId: captureProjectId,
+              taskId,
+              stepId,
+              userText: admittedCapture.userText,
+              previousAgentResult:
+                previousAgentResult ??
+                previousResultFallback ??
+                capturedSession.previousResultFallback ??
+                null,
+              reviews: admittedCapture.reviews,
+            }),
+        );
+      }
+
       dbg.agentSession('Sending follow-up message for step %s', stepId);
-      await this.runBackend(stepId, parts, session);
+      await this.runBackend(stepId, parts, session, {
+        onRunStarting: markStarted,
+      });
     } catch (error) {
       if (!session) throw error;
       if (session.stopRequested) return;
       const { taskId } = session;
+      const isCurrentSession = () => this.sessions.get(stepId) === session;
+      if (!isCurrentSession()) {
+        dbg.agent(
+          'Ignoring stale follow-up failure for replaced step %s: %O',
+          stepId,
+          error,
+        );
+        return;
+      }
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
       dbg.agent('Step %s sendMessage failed: %s', stepId, errorMessage);
@@ -2218,13 +3326,16 @@ class AgentService {
         value: errorMessage,
         isError: true,
       });
+      if (!isCurrentSession()) return;
 
       await StepService.errorStep(stepId);
+      if (!isCurrentSession()) return;
       this.emitEvent(taskId, stepId, {
         type: 'status',
         status: 'errored',
         error: errorMessage,
       });
+      if (!isCurrentSession()) return;
       await this.notifyTaskEvent({
         taskId,
         stepId,
@@ -2242,11 +3353,53 @@ class AgentService {
   /**
    * Queue a prompt to be sent after the current agent work completes.
    */
-  queuePrompt(stepId: string, parts: PromptPart[]): { promptId: string } {
+  queuePrompt(
+    stepId: string,
+    parts: PromptPart[],
+    capture?: AgentMemoryQueuedPromptCapture,
+  ): { promptId: string } {
     const session = this.sessions.get(stepId);
     if (!session) {
       throw new Error(`No active session for step ${stepId}`);
     }
+
+    if (capture) {
+      const pendingPromptId = session.queuedPromptIdsBySubmissionId.get(
+        capture.submissionId,
+      );
+      const tombstoneKey = queuedPromptTombstoneKey(
+        stepId,
+        capture.submissionId,
+      );
+      const tombstonedPromptId =
+        queuedPromptSubmissionTombstones.get(tombstoneKey);
+      const retriedPromptId = pendingPromptId ?? tombstonedPromptId;
+      if (retriedPromptId) {
+        if (tombstonedPromptId) {
+          queuedPromptSubmissionTombstones.delete(tombstoneKey);
+          queuedPromptSubmissionTombstones.set(
+            tombstoneKey,
+            tombstonedPromptId,
+          );
+        }
+        dbg.agent('Deduplicated queued prompt submission: %O', {
+          event: 'agent-memory-queue-submission-deduplicated',
+          stepId,
+          promptId: retriedPromptId,
+          submissionIdHash: diagnosticIdHash(capture.submissionId),
+        });
+        return { promptId: retriedPromptId };
+      }
+    }
+
+    const admittedCapture = capture
+      ? admitAgentMemoryPromptCapture({
+          capture,
+          content: getPromptText(parts),
+          source: 'queued',
+          stepId,
+        })
+      : undefined;
 
     const existingPrompt = session.queuedPrompts[0];
     if (existingPrompt) {
@@ -2256,6 +3409,31 @@ class AgentService {
       const combinedParts = appendPromptParts(existingParts, parts);
       existingPrompt.content = getPromptText(combinedParts);
       queuedPromptParts.set(existingPrompt.id, combinedParts);
+      if (admittedCapture && session.agentMemoryCaptureEligible) {
+        const existingCapture = queuedPromptCaptures.get(existingPrompt.id);
+        const reviews = [
+          ...(existingCapture?.reviews ?? []),
+          ...(admittedCapture.reviews ?? []),
+        ];
+        queuedPromptCaptures.set(existingPrompt.id, {
+          userText: [existingCapture?.userText, admittedCapture.userText]
+            .filter((text): text is string => !!text?.trim())
+            .join('\n\n'),
+          reviews: [
+            ...new Map(reviews.map((review) => [review.commentId, review])).values(),
+          ],
+        });
+        existingPrompt.agentMemoryCapture = queuedPromptCaptures.get(
+          existingPrompt.id,
+        );
+      }
+      if (capture) {
+        rememberPendingQueuedPromptSubmission(
+          session,
+          capture.submissionId,
+          existingPrompt.id,
+        );
+      }
 
       this.emitEvent(session.taskId, stepId, {
         type: 'queue-update',
@@ -2272,14 +3450,24 @@ class AgentService {
 
     const id = nanoid();
     queuedPromptParts.set(id, parts);
+    if (admittedCapture && session.agentMemoryCaptureEligible) {
+      queuedPromptCaptures.set(id, admittedCapture);
+    }
 
     const queuedPrompt: QueuedPrompt = {
       id,
       content: getPromptText(parts),
       createdAt: Date.now(),
+      agentMemoryCapture:
+        admittedCapture && session.agentMemoryCaptureEligible
+          ? admittedCapture
+          : undefined,
     };
 
     session.queuedPrompts.push(queuedPrompt);
+    if (capture) {
+      rememberPendingQueuedPromptSubmission(session, capture.submissionId, id);
+    }
     this.emitEvent(session.taskId, stepId, {
       type: 'queue-update',
       queuedPrompts: session.queuedPrompts,
@@ -2292,7 +3480,12 @@ class AgentService {
   /**
    * Update a queued prompt before it is sent.
    */
-  updateQueuedPrompt(stepId: string, promptId: string, content: string): void {
+  updateQueuedPrompt(
+    stepId: string,
+    promptId: string,
+    content: string,
+    nextCapture?: AgentMemoryPromptCapture,
+  ): void {
     const session = this.sessions.get(stepId);
     if (!session) {
       throw new Error(`No active session for step ${stepId}`);
@@ -2309,6 +3502,72 @@ class AgentService {
 
     queuedPrompt.content = content;
     queuedPromptParts.set(promptId, updatedParts);
+    const previousCapture =
+      queuedPromptCaptures.get(promptId) ?? queuedPrompt.agentMemoryCapture;
+    const reconciliation = previousCapture
+      ? reconcileAgentMemoryPromptCaptureWithDiagnostics(
+          previousCapture,
+          content,
+        )
+      : undefined;
+    const capture = reconciliation?.capture;
+    const authoritativeReviewCount = previousCapture?.reviews?.length ?? 0;
+    if (
+      reconciliation &&
+      authoritativeReviewCount > 0 &&
+      !reconciliation.diagnostics.hasReviewXml
+    ) {
+      dbg.agent('Agent Memory queued review XML missing: %O', {
+        event: 'agent-memory-queue-review-xml-missing',
+        stepId,
+        promptId,
+        authoritativeReviewCount,
+      });
+    }
+    if (
+      reconciliation &&
+      (reconciliation.diagnostics.rejectedCommentIds.length > 0 ||
+        reconciliation.diagnostics.rejectedCommentsWithoutId > 0)
+    ) {
+      dbg.agent('Agent Memory queued review IDs rejected: %O', {
+        event: 'agent-memory-queue-review-ids-rejected',
+        stepId,
+        promptId,
+        rejectedCommentIdHashes:
+          reconciliation.diagnostics.rejectedCommentIds.map(diagnosticIdHash),
+        rejectedCommentCount:
+          reconciliation.diagnostics.rejectedCommentIds.length,
+        rejectedCommentsWithoutId:
+          reconciliation.diagnostics.rejectedCommentsWithoutId,
+      });
+    }
+    if (
+      (previousCapture && !nextCapture) ||
+      (nextCapture && (!capture || !capturesMatch(nextCapture, capture)))
+    ) {
+      dbg.agent('Agent Memory queued renderer metadata mismatch: %O', {
+        event: 'agent-memory-queue-renderer-mismatch',
+        stepId,
+        promptId,
+        rendererMetadataProvided: !!nextCapture,
+        rendererReviewIdHashes: (nextCapture?.reviews ?? []).map(
+          (review) => diagnosticIdHash(review.commentId),
+        ),
+        authoritativeReviewIdHashes: (capture?.reviews ?? []).map(
+          (review) => diagnosticIdHash(review.commentId),
+        ),
+        rendererUserTextMatchesContent: nextCapture
+          ? nextCapture.userText === content
+          : null,
+      });
+    }
+    if (session.agentMemoryCaptureEligible && capture) {
+      queuedPromptCaptures.set(promptId, capture);
+      queuedPrompt.agentMemoryCapture = capture;
+    } else {
+      queuedPromptCaptures.delete(promptId);
+      delete queuedPrompt.agentMemoryCapture;
+    }
     this.emitEvent(session.taskId, stepId, {
       type: 'queue-update',
       queuedPrompts: session.queuedPrompts,
@@ -2332,6 +3591,8 @@ class AgentService {
     }
 
     queuedPromptParts.delete(promptId);
+    queuedPromptCaptures.delete(promptId);
+    tombstoneQueuedPromptSubmissionIds(session, promptId);
     session.queuedPrompts.splice(index, 1);
     this.emitEvent(session.taskId, stepId, {
       type: 'queue-update',
@@ -2408,10 +3669,99 @@ class AgentService {
     return null;
   }
 
+  isAutoAcceptEnabled(stepId: string): boolean {
+    return this.autoAcceptSteps.has(stepId);
+  }
+
+  /**
+   * Allow a request on the user's behalf. `toolsToAllow: []` keeps the grant
+   * scoped to this one call: without it `respondOnce` would derive a rule and
+   * the backend would stop prompting for that tool even after auto-accept is
+   * switched back off.
+   *
+   * If the response fails the request stays queued and was never emitted, which
+   * would block every later request, so surface it to the user instead.
+   */
+  private async autoAcceptRequest(
+    stepId: string,
+    session: ActiveSession,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      await this.respond(stepId, requestId, {
+        behavior: 'allow',
+        toolsToAllow: [],
+      });
+    } catch (error) {
+      dbg.agentPermission(
+        'Auto-accept failed for request %s: %o',
+        requestId,
+        error,
+      );
+      await this.emitQueueHeadRequest(session);
+    }
+  }
+
+  /** Emit the queued request the user is waiting on, if there is one. */
+  private async emitQueueHeadRequest(session: ActiveSession): Promise<void> {
+    const head = session.pendingRequests[0];
+    if (!head) return;
+    await this.emitPendingRequest(session, head);
+  }
+
+  /**
+   * Toggle per-session auto-accept for a step. Nothing is persisted: the flag
+   * lives for the lifetime of the app process. Enabling it drains any requests
+   * already waiting for the user.
+   */
+  async setAutoAccept(stepId: string, enabled: boolean): Promise<void> {
+    // Never let a rule-push failure strand the queue handling below: a throw
+    // here would leave queued requests unemitted and hang the run.
+    const pushRules = async () => {
+      try {
+        await this.refreshPermissionRules({ scope: 'session', stepId });
+      } catch (error) {
+        dbg.agentPermission(
+          'Failed refreshing rules after auto-accept toggle for step %s: %O',
+          stepId,
+          error,
+        );
+      }
+    };
+
+    if (!enabled) {
+      this.autoAcceptSteps.delete(stepId);
+      // Drops the implicit script-edit grant back off the live rule set.
+      await pushRules();
+      // Requests that arrived while auto-accept was on were queued but never
+      // emitted, so re-surface whatever the run is now blocked on.
+      const current = this.sessions.get(stepId);
+      if (current) await this.emitQueueHeadRequest(current);
+      return;
+    }
+    this.autoAcceptSteps.add(stepId);
+    // Pushes the implicit script-edit grant (heredoc snippets, `sed -i`) to
+    // the live run so they stop prompting. Backends without live rule updates
+    // simply keep prompting and get auto-accepted at the app layer.
+    await pushRules();
+
+    const session = this.sessions.get(stepId);
+    if (!session) return;
+    const pendingPermissions = session.pendingRequests.filter(
+      (request) => request.type === 'permission',
+    );
+    for (const request of pendingPermissions) {
+      await this.autoAcceptRequest(stepId, session, request.requestId);
+    }
+  }
+
   async setMode(stepId: string, mode: InteractionMode): Promise<void> {
     const session = this.sessions.get(stepId);
     const step = await TaskStepRepository.findById(stepId);
     if (!step) return;
+    if (isPrReviewChatStepMeta(step.meta)) {
+      throw new Error('PR review chat steps are read-only and cannot change mode');
+    }
 
     const backend = session?.backendType ?? step.agentBackend ?? 'claude-code';
     const normalizedMode = normalizeInteractionModeForBackend({
@@ -2440,6 +3790,10 @@ class AgentService {
 
   isRunning(stepId: string): boolean {
     return this.sessions.has(stepId);
+  }
+
+  isRunningOrStarting(stepId: string): boolean {
+    return this.sessions.has(stepId) || this.startingSteps.has(stepId);
   }
 
   async getMessages(stepId: string): Promise<NormalizedEntry[]> {
@@ -2524,16 +3878,23 @@ class AgentService {
    * Should be called on app startup before the main window is shown.
    */
   async recoverStaleTasks(): Promise<void> {
-    // Recover stale tasks — mark as interrupted (status sync happens via steps below)
-    const staleTasks = await TaskRepository.findByStatuses([
-      'running',
-      'waiting',
-    ]);
+    // PR workspaces are containers that remain available after restart. Generic
+    // agent tasks represent an interrupted run when their process disappears.
+    // Only live states are stale on startup. Already-'interrupted' tasks are in
+    // their terminal recovered state — touching them bumps updatedAt and (for
+    // pr-review) flips them back to 'waiting' on every restart.
+    const staleTasks = await TaskRepository.findByStatuses(['running', 'waiting']);
 
+    let recoveredTaskCount = 0;
     for (const task of staleTasks) {
       try {
+        const nextStatus = task.type === 'pr-review' ? 'waiting' : 'interrupted';
+        if (task.status === nextStatus) {
+          continue;
+        }
+        recoveredTaskCount++;
         const updatedTask = await TaskRepository.update(task.id, {
-          status: 'interrupted',
+          status: nextStatus,
         });
         emitTaskUpsert(updatedTask);
       } catch (error) {
@@ -2541,8 +3902,8 @@ class AgentService {
       }
     }
 
-    if (staleTasks.length > 0) {
-      dbg.agent('Recovered %d stale task(s) on startup', staleTasks.length);
+    if (recoveredTaskCount > 0) {
+      dbg.agent('Recovered %d stale task(s) on startup', recoveredTaskCount);
     }
 
     // Recover stale steps — find ALL steps with 'running' status across all tasks
@@ -2550,6 +3911,20 @@ class AgentService {
     // Write a synthetic interrupted message scoped to each step so the timeline shows it.
     const allRunningSteps = await TaskStepRepository.findByStatus('running');
     let staleStepCount = 0;
+    // Resolve pr-review-ness from the task row itself (not from staleTasks) so a
+    // pr-review workspace whose task row is already 'interrupted' still gets
+    // restored to 'waiting'.
+    const prReviewCache = new Map<string, boolean>();
+    const isPrReviewTask = async (taskId: string): Promise<boolean> => {
+      const cached = prReviewCache.get(taskId);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const task = await TaskRepository.findById(taskId);
+      const isPrReview = task?.type === 'pr-review';
+      prReviewCache.set(taskId, isPrReview);
+      return isPrReview;
+    };
     for (const step of allRunningSteps) {
       try {
         const messageCount =
@@ -2574,7 +3949,14 @@ class AgentService {
           status: 'interrupted',
         });
         emitStepUpsert(updatedStep);
-        await StepService.syncTaskStatus(step.taskId);
+        if (await isPrReviewTask(step.taskId)) {
+          const updatedTask = await TaskRepository.update(step.taskId, {
+            status: 'waiting',
+          });
+          emitTaskUpsert(updatedTask);
+        } else {
+          await StepService.syncTaskStatus(step.taskId);
+        }
         staleStepCount++;
       } catch (error) {
         dbg.agent('Failed to recover stale step %s: %O', step.id, error);
@@ -2584,7 +3966,14 @@ class AgentService {
             status: 'interrupted',
           });
           emitStepUpsert(updatedStep);
-          await StepService.syncTaskStatus(step.taskId);
+          if (await isPrReviewTask(step.taskId)) {
+            const updatedTask = await TaskRepository.update(step.taskId, {
+              status: 'waiting',
+            });
+            emitTaskUpsert(updatedTask);
+          } else {
+            await StepService.syncTaskStatus(step.taskId);
+          }
         } catch {
           dbg.agent('Failed to update status for stale step %s', step.id);
         }

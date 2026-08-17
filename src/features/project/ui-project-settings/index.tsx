@@ -1,12 +1,14 @@
-import type {
-  AiSkillSlotConfig,
-  AiSkillSlotKey,
-  AiSkillSlotsSetting,
-  ModelPreference,
-  ProjectFeatureMap,
-  ProjectFeatureMapItem,
-  ProjectLogoHistoryItem,
-  UpdateProject,
+import {
+  type AiSkillSlotConfig,
+  type AiSkillSlotKey,
+  type AiSkillSlotsSetting,
+  DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
+  type MobilePreviewProjectConfig,
+  type ModelPreference,
+  type ProjectFeatureMap,
+  type ProjectFeatureMapItem,
+  type ProjectLogoHistoryItem,
+  type UpdateProject,
 } from '@shared/types';
 import {
   Archive,
@@ -63,6 +65,7 @@ import {
   useDeleteGeneratedProjectLogo,
   useDeleteProject,
   useDeleteProjectWorktreesFolder,
+  useDetectMobilePreviewProject,
   useGeneratedProjectLogos,
   useGenerateProjectLogo,
   useProject,
@@ -93,6 +96,7 @@ import { ProjectColorPicker } from '@/features/project/ui-project-color-picker';
 import { ProjectLogo } from '@/features/project/ui-project-logo';
 import { ProjectLogoSuggestions } from '@/features/project/ui-project-logo-suggestions';
 import { ProjectMcpSettings } from '@/features/project/ui-project-mcp-settings';
+import { ProjectMobilePreviewIntegration } from '@/features/project/ui-mobile-preview-settings';
 import { ProjectPermissionsSettings } from '@/features/project/ui-project-permissions-settings';
 import { ProjectPipelineSettings } from '@/features/project/ui-project-pipeline-settings';
 import type { ProjectPriority } from '@shared/feed-types';
@@ -732,6 +736,7 @@ export function ProjectSettings({
   const deleteGeneratedProjectLogo = useDeleteGeneratedProjectLogo();
   const regenerateProjectSummary = useRegenerateProjectSummary();
   const createProjectFeatureMapTask = useCreateProjectFeatureMapTask();
+  const detectMobilePreviewProject = useDetectMobilePreviewProject();
   const removeProjectLogo = useRemoveProjectLogo();
   const deleteProject = useDeleteProject();
   const deleteWorktreesFolder = useDeleteProjectWorktreesFolder();
@@ -789,6 +794,8 @@ export function ProjectSettings({
   const [aiSkillSlots, setAiSkillSlots] = useState<AiSkillSlotsSetting | null>(
     null,
   );
+  const [mobilePreviewConfig, setMobilePreviewConfig] =
+    useState<MobilePreviewProjectConfig>(DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG);
   const [protectedBranches, setProtectedBranches] = useState<string[]>([]);
   const [favoriteBranches, setFavoriteBranches] = useState<string[]>([]);
   const [isGeneratingContext, setIsGeneratingContext] = useState(false);
@@ -837,6 +844,8 @@ export function ProjectSettings({
       protectedBranches: project.protectedBranches ?? [],
       favoriteBranches: project.favoriteBranches ?? [],
       aiSkillSlots: project.aiSkillSlots,
+      mobilePreviewConfig:
+        project.mobilePreviewConfig ?? DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
     };
   }, [project]);
 
@@ -859,6 +868,7 @@ export function ProjectSettings({
       protectedBranches,
       favoriteBranches,
       aiSkillSlots,
+      mobilePreviewConfig,
     }),
     [
       aiSkillSlots,
@@ -870,6 +880,7 @@ export function ProjectSettings({
       defaultAgentModelPreference,
       defaultBranch,
       favoriteBranches,
+      mobilePreviewConfig,
       name,
       path,
       prPriority,
@@ -940,6 +951,9 @@ export function ProjectSettings({
       setProtectedBranches(project.protectedBranches ?? []);
       setFavoriteBranches(project.favoriteBranches ?? []);
       setAiSkillSlots(project.aiSkillSlots);
+      setMobilePreviewConfig(
+        project.mobilePreviewConfig ?? DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
+      );
       initializedProjectIdRef.current = project.id;
     }
   }, [backendModelPresets, project]);
@@ -1125,6 +1139,37 @@ export function ProjectSettings({
             : 'Failed to create project feature map task.';
         addToast({
           message,
+          type: 'error',
+        });
+      });
+  }
+
+  function handleMobilePreviewConfigChange(
+    nextConfig: MobilePreviewProjectConfig,
+  ) {
+    markFieldDirty('mobilePreviewConfig');
+    setMobilePreviewConfig(nextConfig);
+  }
+
+  function handleDetectMobilePreview() {
+    void detectMobilePreviewProject
+      .mutateAsync(projectId)
+      .then((updatedProject) => {
+        setMobilePreviewConfig(
+          updatedProject.mobilePreviewConfig ??
+            DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
+        );
+        addToast({
+          message: 'Mobile preview detection updated.',
+          type: 'success',
+        });
+      })
+      .catch((error: unknown) => {
+        addToast({
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Failed to detect mobile apps.',
           type: 'error',
         });
       });
@@ -1722,6 +1767,12 @@ export function ProjectSettings({
       content = (
         <div className="space-y-4">
           <h2 className="text-ink-1 text-lg font-semibold">Integrations</h2>
+          <ProjectMobilePreviewIntegration
+            config={mobilePreviewConfig}
+            isDetecting={detectMobilePreviewProject.isPending}
+            onChange={handleMobilePreviewConfigChange}
+            onDetect={handleDetectMobilePreview}
+          />
           <RepoLink project={project} />
           <WorkItemsLink
             project={project}

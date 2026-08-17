@@ -35,6 +35,7 @@ export function Combobox({
   emptyLabel = 'No options found',
   size = 'md',
   className,
+  contentClassName,
 }: {
   value: string;
   options: ComboboxOption[];
@@ -46,6 +47,7 @@ export function Combobox({
   emptyLabel?: string;
   size?: ComponentSize;
   className?: string;
+  contentClassName?: string;
 }) {
   const id = useId();
   const listboxId = `combobox-listbox-${id}`;
@@ -159,7 +161,13 @@ export function Combobox({
         createPortal(
           <div
             ref={contentRef}
-            className="bg-bg-1 border-glass-border fixed z-[70] overflow-hidden rounded-md border shadow-xl"
+            // Portaled outside any modal, so a focus lock must not reclaim the
+            // search input this popover focuses on open.
+            data-focus-portal="true"
+            className={clsx(
+              'bg-bg-1 border-glass-border fixed z-[70] overflow-hidden rounded-md border shadow-xl',
+              contentClassName,
+            )}
             style={{
               top: position.actualSide === 'bottom' ? position.top : undefined,
               bottom:

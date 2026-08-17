@@ -79,6 +79,7 @@ export type CreatePrReviewChatStepDeps = {
       side?: 'old' | 'new';
       selectedText: string;
     };
+    sessionRules: PermissionScope;
     autoStart: false;
   }) => Promise<TaskStep>;
   startAgent: (stepId: string) => Promise<void>;
@@ -258,6 +259,7 @@ export async function createPrReviewChatStep(
       side: params.side,
       selectedText: params.selectedText,
     },
+    sessionRules: buildReadOnlyPrReviewSessionRules(),
     autoStart: false,
   });
 
@@ -281,6 +283,9 @@ export async function continuePrReviewChatStep(
   if (!task) throw new Error(`Task ${step.taskId} not found`);
   if (task.type !== 'pr-review') {
     throw new Error('PR review chat steps can only continue for pr-review tasks');
+  }
+  if (task.pullRequestId !== String(step.meta.pullRequestId)) {
+    throw new Error('PR review chat step pull request does not match review task');
   }
   if (!task.worktreePath) {
     throw new Error('PR review worktree is unavailable');

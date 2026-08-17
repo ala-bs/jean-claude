@@ -570,6 +570,10 @@ describe('VibeBackend', () => {
           toolName: 'bash',
           input: { command: 'pnpm test' },
           description: 'bash: pnpm test',
+          permissionEvaluation: {
+            action: 'ask',
+            matchValue: 'pnpm test',
+          },
         },
       },
     });

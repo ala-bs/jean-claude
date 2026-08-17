@@ -16,6 +16,7 @@ import {
   type McpCapability,
   type ModelDiscoveryCapability,
   type PermissionCapability,
+  type PermissionRuleUpdateCapability,
   type PromptInputCapability,
   type QuestionCapability,
   type ResourceTrackingCapability,
@@ -171,6 +172,24 @@ function createRuntimeModeSwitchCapability(
   };
 }
 
+function createPermissionRuleUpdatesCapability(
+  backend: AgentBackendType,
+): PermissionRuleUpdateCapability {
+  return {
+    async update({ handle, rules }) {
+      const binding = getRunBinding({
+        handle,
+        backend,
+        capability: 'agent.permissionRuleUpdates',
+      });
+      binding.backend.updatePermissionRules?.({
+        sessionId: binding.adapterSessionId,
+        rules,
+      });
+    },
+  };
+}
+
 function createSessionAllowedToolsCapability(
   backend: AgentBackendType,
 ): SessionAllowedToolsCapability {
@@ -241,6 +260,7 @@ function createCapabilities({
   supportsQuestions,
   supportsRuntimeModeSwitch,
   supportsSessionAllowedTools,
+  supportsPermissionRuleUpdates,
 }: {
   backend: AgentBackendType;
   run: RunAgentCapability;
@@ -248,6 +268,7 @@ function createCapabilities({
   supportsQuestions: boolean;
   supportsRuntimeModeSwitch: boolean;
   supportsSessionAllowedTools: boolean;
+  supportsPermissionRuleUpdates: boolean;
 }): AgentBackendCapabilities {
   return {
     agent: {
@@ -273,6 +294,11 @@ function createCapabilities({
         : unsupported<SessionAllowedToolsCapability>(
             'session-allowed tool tracking is not supported by this backend',
           ),
+      permissionRuleUpdates: supportsPermissionRuleUpdates
+        ? supported(createPermissionRuleUpdatesCapability(backend))
+        : unsupported<PermissionRuleUpdateCapability>(
+            'runtime permission rule refresh is not supported by this backend',
+          ),
       resourceTracking: supported(resourceTrackingCapability),
     },
     generation: createGenerationCapabilities(backend),
@@ -297,6 +323,7 @@ export const claudeCodeProvider: AgentBackendProvider = {
     supportsQuestions: true,
     supportsRuntimeModeSwitch: true,
     supportsSessionAllowedTools: true,
+    supportsPermissionRuleUpdates: true,
   }),
 };
 
@@ -315,6 +342,7 @@ export const openCodeProvider: AgentBackendProvider = {
     supportsQuestions: true,
     supportsRuntimeModeSwitch: false,
     supportsSessionAllowedTools: false,
+    supportsPermissionRuleUpdates: true,
   }),
 };
 
@@ -333,6 +361,7 @@ export const codexProvider: AgentBackendProvider = {
     supportsQuestions: false,
     supportsRuntimeModeSwitch: false,
     supportsSessionAllowedTools: false,
+    supportsPermissionRuleUpdates: false,
   }),
 };
 
@@ -351,6 +380,7 @@ export const copilotProvider: AgentBackendProvider = {
     supportsQuestions: true,
     supportsRuntimeModeSwitch: false,
     supportsSessionAllowedTools: true,
+    supportsPermissionRuleUpdates: true,
   }),
 };
 
@@ -369,6 +399,7 @@ export const vibeProvider: AgentBackendProvider = {
     supportsQuestions: false,
     supportsRuntimeModeSwitch: true,
     supportsSessionAllowedTools: false,
+    supportsPermissionRuleUpdates: true,
   }),
 };
 

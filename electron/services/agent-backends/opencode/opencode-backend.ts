@@ -37,6 +37,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
+import type { QuestionResponseMetadata } from '@shared/agent-types';
 import type { TokenUsage } from '@shared/normalized-message-v2';
 
 
@@ -442,6 +443,8 @@ interface OpenCodeSessionState {
   emittedQuestionRequestIds: Set<string>;
   /** Resolved permission rules for runtime evaluation */
   permissionRules: ResolvedPermissionRule[];
+  /** Rules granted at runtime (e.g. directory approvals); survive refreshes. */
+  runtimePermissionRules: ResolvedPermissionRule[];
   /** Server/client handle used by this session */
   serverHandle: ServerHandle;
   /** Whether this session owns a dedicated server instance */
@@ -601,6 +604,7 @@ export class OpenCodeBackend implements AgentBackend {
       rawDeltaRows: new Map(),
       emittedQuestionRequestIds: new Set(),
       permissionRules: config.permissionRules ?? [],
+      runtimePermissionRules: [],
       serverHandle,
       ownsServerHandle: !useSharedServer,
       serverClosed: false,
@@ -683,7 +687,13 @@ export class OpenCodeBackend implements AgentBackend {
       reply: ocResponse,
     });
     this.assertSuccessfulSdkResponse(result, 'respond to permission');
-    if (directoryRule) state.permissionRules.push(directoryRule);
+    if (directoryRule) {
+      state.permissionRules.push(directoryRule);
+      state.runtimePermissionRules = [
+        ...(state.runtimePermissionRules ?? []),
+        directoryRule,
+      ];
+    }
 
     // Resolve the pending permission promise
     const pending = state.pendingPermissions.get(requestId);
@@ -696,40 +706,63 @@ export class OpenCodeBackend implements AgentBackend {
     }
   }
 
+  /**
+   * Replace the permission-rule snapshot used for runtime evaluation.
+   * Runtime-granted rules (directory approvals) are preserved.
+   */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    const next = [...rules, ...(state.runtimePermissionRules ?? [])];
+    state.permissionRules = next;
+    state.normalizationCtx.permissionRules = next;
+  }
+
   async respondToQuestion(
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
+    metadata: QuestionResponseMetadata,
   ): Promise<void> {
     const state = this.sessions.get(sessionId);
     if (!state) {
-      dbg.agent('OpenCodeBackend.respondToQuestion — no session %s', sessionId);
-      return;
+      throw new Error(`No OpenCode session: ${sessionId}`);
     }
 
     dbg.agent(
-      'OpenCodeBackend.respondToQuestion sending reply for %s with answer %O',
+      'OpenCodeBackend.respondToQuestion sending reply session=%s request=%s',
       sessionId,
-      answer,
+      requestId,
     );
 
     // Map Record<string, string> answers to Array<QuestionAnswer>
     // QuestionAnswer = Array<string> — each answer is the selected option(s)
-    const answers = Object.values(answer).map(toOpenCodeQuestionAnswer);
+    if (!metadata) {
+      throw new Error('OpenCode question response is missing server question order');
+    }
+    // questionKeys is the full, ordered question list. Skipped optional
+    // questions have no answer and must still occupy their positional slot.
+    const answers = metadata.questionKeys.map((questionKey) => {
+      const value = answer[questionKey];
+      return value === undefined ? [] : toOpenCodeQuestionAnswer(value);
+    });
 
-    state.serverHandle.client.question
-      .reply({
-        requestID: requestId,
-        directory: state.cwd,
-        answers,
-      })
-      .catch((error) => {
-        dbg.agent(
-          'OpenCodeBackend.respondToQuestion reply error for %s: %O',
-          sessionId,
-          error,
-        );
-      });
+    const result = await state.serverHandle.client.question.reply({
+      requestID: requestId,
+      directory: state.cwd,
+      answers,
+    });
+    if (result.error) {
+      throw new Error(
+        `OpenCode question reply failed: ${this.formatRequestError(result.error)}`,
+      );
+    }
     if (
       state.pendingQuestions.delete(requestId) &&
       !this.hasPendingUserInput(state)
@@ -1142,7 +1175,14 @@ export class OpenCodeBackend implements AgentBackend {
                 ? permissionPatterns
                 : [matchValue];
             const permissionDecisions = matchValues.map((value) =>
-              evaluatePermissionWithMatch(state.permissionRules, tool, value),
+              evaluatePermissionWithMatch(
+                state.permissionRules,
+                tool,
+                value,
+                tool === 'bash'
+                  ? String(req.input.command ?? '')
+                  : undefined,
+              ),
             );
             const permissionDecision =
               permissionDecisions.find((decision) => decision.action === 'deny') ??

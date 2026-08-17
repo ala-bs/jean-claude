@@ -2,7 +2,15 @@ import { memo, type MouseEvent, useMemo } from 'react';
 import Anser from 'anser';
 
 
-import { splitLogTextLinks } from './utils-log-links';
+import { isDefaultAppFile } from '@shared/default-app-extensions';
+
+import { api } from '@/lib/api';
+import { useToastStore } from '@/stores/toasts';
+
+import { type LogTextSegment, splitLogTextLinks } from './utils-log-links';
+
+const LINK_CLASS_NAME =
+  'underline decoration-current/45 underline-offset-2 hover:decoration-current';
 
 /**
  * ANSI color class → CSS color value.
@@ -50,7 +58,24 @@ function stripNonPrintable(text: string): string {
   );
 }
 
-export const AnsiLine = memo(function AnsiLine({ line }: { line: string }) {
+/** Resolves a log file path to an absolute path usable by the editor. */
+function resolveLogPath(path: string, workingDir?: string): string | null {
+  if (path.startsWith('/')) return path;
+  if (path.startsWith('~/')) return path;
+  if (!workingDir) return null;
+  const base = workingDir.endsWith('/') ? workingDir.slice(0, -1) : workingDir;
+  const relative = path.startsWith('./') ? path.slice(2) : path;
+  return `${base}/${relative}`;
+}
+
+export const AnsiLine = memo(function AnsiLine({
+  line,
+  workingDir,
+}: {
+  line: string;
+  /** Worktree/project dir used to resolve relative file paths. */
+  workingDir?: string;
+}) {
   const segments = useMemo(() => {
     if (!line) return null;
     const parsed = Anser.ansiToJson(line, { use_classes: true });
@@ -64,33 +89,79 @@ export const AnsiLine = memo(function AnsiLine({ line }: { line: string }) {
 
   if (!segments || segments.length === 0) return <> </>;
 
-  const renderTextWithLinks = (content: string, keyPrefix: string) =>
-    splitLogTextLinks(content).map((part, index) => {
-      if (part.type === 'text') {
-        return <span key={`${keyPrefix}-text-${index}`}>{part.text}</span>;
-      }
+  const renderSegment = (part: LogTextSegment, key: string) => {
+    if (part.type === 'text') return <span key={key}>{part.text}</span>;
 
-      const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (part.type === 'file') {
+      const absolutePath = resolveLogPath(part.path, workingDir);
+      if (!absolutePath) return <span key={key}>{part.text}</span>;
+
+      // Images, PDFs, media and archives open with the OS default
+      // application; everything else opens in the configured editor.
+      const opensWithDefaultApp = isDefaultAppFile(absolutePath);
+
+      const handleFileClick = (event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
-
         if (!event.metaKey && !event.ctrlKey) return;
 
         event.stopPropagation();
-        window.open(part.url, '_blank', 'noopener,noreferrer');
+        const openPromise = opensWithDefaultApp
+          ? api.shell.openPath(absolutePath)
+          : api.shell.openInEditor(absolutePath, workingDir);
+        openPromise
+          .catch((error: unknown) => {
+            useToastStore.getState().addToast({
+              type: 'error',
+              message:
+                error instanceof Error
+                  ? error.message
+                  : `Could not open ${absolutePath}`,
+            });
+          });
       };
 
       return (
-        <a
-          key={`${keyPrefix}-link-${index}`}
-          href={part.url}
-          onClick={handleClick}
-          className="underline decoration-current/45 underline-offset-2 hover:decoration-current"
-          title="Cmd-click to open"
+        <button
+          key={key}
+          type="button"
+          onClick={handleFileClick}
+          className={`${LINK_CLASS_NAME} inline cursor-pointer bg-transparent p-0 font-[inherit] text-[inherit] whitespace-pre-wrap`}
+          title={
+            opensWithDefaultApp
+              ? 'Cmd-click to open with default app'
+              : 'Cmd-click to open in editor'
+          }
         >
           {part.text}
-        </a>
+        </button>
       );
-    });
+    }
+
+    const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+      event.preventDefault();
+      if (!event.metaKey && !event.ctrlKey) return;
+
+      event.stopPropagation();
+      window.open(part.url, '_blank', 'noopener,noreferrer');
+    };
+
+    return (
+      <a
+        key={key}
+        href={part.url}
+        onClick={handleClick}
+        className={LINK_CLASS_NAME}
+        title="Cmd-click to open"
+      >
+        {part.text}
+      </a>
+    );
+  };
+
+  const renderTextWithLinks = (content: string, keyPrefix: string) =>
+    splitLogTextLinks(content, { hasWorkingDir: !!workingDir }).map(
+      (part, index) => renderSegment(part, `${keyPrefix}-${index}`),
+    );
 
   return (
     <>

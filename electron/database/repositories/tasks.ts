@@ -1,10 +1,22 @@
-import { Task, TaskStatus, TaskTodoItem, TaskType } from '@shared/types';
-import type { PermissionScope } from '@shared/permission-types';
+import { type Kysely, sql } from 'kysely';
 
+import {
+  PrWorkspaceState,
+  Task,
+  TaskStatus,
+  TaskTodoItem,
+  TaskType,
+} from '@shared/types';
 
-import { NewTaskRow, TaskRow, UpdateTaskRow } from '../schema';
+import {
+  type Database as DatabaseSchema,
+  NewTaskRow,
+  TaskRow,
+  UpdateTaskRow,
+} from '../schema';
 import { db } from '../index';
 import { dbg } from '../../lib/debug';
+import { transitionActivePrWorkspacesToPending } from './pr-workspace-transitions';
 
 
 
@@ -20,9 +32,9 @@ interface CreateTaskInput {
   startCommitHash?: string | null;
   sourceBranch?: string | null;
   branchName?: string | null;
+  prWorkspaceState?: PrWorkspaceState | null;
   hasUnread?: boolean;
   userCompleted?: boolean;
-  sessionRules?: PermissionScope;
   workItemIds?: string[] | null;
   workItemUrls?: string[] | null;
   pullRequestId?: string | null;
@@ -43,9 +55,10 @@ interface UpdateTaskInput {
   startCommitHash?: string | null;
   sourceBranch?: string | null;
   branchName?: string | null;
+  prWorkspaceState?: PrWorkspaceState | null;
+  prWorkspacePendingAt?: string | null;
   hasUnread?: boolean;
   userCompleted?: boolean;
-  sessionRules?: PermissionScope;
   workItemIds?: string[] | null;
   workItemUrls?: string[] | null;
   pullRequestId?: string | null;
@@ -64,15 +77,18 @@ function toTask<T extends TaskRow>(
   | 'type'
   | 'userCompleted'
   | 'hasUnread'
-  | 'sessionRules'
+  | 'prWorkspaceState'
+  | 'prWorkspacePendingAt'
   | 'workItemIds'
   | 'workItemUrls'
   | 'todoItems'
+  | 'cleanupWorktreePath'
+  | 'cleanupBranchName'
 > & {
   type: TaskType;
   userCompleted: boolean;
   hasUnread: boolean;
-  sessionRules: PermissionScope;
+  prWorkspaceState: PrWorkspaceState | null;
   workItemIds: string[] | null;
   workItemUrls: string[] | null;
   todoItems: TaskTodoItem[];
@@ -81,20 +97,30 @@ function toTask<T extends TaskRow>(
     type,
     userCompleted,
     hasUnread,
-    sessionRules,
+    prWorkspaceState,
+    prWorkspacePendingAt: _prWorkspacePendingAt,
     workItemIds,
     workItemUrls,
     todoItems,
+    cleanupWorktreePath: _cleanupWorktreePath,
+    cleanupBranchName: _cleanupBranchName,
     ...rest
   } = row;
+  const normalizedPrWorkspaceState = prWorkspaceState ?? null;
+  if (
+    normalizedPrWorkspaceState !== null &&
+    normalizedPrWorkspaceState !== 'active' &&
+    normalizedPrWorkspaceState !== 'cleanup-pending' &&
+    normalizedPrWorkspaceState !== 'kept'
+  ) {
+    throw new Error(`Invalid PR workspace state: ${normalizedPrWorkspaceState}`);
+  }
   return {
     ...rest,
     type: (type ?? 'agent') as TaskType,
     userCompleted: Boolean(userCompleted),
     hasUnread: Boolean(hasUnread),
-    sessionRules: sessionRules
-      ? (JSON.parse(sessionRules) as PermissionScope)
-      : {},
+    prWorkspaceState: normalizedPrWorkspaceState,
     workItemIds: workItemIds ? JSON.parse(workItemIds) : null,
     workItemUrls: workItemUrls ? JSON.parse(workItemUrls) : null,
     todoItems: todoItems ? (JSON.parse(todoItems) as TaskTodoItem[]) : [],
@@ -109,15 +135,18 @@ function toTaskOrUndefined<T extends TaskRow>(
       | 'type'
       | 'userCompleted'
       | 'hasUnread'
-      | 'sessionRules'
+      | 'prWorkspaceState'
+      | 'prWorkspacePendingAt'
       | 'workItemIds'
       | 'workItemUrls'
       | 'todoItems'
+      | 'cleanupWorktreePath'
+      | 'cleanupBranchName'
     > & {
       type: TaskType;
       userCompleted: boolean;
       hasUnread: boolean;
-      sessionRules: PermissionScope;
+      prWorkspaceState: PrWorkspaceState | null;
       workItemIds: string[] | null;
       workItemUrls: string[] | null;
       todoItems: TaskTodoItem[];
@@ -131,7 +160,6 @@ function toDbValues(data: CreateTaskInput): NewTaskRow {
   const {
     userCompleted,
     hasUnread,
-    sessionRules,
     workItemIds,
     workItemUrls,
     todoItems,
@@ -143,9 +171,6 @@ function toDbValues(data: CreateTaskInput): NewTaskRow {
       userCompleted: userCompleted ? 1 : 0,
     }),
     ...(hasUnread !== undefined && { hasUnread: hasUnread ? 1 : 0 }),
-    ...(sessionRules !== undefined && {
-      sessionRules: JSON.stringify(sessionRules),
-    }),
     ...(workItemIds !== undefined && {
       workItemIds: workItemIds ? JSON.stringify(workItemIds) : null,
     }),
@@ -162,7 +187,6 @@ function toDbUpdateValues(data: UpdateTaskInput): Partial<UpdateTaskRow> {
   const {
     userCompleted,
     hasUnread,
-    sessionRules,
     workItemIds,
     workItemUrls,
     todoItems,
@@ -174,9 +198,6 @@ function toDbUpdateValues(data: UpdateTaskInput): Partial<UpdateTaskRow> {
       userCompleted: userCompleted ? 1 : 0,
     }),
     ...(hasUnread !== undefined && { hasUnread: hasUnread ? 1 : 0 }),
-    ...(sessionRules !== undefined && {
-      sessionRules: JSON.stringify(sessionRules),
-    }),
     ...(workItemIds !== undefined && {
       workItemIds: workItemIds ? JSON.stringify(workItemIds) : null,
     }),
@@ -188,6 +209,64 @@ function toDbUpdateValues(data: UpdateTaskInput): Partial<UpdateTaskRow> {
     }),
   };
 }
+
+export function createTaskCompletionOperations(
+  database: Pick<Kysely<DatabaseSchema>, 'transaction'>,
+) {
+  const markUserCompleted = async (
+    id: string,
+    completeExecution: boolean,
+  ): Promise<Task> => {
+    return database.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom('tasks')
+        .select(['userCompleted', 'projectId'])
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+
+      if (current.userCompleted && !completeExecution) {
+        const row = await trx
+          .selectFrom('tasks')
+          .selectAll()
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow();
+        return toTask(row) as Task;
+      }
+
+      if (!current.userCompleted) {
+        await trx
+          .updateTable('tasks')
+          .set((eb) => ({
+            sortOrder: eb('sortOrder', '+', 1),
+          }))
+          .where('projectId', '=', current.projectId)
+          .where('userCompleted', '=', 1)
+          .execute();
+      }
+
+      const row = await trx
+        .updateTable('tasks')
+        .set({
+          userCompleted: 1,
+          ...(completeExecution && { status: 'completed' as const }),
+          ...(!current.userCompleted && { sortOrder: 0 }),
+          updatedAt: new Date().toISOString(),
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      return toTask(row) as Task;
+    });
+  };
+
+  return {
+    markUserCompleted: (id: string) => markUserCompleted(id, false),
+    markCompleted: (id: string) => markUserCompleted(id, true),
+  };
+}
+
+const taskCompletionOperations = createTaskCompletionOperations(db);
 
 export const TaskRepository = {
   findAll: async () => {
@@ -219,6 +298,27 @@ export const TaskRepository = {
         'projects.repoId as repoId',
       ])
       .where('tasks.userCompleted', '=', 0)
+      .where('tasks.parentTaskId', 'is', null)
+      .where('projects.archivedAt', 'is', null)
+      .orderBy('tasks.createdAt', 'desc')
+      .execute();
+    return rows.map(toTask);
+  },
+
+  findPrWorkspaceTasksForFeed: async () => {
+    const rows = await db
+      .selectFrom('tasks')
+      .innerJoin('projects', 'projects.id', 'tasks.projectId')
+      .selectAll('tasks')
+      .select([
+        'projects.name as projectName',
+        'projects.color as projectColor',
+        'projects.logoPath as projectLogoPath',
+        'projects.repoProviderId as repoProviderId',
+        'projects.repoId as repoId',
+      ])
+      .where('tasks.type', '=', 'pr-review')
+      .where('tasks.prWorkspaceState', 'is not', null)
       .where('tasks.parentTaskId', 'is', null)
       .where('projects.archivedAt', 'is', null)
       .orderBy('tasks.createdAt', 'desc')
@@ -310,6 +410,45 @@ export const TaskRepository = {
     return toTaskOrUndefined(row);
   },
 
+  getVerifiedCleanupIdentity: async (id: string) => {
+    const row = await db
+      .selectFrom('tasks')
+      .select(['cleanupWorktreePath', 'cleanupBranchName'])
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!row?.cleanupWorktreePath || !row.cleanupBranchName) return undefined;
+    return {
+      worktreePath: row.cleanupWorktreePath,
+      branchName: row.cleanupBranchName,
+    };
+  },
+
+  markCleanupIdentityVerified: async (
+    id: string,
+    identity: { worktreePath: string; branchName: string },
+  ) => {
+    const result = await db
+      .updateTable('tasks')
+      .set({
+        cleanupWorktreePath: identity.worktreePath,
+        cleanupBranchName: identity.branchName,
+      })
+      .where('id', '=', id)
+      .where('worktreePath', '=', identity.worktreePath)
+      .where('branchName', '=', identity.branchName)
+      .executeTakeFirst();
+    if (Number(result.numUpdatedRows) !== 1) {
+      throw new Error(`Task ${id} worktree identity changed during cleanup`);
+    }
+  },
+
+  clearCleanupIdentity: (id: string) =>
+    db
+      .updateTable('tasks')
+      .set({ cleanupWorktreePath: null, cleanupBranchName: null })
+      .where('id', '=', id)
+      .execute(),
+
   findActivePrReviewTask: async ({
     projectId,
     pullRequestId,
@@ -324,6 +463,7 @@ export const TaskRepository = {
       .where('type', '=', 'pr-review')
       .where('pullRequestId', '=', pullRequestId)
       .orderBy('createdAt', 'desc')
+      .orderBy('id', 'desc')
       .executeTakeFirst();
     return toTaskOrUndefined(row);
   },
@@ -342,8 +482,101 @@ export const TaskRepository = {
       .where('type', '=', 'pr-review')
       .where('pullRequestId', '=', pullRequestId)
       .orderBy('createdAt', 'desc')
+      .orderBy('id', 'desc')
       .execute();
     return rows.map(toTask);
+  },
+
+  findPendingPrWorkspaceTasks: async () => {
+    const rows = await db
+      .selectFrom('tasks')
+      .selectAll()
+      .where('prWorkspaceState', '=', 'cleanup-pending')
+      .where('type', '=', 'pr-review')
+      .orderBy('prWorkspacePendingAt', 'asc')
+      .orderBy('createdAt', 'asc')
+      .orderBy('id', 'asc')
+      .execute();
+    return rows.map(toTask);
+  },
+
+  setPrWorkspaceState: async (
+    id: string,
+    prWorkspaceState: 'active' | 'cleanup-pending' | 'kept',
+  ) => {
+    const row = await db
+      .updateTable('tasks')
+      .set({
+        prWorkspaceState,
+        prWorkspacePendingAt:
+          prWorkspaceState === 'cleanup-pending'
+            ? new Date().toISOString()
+            : null,
+        ...(prWorkspaceState === 'active' && {
+          status: sql<TaskStatus>`CASE WHEN status = 'completed' THEN 'waiting' ELSE status END`,
+          userCompleted: 0,
+        }),
+        updatedAt: new Date().toISOString(),
+      })
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return toTask(row);
+  },
+
+  markPrWorkspacesCleanupPending: async (params: {
+    projectId: string;
+    pullRequestId: string;
+    taskIds: string[];
+  }): Promise<Task[]> =>
+    (await transitionActivePrWorkspacesToPending(db, params)).map(toTask),
+
+  keepPrWorkspaces: async (ids: string[]): Promise<Task[]> => {
+    if (ids.length === 0) return [];
+    return db.transaction().execute(async (trx) => {
+      const rows = await trx
+        .updateTable('tasks')
+        .set({
+          prWorkspaceState: 'kept',
+          prWorkspacePendingAt: null,
+          status: sql<TaskStatus>`CASE WHEN status = 'completed' THEN 'waiting' ELSE status END`,
+          userCompleted: 0,
+          updatedAt: new Date().toISOString(),
+        })
+        .where('id', 'in', ids)
+        .where('type', '=', 'pr-review')
+        .where('prWorkspaceState', '=', 'cleanup-pending')
+        .returningAll()
+        .execute();
+      if (rows.length !== ids.length) {
+        throw new Error('PR workspace state changed during keep resolution');
+      }
+      return rows.map(toTask);
+    });
+  },
+
+  reactivatePrWorkspaces: async (ids: string[]): Promise<Task[]> => {
+    if (ids.length === 0) return [];
+    return db.transaction().execute(async (trx) => {
+      const rows = await trx
+        .updateTable('tasks')
+        .set({
+          prWorkspaceState: 'active',
+          prWorkspacePendingAt: null,
+          status: sql<TaskStatus>`CASE WHEN status = 'completed' THEN 'waiting' ELSE status END`,
+          userCompleted: 0,
+          updatedAt: new Date().toISOString(),
+        })
+        .where('id', 'in', ids)
+        .where('type', '=', 'pr-review')
+        .where('prWorkspaceState', 'in', ['cleanup-pending', 'kept'])
+        .returningAll()
+        .execute();
+      if (rows.length !== ids.length) {
+        throw new Error('PR workspace state changed during reactivation');
+      }
+      return rows.map(toTask);
+    });
   },
 
   /** Returns the set of IDs that exist in the database from the given list. */
@@ -415,6 +648,12 @@ export const TaskRepository = {
     return db.deleteFrom('tasks').where('id', '=', id).execute();
   },
 
+  deleteMany: (ids: string[]) => {
+    if (ids.length === 0) return Promise.resolve([]);
+    dbg.db('tasks.deleteMany count=%d', ids.length);
+    return db.deleteFrom('tasks').where('id', 'in', ids).execute();
+  },
+
   setHasUnread: async (id: string, hasUnread: boolean): Promise<Task | undefined> => {
     const hasUnreadValue = hasUnread ? 1 : 0;
     const row = await db
@@ -465,46 +704,9 @@ export const TaskRepository = {
     return toTask(row) as Task;
   },
 
-  markUserCompleted: async (id: string): Promise<Task> => {
-    return db.transaction().execute(async (trx) => {
-      const current = await trx
-        .selectFrom('tasks')
-        .select(['userCompleted', 'projectId'])
-        .where('id', '=', id)
-        .executeTakeFirstOrThrow();
+  markUserCompleted: taskCompletionOperations.markUserCompleted,
 
-      if (current.userCompleted) {
-        const row = await trx
-          .selectFrom('tasks')
-          .selectAll()
-          .where('id', '=', id)
-          .executeTakeFirstOrThrow();
-        return toTask(row) as Task;
-      }
-
-      await trx
-        .updateTable('tasks')
-        .set((eb) => ({
-          sortOrder: eb('sortOrder', '+', 1),
-        }))
-        .where('projectId', '=', current.projectId)
-        .where('userCompleted', '=', 1)
-        .execute();
-
-      const row = await trx
-        .updateTable('tasks')
-        .set({
-          userCompleted: 1,
-          sortOrder: 0,
-          updatedAt: new Date().toISOString(),
-        })
-        .where('id', '=', id)
-        .returningAll()
-        .executeTakeFirstOrThrow();
-
-      return toTask(row) as Task;
-    });
-  },
+  markCompleted: taskCompletionOperations.markCompleted,
 
   clearUserCompleted: async (id: string): Promise<Task> => {
     const row = await db

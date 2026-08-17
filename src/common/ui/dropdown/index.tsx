@@ -58,14 +58,23 @@ export function Dropdown({
   variant?: 'default' | 'bright';
   trigger:
     | ReactElement
-    | ((props: { triggerRef: (node: HTMLElement | null) => void }) => ReactElement);
+    | ((props: {
+        triggerRef: (node: HTMLElement | null) => void;
+        'aria-haspopup': 'menu';
+        'aria-expanded': boolean;
+        'aria-controls': string | undefined;
+      }) => ReactElement);
   children: ReactNode;
   align?: 'left' | 'right';
   side?: 'bottom' | 'top';
   className?: string;
   dropdownRef?:
-    | React.MutableRefObject<{ toggle: () => void } | null>
-    | ((handle: { toggle: () => void } | null) => void);
+    | React.MutableRefObject<{
+        toggle: (restoreFocusTo?: HTMLElement | null) => void;
+      } | null>
+    | ((handle: {
+        toggle: (restoreFocusTo?: HTMLElement | null) => void;
+      } | null) => void);
   onOpen?: () => void;
   initialFocusIndex?: number;
 }) {
@@ -77,6 +86,7 @@ export function Dropdown({
     useState<HTMLElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusElementRef = useRef<HTMLElement | null>(null);
   const originalTriggerRef =
     typeof trigger !== 'function' && isValidElement(trigger)
       ? ((trigger as unknown as { ref?: unknown }).ref as
@@ -102,17 +112,42 @@ export function Dropdown({
     setIsOpen(false);
     setFocusedIndex(-1);
     // Return focus to trigger on close
-    (triggerElementNode ?? triggerRef.current)?.focus();
+    (
+      restoreFocusElementRef.current ??
+      triggerElementNode ??
+      triggerRef.current
+    )?.focus();
   }, [triggerElementNode]);
 
-  const toggle = useCallback(() => {
-    setIsOpen((prev) => {
-      if (prev) {
-        setFocusedIndex(-1);
-        // Return focus to trigger on close
-        (triggerElementNode ?? triggerRef.current)?.focus();
+  const toggleWithRestoreFocus = useCallback(
+    (restoreFocusTo?: HTMLElement | null) => {
+      if (restoreFocusTo) {
+        restoreFocusElementRef.current = restoreFocusTo;
       }
-      return !prev;
+      setIsOpen((wasOpen) => {
+        if (wasOpen) {
+          setFocusedIndex(-1);
+          // Return focus to trigger on close
+          (
+            restoreFocusElementRef.current ??
+            restoreFocusTo ??
+            triggerElementNode ??
+            triggerRef.current
+          )?.focus();
+        }
+        return !wasOpen;
+      });
+    },
+    [triggerElementNode],
+  );
+
+  const toggle = useCallback(() => {
+    setIsOpen((wasOpen) => {
+      if (wasOpen) {
+        setFocusedIndex(-1);
+        triggerElementNode?.focus();
+      }
+      return !wasOpen;
     });
   }, [triggerElementNode]);
 
@@ -129,14 +164,14 @@ export function Dropdown({
   // Expose toggle to parent via ref or callback
   useEffect(() => {
     if (dropdownRef) {
-      setRef(dropdownRef, { toggle });
+      setRef(dropdownRef, { toggle: toggleWithRestoreFocus });
     }
     return () => {
       if (dropdownRef) {
         setRef(dropdownRef, null);
       }
     };
-  }, [dropdownRef, toggle]);
+  }, [dropdownRef, toggleWithRestoreFocus]);
 
   // Get all menu items
   const getMenuItems = useCallback(
@@ -296,7 +331,12 @@ export function Dropdown({
   // Build trigger element
   let triggerElement: ReactElement;
   if (typeof trigger === 'function') {
-    triggerElement = trigger({ triggerRef: setTriggerElementNode });
+    triggerElement = trigger({
+      triggerRef: setTriggerElementNode,
+      'aria-haspopup': 'menu',
+      'aria-expanded': isOpen,
+      'aria-controls': isOpen ? menuId : undefined,
+    });
   } else if (isValidElement(trigger)) {
     triggerElement = cloneElement(
       trigger as ReactElement<Record<string, unknown>>,

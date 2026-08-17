@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
+import type { RunStatus } from '@shared/run-command-types';
 
 import {
+  clearStepScrollPosition,
+  DEFAULT_CACHE_LIMIT,
   getQuestionDraftKey,
+  getStepScrollPosition,
+  setStepScrollPosition,
   useTaskMessagesStore,
 } from './task-messages';
 
@@ -16,7 +21,44 @@ describe('task messages store', () => {
       runCommandRunning: {},
       questionDrafts: {},
       questionResponsesInFlight: {},
+      areRunCommandStatusesHydrated: false,
     });
+  });
+
+  it('keeps the scroll position across an unload/reload refetch', () => {
+    const store = useTaskMessagesStore.getState();
+    store.loadStep('step-1', 'task-1', [], 'completed');
+    setStepScrollPosition('step-1', 320);
+
+    store.unloadStep('step-1');
+    store.loadStep('step-1', 'task-1', [], 'completed');
+
+    expect(getStepScrollPosition('step-1')).toBe(320);
+
+    clearStepScrollPosition('step-1');
+    expect(getStepScrollPosition('step-1')).toBeUndefined();
+  });
+
+  it('drops scroll positions for steps evicted by the cache limit', () => {
+    useTaskMessagesStore.setState({ cacheLimit: 2 });
+    try {
+      const store = useTaskMessagesStore.getState();
+
+      store.loadStep('step-a', 'task-1', [], 'completed');
+      setStepScrollPosition('step-a', 100);
+      store.loadStep('step-b', 'task-1', [], 'completed');
+      setStepScrollPosition('step-b', 200);
+      store.loadStep('step-c', 'task-1', [], 'completed');
+      setStepScrollPosition('step-c', 300);
+
+      expect(useTaskMessagesStore.getState().steps['step-a']).toBeUndefined();
+      expect(getStepScrollPosition('step-a')).toBeUndefined();
+      expect(getStepScrollPosition('step-c')).toBe(300);
+    } finally {
+      clearStepScrollPosition('step-b');
+      clearStepScrollPosition('step-c');
+      useTaskMessagesStore.setState({ cacheLimit: DEFAULT_CACHE_LIMIT });
+    }
   });
 
   it('keeps question drafts until explicitly cleared', () => {
@@ -107,6 +149,18 @@ describe('task messages store', () => {
     expect(useTaskMessagesStore.getState().questionDrafts).toEqual({});
   });
 
+  it('tracks run-command status hydration explicitly', () => {
+    expect(
+      useTaskMessagesStore.getState().areRunCommandStatusesHydrated,
+    ).toBe(false);
+
+    useTaskMessagesStore.getState().setRunCommandStatusesHydrated(true);
+
+    expect(
+      useTaskMessagesStore.getState().areRunCommandStatusesHydrated,
+    ).toBe(true);
+  });
+
   it('keeps run-command output without newline as pending line', () => {
     const store = useTaskMessagesStore.getState();
 
@@ -185,6 +239,57 @@ describe('task messages store', () => {
 
     expect(generation).toBeGreaterThan(0);
     expect(log.pendingLines.stdout).toMatchObject({ line: 'new' });
+  });
+
+  it('propagates run-command status updates when only effective ports change', () => {
+    const store = useTaskMessagesStore.getState();
+    const status = {
+      isRunning: true,
+      commands: [
+        {
+          id: 'mobile-dev-server:app',
+          name: 'Metro',
+          command: 'pnpm start',
+          ports: [8081],
+          status: 'running',
+        },
+      ],
+    } satisfies RunStatus;
+
+    store.setRunCommandRunning('task-1', status);
+    store.setRunCommandRunning('task-1', {
+      ...status,
+      commands: [{ ...status.commands[0], ports: [8082] }],
+    });
+
+    expect(
+      useTaskMessagesStore.getState().runCommandRunning['task-1'].commands[0]
+        .ports,
+    ).toEqual([8082]);
+  });
+
+  it('safely updates a legacy run-command status with missing ports', () => {
+    const store = useTaskMessagesStore.getState();
+    const command = {
+      id: 'mobile-dev-server:legacy',
+      name: 'Metro',
+      command: 'pnpm start',
+      status: 'running',
+    } as RunStatus['commands'][number];
+
+    store.setRunCommandRunning('task-1', {
+      isRunning: true,
+      commands: [command],
+    });
+    store.setRunCommandRunning('task-1', {
+      isRunning: true,
+      commands: [{ ...command, ports: [8082] }],
+    });
+
+    expect(
+      useTaskMessagesStore.getState().runCommandRunning['task-1'].commands[0]
+        .ports,
+    ).toEqual([8082]);
   });
 
   it('applies authoritative reset generation and clears queued logs', () => {

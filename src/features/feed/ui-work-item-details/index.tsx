@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Bug,
+  Check,
   CheckSquare,
   ChevronDown,
   ChevronRight,
@@ -12,6 +13,8 @@ import {
   Link2,
   Loader2,
   MessagesSquare,
+  RefreshCw,
+  X,
 } from 'lucide-react';
 import {
   startTransition,
@@ -36,6 +39,7 @@ import {
 import {
   useAddWorkItemComment,
   useBoardColumns,
+  useCurrentAzureUser,
   useIterations,
   useLinkedPullRequestStatuses,
   useRelatedTestCases,
@@ -51,6 +55,8 @@ import {
 } from '@/hooks/use-work-items';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { Chip } from '@/common/ui/chip';
+import { Kbd } from '@/common/ui/kbd';
+import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { Modal } from '@/common/ui/modal';
 import { PrDetail } from '@/features/pull-request/ui-pr-detail';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
@@ -62,6 +68,7 @@ import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
 import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 import { WorkItemHistory } from '@/features/work-item/ui-work-item-history';
 import { EditableMetadataValue as WorkItemMetadataEditor } from '@/features/work-item/ui-work-item-preview';
+import { WorkItemTagEditor } from '@/features/work-item/ui-work-item-tag-editor';
 
 type DetailsTab = 'comments' | 'history' | 'test-cases';
 
@@ -191,6 +198,7 @@ export function getOwnerOptions(
   owners: Array<{ displayName: string; value: string }>,
   currentOwner?: string,
   currentOwnerValue?: string,
+  currentUser?: { displayName?: string | null; uniqueName?: string | null },
 ): Array<{ displayName: string; value: string }> {
   const ownersByKey = new Map<
     string,
@@ -212,11 +220,45 @@ export function getOwnerOptions(
       ownersByKey.set(normalized, { displayName, value });
     }
   }
-  const ownersList = [...ownersByKey.values()];
-  const current = currentValue ? ownersList.shift() : undefined;
+  const currentKey = currentValue ? normalizeOwnerName(currentValue) : null;
+  const meName = currentUser?.displayName?.trim() || '';
+  const meValue = currentUser?.uniqueName?.trim() || meName;
+  // Owners are keyed by unique name (email) when available, display name otherwise,
+  // so also match on display name to avoid listing the same person twice.
+  const meNameKey = meName ? normalizeOwnerName(meName) : null;
+  let meKey = meValue ? normalizeOwnerName(meValue) : null;
+  if (meKey && !ownersByKey.has(meKey) && meNameKey) {
+    const byName = [...ownersByKey.entries()].find(
+      ([, owner]) => normalizeOwnerName(owner.displayName) === meNameKey,
+    );
+    if (byName) meKey = byName[0];
+  }
+  if (meKey && !ownersByKey.has(meKey)) {
+    ownersByKey.set(meKey, { displayName: meName || meValue, value: meValue });
+  }
+  let me = meKey ? ownersByKey.get(meKey) : undefined;
+  let current =
+    currentKey && currentKey !== meKey ? ownersByKey.get(currentKey) : undefined;
+  // Same person reached through both value spaces (email vs display name):
+  // keep a single entry, preferring the one the work item is actually set to
+  // so the dropdown still shows it as selected.
+  if (
+    me &&
+    current &&
+    normalizeOwnerName(current.displayName) ===
+      normalizeOwnerName(me.displayName)
+  ) {
+    me = current;
+    current = undefined;
+  }
+  const pinnedKeys = new Set([meKey, currentKey].filter(Boolean) as string[]);
+  const ownersList = [...ownersByKey.entries()]
+    .filter(([key]) => !pinnedKeys.has(key))
+    .map(([, owner]) => owner);
   ownersList.sort((a, b) => a.displayName.localeCompare(b.displayName));
   return [
     { displayName: 'Unassigned', value: '' },
+    ...(me ? [me] : []),
     ...(current ? [current] : []),
     ...ownersList,
   ];
@@ -412,9 +454,11 @@ function EditableIteration({
 export function WorkItemDetails({
   projectId,
   workItemId,
+  onClose,
 }: {
   projectId: string;
   workItemId: number;
+  onClose?: () => void;
 }) {
   const { data: project } = useProject(projectId);
   const providerId = project?.workItemProviderId ?? null;
@@ -430,6 +474,7 @@ export function WorkItemDetails({
     data: workItem,
     isLoading,
     error,
+    refetch: refetchWorkItem,
   } = useWorkItemById({
     providerId,
     workItemId,
@@ -450,17 +495,25 @@ export function WorkItemDetails({
     providerId,
     projectName,
   });
+  const { data: currentUser } = useCurrentAzureUser(providerId ?? null);
   const ownerOptions = useMemo(
     () =>
       getOwnerOptions(
         ownerQuery.data ?? [],
         workItem?.fields.assignedTo,
         workItem?.fields.assignedToUniqueName,
+        currentUser
+          ? {
+              displayName: currentUser.displayName,
+              uniqueName: currentUser.emailAddress,
+            }
+          : undefined,
       ),
     [
       ownerQuery.data,
       workItem?.fields.assignedTo,
       workItem?.fields.assignedToUniqueName,
+      currentUser,
     ],
   );
   const { data: iterations } = useIterations({
@@ -486,6 +539,7 @@ export function WorkItemDetails({
     data: comments = [],
     isLoading: isLoadingComments,
     error: commentsError,
+    refetch: refetchComments,
   } = useWorkItemComments({
     providerId,
     projectName,
@@ -495,29 +549,98 @@ export function WorkItemDetails({
     data: history = [],
     isLoading: isLoadingHistory,
     error: historyError,
+    refetch: refetchHistory,
   } = useWorkItemHistory({
     providerId,
     projectName,
     workItemId,
   });
-  const { data: relatedTestCases = [], isLoading: isLoadingTestCases } =
-    useRelatedTestCases({
-      providerId,
-      projectName,
-      workItemId,
-    });
+  const {
+    data: relatedTestCases = [],
+    isLoading: isLoadingTestCases,
+    refetch: refetchTestCases,
+  } = useRelatedTestCases({
+    providerId,
+    projectName,
+    workItemId,
+  });
   const linkedPrs = workItem?.linkedPrs ?? [];
-  const { data: linkedPullRequestStatuses = [] } = useLinkedPullRequestStatuses({
+  const {
+    data: linkedPullRequestStatuses = [],
+    isLoading: isLoadingPullRequestStatuses,
+  } = useLinkedPullRequestStatuses({
     providerId,
     linkedPrs,
   });
   const linkedWorkItemIds = getLinkedWorkItemIds(workItem);
-  const { data: linkedWorkItems = [], isLoading: isLoadingLinkedWorkItems } =
-    useWorkItemsByIds({
-      providerId,
-      projectName,
-      workItemIds: linkedWorkItemIds,
-    });
+  const {
+    data: linkedWorkItems = [],
+    isLoading: isLoadingLinkedWorkItems,
+    refetch: refetchLinkedWorkItems,
+  } = useWorkItemsByIds({
+    providerId,
+    projectName,
+    workItemIds: linkedWorkItemIds,
+  });
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const handleRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    void Promise.allSettled([
+      refetchWorkItem(),
+      refetchComments(),
+      refetchHistory(),
+      refetchTestCases(),
+      refetchLinkedWorkItems(),
+      ownerQuery.refetch(),
+    ]).finally(() => setIsRefreshing(false));
+  }, [
+    refetchWorkItem,
+    refetchComments,
+    refetchHistory,
+    refetchTestCases,
+    refetchLinkedWorkItems,
+    ownerQuery,
+  ]);
+  const workItemUrl = workItem?.url ?? null;
+  const copiedTimeoutRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimeoutRef.current) window.clearTimeout(copiedTimeoutRef.current);
+    },
+    [],
+  );
+  const handleCopyLink = useCallback(() => {
+    if (!workItemUrl) return;
+    void navigator.clipboard
+      .writeText(workItemUrl)
+      .then(() => {
+        setCopiedLink(true);
+        if (copiedTimeoutRef.current)
+          window.clearTimeout(copiedTimeoutRef.current);
+        copiedTimeoutRef.current = window.setTimeout(
+          () => setCopiedLink(false),
+          1500,
+        );
+      })
+      .catch(() => setCopiedLink(false));
+  }, [workItemUrl]);
+  const handleOpenInAzure = useCallback(() => {
+    if (!workItemUrl) return;
+    window.open(workItemUrl, '_blank', 'noopener,noreferrer');
+  }, [workItemUrl]);
+
+  useRegisterKeyboardBindings(`work-item-details:${workItemId}`, {
+    'cmd+shift+c': () => {
+      handleCopyLink();
+      return true;
+    },
+    'cmd+shift+o': () => {
+      handleOpenInAzure();
+      return true;
+    },
+  });
+
   const addComment = useAddWorkItemComment();
   const updateComment = useUpdateWorkItemComment();
   const updateField = useUpdateWorkItemField();
@@ -527,6 +650,7 @@ export function WorkItemDetails({
     null,
   );
   const [containerWidth, setContainerWidth] = useState(() => window.innerWidth);
+  const commentsPaneRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!hasTestCases && activeTab === 'test-cases') {
@@ -541,6 +665,7 @@ export function WorkItemDetails({
     maxWidthFraction: 0.6,
     direction: 'left',
     onWidthChange: setCommentsPaneWidth,
+    resizeTargetRef: commentsPaneRef,
   });
 
   useEffect(() => {
@@ -584,11 +709,6 @@ export function WorkItemDetails({
   const hasReproSteps = fields.workItemType === 'Bug' && !!fields.reproSteps;
   const hasContent =
     !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
-  const hasLinks =
-    !!workItem.parentId ||
-    !!workItem.childIds?.length ||
-    !!workItem.relatedWorkItemIds?.length ||
-    !!workItem.linkedPrs?.length;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -607,17 +727,56 @@ export function WorkItemDetails({
               {fields.title}
             </h1>
           </div>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="text-ink-2 hover:border-glass-border hover:text-ink-1 border-glass-border flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors disabled:opacity-60"
+            title="Refresh work item"
+          >
+            <RefreshCw
+              className={clsx('h-3.5 w-3.5', isRefreshing && 'animate-spin')}
+            />
+            Refresh
+          </button>
+          {workItem.url && (
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="text-ink-2 hover:border-glass-border hover:text-ink-1 border-glass-border flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors"
+              title="Copy work item link (⌘⇧C)"
+            >
+              {copiedLink ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <Link2 className="h-3.5 w-3.5" />
+              )}
+              {copiedLink ? 'Copied' : 'Copy link'}
+              <Kbd shortcut="cmd+shift+c" />
+            </button>
+          )}
           {workItem.url && (
             <a
               href={workItem.url}
               target="_blank"
               rel="noopener noreferrer"
               className="text-ink-2 hover:border-glass-border hover:text-ink-1 border-glass-border flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors"
-              title="Open in Azure DevOps"
+              title="Open in Azure DevOps (⌘⇧O)"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               Open
+              <Kbd shortcut="cmd+shift+o" />
             </a>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close dialog"
+              className="text-ink-2 hover:bg-glass-medium hover:text-ink-1 shrink-0 rounded p-1"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
           )}
         </div>
 
@@ -662,12 +821,6 @@ export function WorkItemDetails({
               </span>
             </div>
           )}
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="text-ink-3">Project:</span>
-              <span className="text-ink-1">
-                {fields.teamProject ?? project.name}
-              </span>
-          </div>
           {providerId && (
             <div className="flex items-center gap-1.5 text-xs">
               <span className="text-ink-3">Story points:</span>
@@ -701,6 +854,21 @@ export function WorkItemDetails({
               disabled={iterations === undefined}
               providerId={providerId}
               workItemId={workItem.id}
+            />
+          )}
+          {providerId && (
+            <WorkItemTagEditor
+              key={`${workItem.id}:tags:${fields.tags ?? ''}`}
+              value={fields.tags ?? ''}
+              suggestions={[]}
+              onSave={(value) =>
+                updateField.mutateAsync({
+                  providerId,
+                  workItemId: workItem.id,
+                  field: 'System.Tags',
+                  value,
+                })
+              }
             />
           )}
         </div>
@@ -790,23 +958,23 @@ export function WorkItemDetails({
         />
 
         <aside
+          ref={commentsPaneRef}
           className="border-glass-border/50 bg-bg-1/20 flex min-w-0 shrink-0 flex-col border-l"
           style={{ width: effectiveCommentsPaneWidth }}
         >
-          {hasLinks && (
-            <WorkItemLinks
-              workItem={workItem}
-              linkedWorkItems={linkedWorkItems}
-              linkedPullRequestStatuses={linkedPullRequestStatuses}
-              isLoadingWorkItems={isLoadingLinkedWorkItems}
-              onOpenWorkItem={(id) =>
-                setLinkDetailModal({ type: 'work-item', workItemId: id })
-              }
-              onOpenPullRequest={(pr) =>
-                setLinkDetailModal({ type: 'pull-request', pr })
-              }
-            />
-          )}
+          <WorkItemLinks
+            workItem={workItem}
+            linkedWorkItems={linkedWorkItems}
+            linkedPullRequestStatuses={linkedPullRequestStatuses}
+            isLoadingWorkItems={isLoadingLinkedWorkItems}
+            isLoadingPullRequestStatuses={isLoadingPullRequestStatuses}
+            onOpenWorkItem={(id) =>
+              setLinkDetailModal({ type: 'work-item', workItemId: id })
+            }
+            onOpenPullRequest={(pr) =>
+              setLinkDetailModal({ type: 'pull-request', pr })
+            }
+          />
 
           <div className="border-glass-border flex gap-0 border-b px-3">
             <FeedTabButton
@@ -918,6 +1086,7 @@ function WorkItemLinks({
   linkedWorkItems,
   linkedPullRequestStatuses,
   isLoadingWorkItems,
+  isLoadingPullRequestStatuses,
   onOpenWorkItem,
   onOpenPullRequest,
 }: {
@@ -925,6 +1094,7 @@ function WorkItemLinks({
   linkedWorkItems: AzureDevOpsWorkItem[];
   linkedPullRequestStatuses: AzureDevOpsPullRequestStatus[];
   isLoadingWorkItems: boolean;
+  isLoadingPullRequestStatuses: boolean;
   onOpenWorkItem: (workItemId: number) => void;
   onOpenPullRequest: (
     pr: NonNullable<AzureDevOpsWorkItem['linkedPrs']>[number],
@@ -959,18 +1129,24 @@ function WorkItemLinks({
       </button>
 
       {!collapsed && <div className="flex flex-col gap-2.5 px-5 pb-3">
-        {!!workItem.linkedPrs?.length && (
-          <LinkGroup label="Pull Requests">
-            {workItem.linkedPrs.map((pr) => (
+        <LinkGroup label="Pull Requests">
+          {workItem.linkedPrs?.length ? (
+            workItem.linkedPrs.map((pr) => (
               <LinkedPrChip
                 key={`${pr.projectId}-${pr.repoId}-${pr.prId}`}
                 pr={pr}
                 status={findPullRequestStatus(pr)}
+                isLoadingStatus={isLoadingPullRequestStatuses}
                 onOpen={() => onOpenPullRequest(pr)}
               />
-            ))}
-          </LinkGroup>
-        )}
+            ))
+          ) : (
+            <span className="text-ink-3 flex items-center gap-1.5 py-1 text-xs italic">
+              <GitPullRequest className="h-3.5 w-3.5 shrink-0" />
+              No pull request associated
+            </span>
+          )}
+        </LinkGroup>
 
         {workItem.parentId && (
           <LinkGroup label="Parent">
@@ -1042,25 +1218,69 @@ function LinkGroup({ label, children }: { label: string; children: ReactNode }) 
 function LinkedPrChip({
   pr,
   status,
+  isLoadingStatus,
   onOpen,
 }: {
   pr: NonNullable<AzureDevOpsWorkItem['linkedPrs']>[number];
   status?: AzureDevOpsPullRequestStatus;
+  isLoadingStatus: boolean;
   onOpen: () => void;
 }) {
+  const state = getPullRequestState(status);
   const content = (
     <>
-      <GitPullRequest className="h-3.5 w-3.5 shrink-0 text-acc-ink" />
+      <GitPullRequest className="text-acc-ink h-3.5 w-3.5 shrink-0" />
       <span>PR #{pr.prId}</span>
-      {status?.isDraft && <span className="text-ink-3">Draft</span>}
+      {state ? (
+        <Chip size="xs" color={state.color} pill className={state.className}>
+          {state.label}
+        </Chip>
+      ) : isLoadingStatus ? (
+        <span className="bg-ink-4/20 h-3.5 w-12 shrink-0 animate-pulse rounded-full" />
+      ) : (
+        <Chip size="xs" color="neutral" pill title="Pull request state unavailable">
+          Unknown
+        </Chip>
+      )}
     </>
   );
 
   return (
-    <LinkChip onClick={onOpen} title={`Open PR #${pr.prId}`}>
+    <LinkChip
+      onClick={onOpen}
+      title={
+        state ? `Open PR #${pr.prId} (${state.label})` : `Open PR #${pr.prId}`
+      }
+    >
       {content}
     </LinkChip>
   );
+}
+
+// Mirrors the PR header badge mapping (src/features/pull-request/ui-pr-header).
+function getPullRequestState(status?: AzureDevOpsPullRequestStatus):
+  | {
+      label: string;
+      color: 'green' | 'purple' | 'red' | 'neutral';
+      className?: string;
+    }
+  | null {
+  if (!status) return null;
+  if (status.isDraft && status.status === 'active') {
+    return {
+      label: 'Draft',
+      color: 'neutral',
+      className: '!bg-amber-300 !font-semibold !text-amber-950',
+    };
+  }
+  switch (status.status) {
+    case 'completed':
+      return { label: 'Merged', color: 'purple' };
+    case 'abandoned':
+      return { label: 'Closed', color: 'red' };
+    default:
+      return { label: 'Open', color: 'green' };
+  }
 }
 
 function LinkedWorkItemChip({

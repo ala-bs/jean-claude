@@ -71,6 +71,7 @@ export function PrDiffView({
     filePath: string;
     line: number;
     lineEnd?: number;
+    selectedLines?: string;
     content: string;
   }) => Promise<void> | void;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
@@ -94,6 +95,7 @@ export function PrDiffView({
     filePath: string;
     line: number;
     lineEnd?: number;
+    selectedLines?: string;
     content: string;
   }) => Promise<void>;
   onUploadReviewAsPrImage?: (
@@ -187,6 +189,7 @@ export function PrDiffView({
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) => {
       if (!onAddFileComment) return;
@@ -200,6 +203,7 @@ export function PrDiffView({
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       body: string;
       images: PromptImagePart[];
       uploadCache: PromptImageUploadCache;
@@ -216,6 +220,7 @@ export function PrDiffView({
         filePath: params.filePath,
         line: params.line,
         lineEnd: params.lineEnd,
+        selectedLines: params.selectedLines,
         content,
       });
     },

@@ -51,6 +51,9 @@ export function useDeleteToken() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.tokens.delete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tokens'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tokens'] });
+      queryClient.invalidateQueries({ queryKey: ['providers'] });
+    },
   });
 }

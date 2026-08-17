@@ -5,11 +5,32 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { invalidateTaskStatusResources } from '@/cache/status-invalidations';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
+import type { TaskStatus } from '@shared/types';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
 import { invalidateTaskFeed } from './feed-invalidations';
 
 const MESSAGE_UPDATE_FLUSH_MS = 300;
+
+function invalidateWorktreeChanges(queryClient: QueryClient, taskId: string) {
+  queryClient.invalidateQueries({ queryKey: ['worktree-diff', taskId] });
+  queryClient.invalidateQueries({
+    queryKey: ['worktree-file-content', taskId],
+  });
+  queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+  queryClient.invalidateQueries({
+    queryKey: ['worktree-local-changes', taskId],
+  });
+  queryClient.invalidateQueries({
+    queryKey: ['worktree-local-file-content', taskId],
+  });
+}
+
+function isTurnBoundary(status: TaskStatus): boolean {
+  return (
+    status === 'completed' || status === 'errored' || status === 'interrupted'
+  );
+}
 
 function invalidateWorktreeDiffIfNeeded(
   queryClient: QueryClient,
@@ -21,14 +42,11 @@ function invalidateWorktreeDiffIfNeeded(
     (entry.name === 'write' || entry.name === 'edit') &&
     entry.result
   ) {
-    queryClient.invalidateQueries({ queryKey: ['worktree-diff', taskId] });
-    queryClient.invalidateQueries({
-      queryKey: ['worktree-file-content', taskId],
-    });
+    invalidateWorktreeChanges(queryClient, taskId);
   }
 }
 
-function clearsTaskPendingRequest(status: string): boolean {
+function clearsTaskPendingRequest(status: TaskStatus): boolean {
   return (
     status === 'running' ||
     status === 'completed' ||
@@ -60,6 +78,9 @@ export function TaskMessageManager() {
   );
   const setRunCommandRunning = useTaskMessagesStore(
     (s) => s.setRunCommandRunning,
+  );
+  const setRunCommandStatusesHydrated = useTaskMessagesStore(
+    (s) => s.setRunCommandStatusesHydrated,
   );
 
   useEffect(() => {
@@ -145,6 +166,11 @@ export function TaskMessageManager() {
           if (clearsTaskPendingRequest(event.status)) {
             clearPendingRequestForTask(taskId);
           }
+          // Turn boundary: refresh changes regardless of which tools ran.
+          // Agents can edit files via bash (sed/python), not just write/edit.
+          if (isTurnBoundary(event.status)) {
+            invalidateWorktreeChanges(queryClient, taskId);
+          }
           // Also invalidate task queries so task-level status updates
           queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
           queryClient.invalidateQueries({ queryKey: ['tasks'] });
@@ -168,6 +194,25 @@ export function TaskMessageManager() {
           // Invalidate feed so attention changes to needs-permission
           invalidateTaskFeed(queryClient);
           break;
+        case 'permission-resolved': {
+          // Main resolved the request itself (auto-accept). Only clear if the
+          // banner still shows that exact request, so a newer one survives.
+          const state = useTaskMessagesStore.getState();
+          if (
+            state.steps[stepId]?.pendingPermission?.requestId ===
+            event.requestId
+          ) {
+            setPermission(stepId, null);
+          }
+          if (
+            state.pendingRequestsByTaskId[taskId]?.permission?.requestId ===
+            event.requestId
+          ) {
+            clearPendingRequestForTask(taskId);
+          }
+          invalidateTaskFeed(queryClient);
+          break;
+        }
         case 'question':
           flushPendingEntryUpdates(stepId);
           if (event.questions.length === 0) {
@@ -255,7 +300,14 @@ export function TaskMessageManager() {
   // guaranteed to be active before the initialization fetch resolves,
   // eliminating the race where a command stops between fetch and subscribe.
   useEffect(() => {
+    let cancelled = false;
+    const eventVersionByTaskId = new Map<string, number>();
+    setRunCommandStatusesHydrated(false);
     const unsub = api.runCommands.onStatusChange((taskId, status) => {
+      eventVersionByTaskId.set(
+        taskId,
+        (eventVersionByTaskId.get(taskId) ?? 0) + 1,
+      );
       setRunCommandRunning(taskId, status.isRunning ? status : false);
     });
 
@@ -264,23 +316,36 @@ export function TaskMessageManager() {
     api.runCommands
       .getTaskIdsWithRunningCommands()
       .then(async (taskIds) => {
-        const results = await Promise.all(
-          taskIds.map((taskId) =>
-            api.runCommands
-              .getStatus(taskId)
-              .then((status) => ({ taskId, status })),
-          ),
+        await Promise.all(
+          taskIds.map(async (taskId) => {
+            const eventVersion = eventVersionByTaskId.get(taskId) ?? 0;
+            try {
+              const status = await api.runCommands.getStatus(taskId);
+              if (
+                cancelled ||
+                (eventVersionByTaskId.get(taskId) ?? 0) !== eventVersion
+              ) {
+                return;
+              }
+              setRunCommandRunning(taskId, status.isRunning ? status : false);
+            } catch {
+              // One failed task snapshot must not block remaining hydration.
+            }
+          }),
         );
-        for (const { taskId, status } of results) {
-          setRunCommandRunning(taskId, status.isRunning ? status : false);
-        }
       })
       .catch(() => {
         // Ignore — can happen during app shutdown
+      })
+      .finally(() => {
+        if (!cancelled) setRunCommandStatusesHydrated(true);
       });
 
-    return unsub;
-  }, [setRunCommandRunning]);
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [setRunCommandRunning, setRunCommandStatusesHydrated]);
 
   return null;
 }

@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import {
+  type BoardColorSettings,
+  DEFAULT_BOARD_COLOR_SETTINGS,
+  sanitizeBoardColorSettings,
+} from '@/features/work-item/utils-board-colors';
+
 export type AzureBoardFilters = {
   search: string;
   workItemTypes: string[];
@@ -23,10 +29,13 @@ type AzureBoardState = {
   filtersByProject: Record<string, AzureBoardFilters>;
   panelWidth: number;
   collapsedColumnIdsByProject: Record<string, string[]>;
+  colorSettings: BoardColorSettings;
   setSelectedProjectId: (projectId: string) => void;
   setFilters: (projectId: string, filters: Partial<AzureBoardFilters>) => void;
   setPanelWidth: (panelWidth: number) => void;
   toggleCollapsedColumn: (projectId: string, columnId: string) => void;
+  setColorSettings: (colorSettings: BoardColorSettings) => void;
+  resetColorSettings: () => void;
 };
 
 export function migrateAzureBoardState(persistedState: unknown) {
@@ -63,6 +72,7 @@ export function migrateAzureBoardState(persistedState: unknown) {
       ]),
     ),
     collapsedColumnIdsByProject: state.collapsedColumnIdsByProject ?? {},
+    colorSettings: sanitizeBoardColorSettings(state.colorSettings),
   } as AzureBoardState;
 }
 
@@ -73,6 +83,7 @@ export const useAzureBoardStore = create<AzureBoardState>()(
       filtersByProject: {},
       panelWidth: 65,
       collapsedColumnIdsByProject: {},
+      colorSettings: DEFAULT_BOARD_COLOR_SETTINGS,
       setSelectedProjectId: (selectedProjectId) => set({ selectedProjectId }),
       setFilters: (projectId, filters) =>
         set((state) => ({
@@ -98,11 +109,22 @@ export const useAzureBoardStore = create<AzureBoardState>()(
             },
           };
         }),
+      setColorSettings: (colorSettings) => set({ colorSettings }),
+      resetColorSettings: () =>
+        set({ colorSettings: DEFAULT_BOARD_COLOR_SETTINGS }),
     }),
     {
       name: 'azure-board',
-      version: 4,
+      version: 6,
       migrate: migrateAzureBoardState,
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<AzureBoardState>;
+        return {
+          ...currentState,
+          ...persisted,
+          colorSettings: sanitizeBoardColorSettings(persisted.colorSettings),
+        };
+      },
     },
   ),
 );

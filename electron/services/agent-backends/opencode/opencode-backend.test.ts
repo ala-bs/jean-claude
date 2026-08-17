@@ -1733,7 +1733,7 @@ describe('OpenCodeBackend event stream', () => {
 
   it('keeps the watchdog paused until all pending user input resolves', async () => {
     const client = {
-      question: { reply: vi.fn(() => new Promise(() => {})) },
+      question: { reply: vi.fn(async () => ({ data: true })) },
     };
     const backend = new OpenCodeBackend({
       taskId: 'task-1',
@@ -1747,9 +1747,12 @@ describe('OpenCodeBackend event stream', () => {
       backend as unknown as { sessions: Map<string, typeof state> }
     ).sessions.set('session-1', state);
 
-    await backend.respondToQuestion('session-1', 'question-1', {
-      answer: 'First',
-    });
+    await backend.respondToQuestion(
+      'session-1',
+      'question-1',
+      { answer: 'First' },
+      { questionKeys: ['answer'] },
+    );
 
     expect(state.pendingQuestions).toEqual(new Set(['question-2']));
     expect(state.activityWatchdog.deadline).toBeNull();
@@ -1962,6 +1965,105 @@ describe('OpenCodeBackend event stream', () => {
     });
     expect(resolve).toHaveBeenCalled();
     expect(state.pendingPermissions.has('permission-1')).toBe(false);
+  });
+
+  it('retains a pending question when reply rejects and allows retry', async () => {
+    const reply = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('reply failed'))
+      .mockResolvedValueOnce({ data: true });
+    const client = { question: { reply } };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.pendingQuestions.add('question-1');
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    await expect(
+      backend.respondToQuestion(
+        'session-1',
+        'question-1',
+        { answer: 'First' },
+        { questionKeys: ['answer'] },
+      ),
+    ).rejects.toThrow('reply failed');
+    expect(state.pendingQuestions).toContain('question-1');
+
+    await expect(
+      backend.respondToQuestion(
+        'session-1',
+        'question-1',
+        { answer: 'First' },
+        { questionKeys: ['answer'] },
+      ),
+    ).resolves.toBeUndefined();
+    expect(reply).toHaveBeenCalledTimes(2);
+    expect(reply).toHaveBeenLastCalledWith({
+      requestID: 'question-1',
+      directory: '/tmp/project',
+      answers: [['First']],
+    });
+    expect(state.pendingQuestions).not.toContain('question-1');
+  });
+
+  it('retains a pending question when reply resolves with an API error', async () => {
+    const reply = vi.fn(async () => ({
+      error: { message: 'request rejected' },
+    }));
+    const client = { question: { reply } };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.pendingQuestions.add('question-1');
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    await expect(
+      backend.respondToQuestion(
+        'session-1',
+        'question-1',
+        { answer: 'First' },
+        { questionKeys: ['answer'] },
+      ),
+    ).rejects.toThrow('OpenCode question reply failed');
+    expect(state.pendingQuestions).toContain('question-1');
+  });
+
+  it('converts answers using explicit server question order', async () => {
+    const reply = vi.fn(async () => ({ data: true }));
+    const client = { question: { reply } };
+    const backend = new OpenCodeBackend({
+      taskId: 'task-1',
+      sessionStartIndex: 0,
+      persistRaw: vi.fn(async () => 'raw-1'),
+    });
+    const state = createOpenCodeState(client);
+    state.pendingQuestions.add('question-1');
+    (
+      backend as unknown as { sessions: Map<string, typeof state> }
+    ).sessions.set('session-1', state);
+
+    await backend.respondToQuestion(
+      'session-1',
+      'question-1',
+      { second: 'B', extra: 'ignored', first: 'A' },
+      { questionKeys: ['first', 'second'] },
+    );
+
+    expect(reply).toHaveBeenCalledWith({
+      requestID: 'question-1',
+      directory: '/tmp/project',
+      answers: [['A'], ['B']],
+    });
   });
 
   it('stops a silent session even when the abort request never resolves', async () => {

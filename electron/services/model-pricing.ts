@@ -54,6 +54,12 @@ const PRICING_BY_MODEL: Record<string, ModelPricing> = {
   },
   'claude-fable-5': { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
   'claude-mythos-5': { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+  'claude-sonnet-5': {
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheWrite: 3.75,
+  },
   'claude-sonnet-4-6': {
     input: 3,
     output: 15,
@@ -78,6 +84,7 @@ const PRICING_BY_MODEL: Record<string, ModelPricing> = {
     cacheRead: 0.3,
     cacheWrite: 3.75,
   },
+  'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   'claude-opus-4.8': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   'claude-opus-4-7': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
@@ -214,6 +221,12 @@ function getPricingForModel(model: string): ModelPricing | undefined {
       : undefined) ??
     (normalized.includes('mythos-5')
       ? PRICING_BY_MODEL['claude-mythos-5']
+      : undefined) ??
+    (normalized.includes('opus-5')
+      ? PRICING_BY_MODEL['claude-opus-5']
+      : undefined) ??
+    (normalized.includes('sonnet-5')
+      ? PRICING_BY_MODEL['claude-sonnet-5']
       : undefined) ??
     (normalized.includes('haiku-4-5') || normalized.includes('haiku-4.5')
       ? PRICING_BY_MODEL['claude-haiku-4-5']

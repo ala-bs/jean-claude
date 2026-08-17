@@ -14,7 +14,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type { InteractionMode, ThinkingEffort } from '@shared/types';
-import type { QuestionResponse } from '@shared/agent-types';
+import type { QuestionResponseMetadata } from '@shared/agent-types';
 
 import {
   evaluatePermission,
@@ -104,6 +104,8 @@ interface CopilotSessionState {
   cwd: string;
   mode: InteractionMode;
   permissionRules: ResolvedPermissionRule[];
+  /** Rules derived from persisted session tools; re-applied on rule refresh. */
+  persistedPermissionRules: ResolvedPermissionRule[];
   sessionAllowedTools: string[];
   pendingPermissions: Map<
     string,
@@ -251,6 +253,7 @@ export class CopilotBackend implements AgentBackend {
       cwd: config.cwd,
       mode: config.interactionMode,
       permissionRules: [...(config.permissionRules ?? []), ...persistedRules],
+      persistedPermissionRules: persistedRules,
       sessionAllowedTools: [...new Set(persistedAllow)],
       pendingPermissions: new Map(),
       pendingQuestions: new Map(),
@@ -419,7 +422,7 @@ export class CopilotBackend implements AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
-    metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
+    metadata: QuestionResponseMetadata,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -498,6 +501,22 @@ export class CopilotBackend implements AgentBackend {
       }
       await this.ignoreCleanupError(client.stop?.());
     }
+  }
+
+  /**
+   * Replace the permission-rule snapshot used for runtime evaluation.
+   * Session-persisted rules are re-appended so they survive the refresh.
+   */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.permissionRules = [...rules, ...session.persistedPermissionRules];
   }
 
   getSessionAllowedTools(sessionId: string): string[] {
@@ -650,6 +669,7 @@ export class CopilotBackend implements AgentBackend {
     const action = evaluateCopilotPermission(
       session.permissionRules,
       candidates,
+      String(normalized.input.command ?? '') || undefined,
     );
 
     if (action === 'allow') {
@@ -981,6 +1001,7 @@ function getPermissionCandidates(
 function evaluateCopilotPermission(
   rules: ResolvedPermissionRule[],
   candidates: { tool: string; matchValue: string }[],
+  rawCommand?: string,
 ) {
   let allowed = false;
   for (const candidate of candidates) {
@@ -988,6 +1009,7 @@ function evaluateCopilotPermission(
       rules,
       candidate.tool,
       candidate.matchValue,
+      candidate.tool === 'bash' ? rawCommand : undefined,
     );
     if (action === 'deny') return 'deny';
     if (action === 'allow') allowed = true;
@@ -1023,7 +1045,7 @@ function getUniqueRequestId(
 function toCopilotUserInputResponse(
   answer: Record<string, string>,
   request: CopilotUserInputRequest,
-  metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
+  metadata: QuestionResponseMetadata,
 ): CopilotUserInputResponse {
   const entries = Object.entries(answer);
 
@@ -1039,7 +1061,7 @@ function toCopilotUserInputResponse(
 function getWasFreeform(
   entries: [string, string][],
   request: CopilotUserInputRequest,
-  metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
+  metadata: QuestionResponseMetadata,
 ): boolean {
   if (entries.length === 1) {
     const [question, value] = entries[0];

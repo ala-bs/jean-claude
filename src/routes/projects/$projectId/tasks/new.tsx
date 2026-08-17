@@ -24,6 +24,7 @@ import {
   useBackendModelPresetsSetting,
   useBackendsSetting,
   useCompletionSetting,
+  useModelQuickSwitcherSetting,
   useThinkingSettingsSetting,
 } from '@/hooks/use-settings';
 import {
@@ -38,8 +39,13 @@ import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
+import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { getDefaultModelForBackend } from '@/lib/default-models';
-import { getModelThinkingCapabilities } from '@/features/agent/ui-backend-selector';
+import {
+  getModelsForBackend,
+  getModelThinkingCapabilities,
+} from '@/features/agent/ui-backend-selector';
+import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Input } from '@/common/ui/input';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { PromptTextarea } from '@/features/common/ui-prompt-textarea';
@@ -114,13 +120,9 @@ function NewTask() {
     useBackendDefaultModelsSetting();
   const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
   const { data: thinkingSettings } = useThinkingSettingsSetting();
+  const { data: quickSwitcherSetting } = useModelQuickSwitcherSetting();
   const resolvedDefaultBackend =
     project?.defaultAgentBackend ?? backendsSetting?.defaultBackend;
-  const resolvedDefaultModelPreference = getDefaultModelForBackend({
-    backend: resolvedDefaultBackend ?? null,
-    project,
-    backendDefaultModels: backendDefaultModelsSetting,
-  });
   const effectiveAgentBackend =
     agentBackend ??
     (resolvedDefaultBackend &&
@@ -128,31 +130,54 @@ function NewTask() {
       ? resolvedDefaultBackend
       : backendsSetting?.enabledBackends[0]) ??
     null;
-  const { data: dynamicModels } = useBackendModels(effectiveAgentBackend);
-  const effectiveModelPreference =
-    modelPreference || resolvedDefaultModelPreference;
-  const effectiveBackendModelPresetId =
-    draft.shouldAutoSelectBackendModelPreset === false
-      ? backendModelPresetId
-      : (backendModelPresetId ??
-        findMatchingBackendModelPresetId({
-          presets: backendModelPresets,
-          backend: agentBackend ?? resolvedDefaultBackend ?? undefined,
-          model:
-            modelPreference ??
-            (resolvedDefaultBackend
-              ? getDefaultModelForBackend({
-                  backend: resolvedDefaultBackend,
-                  project,
-                  backendDefaultModels: backendDefaultModelsSetting,
-                })
-              : undefined),
-        }));
-  const effectiveBackendModelPreset = effectiveBackendModelPresetId
-    ? backendModelPresets.find(
-        (preset) => preset.id === effectiveBackendModelPresetId,
-      )
-    : null;
+  // Must be derived from the *validated* backend — pairing a backend with
+  // another backend's default model breaks preset matching.
+  const effectiveDefaultModelPreference = getDefaultModelForBackend({
+    backend: effectiveAgentBackend,
+    project,
+    backendDefaultModels: backendDefaultModelsSetting,
+  });
+  const { data: dynamicModels, isFetched: areBackendModelsFetched } =
+    useBackendModels(effectiveAgentBackend);
+  const availableModelPreferences = useMemo(
+    () =>
+      getModelsForBackend(effectiveAgentBackend, dynamicModels).map(
+        (option) => option.value,
+      ),
+    [effectiveAgentBackend, dynamicModels],
+  );
+  const backendModelSelection = useMemo(
+    () =>
+      resolveBackendModelSelection({
+        presets: backendModelPresets,
+        backend: effectiveAgentBackend,
+        defaultModel: effectiveDefaultModelPreference,
+        draftModelPreference: modelPreference,
+        draftAgentBackend: agentBackend,
+        draftPresetId: backendModelPresetId,
+        shouldAutoSelectPreset: draft.shouldAutoSelectBackendModelPreset,
+        enabledBackends: backendsSetting?.enabledBackends,
+        quickSwitcherEnabled: quickSwitcherSetting?.enabled,
+        availableModels: availableModelPreferences,
+        areModelsFetched: areBackendModelsFetched,
+      }),
+    [
+      agentBackend,
+      areBackendModelsFetched,
+      availableModelPreferences,
+      backendModelPresetId,
+      backendModelPresets,
+      backendsSetting?.enabledBackends,
+      draft.shouldAutoSelectBackendModelPreset,
+      effectiveAgentBackend,
+      effectiveDefaultModelPreference,
+      modelPreference,
+      quickSwitcherSetting?.enabled,
+    ],
+  );
+  const effectiveModelPreference = backendModelSelection.model;
+  const effectiveBackendModelPresetId = backendModelSelection.presetId;
+  const effectiveBackendModelPreset = backendModelSelection.preset;
   const thinkingCapabilities = getModelThinkingCapabilities(
     effectiveModelPreference,
     dynamicModels,
@@ -184,15 +209,39 @@ function NewTask() {
     effectiveAgentBackend,
     !userTouchedSelection,
   );
+  const rateLimitSuggestedPresetId = useMemo(() => {
+    if (!rateLimitSuggestion?.swapped) return null;
+
+    const backendChanged = rateLimitSuggestion.backend !== effectiveAgentBackend;
+    return findMatchingBackendModelPresetId({
+      presets: backendModelPresets,
+      backend: rateLimitSuggestion.backend,
+      model:
+        rateLimitSuggestion.model ??
+        (backendChanged ? 'default' : effectiveModelPreference),
+      thinkingEffort:
+        rateLimitSuggestion.thinkingEffort ??
+        (backendChanged ? 'default' : effectiveThinkingEffort),
+    });
+  }, [
+    backendModelPresets,
+    effectiveAgentBackend,
+    effectiveModelPreference,
+    effectiveThinkingEffort,
+    rateLimitSuggestion,
+  ]);
   useEffect(() => {
     if (!rateLimitSuggestion?.swapped || userTouchedSelection) return;
 
     const nextBackend = rateLimitSuggestion.backend;
+    // Use the unclamped model here: `effectiveModelPreference` may have been
+    // clamped to 'default' for display, and persisting that would destroy the
+    // user's stored selection rather than just hide it.
     const nextModel =
       rateLimitSuggestion.model ??
       (nextBackend !== effectiveAgentBackend
         ? 'default'
-        : effectiveModelPreference);
+        : (modelPreference ?? effectiveDefaultModelPreference));
     const nextThinkingEffort =
       rateLimitSuggestion.thinkingEffort ??
       (nextBackend !== effectiveAgentBackend
@@ -211,9 +260,10 @@ function NewTask() {
     });
   }, [
     effectiveAgentBackend,
-    effectiveModelPreference,
+    effectiveDefaultModelPreference,
     effectiveThinkingEffort,
     interactionMode,
+    modelPreference,
     rateLimitSuggestion,
     setDraft,
     userTouchedSelection,
@@ -232,37 +282,26 @@ function NewTask() {
     if (!resolved) return;
     if (!backendsSetting.enabledBackends.includes(resolved)) return;
 
-    const presetId = findMatchingBackendModelPresetId({
+    // Seed through the shared resolver so this route lands on the same preset
+    // (including the quick-switcher default) as the new-task overlay.
+    const { presetId, preset, model } = resolveBackendModelSelection({
       presets: backendModelPresets,
-      backend: project.defaultAgentBackend,
-      model: project.defaultAgentBackend
-        ? getDefaultModelForBackend({
-            backend: project.defaultAgentBackend,
-            project,
-            backendDefaultModels: backendDefaultModelsSetting,
-          })
-        : undefined,
-    });
-    const preset = presetId
-      ? backendModelPresets.find((item) => item.id === presetId)
-      : null;
-
-    setDraft({
-      agentBackend: resolved,
-      modelPreference: getDefaultModelForBackend({
+      backend: resolved,
+      defaultModel: getDefaultModelForBackend({
         backend: resolved,
         project,
         backendDefaultModels: backendDefaultModelsSetting,
       }),
+      enabledBackends: backendsSetting.enabledBackends,
+      quickSwitcherEnabled: quickSwitcherSetting?.enabled,
+    });
+
+    setDraft({
+      agentBackend: resolved,
+      modelPreference: model,
       thinkingEffort:
         preset?.thinkingEffort ??
-        thinkingSettings?.efforts[resolved]?.[
-          getDefaultModelForBackend({
-            backend: resolved,
-            project,
-            backendDefaultModels: backendDefaultModelsSetting,
-          })
-        ] ??
+        thinkingSettings?.efforts[resolved]?.[model] ??
         thinkingSettings?.efforts[resolved]?.default ??
         'default',
       backendModelPresetId: presetId,
@@ -279,6 +318,7 @@ function NewTask() {
     hasDraft,
     interactionMode,
     project,
+    quickSwitcherSetting?.enabled,
     rateLimitSuggestion?.swapped,
     setDraft,
     thinkingSettings,
@@ -316,6 +356,11 @@ function NewTask() {
       projectId,
       name: taskName,
       prompt: expandFeatureReferencesInPrompt({ text: prompt, featureMap }),
+      agentMemoryPrompt: getOriginalTaskAgentMemoryPrompt({
+        inputMode: 'prompt',
+        prompt,
+        workItemTemplate: '',
+      }),
       status: 'waiting',
       interactionMode: normalizeInteractionModeForBackend({
         backend: submitSelection.backend,
@@ -522,6 +567,7 @@ function NewTask() {
                   backend={effectiveAgentBackend}
                   model={effectiveModelPreference}
                   selectedPresetId={effectiveBackendModelPresetId}
+                  enabledBackends={backendsSetting?.enabledBackends}
                   onChange={(selection) => {
                     markUserTouchedSelection();
                     const nextThinkingCapabilities = getModelThinkingCapabilities(
@@ -569,6 +615,8 @@ function NewTask() {
                   requestedBackend={effectiveAgentBackend}
                   model={effectiveModelPreference}
                   thinkingEffort={effectiveThinkingEffort}
+                  selectedPresetId={effectiveBackendModelPresetId}
+                  suggestedPresetId={rateLimitSuggestedPresetId}
                   onApplySuggestion={(selection) => {
                     markUserTouchedSelection();
                     setDraft({

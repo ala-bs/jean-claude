@@ -7,7 +7,17 @@ import {
   useState,
 } from 'react';
 
-import type { AgentQuestion, QuestionResponse } from '@shared/agent-types';
+import {
+  type AgentQuestion,
+  DECIDE_FOR_ME,
+  type QuestionResponse,
+} from '@shared/agent-types';
+import {
+  buildQuestionResponse,
+  getQuestionInputMode,
+  getQuestionKey,
+  getSelectedLabels,
+} from './question-response';
 import {
   getQuestionDraftKey,
   type QuestionDraft,
@@ -18,9 +28,6 @@ import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import { Textarea } from '@/common/ui/textarea';
 import { useCommands } from '@/common/hooks/use-commands';
 
-type QuestionInputMode = 'text' | 'single-choice' | 'multi-choice';
-
-const DECIDE_FOR_ME = 'Decide for me';
 const EMPTY_ANSWERS: Record<string, string> = {};
 
 function RecommendedBadge() {
@@ -29,45 +36,6 @@ function RecommendedBadge() {
       Recommended
     </span>
   );
-}
-
-function getQuestionInputMode(question: AgentQuestion): QuestionInputMode {
-  if (question.type === 'text') return 'text';
-  if (!question.type && question.options.length === 0) return 'text';
-  if (question.type === 'multi_choice' || question.multiSelect) {
-    return 'multi-choice';
-  }
-  return 'single-choice';
-}
-
-function getSelectedLabels(value: string) {
-  const trimmed = value.trim();
-  if (trimmed.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) {
-        return parsed
-          .filter((item): item is string => typeof item === 'string')
-          .map((label) => label.trim())
-          .filter(Boolean);
-      }
-    } catch {
-      // Fall back to legacy comma-separated format.
-    }
-  }
-
-  return value
-    .split(', ')
-    .map((label) => label.trim())
-    .filter(Boolean);
-}
-
-function getQuestionKey(question: AgentQuestion) {
-  return question.id ?? question.question;
-}
-
-function combineAnswerParts(parts: Array<string | undefined>) {
-  return parts.map((part) => part?.trim()).filter(Boolean).join(', ');
 }
 
 function isQuestionAnswered({
@@ -292,25 +260,27 @@ const QuestionInput = memo(function QuestionInput({
               </button>
             );
           })}
-          <button
-            type="button"
-            aria-pressed={isDecideForMeSelected}
-            onFocus={() =>
-              onActivate({ questionIndex, optionIndex: decideForMeIndex })
-            }
-            onClick={() => {
-              onActivate({ questionIndex, optionIndex: decideForMeIndex });
-              onSelectOption({ questionIndex, optionIndex: decideForMeIndex });
-            }}
-            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-left text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
-              isDecideForMeSelected
-                ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
-                : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
-            }`}
-          >
-            <Sparkles className="h-3 w-3" />
-            Decide for me
-          </button>
+          {allowsFreeform ? (
+            <button
+              type="button"
+              aria-pressed={isDecideForMeSelected}
+              onFocus={() =>
+                onActivate({ questionIndex, optionIndex: decideForMeIndex })
+              }
+              onClick={() => {
+                onActivate({ questionIndex, optionIndex: decideForMeIndex });
+                onSelectOption({ questionIndex, optionIndex: decideForMeIndex });
+              }}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-left text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+                isDecideForMeSelected
+                  ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+                  : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+              }`}
+            >
+              <Sparkles className="h-3 w-3" />
+              Decide for me
+            </button>
+          ) : null}
         </div>
         {allowsFreeform ? (
           <Textarea
@@ -386,27 +356,29 @@ const QuestionInput = memo(function QuestionInput({
             </button>
           );
         })}
-        <button
-          type="button"
-          aria-pressed={isDecideForMeSelected}
-          onFocus={() =>
-            onActivate({ questionIndex, optionIndex: decideForMeIndex })
-          }
-          onClick={() => {
-            onActivate({ questionIndex, optionIndex: decideForMeIndex });
-            onSelectOption({ questionIndex, optionIndex: decideForMeIndex });
-          }}
-          className={`flex items-start gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none ${
-            isDecideForMeSelected
-              ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
-              : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
-          }`}
-        >
-          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span className="block text-[13px] font-semibold leading-tight text-ink-0">
-            Decide for me
-          </span>
-        </button>
+        {allowsFreeform ? (
+          <button
+            type="button"
+            aria-pressed={isDecideForMeSelected}
+            onFocus={() =>
+              onActivate({ questionIndex, optionIndex: decideForMeIndex })
+            }
+            onClick={() => {
+              onActivate({ questionIndex, optionIndex: decideForMeIndex });
+              onSelectOption({ questionIndex, optionIndex: decideForMeIndex });
+            }}
+            className={`flex items-start gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+              isDecideForMeSelected
+                ? 'border-teal-400/70 bg-teal-400/15 text-teal-50 ring-1 ring-teal-400/40'
+                : 'border-white/10 bg-white/[0.04] text-ink-1 hover:border-white/15 hover:bg-white/[0.07]'
+            }`}
+          >
+            <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="block text-[13px] font-semibold leading-tight text-ink-0">
+              Decide for me
+            </span>
+          </button>
+        ) : null}
         {allowsFreeform ? (
           isFreeformOpen ? (
             <Textarea
@@ -516,7 +488,9 @@ export function QuestionOptions({
   const [otherOpenByQuestion, setOtherOpenByQuestion] = useState<
     Record<string, boolean>
   >({});
-  const [, setWasFreeformByQuestion] = useState<Record<string, boolean>>({});
+  const [wasFreeformByQuestion, setWasFreeformByQuestion] = useState<
+    Record<string, boolean>
+  >({});
   const questionIdentity = request.questions
     .map(
       (question) =>
@@ -559,7 +533,9 @@ export function QuestionOptions({
     const mode = getQuestionInputMode(question);
     if (mode === 'text') return 1;
     if (mode === 'multi-choice') return question.options.length + 1;
-    return question.options.length + (question.allowFreeform === false ? 1 : 2);
+    // allowFreeform === false means only the listed choices are acceptable, so
+    // neither the "Decide for me" nor the "Other" slot is rendered.
+    return question.options.length + (question.allowFreeform === false ? 0 : 2);
   }, []);
 
   useEffect(() => {
@@ -635,7 +611,7 @@ export function QuestionOptions({
         });
         setWasFreeformByQuestion((prev) => ({
           ...prev,
-          [question.question]: false,
+          [questionKey]: false,
         }));
         return true;
       }
@@ -824,34 +800,11 @@ export function QuestionOptions({
     });
   }).length;
 
-  const buildResponseAnswers = useCallback((): Record<string, string> => {
-    const responseAnswers: Record<string, string> = {};
-    for (const question of request.questions) {
-      const key = getQuestionKey(question);
-      const value = answers[key];
-      const note = notes[key]?.trim() ? `Notes: ${notes[key].trim()}` : '';
-      if (getQuestionInputMode(question) === 'multi-choice') {
-        const selected = value === undefined ? [] : getSelectedLabels(value);
-        const combined = [...selected, otherAnswers[key], note]
-          .map((part) => part?.trim())
-          .filter((part): part is string => Boolean(part));
-        if (combined.length > 0) {
-          responseAnswers[key] = JSON.stringify(combined);
-        }
-        continue;
-      }
-
-      const combined = combineAnswerParts([value, otherAnswers[key], note]);
-      if (combined) responseAnswers[key] = combined;
-    }
-    return responseAnswers;
-  }, [answers, notes, otherAnswers, request.questions]);
-
   const submitAnswers = async () => {
     if (!allAnswered) return;
     if (!tryStartQuestionResponse(request.taskId)) return;
     try {
-      const effectiveWasFreeformByQuestion: Record<string, boolean> = {};
+      const effectiveWasFreeformByQuestion = { ...wasFreeformByQuestion };
       for (const question of request.questions) {
         const key = getQuestionKey(question);
         const value = answers[key];
@@ -869,11 +822,16 @@ export function QuestionOptions({
         }
       }
 
-      const responseResult = await onRespond(request.requestId, {
-        answers: buildResponseAnswers(),
-        wasFreeform: Object.values(effectiveWasFreeformByQuestion).some(Boolean),
-        wasFreeformByQuestion: effectiveWasFreeformByQuestion,
-      });
+      const responseResult = await onRespond(
+        request.requestId,
+        buildQuestionResponse({
+          questions: request.questions,
+          answers,
+          customAnswers: otherAnswers,
+          notes,
+          wasFreeformByQuestion: effectiveWasFreeformByQuestion,
+        }),
+      );
       if (responseResult !== false) {
         clearQuestionDraft(draftKey, draft ?? null);
       }
@@ -922,17 +880,17 @@ export function QuestionOptions({
     <div className="space-y-2">
       <QuestionContextReminder content={request.contextReminder} />
       <div className="overflow-hidden rounded-xl border border-white/10 bg-bg-2/95 shadow-[0_18px_50px_-30px_rgba(0,0,0,0.8)]">
-      <div className="space-y-2.5 px-3 py-2.5">
-        {request.questions.map((question, index) => {
-          const questionKey = getQuestionKey(question);
-          const isAnswered = isQuestionAnswered({
-            question,
-            value: answers[questionKey],
-            other: otherAnswers[questionKey],
-          });
+        <div className="space-y-2.5 px-3 py-2.5">
+          {request.questions.map((question, index) => {
+            const questionKey = getQuestionKey(question);
+            const isAnswered = isQuestionAnswered({
+              question,
+              value: answers[questionKey],
+              other: otherAnswers[questionKey],
+            });
 
-          return (
-            <section key={`${index}-${questionKey}`} className="space-y-1.5">
+            return (
+              <section key={questionKey} className="space-y-1.5">
               <header className="flex items-center gap-1.5">
                 <span
                   className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] leading-none transition-colors ${
@@ -964,24 +922,27 @@ export function QuestionOptions({
                 onOpenNotes={openNotes}
                 onCloseNotes={closeNotes}
               />
-            </section>
-          );
-        })}
-      </div>
-      <div className="flex items-center gap-2.5 border-t border-white/10 px-3 py-2.5">
-        <button
-          type="button"
-          onClick={submitAnswers}
-          disabled={!allAnswered}
-          className="flex items-center gap-2 rounded-lg bg-teal-300 px-3 py-1.5 text-[13px] font-bold text-bg-0 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-ink-3 disabled:hover:brightness-100"
-        >
-          Submit answers
-          <Kbd shortcut="cmd+enter" className="border-bg-0/20 bg-bg-0/10 text-bg-0" />
-        </button>
-        <span className="text-xs text-ink-3">
-          {request.questions.length} questions · {answeredCount} answered
-        </span>
-      </div>
+              </section>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2.5 border-t border-white/10 px-3 py-2.5">
+          <button
+            type="button"
+            onClick={submitAnswers}
+            disabled={!allAnswered}
+            className="flex items-center gap-2 rounded-lg bg-teal-300 px-3 py-1.5 text-[13px] font-bold text-bg-0 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-ink-3 disabled:hover:brightness-100"
+          >
+            Submit answers
+            <Kbd
+              shortcut="cmd+enter"
+              className="border-bg-0/20 bg-bg-0/10 text-bg-0"
+            />
+          </button>
+          <span className="text-xs text-ink-3">
+            {request.questions.length} questions · {answeredCount} answered
+          </span>
+        </div>
       </div>
     </div>
   );

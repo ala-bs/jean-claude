@@ -620,6 +620,23 @@ function getSourceBranchRefs(
 }
 
 /**
+ * Resolves the merge-base a source branch would produce for a worktree.
+ * Returns null when no common ancestor is reachable, meaning the diff would
+ * silently fall back to the (stale) start commit.
+ */
+export async function resolveSourceBranchMergeBase(
+  worktreePath: string,
+  sourceBranch: string,
+): Promise<string | null> {
+  const { sourceRef, baseCommit } = await getDiffBaseCommit(
+    worktreePath,
+    '',
+    sourceBranch,
+  );
+  return sourceRef ? baseCommit : null;
+}
+
+/**
  * Gets the commit hash to use as the diff base.
  * If sourceBranch is provided, uses the merge-base between HEAD and the source branch.
  * This ensures we only see changes unique to this branch, even after merging
@@ -1595,6 +1612,7 @@ export interface CleanupWorktreeParams {
   skipIfChanges?: boolean;
   branchCleanup?: WorktreeBranchCleanupBehavior;
   force?: boolean;
+  onVerified?: () => void | Promise<void>;
 }
 
 /**
@@ -1610,6 +1628,7 @@ export async function cleanupWorktree(
     skipIfChanges = false,
     branchCleanup = 'delete',
     force = false,
+    onVerified,
   } = params;
 
   if (!(await pathExists(worktreePath))) {
@@ -1629,22 +1648,34 @@ export async function cleanupWorktree(
     }
   }
 
-  let worktreeBranch = branchName?.trim() || null;
-
-  if (!worktreeBranch) {
-    try {
-      const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', {
-        cwd: worktreePath,
-        encoding: 'utf-8',
+  let worktreeBranch: string | null = null;
+  try {
+    const { stdout } = await execAsync('git rev-parse --abbrev-ref HEAD', {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+    worktreeBranch = stdout.trim();
+  } catch (error) {
+    if (branchCleanup === 'delete') {
+      throw new Error('Failed to verify worktree branch before delete', {
+        cause: error,
       });
-      worktreeBranch = stdout.trim();
-    } catch (error) {
-      dbg.worktree(
-        'Failed to resolve worktree branch before delete: %O',
-        error,
-      );
     }
   }
+  const persistedBranch = branchName?.trim() || null;
+  if (branchCleanup === 'delete' && !persistedBranch) {
+    throw new Error('Cannot delete worktree branch without persisted branch metadata');
+  }
+  if (
+    branchCleanup === 'delete' &&
+    persistedBranch &&
+    worktreeBranch !== persistedBranch
+  ) {
+    throw new Error(
+      `Worktree branch mismatch: expected ${persistedBranch}, found ${worktreeBranch ?? 'unknown'}`,
+    );
+  }
+  if (branchCleanup === 'delete') await onVerified?.();
 
   const forceFlag = force ? ' --force' : '';
   await execAsync(
@@ -1669,10 +1700,61 @@ export async function cleanupWorktree(
  * then deletes the branch if requested.
  */
 export async function cleanupMissingWorktree(params: {
+  worktreePath?: string;
   projectPath: string;
   branchName: string;
+  throwOnError?: boolean;
+  allowUnregistered?: boolean;
+  onVerified?: () => void | Promise<void>;
 }): Promise<void> {
-  const { projectPath, branchName } = params;
+  const {
+    worktreePath,
+    projectPath,
+    branchName,
+    throwOnError = false,
+    allowUnregistered = false,
+    onVerified,
+  } = params;
+
+  try {
+    if (!worktreePath) {
+      throw new Error('Cannot verify missing worktree branch without its path');
+    }
+    const { stdout } = await execAsync('git worktree list --porcelain', {
+      cwd: projectPath,
+      encoding: 'utf-8',
+    });
+    const canonicalWorktreePath = path.join(
+      await fs.realpath(path.dirname(worktreePath)),
+      path.basename(worktreePath),
+    );
+    const registered = stdout
+      .trim()
+      .split(/\n\s*\n/)
+      .map((block) => {
+        const lines = block.split('\n');
+        return {
+          path: lines.find((line) => line.startsWith('worktree '))?.slice(9),
+          branch: lines
+            .find((line) => line.startsWith('branch refs/heads/'))
+            ?.slice('branch refs/heads/'.length),
+        };
+      })
+      .find((entry) => entry.path === canonicalWorktreePath);
+    if (
+      (registered && registered.branch !== branchName) ||
+      (!registered && !allowUnregistered)
+    ) {
+      throw new Error(
+        `Missing worktree branch mismatch: expected ${branchName}, found ${registered?.branch ?? 'unregistered'}`,
+      );
+    }
+    await onVerified?.();
+  } catch (error) {
+    dbg.worktree('Failed to verify missing worktree branch: %O', error);
+    if (throwOnError) throw error;
+    return;
+  }
 
   // Prune stale worktree entries (removes references to deleted directories)
   try {
@@ -1683,10 +1765,20 @@ export async function cleanupMissingWorktree(params: {
     dbg.worktree('Pruned stale worktree references in %s', projectPath);
   } catch (error) {
     dbg.worktree('Failed to prune worktrees in %s: %O', projectPath, error);
+    if (throwOnError) throw error;
   }
 
   // Delete the orphaned branch
   try {
+    const { stdout } = await execAsync(
+      `git branch --list ${JSON.stringify(branchName)}`,
+      {
+        cwd: projectPath,
+        encoding: 'utf-8',
+      },
+    );
+    if (!stdout.trim()) return;
+
     await execAsync(`git branch -D ${JSON.stringify(branchName)}`, {
       cwd: projectPath,
       encoding: 'utf-8',
@@ -1699,6 +1791,7 @@ export async function cleanupMissingWorktree(params: {
       projectPath,
       error,
     );
+    if (throwOnError) throw error;
   }
 }
 
@@ -1905,6 +1998,7 @@ async function mergeWorktreeInner(
     await cleanupWorktree({
       worktreePath,
       projectPath,
+      branchName: worktreeBranch,
       branchCleanup: 'delete',
       force: true,
     });
@@ -2000,9 +2094,63 @@ export async function pushBranch(params: {
   const remote = params.remote ?? 'origin';
   dbg.worktree('pushBranch: %s to %s', params.branchName, remote);
 
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn('git', ['push', '-u', remote, params.branchName], {
+  return runGitWithSshPrompt({
+    args: ['push', '-u', remote, params.branchName],
+    cwd: params.worktreePath,
+    label: 'git push',
+  });
+}
+
+/**
+ * Pulls the latest commits for a branch from a remote into the worktree.
+ * Uses the same interactive SSH prompt handling as pushBranch.
+ */
+export async function pullBranch(params: {
+  worktreePath: string;
+  branchName: string;
+  remote?: string;
+}): Promise<void> {
+  const remote = params.remote ?? 'origin';
+  dbg.worktree('pullBranch: %s from %s', params.branchName, remote);
+
+  try {
+    await runGitWithSshPrompt({
+      args: ['pull', '--ff-only', remote, params.branchName],
       cwd: params.worktreePath,
+      label: 'git pull',
+    });
+  } catch (error) {
+    throw new Error(explainPullFailure(getExecErrorMessage(error)));
+  }
+}
+
+/**
+ * Turns raw `git pull --ff-only` stderr into actionable guidance.
+ */
+function explainPullFailure(message: string): string {
+  if (/would be overwritten by merge|local changes/i.test(message)) {
+    return `Pull failed because the worktree has uncommitted changes. Commit or discard them, then pull again.\n\n${message}`;
+  }
+
+  if (/Not possible to fast-forward|diverging|non-fast-forward/i.test(message)) {
+    return `Pull failed because the local branch has diverged from the remote. Rebase or merge manually, then pull again.\n\n${message}`;
+  }
+
+  return message;
+}
+
+/**
+ * Runs a git command that may prompt for SSH credentials, surfacing the prompt
+ * to the renderer via the global prompt dialog.
+ */
+function runGitWithSshPrompt(params: {
+  args: string[];
+  cwd: string;
+  label: string;
+}): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn('git', params.args, {
+      cwd: params.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -2018,7 +2166,7 @@ export async function pushBranch(params: {
     child.stderr?.on('data', async (data: Buffer) => {
       const text = data.toString();
       stderrOutput += text;
-      dbg.worktree('pushBranch stderr: %s', text.trim());
+      dbg.worktree('%s stderr: %s', params.label, text.trim());
 
       if (promptHandled) return;
 
@@ -2068,17 +2216,17 @@ export async function pushBranch(params: {
     });
 
     child.on('error', (err) => {
-      reject(new Error(`Failed to spawn git push: ${err.message}`));
+      reject(new Error(`Failed to spawn ${params.label}: ${err.message}`));
     });
 
     child.on('close', (code) => {
       if (code === 0) {
-        dbg.worktree('Push successful');
+        dbg.worktree('%s successful', params.label);
         resolve();
       } else {
         const errorMessage =
           stderrOutput.trim() || stdoutOutput.trim() || `Exit code ${code}`;
-        reject(new Error(`git push failed: ${errorMessage}`));
+        reject(new Error(`${params.label} failed: ${errorMessage}`));
       }
     });
   });

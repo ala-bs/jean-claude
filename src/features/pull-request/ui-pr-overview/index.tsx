@@ -38,7 +38,12 @@ import {
   isVideoFile,
   VideoGifConverter,
 } from '@/features/common/ui-video-gif-converter';
-import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
+import {
+  MAX_IMAGES,
+  getAttachmentFileName,
+  getAzureAttachmentPayload,
+  processImageFile,
+} from '@/lib/image-utils';
 import {
   type MentionDisplayNames,
   normalizeMentionId,
@@ -98,6 +103,7 @@ export function PrOverview({
   bottomPadding = 0,
   fileCount = 0,
   files = [],
+  mentionDisplayNames: providedMentionDisplayNames,
   mentionOptions = [],
   onSearchMentions,
   repoInfo,
@@ -118,6 +124,7 @@ export function PrOverview({
   bottomPadding?: number;
   fileCount?: number;
   files?: AzureDevOpsFileChange[];
+  mentionDisplayNames?: MentionDisplayNames;
   mentionOptions?: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
   repoInfo?: PullRequestRepoInfo;
@@ -135,7 +142,7 @@ export function PrOverview({
   const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
 
   const mentionDisplayNames = useMemo(() => {
-    const names: MentionDisplayNames = {};
+    const names: MentionDisplayNames = { ...providedMentionDisplayNames };
     const addName = (
       id: string | undefined,
       displayName: string | undefined,
@@ -156,7 +163,13 @@ export function PrOverview({
     }
 
     return names;
-  }, [currentUser, pr.createdBy, pr.reviewers, threads]);
+  }, [
+    currentUser,
+    pr.createdBy,
+    pr.reviewers,
+    providedMentionDisplayNames,
+    threads,
+  ]);
 
 
   const handleExpandCheck = useCallback((buildId: number | null) => {
@@ -605,11 +618,18 @@ const PrDescriptionCard = memo(function PrDescriptionCard({
         const attachmentUrl = await uploadCacheRef.current.resolve({
           image,
           fileName,
-          upload: async () => (await uploadAttachment.mutateAsync({
-            fileName,
-            mimeType: image.mimeType || 'application/octet-stream',
-            dataBase64: image.data,
-          })).url,
+          upload: async () => {
+            // Azure only accepts PNG/GIF/JPG bytes; compressed variants are
+            // WebP/AVIF and must be converted first.
+            const payload = await getAzureAttachmentPayload(image);
+            return (
+              await uploadAttachment.mutateAsync({
+                fileName: getAttachmentFileName(fileName, payload.mimeType),
+                mimeType: payload.mimeType,
+                dataBase64: payload.dataBase64,
+              })
+            ).url;
+          },
         });
         finalDescription = finalDescription.replace(pattern, (match) => replaceMarkdownImageUrl(match, attachmentUrl));
       }

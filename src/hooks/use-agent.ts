@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 
+import type {
+  AgentMemoryFollowUpCapture,
+  AgentMemoryPromptCapture,
+  AgentMemoryQueuedPromptCapture,
+} from '@shared/agent-memory-types';
 import type { PermissionResponse, QuestionResponse } from '@shared/agent-types';
 import { api } from '@/lib/api';
 import type { PromptPart } from '@shared/agent-backend-types';
@@ -207,17 +212,17 @@ export function useAgentControls({
   );
 
   const sendMessage = useCallback(
-    async (parts: PromptPart[]) => {
+    async (parts: PromptPart[], capture?: AgentMemoryFollowUpCapture) => {
       if (!stepId) return;
-      await api.agent.sendMessage(stepId, parts);
+      await api.agent.sendMessage(stepId, parts, capture);
     },
     [stepId],
   );
 
   const queuePrompt = useCallback(
-    async (parts: PromptPart[]) => {
+    async (parts: PromptPart[], capture?: AgentMemoryQueuedPromptCapture) => {
       if (!stepId) return { promptId: '' };
-      return api.agent.queuePrompt(stepId, parts);
+      return api.agent.queuePrompt(stepId, parts, capture);
     },
     [stepId],
   );
@@ -231,9 +236,13 @@ export function useAgentControls({
   );
 
   const updateQueuedPrompt = useCallback(
-    async (promptId: string, content: string) => {
+    async (
+      promptId: string,
+      content: string,
+      capture?: AgentMemoryPromptCapture,
+    ) => {
       if (!stepId) return;
-      await api.agent.updateQueuedPrompt(stepId, promptId, content);
+      await api.agent.updateQueuedPrompt(stepId, promptId, content, capture);
     },
     [stepId],
   );

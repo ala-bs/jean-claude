@@ -26,6 +26,7 @@ import {
 } from './cache-event-service';
 import { prepareSummaryGenerationPrompt } from './session-summary-service';
 import { summarizeNormalizedMessages } from './session-summary-service';
+import { taskRuntimeCleanupService } from './task-runtime-cleanup-service';
 
 
 
@@ -528,8 +529,12 @@ export const StepService = {
     sortOrder?: number;
   }): Promise<TaskStep> => {
     debug('create step taskId=%s name=%s', data.taskId, data.name);
+    const task = await TaskRepository.findById(data.taskId);
+    if (task && !task.userCompleted) {
+      await taskRuntimeCleanupService.resetAfterReactivation(data.taskId);
+    }
     const createdStep = await TaskStepRepository.create(
-      data as Parameters<typeof TaskStepRepository.create>[0],
+      { ...data, sessionRules: {} },
     );
     debug(
       'created step id=%s status=%s dependsOn=%d autoStart=%s',
@@ -804,7 +809,13 @@ export const StepService = {
     const steps = await TaskStepRepository.findByTaskId(taskId);
     const newStatus = computeTaskStatus(steps);
     debug('syncTaskStatus taskId=%s newStatus=%s', taskId, newStatus);
+    // An agent run finishing (status === 'completed') is NOT a terminal task
+    // state: the worktree stays alive and previews/run commands must keep
+    // working. Only user-archived tasks (userCompleted) are terminal.
     const task = await TaskRepository.update(taskId, { status: newStatus });
     emitTaskUpsert(task);
+    if (!task.userCompleted) {
+      await taskRuntimeCleanupService.resetAfterReactivation(taskId);
+    }
   },
 };

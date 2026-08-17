@@ -29,8 +29,12 @@ import {
   stripRefsHeads,
 } from '@/features/pipelines/ui-pipelines-overlay/utils';
 import { useBuildLog, useBuildTimeline } from '@/hooks/use-pipeline-runs';
+
 import { useWindowFocused } from '@/hooks/use-window-focused';
 
+
+import { CiLogView } from '../ui-ci-log-view';
+import { parseCiLog } from '../utils-ci-log-parser';
 
 import { useBuildDetail } from '../ui-pr-pipeline-pane/use-build-detail';
 
@@ -218,10 +222,8 @@ function LogViewer({
     logId,
   });
 
-  const lines = useMemo(() => {
-    if (!logContent) return [];
-    return logContent.split('\n');
-  }, [logContent]);
+  const [showTimestamps, setShowTimestamps] = useState(false);
+  const [raw, setRaw] = useState(false);
 
   const errorMessages = useMemo(() => {
     if (!issues) return new Set<string>();
@@ -229,6 +231,11 @@ function LogViewer({
       issues.filter((i) => i.type === 'error').map((i) => i.message),
     );
   }, [issues]);
+
+  const parsed = useMemo(
+    () => (logContent ? parseCiLog(logContent, { errorMessages }) : null),
+    [logContent, errorMessages],
+  );
 
   const handleCopy = useCallback(() => {
     if (logContent) {
@@ -245,7 +252,7 @@ function LogViewer({
     );
   }
 
-  if (!logContent) return null;
+  if (!logContent || !parsed) return null;
 
   return (
     <div className="overflow-hidden rounded-md border border-neutral-700/50">
@@ -258,10 +265,30 @@ function LogViewer({
             <span className="h-2 w-2 rounded-full bg-green-500/55" />
           </div>
           <span className="text-[11px] text-neutral-500">
-            output · {lines.length} lines
+            output · {parsed.visibleLines} lines
           </span>
+          {parsed.errorCount > 0 && (
+            <span className="font-mono text-[10px] text-red-400">
+              {parsed.errorCount} err
+            </span>
+          )}
+          {parsed.warningCount > 0 && (
+            <span className="font-mono text-[10px] text-amber-400">
+              {parsed.warningCount} warn
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowTimestamps((p) => !p)}
+            className={clsx(
+              'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors hover:bg-neutral-800 hover:text-neutral-300',
+              showTimestamps ? 'text-neutral-300' : 'text-neutral-500',
+            )}
+          >
+            <Clock className="h-2.5 w-2.5" />
+            Time
+          </button>
           <button
             onClick={handleCopy}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-neutral-300"
@@ -269,7 +296,13 @@ function LogViewer({
             <Copy className="h-2.5 w-2.5" />
             Copy
           </button>
-          <button className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-neutral-300">
+          <button
+            onClick={() => setRaw((p) => !p)}
+            className={clsx(
+              'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors hover:bg-neutral-800 hover:text-neutral-300',
+              raw ? 'text-neutral-300' : 'text-neutral-500',
+            )}
+          >
             <FileText className="h-2.5 w-2.5" />
             Raw
           </button>
@@ -278,32 +311,13 @@ function LogViewer({
 
       {/* Log lines */}
       <div className="max-h-72 overflow-auto bg-neutral-950/80 py-1 font-mono text-[11px] leading-[20px]">
-        {lines.map((line, idx) => {
-          const isError = errorMessages.has(line.trim());
-          return (
-            <div
-              key={idx}
-              className={clsx(
-                'flex',
-                isError
-                  ? 'border-l-2 border-l-red-500 bg-red-500/10'
-                  : 'border-l-2 border-l-transparent',
-              )}
-            >
-              <span className="w-10 shrink-0 pr-2 text-right text-neutral-600 select-none">
-                {idx + 1}
-              </span>
-              <span
-                className={clsx(
-                  'min-w-0 flex-1 pr-3 break-all whitespace-pre-wrap',
-                  isError ? 'text-red-400' : 'text-neutral-300',
-                )}
-              >
-                {line}
-              </span>
-            </div>
-          );
-        })}
+        {raw ? (
+          <pre className="px-3 break-all whitespace-pre-wrap text-neutral-300">
+            {logContent}
+          </pre>
+        ) : (
+          <CiLogView nodes={parsed.nodes} showTimestamps={showTimestamps} />
+        )}
       </div>
     </div>
   );

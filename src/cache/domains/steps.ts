@@ -2,6 +2,7 @@ import type { TaskStep } from '@shared/types';
 
 import { applyEntityPatch, mergeEntitySnapshot } from '../entity-merge';
 import {
+  markResourceDeleted,
   markResourceStale,
   setIndexResource,
   setResourceSuccess,
@@ -95,6 +96,8 @@ export function removeStep(
   { deleteResource = true }: { deleteResource?: boolean } = {},
 ) {
   cache$.steps[stepId].delete();
+  // See removeTask: guards in-flight loads against resurrecting the step.
+  markResourceDeleted(stepResourceKey(stepId));
 
   if (deleteResource) {
     cache$.resources[stepResourceKey(stepId)].delete();

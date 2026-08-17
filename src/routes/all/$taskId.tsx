@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 
 import { TaskPanel } from '@/features/task/ui-task-panel';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { useMobileModeRedirect } from '@/features/mobile-preview/use-mobile-mode-redirect';
 
 const FEED_NAVIGATION_DEBOUNCE_MS = 100;
 
@@ -15,6 +16,9 @@ function AllTaskPanel() {
     taskId,
     FEED_NAVIGATION_DEBOUNCE_MS,
   );
+  const isRedirectingToMobile = useMobileModeRedirect(debouncedTaskId);
+
+  if (isRedirectingToMobile) return null;
 
   return <TaskPanel key={debouncedTaskId} taskId={debouncedTaskId} />;
 }

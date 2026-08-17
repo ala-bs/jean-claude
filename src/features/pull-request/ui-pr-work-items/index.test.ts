@@ -10,20 +10,9 @@ import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { useCommands } from '@/common/hooks/use-commands';
 
-import { PrWorkItems } from '.';
+import { useWorkItemModalStore } from '@/stores/work-item-modal';
 
-vi.mock('@/features/work-item/ui-work-item-preview', () => ({
-  WorkItemPreview: ({
-    onOpenInBrowser,
-  }: {
-    onOpenInBrowser?: () => void;
-  }) =>
-    createElement(
-      'button',
-      { onClick: onOpenInBrowser },
-      'Open in Azure',
-    ),
-}));
+import { PrWorkItems } from '.';
 
 const workItem = {
   id: 123,
@@ -43,6 +32,7 @@ afterEach(() => {
   root = null;
   container?.remove();
   container = null;
+  useWorkItemModalStore.getState().close();
   vi.restoreAllMocks();
 });
 
@@ -58,6 +48,7 @@ function Harness() {
   ]);
 
   return createElement(PrWorkItems, {
+    projectId: 'project-1',
     workItems: [workItem],
     isLoading: false,
   });
@@ -102,26 +93,9 @@ describe('PrWorkItems', () => {
       row?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    open.mockClear();
-    pressOpenShortcut();
-    expect(open).toHaveBeenCalledOnce();
-    expect(open).toHaveBeenCalledWith(
-      workItem.url,
-      '_blank',
-      'noopener,noreferrer',
-    );
-
-    const button = Array.from(document.querySelectorAll('button')).find(
-      (candidate) => candidate.textContent?.includes('Open in Azure'),
-    );
-    expect(button).toBeDefined();
-
-    open.mockClear();
-    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(open).toHaveBeenCalledWith(
-      workItem.url,
-      '_blank',
-      'noopener,noreferrer',
-    );
+    expect(useWorkItemModalStore.getState().target).toEqual({
+      projectId: 'project-1',
+      workItemId: workItem.id,
+    });
   });
 });

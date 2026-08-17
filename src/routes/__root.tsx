@@ -7,49 +7,40 @@ import {
 } from '@tanstack/react-router';
 import { scan, setOptions } from 'react-scan';
 import { useAppearanceSetting, useBackendsSetting } from '@/hooks/use-settings';
-import { useCallback, useEffect, useRef } from 'react';
-import {
-  useCurrentVisibleProject,
-  useNavigationStore,
-} from '@/stores/navigation';
+import { useEffect, useRef } from 'react';
 import clsx from 'clsx';
+import { useNavigationStore } from '@/stores/navigation';
 
-import { ActivityCenterOverlay } from '@/features/activity-center/ui-activity-center-overlay';
 import { api } from '@/lib/api';
-import { AzureBoardOverlay } from '@/features/work-item/ui-azure-board-overlay';
-import { BacklogOverlay } from '@/features/project/ui-backlog-overlay';
 import { Button } from '@/common/ui/button';
-import { CalendarOverlay } from '@/features/calendar/ui-calendar-overlay';
 import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
-import { CommandPaletteOverlay } from '@/features/command-palette/ui-command-palette-overlay';
+import { ClosedPrWorkspaceModal } from '@/features/pull-request/ui-closed-pr-workspace-modal';
 import { createInterruptAllTasksCommand } from '@/lib/interrupt-all-tasks-command';
 import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
 import { Header } from '@/layout/ui-header';
-import { LearningCenterOverlay } from '@/features/onboarding/ui-learning-center-overlay';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
-import { NewTaskOverlay } from '@/features/new-task/ui-new-task-overlay';
-import { PipelinesOverlay } from '@/features/pipelines/ui-pipelines-overlay';
-import { ProjectOverlay } from '@/features/project/ui-project-overlay';
+import { OverlayHost } from '@/layout/ui-overlay-host';
+import {
+  pruneOrphanedDiffReviewState,
+  pruneStalePrReviewState,
+} from '@/stores/diff-review';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';
 import { resolveLastLocationRedirect } from '@/lib/navigation';
-import { ResourcesOverlay } from '@/features/resources/ui-resources-overlay';
-import { RunningCommandsOverlay } from '@/features/run-commands/ui-running-commands-overlay';
-import { SettingsOverlay } from '@/features/settings/ui-settings-overlay';
+import { resolveSetupState } from '@/lib/onboarding-setup-state';
 import { TaskMessageManager } from '@/features/agent/task-message-manager';
-import { UsageOverlay } from '@/features/usage/ui-usage-overlay';
 import { useChangelogStore } from '@/stores/changelog';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
+import { useMobilePreviewWorkspaceStore } from '@/stores/mobile-preview-workspace';
 import { useModal } from '@/common/context/modal';
-import { useNewTaskDraft } from '@/stores/new-task-draft';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjects } from '@/hooks/use-projects';
 import { useToastStore } from '@/stores/toasts';
 import { useUISetting } from '@/stores/ui';
-import { WorkActivityOverlay } from '@/features/work-activity/ui-work-activity-overlay';
+import { WorkItemModal } from '@/features/feed/ui-work-item-modal';
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -229,6 +220,28 @@ function ActivityCenterContainer() {
   return null;
 }
 
+function UsageContainer() {
+  const layer = useKeyboardLayer('global-nav');
+  const toggle = useOverlaysStore((s) => s.toggle);
+
+  useCommands(
+    'usage-trigger',
+    [
+      {
+        shortcut: 'cmd+shift+u',
+        label: 'AI Usage',
+        section: 'General',
+        handler: () => {
+          toggle('usage');
+        },
+      },
+    ],
+    { layer },
+  );
+
+  return null;
+}
+
 function CalendarContainer() {
   const layer = useKeyboardLayer('global-nav');
   const toggle = useOverlaysStore((s) => s.toggle);
@@ -273,17 +286,19 @@ function WorkActivityContainer() {
 }
 
 function OnboardingBootstrap() {
-  const { data: projects = [], isLoading: isLoadingProjects } = useProjects();
-  const setupWizardCompleted = useOnboardingStore(
-    (s) => s.setupWizardCompleted,
-  );
+  const { data: projects, isError: projectsFailed } = useProjects();
   const setupBackendSelected = useOnboardingStore(
     (s) => s.setupBackendSelected,
   );
   const setupWizardSkipped = useOnboardingStore((s) => s.setupWizardSkipped);
-  const { data: backendsSetting } = useBackendsSetting();
-  const setupBackendReady =
-    setupBackendSelected || (backendsSetting?.enabledBackends?.length ?? 0) > 0;
+  const { data: backendsSetting, isError: backendsFailed } =
+    useBackendsSetting();
+  const { isUnknown: isSetupStateUnknown, setupRequired } = resolveSetupState({
+    projects,
+    backendsSetting,
+    setupBackendSelected,
+    queriesFailed: projectsFailed || backendsFailed,
+  });
   const isChangelogOpen = useChangelogStore((s) => s.isOpen);
   const navigate = useNavigate();
   const pathname = useRouterState({
@@ -291,23 +306,19 @@ function OnboardingBootstrap() {
   });
 
   useEffect(() => {
-    if (isLoadingProjects) return;
-    const requiredSetupDone = projects.length > 0 && setupBackendReady;
-    if (requiredSetupDone && setupWizardCompleted) return;
-    if (requiredSetupDone) return;
+    if (isSetupStateUnknown) return;
+    if (!setupRequired) return;
     if (isOnboardingFlowPath(pathname)) return;
     if (isChangelogOpen) return;
     if (setupWizardSkipped) return;
     if (window.sessionStorage.getItem('jc-setup-wizard-skipped') === '1') return;
     void navigate({ to: '/onboarding/setup' });
   }, [
-    isLoadingProjects,
+    isSetupStateUnknown,
     isChangelogOpen,
     navigate,
     pathname,
-    projects.length,
-    setupWizardCompleted,
-    setupBackendReady,
+    setupRequired,
     setupWizardSkipped,
   ]);
 
@@ -396,77 +407,24 @@ function PipelinesOverlayContainer() {
   return null;
 }
 
-function OverlayHost() {
-  const activeOverlay = useOverlaysStore((s) => s.activeOverlay);
-  const close = useOverlaysStore((s) => s.close);
-
-  if (activeOverlay === null) return null;
-
-  switch (activeOverlay) {
-    case 'new-task':
-      return <NewTaskOverlayContainer />;
-    case 'command-palette':
-      return <CommandPaletteOverlay onClose={() => close('command-palette')} />;
-    case 'project-switcher':
-      return <ProjectOverlay onClose={() => close('project-switcher')} />;
-    case 'activity-center':
-      return <ActivityCenterOverlay onClose={() => close('activity-center')} />;
-    case 'calendar':
-      return <CalendarOverlay onClose={() => close('calendar')} />;
-    case 'settings':
-      return <SettingsOverlay onClose={() => close('settings')} />;
-    case 'usage':
-      return <UsageOverlay onClose={() => close('usage')} />;
-    case 'work-activity':
-      return <WorkActivityOverlay onClose={() => close('work-activity')} />;
-    case 'resources':
-      return <ResourcesOverlay onClose={() => close('resources')} />;
-    case 'backlog':
-      return <BacklogOverlay onClose={() => close('backlog')} />;
-    case 'azure-board':
-      return <AzureBoardOverlay onClose={() => close('azure-board')} />;
-    case 'running-commands':
-      return (
-        <RunningCommandsOverlay onClose={() => close('running-commands')} />
-      );
-    case 'pipelines':
-      return <PipelinesOverlay onClose={() => close('pipelines')} />;
-    case 'learning-center':
-      return <LearningCenterOverlay onClose={() => close('learning-center')} />;
-    case 'keyboard-help':
-      return null;
-  }
-}
-
-function NewTaskOverlayContainer() {
-  const close = useOverlaysStore((s) => s.close);
-  const { draft, discardDraft, setSelectedProjectId } = useNewTaskDraft();
-  const { projectId } = useCurrentVisibleProject();
-
-  useEffect(() => {
-    if (projectId === 'all') return;
-    if (draft?.backlogTodoIds?.length) return;
-    setSelectedProjectId(projectId);
-  }, [draft?.backlogTodoIds?.length, projectId, setSelectedProjectId]);
-
-  const handleClose = useCallback(() => close('new-task'), [close]);
-  const handleDiscardDraft = useCallback(() => {
-    discardDraft();
-    close('new-task');
-  }, [discardDraft, close]);
-
-  return (
-    <NewTaskOverlay onClose={handleClose} onDiscardDraft={handleDiscardDraft} />
-  );
-}
-
 /** Clean up persisted store data for tasks that no longer exist or are completed */
 function useCleanupNonActiveTasks() {
   useEffect(() => {
+    // PR review state expires by age and has no bearing on the task list, so
+    // it must not sit behind the fetch below (or its empty-list bail-out).
+    pruneStalePrReviewState();
+
     void api.tasks.findAll().then((tasks) => {
+      // Never prune from an empty list: a transient failure would wipe every
+      // persisted per-task store (drafts, comments, review state).
+      if (tasks.length === 0) return;
+
       const activeIds = new Set(
         tasks.filter((t) => t.status !== 'completed').map((t) => t.id),
       );
+      // Reviewing usually happens *after* a task completes, so diff review
+      // state is kept for every task that still exists — not just active ones.
+      const existingIds = new Set(tasks.map((t) => t.id));
 
       // Prune review comments
       pruneOrphanedReviewComments(activeIds);
@@ -476,6 +434,9 @@ function useCleanupNonActiveTasks() {
 
       // Prune task review comment drafts
       pruneOrphanedTaskReviewDrafts(activeIds);
+
+      // Prune diff review state (reviewed files, tabs, groups)
+      pruneOrphanedDiffReviewState(existingIds);
 
       // Prune navigation task state
       // Note: clearTaskNavHistoryState also calls clearReviewCommentsForTask
@@ -492,20 +453,30 @@ function useCleanupNonActiveTasks() {
 
 function RootLayout() {
   useCleanupNonActiveTasks();
-  const { data: projects = [], isLoading: isLoadingProjects } = useProjects();
+  const { data: projects, isError: projectsFailed } = useProjects();
   const setupBackendSelected = useOnboardingStore(
     (s) => s.setupBackendSelected,
   );
   const setupWizardSkipped = useOnboardingStore((s) => s.setupWizardSkipped);
-  const { data: backendsSetting } = useBackendsSetting();
-  const setupBackendReady =
-    setupBackendSelected || (backendsSetting?.enabledBackends?.length ?? 0) > 0;
+  const { data: backendsSetting, isError: backendsFailed } =
+    useBackendsSetting();
+  const { isUnknown: isSetupStateUnknown, setupRequired } = resolveSetupState({
+    projects,
+    backendsSetting,
+    setupBackendSelected,
+    queriesFailed: projectsFailed || backendsFailed,
+  });
   const closeChangelog = useChangelogStore((s) => s.close);
   const closeOverlays = useOverlaysStore((s) => s.closeAll);
+  const isMobilePreviewWorkspaceOpen = useMobilePreviewWorkspaceStore(
+    (state) => state.isOpen,
+  );
+  const closeMobilePreviewWorkspace = useMobilePreviewWorkspaceStore(
+    (state) => state.close,
+  );
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  const setupRequired = projects.length === 0 || !setupBackendReady;
   const isSetupRoute = pathname.startsWith('/onboarding/setup');
   const isOnboardingFlowRoute = isOnboardingFlowPath(pathname);
   const setupSkippedThisSession =
@@ -513,7 +484,9 @@ function RootLayout() {
     window.sessionStorage.getItem('jc-setup-wizard-skipped') === '1';
   const hideContentForSetupDecision =
     !isOnboardingFlowRoute &&
-    (isLoadingProjects || (setupRequired && !setupSkippedThisSession));
+    (isSetupStateUnknown || (setupRequired && !setupSkippedThisSession));
+  const suppressMobilePreviewWorkspace =
+    isOnboardingFlowRoute || isSetupRoute || hideContentForSetupDecision;
 
   useEffect(() => {
     if (setupRequired || isOnboardingFlowRoute) closeChangelog();
@@ -522,6 +495,16 @@ function RootLayout() {
   useEffect(() => {
     if (isOnboardingFlowRoute) closeOverlays();
   }, [closeOverlays, isOnboardingFlowRoute]);
+
+  useEffect(() => {
+    if (suppressMobilePreviewWorkspace && isMobilePreviewWorkspaceOpen) {
+      closeMobilePreviewWorkspace();
+    }
+  }, [
+    closeMobilePreviewWorkspace,
+    isMobilePreviewWorkspaceOpen,
+    suppressMobilePreviewWorkspace,
+  ]);
 
   return (
     <div
@@ -534,9 +517,12 @@ function RootLayout() {
       <ReactScanBridge />
       <NotificationTaskOpenBridge />
       <RateLimitSwapBridge />
+      <AgentMemoryCaptureWarningBridge />
       <TaskMessageManager />
       <AppearanceBridge />
       <GlobalPromptFromBackModal />
+      <ClosedPrWorkspaceModal />
+      <WorkItemModal />
       <OnboardingBootstrap />
       {!isOnboardingFlowRoute && <GlobalCommands />}
       {/* <TaskCommands /> */}
@@ -553,6 +539,7 @@ function RootLayout() {
           <BacklogContainer />
           <AzureBoardContainer />
           <ActivityCenterContainer />
+          <UsageContainer />
           <CalendarContainer />
           <WorkActivityContainer />
           <RunningCommandsContainer />
@@ -564,8 +551,10 @@ function RootLayout() {
       <div className="flex h-full w-full flex-1 flex-col overflow-hidden">
         <Header />
         <main className="flex h-full w-full overflow-hidden">
-          {!isSetupRoute && !hideContentForSetupDecision && <MainSidebar />}
-          {hideContentForSetupDecision ? <StartupSetupGate /> : <Outlet />}
+          <div className="flex h-full min-w-0 flex-1">
+            {!isSetupRoute && !hideContentForSetupDecision && <MainSidebar />}
+            {hideContentForSetupDecision ? <StartupSetupGate /> : <Outlet />}
+          </div>
         </main>
       </div>
     </div>
@@ -666,6 +655,21 @@ function RateLimitSwapBridge() {
       addToast({
         message: `Rate limit approaching for ${data.from} — routing new tasks to ${data.to}`,
         type: 'success',
+      });
+    });
+  }, [addToast]);
+
+  return null;
+}
+
+function AgentMemoryCaptureWarningBridge() {
+  const addToast = useToastStore((state) => state.addToast);
+
+  useEffect(() => {
+    return api.agentMemory.onCaptureWarning((warning) => {
+      addToast({
+        type: 'error',
+        message: `Agent Memory could not save this ${warning.source}: ${warning.message}`,
       });
     });
   }, [addToast]);

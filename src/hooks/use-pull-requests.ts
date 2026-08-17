@@ -267,6 +267,46 @@ export function updateFeedPullRequest(
         : item,
     ),
   );
+
+  if (patch.isWaitingForAuthor === undefined) return;
+
+  const updateTaskItem = (item: FeedItem): FeedItem => {
+    const children = item.children?.map(updateTaskItem);
+    const withChildren = children ? { ...item, children } : item;
+
+    if (
+      item.source !== 'task' ||
+      item.projectId !== projectId ||
+      item.pullRequestId !== prId
+    ) {
+      return withChildren;
+    }
+
+    return { ...withChildren, isWaitingForAuthor: patch.isWaitingForAuthor };
+  };
+
+  updateFeedDocument('tasks', (items) => items.map(updateTaskItem));
+}
+
+export function updateFeedTaskPullRequest(
+  projectId: string,
+  prId: number,
+  patch: Partial<FeedItem>,
+) {
+  const updateTask = (item: FeedItem): FeedItem => {
+    const updatedChildren = item.children?.map(updateTask);
+    const updatedItem = updatedChildren
+      ? { ...item, children: updatedChildren }
+      : item;
+
+    return item.source === 'task' &&
+      item.projectId === projectId &&
+      item.pullRequestId === prId
+      ? { ...updatedItem, ...patch }
+      : updatedItem;
+  };
+
+  updateFeedDocument('tasks', (items) => items.map(updateTask));
 }
 
 function markFeedPullRequestsStale() {
@@ -291,6 +331,10 @@ export function updateFeedItemsForPullRequest(
               isDraft: pr.isDraft,
               pullRequestUrl: pr.url,
               pullRequestMergeStatus: pr.mergeStatus,
+              isWaitingForAuthor: pr.reviewers.some(
+                (reviewer) =>
+                  !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+              ),
             }
           : item,
       )
@@ -319,6 +363,10 @@ export function updateFeedItemsForPullRequest(
       workItemPrStatus: pr.status,
       pullRequestUrl: pr.url,
       pullRequestMergeStatus: pr.mergeStatus,
+      isWaitingForAuthor: pr.reviewers.some(
+        (reviewer) =>
+          !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+      ),
     };
   };
 
@@ -882,6 +930,7 @@ export function useAddPullRequestComment(
   return useMutation({
     mutationFn: (content: string) =>
       api.azureDevOps.addPullRequestComment({
+        localProjectId: projectId,
         providerId: repoInfo!.providerId,
         projectId: repoInfo!.projectId,
         repoId: repoInfo!.repoId,
@@ -920,9 +969,11 @@ export function useAddPullRequestFileComment(
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) =>
       api.azureDevOps.addPullRequestFileComment({
+        localProjectId: projectId,
         providerId: repoInfo!.providerId,
         projectId: repoInfo!.projectId,
         repoId: repoInfo!.repoId,
@@ -963,6 +1014,7 @@ export function useAddThreadReply(
   >({
     mutationFn: (params) =>
       api.azureDevOps.addThreadReply({
+        localProjectId: projectId,
         providerId: repoInfo!.providerId,
         projectId: repoInfo!.projectId,
         repoId: repoInfo!.repoId,
@@ -1207,10 +1259,15 @@ export function useVotePullRequest(
 
       const isApprovedByMe =
         voteStatus === 'approved' || voteStatus === 'approved-with-suggestions';
+      const isWaitingForAuthor = updatedCachedPr?.reviewers.some(
+        (reviewer) =>
+          !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+      );
       if (!repoInfoOverride) {
         updateFeedPullRequest(projectId, prId, {
           isApprovedByMe,
           attention: isApprovedByMe ? 'pr-approved-by-me' : 'review-requested',
+          isWaitingForAuthor,
         });
       }
       if (isApprovedByMe) {
@@ -1323,6 +1380,7 @@ export function usePublishPullRequest(
       if (!repoInfoOverride) {
         updateFeedPullRequest(projectId, prId, { isDraft: false });
       }
+      updateFeedTaskPullRequest(projectId, prId, { isDraft: false });
       queryClient.invalidateQueries({
         queryKey,
       });
@@ -1370,6 +1428,7 @@ export function useMarkPullRequestDraft(
       if (!repoInfoOverride) {
         updateFeedPullRequest(projectId, prId, { isDraft: true });
       }
+      updateFeedTaskPullRequest(projectId, prId, { isDraft: true });
       queryClient.invalidateQueries({ queryKey });
       if (!repoInfoOverride) {
         queryClient.invalidateQueries({

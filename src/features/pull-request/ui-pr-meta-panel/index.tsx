@@ -150,6 +150,7 @@ export function PrMetaPanel({
 
       {/* Work Items */}
       <PrWorkItems
+        projectId={projectId}
         workItems={workItems}
         isLoading={isWorkItemsLoading}
         providerId={providerId}
@@ -159,7 +160,6 @@ export function PrMetaPanel({
         onUnlink={onUnlinkWorkItem}
         isLinking={isLinkingWorkItem}
         isUnlinking={isUnlinkingWorkItem}
-        readOnly={readOnly}
       />
 
       {/* Auto-complete */}

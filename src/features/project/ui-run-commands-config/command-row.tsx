@@ -15,17 +15,18 @@ import { useSortable } from '@dnd-kit/sortable';
 
 
 
-import type {
-  ProjectCommand,
-  ProjectSuggestionCommand,
-  RunCommandEnvSource,
-  RunCommandEnvVar,
-  UpdateProjectCommand,
+import {
+  getAvailablePortOverrideValidationError,
+  type ProjectCommand,
+  type ProjectSuggestionCommand,
+  RUN_COMMAND_ENV_SOURCES,
+  type RunCommandEnvSource,
+  type RunCommandEnvVar,
+  type UpdateProjectCommand,
 } from '@shared/run-command-types';
 import { Checkbox } from '@/common/ui/checkbox';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
-import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
 import { Select } from '@/common/ui/select';
 import { Tooltip } from '@/common/ui/tooltip';
 import { useDropdownPosition } from '@/common/hooks/use-dropdown-position';
@@ -96,8 +97,21 @@ export function CommandRow({
   const [hasPendingEnvEdits, setHasPendingEnvEdits] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [portOverrideEditError, setPortOverrideEditError] = useState<
+    string | null
+  >(null);
   const commandInputWrapRef = useRef<HTMLDivElement | null>(null);
   const lastPortDraftCommandIdRef = useRef(command.id);
+  const availablePortOverrideError =
+    getAvailablePortOverrideValidationError({
+      ports: command.ports,
+      portConflictStrategy: 'use-available-port',
+    });
+  const portOverrideValidationError =
+    portOverrideEditError ??
+    (localPortConflictStrategy === 'use-available-port'
+      ? availablePortOverrideError
+      : null);
 
   const {
     attributes,
@@ -133,6 +147,7 @@ export function CommandRow({
 
     lastPortDraftCommandIdRef.current = command.id;
     startTransition(() => {
+      setPortOverrideEditError(null);
       setLocalPortConflictStrategy(command.portConflictStrategy);
       setLocalPortOverrideProvider(command.portOverrideProvider);
       setLocalPortOverrideEnvVar(command.portOverrideEnvVar ?? 'PORT');
@@ -222,6 +237,15 @@ export function CommandRow({
   };
 
   const handlePortsChange = (ports: number[]) => {
+    const error = getAvailablePortOverrideValidationError({
+      ports,
+      portConflictStrategy: localPortConflictStrategy,
+    });
+    if (error) {
+      setPortOverrideEditError(error);
+      return;
+    }
+    setPortOverrideEditError(null);
     emitDraftChange({ ports });
     onUpdate({ ports });
   };
@@ -229,6 +253,19 @@ export function CommandRow({
   const handlePortConflictStrategyChange = (value: string) => {
     const portConflictStrategy =
       value === 'use-available-port' ? 'use-available-port' : 'prompt';
+    if (
+      portConflictStrategy === 'use-available-port' &&
+      command.ports.length !== 1
+    ) {
+      setPortOverrideEditError(
+        getAvailablePortOverrideValidationError({
+          ports: command.ports,
+          portConflictStrategy,
+        }),
+      );
+      return;
+    }
+    setPortOverrideEditError(null);
     setLocalPortConflictStrategy(portConflictStrategy);
     const portOverrideEnvVar =
       portConflictStrategy === 'use-available-port'
@@ -509,6 +546,11 @@ export function CommandRow({
                 ]}
                 onChange={handlePortConflictStrategyChange}
               />
+              {portOverrideValidationError && (
+                <p className="text-xs text-red-400" role="alert">
+                  {portOverrideValidationError}
+                </p>
+              )}
               {localPortConflictStrategy === 'use-available-port' && (
                 <>
                   <Select

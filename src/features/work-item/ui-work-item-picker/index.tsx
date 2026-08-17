@@ -19,6 +19,7 @@ import {
   useWorkItems,
 } from '@/hooks/use-work-items';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
+import { EMPTY_BOARD_COLUMNS } from '@/features/work-item/ui-work-item-board';
 import { Select } from '@/common/ui/select';
 import type { SelectOption } from '@/common/ui/select';
 import { WorkItemBoard } from '@/features/work-item/ui-work-item-board';
@@ -500,7 +501,7 @@ export function WorkItemPicker({
           ) : (
             <WorkItemBoard
               workItems={filteredWorkItems}
-              boardColumns={boardColumns ?? []}
+              boardColumns={boardColumns ?? EMPTY_BOARD_COLUMNS}
               highlightedWorkItemId={highlightedId}
               exactMatchWorkItemId={exactMatchWorkItemId}
               selectedWorkItemIds={selectedWorkItemIds}

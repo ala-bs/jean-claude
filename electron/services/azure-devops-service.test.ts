@@ -35,8 +35,10 @@ import {
   queryWorkItems,
   resolveWorkItemBoardColumnUpdate,
   setPullRequestAutoComplete,
+  setWorkItemCommentReaction,
   updatePullRequestTitle,
   updateWorkItemBoardColumn,
+  sniffImageExtension,
   uploadPullRequestAttachment,
 } from './azure-devops-service';
 
@@ -809,6 +811,47 @@ function workItemResponse(id: number) {
   };
 }
 
+describe('sniffImageExtension', () => {
+  function isoBmff(majorBrand: string, compatibleBrands: string[]) {
+    const brands = [majorBrand, '\0\0\0\0', ...compatibleBrands].join('');
+    const body = Buffer.concat([
+      Buffer.from('ftyp', 'ascii'),
+      Buffer.from(brands, 'ascii'),
+    ]);
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(body.length + 4);
+    return Buffer.concat([size, body]);
+  }
+
+  it('detects common raster formats from magic bytes', () => {
+    expect(
+      sniffImageExtension(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      ),
+    ).toBe('png');
+    expect(sniffImageExtension(Buffer.from([0xff, 0xd8, 0xff]))).toBe('jpg');
+    expect(sniffImageExtension(Buffer.from('GIF89a-data', 'ascii'))).toBe(
+      'gif',
+    );
+    expect(
+      sniffImageExtension(Buffer.from('RIFF\0\0\0\0WEBPVP8 ', 'ascii')),
+    ).toBe('webp');
+  });
+
+  it('detects AVIF from the major brand and the compatible-brands list', () => {
+    expect(sniffImageExtension(isoBmff('avif', ['mif1']))).toBe('avif');
+    expect(sniffImageExtension(isoBmff('mif1', ['avif', 'miaf']))).toBe('avif');
+  });
+
+  it('detects HEIC and SVG, and gives up on unknown bytes', () => {
+    expect(sniffImageExtension(isoBmff('heic', ['mif1']))).toBe('heic');
+    expect(sniffImageExtension(Buffer.from('  <svg xmlns=', 'ascii'))).toBe(
+      'svg',
+    );
+    expect(sniffImageExtension(Buffer.from('not-an-image', 'ascii'))).toBeNull();
+  });
+});
+
 describe('uploadPullRequestAttachment', () => {
   beforeEach(() => {
     findProviderByIdMock.mockResolvedValue({
@@ -998,7 +1041,7 @@ describe('addWorkItemComment', () => {
       }),
     ]);
     expect(vi.mocked(fetch).mock.calls[0][0]).toBe(
-      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText',
+      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=all',
     );
   });
 
@@ -1039,7 +1082,7 @@ describe('addWorkItemComment', () => {
 
     expect(comments.map((comment) => comment.id)).toEqual([3, 2, 1]);
     expect(vi.mocked(fetch).mock.calls[1][0]).toBe(
-      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText&continuationToken=next+token%26page%3D2',
+      'https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=all&continuationToken=next+token%26page%3D2',
     );
   });
 
@@ -1165,6 +1208,41 @@ describe('addWorkItemComment', () => {
         format: 'markdown',
       }),
     ]);
+  });
+});
+
+describe('setWorkItemCommentReaction', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ['like', 'PUT'],
+    ['heart', 'DELETE'],
+  ])('uses Azure reaction route for %s', async (reactionType, method) => {
+    await setWorkItemCommentReaction({
+      providerId: 'provider-1',
+      projectName: 'Project Name',
+      workItemId: 299,
+      commentId: 42,
+      reactionType: reactionType as 'like' | 'heart',
+      engaged: method === 'PUT',
+    });
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      `https://dev.azure.com/org/Project%20Name/_apis/wit/workItems/299/comments/42/reactions/${reactionType}?api-version=7.1-preview.1`,
+      { method, headers: { Authorization: 'Basic OnBhdA==' } },
+    );
   });
 });
 
@@ -1615,7 +1693,15 @@ describe('getPullRequestStatuses', () => {
               name: 'repo',
               project: { name: 'project' },
             },
-            reviewers: [],
+            reviewers: [
+              {
+                id: 'reviewer-1',
+                displayName: 'Reviewer',
+                uniqueName: 'reviewer@example.com',
+                vote: -5,
+                isContainer: false,
+              },
+            ],
           },
           { ok: true },
         );
@@ -1631,6 +1717,7 @@ describe('getPullRequestStatuses', () => {
     expect(statuses.get('project:repo:123')).toMatchObject({
       status: 'active',
       activeThreadCount: 1,
+      isWaitingForAuthor: true,
     });
   });
 });

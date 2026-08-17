@@ -90,6 +90,18 @@ export interface ResolvedPermissionRule {
 }
 
 /**
+ * Broadcast whenever persisted permission rules change.
+ *
+ * - `scope: 'global'` affects every project.
+ * - `scope: 'project' | 'worktree'` affects the project rooted at `projectPath`.
+ * - `scope: 'session'` affects a single step's session rules.
+ */
+export type PermissionsChangedEvent =
+  | { scope: 'global' }
+  | { scope: 'project' | 'worktree'; projectPath?: string }
+  | { scope: 'session'; stepId: string };
+
+/**
  * Result of evaluating a tool request against permission rules.
  * - `allow`: auto-allow, don't prompt the user
  * - `deny`: auto-deny silently, don't prompt the user
@@ -98,6 +110,15 @@ export interface ResolvedPermissionRule {
 export type PermissionEvalResult = PermissionAction;
 
 export interface PermissionEvalDetails {
+  action: PermissionEvalResult;
+  matchedRule?: ResolvedPermissionRule;
+  /** Per-subcommand breakdown, present only for compound bash commands. */
+  subCommands?: PermissionSubCommandEval[];
+}
+
+/** Evaluation outcome for a single subcommand of a compound bash command. */
+export interface PermissionSubCommandEval {
+  command: string;
   action: PermissionEvalResult;
   matchedRule?: ResolvedPermissionRule;
 }

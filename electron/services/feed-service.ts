@@ -25,6 +25,7 @@ import {
   getPullRequestActivityMetadata,
   getPullRequestStatuses,
   getWorkItemById,
+  type LinkedPr,
   listPullRequests,
   queryAssignedWorkItems,
 } from './azure-devops-service';
@@ -32,10 +33,9 @@ import {
   hasUncommittedWorktreeChanges,
   hasUnpushedWorktreeCommits,
 } from './worktree-service';
-import { completePrReviewTasksForMergedPr } from './pr-review-task-service';
 import { emitCacheEvent } from './cache-event-service';
 import { getMostRecentlyUpdatedStep } from './step-service';
-import type { LinkedPr } from './azure-devops-service';
+import { reconcilePrWorkspaceState } from './pr-review-task-service';
 
 
 
@@ -60,6 +60,7 @@ let activityCache: {
       lastThreadActivityDate: string | null;
       activeThreadCount: number;
       unresolvedCommentCount: number;
+      resolvedThreadCount: number;
     }
   >;
   fetchedAt: number;
@@ -224,7 +225,14 @@ export async function getTaskFeedItems({
 } = {}): Promise<FeedItem[]> {
   dbg.feed('getTaskFeedItems: fetching active tasks');
 
-  const activeTasks = await TaskRepository.findAllActive();
+  const [activeTasks, prWorkspaceTasks] = await Promise.all([
+    TaskRepository.findAllActive(),
+    TaskRepository.findPrWorkspaceTasksForFeed(),
+  ]);
+  const activeTaskIds = new Set(activeTasks.map((task) => task.id));
+  activeTasks.push(
+    ...prWorkspaceTasks.filter((task) => !activeTaskIds.has(task.id)),
+  );
   const stepsByTaskId = await TaskStepRepository.findByTaskIds(
     activeTasks.map((task) => task.id),
   );
@@ -395,16 +403,13 @@ export async function getTaskFeedItems({
   );
 
   await enrichTaskFeedItemsWithWorkItemTypes({ feedItems });
-  const completedTaskIds = await enrichTaskFeedItemsWithPrStatus({
+  await enrichTaskFeedItemsWithPrStatus({
     feedItems,
     prItems,
   });
-  const activeFeedItems = feedItems.filter(
-    (item) => !item.taskId || !completedTaskIds.has(item.taskId),
-  );
 
-  dbg.feed('getTaskFeedItems: returning %d tasks', activeFeedItems.length);
-  return activeFeedItems;
+  dbg.feed('getTaskFeedItems: returning %d tasks', feedItems.length);
+  return feedItems;
 }
 
 /**
@@ -508,8 +513,26 @@ async function enrichTaskFeedItemsWithPrStatus({
 }: {
   feedItems: FeedItem[];
   prItems: FeedItem[];
-}): Promise<Set<string>> {
-  const completedTaskIds = new Set<string>();
+}): Promise<void> {
+  const reconciledPrs = new Set<string>();
+  const reconcileObservedPr = async (item: FeedItem, pullRequestId: number) => {
+    const key = `${item.projectId}:${pullRequestId}`;
+    if (reconciledPrs.has(key)) return;
+    reconciledPrs.add(key);
+    try {
+      await reconcilePrWorkspaceState({
+        projectId: item.projectId,
+        pullRequestId,
+      });
+    } catch (err) {
+      dbg.feed(
+        'Failed reconciling PR workspace state for project %s PR %s: %O',
+        item.projectId,
+        pullRequestId,
+        err,
+      );
+    }
+  };
   // --- Enrich task feed items with PR status ---
   // Build a set of known active PRs from the PR feed.
   const activePrMap = new Map<
@@ -518,8 +541,10 @@ async function enrichTaskFeedItemsWithPrStatus({
       isDraft: boolean;
       mergeStatus: FeedItem['pullRequestMergeStatus'];
       approvedBy: FeedItem['approvedBy'];
+      isWaitingForAuthor: boolean;
       activeThreadCount: FeedItem['activeThreadCount'];
       unresolvedCommentCount: FeedItem['unresolvedCommentCount'];
+      resolvedThreadCount: FeedItem['resolvedThreadCount'];
     }
   >();
   for (const prItem of prItems) {
@@ -530,8 +555,10 @@ async function enrichTaskFeedItemsWithPrStatus({
       isDraft: !!prItem.isDraft,
       mergeStatus: prItem.pullRequestMergeStatus,
       approvedBy: prItem.approvedBy,
+      isWaitingForAuthor: !!prItem.isWaitingForAuthor,
       activeThreadCount: prItem.activeThreadCount,
       unresolvedCommentCount: prItem.unresolvedCommentCount,
+      resolvedThreadCount: prItem.resolvedThreadCount,
     });
   }
 
@@ -558,8 +585,10 @@ async function enrichTaskFeedItemsWithPrStatus({
         item.isDraft = activePrInfo.isDraft;
         item.pullRequestMergeStatus = activePrInfo.mergeStatus;
         item.approvedBy = activePrInfo.approvedBy;
+        item.isWaitingForAuthor = activePrInfo.isWaitingForAuthor;
         item.activeThreadCount = activePrInfo.activeThreadCount;
         item.unresolvedCommentCount = activePrInfo.unresolvedCommentCount;
+        await reconcileObservedPr(item, item.pullRequestId);
       }
 
       const project = projectsById.get(item.projectId);
@@ -621,18 +650,11 @@ async function enrichTaskFeedItemsWithPrStatus({
             entry.item.isDraft = status.isDraft;
             entry.item.pullRequestMergeStatus = status.mergeStatus;
             entry.item.approvedBy = status.approvedBy;
+            entry.item.isWaitingForAuthor = !!status.isWaitingForAuthor;
             if (status.activeThreadCount !== undefined) {
               entry.item.activeThreadCount = status.activeThreadCount;
             }
-            if (status.status === 'completed') {
-              const completedTasks = await completePrReviewTasksForMergedPr({
-                projectId: entry.item.projectId,
-                pullRequestId: entry.linkedPr.prId,
-              });
-              for (const task of completedTasks) {
-                completedTaskIds.add(task.id);
-              }
-            }
+            await reconcileObservedPr(entry.item, entry.linkedPr.prId);
             if (status.url) {
               entry.item.workItemPrUrl = status.url;
             }
@@ -648,7 +670,6 @@ async function enrichTaskFeedItemsWithPrStatus({
     }
   }
 
-  return completedTaskIds;
 }
 
 async function fetchNoteFeedItems(): Promise<FeedItem[]> {
@@ -802,6 +823,10 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
                   r.uniqueName.toLowerCase() ===
                     providerUserEmailMap.get(project.repoProviderId!),
               ),
+            isWaitingForAuthor: pr.reviewers.some(
+              (reviewer) =>
+                !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+            ),
           }),
         );
 
@@ -837,6 +862,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
         lastThreadActivityDate: string | null;
         activeThreadCount: number;
         unresolvedCommentCount: number;
+        resolvedThreadCount: number;
       }
     >();
 
@@ -928,6 +954,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
 
     const activeThreadCount = metadata?.activeThreadCount ?? 0;
     const unresolvedCommentCount = metadata?.unresolvedCommentCount ?? 0;
+    const resolvedThreadCount = metadata?.resolvedThreadCount ?? 0;
 
     // Determine attention level
     let attention = item.attention;
@@ -945,6 +972,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
       hasNewActivity,
       activeThreadCount,
       unresolvedCommentCount,
+      resolvedThreadCount,
     };
   });
 

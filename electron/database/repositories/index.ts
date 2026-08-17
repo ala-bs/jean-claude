@@ -20,3 +20,5 @@ export type {
   PersistedWorkItemSummary,
   UpsertWorkItemSummary,
 } from './work-item-summaries';
+export { MobilePreviewDeviceUsageRepository } from './mobile-preview-device-usage';
+export type { PersistedMobilePreviewDeviceUsage } from './mobile-preview-device-usage';

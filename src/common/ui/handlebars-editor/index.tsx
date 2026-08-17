@@ -176,6 +176,7 @@ export function HandlebarsEditor({
   minHeight = '120px',
   maxHeight = '300px',
   featureMap = null,
+  onPaste,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -184,12 +185,22 @@ export function HandlebarsEditor({
   minHeight?: string;
   maxHeight?: string;
   featureMap?: ProjectFeatureMap | null;
+  /**
+   * Called in the capture phase before Monaco handles the paste, so callers can
+   * intercept it (e.g. attach large pasted content as a file).
+   */
+  onPaste?: (event: ClipboardEvent) => void;
 }) {
   const disposablesRef = useRef<IDisposable[]>([]);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const featureMapRef = useRef<ProjectFeatureMap | null>(featureMap);
   const isInternalChange = useRef(false);
+  const onPasteRef = useRef(onPaste);
   const [isEmpty, setIsEmpty] = useState(!value);
+
+  useEffect(() => {
+    onPasteRef.current = onPaste;
+  }, [onPaste]);
 
   useEffect(() => {
     featureMapRef.current = featureMap;
@@ -212,6 +223,21 @@ export function HandlebarsEditor({
   const handleMount: OnMount = useCallback(
     (monacoEditor, monaco) => {
       editorRef.current = monacoEditor;
+
+      // Monaco handles paste on its hidden textarea, so React's onPaste on a
+      // parent runs too late to cancel it. Intercept in the capture phase.
+      const domNode = monacoEditor.getDomNode();
+      if (domNode) {
+        const handleNativePaste = (event: ClipboardEvent) => {
+          onPasteRef.current?.(event);
+          if (event.defaultPrevented) event.stopPropagation();
+        };
+        domNode.addEventListener('paste', handleNativePaste, true);
+        disposablesRef.current.push({
+          dispose: () =>
+            domNode.removeEventListener('paste', handleNativePaste, true),
+        });
+      }
 
       const isInsideOpenHandlebarsExpression = (
         model: editor.ITextModel,

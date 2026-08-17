@@ -9,6 +9,7 @@ import {
   type AzureDevOpsWorkItem,
   type AzureDevOpsWorkItemState,
   type WorkItemComment,
+  type WorkItemCommentReactionType,
   type WorkItemHistoryEntry,
 } from '@/lib/api';
 import { markDocumentStale } from '@/cache/cache-actions';
@@ -635,6 +636,7 @@ export function useAddWorkItemComment() {
 
 export function useUpdateWorkItemComment() {
   const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
   return useMutation({
     mutationFn: (params: {
       providerId: string;
@@ -646,8 +648,64 @@ export function useUpdateWorkItemComment() {
     onSuccess: (comment, variables) => {
       queryClient.setQueryData<WorkItemComment[]>(
         ['work-item-comments', variables.providerId, variables.projectName, [variables.workItemId]],
-        (existing) => existing?.map((item) => (item.id === comment.id ? comment : item)),
+        (existing) =>
+          existing?.map((item) =>
+            item.id === comment.id
+              ? { ...item, ...comment, reactions: item.reactions }
+              : item,
+          ),
       );
+      queryClient.invalidateQueries({ queryKey: ['work-item-comments', variables.providerId, variables.projectName] });
+    },
+    onError: (error, variables) => {
+      console.error('[work-item-comment] update failed', {
+        workItemId: variables.workItemId,
+        commentId: variables.commentId,
+        error,
+      });
+      addToast({
+        message:
+          error instanceof Error
+            ? `Failed to update comment: ${error.message}`
+            : 'Failed to update work item comment',
+        type: 'error',
+      });
+    },
+  });
+}
+
+export function useSetWorkItemCommentReaction() {
+  const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+  return useMutation({
+    mutationFn: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      commentId: number;
+      reactionType: WorkItemCommentReactionType;
+      engaged: boolean;
+    }) => api.azureDevOps.setWorkItemCommentReaction(params),
+    onMutate: async (variables) => {
+      const queryKey = ['work-item-comments', variables.providerId, variables.projectName, [variables.workItemId]];
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<WorkItemComment[]>(queryKey);
+      queryClient.setQueryData<WorkItemComment[]>(queryKey, (comments) => comments?.map((comment) => {
+        if (comment.id !== variables.commentId) return comment;
+        const reactions = [...(comment.reactions ?? [])];
+        const index = reactions.findIndex((reaction) => reaction.type === variables.reactionType);
+        const current = index >= 0 ? reactions[index] : { type: variables.reactionType, count: 0, isCurrentUserEngaged: false };
+        const next = { ...current, count: Math.max(0, current.count + (variables.engaged ? 1 : -1)), isCurrentUserEngaged: variables.engaged };
+        if (index >= 0) reactions[index] = next; else reactions.push(next);
+        return { ...comment, reactions };
+      }));
+      return { previous, queryKey };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) queryClient.setQueryData(context.queryKey, context.previous);
+      addToast({ message: 'Failed to update comment reaction', type: 'error' });
+    },
+    onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: ['work-item-comments', variables.providerId, variables.projectName] });
     },
   });

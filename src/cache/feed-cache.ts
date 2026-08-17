@@ -58,3 +58,37 @@ export function updateFeedDocument(
   markResourceChanged(key);
   cache$.documents[key].data.set(next);
 }
+
+/**
+ * Optimistically updates worktree-derived flags on a task feed item (and its
+ * children). These flags are only produced by the server feed enrichment, so
+ * without this the badge can stay stale until a feed load actually commits.
+ */
+export function updateFeedTaskWorktreeFlags(
+  taskId: string,
+  flags: Pick<FeedItem, 'hasUncommittedChanges' | 'hasUnpushedCommits'>,
+) {
+  updateFeedDocument('tasks', (items) => {
+    const updateItem = (item: FeedItem): FeedItem => {
+      const children = item.children?.map(updateItem);
+      const childrenChanged = children?.some(
+        (child, index) => child !== item.children?.[index],
+      );
+      const withChildren = childrenChanged ? { ...item, children } : item;
+
+      if (
+        item.source !== 'task' ||
+        item.taskId !== taskId ||
+        (item.hasUncommittedChanges === flags.hasUncommittedChanges &&
+          item.hasUnpushedCommits === flags.hasUnpushedCommits)
+      ) {
+        return withChildren;
+      }
+
+      return { ...withChildren, ...flags };
+    };
+
+    const next = items.map(updateItem);
+    return next.some((item, index) => item !== items[index]) ? next : items;
+  });
+}

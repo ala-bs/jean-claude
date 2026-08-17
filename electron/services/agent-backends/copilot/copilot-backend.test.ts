@@ -478,6 +478,46 @@ describe('CopilotBackend', () => {
     ).resolves.toEqual({ kind: 'approve-once' });
   });
 
+  it('swaps the rule snapshot mid-run and keeps persisted session rules', async () => {
+    const backend = createBackend();
+
+    const session = await backend.start(
+      createConfig({
+        permissionRules: [
+          { tool: 'bash', pattern: 'pnpm test', action: 'allow' },
+        ],
+        persistedSessionRules: { read: { 'src/**': 'allow' } },
+      }),
+      [{ type: 'text', text: 'hello' }],
+    );
+
+    backend.updatePermissionRules({
+      sessionId: session.sessionId,
+      rules: [{ tool: 'bash', pattern: 'pnpm test', action: 'deny' }],
+    });
+
+    await expect(
+      Promise.resolve(
+        getPermissionHandler()({
+          kind: 'shell',
+          toolCallId: 'perm-1',
+          fullCommandText: 'pnpm test',
+        }),
+      ),
+    ).resolves.toMatchObject({ kind: 'reject' });
+
+    // Persisted session rules survive the refresh.
+    await expect(
+      Promise.resolve(
+        getPermissionHandler()({
+          kind: 'read',
+          toolCallId: 'perm-2',
+          path: '/repo/src/a.ts',
+        }),
+      ),
+    ).resolves.toEqual({ kind: 'approve-once' });
+  });
+
   it('auto-denies permission requests denied by existing rules', async () => {
     const backend = createBackend();
 
@@ -1178,6 +1218,7 @@ describe('CopilotBackend', () => {
       {
         'Which branch?': 'dev',
       },
+      { questionKeys: ['Which branch?'] },
     );
 
     await expect(response).resolves.toEqual({
@@ -1213,6 +1254,7 @@ describe('CopilotBackend', () => {
       {
         wasFreeform: false,
         wasFreeformByQuestion: { 'Which branch?': false },
+        questionKeys: ['Which branch?'],
       },
     );
 
@@ -1222,7 +1264,42 @@ describe('CopilotBackend', () => {
     });
   });
 
-  it('infers fixed-choice answers as not freeform when metadata is absent', async () => {
+  it('resolves Decide for me for fixed-choice questions', async () => {
+    const backend = createBackend();
+    const session = await backend.start(createConfig(), [
+      { type: 'text', text: 'hello' },
+    ]);
+    const iterator = session.events[Symbol.asyncIterator]();
+
+    await iterator.next();
+    const response = getUserInputHandler()({
+      question: 'Which branch?',
+      choices: ['main', 'dev'],
+      allowFreeform: false,
+    });
+    const event = await iterator.next();
+    if (event.value?.type !== 'question') {
+      throw new Error('Expected question event');
+    }
+
+    await backend.respondToQuestion(
+      session.sessionId,
+      event.value.request.requestId,
+      { 'Which branch?': 'Decide for me' },
+      {
+        wasFreeform: true,
+        wasFreeformByQuestion: { 'Which branch?': true },
+        questionKeys: ['Which branch?'],
+      },
+    );
+
+    await expect(response).resolves.toEqual({
+      answer: 'Decide for me',
+      wasFreeform: true,
+    });
+  });
+
+  it('infers fixed-choice answers when optional metadata fields are absent', async () => {
     const backend = createBackend();
     const session = await backend.start(createConfig(), [
       { type: 'text', text: 'hello' },
@@ -1246,6 +1323,7 @@ describe('CopilotBackend', () => {
       {
         'Which branch?': 'dev',
       },
+      { questionKeys: ['Which branch?'] },
     );
 
     await expect(response).resolves.toEqual({
@@ -1281,6 +1359,7 @@ describe('CopilotBackend', () => {
       {
         wasFreeform: true,
         wasFreeformByQuestion: { 'Which branch?': true },
+        questionKeys: ['Which branch?'],
       },
     );
 
@@ -1315,6 +1394,7 @@ describe('CopilotBackend', () => {
         Environment: 'production',
         Confirm: 'yes',
       },
+      { questionKeys: ['Deploy details?'] },
     );
 
     await expect(response).resolves.toEqual({

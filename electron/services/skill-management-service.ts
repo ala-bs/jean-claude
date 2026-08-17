@@ -22,8 +22,11 @@ import { dbg } from '../lib/debug';
 import { isEnoent } from '../lib/fs';
 
 
+import {
+  JC_BUILTIN_SKILLS_DIR,
+  RETIRED_BUILTIN_SKILL_NAMES,
+} from './builtin-skills-service';
 import { getSourceProvenanceByInstalledPathMap } from './source-manifest-store';
-import { JC_BUILTIN_SKILLS_DIR } from './builtin-skills-service';
 
 
 type SupportedSkillBackendType = AgentBackendType;
@@ -175,8 +178,11 @@ function isPathInside({
   );
 }
 
-function isJcBuiltinSkillPath(targetPath: string): boolean {
-  return isPathInside({ rootPath: JC_BUILTIN_SKILLS_DIR, targetPath });
+function isJcBuiltinSkillPath(
+  targetPath: string,
+  builtinSkillsDir = JC_BUILTIN_SKILLS_DIR,
+): boolean {
+  return isPathInside({ rootPath: builtinSkillsDir, targetPath });
 }
 
 /** Converts a skill name into a safe directory name (lowercase, alphanumeric + dashes). */
@@ -352,6 +358,7 @@ async function discoverJcManagedUserSkills(): Promise<ManagedSkill[]> {
       withFileTypes: true,
     });
     for (const entry of entries) {
+      if (RETIRED_BUILTIN_SKILL_NAMES.has(entry.name)) continue;
       if (entry.name.startsWith('.')) continue;
       if (!entry.isDirectory()) continue;
 
@@ -406,6 +413,7 @@ async function discoverBuiltinSkills(): Promise<ManagedSkill[]> {
       withFileTypes: true,
     });
     for (const entry of entries) {
+      if (RETIRED_BUILTIN_SKILL_NAMES.has(entry.name)) continue;
       if (entry.name.startsWith('.')) continue;
       if (!entry.isDirectory()) continue;
 
@@ -453,10 +461,18 @@ async function discoverBuiltinSkills(): Promise<ManagedSkill[]> {
  * Jean-Claude managed builtin skill storage. User, foreign, and real entries
  * are left untouched.
  */
-export async function syncBuiltinSkillSymlinks(): Promise<void> {
+export async function syncBuiltinSkillSymlinks({
+  builtinSkillsDir = JC_BUILTIN_SKILLS_DIR,
+  backendSkillsDirs = Object.values(SKILL_PATH_CONFIGS).map(
+    (config) => config.userSkillsDir,
+  ),
+}: {
+  builtinSkillsDir?: string;
+  backendSkillsDirs?: string[];
+} = {}): Promise<void> {
   let entries: Array<{ name: string; isDirectory: () => boolean }>;
   try {
-    entries = await fs.readdir(JC_BUILTIN_SKILLS_DIR, { withFileTypes: true });
+    entries = await fs.readdir(builtinSkillsDir, { withFileTypes: true });
   } catch (error) {
     if (!isEnoent(error)) {
       dbg.skill('Error reading builtin skills dir for symlink sync: %O', error);
@@ -465,23 +481,24 @@ export async function syncBuiltinSkillSymlinks(): Promise<void> {
   }
 
   for (const entry of entries) {
+    if (RETIRED_BUILTIN_SKILL_NAMES.has(entry.name)) continue;
     if (entry.name.startsWith('.')) continue;
     if (!entry.isDirectory()) continue;
 
-    const canonicalPath = path.join(JC_BUILTIN_SKILLS_DIR, entry.name);
+    const canonicalPath = path.join(builtinSkillsDir, entry.name);
 
-    for (const config of Object.values(SKILL_PATH_CONFIGS)) {
-      const symlinkPath = path.join(config.userSkillsDir, entry.name);
+    for (const backendSkillsDir of backendSkillsDirs) {
+      const symlinkPath = path.join(backendSkillsDir, entry.name);
 
       try {
-        await fs.mkdir(config.userSkillsDir, { recursive: true });
+        await fs.mkdir(backendSkillsDir, { recursive: true });
 
         if (await isSymlink(symlinkPath)) {
           const targetPath = await readSymlinkTargetPath(symlinkPath);
           if (path.resolve(targetPath) === path.resolve(canonicalPath)) {
             continue;
           }
-          if (!isJcBuiltinSkillPath(targetPath)) {
+          if (!isJcBuiltinSkillPath(targetPath, builtinSkillsDir)) {
             dbg.skill(
               'Skipping builtin symlink %s: non-builtin symlink target exists (%s)',
               symlinkPath,

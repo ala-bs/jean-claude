@@ -20,6 +20,11 @@ import { Kbd } from '@/common/ui/kbd';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useMemoryUsage } from '@/hooks/use-memory-usage';
+import { Sparkline as BaseSparkline } from '@/common/ui/sparkline';
+import {
+  formatCpuPercent as formatCpu,
+  formatResourceBytes,
+} from '@/lib/format-resource-usage';
 
 
 let peakTotalAgentCpu = 100;
@@ -29,16 +34,7 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
 }
 
-function formatBytes(bytes: number): string {
-  const megabytes = bytes / 1_048_576;
-  if (megabytes > 1000) return `${(megabytes / 1000).toFixed(1)} GB`;
-  if (megabytes >= 1) return `${megabytes.toFixed(0)} MB`;
-  return `${(bytes / 1_024).toFixed(0)} KB`;
-}
-
-function formatCpu(value: number): string {
-  return `${Math.max(0, value).toFixed(1)}%`;
-}
+const formatBytes = formatResourceBytes;
 
 function formatElapsed(sampledAt: string): string {
   const seconds = Math.max(
@@ -50,7 +46,7 @@ function formatElapsed(sampledAt: string): string {
 }
 
 function formatCompactBytes(bytes: number): string {
-  return formatBytes(bytes).replace(' ', '');
+  return formatResourceBytes(bytes, { compact: true });
 }
 
 function snapshotRootKey(snapshot: AgentResourceSnapshot): string {
@@ -94,21 +90,6 @@ function getUniqueProcessSamples(snapshots: AgentResourceSnapshot[]) {
   return { latestByRoot, totals };
 }
 
-function sparkPath(values: number[], width: number, height: number) {
-  if (values.length === 0) return '';
-  const max = Math.max(...values, 1);
-  const min = Math.min(...values, 0);
-  const range = Math.max(max - min, 1);
-  return values
-    .map((value, index) => {
-      const x =
-        values.length === 1 ? width : (index / (values.length - 1)) * width;
-      const y = height - ((value - min) / range) * height;
-      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(' ');
-}
-
 function Sparkline({
   className,
   fillClassName,
@@ -122,31 +103,22 @@ function Sparkline({
   width?: number;
   height?: number;
 }) {
-  const path = sparkPath(values, width, height);
-  const areaPath = path ? `${path} L ${width} ${height} L 0 ${height} Z` : '';
-
   return (
-    <svg
+    <BaseSparkline
+      data={values}
       width={width}
       height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      aria-hidden
+      strokeWidth={1.6}
+      // Zero-based with a floor of 1, so idle series stay flat instead of
+      // amplifying sub-unit noise into a full-height zigzag.
+      max={Math.max(...values, 1)}
+      strokeClassName={`resource-sparkline ${className}`}
+      strokePathLength={1}
+      fillClassName={fillClassName}
+      fillOpacity={0}
+      shrink={false}
       className="w-full overflow-hidden"
-    >
-      {areaPath ? <path d={areaPath} className={fillClassName} /> : null}
-      {path ? (
-        <path
-          d={path}
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.6"
-          pathLength={1}
-          className={`resource-sparkline ${className}`}
-        />
-      ) : null}
-    </svg>
+    />
   );
 }
 

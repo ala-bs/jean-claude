@@ -5,6 +5,9 @@ import { api } from '@/lib/api';
 
 
 // Hoisted outside component to avoid recreation on every render
+const STEP_NOT_FOUND_RETRY_MS = 400;
+const STUCK_LOADING_RETRY_MS = 4000;
+
 const DEFAULT_TASK_STATE: TaskState = {
   taskId: '',
   messages: [],
@@ -42,6 +45,8 @@ export function useTaskMessages({
   const fetchingRef = useRef<string | null>(null);
   // Track which step we've done a sync check for (only relevant when already loaded)
   const syncCheckedRef = useRef<string | null>(null);
+  // Incremented per fetch so late responses can be discarded
+  const fetchGenerationRef = useRef(0);
 
   const fetchPendingRequest = useCallback(async () => {
     if (!enabled || !stepId) return;
@@ -90,16 +95,36 @@ export function useTaskMessages({
   const fetchMessages = useCallback(() => {
     if (!enabled || !stepId) return;
     fetchingRef.current = stepId;
+    // Guards against stale responses clobbering newer state (refetch/unload,
+    // step switch, or an IPC status update that landed while in flight).
+    const generation = ++fetchGenerationRef.current;
+    const isStale = () => generation !== fetchGenerationRef.current;
     Promise.all([
       api.agent.getMessages(stepId),
       api.steps.findById(stepId),
     ])
-      .then(([messages, step]) => {
-        if (step) {
-          loadStep(stepId, taskId, messages, step.status);
+      .then(async ([messages, step]) => {
+        if (isStale()) return;
+        let resolvedStep = step;
+        if (!resolvedStep) {
+          // Step row may not be committed yet — retry once before giving up.
+          await new Promise((resolve) =>
+            setTimeout(resolve, STEP_NOT_FOUND_RETRY_MS),
+          );
+          if (isStale()) return;
+          resolvedStep = await api.steps.findById(stepId);
+          if (isStale()) return;
+        }
+        if (resolvedStep) {
+          loadStep(stepId, taskId, messages, resolvedStep.status);
           // Also fetch pending request after loading step
           fetchPendingRequest();
+          return;
         }
+        // Still missing: surface it as an error instead of leaving the step
+        // unloaded forever (which strands the panel on "Loading...").
+        console.error('Step not found while loading messages', stepId);
+        setStatus(stepId, 'errored', 'Step not found', taskId);
       })
       .catch((error: unknown) => {
         console.error('Failed to fetch task messages', error);
@@ -185,6 +210,26 @@ export function useTaskMessages({
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
   }, [enabled, stepId, isLoaded, stepState?.status, fetchPendingRequest]);
+
+  // Watchdog: if the step never lands in the store (stale-aborted fetch, a
+  // fetch that was never started), log state and retry instead of stranding
+  // the feed on a spinner forever. Cleared as soon as the step loads.
+  useEffect(() => {
+    if (!enabled || !stepId || isLoaded) return;
+    const timer = setInterval(() => {
+      // A slow-but-live fetch is left alone (and not logged): retrying would
+      // bump the generation and discard a nearly-complete response. Only
+      // stranded steps — fetch aborted as stale, or never started — are revived.
+      if (fetchingRef.current === stepId) return;
+      console.warn('[task-messages] step stranded without a fetch, retrying', {
+        stepId,
+        taskId,
+        generation: fetchGenerationRef.current,
+      });
+      fetchMessages();
+    }, STUCK_LOADING_RETRY_MS);
+    return () => clearInterval(timer);
+  }, [enabled, stepId, taskId, isLoaded, fetchMessages]);
 
   const state = stepState ?? DEFAULT_TASK_STATE;
 

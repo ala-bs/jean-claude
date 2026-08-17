@@ -33,7 +33,7 @@ import {
 } from './yaml-pipeline-parser';
 
 import { azureHtmlToMarkdown } from './azure-html-to-markdown';
-import { dbg } from '../lib/debug';
+import { createDebug, dbg } from '../lib/debug';
 import { ProviderRepository } from '../database/repositories/providers';
 import { sendGlobalPromptToWindow } from './global-prompt-service';
 import { TokenRepository } from '../database/repositories/tokens';
@@ -133,6 +133,16 @@ export interface WorkItemComment {
   attachmentBaseUrl?: string;
   createdBy: string;
   createdDate: string;
+  reactions?: WorkItemCommentReaction[];
+}
+
+export type WorkItemCommentReactionType =
+  | 'like' | 'dislike' | 'heart' | 'hooray' | 'smile' | 'confused';
+
+export interface WorkItemCommentReaction {
+  type: WorkItemCommentReactionType;
+  count: number;
+  isCurrentUserEngaged: boolean;
 }
 
 export interface AzureDevOpsIteration {
@@ -598,6 +608,7 @@ type PullRequestStatusMetadata = {
     uniqueName: string;
     imageUrl?: string;
   }>;
+  isWaitingForAuthor?: boolean;
 };
 
 export async function getPullRequestStatuses(params: {
@@ -684,6 +695,9 @@ export async function getPullRequestStatuses(params: {
                   uniqueName: r.uniqueName,
                   imageUrl: r.imageUrl,
                 })),
+              isWaitingForAuthor: (pr.reviewers ?? []).some(
+                (r) => !r.isContainer && mapVoteToStatus(r.vote) === 'waiting',
+              ),
             },
           );
         } catch (err) {
@@ -1449,7 +1463,7 @@ export async function getWorkItemComments(params: {
   workItemId: number;
 }): Promise<WorkItemComment[]> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
-  const baseUrl = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText`;
+  const baseUrl = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=all`;
   const comments: {
     id: number;
     workItemId: number;
@@ -1457,6 +1471,7 @@ export async function getWorkItemComments(params: {
     renderedText?: string;
     createdBy?: { displayName?: string };
     createdDate?: string;
+    reactions?: WorkItemCommentReaction[];
   }[] = [];
   const seenCommentIds = new Set<number>();
   const seenContinuationTokens = new Set<string>();
@@ -1522,8 +1537,30 @@ export async function getWorkItemComments(params: {
       attachmentBaseUrl,
       createdBy: c.createdBy?.displayName ?? 'Unknown',
       createdDate: c.createdDate ?? '',
+      reactions: c.reactions ?? [],
     };
   });
+}
+
+export async function setWorkItemCommentReaction(params: {
+  providerId: string;
+  projectName: string;
+  workItemId: number;
+  commentId: number;
+  reactionType: WorkItemCommentReactionType;
+  engaged: boolean;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const url = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments/${params.commentId}/reactions/${params.reactionType}?api-version=7.1-preview.1`;
+  const response = await fetch(url, {
+    method: params.engaged ? 'PUT' : 'DELETE',
+    headers: { Authorization: authHeader },
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to update work item comment reaction (${response.status} ${response.statusText}) ${params.engaged ? 'PUT' : 'DELETE'} ${url}: ${await response.text()}`,
+    );
+  }
 }
 
 function getRenderedCommentText(comment: {
@@ -1874,7 +1911,16 @@ export async function updateWorkItemComment(params: {
     },
   );
   if (!response.ok) {
-    throw new Error(`Failed to update comment for work item ${params.workItemId}: ${await response.text()}`);
+    const body = await response.text();
+    console.error('[azure-devops] updateWorkItemComment failed', {
+      status: response.status,
+      workItemId: params.workItemId,
+      commentId: params.commentId,
+      body: body.slice(0, 500),
+    });
+    throw new Error(
+      `Failed to update comment for work item ${params.workItemId} (HTTP ${response.status}): ${body.slice(0, 300)}`,
+    );
   }
   const c: { id: number; workItemId?: number; text?: string; renderedText?: string; createdBy?: { displayName?: string }; createdDate?: string } = await response.json();
   const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({ orgName, projectName: params.projectName });
@@ -3101,6 +3147,8 @@ export async function removePullRequestTag(params: {
   }
 }
 
+const AZURE_ALLOWED_ATTACHMENT_EXTENSIONS = new Set(['png', 'gif', 'jpg']);
+
 export async function uploadPullRequestAttachment(params: {
   providerId: string;
   projectId: string;
@@ -3119,9 +3167,34 @@ export async function uploadPullRequestAttachment(params: {
     .digest('hex')
     .slice(0, 8);
 
+  // The renderer's claimed mime/extension can drift from the actual bytes
+  // (canvas re-encoding, fallbacks). Azure serves attachments with a content
+  // type derived from the file name, so sniff the bytes and make them win.
+  const sniffed = sniffImageExtension(data);
+  // Azure rejects anything outside its extension allow list, so fail with a
+  // clear message instead of uploading a name it will refuse.
+  if (sniffed && !AZURE_ALLOWED_ATTACHMENT_EXTENSIONS.has(sniffed)) {
+    throw new Error(
+      `Unsupported attachment format "${sniffed}": Azure DevOps only accepts PNG, GIF, JPG or JPEG images.`,
+    );
+  }
+  const requestedName = params.fileName || 'image.png';
+  const baseName = sniffed
+    ? `${requestedName.replace(/\.[^./\\]+$/, '') || 'image'}.${sniffed}`
+    : requestedName;
+
+  dbg.azure('pr-attachment:upload', {
+    pullRequestId: params.pullRequestId,
+    requestedName,
+    requestedMimeType: params.mimeType,
+    sniffedExtension: sniffed ?? 'unknown',
+    bytes: data.byteLength,
+    magic: data.subarray(0, 12).toString('hex'),
+  });
+
   for (let attempt = 0; attempt < 10; attempt++) {
     const fileName = getPullRequestAttachmentFileName(
-      params.fileName,
+      baseName,
       hashSuffix,
       attempt,
     );
@@ -3139,6 +3212,12 @@ export async function uploadPullRequestAttachment(params: {
 
     if (!response.ok) {
       const error = await response.text();
+      dbg.azure('pr-attachment:upload-failed', {
+        fileName,
+        attempt,
+        status: response.status,
+        error: error.slice(0, 500),
+      });
       if (isDuplicateAttachmentNameError(error) && attempt < 9) {
         continue;
       }
@@ -3149,6 +3228,18 @@ export async function uploadPullRequestAttachment(params: {
     if (!attachment.url) {
       throw new Error('Azure DevOps did not return an attachment URL');
     }
+
+    dbg.azure('pr-attachment:uploaded', {
+      fileName,
+      attempt,
+      url: attachment.url,
+    });
+
+    await verifyAttachmentContentType({
+      attachmentUrl: attachment.url,
+      authHeader,
+      expectedBytes: data.byteLength,
+    });
 
     return { url: attachment.url };
   }
@@ -3167,6 +3258,96 @@ function getPullRequestAttachmentFileName(
   if (extensionIndex <= 0) return `${fileName}-${suffix}`;
 
   return `${fileName.slice(0, extensionIndex)}-${suffix}${fileName.slice(extensionIndex)}`;
+}
+
+/**
+ * Read the attachment back so a wrong served content type shows up in the logs
+ * instead of only as a broken image in the Azure UI. Debug-gated (HEAD only) so
+ * it costs nothing when `jc:azure` logging is disabled.
+ */
+async function verifyAttachmentContentType(params: {
+  attachmentUrl: string;
+  authHeader: string;
+  expectedBytes: number;
+}): Promise<void> {
+  if (!createDebug.enabled('jc:azure')) return;
+
+  // Never send the PAT to a host Azure didn't vouch for.
+  let url: URL;
+  try {
+    url = new URL(params.attachmentUrl);
+  } catch {
+    dbg.azure('pr-attachment:verify-skipped', { reason: 'invalid-url' });
+    return;
+  }
+  const isAllowedHost =
+    url.protocol === 'https:' &&
+    url.username === '' &&
+    url.password === '' &&
+    (url.hostname === 'dev.azure.com' ||
+      url.hostname.endsWith('.visualstudio.com'));
+  if (!isAllowedHost) {
+    dbg.azure('pr-attachment:verify-skipped', {
+      reason: 'disallowed-host',
+      host: url.hostname,
+    });
+    return;
+  }
+
+  try {
+    const verify = await fetch(url.href, {
+      method: 'HEAD',
+      redirect: 'manual',
+      headers: { Authorization: params.authHeader },
+    });
+    // HEAD has no body, but cancel defensively so no socket is pinned.
+    await verify.body?.cancel();
+    dbg.azure('pr-attachment:verify', {
+      url: url.href,
+      status: verify.status,
+      contentType: verify.headers.get('content-type'),
+      contentLength: verify.headers.get('content-length'),
+      expectedBytes: params.expectedBytes,
+    });
+  } catch (verifyError) {
+    dbg.azure('pr-attachment:verify-failed', {
+      url: url.href,
+      error: String(verifyError),
+    });
+  }
+}
+
+/**
+ * Detect the real image format from magic bytes. Authoritative over the
+ * caller-provided mime type, since Azure derives the served content type from
+ * the attachment file name.
+ */
+export function sniffImageExtension(data: Buffer): string | null {
+  const ascii = (start: number, end: number) =>
+    data.subarray(start, end).toString('ascii');
+
+  if (data.length >= 8 && data[0] === 0x89 && ascii(1, 4) === 'PNG')
+    return 'png';
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8) return 'jpg';
+  if (data.length >= 6 && ascii(0, 3) === 'GIF') return 'gif';
+  if (data.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP')
+    return 'webp';
+  if (data.length >= 12 && ascii(4, 8) === 'ftyp') {
+    // Check the major brand *and* the compatible-brands list: AVIF files are
+    // commonly stamped `mif1` as the major brand with `avif` as compatible.
+    const boxSize = data.readUInt32BE(0);
+    const brandsEnd = Math.min(
+      data.length,
+      boxSize > 8 && boxSize <= data.length ? boxSize : data.length,
+    );
+    const brands = ascii(8, brandsEnd);
+    if (/avif|avis/.test(brands)) return 'avif';
+    const majorBrand = ascii(8, 12);
+    if (majorBrand.startsWith('hei') || majorBrand.startsWith('mif'))
+      return 'heic';
+  }
+  if (data.length >= 4 && /^\s*(<\?xml|<svg)/.test(ascii(0, 64))) return 'svg';
+  return null;
 }
 
 function isDuplicateAttachmentNameError(error: string) {
@@ -4223,6 +4404,7 @@ export async function getPullRequestActivityMetadata(params: {
   lastThreadActivityDate: string | null;
   activeThreadCount: number;
   unresolvedCommentCount: number;
+  resolvedThreadCount: number;
 }> {
   const [commits, threads] = await Promise.all([
     getPullRequestCommits(params),
@@ -4258,12 +4440,14 @@ export async function getPullRequestActivityMetadata(params: {
     lastThreadActivityDate,
     activeThreadCount: threadCounts.active,
     unresolvedCommentCount: threadCounts.unresolvedComments,
+    resolvedThreadCount: threadCounts.resolved,
   };
 }
 
 function getPullRequestThreadCounts(threads: AzureDevOpsCommentThread[]) {
   let active = 0;
   let unresolvedComments = 0;
+  let resolved = 0;
 
   for (const thread of threads) {
     const comments = thread.comments.filter(
@@ -4276,10 +4460,12 @@ function getPullRequestThreadCounts(threads: AzureDevOpsCommentThread[]) {
     if (!thread.isDeleted && comments.length > 0 && isActive) {
       active++;
       unresolvedComments += comments.length;
+    } else if (!thread.isDeleted && comments.length > 0) {
+      resolved++;
     }
   }
 
-  return { active, unresolvedComments };
+  return { active, unresolvedComments, resolved };
 }
 
 export async function addThreadReply(params: {

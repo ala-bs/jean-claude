@@ -20,10 +20,12 @@ export function WorkItemTagEditor({
   value,
   suggestions,
   onSave,
+  readOnly = false,
 }: {
   value: string;
   suggestions: string[];
   onSave: (value: string) => Promise<unknown>;
+  readOnly?: boolean;
 }) {
   const id = useId();
   const listboxId = `work-item-tags-${id}`;
@@ -57,11 +59,15 @@ export function WorkItemTagEditor({
         (!normalizedQuery || suggestion.toLocaleLowerCase().includes(normalizedQuery)),
     );
   }, [query, selectedKeys, suggestions]);
+  const customTag = query.trim();
+  const canCreateCustomTag =
+    !!customTag && !selectedKeys.has(customTag.toLocaleLowerCase());
+  const optionCount = filteredSuggestions.length + (canCreateCustomTag ? 1 : 0);
   const activeFocusedIndex = Math.min(
     focusedIndex,
-    Math.max(filteredSuggestions.length - 1, 0),
+    Math.max(optionCount - 1, 0),
   );
-  const showSuggestions = isOpen && filteredSuggestions.length > 0;
+  const showSuggestions = isOpen && optionCount > 0;
 
   const close = () => {
     setIsOpen(false);
@@ -112,6 +118,8 @@ export function WorkItemTagEditor({
     void saveTags([...tags, ...tag.split(/[;,]/)]);
   };
 
+  if (readOnly && tags.length === 0) return null;
+
   return (
     <div className="relative min-w-0">
       <div
@@ -125,18 +133,20 @@ export function WorkItemTagEditor({
             title={tag}
           >
             <span className="max-w-32 truncate">{tag}</span>
-            <button
-              type="button"
-              disabled={isSaving}
-              onClick={() => void saveTags(tags.filter((item) => item !== tag))}
-              className="text-acc-ink/60 hover:text-acc-ink disabled:opacity-40"
-              aria-label={`Remove ${tag} tag`}
-            >
-              <X className="h-2.5 w-2.5" />
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={() => void saveTags(tags.filter((item) => item !== tag))}
+                className="text-acc-ink/60 hover:text-acc-ink disabled:opacity-40"
+                aria-label={`Remove ${tag} tag`}
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            )}
           </span>
         ))}
-        {isOpen ? (
+        {!readOnly && (isOpen ? (
           <input
             ref={inputRef}
             role="combobox"
@@ -154,19 +164,19 @@ export function WorkItemTagEditor({
               setFocusedIndex(0);
             }}
             onKeyDown={(event) => {
-              if (event.key === 'ArrowDown' && filteredSuggestions.length > 0) {
+              if (event.key === 'ArrowDown' && optionCount > 0) {
                 event.preventDefault();
-                setFocusedIndex((index) => (index + 1) % filteredSuggestions.length);
-              } else if (event.key === 'ArrowUp' && filteredSuggestions.length > 0) {
+                setFocusedIndex((index) => (index + 1) % optionCount);
+              } else if (event.key === 'ArrowUp' && optionCount > 0) {
                 event.preventDefault();
                 setFocusedIndex((index) =>
-                  index <= 0 ? filteredSuggestions.length - 1 : index - 1,
+                  index <= 0 ? optionCount - 1 : index - 1,
                 );
               } else if (event.key === 'Enter') {
                 event.preventDefault();
                 const suggestion = filteredSuggestions[activeFocusedIndex];
                 if (suggestion) addTag(suggestion);
-                else if (query.trim()) addTag(query);
+                else if (canCreateCustomTag) addTag(customTag);
               } else if (event.key === ',' || event.key === ';') {
                 event.preventDefault();
                 if (query.trim()) addTag(query);
@@ -191,10 +201,10 @@ export function WorkItemTagEditor({
           >
             + tag
           </button>
-        )}
-        {isSaving && <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />}
+        ))}
+        {!readOnly && isSaving && <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />}
       </div>
-      {error && (
+      {!readOnly && error && (
         <span role="alert" className="text-status-fail absolute top-full left-0 z-10 mt-1 text-[10px]">
           {error}
         </span>
@@ -233,6 +243,26 @@ export function WorkItemTagEditor({
               {suggestion}
             </button>
           ))}
+          {canCreateCustomTag && (
+            <button
+              id={`${listboxId}-option-${filteredSuggestions.length}`}
+              type="button"
+              role="option"
+              aria-selected={
+                activeFocusedIndex === filteredSuggestions.length
+              }
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setFocusedIndex(filteredSuggestions.length)}
+              onClick={() => addTag(customTag)}
+              className={`text-ink-1 block w-full truncate px-2.5 py-1.5 text-left text-xs ${
+                activeFocusedIndex === filteredSuggestions.length
+                  ? 'bg-bg-3'
+                  : 'hover:bg-bg-2'
+              }`}
+            >
+              Create "{customTag}"
+            </button>
+          )}
         </div>,
         document.body,
       )}

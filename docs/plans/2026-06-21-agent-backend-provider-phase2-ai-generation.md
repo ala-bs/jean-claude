@@ -156,4 +156,3 @@ Expected: pass.
 **Step 8: No commit**
 
 Leave changes uncommitted.
-

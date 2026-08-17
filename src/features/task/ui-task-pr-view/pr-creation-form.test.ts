@@ -7,15 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
 const {
+  addPrFileCommentsSpy,
   createPullRequestSpy,
   getPullRequestSpy,
   processImageFileSpy,
+  taskSummaryState,
   updatePullRequestDescriptionSpy,
   uploadPullRequestAttachmentSpy,
 } = vi.hoisted(() => ({
+  addPrFileCommentsSpy: vi.fn(),
   createPullRequestSpy: vi.fn(),
   getPullRequestSpy: vi.fn(),
   processImageFileSpy: vi.fn(),
+  taskSummaryState: { value: undefined as unknown },
   updatePullRequestDescriptionSpy: vi.fn(),
   uploadPullRequestAttachmentSpy: vi.fn(),
 }));
@@ -30,7 +34,7 @@ vi.mock('@/features/common/ui-video-gif-converter', () => ({
 }));
 
 vi.mock('@/hooks/use-create-pull-request', () => ({
-  useAddPrFileComments: () => ({ mutateAsync: vi.fn() }),
+  useAddPrFileComments: () => ({ mutateAsync: addPrFileCommentsSpy }),
   useCreatePullRequest: () => ({ mutateAsync: createPullRequestSpy }),
 }));
 
@@ -41,7 +45,6 @@ vi.mock('@/lib/api', () => ({
       uploadPullRequestAttachment: uploadPullRequestAttachmentSpy,
       getPullRequest: getPullRequestSpy,
     },
-    preferenceMemory: { recordEvidence: vi.fn() },
   },
 }));
 
@@ -51,7 +54,7 @@ vi.mock('@/hooks/use-task-summary', () => ({
     isPending: false,
     mutateAsync: vi.fn(),
   }),
-  useTaskSummary: () => ({ data: undefined }),
+  useTaskSummary: () => ({ data: taskSummaryState.value }),
 }));
 
 vi.mock('@/hooks/use-settings', () => ({
@@ -105,11 +108,20 @@ vi.mock('@/stores/toasts', () => ({
     selector({ addToast: vi.fn() }),
 }));
 
-vi.mock('@/lib/image-utils', () => ({
-  MAX_FILE_SIZE: 10 * 1024 * 1024,
-  MAX_IMAGES: 5,
-  processImageFile: processImageFileSpy,
-}));
+vi.mock('@/lib/image-utils', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/image-utils')>(
+      '@/lib/image-utils',
+    );
+  return {
+    MAX_FILE_SIZE: 10 * 1024 * 1024,
+    MAX_IMAGES: 5,
+    getAttachmentFileName: actual.getAttachmentFileName,
+    getAttachmentPayload: actual.getAttachmentPayload,
+    getAzureAttachmentPayload: actual.getAzureAttachmentPayload,
+    processImageFile: processImageFileSpy,
+  };
+});
 
 import { PrCreationForm } from './pr-creation-form';
 
@@ -163,6 +175,8 @@ describe('PrCreationForm image previews', () => {
     getPullRequestSpy.mockResolvedValue({
       description: 'Generated description',
     });
+    addPrFileCommentsSpy.mockResolvedValue(undefined);
+    taskSummaryState.value = undefined;
     vi.stubGlobal('URL', {
       createObjectURL: createObjectUrl,
       revokeObjectURL: revokeObjectUrl,
@@ -304,6 +318,57 @@ describe('PrCreationForm image previews', () => {
           /Generated description[\s\S]*https:\/\/dev\.azure\.com\/attachments\/converted-demo\.gif/,
         ),
       }),
+    );
+  });
+
+  it('posts AI annotations without local project capture metadata', async () => {
+    taskSummaryState.value = {
+      summary: { whatIDid: 'Changed auth', keyDecisions: 'Kept API stable' },
+      annotations: [
+        {
+          filePath: 'src/auth.ts',
+          lineNumber: 12,
+          explanation: 'AI-generated annotation',
+        },
+      ],
+    };
+    await act(async () => {
+      root.render(
+        createElement(PrCreationForm, {
+          taskId: 'task-id',
+          projectId: 'project-id',
+          onSuccess: vi.fn(),
+          onCancel: vi.fn(),
+        }),
+      );
+    });
+    const fillButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('Fill from Summary'),
+    );
+    if (!fillButton) throw new Error('Fill from Summary button not found');
+    await act(async () => fillButton.click());
+
+    const createButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('Create PR'),
+    );
+    if (!createButton) throw new Error('Create PR button not found');
+    await act(async () => createButton.click());
+
+    await vi.waitFor(() => {
+      expect(addPrFileCommentsSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          comments: [
+            {
+              filePath: 'src/auth.ts',
+              line: 12,
+              content: 'jean-claude: AI-generated annotation',
+            },
+          ],
+        }),
+      );
+    });
+    expect(addPrFileCommentsSpy.mock.calls[0]?.[0]).not.toHaveProperty(
+      'localProjectId',
     );
   });
 });

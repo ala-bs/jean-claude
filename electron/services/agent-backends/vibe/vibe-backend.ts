@@ -10,6 +10,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
+import type { QuestionResponseMetadata } from '@shared/agent-types';
 import type { ResolvedPermissionRule } from '@shared/permission-types';
 
 import {
@@ -267,7 +268,22 @@ export class VibeBackend implements AgentBackend {
     _sessionId: string,
     _requestId: string,
     _answer: Record<string, string>,
+    _metadata: QuestionResponseMetadata,
   ): Promise<void> {}
+
+  /** Replace the permission-rule snapshot used for runtime evaluation. */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.permissionRules = rules;
+    session.normalizationCtx.permissionRules = rules;
+  }
 
   async setMode(
     sessionId: string,
@@ -435,6 +451,9 @@ export class VibeBackend implements AgentBackend {
       session.permissionRules,
       toolMatch.tool,
       toolMatch.matchValue,
+      toolMatch.tool === 'bash'
+        ? String(tool.input.command ?? '')
+        : undefined,
     );
     if (permissionDecision.action !== 'ask') {
       const optionId =
@@ -491,6 +510,19 @@ export class VibeBackend implements AgentBackend {
         requestId,
         toolName: tool.toolName,
         input: tool.input,
+        permissionEvaluation: {
+          action: permissionDecision.action,
+          matchValue: toolMatch.matchValue,
+          ...(permissionDecision.matchedRule
+            ? {
+                matchedRule: {
+                  tool: permissionDecision.matchedRule.tool,
+                  pattern: permissionDecision.matchedRule.pattern,
+                  action: permissionDecision.matchedRule.action,
+                },
+              }
+            : {}),
+        },
         description:
           stringOrUndefined(params.description) ??
           stringOrUndefined(params.title) ??

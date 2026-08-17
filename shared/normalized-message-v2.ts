@@ -125,6 +125,7 @@ export type NormalizedToolUse = {
           before?: string;
           after?: string;
         }[];
+        isTurnSummary?: boolean;
       };
       result?: {
         success: boolean;
@@ -166,6 +167,7 @@ export type NormalizedToolUse = {
           before?: string;
           after?: string;
         }[];
+        isTurnSummary?: boolean;
       };
       result?: {
         changes: {
@@ -259,6 +261,25 @@ export interface NormalizedPermissionRequest {
   toolName: string;
   input: Record<string, unknown>;
   description?: string;
+  permissionEvaluation?: {
+    action: 'allow' | 'ask' | 'deny';
+    matchValue?: string;
+    matchedRule?: {
+      tool: string;
+      pattern: string;
+      action: 'allow' | 'ask' | 'deny';
+    };
+    /** Per-subcommand breakdown for compound bash commands (`&&`, `;`, `|`, `||`). */
+    subCommands?: Array<{
+      command: string;
+      action: 'allow' | 'ask' | 'deny';
+      matchedRule?: {
+        tool: string;
+        pattern: string;
+        action: 'allow' | 'ask' | 'deny';
+      };
+    }>;
+  };
   sessionAllowButton?: {
     label: string;
     toolsToAllow: string[];
