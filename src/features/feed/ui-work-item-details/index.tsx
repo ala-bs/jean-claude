@@ -13,37 +13,55 @@ import {
   Loader2,
   MessagesSquare,
 } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
-import { diffWordsWithSpace } from 'diff';
 import type { ReactNode } from 'react';
 
 import type {
   AzureDevOpsPullRequestStatus,
   AzureDevOpsWorkItem,
-  WorkItemHistoryEntry,
 } from '@/lib/api';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
 import {
+  getOwnerColor,
+  normalizeOwnerName,
+} from '@/features/work-item/utils-owner-color';
+import {
   useAddWorkItemComment,
+  useBoardColumns,
+  useIterations,
   useLinkedPullRequestStatuses,
   useRelatedTestCases,
+  useUpdateWorkItemComment,
+  useUpdateWorkItemField,
   useUpdateWorkItemState,
   useWorkItemById,
   useWorkItemComments,
   useWorkItemHistory,
+  useWorkItemOwners,
   useWorkItemsByIds,
   useWorkItemStates,
 } from '@/hooks/use-work-items';
 import { AzureHtmlContent } from '@/features/common/ui-azure-html-content';
 import { Chip } from '@/common/ui/chip';
-import { formatRelativeTime } from '@/lib/time';
 import { Modal } from '@/common/ui/modal';
 import { PrDetail } from '@/features/pull-request/ui-pr-detail';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useProject } from '@/hooks/use-projects';
+import { UserAvatar } from '@/common/ui/user-avatar';
 import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
+import { WorkItemBoardColumnEditor } from '@/features/work-item/ui-work-item-board-column-editor';
 import { WorkItemComments } from '@/features/work-item/ui-work-item-comments';
+import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
+import { WorkItemHistory } from '@/features/work-item/ui-work-item-history';
+import { EditableMetadataValue as WorkItemMetadataEditor } from '@/features/work-item/ui-work-item-preview';
 
 type DetailsTab = 'comments' | 'history' | 'test-cases';
 
@@ -169,6 +187,228 @@ function EditableStateBadge({
   );
 }
 
+export function getOwnerOptions(
+  owners: Array<{ displayName: string; value: string }>,
+  currentOwner?: string,
+  currentOwnerValue?: string,
+): Array<{ displayName: string; value: string }> {
+  const ownersByKey = new Map<
+    string,
+    { displayName: string; value: string }
+  >();
+  const currentValue = currentOwnerValue?.trim() || currentOwner?.trim();
+  if (currentOwner?.trim() && currentValue) {
+    ownersByKey.set(normalizeOwnerName(currentValue), {
+      displayName: currentOwner.trim(),
+      value: currentValue,
+    });
+  }
+  for (const owner of owners) {
+    const displayName = owner.displayName.trim();
+    const value = owner.value.trim();
+    if (!displayName || !value) continue;
+    const normalized = normalizeOwnerName(value);
+    if (!ownersByKey.has(normalized)) {
+      ownersByKey.set(normalized, { displayName, value });
+    }
+  }
+  const ownersList = [...ownersByKey.values()];
+  const current = currentValue ? ownersList.shift() : undefined;
+  ownersList.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return [
+    { displayName: 'Unassigned', value: '' },
+    ...(current ? [current] : []),
+    ...ownersList,
+  ];
+}
+
+function EditableOwner({
+  owner,
+  ownerValue,
+  options,
+  disabled,
+  error,
+  onRetry,
+  providerId,
+  workItemId,
+}: {
+  owner?: string;
+  ownerValue?: string;
+  options: Array<{ displayName: string; value: string }>;
+  disabled: boolean;
+  error: string | null;
+  onRetry: () => void;
+  providerId: string;
+  workItemId: number;
+}) {
+  const updateField = useUpdateWorkItemField();
+  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
+  const currentOwner = owner ?? '';
+  const currentOwnerValue = ownerValue ?? currentOwner;
+
+  const handleSelect = useCallback(
+    (nextOwner: { displayName: string; value: string }) => {
+      dropdownRef.current?.toggle();
+      if (nextOwner.value === currentOwnerValue) return;
+      updateField.mutate({
+        providerId,
+        workItemId,
+        field: 'System.AssignedTo',
+        value: nextOwner.value,
+      });
+    },
+    [currentOwnerValue, providerId, updateField, workItemId],
+  );
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <span className="text-ink-3">Assigned to:</span>
+      <Dropdown
+        dropdownRef={dropdownRef}
+        className="min-w-52"
+        trigger={
+          <button
+            type="button"
+            disabled={disabled || updateField.isPending || options.length <= 1}
+            className="text-ink-1 hover:text-acc-ink flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors disabled:cursor-default disabled:opacity-60"
+            aria-label={`Edit owner. Current owner: ${currentOwner || 'Unassigned'}`}
+          >
+            {currentOwner && (
+              <UserAvatar
+                name={currentOwner}
+                color={getOwnerColor(currentOwner)}
+              />
+            )}
+            <span className="max-w-36 truncate">
+              {currentOwner || 'Unassigned'}
+            </span>
+            {updateField.isPending ? (
+              <Loader2 className="text-ink-3 h-3 w-3 animate-spin" />
+            ) : (
+              <ChevronDown className="text-ink-3 h-3 w-3" />
+            )}
+          </button>
+        }
+      >
+        {options.map((option) => (
+          <DropdownItem
+            key={option.value || '__unassigned__'}
+            checked={option.value === currentOwnerValue}
+            onClick={() => handleSelect(option)}
+          >
+            <span className="flex items-center gap-2">
+              {option.value && (
+                <UserAvatar
+                  name={option.displayName}
+                  color={getOwnerColor(option.displayName)}
+                />
+              )}
+              <span>{option.displayName}</span>
+              {option.value && option.value !== option.displayName && (
+                <span className="text-ink-3">{option.value}</span>
+              )}
+            </span>
+          </DropdownItem>
+        ))}
+      </Dropdown>
+      {error && (
+        <button
+          type="button"
+          className="text-status-fail hover:underline"
+          title={error}
+          onClick={onRetry}
+        >
+          Retry owners
+        </button>
+      )}
+    </div>
+  );
+}
+
+function EditableIteration({
+  iterationPath,
+  options,
+  disabled,
+  providerId,
+  workItemId,
+}: {
+  iterationPath?: string;
+  options: Array<{ name: string; path: string; isCurrent: boolean }>;
+  disabled: boolean;
+  providerId: string;
+  workItemId: number;
+}) {
+  const updateField = useUpdateWorkItemField();
+  const dropdownRef = useRef<{ toggle: () => void } | null>(null);
+  const currentPath = iterationPath ?? '';
+  const currentName =
+    options.find((option) => option.path === currentPath)?.name ??
+    currentPath.split('\\').at(-1) ??
+    'Unknown';
+
+  const handleSelect = useCallback(
+    (nextPath: string) => {
+      dropdownRef.current?.toggle();
+      if (nextPath === currentPath) return;
+      updateField.mutate({
+        providerId,
+        workItemId,
+        field: 'System.IterationPath',
+        value: nextPath,
+      });
+    },
+    [currentPath, providerId, updateField, workItemId],
+  );
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <span className="text-ink-3">Iteration:</span>
+      <Dropdown
+        dropdownRef={dropdownRef}
+        className="min-w-52"
+        trigger={
+          <button
+            type="button"
+            disabled={disabled || updateField.isPending || options.length === 0}
+            className="text-ink-1 hover:text-acc-ink flex min-w-0 max-w-56 items-center gap-1 rounded px-1 py-0.5 transition-colors disabled:cursor-default disabled:opacity-60"
+            aria-label={`Edit iteration. Current iteration: ${currentName}`}
+          >
+            <span className="truncate">{currentName}</span>
+            {updateField.isPending ? (
+              <Loader2 className="text-ink-3 h-3 w-3 shrink-0 animate-spin" />
+            ) : (
+              <ChevronDown className="text-ink-3 h-3 w-3 shrink-0" />
+            )}
+          </button>
+        }
+      >
+        {options.map((option) => (
+          <DropdownItem
+            key={option.path}
+            checked={option.path === currentPath}
+            onClick={() => handleSelect(option.path)}
+          >
+            <span
+              className={clsx(
+                'flex min-w-0 flex-col',
+                option.isCurrent && 'text-acc-ink',
+              )}
+            >
+              <span>{option.name}</span>
+              {option.name !== option.path && (
+                <span className="text-ink-3 truncate text-xs">{option.path}</span>
+              )}
+              {option.isCurrent && (
+                <span className="text-acc-ink/70 text-[10px]">Current</span>
+              )}
+            </span>
+          </DropdownItem>
+        ))}
+      </Dropdown>
+    </div>
+  );
+}
+
 export function WorkItemDetails({
   projectId,
   workItemId,
@@ -195,11 +435,53 @@ export function WorkItemDetails({
     workItemId,
   });
   const projectName = workItem?.fields.teamProject ?? configuredProjectName;
+  const { data: boardColumns = [] } = useBoardColumns({
+    providerId: providerId ?? '',
+    projectId: project?.workItemProjectId ?? '',
+    projectName: projectName ?? '',
+    enabled: !!providerId && !!project?.workItemProjectId && !!projectName,
+  });
   const { data: availableStates = [] } = useWorkItemStates({
     providerId,
     projectName,
     workItemType: workItem?.fields.workItemType ?? null,
   });
+  const ownerQuery = useWorkItemOwners({
+    providerId,
+    projectName,
+  });
+  const ownerOptions = useMemo(
+    () =>
+      getOwnerOptions(
+        ownerQuery.data ?? [],
+        workItem?.fields.assignedTo,
+        workItem?.fields.assignedToUniqueName,
+      ),
+    [
+      ownerQuery.data,
+      workItem?.fields.assignedTo,
+      workItem?.fields.assignedToUniqueName,
+    ],
+  );
+  const { data: iterations } = useIterations({
+    providerId: providerId ?? '',
+    projectName: projectName ?? '',
+  });
+  const iterationOptions = useMemo(() => {
+    const options = [...(iterations ?? [])];
+    const currentPath = workItem?.fields.iterationPath;
+    if (currentPath && !options.some((option) => option.path === currentPath)) {
+      options.unshift({
+        id: currentPath,
+        name: currentPath.split('\\').at(-1) ?? currentPath,
+        path: currentPath,
+        startDate: null,
+        finishDate: null,
+        isCurrent: false,
+      });
+    }
+    return options.reverse();
+  }, [iterations, workItem?.fields.iterationPath]);
   const {
     data: comments = [],
     isLoading: isLoadingComments,
@@ -233,9 +515,12 @@ export function WorkItemDetails({
   const { data: linkedWorkItems = [], isLoading: isLoadingLinkedWorkItems } =
     useWorkItemsByIds({
       providerId,
+      projectName,
       workItemIds: linkedWorkItemIds,
     });
   const addComment = useAddWorkItemComment();
+  const updateComment = useUpdateWorkItemComment();
+  const updateField = useUpdateWorkItemField();
   const hasTestCases = isLoadingTestCases || relatedTestCases.length > 0;
   const [activeTab, setActiveTab] = useState<DetailsTab>('comments');
   const [linkDetailModal, setLinkDetailModal] = useState<LinkDetailModal | null>(
@@ -297,7 +582,8 @@ export function WorkItemDetails({
 
   const { fields } = workItem;
   const hasReproSteps = fields.workItemType === 'Bug' && !!fields.reproSteps;
-  const hasContent = !!fields.description || hasReproSteps;
+  const hasContent =
+    !!fields.description || !!fields.acceptanceCriteria || hasReproSteps;
   const hasLinks =
     !!workItem.parentId ||
     !!workItem.childIds?.length ||
@@ -346,18 +632,77 @@ export function WorkItemDetails({
           ) : (
             <StateBadge state={fields.state} />
           )}
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="text-ink-3">Assigned to:</span>
-            <span className="text-ink-1">
-              {fields.assignedTo ?? 'Unassigned'}
-            </span>
-          </div>
+          {providerId && project.workItemProjectId && projectName && boardColumns.length > 0 && (
+            <WorkItemBoardColumnEditor
+              key={`${workItem.id}:column`}
+              workItem={workItem}
+              providerId={providerId}
+              projectId={project.workItemProjectId}
+              projectName={projectName}
+              columns={boardColumns}
+              variant="details"
+            />
+          )}
+          {providerId ? (
+            <EditableOwner
+              owner={fields.assignedTo}
+              ownerValue={fields.assignedToUniqueName}
+              options={ownerOptions}
+              disabled={ownerQuery.data === undefined}
+              error={ownerQuery.error?.message ?? null}
+              onRetry={() => void ownerQuery.refetch()}
+              providerId={providerId}
+              workItemId={workItem.id}
+            />
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-ink-3">Assigned to:</span>
+              <span className="text-ink-1">
+                {fields.assignedTo ?? 'Unassigned'}
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-1.5 text-xs">
             <span className="text-ink-3">Project:</span>
               <span className="text-ink-1">
                 {fields.teamProject ?? project.name}
               </span>
           </div>
+          {providerId && (
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-ink-3">Story points:</span>
+              <WorkItemMetadataEditor
+                key={`${workItem.id}:story-points:${fields.storyPoints ?? ''}`}
+                value={String(fields.storyPoints ?? '')}
+                label="Story points"
+                emptyLabel="None"
+                validate={(value) => {
+                  if (value === '') return null;
+                  const points = Number(value);
+                  return Number.isInteger(points) && points >= 0
+                    ? null
+                    : 'Story points must be a non-negative integer';
+                }}
+                onSave={(value) =>
+                  updateField.mutateAsync({
+                    providerId,
+                    workItemId: workItem.id,
+                    field: 'Microsoft.VSTS.Scheduling.StoryPoints',
+                    value: value === '' ? null : Number(value),
+                  })
+                }
+              />
+            </div>
+          )}
+          {providerId && projectName && (
+            <EditableIteration
+              iterationPath={fields.iterationPath}
+              options={iterationOptions}
+              disabled={iterations === undefined}
+              providerId={providerId}
+              workItemId={workItem.id}
+            />
+          )}
         </div>
       </div>
 
@@ -369,6 +714,18 @@ export function WorkItemDetails({
         )}
       >
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-4">
+          {providerId && projectName && (
+            <WorkItemGeneratedSummary
+              request={{
+                projectId,
+                providerId,
+                projectName,
+                workItemId: workItem.id,
+              }}
+              workItemTitle={fields.title}
+              className="mb-5"
+            />
+          )}
           {hasContent ? (
             <div className="w-full">
               {fields.description && (
@@ -381,8 +738,29 @@ export function WorkItemDetails({
                 />
               )}
 
-              {hasReproSteps && (
+              {fields.acceptanceCriteria && (
                 <div className={fields.description ? 'mt-6' : undefined}>
+                  <h2 className="text-ink-0 mb-2 text-sm font-semibold">
+                    Acceptance Criteria
+                  </h2>
+                  <AzureHtmlContent
+                    html={fields.acceptanceCriteria}
+                    providerId={providerId ?? undefined}
+                    className="text-ink-1 text-sm"
+                    imageClassName="max-h-96 w-auto object-contain"
+                    enableImageModal
+                  />
+                </div>
+              )}
+
+              {hasReproSteps && (
+                <div
+                  className={
+                    fields.description || fields.acceptanceCriteria
+                      ? 'mt-6'
+                      : undefined
+                  }
+                >
                   <h2 className="text-ink-0 mb-2 text-sm font-semibold">
                     Repro Steps
                   </h2>
@@ -465,9 +843,11 @@ export function WorkItemDetails({
                   commentsError instanceof Error ? commentsError.message : null
                 }
                 providerId={providerId ?? undefined}
+                projectName={projectName ?? undefined}
                 emptyMessage="No comments on this work item yet."
                 hideHeader
-                isAddingComment={addComment.isPending}
+                isAddingComment={addComment.isPending || updateComment.isPending}
+                onUpdateComment={({ commentId, text }) => updateComment.mutateAsync({ providerId: providerId!, projectName: projectName!, workItemId, commentId, text })}
                 onAddComment={
                   providerId && projectName
                     ? (text) =>
@@ -813,239 +1193,6 @@ function LinkedDetailModal({
   }
 
   return null;
-}
-
-function WorkItemHistory({
-  history,
-  isLoading,
-  error,
-  providerId,
-}: {
-  history: WorkItemHistoryEntry[];
-  isLoading: boolean;
-  error: string | null;
-  providerId?: string;
-}) {
-  if (isLoading) {
-    return <p className="text-ink-3 text-sm">Loading history...</p>;
-  }
-
-  if (error) {
-    return <p className="text-status-fail text-sm">{error}</p>;
-  }
-
-  if (history.length === 0) {
-    return <p className="text-ink-3 text-sm italic">No history found.</p>;
-  }
-
-  return (
-    <div className="flex flex-col gap-2.5">
-      {history.map((entry) => (
-        <div
-          key={entry.id}
-          className="border-glass-border/60 rounded-md border bg-white/[0.018] px-3 py-2.5"
-        >
-          <div className="mb-2 flex items-baseline gap-2">
-            <div className="flex min-w-0 flex-1 items-baseline gap-2">
-              <p className="text-ink-1 truncate text-[13px] font-medium">
-                {entry.revisedBy}
-              </p>
-              <p
-                className="text-ink-3 shrink-0 text-[11px]"
-                title={
-                  entry.revisedDate
-                    ? new Date(entry.revisedDate).toLocaleString()
-                    : undefined
-                }
-              >
-                {entry.revisedDate
-                  ? formatRelativeTime(entry.revisedDate)
-                  : 'Unknown date'}
-              </p>
-            </div>
-            <span className="text-ink-4 shrink-0 text-[11px]">
-              #{entry.id}
-            </span>
-          </div>
-
-          <div className="divide-glass-border/50 divide-y">
-            {entry.fields.map((field) => (
-              <HistoryChangeRow
-                key={field.name}
-                field={field}
-                providerId={providerId}
-              />
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function HistoryChangeRow({
-  field,
-  providerId,
-}: {
-  field: WorkItemHistoryEntry['fields'][number];
-  providerId?: string;
-}) {
-  const isComment = field.name === 'Comment' || field.name === 'History';
-  const showDiff = shouldShowHistoryTextDiff(field);
-
-  return (
-    <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3 py-1.5">
-      <span className="text-ink-2 truncate text-[12px] font-medium">
-        {isComment ? 'Comment' : formatHistoryFieldName(field.name)}
-      </span>
-      {isComment ? (
-        <HistoryCommentValue value={field.newValue} providerId={providerId} />
-      ) : showDiff ? (
-        <HistoryTextDiff
-          oldValue={field.oldValue ?? ''}
-          newValue={field.newValue ?? ''}
-        />
-      ) : (
-        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_18px_minmax(0,1fr)] items-start gap-1.5">
-          <HistoryValue value={field.oldValue} providerId={providerId} />
-          <span className="text-ink-4 text-center text-[11px] leading-5">
-            -&gt;
-          </span>
-          <HistoryValue value={field.newValue} providerId={providerId} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HistoryCommentValue({
-  value,
-  providerId,
-}: {
-  value?: string;
-  providerId?: string;
-}) {
-  if (!value) {
-    return <span className="text-ink-4 text-[12px] italic">Empty</span>;
-  }
-
-  if (!value.includes('<')) {
-    return (
-      <p className="text-ink-1 text-[12px] leading-5 whitespace-pre-wrap">
-        {value}
-      </p>
-    );
-  }
-
-  return (
-    <AzureHtmlContent
-      html={value}
-      providerId={providerId}
-      className="text-ink-1 text-[12px] leading-5"
-      imageClassName="max-h-20 w-auto object-contain"
-      enableImageModal
-    />
-  );
-}
-
-function HistoryValue({
-  value,
-  providerId,
-}: {
-  value?: string;
-  providerId?: string;
-}) {
-  if (!value) {
-    return <span className="text-ink-4 text-[12px] italic">Empty</span>;
-  }
-
-  if (!value.includes('<')) {
-    return (
-      <span className="text-ink-1 truncate text-[12px]" title={value}>
-        {value}
-      </span>
-    );
-  }
-
-  return (
-    <AzureHtmlContent
-      html={value}
-      providerId={providerId}
-      className="text-ink-2 text-[12px] leading-5"
-      imageClassName="max-h-16 w-auto object-contain"
-      enableImageModal
-    />
-  );
-}
-
-function formatHistoryFieldName(name: string): string {
-  return name
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/\bId\b/g, 'ID');
-}
-
-function shouldShowHistoryTextDiff(
-  field: WorkItemHistoryEntry['fields'][number],
-): boolean {
-  const oldValue = field.oldValue ?? '';
-  const newValue = field.newValue ?? '';
-  if (!oldValue && !newValue) {
-    return false;
-  }
-  if (oldValue === newValue) {
-    return false;
-  }
-
-  const fieldName = field.name.toLowerCase();
-  return (
-    oldValue.includes('<') ||
-    newValue.includes('<') ||
-    oldValue.length > 40 ||
-    newValue.length > 40 ||
-    ['acceptance', 'criteria', 'description', 'repro', 'steps', 'title'].some(
-      (part) => fieldName.includes(part),
-    )
-  );
-}
-
-function HistoryTextDiff({
-  oldValue,
-  newValue,
-}: {
-  oldValue: string;
-  newValue: string;
-}) {
-  const changes = diffWordsWithSpace(
-    plainHistoryValue(oldValue),
-    plainHistoryValue(newValue),
-  );
-
-  return (
-    <div className="min-w-0 rounded border border-white/[0.06] bg-black/10 px-2 py-1.5 text-[12px] leading-5">
-      {changes.map((part, index) => (
-        <span
-          key={`${index}-${part.value}`}
-          className={clsx(
-            part.added &&
-              'rounded bg-status-done/15 px-0.5 text-status-done',
-            part.removed &&
-              'rounded bg-status-fail/15 px-0.5 text-status-fail line-through decoration-status-fail/70',
-            !part.added && !part.removed && 'text-ink-2',
-          )}
-        >
-          {part.value}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function plainHistoryValue(value: string): string {
-  if (!value.includes('<')) return value.trim();
-
-  const element = document.createElement('div');
-  element.innerHTML = value;
-  return (element.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
 function ExpandableTestCase({

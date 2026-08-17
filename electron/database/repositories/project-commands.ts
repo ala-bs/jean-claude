@@ -17,6 +17,10 @@ function parseRow(row: {
   name: string | null;
   command: string;
   ports: string;
+  portConflictStrategy?: string;
+  portOverrideProvider?: string;
+  portOverrideEnvVar?: string | null;
+  portOverrideArgs?: string | null;
   envVars?: string;
   confirmBeforeRun: number;
   confirmMessage: string | null;
@@ -26,6 +30,14 @@ function parseRow(row: {
   return {
     ...row,
     ports: JSON.parse(row.ports) as number[],
+    portConflictStrategy:
+      row.portConflictStrategy === 'use-available-port'
+        ? 'use-available-port'
+        : 'prompt',
+    portOverrideProvider:
+      row.portOverrideProvider === 'args' ? 'args' : 'env',
+    portOverrideEnvVar: row.portOverrideEnvVar ?? null,
+    portOverrideArgs: row.portOverrideArgs ?? null,
     envVars: JSON.parse(row.envVars ?? '[]') as RunCommandEnvVar[],
     confirmBeforeRun: row.confirmBeforeRun === 1,
   };
@@ -63,6 +75,10 @@ export const ProjectCommandRepository = {
         name: data.name ?? null,
         command: data.command,
         ports: JSON.stringify(data.ports),
+        portConflictStrategy: data.portConflictStrategy,
+        portOverrideProvider: data.portOverrideProvider,
+        portOverrideEnvVar: data.portOverrideEnvVar ?? null,
+        portOverrideArgs: data.portOverrideArgs ?? null,
         envVars: JSON.stringify(data.envVars ?? []),
         confirmBeforeRun: data.confirmBeforeRun ? 1 : 0,
         confirmMessage: data.confirmMessage ?? null,
@@ -87,6 +103,14 @@ export const ProjectCommandRepository = {
     if (data.name !== undefined) updateData.name = data.name;
     if (data.command !== undefined) updateData.command = data.command;
     if (data.ports !== undefined) updateData.ports = JSON.stringify(data.ports);
+    if (data.portConflictStrategy !== undefined)
+      updateData.portConflictStrategy = data.portConflictStrategy;
+    if (data.portOverrideProvider !== undefined)
+      updateData.portOverrideProvider = data.portOverrideProvider;
+    if (data.portOverrideEnvVar !== undefined)
+      updateData.portOverrideEnvVar = data.portOverrideEnvVar?.trim() || null;
+    if (data.portOverrideArgs !== undefined)
+      updateData.portOverrideArgs = data.portOverrideArgs?.trim() || null;
     if (data.envVars !== undefined) {
       const envVars = data.envVars.filter((envVar) => envVar.name.trim());
       updateData.envVars = JSON.stringify(envVars);

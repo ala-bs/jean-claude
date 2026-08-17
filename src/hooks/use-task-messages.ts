@@ -19,9 +19,11 @@ const DEFAULT_TASK_STATE: TaskState = {
 export function useTaskMessages({
   taskId,
   stepId,
+  enabled = true,
 }: {
   taskId: string;
   stepId: string | null;
+  enabled?: boolean;
 }) {
   const stepState = useTaskMessagesStore((s) =>
     stepId ? s.steps[stepId] : undefined,
@@ -29,6 +31,7 @@ export function useTaskMessages({
   const loadStep = useTaskMessagesStore((s) => s.loadStep);
   const touchStep = useTaskMessagesStore((s) => s.touchStep);
   const unloadStep = useTaskMessagesStore((s) => s.unloadStep);
+  const setStatus = useTaskMessagesStore((s) => s.setStatus);
   const setPermission = useTaskMessagesStore((s) => s.setPermission);
   const setQuestion = useTaskMessagesStore((s) => s.setQuestion);
   const setPendingRequestForTask = useTaskMessagesStore(
@@ -41,7 +44,7 @@ export function useTaskMessages({
   const syncCheckedRef = useRef<string | null>(null);
 
   const fetchPendingRequest = useCallback(async () => {
-    if (!stepId) return;
+    if (!enabled || !stepId) return;
     const pendingRequestVersionAtStart =
       useTaskMessagesStore.getState().pendingRequestVersion;
     const pendingRequest = await api.agent.getPendingRequest(stepId);
@@ -75,37 +78,52 @@ export function useTaskMessages({
         });
       }
     }
-  }, [stepId, taskId, setPermission, setQuestion, setPendingRequestForTask]);
+  }, [
+    enabled,
+    stepId,
+    taskId,
+    setPermission,
+    setQuestion,
+    setPendingRequestForTask,
+  ]);
 
   const fetchMessages = useCallback(() => {
-    if (!stepId) return;
+    if (!enabled || !stepId) return;
     fetchingRef.current = stepId;
     Promise.all([
       api.agent.getMessages(stepId),
       api.steps.findById(stepId),
-    ]).then(([messages, step]) => {
-      if (step) {
-        loadStep(stepId, taskId, messages, step.status);
-        // Also fetch pending request after loading step
-        fetchPendingRequest();
-      }
-      // Clear fetching ref after load completes
-      if (fetchingRef.current === stepId) {
-        fetchingRef.current = null;
-      }
-    });
-  }, [stepId, taskId, loadStep, fetchPendingRequest]);
+    ])
+      .then(([messages, step]) => {
+        if (step) {
+          loadStep(stepId, taskId, messages, step.status);
+          // Also fetch pending request after loading step
+          fetchPendingRequest();
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to fetch task messages', error);
+        const message =
+          error instanceof Error ? error.message : 'Failed to fetch messages';
+        setStatus(stepId, 'errored', message, taskId);
+      })
+      .finally(() => {
+        if (fetchingRef.current === stepId) {
+          fetchingRef.current = null;
+        }
+      });
+  }, [enabled, stepId, taskId, loadStep, fetchPendingRequest, setStatus]);
 
   const refetch = useCallback(() => {
-    if (!stepId) return;
+    if (!enabled || !stepId) return;
     // Force a fresh fetch by unloading and re-fetching
     unloadStep(stepId);
     syncCheckedRef.current = null;
     fetchMessages();
-  }, [stepId, unloadStep, fetchMessages]);
+  }, [enabled, stepId, unloadStep, fetchMessages]);
 
   useEffect(() => {
-    if (!stepId) return;
+    if (!enabled || !stepId) return;
 
     if (!isLoaded) {
       // Not loaded - fetch everything from backend
@@ -126,13 +144,18 @@ export function useTaskMessages({
         syncCheckedRef.current = stepId;
 
         // Check message count sync
-        api.agent.getMessageCount(stepId).then((backendCount) => {
-          const frontendCount = stepState?.messages.length ?? 0;
-          if (backendCount !== frontendCount) {
-            // Out of sync - reload from backend
-            fetchMessages();
-          }
-        });
+        api.agent
+          .getMessageCount(stepId)
+          .then((backendCount) => {
+            const frontendCount = stepState?.messages.length ?? 0;
+            if (backendCount !== frontendCount) {
+              // Out of sync - reload from backend
+              fetchMessages();
+            }
+          })
+          .catch((error: unknown) => {
+            console.error('Failed to sync task message count', error);
+          });
 
         // Also fetch pending request (in case we missed an IPC event)
         fetchPendingRequest();
@@ -140,6 +163,7 @@ export function useTaskMessages({
     }
   }, [
     stepId,
+    enabled,
     isLoaded,
     touchStep,
     stepState?.messages.length,
@@ -149,7 +173,7 @@ export function useTaskMessages({
 
   // Refetch pending request when window regains focus
   useEffect(() => {
-    if (!stepId) return;
+    if (!enabled || !stepId) return;
 
     const handleFocus = () => {
       // Only refetch if the step is loaded and in a waiting state
@@ -160,7 +184,7 @@ export function useTaskMessages({
 
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
-  }, [stepId, isLoaded, stepState?.status, fetchPendingRequest]);
+  }, [enabled, stepId, isLoaded, stepState?.status, fetchPendingRequest]);
 
   const state = stepState ?? DEFAULT_TASK_STATE;
 
@@ -171,7 +195,7 @@ export function useTaskMessages({
     pendingPermission: state.pendingPermission,
     pendingQuestion: state.pendingQuestion,
     queuedPrompts: state.queuedPrompts,
-    isLoading: !stepId || !isLoaded,
+    isLoading: enabled && (!stepId || !isLoaded),
     refetch,
   };
 }

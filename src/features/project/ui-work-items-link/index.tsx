@@ -8,10 +8,18 @@ import { Combobox } from '@/common/ui/combobox';
 import type { Project } from '@shared/types';
 import { useToastStore } from '@/stores/toasts';
 import { useUpdateProject } from '@/hooks/use-projects';
+import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
+import { WorkItemTitleParserSettings } from '@/features/project/ui-work-item-title-parser-settings';
 
-
-
-export function WorkItemsLink({ project }: { project: Project }) {
+export function WorkItemsLink({
+  project,
+  workItemTitleParser,
+  onWorkItemTitleParserChange,
+}: {
+  project: Project;
+  workItemTitleParser: WorkItemTitleParserSetting | null;
+  onWorkItemTitleParserChange: (setting: WorkItemTitleParserSetting) => void;
+}) {
   const { data: providers } = useProviders();
   const updateProject = useUpdateProject();
   const addToast = useToastStore((s) => s.addToast);
@@ -68,7 +76,7 @@ export function WorkItemsLink({ project }: { project: Project }) {
 
   const canLink = selectedProviderId && selectedProjectId;
 
-  if (azureProviders.length === 0) {
+  if (azureProviders.length === 0 && !isLinked) {
     return (
       <div className="border-glass-border rounded-lg border border-dashed p-4">
         <div className="text-ink-3 flex items-center gap-2">
@@ -130,6 +138,11 @@ export function WorkItemsLink({ project }: { project: Project }) {
             description="Display assigned work items from this project in the feed list"
           />
         </div>
+        <WorkItemTitleParserSettings
+          key={project.id}
+          setting={workItemTitleParser}
+          onChange={onWorkItemTitleParserChange}
+        />
       </div>
     );
   }

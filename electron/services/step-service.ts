@@ -381,16 +381,20 @@ export function getMostRecentlyUpdatedStep(
 function computeTaskStatus(
   steps: TaskStep[],
 ): 'running' | 'errored' | 'interrupted' | 'completed' | 'waiting' {
-  if (steps.some((s) => s.status === 'running')) return 'running';
+  const activeSteps = steps.filter((step) => !step.archivedAt);
+  if (activeSteps.some((s) => s.status === 'running')) return 'running';
 
   // Use the most recently updated step's status for errored/interrupted rather
   // than any step, so that earlier failed steps don't keep the task marked as
   // errored once a newer step has progressed past that state.
-  const mostRecentStep = getMostRecentlyUpdatedStep(steps);
+  const mostRecentStep = getMostRecentlyUpdatedStep(activeSteps);
   if (mostRecentStep?.status === 'errored') return 'errored';
   if (mostRecentStep?.status === 'interrupted') return 'interrupted';
 
-  if (steps.length > 0 && steps.every((s) => s.status === 'completed'))
+  if (
+    activeSteps.length > 0 &&
+    activeSteps.every((s) => s.status === 'completed')
+  )
     return 'completed';
   return 'waiting';
 }
@@ -457,13 +461,15 @@ function extractReviewComments(output: string): {
 async function updateDependentStepStatuses(taskId: string): Promise<string[]> {
   const steps = await TaskStepRepository.findByTaskId(taskId);
   const terminalIds = new Set(
-    steps.filter((s) => canUseStepAsContinueSource(s.status)).map((s) => s.id),
+    steps
+      .filter((s) => !s.archivedAt && canUseStepAsContinueSource(s.status))
+      .map((s) => s.id),
   );
 
   const autoStartStepIds: string[] = [];
 
   for (const step of steps) {
-    if (step.status !== 'pending') continue;
+    if (step.archivedAt || step.status !== 'pending') continue;
     const allDepsCompleted = step.dependsOn.every((depId) =>
       terminalIds.has(depId),
     );
@@ -568,6 +574,41 @@ export const StepService = {
     return step;
   },
 
+  archive: async (
+    stepId: string,
+    options: { beforePersist: () => Promise<void> },
+  ): Promise<TaskStep> => {
+    const step = await TaskStepRepository.findById(stepId);
+    if (!step) throw new Error(`Step not found: ${stepId}`);
+    if (step.archivedAt) return step;
+
+    const siblings = await TaskStepRepository.findByTaskId(step.taskId);
+    const dependent = siblings.find((sibling) =>
+      sibling.dependsOn.includes(stepId),
+    );
+    if (dependent) {
+      throw new Error(
+        `Cannot archive step "${step.name}": step "${dependent.name}" depends on it`,
+      );
+    }
+
+    await options.beforePersist();
+    const { step: archivedStep, deletedRawMessageCount } =
+      await TaskStepRepository.archiveAndDeleteRawMessages(
+        stepId,
+        new Date().toISOString(),
+      );
+    debug(
+      'archive step=%s deletedRawMessages=%d',
+      stepId,
+      deletedRawMessageCount,
+    );
+    debug('archive step=%s taskId=%s status=%s', stepId, step.taskId, step.status);
+    emitStepUpsert(archivedStep);
+    await StepService.syncTaskStatus(step.taskId);
+    return archivedStep;
+  },
+
   delete: async (stepId: string): Promise<void> => {
     const step = await TaskStepRepository.findById(stepId);
     if (!step) return;
@@ -619,6 +660,7 @@ export const StepService = {
   }> => {
     const step = await TaskStepRepository.findById(stepId);
     if (!step) throw new Error(`Step not found: ${stepId}`);
+    if (step.archivedAt) throw new Error(`Step is archived: ${stepId}`);
 
     const task = await TaskRepository.findById(step.taskId);
     if (!task) throw new Error(`Task not found for step: ${stepId}`);

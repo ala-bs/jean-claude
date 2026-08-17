@@ -18,7 +18,9 @@ import { Select, type SelectOption } from '@/common/ui/select';
 import {
   useBackendModelPresetsSetting,
   useBackendsSetting,
+  useModelQuickSwitcherSetting,
   useUpdateBackendModelPresetsSetting,
+  useUpdateModelQuickSwitcherSetting,
 } from '@/hooks/use-settings';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { BackendModelPreset } from '@shared/types';
@@ -26,6 +28,7 @@ import { BackendsSettings } from '@/features/settings/ui-general-settings';
 import { Button } from '@/common/ui/button';
 import { Input } from '@/common/ui/input';
 import { ModelSelector } from '@/features/agent/ui-model-selector';
+import { Switch } from '@/common/ui/switch';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 
@@ -139,6 +142,12 @@ function PresetCard({
           disabled={thinkingOptions.length <= 1}
         />
       </div>
+      <Switch
+        checked={preset.showInQuickSwitcher !== false}
+        onChange={(showInQuickSwitcher) => onChange({ showInQuickSwitcher })}
+        label="Show in quick switcher"
+        className="mt-4"
+      />
     </div>
   );
 }
@@ -146,6 +155,8 @@ function PresetCard({
 export function ModelPresetsSettings() {
   const { data: backendsSetting } = useBackendsSetting();
   const { data: presets = [] } = useBackendModelPresetsSetting();
+  const { data: quickSwitcherSetting } = useModelQuickSwitcherSetting();
+  const updateQuickSwitcher = useUpdateModelQuickSwitcherSetting();
   const updatePresets = useUpdateBackendModelPresetsSetting();
 
   const enabledBackends = useMemo(
@@ -191,6 +202,7 @@ export function ModelPresetsSettings() {
         backend: defaultBackend,
         model: 'default',
         thinkingEffort: 'default',
+        showInQuickSwitcher: true,
       },
     ]);
   };
@@ -205,7 +217,18 @@ export function ModelPresetsSettings() {
 
       <div className="border-line-soft my-8 border-t" />
 
-      <div className="flex items-start justify-between gap-4">
+      <div className="border-glass-border bg-bg-1 rounded-xl border p-4">
+        <Switch
+          checked={quickSwitcherSetting?.enabled ?? false}
+          onChange={(enabled) => updateQuickSwitcher.mutate({ enabled })}
+          label="Use quick model switcher"
+        />
+        <p className="text-ink-3 mt-1 text-sm">
+          Replace model dropdown with quick-switch presets in task forms.
+        </p>
+      </div>
+
+      <div className="mt-2 flex items-start justify-between gap-4">
         <Button icon={<Plus />} onClick={handleAddPreset}>
           Add preset
         </Button>

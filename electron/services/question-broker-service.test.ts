@@ -23,8 +23,13 @@ const questions: QuestionSpec[] = [
           id: 'small',
           label: 'Small change',
           description: 'Keep the change scoped',
+          recommended: true,
         },
-        { label: 'Rewrite', description: 'Replace the flow' },
+        {
+          label: 'Rewrite',
+          description: 'Replace the flow',
+          recommended: false,
+        },
       ],
   },
   {
@@ -147,6 +152,32 @@ describe('question-broker-service', () => {
       );
     });
 
+    it('rejects malformed recommended metadata', () => {
+      expect(() =>
+        validateQuestionSpecs([
+          {
+            id: 'choice',
+            type: 'single_choice',
+            label: 'Pick one',
+            options: [{ label: 'Small', recommended: 'yes' }],
+          } as unknown as QuestionSpec,
+        ]),
+      ).toThrow('Question choice has an invalid option');
+    });
+
+    it('rejects malformed recommended metadata on ignored text options', () => {
+      expect(() =>
+        validateQuestionSpecs([
+          {
+            id: 'notes',
+            type: 'text',
+            label: 'Notes',
+            options: [{ label: 'Ignored', recommended: 'yes' }],
+          } as unknown as QuestionSpec,
+        ]),
+      ).toThrow('Question notes has an invalid option');
+    });
+
     it('ignores options on text questions', () => {
       expect(() =>
         validateQuestionSpecs([
@@ -165,10 +196,12 @@ describe('question-broker-service', () => {
     expect(
       toNormalizedQuestionRequest({
         requestId: 'question-request-1',
+        contextReminder: '**Current constraint:** keep the change scoped.',
         questions,
       }),
     ).toEqual({
       requestId: 'question-request-1',
+      contextReminder: '**Current constraint:** keep the change scoped.',
       questions: [
         {
           id: 'approach',
@@ -180,8 +213,13 @@ describe('question-broker-service', () => {
               id: 'small',
               label: 'Small change',
               description: 'Keep the change scoped',
+              recommended: true,
             },
-            { label: 'Rewrite', description: 'Replace the flow' },
+            {
+              label: 'Rewrite',
+              description: 'Replace the flow',
+              recommended: false,
+            },
           ],
           multiSelect: false,
           required: true,

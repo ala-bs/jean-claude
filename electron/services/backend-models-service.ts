@@ -306,7 +306,7 @@ export function parseOpenCodeModelsVerbose(stdout: string): BackendModel[] {
         name?: string;
         cost?: OpenCodeModelCost;
         capabilities?: { reasoning?: boolean };
-        limit?: { context?: unknown };
+        limit?: { context?: unknown; input?: unknown };
         variants?: Record<string, unknown>;
       };
       const thinkingEfforts = Object.keys(metadata.variants ?? {}).filter(
@@ -319,8 +319,10 @@ export function parseOpenCodeModelsVerbose(stdout: string): BackendModel[] {
         supportsThinking:
           metadata.capabilities?.reasoning === true ||
           thinkingEfforts.length > 0,
-        ...(isValidContextWindow(metadata.limit?.context)
-          ? { contextWindow: metadata.limit.context }
+        ...(isValidContextWindow(metadata.limit?.input)
+          ? { contextWindow: metadata.limit.input }
+          : isValidContextWindow(metadata.limit?.context)
+            ? { contextWindow: metadata.limit.context }
           : {}),
         ...(thinkingEfforts.length > 0 ? { thinkingEfforts } : {}),
         ...(metadata.cost ? { cost: metadata.cost } : {}),

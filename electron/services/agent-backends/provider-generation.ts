@@ -1,4 +1,4 @@
-import { homedir } from 'os';
+import { homedir } from 'node:os';
 
 import type {
   AgentBackendCapabilities,
@@ -77,6 +77,23 @@ export const codexStructuredGenerationCapability: StructuredGenerationCapability
     },
   };
 
+const copilotTextGenerationCapability: TextGenerationCapability = {
+  async generate(input) {
+    rejectRestrictedCopilotGeneration(input);
+    const output = await generateWithCodex(input);
+    return { output };
+  },
+};
+
+const copilotStructuredGenerationCapability: StructuredGenerationCapability = {
+  mode: 'prompt-json',
+  async generate(input) {
+    rejectRestrictedCopilotGeneration(input);
+    const output = await generateWithCodex(input);
+    return { output };
+  },
+};
+
 export function createGenerationCapabilities(
   backend: AgentBackendType,
 ): AgentBackendCapabilities['generation'] {
@@ -94,10 +111,17 @@ export function createGenerationCapabilities(
     };
   }
 
-  if (backend === 'codex' || backend === 'copilot') {
+  if (backend === 'codex') {
     return {
       text: supported(codexTextGenerationCapability),
       structured: supported(codexStructuredGenerationCapability),
+    };
+  }
+
+  if (backend === 'copilot') {
+    return {
+      text: supported(copilotTextGenerationCapability),
+      structured: supported(copilotStructuredGenerationCapability),
     };
   }
 
@@ -136,6 +160,7 @@ async function generateWithClaudeCode({
       allowedTools: buildClaudeCodeAllowedTools(
         allowedTools,
         allowedToolPatterns,
+        skillName,
       ),
       model: model !== 'default' ? model : undefined,
       abortController,
@@ -246,7 +271,7 @@ async function generateWithOpenCode({
   const session = await client.session.create({
     directory,
     ...(permission.length > 0 ? { body: { permission } } : {}),
-  });
+  }, { throwOnError: true });
   const sessionId = session.data?.id;
 
   if (!sessionId) {
@@ -259,6 +284,11 @@ async function generateWithOpenCode({
   abortController.signal.addEventListener('abort', onAbort, { once: true });
 
   try {
+    if (abortController.signal.aborted) {
+      onAbort();
+      throw new Error('OpenCode generation aborted');
+    }
+
     const response = await client.session.prompt({
       sessionID: sessionId,
       directory,
@@ -329,6 +359,18 @@ async function generateWithOpenCode({
       });
     }
 
+    if (info?.error) {
+      const message =
+        'data' in info.error &&
+        typeof info.error.data === 'object' &&
+        info.error.data !== null &&
+        'message' in info.error.data &&
+        typeof info.error.data.message === 'string'
+          ? info.error.data.message
+          : 'No error details returned';
+      throw new Error(`OpenCode ${info.error.name}: ${message}`);
+    }
+
     return extractOpenCodeResponseOutput({
       response,
       outputSchema,
@@ -369,11 +411,23 @@ async function generateWithCodex({
   thinkingEffort,
   outputSchema,
   cwd,
+  allowedTools,
+  allowedToolPatterns,
   abortController,
   usageContext,
 }: Parameters<TextGenerationCapability['generate']>[0] & {
   outputSchema?: Record<string, unknown>;
 }): Promise<unknown | null> {
+  const hasRestrictions =
+    allowedTools !== undefined || allowedToolPatterns !== undefined;
+
+  if (hasRestrictions) {
+    throw new Error(
+      'Codex restricted generation is unsupported; choose Claude Code or OpenCode for generation that handles untrusted or file-backed content',
+    );
+  }
+  const generationCwd = cwd ?? homedir();
+
   const { getOrCreateCodexAppServer } = await import(
     './codex/codex-app-server'
   );
@@ -390,7 +444,7 @@ async function generateWithCodex({
 
   const threadResult = await abortableCodexAwait(
     client.request('thread/start', {
-      cwd: cwd ?? homedir(),
+      cwd: generationCwd,
       serviceName: 'jean_claude',
       ...(thinkingEffort && thinkingEffort !== 'default'
         ? { config: { model_reasoning_effort: thinkingEffort } }
@@ -519,6 +573,17 @@ async function generateWithCodex({
   }
 }
 
+function rejectRestrictedCopilotGeneration({
+  allowedTools,
+  allowedToolPatterns,
+}: Parameters<TextGenerationCapability['generate']>[0]): void {
+  if (allowedTools !== undefined || allowedToolPatterns !== undefined) {
+    throw new Error(
+      'Copilot restricted generation is unsupported; refusing generation because Copilot does not have an isolated restricted adapter',
+    );
+  }
+}
+
 async function recordCodexUsage({
   params,
   usageContext,
@@ -594,13 +659,31 @@ function extractOpenCodeResponseOutput({
     .trim();
 
   if (!textParts) {
+    const info = response.data?.info as Partial<OcAssistantMessage> | undefined;
     dbg.agent(
-      'OpenCode generation returned no usable output (session=%s model=%s skill=%s structured=%s parts=%d)',
+      'OpenCode generation returned no usable output (session=%s model=%s skill=%s structured=%s responseKeys=%O info=%O partTypes=%O)',
       sessionId,
       model,
       skillName ?? '(none)',
       outputSchema ? 'yes' : 'no',
-      response.data?.parts?.length ?? 0,
+      Object.keys(response.data ?? {}),
+      info
+        ? {
+            id: info.id,
+            providerID: info.providerID,
+            modelID: info.modelID,
+            mode: info.mode,
+            agent: info.agent,
+            finish: info.finish,
+            variant: info.variant,
+            time: info.time,
+            tokens: info.tokens,
+            cost: info.cost,
+            hasError: info.error !== undefined,
+            hasStructuredOutput: info.structured !== undefined,
+          }
+        : null,
+      (response.data?.parts ?? []).map((part) => part.type ?? '(unknown)'),
     );
     return null;
   }
@@ -883,14 +966,16 @@ function buildOpenCodePermissions(
 function buildClaudeCodeAllowedTools(
   allowedTools?: string[],
   allowedToolPatterns?: Record<string, string[]>,
+  skillName?: string | null,
 ): string[] {
-  if (!allowedTools) return [];
-
-  return allowedTools.flatMap((tool) => {
+  const tools = (allowedTools ?? []).flatMap((tool) => {
     const patterns = allowedToolPatterns?.[tool];
     if (!patterns?.length) return [tool];
     return patterns.map((pattern) => `${tool}(${pattern})`);
   });
+
+  if (skillName) tools.push(`Skill(${skillName})`);
+  return tools;
 }
 
 function parseJsonResponse(text: string): unknown | null {

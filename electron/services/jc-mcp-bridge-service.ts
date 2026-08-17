@@ -277,6 +277,7 @@ export class JcMcpBridgeService {
   private resolveRoute(body: {
     stepId?: string;
     registrationId?: string;
+    contextReminder?: string;
     questions: QuestionSpec[];
   }):
     | { ok: true; value: RegisteredJcMcpBridgeRoute }
@@ -304,7 +305,7 @@ export class JcMcpBridgeService {
   }: {
     res: http.ServerResponse;
     route: RegisteredJcMcpBridgeRoute;
-    body: { questions: QuestionSpec[] };
+    body: { contextReminder?: string; questions: QuestionSpec[] };
   }): Promise<void> {
     if (!route) {
       writeJson(res, 404, { error: 'Unknown stepId' });
@@ -326,6 +327,7 @@ export class JcMcpBridgeService {
       brokerRequest = this.broker.createRequest({
         taskId: route.taskId,
         stepId: route.stepId,
+        contextReminder: body.contextReminder,
         questions: body.questions,
       });
       const requestId = brokerRequest.request.requestId;
@@ -434,18 +436,23 @@ function isAskQuestionBody(
 ): body is {
   stepId?: string;
   registrationId?: string;
+  contextReminder?: string;
   questions: QuestionSpec[];
 } {
   if (!body || typeof body !== 'object') return false;
   const value = body as {
     stepId?: unknown;
     registrationId?: unknown;
+    contextReminder?: unknown;
     questions?: unknown;
   };
   return (
     (value.stepId === undefined || typeof value.stepId === 'string') &&
     (value.registrationId === undefined ||
       typeof value.registrationId === 'string') &&
+    (value.contextReminder === undefined ||
+      (typeof value.contextReminder === 'string' &&
+        value.contextReminder.trim().length > 0)) &&
     Array.isArray(value.questions)
   );
 }

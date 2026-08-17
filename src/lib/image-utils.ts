@@ -1,9 +1,10 @@
+import { MAX_IMAGE_ATTACHMENT_BYTES } from '@shared/media-limits';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
 import { compressImage } from './image-compression';
 
 export const MAX_IMAGES = 5;
-export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+export const MAX_FILE_SIZE = MAX_IMAGE_ATTACHMENT_BYTES;
 export const ALLOWED_IMAGE_TYPES = [
   'image/png',
   'image/jpeg',

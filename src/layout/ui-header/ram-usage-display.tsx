@@ -159,6 +159,12 @@ export function RamUsageDisplay() {
       values: history.map((sample) => sample.rendererProcess.cpuPercent),
       formatValue: formatCpu,
     },
+    {
+      label: 'GPU CPU',
+      value: data.gpuCpuPercent,
+      values: history.map((sample) => sample.gpuCpuPercent),
+      formatValue: formatCpu,
+    },
   ] satisfies Array<{
     label: string;
     value: number;
@@ -191,7 +197,8 @@ export function RamUsageDisplay() {
         {formatBytes(data.totalRssBytes)} ·{' '}
         {formatCpu(
           data.mainProcess.cpuPercent + data.rendererProcess.cpuPercent,
-        )}
+        )}{' '}
+        · GPU {formatCpu(data.gpuCpuPercent)}
       </span>
     </div>
   );

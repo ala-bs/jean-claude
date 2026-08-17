@@ -5,7 +5,7 @@ import type {
   KeyboardEvent,
 } from 'react';
 import { Edit3, Image, Loader2, Save, X } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 
@@ -13,6 +13,7 @@ import type {
   AzureDevOpsCommentThread,
   AzureDevOpsFileChange,
   AzureDevOpsPullRequestDetails,
+  AzureDevOpsUser,
 } from '@/lib/api';
 /* eslint-disable sort-imports */
 import {
@@ -57,6 +58,8 @@ import type { PullRequestRepoInfo } from '@/hooks/use-pull-requests';
 import { Textarea } from '@/common/ui/textarea';
 import { useDebouncedValue } from '@/hooks/use-debounced-value';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
+import { createPromptImageUploadCache } from '@/lib/prompt-image-upload-cache';
 
 
 
@@ -68,6 +71,7 @@ import { CIInlinePanel } from '../ui-pr-ci-inline';
 import { PrChecks } from '../ui-pr-checks';
 import { PrComments } from '../ui-pr-comments';
 import { PrMetaPanel } from '../ui-pr-meta-panel';
+import { descriptionPreviewMarkdown } from './media-preview';
 
 
 
@@ -77,21 +81,6 @@ type PendingDescriptionImage = PromptImagePart & {
 
 function placeholderPattern(placeholderMarkdown: string) {
   return markdownImagePlaceholderPattern(placeholderMarkdown);
-}
-
-function descriptionPreviewMarkdown(
-  markdown: string,
-  images: PendingDescriptionImage[],
-) {
-  return images.reduce((current, image) => {
-    const dataUrl = `data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`;
-    const pattern = placeholderPattern(image.placeholderMarkdown);
-    if (!pattern) return current;
-    return current.replace(
-      pattern,
-      (match) => replaceMarkdownImageUrl(match, dataUrl),
-    );
-  }, markdown);
 }
 
 export function PrOverview({
@@ -123,7 +112,7 @@ export function PrOverview({
   repoId?: string;
   azureProjectName?: string;
   threads?: AzureDevOpsCommentThread[];
-  onAddComment?: (content: string) => void;
+  onAddComment?: (content: string) => Promise<void> | void;
   onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   isAddingComment?: boolean;
   bottomPadding?: number;
@@ -143,40 +132,7 @@ export function PrOverview({
   const [filePreviewWidth, setFilePreviewWidth] = useState(560);
   // Track which build is expanded inline in the checks block
   const [expandedBuildId, setExpandedBuildId] = useState<number | null>(null);
-  const [isEditingDescription, setIsEditingDescription] = useState(false);
-  const [descriptionDraft, setDescriptionDraft] = useState(pr.description);
-  const [descriptionError, setDescriptionError] = useState<string | null>(null);
-  const [pendingDescriptionImages, setPendingDescriptionImages] = useState<
-    PendingDescriptionImage[]
-  >([]);
-  const [descriptionVideoFile, setDescriptionVideoFile] = useState<File | null>(
-    null,
-  );
-  const pendingDescriptionImagesRef = useRef<PendingDescriptionImage[]>([]);
-  const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const descriptionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const descriptionImageTokenCounterRef = useRef(0);
-
   const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
-  const updateDescription = useUpdatePullRequestDescription(
-    projectId,
-    prId,
-    repoInfo,
-  );
-  const uploadAttachment = useUploadPullRequestAttachment(
-    projectId,
-    prId,
-    repoInfo,
-  );
-
-  const currentUserEmail = currentUser?.emailAddress.toLowerCase();
-  const ownerEmail = pr.createdBy.uniqueName.toLowerCase();
-  const canEditDescription =
-    !readOnly &&
-    !!currentUser &&
-    (currentUser.identityId === pr.createdBy.id ||
-      currentUser.id === pr.createdBy.id ||
-      currentUserEmail === ownerEmail);
 
   const mentionDisplayNames = useMemo(() => {
     const names: MentionDisplayNames = {};
@@ -202,25 +158,6 @@ export function PrOverview({
     return names;
   }, [currentUser, pr.createdBy, pr.reviewers, threads]);
 
-  // Debounce draft for preview to avoid re-rendering markdown+GIFs on every keystroke
-  const debouncedDescriptionDraft = useDebouncedValue(descriptionDraft, 300);
-  const previewDescriptionDraft = useMemo(
-    () =>
-      descriptionPreviewMarkdown(
-        debouncedDescriptionDraft,
-        pendingDescriptionImages,
-      ),
-    [debouncedDescriptionDraft, pendingDescriptionImages],
-  );
-
-  useEffect(() => {
-    if (!isEditingDescription) {
-      startTransition(() => setDescriptionDraft(pr.description));
-      startTransition(() => setDescriptionError(null));
-      pendingDescriptionImagesRef.current = [];
-      startTransition(() => setPendingDescriptionImages([]));
-    }
-  }, [isEditingDescription, pr.description]);
 
   const handleExpandCheck = useCallback((buildId: number | null) => {
     setExpandedBuildId(buildId);
@@ -335,9 +272,14 @@ export function PrOverview({
     [pr.completionOptions?.autoCompleteIgnoreConfigIds],
   );
 
-  const handleIgnoreOptionalPolicy = useCallback(
-    (configId: number) => {
-      if (!pr.autoCompleteSetBy) return;
+  const handleSetPolicyIgnored = useCallback(
+    (configId: number, shouldIgnore: boolean) => {
+      if (!pr.autoCompleteSetBy || autoCompleteMutation.isAnyPending) return;
+
+      const currentIds = pr.completionOptions?.autoCompleteIgnoreConfigIds ?? [];
+      const autoCompleteIgnoreConfigIds = shouldIgnore
+        ? Array.from(new Set([...currentIds, configId]))
+        : currentIds.filter((id) => id !== configId);
 
       autoCompleteMutation.mutate({
         enabled: true,
@@ -351,12 +293,7 @@ export function PrOverview({
           transitionWorkItems:
             pr.completionOptions?.transitionWorkItems ?? false,
           mergeCommitMessage: pr.completionOptions?.mergeCommitMessage,
-          autoCompleteIgnoreConfigIds: Array.from(
-            new Set([
-              ...(pr.completionOptions?.autoCompleteIgnoreConfigIds ?? []),
-              configId,
-            ]),
-          ),
+          autoCompleteIgnoreConfigIds,
         },
       });
     },
@@ -366,193 +303,6 @@ export function PrOverview({
       pr.autoCompleteSetBy,
       pr.completionOptions,
     ],
-  );
-
-  const handleSaveDescription = useCallback(async () => {
-    if (uploadAttachment.isPending) return;
-
-    setDescriptionError(null);
-
-    try {
-      let finalDescription = descriptionDraft;
-
-      for (const image of pendingDescriptionImages) {
-        const pattern = placeholderPattern(image.placeholderMarkdown);
-        if (!pattern || !finalDescription.match(pattern)) continue;
-        const fileName = image.filename || 'image.png';
-        const attachment = await uploadAttachment.mutateAsync({
-          fileName,
-          mimeType: image.mimeType || 'application/octet-stream',
-          dataBase64: image.data,
-        });
-        finalDescription = finalDescription.replace(pattern, (match) =>
-          replaceMarkdownImageUrl(match, attachment.url),
-        );
-      }
-
-      if (finalDescription.includes('jc-image://')) {
-        setDescriptionError(
-          'Remove incomplete image placeholders before saving.',
-        );
-        return;
-      }
-
-      await updateDescription.mutateAsync(finalDescription);
-      pendingDescriptionImagesRef.current = [];
-      setPendingDescriptionImages([]);
-      setDescriptionDraft(finalDescription);
-      setIsEditingDescription(false);
-    } catch (error) {
-      setDescriptionError(
-        error instanceof Error ? error.message : 'Failed to save description',
-      );
-    }
-  }, [
-    descriptionDraft,
-    pendingDescriptionImages,
-    updateDescription,
-    uploadAttachment,
-  ]);
-
-  const insertDescriptionMarkdown = useCallback((markdown: string) => {
-    const textarea = descriptionTextareaRef.current;
-    if (!textarea) {
-      setDescriptionDraft((current) => {
-        const separator = current.trim() ? '\n\n' : '';
-        return `${current.trimEnd()}${separator}${markdown}`;
-      });
-      return;
-    }
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    setDescriptionDraft(
-      (current) => `${current.slice(0, start)}${markdown}${current.slice(end)}`,
-    );
-    requestAnimationFrame(() => {
-      textarea.focus();
-      const cursor = start + markdown.length;
-      textarea.setSelectionRange(cursor, cursor);
-    });
-  }, []);
-
-  const stageDescriptionImage = useCallback(
-    (image: PromptImagePart) => {
-      if (pendingDescriptionImagesRef.current.length >= MAX_IMAGES) {
-        setDescriptionError(
-          `Only ${MAX_IMAGES} images or GIFs can be attached.`,
-        );
-        return;
-      }
-
-      descriptionImageTokenCounterRef.current += 1;
-      const token = descriptionImageTokenCounterRef.current;
-      const fileName = image.filename || `image-${token}.png`;
-      const safeAltText = fileName.replace(/[[\]()\\]/g, '_');
-      const placeholderMarkdown = `![${safeAltText}](jc-image://${token}${getPromptImageMarkdownSize(image)})`;
-
-      insertDescriptionMarkdown(placeholderMarkdown);
-      const nextImages = [
-        ...pendingDescriptionImagesRef.current,
-        { ...image, placeholderMarkdown },
-      ];
-      pendingDescriptionImagesRef.current = nextImages;
-      setPendingDescriptionImages(nextImages);
-    },
-    [insertDescriptionMarkdown],
-  );
-
-  const stageDescriptionImageFiles = useCallback(
-    async (files: File[]) => {
-      const imageFiles = files.filter((file) => file.type.startsWith('image/'));
-      const videoFile = files.find(isVideoFile);
-      if (imageFiles.length === 0 && !videoFile) return;
-      const allowed = MAX_IMAGES - pendingDescriptionImages.length;
-      if (allowed <= 0) return;
-      if (videoFile && allowed > imageFiles.length) {
-        setDescriptionVideoFile(videoFile);
-      }
-
-      setDescriptionError(null);
-      try {
-        await Promise.all(
-          imageFiles.slice(0, allowed).map(
-            (file) =>
-              new Promise<void>((resolve, reject) => {
-                void processImageFile(
-                  file,
-                  (image) => {
-                    stageDescriptionImage(image);
-                    resolve();
-                  },
-                  reject,
-                ).catch(reject);
-              }),
-          ),
-        );
-      } catch (error) {
-        setDescriptionError(
-          error instanceof Error ? error.message : 'Failed to stage image',
-        );
-      }
-    },
-    [pendingDescriptionImages.length, stageDescriptionImage],
-  );
-
-  const handleImageSelection = useCallback(
-    async (event: ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(event.target.files ?? []);
-      await stageDescriptionImageFiles(files);
-      event.target.value = '';
-    },
-    [stageDescriptionImageFiles],
-  );
-
-  const handleDescriptionPaste = useCallback(
-    (event: ClipboardEvent<HTMLTextAreaElement>) => {
-      const files = Array.from(event.clipboardData.files);
-      const imageFiles = files.filter((file) => file.type.startsWith('image/'));
-      const hasVideo = files.some(isVideoFile);
-      if (imageFiles.length === 0 && !hasVideo) return;
-      event.preventDefault();
-      void stageDescriptionImageFiles(files);
-    },
-    [stageDescriptionImageFiles],
-  );
-
-  const handleDescriptionDrop = useCallback(
-    (event: DragEvent<HTMLTextAreaElement>) => {
-      const files = Array.from(event.dataTransfer.files);
-      const imageFiles = files.filter((file) => file.type.startsWith('image/'));
-      const hasVideo = files.some(isVideoFile);
-      if (imageFiles.length === 0 && !hasVideo) return;
-      event.preventDefault();
-      void stageDescriptionImageFiles(files);
-    },
-    [stageDescriptionImageFiles],
-  );
-
-  const handleDescriptionDragOver = useCallback(
-    (event: DragEvent<HTMLTextAreaElement>) => {
-      if (
-        Array.from(event.dataTransfer.items).some(
-          (item) => item.kind === 'file',
-        )
-      ) {
-        event.preventDefault();
-      }
-    },
-    [],
-  );
-
-  const handleDescriptionKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-        event.preventDefault();
-        void handleSaveDescription();
-      }
-    },
-    [handleSaveDescription],
   );
 
   // Merge optimistic queued state with server data
@@ -611,182 +361,25 @@ export function PrOverview({
                 : undefined
             }
             ignoredAutoCompletePolicyIds={ignoredAutoCompletePolicyIds}
-            onIgnoreOptionalPolicy={
+            onSetPolicyIgnored={
               !readOnly && pr.autoCompleteSetBy
-                ? handleIgnoreOptionalPolicy
+                ? handleSetPolicyIgnored
                 : undefined
             }
-            isIgnoringOptionalPolicy={autoCompleteMutation.isPending}
+            isSettingPolicyIgnored={autoCompleteMutation.isAnyPending}
           />
 
           {/* Description */}
-          <div className="border-glass-border bg-bg-1 overflow-hidden rounded-lg border">
-            <div className="border-glass-border/50 flex items-center gap-2.5 border-b px-3.5 py-2.5">
-              <span className="text-ink-0 text-[13px] font-medium">
-                Description
-              </span>
-              <div className="flex-1" />
-              <span className="text-ink-3 text-[11.5px]">
-                by {pr.createdBy.displayName}
-              </span>
-              {canEditDescription && !isEditingDescription && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  icon={<Edit3 className="h-3.5 w-3.5" />}
-                  onClick={() => setIsEditingDescription(true)}
-                >
-                  Edit
-                </Button>
-              )}
-            </div>
-            <div className="p-4">
-              {isEditingDescription ? (
-                <div className="space-y-3">
-                  <Textarea
-                    ref={descriptionTextareaRef}
-                    value={descriptionDraft}
-                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
-                      setDescriptionDraft(event.target.value)
-                    }
-                    onPaste={handleDescriptionPaste}
-                    onDrop={handleDescriptionDrop}
-                    onDragOver={handleDescriptionDragOver}
-                    onKeyDown={handleDescriptionKeyDown}
-                    rows={10}
-                    className="min-h-56 font-mono text-xs"
-                    placeholder="Describe the pull request..."
-                    disabled={
-                      updateDescription.isPending || uploadAttachment.isPending
-                    }
-                  />
-                  <input
-                    ref={imageInputRef}
-                    type="file"
-                    accept="image/*,video/*"
-                    multiple
-                    className="hidden"
-                    onChange={handleImageSelection}
-                  />
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      icon={<Image className="h-3.5 w-3.5" />}
-                      onClick={() => imageInputRef.current?.click()}
-                      disabled={
-                        updateDescription.isPending ||
-                        uploadAttachment.isPending
-                      }
-                    >
-                      {uploadAttachment.isPending
-                        ? 'Uploading...'
-                        : 'Add image/GIF'}
-                    </Button>
-                    <div className="flex-1" />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      icon={<X className="h-3.5 w-3.5" />}
-                      onClick={() => {
-                        pendingDescriptionImagesRef.current = [];
-                        setPendingDescriptionImages([]);
-                        setIsEditingDescription(false);
-                      }}
-                      disabled={
-                        updateDescription.isPending ||
-                        uploadAttachment.isPending
-                      }
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      size="sm"
-                      icon={
-                        updateDescription.isPending ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Save className="h-3.5 w-3.5" />
-                        )
-                      }
-                      onClick={() => void handleSaveDescription()}
-                      disabled={
-                        updateDescription.isPending ||
-                        uploadAttachment.isPending
-                      }
-                    >
-                      Save <Kbd shortcut="cmd+enter" />
-                    </Button>
-                  </div>
-                  {previewDescriptionDraft.trim() && (
-                    <div className="border-glass-border/60 bg-bg-2/60 rounded-md border p-3">
-                      <div className="text-ink-4 mb-2 text-[10px] font-medium tracking-wide uppercase">
-                        Preview
-                      </div>
-                      <AzureMarkdownContent
-                        markdown={previewDescriptionDraft}
-                        providerId={providerId}
-                        className="text-ink-1 text-sm"
-                        imageClassName="max-h-[360px] object-contain"
-                        enableImageModal
-                        mentionDisplayNames={mentionDisplayNames}
-                      />
-                    </div>
-                  )}
-                  {descriptionError && (
-                    <p className="text-xs text-red-400">{descriptionError}</p>
-                  )}
-                  {pendingDescriptionImages.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {pendingDescriptionImages.map((image, index) => (
-                        <div
-                          key={`${image.filename ?? 'img'}-${index}`}
-                          className="relative"
-                        >
-                          <img
-                            src={`data:${image.storageMimeType ?? image.mimeType};base64,${image.storageData ?? image.data}`}
-                            alt={image.filename || 'Attached image'}
-                            title={
-                              image.sizeBytes
-                                ? formatBytes(image.sizeBytes)
-                                : undefined
-                            }
-                            className="h-8 w-8 rounded border border-white/10 object-cover"
-                          />
-                          {image.sizeBytes && (
-                            <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">
-                              {formatBytes(image.sizeBytes)}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : pr.description.trim() ? (
-                <AzureMarkdownContent
-                  markdown={pr.description}
-                  providerId={providerId}
-                  className="text-ink-1 text-sm"
-                  imageClassName="max-h-[520px] object-contain"
-                  enableImageModal
-                  mentionDisplayNames={mentionDisplayNames}
-                />
-              ) : (
-                <p className="text-ink-3 text-sm italic">No description</p>
-              )}
-              <VideoGifConverter
-                file={descriptionVideoFile}
-                onAttach={stageDescriptionImage}
-                onClose={() => setDescriptionVideoFile(null)}
-              />
-            </div>
-          </div>
+          <PrDescriptionCard
+            pr={pr}
+            projectId={projectId}
+            prId={prId}
+            providerId={providerId}
+            mentionDisplayNames={mentionDisplayNames}
+            currentUser={currentUser}
+            repoInfo={repoInfo}
+            readOnly={readOnly}
+          />
 
           {/* Comments */}
           <PrComments
@@ -844,6 +437,7 @@ export function PrOverview({
                 mentionDisplayNames={mentionDisplayNames}
                 mentionOptions={mentionOptions}
                 onSearchMentions={onSearchMentions}
+                onUploadImage={onUploadImage}
                 onClose={() => setFilePreview(null)}
                 repoInfo={repoInfo}
                 readOnly={readOnly}
@@ -881,6 +475,242 @@ export function PrOverview({
   );
 }
 
+const PrDescriptionCard = memo(function PrDescriptionCard({
+  pr,
+  projectId,
+  prId,
+  providerId,
+  mentionDisplayNames,
+  currentUser,
+  repoInfo,
+  readOnly,
+}: {
+  pr: AzureDevOpsPullRequestDetails;
+  projectId: string;
+  prId: number;
+  providerId?: string;
+  mentionDisplayNames: MentionDisplayNames;
+  currentUser?: AzureDevOpsUser;
+  repoInfo?: PullRequestRepoInfo;
+  readOnly: boolean;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(pr.description);
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [images, setImages] = useState<PendingDescriptionImage[]>([]);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const imagesRef = useRef<PendingDescriptionImage[]>([]);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const tokenCounterRef = useRef(0);
+  const saveInProgressRef = useRef(false);
+  const uploadCacheRef = useRef(createPromptImageUploadCache());
+  const imagePreviewUrls = useImagePreviewUrls(images);
+  const updateDescription = useUpdatePullRequestDescription(projectId, prId, repoInfo);
+  const uploadAttachment = useUploadPullRequestAttachment(projectId, prId, repoInfo);
+  const controlsLocked = isSaving || updateDescription.isPending || uploadAttachment.isPending;
+  const canEdit = (() => {
+    if (readOnly || !currentUser) return false;
+    const email = currentUser.emailAddress.toLowerCase();
+    const ownerEmail = pr.createdBy.uniqueName.toLowerCase();
+    return (
+      currentUser.identityId === pr.createdBy.id ||
+      currentUser.id === pr.createdBy.id ||
+      email === ownerEmail
+    );
+  })();
+  const debouncedDraft = useDebouncedValue(draft, 300);
+  const previewDraft = useMemo(
+    () => descriptionPreviewMarkdown(debouncedDraft, images, imagePreviewUrls),
+    [debouncedDraft, imagePreviewUrls, images],
+  );
+
+  useEffect(() => {
+    if (!isEditing) {
+      startTransition(() => setDraft(pr.description));
+      startTransition(() => setError(null));
+      imagesRef.current = [];
+      uploadCacheRef.current.clear();
+      startTransition(() => setImages([]));
+    }
+  }, [isEditing, pr.description]);
+
+  useEffect(() => {
+    const cache = uploadCacheRef.current;
+    return () => cache.clear();
+  }, []);
+
+  const insertMarkdown = useCallback((markdown: string) => {
+    if (saveInProgressRef.current) return;
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      setDraft((current) => `${current.trimEnd()}${current.trim() ? '\n\n' : ''}${markdown}`);
+      return;
+    }
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    setDraft((current) => `${current.slice(0, start)}${markdown}${current.slice(end)}`);
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + markdown.length, start + markdown.length);
+    });
+  }, []);
+
+  const stageImage = useCallback((image: PromptImagePart) => {
+    if (saveInProgressRef.current) return;
+    if (imagesRef.current.length >= MAX_IMAGES) {
+      setError(`Only ${MAX_IMAGES} images or GIFs can be attached.`);
+      return;
+    }
+    const token = ++tokenCounterRef.current;
+    const fileName = image.filename || `image-${token}.png`;
+    const safeAltText = fileName.replace(/[[\]()\\]/g, '_');
+    const placeholderMarkdown = `![${safeAltText}](jc-image://${token}${getPromptImageMarkdownSize(image)})`;
+    insertMarkdown(placeholderMarkdown);
+    const nextImages = [...imagesRef.current, { ...image, placeholderMarkdown }];
+    imagesRef.current = nextImages;
+    setImages(nextImages);
+  }, [insertMarkdown]);
+
+  const stageImageFiles = useCallback(async (files: File[]) => {
+    if (saveInProgressRef.current) return;
+    const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+    const video = files.find(isVideoFile);
+    if (imageFiles.length === 0 && !video) return;
+    const allowed = MAX_IMAGES - images.length;
+    if (allowed <= 0) return;
+    if (video && allowed > imageFiles.length) setVideoFile(video);
+    setError(null);
+    try {
+      await Promise.all(imageFiles.slice(0, allowed).map((file) => new Promise<void>((resolve, reject) => {
+        void processImageFile(file, (image) => { stageImage(image); resolve(); }, reject).catch(reject);
+      })));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to stage image');
+    }
+  }, [images.length, stageImage]);
+
+  const save = useCallback(async () => {
+    if (saveInProgressRef.current || uploadAttachment.isPending) return;
+    saveInProgressRef.current = true;
+    setIsSaving(true);
+    setError(null);
+    try {
+      let finalDescription = draft;
+      for (const image of images) {
+        const pattern = placeholderPattern(image.placeholderMarkdown);
+        if (!pattern || !finalDescription.match(pattern)) continue;
+        const fileName = image.filename || 'image.png';
+        const attachmentUrl = await uploadCacheRef.current.resolve({
+          image,
+          fileName,
+          upload: async () => (await uploadAttachment.mutateAsync({
+            fileName,
+            mimeType: image.mimeType || 'application/octet-stream',
+            dataBase64: image.data,
+          })).url,
+        });
+        finalDescription = finalDescription.replace(pattern, (match) => replaceMarkdownImageUrl(match, attachmentUrl));
+      }
+      if (finalDescription.includes('jc-image://')) {
+        setError('Remove incomplete image placeholders before saving.');
+        return;
+      }
+      await updateDescription.mutateAsync(finalDescription);
+      imagesRef.current = [];
+      uploadCacheRef.current.clear();
+      setImages([]);
+      setDraft(finalDescription);
+      setIsEditing(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to save description');
+    } finally {
+      saveInProgressRef.current = false;
+      setIsSaving(false);
+    }
+  }, [draft, images, updateDescription, uploadAttachment]);
+
+  const handleFiles = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    await stageImageFiles(Array.from(event.target.files ?? []));
+    event.target.value = '';
+  }, [stageImageFiles]);
+  const handlePaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (saveInProgressRef.current) return;
+    const files = Array.from(event.clipboardData.files);
+    if (!files.some((file) => file.type.startsWith('image/') || isVideoFile(file))) return;
+    event.preventDefault();
+    void stageImageFiles(files);
+  }, [stageImageFiles]);
+  const handleDrop = useCallback((event: DragEvent<HTMLTextAreaElement>) => {
+    if (saveInProgressRef.current) return;
+    const files = Array.from(event.dataTransfer.files);
+    if (!files.some((file) => file.type.startsWith('image/') || isVideoFile(file))) return;
+    event.preventDefault();
+    void stageImageFiles(files);
+  }, [stageImageFiles]);
+  const handleKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      void save();
+    }
+  }, [save]);
+  const removeImage = useCallback((index: number) => {
+    if (saveInProgressRef.current || updateDescription.isPending || uploadAttachment.isPending) return;
+    const image = imagesRef.current[index];
+    if (image) {
+      uploadCacheRef.current.delete(image);
+      const pattern = placeholderPattern(image.placeholderMarkdown);
+      setDraft((current) => pattern ? current.replace(pattern, '') : current);
+    }
+    const nextImages = imagesRef.current.filter((_, imageIndex) => imageIndex !== index);
+    imagesRef.current = nextImages;
+    setImages(nextImages);
+  }, [updateDescription.isPending, uploadAttachment.isPending]);
+  const cancel = useCallback(() => {
+    if (saveInProgressRef.current) return;
+    imagesRef.current = [];
+    uploadCacheRef.current.clear();
+    setImages([]);
+    setIsEditing(false);
+  }, []);
+  const startEditing = useCallback(() => {
+    uploadCacheRef.current.clear();
+    imagesRef.current = [];
+    setImages([]);
+    setDraft(pr.description);
+    setError(null);
+    setIsEditing(true);
+  }, [pr.description]);
+
+  return (
+    <div className="border-glass-border bg-bg-1 overflow-hidden rounded-lg border">
+      <div className="border-glass-border/50 flex items-center gap-2.5 border-b px-3.5 py-2.5">
+        <span className="text-ink-0 text-[13px] font-medium">Description</span>
+        <div className="flex-1" />
+        <span className="text-ink-3 text-[11.5px]">by {pr.createdBy.displayName}</span>
+        {canEdit && !isEditing && <Button type="button" variant="ghost" size="sm" icon={<Edit3 className="h-3.5 w-3.5" />} onClick={startEditing}>Edit</Button>}
+      </div>
+      <div className="p-4">
+        {isEditing ? <div className="space-y-3">
+          <Textarea ref={textareaRef} value={draft} onChange={(event) => { if (!saveInProgressRef.current) setDraft(event.target.value); }} onPaste={handlePaste} onDrop={handleDrop} onDragOver={(event) => { if (Array.from(event.dataTransfer.items).some((item) => item.kind === 'file')) event.preventDefault(); }} onKeyDown={handleKeyDown} rows={10} className="min-h-56 font-mono text-xs" placeholder="Describe the pull request..." disabled={controlsLocked} />
+          <input ref={inputRef} type="file" accept="image/*,video/*" multiple className="hidden" onChange={handleFiles} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="secondary" size="sm" icon={<Image className="h-3.5 w-3.5" />} onClick={() => { if (!saveInProgressRef.current) inputRef.current?.click(); }} disabled={controlsLocked}>{uploadAttachment.isPending ? 'Uploading...' : 'Add image/GIF'}</Button>
+            <div className="flex-1" />
+            <Button type="button" variant="ghost" size="sm" icon={<X className="h-3.5 w-3.5" />} onClick={cancel} disabled={controlsLocked}>Cancel</Button>
+            <Button type="button" variant="primary" size="sm" icon={isSaving || updateDescription.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} onClick={() => void save()} disabled={controlsLocked}>Save <Kbd shortcut="cmd+enter" /></Button>
+          </div>
+          {previewDraft.trim() && <div className="border-glass-border/60 bg-bg-2/60 rounded-md border p-3"><div className="text-ink-4 mb-2 text-[10px] font-medium tracking-wide uppercase">Preview</div><AzureMarkdownContent markdown={previewDraft} providerId={providerId} className="text-ink-1 text-sm" imageClassName="max-h-[360px] object-contain" enableImageModal allowBlobImages mentionDisplayNames={mentionDisplayNames} /></div>}
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          {images.length > 0 && <div className="flex flex-wrap gap-1.5">{images.map((image, index) => <div key={`${image.filename ?? 'img'}-${index}`} className="relative">{imagePreviewUrls[index] ? <img src={imagePreviewUrls[index]} alt={image.filename || 'Attached image'} title={image.sizeBytes ? formatBytes(image.sizeBytes) : undefined} className="h-8 w-8 rounded border border-white/10 object-cover" /> : <div title={image.filename} className="text-ink-3 border-stroke-1 flex h-8 max-w-36 items-center rounded border px-1.5 text-[9px]"><span className="truncate">{image.filename ?? image.mimeType}</span></div>}{image.sizeBytes && <span className="absolute right-0 bottom-0 left-0 rounded-b bg-black/70 px-0.5 text-center font-mono text-[7px] leading-3 text-white">{formatBytes(image.sizeBytes)}</span>}<button type="button" aria-label={`Remove ${image.filename ?? 'attached image'}`} onClick={() => removeImage(index)} disabled={controlsLocked} className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-30"><X className="h-2.5 w-2.5" /></button></div>)}</div>}
+        </div> : pr.description.trim() ? <AzureMarkdownContent markdown={pr.description} providerId={providerId} className="text-ink-1 text-sm" imageClassName="max-h-[520px] object-contain" enableImageModal mentionDisplayNames={mentionDisplayNames} /> : <p className="text-ink-3 text-sm italic">No description</p>}
+        <VideoGifConverter file={videoFile} onAttach={stageImage} onClose={() => setVideoFile(null)} />
+      </div>
+    </div>
+  );
+});
+
 function PrFilePreviewPane({
   projectId,
   prId,
@@ -894,6 +724,7 @@ function PrFilePreviewPane({
   mentionDisplayNames,
   mentionOptions,
   onSearchMentions,
+  onUploadImage,
   onClose,
   repoInfo,
   readOnly,
@@ -910,6 +741,7 @@ function PrFilePreviewPane({
   mentionDisplayNames: MentionDisplayNames;
   mentionOptions: MentionOption[];
   onSearchMentions?: (query: string) => Promise<MentionOption[]>;
+  onUploadImage?: (image: PromptImagePart, fileName: string) => Promise<string>;
   onClose: () => void;
   repoInfo?: PullRequestRepoInfo;
   readOnly: boolean;
@@ -977,6 +809,7 @@ function PrFilePreviewPane({
               mentionDisplayNames={mentionDisplayNames}
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
+              onUploadImage={onUploadImage}
               repoInfo={repoInfo}
               readOnly={readOnly}
             />

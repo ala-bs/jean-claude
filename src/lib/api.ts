@@ -74,6 +74,13 @@ import type {
   AzureDevOpsPullRequestTag,
 } from '@shared/azure-devops-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
+import type {
+  DiscoveredMcpVariant,
+  GlobalMcpDiscoveryResult,
+  GlobalMcpServer,
+  NewGlobalMcpServer,
+  UpdateGlobalMcpServer,
+} from '@shared/global-mcp-types';
 import type { FeedItem, FeedNote, ProjectPriority } from '@shared/feed-types';
 import type {
   GlobalPrompt,
@@ -120,10 +127,15 @@ import type {
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
 import type {
+  PreferenceMemoryDashboard,
   RecordPreferenceEvidenceParams,
   RecordPreferenceEvidenceResult,
 } from '@shared/preference-memory-types';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
+import type {
+  WorkItemSummary,
+  WorkItemSummaryRequest,
+} from '@shared/work-item-summary-types';
 import type { AgentResourceSnapshot } from '@shared/agent-resource-types';
 import type { AgentUIEvent } from '@shared/agent-ui-events';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
@@ -151,6 +163,7 @@ export interface PackageJson {
 
 export interface WorktreeDiffFile {
   path: string;
+  originalPath?: string;
   status: 'added' | 'modified' | 'deleted';
   additions: number;
   deletions: number;
@@ -269,11 +282,18 @@ export interface AzureDevOpsWorkItem {
     teamProject?: string;
     state: string;
     assignedTo?: string;
+    assignedToUniqueName?: string;
     description?: string;
+    acceptanceCriteria?: string;
     reproSteps?: string;
     changedDate?: string;
     boardColumn?: string;
     boardColumnDone?: boolean;
+    tags?: string;
+    priority?: number;
+    stackRank?: number;
+    storyPoints?: number;
+    iterationPath?: string;
   };
   testSteps?: TestStep[];
   parentId?: number;
@@ -302,12 +322,17 @@ export interface AzureDevOpsBoardColumn {
   name: string;
   columnType?: string;
   stateMappings: Record<string, string>;
+  teamId?: string;
+  boardId?: string;
 }
 
 export interface WorkItemComment {
   id: number;
   workItemId: number;
   text: string;
+  rawText?: string;
+  format?: 'html' | 'markdown';
+  attachmentBaseUrl?: string;
   createdBy: string;
   createdDate: string;
 }
@@ -350,6 +375,12 @@ export interface WorktreeStatus {
   hasUnstagedChanges: boolean;
   hasUnpushedCommits: boolean;
   currentBranch: string | null;
+  worktreeDeleted?: boolean;
+}
+
+export interface WorktreeLocalChanges {
+  staged: WorktreeDiffFile[];
+  unstaged: WorktreeDiffFile[];
   worktreeDeleted?: boolean;
 }
 
@@ -484,6 +515,12 @@ export interface Api {
     getSkills: (projectId: string) => Promise<Skill[]>;
   };
   preferenceMemory: {
+    getDashboard: (params: {
+      projectId: string;
+      page?: number;
+      pageSize?: number;
+    }) => Promise<PreferenceMemoryDashboard>;
+    consolidate: (projectId: string) => Promise<{ processed: boolean }>;
     recordEvidence: (
       params: RecordPreferenceEvidenceParams,
     ) => Promise<RecordPreferenceEvidenceResult>;
@@ -509,6 +546,7 @@ export interface Api {
     createWithWorktree: (
       data: NewTask & {
         useWorktree: boolean;
+        useExistingBranch?: boolean;
         sourceBranch?: string | null;
         autoStart?: boolean;
         interactionMode?: InteractionMode | null;
@@ -535,6 +573,7 @@ export interface Api {
       worktreeCleanup?: {
         worktreePath: string;
         branchName: string;
+        keepBranch: boolean;
       };
     }>;
     clearUserCompleted: (id: string) => Promise<Task>;
@@ -570,6 +609,7 @@ export interface Api {
     ) => Promise<Task[]>;
     worktree: {
       getDiff: (taskId: string) => Promise<WorktreeDiffResult>;
+      getLocalChanges: (taskId: string) => Promise<WorktreeLocalChanges>;
       getCommits: (taskId: string) => Promise<WorktreeCommit[]>;
       getCommitDiff: (
         taskId: string,
@@ -585,6 +625,13 @@ export interface Api {
         taskId: string,
         filePath: string,
         status: 'added' | 'modified' | 'deleted',
+      ) => Promise<WorktreeFileContent>;
+      getLocalFileContent: (
+        taskId: string,
+        filePath: string,
+        status: 'added' | 'modified' | 'deleted',
+        scope: 'staged' | 'unstaged',
+        originalPath?: string,
       ) => Promise<WorktreeFileContent>;
       getStatus: (taskId: string) => Promise<WorktreeStatus>;
       commit: (
@@ -622,6 +669,7 @@ export interface Api {
         params: {
           worktreePath: string;
           branchName: string;
+          keepBranch?: boolean;
         },
       ) => Promise<{ editorCloseWarning?: string }>;
     };
@@ -637,19 +685,31 @@ export interface Api {
       deleteWorktree?: boolean;
       commitUnstaged?: boolean;
     }) => Promise<{ id: number; url: string; editorCloseWarning?: string }>;
-    createPrReview: (params: {
+    createPrReviewTask: (params: {
       projectId: string;
       pullRequestId: number;
-      agentBackend?: AgentBackendType | null;
-      modelPreference?: string | null;
-      thinkingEffort?: ThinkingEffort | null;
     }) => Promise<Task>;
   };
   steps: {
     findByTaskId: (taskId: string) => Promise<TaskStep[]>;
     findById: (stepId: string) => Promise<TaskStep | undefined>;
     create: (data: NewTaskStep & { start?: boolean }) => Promise<TaskStep>;
+    createPrReviewChatStep: (params: {
+      taskId: string;
+      pullRequestId: number;
+      filePath: string;
+      lineStart: number;
+      lineEnd?: number;
+      side?: 'old' | 'new';
+      selectedText: string;
+      question: string;
+    }) => Promise<TaskStep>;
+    continuePrReviewChatStep: (params: {
+      stepId: string;
+      question: string;
+    }) => Promise<TaskStep>;
     update: (stepId: string, data: UpdateTaskStep) => Promise<TaskStep>;
+    archive: (stepId: string) => Promise<TaskStep>;
 
     resolvePrompt: (stepId: string) => Promise<{
       resolvedPrompt: string;
@@ -689,13 +749,24 @@ export interface Api {
         workItemTypes?: string[];
         excludeWorkItemTypes?: string[];
         searchText?: string;
-        iterationPath?: string;
+          iterationPath?: string;
+          iterationPaths?: string[];
+          assignedTo?: string;
       };
     }) => Promise<AzureDevOpsWorkItem[]>;
+    queryWorkItemOwners: (params: {
+      providerId: string;
+      projectName: string;
+    }) => Promise<Array<{ displayName: string; value: string }>>;
     getWorkItemById: (params: {
       providerId: string;
       workItemId: number;
     }) => Promise<AzureDevOpsWorkItem | null>;
+    getWorkItemsByIds: (params: {
+      providerId: string;
+      projectName: string;
+      workItemIds: number[];
+    }) => Promise<AzureDevOpsWorkItem[]>;
     getPullRequestStatuses: (params: {
       providerId: string;
       linkedPrs: Array<{ prId: number; projectId: string; repoId: string }>;
@@ -715,6 +786,21 @@ export interface Api {
       workItemId: number;
       state: string;
     }) => Promise<void>;
+    updateWorkItemField: (params: {
+      providerId: string;
+      workItemId: number;
+      field: string;
+      value: string | number | null;
+    }) => Promise<void>;
+    updateWorkItemBoardColumn: (params: {
+      providerId: string;
+      projectId: string;
+      projectName: string;
+      workItemId: number;
+      column: string;
+      teamId: string;
+      boardId: string;
+    }) => Promise<void>;
     getRelatedTestCases: (params: {
       providerId: string;
       projectName: string;
@@ -725,6 +811,16 @@ export interface Api {
       projectName: string;
       workItemId: number;
     }) => Promise<WorkItemComment[]>;
+    getWorkItemSummary: (
+      params: WorkItemSummaryRequest,
+    ) => Promise<WorkItemSummary | null>;
+    generateWorkItemSummary: (
+      params: WorkItemSummaryRequest,
+    ) => Promise<WorkItemSummary>;
+    getCachedWorkItemSummaries: (params: {
+      providerId: string;
+      workItemIds: number[];
+    }) => Promise<WorkItemSummary[]>;
     getWorkItemHistory: (params: {
       providerId: string;
       projectName: string;
@@ -736,6 +832,20 @@ export interface Api {
       workItemId: number;
       text: string;
     }) => Promise<WorkItemComment>;
+    updateWorkItemComment: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      commentId: number;
+      text: string;
+    }) => Promise<WorkItemComment>;
+    uploadWorkItemAttachment: (params: {
+      providerId: string;
+      projectName: string;
+      filename: string;
+      mimeType: string;
+      base64: string;
+    }) => Promise<{ url: string }>;
     getIterations: (params: {
       providerId: string;
       projectName: string;
@@ -974,6 +1084,12 @@ export interface Api {
       repoId: string;
       pullRequestId: number;
     }) => Promise<void>;
+    markPullRequestDraft: (params: {
+      providerId: string;
+      projectId: string;
+      repoId: string;
+      pullRequestId: number;
+    }) => Promise<void>;
   };
   dialog: {
     openDirectory: () => Promise<string | null>;
@@ -1114,6 +1230,7 @@ export interface Api {
   agent: {
     start: (stepId: string) => Promise<void>;
     stop: (stepId: string) => Promise<void>;
+    stopAll: () => Promise<void>;
     respond: (
       stepId: string,
       requestId: string,
@@ -1147,6 +1264,7 @@ export interface Api {
     ) => Promise<DebugMessageWithRawData[]>;
     getResourceSnapshots: () => Promise<AgentResourceSnapshot[]>;
     getResourceHistory: () => Promise<Record<string, AgentResourceSnapshot[]>>;
+    setHighFrequencyResourceSampling: (enabled: boolean) => Promise<void>;
     compactRawMessages: (taskId: string) => Promise<void>;
     reprocessNormalization: (taskId: string) => Promise<number>;
     getPendingRequest: (stepId: string) => Promise<
@@ -1159,6 +1277,7 @@ export interface Api {
           data: {
             taskId: string;
             requestId: string;
+            contextReminder?: string;
             questions: AgentQuestion[];
           };
         }
@@ -1261,6 +1380,7 @@ export interface Api {
       taskId: string;
       runCommandId: string;
     }) => Promise<void>;
+    stopAll: () => Promise<void>;
     sendInput: (params: {
       taskId: string;
       runCommandId: string;
@@ -1350,6 +1470,29 @@ export interface Api {
         mainRepoPath: string;
       },
     ) => Promise<string>;
+  };
+  globalMcp: {
+    findAll: () => Promise<GlobalMcpServer[]>;
+    findById: (id: string) => Promise<GlobalMcpServer | undefined>;
+    create: (data: NewGlobalMcpServer) => Promise<GlobalMcpServer>;
+    update: (
+      id: string,
+      data: UpdateGlobalMcpServer,
+    ) => Promise<GlobalMcpServer>;
+    enable: (
+      id: string,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
+    disable: (
+      id: string,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
+    uninstall: (id: string) => Promise<void>;
+    discover: () => Promise<GlobalMcpDiscoveryResult>;
+    import: (
+      entry: DiscoveredMcpVariant,
+      backends: AgentBackendType[],
+    ) => Promise<GlobalMcpServer>;
   };
   claudeProjects: {
     findNonExistent: () => Promise<ClaudeProjectsScanResult>;
@@ -1640,6 +1783,7 @@ export interface Api {
         privateBytes: number;
         cpuPercent: number;
       };
+      gpuCpuPercent: number;
     }>;
   };
   debugLogs: {
@@ -1743,6 +1887,12 @@ export const api: Api = hasWindowApi
         getSkills: async () => [],
       },
       preferenceMemory: {
+        getDashboard: async () => {
+          throw new Error('API not available');
+        },
+        consolidate: async () => {
+          throw new Error('API not available');
+        },
         recordEvidence: async () => {
           throw new Error('API not available');
         },
@@ -1794,6 +1944,7 @@ export const api: Api = hasWindowApi
         reorder: async () => [],
         worktree: {
           getDiff: async () => ({ files: [] }),
+          getLocalChanges: async () => ({ staged: [], unstaged: [] }),
           getCommits: async () => [],
           getCommitDiff: async () => [],
           getCommitFileContent: async () => ({
@@ -1802,6 +1953,11 @@ export const api: Api = hasWindowApi
             isBinary: false,
           }),
           getFileContent: async () => ({
+            oldContent: null,
+            newContent: null,
+            isBinary: false,
+          }),
+          getLocalFileContent: async () => ({
             oldContent: null,
             newContent: null,
             isBinary: false,
@@ -1833,7 +1989,7 @@ export const api: Api = hasWindowApi
           },
         },
         createPullRequest: async () => ({ id: 0, url: '' }),
-        createPrReview: async () => {
+        createPrReviewTask: async () => {
           throw new Error('API not available');
         },
       },
@@ -1843,7 +1999,16 @@ export const api: Api = hasWindowApi
         create: async () => {
           throw new Error('API not available');
         },
+        createPrReviewChatStep: async () => {
+          throw new Error('API not available');
+        },
+        continuePrReviewChatStep: async () => {
+          throw new Error('API not available');
+        },
         update: async () => {
+          throw new Error('API not available');
+        },
+        archive: async () => {
           throw new Error('API not available');
         },
         delete: async () => {},
@@ -1896,17 +2061,36 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         queryWorkItems: async () => [],
+        queryWorkItemOwners: async () => [],
         getWorkItemById: async () => null,
+        getWorkItemsByIds: async () => [],
         getPullRequestStatuses: async () => [],
         getWorkItemStates: async () => [],
         getBoardColumns: async () => [],
         updateWorkItemState: async () => {
           throw new Error('API not available');
         },
+        updateWorkItemField: async () => {
+          throw new Error('API not available');
+        },
+        updateWorkItemBoardColumn: async () => {
+          throw new Error('API not available');
+        },
         getRelatedTestCases: async () => [],
         getWorkItemComments: async () => [],
+        getWorkItemSummary: async () => null,
+        generateWorkItemSummary: async () => {
+          throw new Error('API not available');
+        },
+        getCachedWorkItemSummaries: async () => [],
         getWorkItemHistory: async () => [],
         addWorkItemComment: async () => {
+          throw new Error('API not available');
+        },
+        updateWorkItemComment: async () => {
+          throw new Error('API not available');
+        },
+        uploadWorkItemAttachment: async () => {
           throw new Error('API not available');
         },
         getIterations: async () => [],
@@ -1977,6 +2161,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         publishPullRequest: async () => {
+          throw new Error('API not available');
+        },
+        markPullRequestDraft: async () => {
           throw new Error('API not available');
         },
       },
@@ -2060,6 +2247,9 @@ export const api: Api = hasWindowApi
         stop: async () => {
           throw new Error('API not available');
         },
+        stopAll: async () => {
+          throw new Error('API not available');
+        },
         respond: async () => {
           throw new Error('API not available');
         },
@@ -2081,6 +2271,7 @@ export const api: Api = hasWindowApi
         getMessagesWithRawData: async () => [],
         getResourceSnapshots: async () => [],
         getResourceHistory: async () => ({}),
+        setHighFrequencyResourceSampling: async () => {},
         compactRawMessages: async () => {},
         reprocessNormalization: async () => 0,
         getPendingRequest: async () => null,
@@ -2198,6 +2389,7 @@ export const api: Api = hasWindowApi
           commands: [],
         }),
         stopCommand: async () => {},
+        stopAll: async () => {},
         sendInput: async () => {},
         resetLogs: async () => 0,
         sendSignal: async () => {},
@@ -2248,6 +2440,27 @@ export const api: Api = hasWindowApi
         activate: async () => {},
         deactivate: async () => {},
         substituteVariables: async (commandTemplate) => commandTemplate,
+      },
+      globalMcp: {
+        findAll: async () => [],
+        findById: async () => undefined,
+        create: async () => {
+          throw new Error('API not available');
+        },
+        update: async () => {
+          throw new Error('API not available');
+        },
+        enable: async () => {
+          throw new Error('API not available');
+        },
+        disable: async () => {
+          throw new Error('API not available');
+        },
+        uninstall: async () => {},
+        discover: async () => ({ groups: [], errors: [] }),
+        import: async () => {
+          throw new Error('API not available');
+        },
       },
       claudeProjects: {
         findNonExistent: async () => ({ projects: [], contentHash: '' }),
@@ -2505,6 +2718,7 @@ export const api: Api = hasWindowApi
             privateBytes: 0,
             cpuPercent: 0,
           },
+          gpuCpuPercent: 0,
         }),
       },
       debugLogs: {

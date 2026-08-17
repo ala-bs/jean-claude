@@ -8,8 +8,88 @@
 
 import { ProviderRepository, TokenRepository } from '../database/repositories';
 import { dbg } from '../lib/debug';
+import { MAX_IMAGE_ATTACHMENT_BYTES } from '../../shared/media-limits';
 
 import { createAuthHeader } from './azure-devops-service';
+
+const MAX_AUTHENTICATED_REDIRECTS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+function parseAllowedAzureImageUrl(imageUrl: string): URL | null {
+  let url: URL;
+  try {
+    url = new URL(imageUrl);
+  } catch {
+    return null;
+  }
+
+  const isAllowedHost =
+    url.hostname === 'dev.azure.com' ||
+    url.hostname.endsWith('.visualstudio.com');
+  if (
+    url.protocol !== 'https:' ||
+    !isAllowedHost ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.port !== ''
+  ) {
+    return null;
+  }
+
+  return url;
+}
+
+async function fetchWithValidatedRedirects(params: {
+  imageUrl: string;
+  authorization: string;
+  signal?: AbortSignal;
+}): Promise<Response> {
+  let url = parseAllowedAzureImageUrl(params.imageUrl);
+  if (!url) throw new Error('Disallowed Azure DevOps image URL');
+
+  const visited = new Set<string>();
+  for (let redirectCount = 0; ; redirectCount += 1) {
+    const normalizedUrl = url.href;
+    if (visited.has(normalizedUrl)) {
+      throw new Error('Azure DevOps image redirect loop');
+    }
+    visited.add(normalizedUrl);
+
+    const response = await fetch(normalizedUrl, {
+      signal: params.signal,
+      redirect: 'manual',
+      headers: { Authorization: params.authorization },
+    });
+    if (!REDIRECT_STATUSES.has(response.status)) return response;
+
+    if (redirectCount >= MAX_AUTHENTICATED_REDIRECTS) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error('Too many Azure DevOps image redirects');
+    }
+
+    const location = response.headers.get('location');
+    if (!location) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error('Azure DevOps image redirect missing Location');
+    }
+
+    let destination: URL;
+    try {
+      destination = new URL(location, url);
+    } catch {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error('Invalid Azure DevOps image redirect');
+    }
+    const allowedDestination = parseAllowedAzureImageUrl(destination.href);
+    if (!allowedDestination) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error('Disallowed Azure DevOps image redirect');
+    }
+
+    await response.body?.cancel().catch(() => undefined);
+    url = allowedDestination;
+  }
+}
 
 /**
  * Validates URL and resolves provider credentials for an Azure DevOps image fetch.
@@ -18,25 +98,14 @@ import { createAuthHeader } from './azure-devops-service';
 async function fetchAuthenticated(params: {
   providerId: string;
   imageUrl: string;
+  signal?: AbortSignal;
 }): Promise<
   { response: Response; mimeType: string } | { error: string; status: number }
 > {
-  const { providerId, imageUrl } = params;
+  const { providerId, imageUrl, signal } = params;
 
-  // Validate the URL is an Azure DevOps URL
-  let url: URL;
-  try {
-    url = new URL(imageUrl);
-  } catch {
+  if (!parseAllowedAzureImageUrl(imageUrl)) {
     dbg.azureImageProxy('Invalid URL: %s', imageUrl);
-    return { error: 'Invalid image URL', status: 400 };
-  }
-
-  if (
-    !url.hostname.endsWith('dev.azure.com') &&
-    !url.hostname.endsWith('visualstudio.com')
-  ) {
-    dbg.azureImageProxy('Rejected non-Azure DevOps URL: %s', imageUrl);
     return { error: 'Only Azure DevOps URLs are allowed', status: 403 };
   }
 
@@ -54,10 +123,10 @@ async function fetchAuthenticated(params: {
   }
 
   try {
-    const response = await fetch(imageUrl, {
-      headers: {
-        Authorization: createAuthHeader(token),
-      },
+    const response = await fetchWithValidatedRedirects({
+      imageUrl,
+      authorization: createAuthHeader(token),
+      signal,
     });
 
     if (!response.ok) {
@@ -90,10 +159,43 @@ async function fetchAuthenticated(params: {
 export async function fetchAuthenticatedImageStream(params: {
   providerId: string;
   imageUrl: string;
+  signal?: AbortSignal;
 }): Promise<Response> {
-  const result = await fetchAuthenticated(params);
+  const fetchController = new AbortController();
+  let abortBoundedStream: ((reason: unknown) => Promise<void>) | undefined;
+  const removeExternalAbortListener = () =>
+    params.signal?.removeEventListener('abort', handleExternalAbort);
+  const handleExternalAbort = () => {
+    const reason =
+      params.signal?.reason ??
+      new DOMException('Protocol request cancelled', 'AbortError');
+    if (abortBoundedStream) {
+      void abortBoundedStream(reason);
+    } else if (!fetchController.signal.aborted) {
+      fetchController.abort(reason);
+    }
+  };
+
+  if (params.signal?.aborted) {
+    handleExternalAbort();
+  } else {
+    params.signal?.addEventListener('abort', handleExternalAbort, { once: true });
+  }
+
+  let result: Awaited<ReturnType<typeof fetchAuthenticated>>;
+  try {
+    result = await fetchAuthenticated({
+      providerId: params.providerId,
+      imageUrl: params.imageUrl,
+      signal: fetchController.signal,
+    });
+  } catch (error) {
+    removeExternalAbortListener();
+    throw error;
+  }
 
   if ('error' in result) {
+    removeExternalAbortListener();
     return new Response(result.error, { status: result.status });
   }
 
@@ -109,7 +211,70 @@ export async function fetchAuthenticatedImageStream(params: {
     headers['Content-Length'] = contentLength;
   }
 
-  return new Response(response.body, { headers });
+  if (!response.body) {
+    removeExternalAbortListener();
+    return new Response(null, { headers });
+  }
+
+  const reader = response.body.getReader();
+  let stopped = false;
+  let released = false;
+
+  const releaseReader = () => {
+    if (released) return;
+    released = true;
+    reader.releaseLock();
+    removeExternalAbortListener();
+  };
+
+  const cancelUpstream = async (reason: unknown) => {
+    if (stopped) return;
+    stopped = true;
+    if (!fetchController.signal.aborted) fetchController.abort(reason);
+    try {
+      await reader.cancel(reason);
+    } catch {
+      // Fetch abort may reject the pending read before cancellation completes.
+    } finally {
+      releaseReader();
+    }
+  };
+
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      abortBoundedStream = async (reason) => {
+        if (stopped) return;
+        await cancelUpstream(reason);
+        controller.error(reason);
+      };
+    },
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (stopped) return;
+        if (done) {
+          stopped = true;
+          releaseReader();
+          controller.close();
+          return;
+        }
+
+        controller.enqueue(value);
+      } catch (error) {
+        if (stopped) return;
+        await cancelUpstream(error);
+        controller.error(error);
+      }
+    },
+    cancel: cancelUpstream,
+  });
+
+  try {
+    return new Response(body, { headers });
+  } catch (error) {
+    await cancelUpstream(error);
+    throw error;
+  }
 }
 
 /**
@@ -120,17 +285,61 @@ export async function fetchImageAsBase64(params: {
   providerId: string;
   imageUrl: string;
 }): Promise<{ data: string; mimeType: string } | null> {
-  const result = await fetchAuthenticated(params);
+  const controller = new AbortController();
+  const result = await fetchAuthenticated({ ...params, signal: controller.signal });
 
   if ('error' in result) {
     return null;
   }
 
   const { response, mimeType } = result;
-  const arrayBuffer = await response.arrayBuffer();
-  const data = Buffer.from(arrayBuffer).toString('base64');
+  try {
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (
+      Number.isFinite(declaredLength) &&
+      declaredLength > MAX_IMAGE_ATTACHMENT_BYTES
+    ) {
+      controller.abort(new Error('Image exceeds attachment memory limit'));
+      await response.body?.cancel().catch(() => undefined);
+      return null;
+    }
 
-  return { data, mimeType };
+    if (!response.body) return null;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > MAX_IMAGE_ATTACHMENT_BYTES) {
+          controller.abort(new Error('Image exceeds attachment memory limit'));
+          await reader.cancel().catch(() => undefined);
+          return null;
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const image = Buffer.allocUnsafe(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).copy(
+        image,
+        offset,
+      );
+      offset += chunk.byteLength;
+    }
+
+    return { data: image.toString('base64'), mimeType };
+  } catch (error) {
+    dbg.azureImageProxy('Error buffering proxied image: %O', error);
+    controller.abort(error);
+    return null;
+  }
 }
 
 /**

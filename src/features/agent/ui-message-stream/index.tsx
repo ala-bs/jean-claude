@@ -74,12 +74,13 @@ export interface QuestionBannerProps {
   request: {
     taskId: string;
     requestId: string;
+    contextReminder?: string;
     questions: AgentQuestion[];
   };
   onRespond: (
     requestId: string,
     response: QuestionResponse,
-  ) => void | Promise<void>;
+  ) => void | Promise<void | boolean>;
 }
 
 export const MessageStream = memo(function MessageStream({
@@ -99,6 +100,8 @@ export const MessageStream = memo(function MessageStream({
   taskId,
   stepId,
   afterLastPromptGroup,
+  onOpenFileInReview,
+  onOpenFileInEditor,
 }: {
   messages: NormalizedEntry[];
   isRunning?: boolean;
@@ -133,6 +136,8 @@ export const MessageStream = memo(function MessageStream({
   stepId?: string | null;
   /** Optional action rendered directly below the last prompt group */
   afterLastPromptGroup?: ReactNode;
+  onOpenFileInReview?: (filePath: string) => void;
+  onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -393,7 +398,9 @@ export const MessageStream = memo(function MessageStream({
                   <PromptGroupEntry
                     group={streamMessage}
                     isLast={index === lastPromptGroupIndex}
-                    isTaskRunning={isRunning}
+                    isTaskRunning={
+                      index === lastPromptGroupIndex && isRunning
+                    }
                     previousPromptDate={previousPromptDate}
                     onFilePathClick={onFilePathClick}
                     onToolDiffClick={onToolDiffClick}
@@ -403,6 +410,8 @@ export const MessageStream = memo(function MessageStream({
                     onResultContextMenu={handleEntryContextMenu}
                     rootPath={rootPath}
                     taskId={taskId}
+                    onOpenFileInReview={onOpenFileInReview}
+                    onOpenFileInEditor={onOpenFileInEditor}
                   />
                   {index === lastPromptGroupIndex && afterLastPromptGroup && (
                     <div className="mx-4 -mt-2 mb-5 flex justify-start">

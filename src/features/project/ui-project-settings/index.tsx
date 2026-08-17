@@ -26,6 +26,12 @@ import {
   X,
 } from 'lucide-react';
 import {
+  createProjectSettingsAutosave,
+  createProjectSettingsSaveQueue,
+  flushProjectSettings,
+  type ProjectSettingsSave,
+} from './utils-project-settings-save-data';
+import {
   ListDetailLayout,
   ListGroupHeader,
   ListItemButton,
@@ -78,7 +84,6 @@ import { Checkbox } from '@/common/ui/checkbox';
 import { FavoriteBranchesInput } from './favorite-branches-input';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
 import { getDefaultModelForBackend } from '@/lib/default-models';
-import { getProjectSettingsSaveData } from './utils-project-settings-save-data';
 import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
 import { Input } from '@/common/ui/input';
 import isEqual from 'lodash-es/isEqual';
@@ -106,6 +111,7 @@ import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings'
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useToastStore } from '@/stores/toasts';
 import { WorkItemsLink } from '@/features/project/ui-work-items-link';
+import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
 
 const PROMPT_PREFACE_MODE_OPTIONS = [
@@ -778,6 +784,8 @@ export function ProjectSettings({
   const [prPriority, setPrPriority] = useState<ProjectPriority>('normal');
   const [workItemPriority, setWorkItemPriority] =
     useState<ProjectPriority>('normal');
+  const [workItemTitleParser, setWorkItemTitleParser] =
+    useState<WorkItemTitleParserSetting | null>(null);
   const [aiSkillSlots, setAiSkillSlots] = useState<AiSkillSlotsSetting | null>(
     null,
   );
@@ -822,6 +830,7 @@ export function ProjectSettings({
       defaultAgentModelPreference: project.defaultAgentModelPreference,
       prPriority: project.prPriority ?? 'normal',
       workItemPriority: project.workItemPriority ?? 'normal',
+      workItemTitleParser: project.workItemTitleParser,
       completionContext: project.completionContext ?? null,
       summary: project.summary ?? null,
       worktreesPath: project.worktreesPath ?? null,
@@ -843,6 +852,7 @@ export function ProjectSettings({
       defaultAgentModelPreference,
       prPriority,
       workItemPriority,
+      workItemTitleParser,
       completionContext: completionContext || null,
       summary: summary || null,
       worktreesPath: worktreesPath || null,
@@ -866,19 +876,18 @@ export function ProjectSettings({
       protectedBranches,
       summary,
       workItemPriority,
+      workItemTitleParser,
       worktreesPath,
     ],
   );
 
   const hasChanges = projectData ? !isEqual(draftData, projectData) : false;
   const hasChangesRef = useRef(false);
-  const savingProjectRef = useRef(false);
-  const pendingProjectSaveRef = useRef<{
-    data: UpdateProject;
-    fieldVersions: Map<keyof UpdateProject, number>;
-  } | null>(null);
   const dirtyFieldsRef = useRef(new Set<keyof UpdateProject>());
   const dirtyFieldVersionsRef = useRef(new Map<keyof UpdateProject, number>());
+  const latestDraftDataRef = useRef(draftData);
+  const latestUpdateProjectRef = useRef(updateProject);
+  const latestAddToastRef = useRef(addToast);
 
   const markFieldDirty = useCallback((field: keyof UpdateProject) => {
     dirtyFieldsRef.current.add(field);
@@ -891,6 +900,12 @@ export function ProjectSettings({
   useEffect(() => {
     hasChangesRef.current = hasChanges;
   }, [hasChanges]);
+
+  useEffect(() => {
+    latestDraftDataRef.current = draftData;
+    latestUpdateProjectRef.current = updateProject;
+    latestAddToastRef.current = addToast;
+  }, [addToast, draftData, updateProject]);
 
   // Sync local state when project loads or changes
   useEffect(() => {
@@ -916,6 +931,7 @@ export function ProjectSettings({
       );
       setPrPriority(project.prPriority ?? 'normal');
       setWorkItemPriority(project.workItemPriority ?? 'normal');
+      setWorkItemTitleParser(project.workItemTitleParser);
       setCompletionContext(project.completionContext ?? '');
       setSummary(project.summary ?? '');
       dirtyFieldsRef.current.clear();
@@ -928,68 +944,73 @@ export function ProjectSettings({
     }
   }, [backendModelPresets, project]);
 
-  const saveProjectSettings = useCallback(
-    async (save: {
-      data: UpdateProject;
-      fieldVersions: Map<keyof UpdateProject, number>;
-    }) => {
-      pendingProjectSaveRef.current = save;
-      if (savingProjectRef.current) return;
-
-      savingProjectRef.current = true;
-      try {
-        while (pendingProjectSaveRef.current) {
-          const nextSave = pendingProjectSaveRef.current;
-          pendingProjectSaveRef.current = null;
-          await updateProject({
-            id: projectId,
-            data: nextSave.data,
-          });
-          const pendingSave = pendingProjectSaveRef.current as
-            | typeof nextSave
-            | null;
-          for (const [field, version] of nextSave.fieldVersions) {
-            const currentVersion = dirtyFieldVersionsRef.current.get(field);
-            const pendingVersion = pendingSave?.fieldVersions.get(field);
-            if (currentVersion === version && pendingVersion === undefined) {
-              dirtyFieldsRef.current.delete(field);
-              dirtyFieldVersionsRef.current.delete(field);
-            }
+  const saveQueueRef = useRef<ReturnType<
+    typeof createProjectSettingsSaveQueue
+  > | null>(null);
+  useEffect(() => {
+    saveQueueRef.current = createProjectSettingsSaveQueue({
+      save: (save) =>
+        latestUpdateProjectRef.current({ id: projectId, data: save.data }),
+      onSuccess: (saved, queuedSave) => {
+        for (const [field, version] of saved.fieldVersions) {
+          const currentVersion = dirtyFieldVersionsRef.current.get(field);
+          const queuedVersion = queuedSave?.fieldVersions.get(field);
+          if (currentVersion === version && queuedVersion === undefined) {
+            dirtyFieldsRef.current.delete(field);
+            dirtyFieldVersionsRef.current.delete(field);
           }
         }
-      } catch (error) {
-        addToast({
+      },
+      onError: (error) => {
+        latestAddToastRef.current({
           message:
             error instanceof Error
               ? error.message
               : 'Failed to save project settings',
           type: 'error',
         });
-      } finally {
-        savingProjectRef.current = false;
-      }
-    },
-    [addToast, projectId, updateProject],
-  );
+      },
+    });
+  }, [projectId]);
+
+  const saveProjectSettings = useCallback((save: ProjectSettingsSave) => {
+    void saveQueueRef.current?.enqueue(save);
+  }, []);
+  const latestSaveProjectSettingsRef = useRef(saveProjectSettings);
+  useEffect(() => {
+    latestSaveProjectSettingsRef.current = saveProjectSettings;
+  }, [saveProjectSettings]);
+
+  const flushLatestProjectSettings = useCallback(() => {
+    flushProjectSettings({
+      data: latestDraftDataRef.current,
+      dirtyFields: dirtyFieldsRef.current,
+      dirtyFieldVersions: dirtyFieldVersionsRef.current,
+      save: latestSaveProjectSettingsRef.current,
+    });
+  }, []);
+
+  const autosaveRef = useRef<ReturnType<
+    typeof createProjectSettingsAutosave
+  > | null>(null);
+  useEffect(() => {
+    const autosave = createProjectSettingsAutosave({
+      save: flushLatestProjectSettings,
+    });
+    autosaveRef.current = autosave;
+    return () => {
+      autosave.flush();
+      autosaveRef.current = null;
+    };
+  }, [flushLatestProjectSettings]);
 
   useEffect(() => {
     if (!projectData || !hasChanges) return;
-    const saveData = getProjectSettingsSaveData({
-      data: draftData,
-      dirtyFields: dirtyFieldsRef.current,
-    });
-    if (Object.keys(saveData).length === 0) return;
-    const fieldVersions = new Map<keyof UpdateProject, number>();
-    for (const field of Object.keys(saveData) as (keyof UpdateProject)[]) {
-      fieldVersions.set(field, dirtyFieldVersionsRef.current.get(field) ?? 0);
-    }
-
-    const saveTimeout = window.setTimeout(() => {
-      void saveProjectSettings({ data: saveData, fieldVersions });
-    }, 500);
-
-    return () => window.clearTimeout(saveTimeout);
-  }, [draftData, hasChanges, projectData, saveProjectSettings]);
+    const autosave = autosaveRef.current;
+    if (!autosave) return;
+    autosave.schedule();
+    return autosave.cancel;
+  }, [draftData, hasChanges, projectData]);
 
   useEffect(() => {
     if (menuItem !== 'danger-zone' && showDeleteConfirm) {
@@ -1702,7 +1723,14 @@ export function ProjectSettings({
         <div className="space-y-4">
           <h2 className="text-ink-1 text-lg font-semibold">Integrations</h2>
           <RepoLink project={project} />
-          <WorkItemsLink project={project} />
+          <WorkItemsLink
+            project={project}
+            workItemTitleParser={workItemTitleParser}
+            onWorkItemTitleParserChange={(setting) => {
+              markFieldDirty('workItemTitleParser');
+              setWorkItemTitleParser(setting);
+            }}
+          />
         </div>
       );
       break;

@@ -90,6 +90,7 @@ export function SkillEditor({
   // Resizable split state
   const [leftWidth, setLeftWidth] = useState(0);
   const containerMeasuredRef = useRef(false);
+  const leftPaneRef = useRef<HTMLDivElement>(null);
 
   const onWidthChange = useCallback((w: number) => setLeftWidth(w), []);
   const { containerRef, isDragging, handleMouseDown } = useHorizontalResize({
@@ -97,6 +98,7 @@ export function SkillEditor({
     minWidth: 300,
     maxWidthFraction: 0.7,
     onWidthChange,
+    resizeTargetRef: leftPaneRef,
   });
 
   // Initialize left width to 50% of container on mount
@@ -344,6 +346,7 @@ export function SkillEditor({
         {/* Left pane: markdown textarea */}
         {leftWidth > 0 && (
           <div
+            ref={leftPaneRef}
             className="border-glass-border flex shrink-0 flex-col border-r"
             style={{ width: leftWidth }}
           >

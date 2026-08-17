@@ -57,3 +57,31 @@ export interface RecordPreferenceEvidenceResult {
   path: string;
   recorded: number;
 }
+
+export interface PreferenceMemoryHistoryEntry {
+  id: string;
+  createdAt: string;
+  backend: string;
+  model: string;
+  thinkingEffort: string;
+  evidence: { files: Array<{ fileName: string; recordCount: number }> };
+  document: { content: string; sha256: string };
+}
+
+export interface PreferenceMemoryDashboard {
+  projectId: string;
+  preferences: { content: string; updatedAt: string | null };
+  evidence: {
+    records: PreferenceEvidenceRecord[];
+    page: number;
+    pageSize: number;
+    total: number;
+    bySource: Record<PreferenceEvidenceSource, number>;
+  };
+  state: {
+    lastConsolidatedAt: string | null;
+    pendingBytes: number;
+    totalBytes: number;
+  };
+  history: PreferenceMemoryHistoryEntry[];
+}

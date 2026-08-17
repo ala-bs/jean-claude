@@ -964,13 +964,38 @@ function TaskHeaderWorkItemChip({
   );
 }
 
+function TaskPanelState({
+  title,
+  detail,
+  action,
+}: {
+  title: string;
+  detail?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="text-ink-3 flex h-full w-full flex-1 items-center justify-center">
+      <div className="space-y-3 text-center">
+        <p>{title}</p>
+        {detail && <p className="text-ink-4 text-sm">{detail}</p>}
+        {action && <div className="flex justify-center">{action}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function TaskPanel({ taskId }: { taskId: string }) {
   const navigate = useNavigate();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
   const modal = useModal();
-  const { data: task } = useTask(taskId);
+  const {
+    data: task,
+    error: taskError,
+    isError: isTaskError,
+    isLoading: isTaskLoading,
+  } = useTask(taskId);
   const projectId = task?.projectId;
 
   // Permission modal state — hoisted here so it survives MessageStream unmount/remount cycles
@@ -982,7 +1007,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [],
   );
   const closePermissionModal = useCallback(() => setPermissionModal(null), []);
-  const { data: project } = useProject(projectId ?? '');
+  const {
+    data: project,
+    error: projectError,
+    isError: isProjectError,
+    isLoading: isProjectLoading,
+  } = useProject(projectId ?? '');
   const { data: projectIsGitRepository } = useProjectIsGitRepository(
     projectId ?? null,
   );
@@ -1108,6 +1138,29 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     hideUnchanged: explorerHideUnchanged,
     toggleHideUnchanged: explorerToggleHideUnchanged,
   } = useTaskFileExplorerState(taskId);
+
+  const handleOpenFileInReview = useCallback(
+    (filePath: string) => {
+      if (hasGitReviewModes) {
+        setReviewMode('changes');
+        selectDiffFile(filePath);
+      } else if (taskRootPathForExplorer) {
+        setReviewMode('files');
+        explorerSelectFile(
+          `${taskRootPathForExplorer.replace(/\/$/, '')}/${filePath}`,
+        );
+      }
+      openDiffView();
+    },
+    [
+      explorerSelectFile,
+      hasGitReviewModes,
+      openDiffView,
+      selectDiffFile,
+      setReviewMode,
+      taskRootPathForExplorer,
+    ],
+  );
 
   const agentMeta = useTaskMessageMeta(activeStepId);
   const model = useStepModel(activeStepId);
@@ -1260,17 +1313,18 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     if (activeStepId && steps.some((s) => s.id === activeStepId)) return;
 
     // Priority: first running → first ready → last terminal → first step
-    const running = steps.find((s) => s.status === 'running');
+    const activeSteps = steps.filter((step) => !step.archivedAt);
+    const running = activeSteps.find((s) => s.status === 'running');
     if (running) {
       setActiveStepId(running.id);
       return;
     }
-    const ready = steps.find((s) => s.status === 'ready');
+    const ready = activeSteps.find((s) => s.status === 'ready');
     if (ready) {
       setActiveStepId(ready.id);
       return;
     }
-    const terminalSteps = steps.filter(
+    const terminalSteps = activeSteps.filter(
       (s) =>
         s.status === 'completed' ||
         s.status === 'interrupted' ||
@@ -1280,7 +1334,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       setActiveStepId(terminalSteps[terminalSteps.length - 1]!.id);
       return;
     }
-    setActiveStepId(steps[0]!.id);
+    setActiveStepId(activeSteps[0]?.id ?? steps[0]!.id);
   }, [steps, activeStepId, setActiveStepId]);
 
   const handleCopySessionId = useCallback(async () => {
@@ -1387,6 +1441,21 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       });
     }
   }, [task, isDiffViewOpen, diffSelectedFile, modal]);
+
+  const handleOpenFileInEditor = useCallback(
+    async (filePath: string) => {
+      if (!task?.worktreePath) return;
+      try {
+        await api.shell.openInEditor(filePath, task.worktreePath);
+      } catch {
+        modal.error({
+          title: 'File Not Found',
+          content: `The file path no longer exists:\n${filePath}`,
+        });
+      }
+    },
+    [modal, task],
+  );
 
   const handleDeleteWorktree = useCallback(() => {
     if (!task?.worktreePath) return;
@@ -1872,7 +1941,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       handler: () => {
         if (!isDiffViewOpen) return;
         const MODES: ReviewMode[] = hasGitReviewModes
-          ? ['changes', 'files', 'commits']
+          ? ['changes', 'unstaged', 'files', 'commits']
           : ['files'];
         const next = MODES[(MODES.indexOf(reviewMode) + 1) % MODES.length]!;
         setReviewMode(next);
@@ -2028,11 +2097,67 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [activeStepId],
   );
 
-  if (!task || !project) {
+  useEffect(() => {
+    if (!isTaskLoading && !isTaskError && !task) {
+      clearTaskNavHistoryState(taskId);
+    }
+  }, [clearTaskNavHistoryState, isTaskError, isTaskLoading, task, taskId]);
+
+  if (isTaskError || isProjectError) {
     return (
-      <div className="text-ink-3 flex h-full items-center justify-center">
-        Loading...
-      </div>
+      <TaskPanelState
+        title="Failed to load task"
+        detail={taskError?.message ?? projectError?.message}
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate({ to: '/all' })}
+          >
+            Back to tasks
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (isTaskLoading || (task && isProjectLoading)) {
+    return <TaskPanelState title="Loading..." />;
+  }
+
+  if (!task) {
+    return (
+      <TaskPanelState
+        title="Task not found"
+        detail="It may have been deleted or completed."
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate({ to: '/all' })}
+          >
+            Back to tasks
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (!project) {
+    return (
+      <TaskPanelState
+        title="Project not found"
+        detail="Task loaded, but its project is missing."
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate({ to: '/all' })}
+          >
+            Back to tasks
+          </Button>
+        }
+      />
     );
   }
 
@@ -2194,6 +2319,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   {/* Picker */}
                   <div className="min-h-0 flex-1">
                     <WorkItemPicker
+                      appProjectId={project.id}
                       providerId={project.workItemProviderId!}
                       projectId={project.workItemProjectId!}
                       projectName={project.workItemProjectName!}
@@ -2493,6 +2619,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   onStartStep={handleStartStep}
                   onFilePathClick={handleFilePathClick}
                   onToolDiffClick={handleToolDiffClick}
+                  onOpenFileInReview={handleOpenFileInReview}
+                  onOpenFileInEditor={
+                    task.worktreePath ? handleOpenFileInEditor : undefined
+                  }
                   onCancelQueuedPrompt={cancelQueuedPrompt}
                   onUpdateQueuedPrompt={updateQueuedPrompt}
                   onShowRawMessage={openDebugMessages}
@@ -2708,6 +2838,8 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onStartStep,
   onFilePathClick,
   onToolDiffClick,
+  onOpenFileInReview,
+  onOpenFileInEditor,
   onCancelQueuedPrompt,
   onUpdateQueuedPrompt,
   onShowRawMessage,
@@ -2744,6 +2876,8 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
     oldString: string,
     newString: string,
   ) => void;
+  onOpenFileInReview?: (filePath: string) => void;
+  onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
   onCancelQueuedPrompt?: (promptId: string) => void;
   onUpdateQueuedPrompt?: (promptId: string, content: string) => void;
   onShowRawMessage?: (entryId: string) => void;
@@ -2817,6 +2951,8 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
             queuedPrompts={agentState.queuedPrompts}
             onFilePathClick={onFilePathClick}
             onToolDiffClick={onToolDiffClick}
+            onOpenFileInReview={onOpenFileInReview}
+            onOpenFileInEditor={onOpenFileInEditor}
             onCancelQueuedPrompt={onCancelQueuedPrompt}
             onUpdateQueuedPrompt={onUpdateQueuedPrompt}
             onShowRawMessage={onShowRawMessage}
@@ -2939,6 +3075,30 @@ function backendSupportsImages(backend?: AgentBackendType | null): boolean {
  * This isolates the rapidly-changing prompt text from the rest of TaskPanel,
  * preventing full tree re-renders on every keystroke.
  */
+async function persistThinkingEffort({
+  mutateStepAsync,
+  setThinkingEffortOverride,
+  thinkingUpdateVersionRef,
+  stepId,
+  thinkingEffort,
+  version,
+}: {
+  mutateStepAsync: ReturnType<typeof useUpdateStep>['mutateAsync'];
+  setThinkingEffortOverride: (value: ThinkingEffort | null) => void;
+  thinkingUpdateVersionRef: { current: number };
+  stepId: string;
+  thinkingEffort: ThinkingEffort;
+  version: number;
+}) {
+  try {
+    await mutateStepAsync({ stepId, data: { thinkingEffort } });
+  } finally {
+    if (thinkingUpdateVersionRef.current === version) {
+      setThinkingEffortOverride(null);
+    }
+  }
+}
+
 const TaskInputFooter = memo(function TaskInputFooter({
   taskId,
   activeStepId,
@@ -3103,6 +3263,38 @@ const TaskInputFooter = memo(function TaskInputFooter({
   );
 
   const updateStep = useUpdateStep();
+  const mutateStepAsync = updateStep.mutateAsync;
+  const [thinkingEffortOverride, setThinkingEffortOverride] =
+    useState<ThinkingEffort | null>(null);
+  const [isSubmittingPrompt, setIsSubmittingPrompt] = useState(false);
+  const pendingThinkingUpdateRef = useRef<Promise<unknown> | null>(null);
+  const thinkingUpdateQueueRef = useRef(Promise.resolve());
+  const thinkingUpdateVersionRef = useRef(0);
+  const addToast = useToastStore((state) => state.addToast);
+  const displayedThinkingEffort =
+    thinkingEffortOverride ?? effectiveThinkingEffort;
+
+  const waitForThinkingUpdate = useCallback(async () => {
+    const pendingUpdate = pendingThinkingUpdateRef.current;
+    if (!pendingUpdate) return;
+    try {
+      await pendingUpdate;
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to save thinking level',
+      });
+      throw error;
+    } finally {
+      if (pendingThinkingUpdateRef.current === pendingUpdate) {
+        pendingThinkingUpdateRef.current = null;
+      }
+    }
+  }, [addToast]);
+
   const handleModelChange = useCallback(
     (modelPreference: ModelPreference) => {
       if (activeStepId) {
@@ -3136,27 +3328,42 @@ const TaskInputFooter = memo(function TaskInputFooter({
   const handleThinkingEffortChange = useCallback(
     (thinkingEffort: ThinkingEffort) => {
       if (activeStepId) {
-        updateStep.mutate({ stepId: activeStepId, data: { thinkingEffort } });
+        setThinkingEffortOverride(thinkingEffort);
+        const version = ++thinkingUpdateVersionRef.current;
+        const pendingUpdate = thinkingUpdateQueueRef.current.then(() =>
+          persistThinkingEffort({
+            mutateStepAsync,
+            setThinkingEffortOverride,
+            thinkingUpdateVersionRef,
+            stepId: activeStepId,
+            thinkingEffort,
+            version,
+          }),
+        );
+        thinkingUpdateQueueRef.current = pendingUpdate.catch(() => undefined);
+        pendingThinkingUpdateRef.current = pendingUpdate;
       }
     },
-    [activeStepId, updateStep],
+    [activeStepId, mutateStepAsync],
   );
 
-  const handleSendMessage = useCallback(
-    (parts: PromptPart[]) => {
-      if (task?.userCompleted) {
-        clearUserCompleted.mutate(taskId);
-      }
-
-      // Append synthesized review comments to prompt
-      let finalParts = parts;
-      if (openReviewComments.length > 0) {
-        const reviewParts = synthesizeReviewPrompt(openReviewComments);
-        if (reviewParts) {
-          finalParts = [...parts, ...reviewParts];
+  const handleSendMessage = async (parts: PromptPart[]) => {
+      setIsSubmittingPrompt(true);
+      try {
+        await waitForThinkingUpdate();
+        if (task?.userCompleted) {
+          clearUserCompleted.mutate(taskId);
         }
-        void api.preferenceMemory
-          .recordEvidence({
+
+        // Append synthesized review comments to prompt
+        let finalParts = parts;
+        if (openReviewComments.length > 0) {
+          const reviewParts = synthesizeReviewPrompt(openReviewComments);
+          if (reviewParts) {
+            finalParts = [...parts, ...reviewParts];
+          }
+          void api.preferenceMemory
+            .recordEvidence({
             source: 'task-review-comment',
             taskId,
             comments: openReviewComments.map((comment) => ({
@@ -3170,59 +3377,46 @@ const TaskInputFooter = memo(function TaskInputFooter({
             context: {
               targetStepId: activeStepId,
             },
-          })
-          .catch((error: unknown) => {
-            console.warn('Failed to record preference evidence', error);
-          });
-        // Resolve and clear all open comments after send
-        for (const comment of openReviewComments) {
-          resolveComment(taskId, comment.id);
+            })
+            .catch((error: unknown) => {
+              console.warn('Failed to record preference evidence', error);
+            });
+          // Resolve and clear all open comments after send
+          for (const comment of openReviewComments) {
+            resolveComment(taskId, comment.id);
+          }
+          clearResolvedComments(taskId);
         }
-        clearResolvedComments(taskId);
+
+        clearPromptDraft();
+        onSend(finalParts);
+      } finally {
+        setIsSubmittingPrompt(false);
       }
+  };
 
-      clearPromptDraft();
-      onSend(finalParts);
-    },
-    [
-      task?.userCompleted,
-      taskId,
-      clearUserCompleted,
-      clearPromptDraft,
-      onSend,
-      openReviewComments,
-      resolveComment,
-      clearResolvedComments,
-      activeStepId,
-    ],
-  );
+  const handleQueuePrompt = async (parts: PromptPart[]) => {
+      setIsSubmittingPrompt(true);
+      try {
+        await waitForThinkingUpdate();
+        let finalParts = parts;
+        if (openReviewComments.length > 0) {
+          const reviewParts = synthesizeReviewPrompt(openReviewComments);
+          if (reviewParts) {
+            finalParts = [...parts, ...reviewParts];
+          }
+          for (const comment of openReviewComments) {
+            resolveComment(taskId, comment.id);
+          }
+          clearResolvedComments(taskId);
+        }
 
-  const handleQueuePrompt = useCallback(
-    (parts: PromptPart[]) => {
-      let finalParts = parts;
-      if (openReviewComments.length > 0) {
-        const reviewParts = synthesizeReviewPrompt(openReviewComments);
-        if (reviewParts) {
-          finalParts = [...parts, ...reviewParts];
-        }
-        for (const comment of openReviewComments) {
-          resolveComment(taskId, comment.id);
-        }
-        clearResolvedComments(taskId);
+        clearPromptDraft();
+        onQueue(finalParts);
+      } finally {
+        setIsSubmittingPrompt(false);
       }
-
-      clearPromptDraft();
-      onQueue(finalParts);
-    },
-    [
-      taskId,
-      clearPromptDraft,
-      onQueue,
-      openReviewComments,
-      resolveComment,
-      clearResolvedComments,
-    ],
-  );
+  };
 
   const handleStop = useCallback(async () => {
     if (queuedPrompts.length > 0) {
@@ -3235,8 +3429,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
 
     await onStop();
   }, [onStop, promptDraft, queuedPrompts, setPromptDraft]);
-
-  const [inputFocused, setInputFocused] = useState(false);
 
   // Responsive: detect narrow composer width.
   // Below this threshold the composer switches to a stacked layout
@@ -3276,14 +3468,16 @@ const TaskInputFooter = memo(function TaskInputFooter({
         value={effectiveModel}
         onChange={handleModelChange}
         models={getModelsForBackend(effectiveBackend, dynamicModels)}
-        disabled={isTaskCompleted}
+        disabled={isRunning || isTaskCompleted}
         size="sm"
       />
       <ThinkingSelector
-        value={effectiveThinkingEffort}
+         value={displayedThinkingEffort}
         onChange={handleThinkingEffortChange}
         options={thinkingOptions}
-        disabled={isRunning || isTaskCompleted || thinkingOptions.length <= 1}
+        disabled={
+          isSubmittingPrompt || isTaskCompleted || thinkingOptions.length <= 1
+        }
         size="sm"
       />
     </div>
@@ -3300,10 +3494,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   return (
     <div
       ref={containerRef}
-      className={clsx(
-        'mx-3 mb-3 flex flex-col rounded-xl transition-shadow duration-300',
-        inputFocused ? 'prompt-input-border-focused' : 'prompt-input-border',
-      )}
+      className="prompt-input-border mx-3 mb-3 flex flex-col rounded-xl transition-shadow duration-300"
     >
       {/* Review comment pills */}
       <ReviewPillsQueue
@@ -3338,7 +3529,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
             supportsImages={backendSupportsImages(activeStep?.agentBackend)}
             projectId={task?.projectId}
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}
-            onFocusChange={setInputFocused}
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
             isCompact
@@ -3349,12 +3539,14 @@ const TaskInputFooter = memo(function TaskInputFooter({
                   onModeChange={handleModeChange}
                   model={effectiveModel}
                   onModelChange={handleModelChange}
-                  thinkingEffort={effectiveThinkingEffort}
+                   thinkingEffort={displayedThinkingEffort}
                   onThinkingEffortChange={handleThinkingEffortChange}
                   thinkingOptions={thinkingOptions}
                   backend={effectiveBackend}
                   models={getModelsForBackend(effectiveBackend, dynamicModels)}
-                  disabled={isRunning || isTaskCompleted}
+                  disabled={isSubmittingPrompt || isTaskCompleted}
+                  modeDisabled={isRunning}
+                  modelDisabled={isRunning}
                 />
               </>
             }
@@ -3387,7 +3579,6 @@ const TaskInputFooter = memo(function TaskInputFooter({
             supportsImages={backendSupportsImages(activeStep?.agentBackend)}
             projectId={task?.projectId}
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}
-            onFocusChange={setInputFocused}
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
             controlsAboveButtons={selectorGroup}

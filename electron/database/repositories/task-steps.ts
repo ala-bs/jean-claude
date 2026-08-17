@@ -38,6 +38,7 @@ function toStep(row: TaskStepRow): TaskStep {
     images: row.images ? JSON.parse(row.images) : null,
     meta: row.meta ? (JSON.parse(row.meta) as TaskStepMeta) : {},
     autoStart: row.autoStart === 1,
+    archivedAt: row.archivedAt,
     sortOrder: row.sortOrder,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -187,6 +188,7 @@ export const TaskStepRepository = {
       output?: string | null;
       meta?: TaskStepMeta;
       autoStart?: boolean;
+      archivedAt?: string | null;
       sortOrder?: number;
     },
   ): Promise<TaskStep> => {
@@ -214,6 +216,29 @@ export const TaskStepRepository = {
       .executeTakeFirstOrThrow();
 
     return toStep(row);
+  },
+
+  archiveAndDeleteRawMessages: async (
+    id: string,
+    archivedAt: string,
+  ): Promise<{ step: TaskStep; deletedRawMessageCount: number }> => {
+    const result = await db.transaction().execute(async (trx) => {
+      const row = await trx
+        .updateTable('task_steps')
+        .set({ archivedAt, updatedAt: archivedAt })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      const deleted = await trx
+        .deleteFrom('raw_messages')
+        .where('stepId', '=', id)
+        .executeTakeFirst();
+      return { row, deletedRawMessageCount: Number(deleted.numDeletedRows) };
+    });
+    return {
+      step: toStep(result.row),
+      deletedRawMessageCount: result.deletedRawMessageCount,
+    };
   },
 
   delete: async (id: string): Promise<void> => {

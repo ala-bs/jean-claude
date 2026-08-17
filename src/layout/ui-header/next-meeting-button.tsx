@@ -4,6 +4,11 @@ import clsx from 'clsx';
 
 
 import {
+  beginCalendarLoad,
+  markCalendarLoadSucceeded,
+  shouldNotifyCalendarLoadError,
+} from '@/lib/calendar-load-error';
+import {
   extractTeamsUrl,
   formatTimeHHMM,
   getMeetingState,
@@ -67,15 +72,17 @@ export function NextMeetingButton() {
     }
     let cancelled = false;
     const load = async () => {
+      const loadId = beginCalendarLoad();
       try {
         const result = await api.calendar.listUpcomingMeetings();
         if (!cancelled) {
+          markCalendarLoadSucceeded(loadId);
           setMeetings(result);
           setHasLoaded(true);
           setNow(Date.now());
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && shouldNotifyCalendarLoadError(error, loadId)) {
           addToast({
             message:
               error instanceof Error

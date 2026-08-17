@@ -1,4 +1,4 @@
-import { Columns3, List, RefreshCw } from 'lucide-react';
+import { Columns3, List, Loader2, RefreshCw } from 'lucide-react';
 import {
   startTransition,
   useCallback,
@@ -11,6 +11,7 @@ import clsx from 'clsx';
 import Fuse from 'fuse.js';
 import type React from 'react';
 
+import { createRafScheduler } from '@/lib/raf-scheduler';
 
 import {
   useBoardColumns,
@@ -56,6 +57,7 @@ function getExactWorkItemIdSearch(filter: string | undefined): string | null {
 const DEFAULT_EXCLUDE_TYPES = ['Test Suite', 'Test Case', 'Epic', 'Feature'];
 
 export function WorkItemPicker({
+  appProjectId,
   providerId,
   projectId,
   projectName,
@@ -73,6 +75,7 @@ export function WorkItemPicker({
   excludeWorkItemTypes = DEFAULT_EXCLUDE_TYPES,
   headerRight,
 }: {
+  appProjectId?: string;
   providerId: string;
   projectId: string;
   projectName: string;
@@ -247,6 +250,10 @@ export function WorkItemPicker({
   const isRefreshing =
     isFetchingWorkItems || isFetchingBoardColumns || isFetchingIterations;
 
+  // Empty cached results look identical to an empty project while refetching.
+  const isLoadingWorkItems =
+    isLoading || (isFetchingWorkItems && (workItems?.length ?? 0) === 0);
+
   const handleRefresh = useCallback(() => {
     void refetchWorkItems();
     void refetchBoardColumns();
@@ -318,37 +325,61 @@ export function WorkItemPicker({
     [onPanelWidthChange],
   );
   const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => dragCleanupRef.current?.(), []);
 
   const handleDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
       isDragging.current = true;
+      let latestWidth: number | null = null;
+      const updateWidth = createRafScheduler((width: number) => {
+        latestWidth = width;
+        if (panelRef.current) panelRef.current.style.width = `${width}%`;
+      });
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
         if (!containerRef.current || !isDragging.current) return;
         const rect = containerRef.current.getBoundingClientRect();
         const x = moveEvent.clientX - rect.left;
         const pct = (x / rect.width) * 100;
-        setPanelWidth(Math.min(80, Math.max(30, pct)));
+        updateWidth.schedule(Math.min(80, Math.max(30, pct)));
       };
 
       const handleMouseUp = () => {
+        updateWidth.flush();
         isDragging.current = false;
+        if (latestWidth !== null) setPanelWidth(latestWidth);
+        dragCleanupRef.current?.();
+      };
+      const handleWindowBlur = () => handleMouseUp();
+
+      dragCleanupRef.current = () => {
+        updateWidth.cancel();
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('blur', handleWindowBlur);
+        dragCleanupRef.current = null;
       };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('blur', handleWindowBlur);
   };
 
   const isBoardBootstrapping = viewMode === 'board' && isLoadingBoardColumns;
 
   // Loading state
-  if (!canFetchWorkItems || isLoading || isBoardBootstrapping) {
+  if (!canFetchWorkItems || isLoadingWorkItems || isBoardBootstrapping) {
     return (
-      <div className="flex h-full w-full items-center justify-center">
-        <span className="text-ink-2 text-sm">
+      <div
+        className="flex h-full w-full items-center justify-center"
+        role="status"
+        aria-label="Loading work items"
+      >
+        <span className="text-ink-2 flex items-center gap-2 text-sm">
+          <Loader2 aria-hidden="true" className="text-acc-ink h-4 w-4 animate-spin" />
           {isLoadingIterations
             ? 'Loading iterations...'
             : isBoardBootstrapping
@@ -363,6 +394,7 @@ export function WorkItemPicker({
     <div ref={containerRef} className="flex h-full w-full overflow-hidden">
       {/* Left panel */}
       <div
+        ref={panelRef}
         className="flex min-w-0 flex-col overflow-hidden"
         style={{ width: `${panelWidth}%` }}
       >
@@ -497,6 +529,7 @@ export function WorkItemPicker({
       >
         <WorkItemPreview
           workItem={highlightedWorkItem}
+          projectId={appProjectId}
           providerId={providerId}
           projectName={projectName}
         />

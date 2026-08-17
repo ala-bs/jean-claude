@@ -80,12 +80,20 @@ export function emitTaskPatch({
   taskId,
   projectId,
   patch,
+  invalidateFeed,
 }: {
   taskId: string;
   projectId: string;
   patch: Partial<Task>;
+  invalidateFeed?: boolean;
 }) {
-  return emitCacheEvent({ type: 'task.patch', taskId, projectId, patch });
+  return emitCacheEvent({
+    type: 'task.patch',
+    taskId,
+    projectId,
+    patch,
+    invalidateFeed,
+  });
 }
 
 export function emitTaskDelete({

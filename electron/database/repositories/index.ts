@@ -14,3 +14,9 @@ export { PrViewSnapshotRepository } from './pr-view-snapshots';
 export { UsageSnapshotRepository } from './usage-snapshots';
 export { AiUsageRepository } from './ai-usage';
 export { WorkActivityRepository } from './work-activity';
+export { GlobalMcpServerRepository } from './global-mcp-servers';
+export { WorkItemSummaryRepository } from './work-item-summaries';
+export type {
+  PersistedWorkItemSummary,
+  UpsertWorkItemSummary,
+} from './work-item-summaries';

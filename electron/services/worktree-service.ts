@@ -87,7 +87,7 @@ async function getIgnoredCommitPaths({
   const { stdout } = await execFileAsync(
     'git',
     ['status', '--porcelain', '-z', '--untracked-files=all'],
-    { cwd: worktreePath, encoding: 'utf-8' },
+    { cwd: worktreePath, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 },
   );
   const entries = stdout.split('\0').filter(Boolean);
   const ignoredPaths = new Set<string>();
@@ -408,6 +408,7 @@ export function generateWorktreeNameFromTaskName(taskName: string): string {
  */
 export interface WorktreeDiffFile {
   path: string;
+  originalPath?: string;
   status: 'added' | 'modified' | 'deleted';
   additions: number;
   deletions: number;
@@ -418,12 +419,204 @@ export interface WorktreeDiffResult {
   worktreeDeleted?: boolean;
 }
 
+export interface WorktreeLocalChanges {
+  staged: WorktreeDiffFile[];
+  unstaged: WorktreeDiffFile[];
+  worktreeDeleted?: boolean;
+}
+
 export interface WorktreeFileContent {
   oldContent: string | null;
   newContent: string | null;
   isBinary: boolean;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+}
+
+function parseNameStatusOutput(output: string): WorktreeDiffFile[] {
+  const files: WorktreeDiffFile[] = [];
+  const entries = output.split('\0').filter(Boolean);
+  for (let index = 0; index < entries.length;) {
+    const inlineParts = entries[index]!.split('\t');
+    const statusCode = inlineParts[0];
+    const isRename = statusCode?.[0] === 'R' || statusCode?.[0] === 'C';
+    const originalPath = isRename && inlineParts.length === 1
+      ? entries[index + 1]
+      : undefined;
+    const filePath = inlineParts.length > 1
+      ? inlineParts.slice(1).join('\t')
+      : isRename
+        ? entries[index + 2]
+        : entries[index + 1];
+    index += inlineParts.length > 1 ? 1 : isRename ? 3 : 2;
+    const status = statusCode?.[0];
+    if (!filePath || !status) continue;
+    files.push({
+      path: filePath,
+      ...(originalPath ? { originalPath } : {}),
+      status: status === 'A' || status === 'R' || status === 'C'
+          ? status === 'A' ? 'added' : 'modified'
+        : status === 'D'
+          ? 'deleted'
+          : 'modified',
+      additions: 0,
+      deletions: 0,
+    });
+  }
+  return files;
+}
+
+async function readGitFileContent(
+  worktreePath: string,
+  ref: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['show', `${ref === ':' ? ':' : `${ref}:`}${filePath}`],
+      { cwd: worktreePath, encoding: 'utf-8', maxBuffer: 15 * 1024 * 1024 },
+    );
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
+export async function getWorktreeLocalFileContent(
+  worktreePath: string,
+  filePath: string,
+  status: 'added' | 'modified' | 'deleted',
+  scope: 'staged' | 'unstaged',
+  originalPath?: string,
+): Promise<WorktreeFileContent> {
+  const normalizedPath = path.normalize(filePath);
+  if (
+    path.isAbsolute(filePath) ||
+    normalizedPath === '..' ||
+    normalizedPath.startsWith(`..${path.sep}`)
+  ) {
+    throw new Error(`Invalid worktree file path: ${filePath}`);
+  }
+  const oldRef = scope === 'staged' ? 'HEAD' : ':';
+  const oldContent = status === 'added'
+    ? null
+    : await readGitFileContent(worktreePath, oldRef, originalPath ?? filePath);
+  let newContent: string | null = null;
+  let newIsBinary = false;
+  if (status !== 'deleted') {
+    if (scope === 'staged') {
+      newContent = await readGitFileContent(worktreePath, ':', filePath);
+    } else {
+      try {
+        const fullPath = path.join(worktreePath, filePath);
+        const [realRoot, realPath] = await Promise.all([
+          fs.realpath(worktreePath),
+          fs.realpath(fullPath),
+        ]);
+        if (realPath !== realRoot && !realPath.startsWith(`${realRoot}${path.sep}`)) {
+          throw new Error(`File path escapes worktree: ${filePath}`);
+        }
+        newIsBinary = await isBinaryFile(fullPath);
+        newContent = newIsBinary ? null : await fs.readFile(fullPath, 'utf-8');
+      } catch {
+        newContent = null;
+      }
+    }
+  }
+  const isBinary =
+    newIsBinary ||
+    (scope === 'staged' && status !== 'deleted' && newContent === null) ||
+    (oldContent?.includes('\0') ?? false) ||
+    (newContent?.includes('\0') ?? false) ||
+    (oldContent === null && newContent === null && status === 'modified');
+  return { oldContent, newContent, isBinary };
+}
+
+async function getLocalChangeFiles(
+  worktreePath: string,
+): Promise<WorktreeLocalChanges> {
+  const { stdout: statusOutput } = await execFileAsync(
+    'git',
+    ['status', '--porcelain', '-z', '--untracked-files=all'],
+    { cwd: worktreePath, encoding: 'utf-8' },
+  );
+  const staged = parseNameStatusOutput(
+    (await execFileAsync('git', ['diff', '--cached', '--name-status', '-z'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    })).stdout,
+  );
+  const unstaged = parseNameStatusOutput(
+    (await execFileAsync('git', ['diff', '--name-status', '-z'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    })).stdout,
+  );
+  const unstagedPaths = new Set(unstaged.map((file) => file.path));
+  const statusEntries = statusOutput.split('\0').filter(Boolean);
+  for (const entry of statusEntries) {
+    const status = entry.slice(0, 2);
+    const filePath = entry.slice(3);
+    if (status === '??' && filePath && !unstagedPaths.has(filePath)) {
+      unstaged.push({
+        path: filePath,
+        status: 'added',
+        additions: 0,
+        deletions: 0,
+      });
+    }
+  }
+  return { staged, unstaged };
+}
+
+export async function getWorktreeLocalChanges(
+  worktreePath: string,
+): Promise<WorktreeLocalChanges> {
+  if (!(await pathExists(worktreePath))) {
+    return { staged: [], unstaged: [], worktreeDeleted: true };
+  }
+  try {
+    return await getLocalChangeFiles(worktreePath);
+  } catch (error) {
+    if (isEnoent(error)) return { staged: [], unstaged: [], worktreeDeleted: true };
+    throw error;
+  }
+}
+
+function getSourceBranchRefs(
+  sourceBranch: string,
+  remoteNames: Set<string>,
+): {
+  localBranch: string;
+  refs: string[];
+  exactLocalRef: string | null;
+} {
+  const remoteRefMatch = sourceBranch.match(/^refs\/remotes\/([^/]+)\/(.+)$/);
+  const shorthandParts = sourceBranch.split('/');
+  const shorthandRemote = remoteNames.has(shorthandParts[0])
+    ? shorthandParts[0]
+    : sourceBranch.startsWith('origin/')
+      ? 'origin'
+      : null;
+  const remoteName = remoteRefMatch?.[1] ?? shorthandRemote;
+  const localBranch = remoteRefMatch
+    ? remoteRefMatch[2]
+    : remoteName
+      ? shorthandParts.slice(1).join('/')
+      : sourceBranch.replace(/^refs\/heads\//, '');
+
+  const refs = [`refs/heads/${localBranch}`];
+  let exactLocalRef: string | null = null;
+  if (shorthandRemote && !remoteRefMatch) {
+    exactLocalRef = `refs/heads/${sourceBranch}`;
+    refs.unshift(exactLocalRef);
+  }
+  refs.push(`refs/remotes/${remoteName ?? 'origin'}/${localBranch}`);
+
+  return { localBranch, refs, exactLocalRef };
 }
 
 /**
@@ -442,32 +635,91 @@ async function getDiffBaseCommit(
   worktreePath: string,
   startCommitHash: string,
   sourceBranch: string | null,
-): Promise<string> {
+): Promise<{ baseCommit: string; sourceRef: string | null }> {
   if (!sourceBranch) {
     dbg.worktree('No sourceBranch, using startCommitHash: %s', startCommitHash);
-    return startCommitHash;
+    return { baseCommit: startCommitHash, sourceRef: null };
   }
 
-  const refs = sourceBranch.startsWith('origin/')
-    ? [sourceBranch]
-    : [sourceBranch, `origin/${sourceBranch}`];
+  let remoteNames = new Set<string>();
+  try {
+    const { stdout } = await execFileAsync('git', ['remote'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+    remoteNames = new Set(stdout.trim().split('\n').filter(Boolean));
+  } catch {
+    // Ref resolution still supports local branches and origin without remotes.
+  }
+  const { localBranch, refs, exactLocalRef } = getSourceBranchRefs(
+    sourceBranch,
+    remoteNames,
+  );
+
+  try {
+    await execFileAsync('git', ['check-ref-format', '--branch', localBranch], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+  } catch {
+    dbg.worktree(
+      'Invalid sourceBranch, falling back to startCommitHash: %s',
+      startCommitHash,
+    );
+    return { baseCommit: startCommitHash, sourceRef: null };
+  }
+
+  if (exactLocalRef) {
+    try {
+      await execFileAsync('git', ['show-ref', '--verify', exactLocalRef], {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+      });
+      refs.splice(0, refs.length, exactLocalRef);
+    } catch {
+      // No exact local branch; interpret sourceBranch as remote shorthand.
+    }
+  }
+
+  let nearest:
+    | { baseCommit: string; sourceRef: string; distance: number }
+    | undefined;
 
   for (const ref of refs) {
     try {
-      const mergeBase = await execFileAsync(
+      const mergeBase = await execFileAsync('git', ['merge-base', 'HEAD', ref], {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+      });
+      const baseCommit = mergeBase.stdout.trim();
+      const commitCount = await execFileAsync(
         'git',
-        ['merge-base', 'HEAD', ref],
+        ['rev-list', '--count', `${baseCommit}..HEAD`],
         {
           cwd: worktreePath,
           encoding: 'utf-8',
         },
       );
-      const base = mergeBase.stdout.trim();
-      dbg.worktree('Using merge-base with %s: %s', ref, base);
-      return base;
+      const distance = Number.parseInt(commitCount.stdout.trim(), 10);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { baseCommit, sourceRef: ref, distance };
+      }
     } catch {
       continue;
     }
+  }
+
+  if (nearest) {
+    dbg.worktree(
+      'Using nearest merge-base with %s: %s (%d commits from HEAD)',
+      nearest.sourceRef,
+      nearest.baseCommit,
+      nearest.distance,
+    );
+    return {
+      baseCommit: nearest.baseCommit,
+      sourceRef: nearest.sourceRef,
+    };
   }
 
   // Fall back to startCommitHash if merge-base fails
@@ -475,7 +727,7 @@ async function getDiffBaseCommit(
     'merge-base failed, falling back to startCommitHash: %s',
     startCommitHash,
   );
-  return startCommitHash;
+  return { baseCommit: startCommitHash, sourceRef: null };
 }
 
 /**
@@ -488,42 +740,36 @@ async function getDiffBaseCommit(
  */
 async function getTaskChangedFiles(
   worktreePath: string,
-  sourceBranch: string | null,
+  sourceRef: string | null,
 ): Promise<Set<string> | null> {
-  if (!sourceBranch) return null;
+  if (!sourceRef) return null;
 
-  // Prefer the local source branch because it may have unpushed commits that
-  // were present when the worktree was created.
-  const refs = sourceBranch.startsWith('origin/')
-    ? [sourceBranch]
-    : [sourceBranch, `origin/${sourceBranch}`];
-
-  for (const ref of refs) {
-    try {
-      const { stdout } = await execFileAsync(
-        'git',
-        ['diff', '--name-only', ref],
-        {
-          cwd: worktreePath,
-          encoding: 'utf-8',
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
-      const files = new Set(
-        stdout
-          .trim()
-          .split('\n')
-          .filter((f) => f),
-      );
-      dbg.worktree('Task-changed files (vs %s): %d files', ref, files.size);
-      return files;
-    } catch {
-      continue;
-    }
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['diff', '--name-only', sourceRef],
+      {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    const files = new Set(
+      stdout
+        .trim()
+        .split('\n')
+        .filter((f) => f),
+    );
+    dbg.worktree(
+      'Task-changed files (vs %s): %d files',
+      sourceRef,
+      files.size,
+    );
+    return files;
+  } catch {
+    dbg.worktree('Could not use resolved source branch for filtering, skipping');
+    return null;
   }
-
-  dbg.worktree('Could not resolve source branch for filtering, skipping');
-  return null;
 }
 
 /**
@@ -563,12 +809,14 @@ export async function getWorktreeDiff(
   }
 
   try {
-    const [baseCommit, taskChangedFiles] = await Promise.all([
-      getDiffBaseCommit(worktreePath, startCommitHash, sourceBranch ?? null),
-      // Files whose content matches the source branch are merge artifacts
-      // (from merging source into this branch) and should be excluded.
-      getTaskChangedFiles(worktreePath, sourceBranch ?? null),
-    ]);
+    const { baseCommit, sourceRef } = await getDiffBaseCommit(
+      worktreePath,
+      startCommitHash,
+      sourceBranch ?? null,
+    );
+    // Files whose content matches the source branch are merge artifacts
+    // (from merging source into this branch) and should be excluded.
+    const taskChangedFiles = await getTaskChangedFiles(worktreePath, sourceRef);
 
     // We need to combine two sources to get all changes:
     // 1. git diff --name-status <commit> - changes from baseCommit to working tree
@@ -746,7 +994,7 @@ export async function getWorktreeFileContent(
   });
 
   // Get the appropriate base commit for diffing
-  const baseCommit = await getDiffBaseCommit(
+  const { baseCommit } = await getDiffBaseCommit(
     worktreePath,
     startCommitHash,
     sourceBranch ?? null,
@@ -900,6 +1148,7 @@ async function copyWorktreeFiles(
  * @param taskName - Optional task name to use for worktree naming (preferred over prompt)
  * @param sourceBranch - Optional branch to base the worktree on (defaults to current HEAD)
  * @param startPoint - Optional git ref to create the worktree from while preserving sourceBranch metadata
+ * @param useExistingBranch - Check out sourceBranch directly instead of creating a task branch
  * @returns The path to the created worktree and the starting commit hash
  */
 export async function createWorktree(
@@ -910,6 +1159,7 @@ export async function createWorktree(
   taskName?: string,
   sourceBranch?: string,
   startPoint?: string,
+  useExistingBranch = false,
 ): Promise<CreateWorktreeResult> {
   dbg.worktree('createWorktree called %o', {
     projectPath,
@@ -941,16 +1191,19 @@ export async function createWorktree(
   const actualSourceBranch =
     sourceBranch ?? (await getCurrentBranchName(projectPath));
 
-  // Create branch name with jean-claude/ prefix
-  const branchName = `jean-claude/${worktreeName}`;
+  const branchName = useExistingBranch
+    ? actualSourceBranch
+    : `jean-claude/${worktreeName}`;
   dbg.worktree('Creating worktree: %s, branch: %s', worktreePath, branchName);
 
-  // Create the worktree with a new branch
-  // If sourceBranch is provided, use it as the start point; otherwise use current HEAD
+  // Existing branch mode checks out selected branch directly. New branch mode
+  // keeps isolated-task behavior.
   try {
     const startPointArg = startPoint ?? sourceBranch;
-    const args = ['worktree', 'add', worktreePath, '-b', branchName];
-    if (startPointArg) args.push(startPointArg);
+    const args = useExistingBranch
+      ? ['worktree', 'add', worktreePath, startPointArg ?? branchName]
+      : ['worktree', 'add', worktreePath, '-b', branchName];
+    if (!useExistingBranch && startPointArg) args.push(startPointArg);
     dbg.worktree('Running: git %s', args.join(' '));
     await execFileAsync('git', args, {
       cwd: projectPath,
@@ -1025,12 +1278,23 @@ export async function getProjectBranches(
   projectPath: string,
 ): Promise<BranchInfo[]> {
   try {
-    const { stdout } = await execAsync(
+    const [{ stdout }, { stdout: worktreeList }] = await Promise.all([
+      execAsync(
       'git branch --sort=-committerdate --format="%(refname:short)\t%(committerdate:iso-strict)"',
       {
         cwd: projectPath,
         encoding: 'utf-8',
       },
+      ),
+      execAsync('git worktree list --porcelain', {
+        cwd: projectPath,
+        encoding: 'utf-8',
+      }),
+    ]);
+    const checkedOutBranches = new Set(
+      [...worktreeList.matchAll(/^branch refs\/heads\/(.+)$/gm)].map(
+        (match) => match[1],
+      ),
     );
     return stdout
       .trim()
@@ -1039,11 +1303,16 @@ export async function getProjectBranches(
       .map((line) => {
         const separatorIndex = line.indexOf('\t');
         if (separatorIndex === -1) {
-          return { name: line, lastCommitDate: '' };
+          return {
+            name: line,
+            lastCommitDate: '',
+            isCheckedOut: checkedOutBranches.has(line),
+          };
         }
         return {
           name: line.slice(0, separatorIndex),
           lastCommitDate: line.slice(separatorIndex + 1),
+          isCheckedOut: checkedOutBranches.has(line.slice(0, separatorIndex)),
         };
       });
   } catch (error) {
@@ -1058,6 +1327,80 @@ export interface WorktreeStatus {
   hasUnpushedCommits: boolean;
   currentBranch: string | null;
   worktreeDeleted?: boolean;
+}
+
+export async function hasUncommittedWorktreeChanges(
+  worktreePath: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        '--no-optional-locks',
+        'status',
+        '--porcelain',
+        '--untracked-files=normal',
+      ],
+      { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+    );
+    return stdout.trim().length > 0;
+  } catch (error) {
+    if (isEnoent(error) && !(await pathExists(worktreePath))) return false;
+    throw error;
+  }
+}
+
+export async function hasUnpushedWorktreeCommits(
+  worktreePath: string,
+): Promise<boolean> {
+  let branchStatus: string;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        '--no-optional-locks',
+        'status',
+        '--porcelain=v2',
+        '--branch',
+        '--untracked-files=no',
+      ],
+      { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+    );
+    branchStatus = stdout;
+  } catch (error) {
+    if (isEnoent(error) && !(await pathExists(worktreePath))) return false;
+    throw error;
+  }
+
+  const lines = branchStatus.split('\n');
+  const hasUpstream = lines.some((line) => line.startsWith('# branch.upstream '));
+  if (hasUpstream) {
+    const aheadLine = lines.find((line) => line.startsWith('# branch.ab '));
+    const aheadCount = aheadLine?.match(/^# branch\.ab \+(\d+) /)?.[1];
+    return Number(aheadCount ?? 0) > 0;
+  }
+
+  // A branch can be published without tracking configuration.
+  const { stdout: containingRemoteRefs } = await execFileAsync(
+    'git',
+    [
+      '--no-optional-locks',
+      'for-each-ref',
+      '--contains=HEAD',
+      '--format=%(refname)',
+      'refs/remotes',
+    ],
+    { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+  );
+  if (containingRemoteRefs.trim().length > 0) return false;
+
+  // Without an upstream or containing remote ref, local commits need a push.
+  const { stdout } = await execFileAsync(
+    'git',
+    ['--no-optional-locks', 'log', '--oneline', '-1'],
+    { cwd: worktreePath, encoding: 'utf-8', timeout: 5_000 },
+  );
+  return stdout.trim().length > 0;
 }
 
 /**
@@ -1088,27 +1431,8 @@ export async function getWorktreeStatus(
     const hasUnstagedChanges = unstagedOutput.trim().length > 0;
     const currentBranch = await getCurrentBranch(worktreePath);
 
-    // Check for unpushed commits (commits ahead of upstream)
-    let hasUnpushedCommits = false;
-    try {
-      const { stdout: aheadOutput } = await execAsync(
-        'git rev-list --count @{u}..HEAD',
-        { cwd: worktreePath, encoding: 'utf-8' },
-      );
-      hasUnpushedCommits = parseInt(aheadOutput.trim(), 10) > 0;
-    } catch {
-      // No upstream tracking branch — any local commits are unpushed
-      // Check if there are any commits at all
-      try {
-        const { stdout: logOutput } = await execAsync('git log --oneline -1', {
-          cwd: worktreePath,
-          encoding: 'utf-8',
-        });
-        hasUnpushedCommits = logOutput.trim().length > 0;
-      } catch {
-        hasUnpushedCommits = false;
-      }
-    }
+    const hasUnpushedCommits =
+      await hasUnpushedWorktreeCommits(worktreePath);
 
     return {
       hasUncommittedChanges: hasStagedChanges || hasUnstagedChanges,
@@ -1788,7 +2112,7 @@ export async function getWorktreeUnifiedDiff(
 
   try {
     // Get the appropriate base commit for diffing
-    const baseCommit = await getDiffBaseCommit(
+    const { baseCommit, sourceRef } = await getDiffBaseCommit(
       worktreePath,
       startCommitHash,
       sourceBranch ?? null,
@@ -1797,7 +2121,7 @@ export async function getWorktreeUnifiedDiff(
     // Get task-changed files to filter out merge artifacts
     const taskChangedFiles = await getTaskChangedFiles(
       worktreePath,
-      sourceBranch ?? null,
+      sourceRef,
     );
 
     if (taskChangedFiles && taskChangedFiles.size > 0) {

@@ -3,7 +3,7 @@ import type {
   AiUsageTokenInput,
 } from '@shared/ai-usage-types';
 
-export const AI_USAGE_PRICING_VERSION = '2026-06-12-anthropic-pricing';
+export const AI_USAGE_PRICING_VERSION = '2026-07-11';
 
 type ModelPricing = {
   input: number;
@@ -12,7 +12,7 @@ type ModelPricing = {
   cacheWrite?: number;
 };
 
-// USD per 1M tokens. Claude rates verified against Anthropic pricing docs on 2026-06-12.
+// USD per 1M tokens. Rates verified against provider pricing docs.
 // Keep conservative; unknown models cost $0 and are flagged.
 const PRICING_BY_MODEL: Record<string, ModelPricing> = {
   haiku: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
@@ -164,6 +164,14 @@ const PRICING_BY_MODEL: Record<string, ModelPricing> = {
     cacheRead: 1.5,
     cacheWrite: 18.75,
   },
+  'gpt-5.6-sol': { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+  'gpt-5.6-terra': {
+    input: 2.5,
+    output: 15,
+    cacheRead: 0.25,
+    cacheWrite: 3.125,
+  },
+  'gpt-5.6-luna': { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
   'gpt-5.5': { input: 5, output: 30, cacheRead: 0.5 },
   'gpt-5.5-codex': { input: 5, output: 30, cacheRead: 0.5 },
   'gpt-5.4': { input: 2.5, output: 15, cacheRead: 0.25 },

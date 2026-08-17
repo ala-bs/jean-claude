@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { dbg } from '../../../lib/debug';
+import { getChildProcessEnv } from '../../../lib/child-process-env';
 
 import { CodexJsonRpcClient } from './codex-json-rpc-client';
 
@@ -73,7 +74,7 @@ async function startCodexAppServer(
   await assertCodexCliAvailable();
 
   const proc = spawn('codex', ['app-server', '--listen', 'stdio://'], {
-    env: process.env,
+    env: getChildProcessEnv(),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const client = new CodexJsonRpcClient({ process: proc });
@@ -124,7 +125,10 @@ async function startCodexAppServer(
 
 async function assertCodexCliAvailable(): Promise<void> {
   try {
-    await execFileAsync('codex', ['--version'], { timeout: 5_000 });
+    await execFileAsync('codex', ['--version'], {
+      env: getChildProcessEnv(),
+      timeout: 5_000,
+    });
   } catch (error) {
     const code = (error as { code?: string }).code;
     if (code === 'ENOENT') {

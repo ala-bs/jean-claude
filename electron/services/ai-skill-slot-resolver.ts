@@ -50,14 +50,18 @@ export async function resolveAiSkillSlot(
   // 1. Check project override (validate in case of corrupted data)
   if (projectSlots && isAiSkillSlotsSetting(projectSlots)) {
     if (projectSlots[slotKey] !== undefined) {
-      return normalizeSlotForEnabledBackends(projectSlots[slotKey]);
+      return normalizeSlotForEnabledBackends(projectSlots[slotKey], {
+        preserveSkillOnFallback: slotKey === 'work-item-summary',
+      });
     }
   }
 
   // 2. Check global setting (SettingsRepository.get already validates)
   const globalSlots = await SettingsRepository.get('aiSkillSlots');
   if (globalSlots[slotKey] !== undefined) {
-    return normalizeSlotForEnabledBackends(globalSlots[slotKey]);
+    return normalizeSlotForEnabledBackends(globalSlots[slotKey], {
+      preserveSkillOnFallback: slotKey === 'work-item-summary',
+    });
   }
 
   if (slotKey === 'project-feature-map') {

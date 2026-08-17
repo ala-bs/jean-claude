@@ -6,6 +6,7 @@ import {
   ingestTask,
   ingestTasks,
   markTaskListsStale,
+  patchTaskSnapshot,
   projectTasksResourceKey,
   removeTask,
   selectActiveTasks,
@@ -46,6 +47,8 @@ import { useToastStore } from '@/stores/toasts';
 // The IPC handler extracts interactionMode/modelPreference/agentBackend
 // to auto-create the initial TaskStep.
 type CreateTaskPayload = NewTask & {
+  useWorktree?: boolean;
+  useExistingBranch?: boolean;
   interactionMode?: InteractionMode | null;
   modelPreference?: string | null;
   thinkingEffort?: ThinkingEffort | null;
@@ -267,6 +270,12 @@ export function useDeleteWorktree() {
       if (result.editorCloseWarning) {
         addToast({ type: 'error', message: result.editorCloseWarning });
       }
+      patchTaskSnapshot(taskId, {
+        worktreePath: null,
+        branchName: null,
+        startCommitHash: null,
+        sourceBranch: null,
+      });
       queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });

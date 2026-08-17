@@ -19,6 +19,8 @@ export interface DiffFile {
 export interface CommentThread {
   id: number;
   line?: number;
+  lineStart?: number;
+  lineEnd?: number;
   status?: string;
   comments: Array<{
     id?: number;

@@ -20,7 +20,12 @@ export type AgentUIEventPayload =
     }
   | { type: 'status'; status: TaskStatus; error?: string }
   | ({ type: 'permission' } & NormalizedPermissionRequest)
-  | { type: 'question'; requestId: string; questions: AgentQuestion[] }
+  | {
+      type: 'question';
+      requestId: string;
+      contextReminder?: string;
+      questions: AgentQuestion[];
+    }
   | { type: 'name-updated'; name: string }
   | { type: 'resource-snapshot'; snapshot: AgentResourceSnapshot }
   | { type: 'queue-update'; queuedPrompts: QueuedPrompt[] };

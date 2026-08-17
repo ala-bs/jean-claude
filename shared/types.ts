@@ -15,6 +15,12 @@ import {
 import type { PermissionScope } from './permission-types';
 import type { ProjectPriority } from './feed-types';
 import type { UsageProviderType } from './usage-types';
+import type { WorkItemTitleParserSetting } from './work-item-title-parser-types';
+
+export type {
+  WorkItemTitleParserRule,
+  WorkItemTitleParserSetting,
+} from './work-item-title-parser-types';
 
 
 export type ProviderType = 'azure-devops' | 'github' | 'gitlab';
@@ -47,7 +53,7 @@ export interface UpdateToken {
 }
 
 export type ProjectType = 'local' | 'git-provider' | 'system';
-export type TaskType = 'agent' | 'skill-creation' | 'feature-map';
+export type TaskType = 'agent' | 'skill-creation' | 'feature-map' | 'pr-review';
 export type TaskStatus =
   | 'running'
   | 'waiting'
@@ -204,6 +210,7 @@ export interface UpdateProvider {
 export interface BranchInfo {
   name: string;
   lastCommitDate: string;
+  isCheckedOut?: boolean;
 }
 
 export interface DetectedProjectLogo {
@@ -253,6 +260,7 @@ export interface Project {
   workItemProviderId: string | null;
   workItemProjectId: string | null;
   workItemProjectName: string | null;
+  workItemTitleParser: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed: boolean;
   showPrsInFeed: boolean;
   autoPullSourceBranch: boolean;
@@ -291,6 +299,7 @@ export interface NewProject {
   workItemProviderId?: string | null;
   workItemProjectId?: string | null;
   workItemProjectName?: string | null;
+  workItemTitleParser?: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
@@ -329,6 +338,7 @@ export interface UpdateProject {
   workItemProviderId?: string | null;
   workItemProjectId?: string | null;
   workItemProjectName?: string | null;
+  workItemTitleParser?: WorkItemTitleParserSetting | null;
   showWorkItemsInFeed?: boolean;
   showPrsInFeed?: boolean;
   autoPullSourceBranch?: boolean;
@@ -472,6 +482,17 @@ export interface PrReviewStepMeta {
   submittedCount?: number;
 }
 
+/** Meta for PR review chat steps anchored to selected diff text */
+export interface PrReviewChatStepMeta {
+  kind: 'pr-review-chat';
+  pullRequestId: number;
+  filePath: string;
+  lineStart: number;
+  lineEnd?: number;
+  side?: 'old' | 'new';
+  selectedText: string;
+}
+
 /** Config for a single reviewer in a review step */
 export interface ReviewerConfig {
   id: string;
@@ -516,10 +537,27 @@ export type TaskStepMeta =
   | CreatePullRequestStepMeta
   | ForkStepMeta
   | PrReviewStepMeta
+  | PrReviewChatStepMeta
   | ReviewStepMeta
   | SkillCreationStepMeta
   | FeatureMapStepMeta
   | Record<string, never>;
+
+export function isPrReviewChatStepMeta(
+  meta: TaskStepMeta | null | undefined,
+): meta is PrReviewChatStepMeta {
+  if (!meta) return false;
+  const m = meta as PrReviewChatStepMeta;
+  return (
+    m.kind === 'pr-review-chat' &&
+    typeof m.pullRequestId === 'number' &&
+    typeof m.filePath === 'string' &&
+    typeof m.lineStart === 'number' &&
+    (m.lineEnd === undefined || typeof m.lineEnd === 'number') &&
+    (m.side === undefined || m.side === 'old' || m.side === 'new') &&
+    typeof m.selectedText === 'string'
+  );
+}
 
 /** Type guard for SkillCreationStepMeta */
 export function isSkillCreationStepMeta(
@@ -566,6 +604,7 @@ export interface TaskStep {
   images: PromptImagePart[] | null;
   meta: TaskStepMeta;
   autoStart: boolean;
+  archivedAt?: string | null;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -604,6 +643,7 @@ export interface UpdateTaskStep {
   images?: PromptImagePart[] | null;
   meta?: TaskStepMeta;
   autoStart?: boolean;
+  archivedAt?: string | null;
   sortOrder?: number;
 }
 
@@ -683,6 +723,12 @@ export interface BackendDefaultModelsSetting {
   models: Record<AgentBackendType, ModelPreference>;
 }
 
+export interface PrReviewAgentSetting {
+  backend: AgentBackendType | null;
+  modelPreference: ModelPreference;
+  thinkingEffort: ThinkingEffort;
+}
+
 export type OpenCodeProcessMode = 'standalone' | 'shared';
 
 export interface OpenCodeProcessSetting {
@@ -743,9 +789,14 @@ export interface BackendModelPreset {
   backend: AgentBackendType;
   model: ModelPreference;
   thinkingEffort?: ThinkingEffort | null;
+  showInQuickSwitcher?: boolean;
 }
 
 export type BackendModelPresetsSetting = BackendModelPreset[];
+
+export interface ModelQuickSwitcherSetting {
+  enabled: boolean;
+}
 
 export type TaskNotificationEvent =
   | 'completed'
@@ -792,6 +843,13 @@ export const DEFAULT_PROJECT_FEATURE_MAP_SLOT: AiSkillSlotConfig = {
   skillName: 'project-feature-mapping',
 };
 
+export const DEFAULT_WORK_ITEM_SUMMARY_SLOT: AiSkillSlotConfig = {
+  backend: 'claude-code',
+  model: 'haiku',
+  thinkingEffort: 'default',
+  skillName: 'work-item-summary',
+};
+
 export interface AiGenerationSetting {
   openAiApiKey: string; // Stored encrypted
   openAiImageGenerationEnabled?: boolean;
@@ -815,6 +873,7 @@ export type AiSkillSlotKey =
   | 'verification-note'
   | 'project-summary'
   | 'project-feature-map'
+  | 'work-item-summary'
   | 'logo-generation';
 export type AiSkillSlotsSetting = Partial<
   Record<AiSkillSlotKey, AiSkillSlotConfig>
@@ -955,6 +1014,18 @@ function isBackendDefaultModelsSetting(
   return VALID_BACKENDS.every((backend) => typeof models[backend] === 'string');
 }
 
+function isPrReviewAgentSetting(v: unknown): v is PrReviewAgentSetting {
+  if (!v || typeof v !== 'object') return false;
+  const obj = v as Record<string, unknown>;
+  return (
+    (obj.backend === null ||
+      (typeof obj.backend === 'string' &&
+        VALID_BACKENDS.includes(obj.backend as AgentBackendType))) &&
+    typeof obj.modelPreference === 'string' &&
+    VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort)
+  );
+}
+
 function isOpenCodeProcessSetting(v: unknown): v is OpenCodeProcessSetting {
   if (!v || typeof v !== 'object') return false;
   const obj = v as Record<string, unknown>;
@@ -1082,9 +1153,21 @@ function isBackendModelPresetsSetting(
       VALID_BACKENDS.includes(obj.backend as AgentBackendType) &&
       (obj.thinkingEffort === undefined ||
         obj.thinkingEffort === null ||
-        VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort))
+        VALID_THINKING_EFFORTS.includes(obj.thinkingEffort as ThinkingEffort)) &&
+      (obj.showInQuickSwitcher === undefined ||
+        typeof obj.showInQuickSwitcher === 'boolean')
     );
   });
+}
+
+function isModelQuickSwitcherSetting(
+  v: unknown,
+): v is ModelQuickSwitcherSetting {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    typeof (v as Record<string, unknown>).enabled === 'boolean'
+  );
 }
 
 const VALID_TASK_NOTIFICATION_EVENTS: TaskNotificationEvent[] = [
@@ -1138,6 +1221,7 @@ const VALID_SLOT_KEYS: AiSkillSlotKey[] = [
   'verification-note',
   'project-summary',
   'project-feature-map',
+  'work-item-summary',
   'logo-generation',
 ];
 
@@ -1300,6 +1384,14 @@ export const SETTINGS_DEFINITIONS = {
     } as BackendDefaultModelsSetting,
     validate: isBackendDefaultModelsSetting,
   },
+  prReviewAgent: {
+    defaultValue: {
+      backend: null,
+      modelPreference: 'default',
+      thinkingEffort: 'default',
+    } as PrReviewAgentSetting,
+    validate: isPrReviewAgentSetting,
+  },
   opencodeProcess: {
     defaultValue: {
       mode: 'standalone',
@@ -1362,6 +1454,10 @@ export const SETTINGS_DEFINITIONS = {
     defaultValue: [] as BackendModelPresetsSetting,
     validate: isBackendModelPresetsSetting,
   },
+  modelQuickSwitcher: {
+    defaultValue: { enabled: false } as ModelQuickSwitcherSetting,
+    validate: isModelQuickSwitcherSetting,
+  },
   taskEventNotifications: {
     defaultValue: {
       modes: DEFAULT_TASK_NOTIFICATION_MODES,
@@ -1380,6 +1476,7 @@ export const SETTINGS_DEFINITIONS = {
   aiSkillSlots: {
     defaultValue: {
       'project-feature-map': DEFAULT_PROJECT_FEATURE_MAP_SLOT,
+      'work-item-summary': DEFAULT_WORK_ITEM_SUMMARY_SLOT,
     } as AiSkillSlotsSetting,
     validate: isAiSkillSlotsSetting,
   },
@@ -1415,6 +1512,7 @@ export type {
   PromptPrefaceFrequency,
   PromptPrefacePlacement,
   PromptPrefaceSetting,
+  PromptPrefaceTarget,
   ProjectPromptPrefaceSetting,
 } from './prompt-preface-types';
 export { normalizePromptPrefaceSetting } from './prompt-preface-types';

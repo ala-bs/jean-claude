@@ -43,6 +43,8 @@ export interface FeedItem {
   pullRequestRepoId?: string;
   pullRequestUrl?: string;
   pullRequestMergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
+  hasUncommittedChanges?: boolean;
+  hasUnpushedCommits?: boolean;
   noteId?: string;
   noteContent?: string;
   isCompleted?: boolean;
@@ -55,6 +57,8 @@ export interface FeedItem {
   workItemUrl?: string;
   workItemType?: string;
   workItemState?: string;
+  workItemSummary?: string;
+  workItemSummaryStale?: boolean;
   workItemPrId?: number;
   workItemPrStatus?: 'active' | 'completed' | 'abandoned';
   workItemPrUrl?: string;

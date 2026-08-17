@@ -33,6 +33,7 @@ export type CacheEvent =
       taskId: string;
       projectId: string;
       patch: Partial<Task>;
+      invalidateFeed?: boolean;
     }
   | {
       type: 'task.delete';

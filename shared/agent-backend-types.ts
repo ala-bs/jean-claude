@@ -108,6 +108,7 @@ export interface NormalizedPermissionResponse {
   allowMode?: 'session' | 'project' | 'worktree';
   toolsToAllow?: string[];
   setModeOnAllow?: InteractionMode;
+  allowedDirectory?: string;
 }
 
 /**
@@ -175,6 +176,7 @@ export interface NormalizedQuestionOption {
   id?: string;
   label: string;
   description: string;
+  recommended?: boolean;
 }
 
 export type NormalizedQuestionType = 'single_choice' | 'multi_choice' | 'text';
@@ -192,5 +194,6 @@ export interface NormalizedQuestion {
 
 export interface NormalizedQuestionRequest {
   requestId: string;
+  contextReminder?: string;
   questions: NormalizedQuestion[];
 }

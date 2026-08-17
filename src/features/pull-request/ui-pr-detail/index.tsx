@@ -33,31 +33,43 @@ import {
   useReviewCommentsStore,
 } from '@/stores/review-comments';
 import {
+  useContinuePrReviewChatStep,
+  useCreateOrGetPrReviewTask,
+  useCreatePrReviewChatStep,
+} from '@/hooks/use-pr-review-agent';
+import { useDeleteWorktree, useProjectTasks } from '@/hooks/use-tasks';
+import {
   useTaskReviewDraftCountByFile,
   useTaskReviewFileDrafts,
 } from '@/stores/task-review-comment-drafts';
 import { api } from '@/lib/api';
 import type { DiffFile } from '@/features/common/ui-file-diff';
+import { isPrReviewChatStepMeta } from '@shared/types';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PrDetailTab } from '@/stores/navigation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import type { TaskStep } from '@shared/types';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useLatestRef } from '@/hooks/use-latest-ref';
 import { usePrDetailState } from '@/stores/navigation';
 import { usePrDraftCountByFile } from '@/stores/pr-comment-drafts';
 import { useProject } from '@/hooks/use-projects';
-import { useProjectTasks } from '@/hooks/use-tasks';
 import { useRecordPrView } from '@/hooks/use-pr-view-snapshot';
+import { useSteps } from '@/hooks/use-steps';
+import { useTaskMessages } from '@/hooks/use-task-messages';
+import { useToastStore } from '@/stores/toasts';
 
 
 
 import { getCommentStatusCountByPrFile } from '../utils-pr-comment-counts';
+import { getPrThreadImageUploader } from './utils-pr-thread-image-uploader';
 import { PrCommitDiffView } from '../ui-pr-commit-diff-view';
 import { PrCommits } from '../ui-pr-commits';
 import { PrDiffView } from '../ui-pr-diff-view';
 import { PrHeader } from '../ui-pr-header';
 import { PrOverview } from '../ui-pr-overview';
+import { PrReviewAgentChatCard } from '../ui-pr-review-agent-chat-card';
 
 
 const PR_DETAIL_TABS: PrDetailTab[] = ['overview', 'files', 'commits'];
@@ -94,7 +106,12 @@ export function PrDetail({
   const [searchedMentionOptions, setSearchedMentionOptions] = useState<
     MentionOption[]
   >([]);
-  const [commentMode, setCommentMode] = useState<CommentMode>('pr');
+  const [commentMode, setCommentMode] = useState<CommentMode | null>(null);
+  const { data: pr, isLoading: isPrLoading } = usePullRequest(
+    projectId,
+    prId,
+    repoInfo,
+  );
 
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
@@ -139,6 +156,13 @@ export function PrDetail({
       handler: () => setActiveTab('commits'),
       hideInCommandPalette: true,
     },
+    pr?.url ? {
+      label: 'Open PR in Azure DevOps',
+      shortcut: 'cmd+shift+o',
+      handler: () => {
+        window.open(pr.url, '_blank', 'noopener,noreferrer');
+      },
+    } : false,
   ]);
 
   const { data: project } = useProject(projectId);
@@ -183,12 +207,6 @@ export function PrDetail({
     repoInfo,
   ]);
 
-  const { data: pr, isLoading: isPrLoading } = usePullRequest(
-    projectId,
-    prId,
-    repoInfo,
-  );
-
   const { data: commits = [], isLoading: isCommitsLoading } =
     usePullRequestCommits(projectId, prId, repoInfo);
   const { data: files = [], isLoading: isFilesLoading } = usePullRequestChanges(
@@ -198,14 +216,37 @@ export function PrDetail({
   );
   const { data: threads = [] } = usePullRequestThreads(projectId, prId, repoInfo);
 
-  const associatedTask = useMemo(
-    () =>
-      projectTasks.find(
-        (task) => task.pullRequestId === String(prId) && task.type === 'agent',
-      ) ?? null,
-    [projectTasks, prId],
-  );
-  const associatedTaskId = associatedTask?.id ?? '';
+  const associatedTasks = useMemo(() => {
+    const pullRequestId = String(prId);
+    const result = {
+      agentTask: null,
+      prReviewTask: null,
+    } as {
+      agentTask: (typeof projectTasks)[number] | null;
+      prReviewTask: (typeof projectTasks)[number] | null;
+    };
+
+    for (const task of projectTasks) {
+      if (task.pullRequestId !== pullRequestId) continue;
+      if (task.type === 'agent' && !result.agentTask) {
+        result.agentTask = task;
+      } else if (task.type === 'pr-review' && !result.prReviewTask) {
+        result.prReviewTask = task;
+      }
+      if (result.agentTask && result.prReviewTask) break;
+    }
+
+    return result;
+  }, [projectTasks, prId]);
+  const taskCommentTask = associatedTasks.agentTask;
+  const taskCommentTaskId = taskCommentTask?.id ?? '';
+  const associatedPrReviewTask = associatedTasks.prReviewTask;
+  const { data: prReviewSteps = [] } = useSteps(associatedPrReviewTask?.id ?? '');
+  const continuePrReviewChatStep = useContinuePrReviewChatStep();
+  const createOrGetPrReviewTask = useCreateOrGetPrReviewTask();
+  const createPrReviewChatStep = useCreatePrReviewChatStep();
+  const deleteWorktree = useDeleteWorktree();
+  const addToast = useToastStore((state) => state.addToast);
 
   const isPrAuthor = useMemo(() => {
     if (!pr || !currentUser) return false;
@@ -217,14 +258,14 @@ export function PrDetail({
       (!!currentUserEmail && currentUserEmail === ownerEmail)
     );
   }, [currentUser, pr]);
-  const canCreateTaskComment = !readOnly && isPrAuthor && !!associatedTask;
-  const activeCommentMode = canCreateTaskComment ? commentMode : 'pr';
-  const taskReviewCommentCountByFile = useReviewCommentsByFile(associatedTaskId);
+  const canCreateTaskComment = !readOnly && isPrAuthor && !!taskCommentTask;
+  const activeCommentMode = canCreateTaskComment ? (commentMode ?? 'task') : 'pr';
+  const taskReviewCommentCountByFile = useReviewCommentsByFile(taskCommentTaskId);
   const taskReviewDraftCountByFile = useTaskReviewDraftCountByFile({
-    taskId: associatedTaskId,
+    taskId: taskCommentTaskId,
   });
   const selectedFileReviewComments = useReviewCommentsForFile(
-    associatedTaskId,
+    taskCommentTaskId,
     selectedFile ?? '',
   );
   const {
@@ -233,7 +274,7 @@ export function PrDetail({
     getBody: getTaskReviewDraftBody,
     defaultCommentFormLineRanges: defaultTaskReviewCommentFormLineRanges,
   } = useTaskReviewFileDrafts({
-    taskId: associatedTaskId,
+    taskId: taskCommentTaskId,
     filePath: selectedFile ?? '',
   });
 
@@ -269,20 +310,20 @@ export function PrDetail({
   });
 
   const handleAddComment = useCallback(
-    (content: string) => {
-      addComment.mutate(content);
+    async (content: string) => {
+      await addComment.mutateAsync(content);
     },
     [addComment],
   );
 
   const handleAddFileComment = useCallback(
-    (params: {
+    async (params: {
       filePath: string;
       line: number;
       lineEnd?: number;
       content: string;
     }) => {
-      addFileComment.mutate(params);
+      await addFileComment.mutateAsync(params);
     },
     [addFileComment],
   );
@@ -297,9 +338,9 @@ export function PrDetail({
       presets: ReviewPresetId[];
       images?: PromptImagePart[];
     }) => {
-      if (!associatedTask) return;
+      if (!taskCommentTask) return;
       clearTaskReviewDraft(params.lineStart, params.lineEnd);
-      addReviewComment(associatedTask.id, {
+      addReviewComment(taskCommentTask.id, {
         commentKind: 'diff',
         anchor: {
           filePath: params.filePath,
@@ -314,34 +355,34 @@ export function PrDetail({
         resolved: false,
       });
     },
-    [addReviewComment, associatedTask, clearTaskReviewDraft],
+    [addReviewComment, taskCommentTask, clearTaskReviewDraft],
   );
 
   const handleDeleteTaskReviewComment = useCallback(
     (commentId: string) => {
-      if (!associatedTask) return;
-      removeReviewComment(associatedTask.id, commentId);
+      if (!taskCommentTask) return;
+      removeReviewComment(taskCommentTask.id, commentId);
     },
-    [associatedTask, removeReviewComment],
+    [taskCommentTask, removeReviewComment],
   );
 
   const handleEditTaskReviewComment = useCallback(
     (commentId: string, body: string, images: PromptImagePart[]) => {
-      if (!associatedTask) return;
-      updateReviewComment(associatedTask.id, commentId, {
+      if (!taskCommentTask) return;
+      updateReviewComment(taskCommentTask.id, commentId, {
         body,
         images: images.length > 0 ? images : undefined,
       });
     },
-    [associatedTask, updateReviewComment],
+    [taskCommentTask, updateReviewComment],
   );
 
   const handleResolveTaskReviewComment = useCallback(
     (commentId: string) => {
-      if (!associatedTask) return;
-      resolveReviewComment(associatedTask.id, commentId);
+      if (!taskCommentTask) return;
+      resolveReviewComment(taskCommentTask.id, commentId);
     },
-    [associatedTask, resolveReviewComment],
+    [taskCommentTask, resolveReviewComment],
   );
 
   const handleTaskReviewDraftBodyChange = useCallback(
@@ -367,6 +408,65 @@ export function PrDetail({
     [uploadAttachment],
   );
 
+  const handleAskAgent = useCallback(
+    async (params: {
+      filePath: string;
+      lineStart: number;
+      lineEnd?: number;
+      side?: 'old' | 'new';
+      selectedText: string;
+      question: string;
+    }) => {
+      const task =
+        associatedPrReviewTask?.worktreePath
+          ? associatedPrReviewTask
+          : await createOrGetPrReviewTask.mutateAsync({
+              projectId,
+              pullRequestId: prId,
+            });
+
+      await createPrReviewChatStep.mutateAsync({
+        taskId: task.id,
+        pullRequestId: prId,
+        filePath: params.filePath,
+        lineStart: params.lineStart,
+        lineEnd: params.lineEnd,
+        side: params.side,
+        selectedText: params.selectedText,
+        question: params.question,
+      });
+    },
+    [
+      associatedPrReviewTask,
+      createOrGetPrReviewTask,
+      createPrReviewChatStep,
+      projectId,
+      prId,
+    ],
+  );
+
+  const handleCleanReviewWorkspace = useCallback(async () => {
+    if (!associatedPrReviewTask?.worktreePath) return;
+
+    try {
+      const result = await deleteWorktree.mutateAsync({
+        taskId: associatedPrReviewTask.id,
+        keepBranch: true,
+      });
+      if (!result.editorCloseWarning) {
+        addToast({ type: 'success', message: 'Review workspace cleaned' });
+      }
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to clean review workspace',
+      });
+    }
+  }, [addToast, associatedPrReviewTask, deleteWorktree]);
+
   // Convert PR files to unified DiffFile format for the tree
   const diffFiles: DiffFile[] = useMemo(() => {
     return files.map((f) => ({
@@ -382,6 +482,71 @@ export function PrDetail({
 
   const filePaths = useMemo(() => files.map((f) => f.path), [files]);
   const draftCountByFile = usePrDraftCountByFile(prId, filePaths);
+  const prReviewChatCountByFile = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const step of prReviewSteps) {
+      if (!isPrReviewChatStepMeta(step.meta)) continue;
+      if (step.meta.pullRequestId !== prId) continue;
+      counts[step.meta.filePath] = (counts[step.meta.filePath] ?? 0) + 1;
+    }
+    return counts;
+  }, [prId, prReviewSteps]);
+  const selectedFilePrReviewChatCards = useMemo(() => {
+    if (!selectedFile || !associatedPrReviewTask) return [];
+
+    return prReviewSteps
+      .filter((step) => {
+        return (
+          isPrReviewChatStepMeta(step.meta) &&
+          step.meta.pullRequestId === prId &&
+          step.meta.filePath === selectedFile
+        );
+      })
+      .map((step) => {
+        if (!isPrReviewChatStepMeta(step.meta)) return null;
+
+        return {
+          id: step.id,
+          line: step.meta.lineEnd ?? step.meta.lineStart,
+          side: step.meta.side,
+          lineStart: step.meta.lineStart,
+          lineEnd: step.meta.lineEnd,
+          content: (
+            <PrReviewChatCardForStep
+              key={step.id}
+              step={step}
+              disabled={readOnly || !associatedPrReviewTask.worktreePath}
+              disableReason={
+                readOnly
+                  ? 'This pull request view is read-only.'
+                  : !associatedPrReviewTask.worktreePath
+                    ? 'Review workspace was cleaned up. Start a new review workspace to ask more.'
+                    : undefined
+              }
+              isSubmittingFollowUp={
+                continuePrReviewChatStep.isPending &&
+                continuePrReviewChatStep.variables?.stepId === step.id
+              }
+              onFollowUp={async (question) => {
+                await continuePrReviewChatStep.mutateAsync({
+                  stepId: step.id,
+                  question,
+                });
+              }}
+            />
+          ),
+        };
+      })
+      .filter((card) => card !== null)
+      .sort((a, b) => a.line - b.line);
+  }, [
+    associatedPrReviewTask,
+    continuePrReviewChatStep,
+    prId,
+    prReviewSteps,
+    readOnly,
+    selectedFile,
+  ]);
 
   const { mentionDisplayNames, mentionOptions } = useMemo(() => {
     const names: MentionDisplayNames = {};
@@ -461,6 +626,15 @@ export function PrDetail({
         providerId={repoInfo?.providerId}
         repoInfo={repoInfo}
         readOnly={readOnly}
+        onCleanReviewWorkspace={
+          !readOnly && associatedPrReviewTask?.worktreePath
+            ? handleCleanReviewWorkspace
+            : undefined
+        }
+        isCleaningReviewWorkspace={
+          deleteWorktree.isPending &&
+          deleteWorktree.variables?.taskId === associatedPrReviewTask?.id
+        }
       />
 
       {/* Tab bar */}
@@ -521,24 +695,14 @@ export function PrDetail({
             repoInfo={repoInfo}
             readOnly={readOnly}
             threads={threads}
-            onAddComment={
-              readOnly
-                ? undefined
-                : activeCommentMode === 'task'
-                  ? undefined
-                  : handleAddComment
-            }
-            isAddingComment={
-              readOnly
-                ? false
-                : activeCommentMode === 'task'
-                  ? false
-                  : addComment.isPending
-            }
+            onAddComment={readOnly ? undefined : handleAddComment}
+            isAddingComment={!readOnly && addComment.isPending}
             onUploadImage={
-              readOnly || activeCommentMode === 'task'
-                ? undefined
-                : handleUploadImage
+              getPrThreadImageUploader({
+                readOnly,
+                activeCommentMode,
+                uploadImage: handleUploadImage,
+              })
             }
             bottomPadding={bottomPadding}
             fileCount={files.length}
@@ -586,6 +750,7 @@ export function PrDetail({
                       ? taskReviewDraftCountByFile
                       : draftCountByFile
                   }
+                  llmThreadCountByFile={prReviewChatCountByFile}
                 />
               )}
               {/* Resize handle */}
@@ -621,9 +786,11 @@ export function PrDetail({
                         : handleAddFileComment
                   }
                   onUploadImage={
-                    readOnly || activeCommentMode === 'task'
-                      ? undefined
-                      : handleUploadImage
+                    getPrThreadImageUploader({
+                      readOnly,
+                      activeCommentMode,
+                      uploadImage: handleUploadImage,
+                    })
                   }
                   isAddingComment={
                     readOnly
@@ -646,6 +813,12 @@ export function PrDetail({
                       ? handleAddTaskReviewComment
                       : undefined
                   }
+                  onAddReviewCommentAsPrComment={
+                    activeCommentMode === 'task' ? handleAddFileComment : undefined
+                  }
+                  onUploadReviewAsPrImage={
+                    activeCommentMode === 'task' ? handleUploadImage : undefined
+                  }
                   onDeleteReviewComment={handleDeleteTaskReviewComment}
                   onEditReviewComment={handleEditTaskReviewComment}
                   onResolveReviewComment={handleResolveTaskReviewComment}
@@ -658,6 +831,8 @@ export function PrDetail({
                   onReviewCommentDraftBodyChange={
                     handleTaskReviewDraftBodyChange
                   }
+                  onAskAgent={!readOnly ? handleAskAgent : undefined}
+                  prReviewChatCards={selectedFilePrReviewChatCards}
                 />
               ) : (
                 <div className="text-ink-3 flex h-full items-center justify-center">
@@ -712,6 +887,43 @@ export function PrDetail({
           ))}
       </div>
     </div>
+  );
+}
+
+function PrReviewChatCardForStep({
+  step,
+  disabled,
+  disableReason,
+  isSubmittingFollowUp,
+  onFollowUp,
+}: {
+  step: TaskStep;
+  disabled: boolean;
+  disableReason?: string;
+  isSubmittingFollowUp: boolean;
+  onFollowUp: (question: string) => Promise<void> | void;
+}) {
+  const [shouldLoadMessages, setShouldLoadMessages] = useState(true);
+  const { messages, error } = useTaskMessages({
+    taskId: step.taskId,
+    stepId: step.id,
+    enabled: shouldLoadMessages,
+  });
+
+  return (
+    <PrReviewAgentChatCard
+      step={step}
+      messages={messages}
+      onFollowUp={onFollowUp}
+      isSubmittingFollowUp={isSubmittingFollowUp}
+      disabled={disabled}
+      disableReason={disableReason}
+      loadError={error}
+      defaultExpanded
+      onExpandedChange={(expanded) => {
+        if (expanded) setShouldLoadMessages(true);
+      }}
+    />
   );
 }
 

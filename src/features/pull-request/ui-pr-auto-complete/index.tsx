@@ -149,7 +149,7 @@ export function PrAutoComplete({
   }, [allowedStrategies, mergeStrategy]);
 
   const handleEnable = useCallback(() => {
-    if (!currentIdentityId) return;
+    if (!currentIdentityId || autoCompleteMutation.isAnyPending) return;
     autoCompleteMutation.mutate(
       {
         enabled: true,
@@ -185,6 +185,7 @@ export function PrAutoComplete({
   const handleCancel = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
+      if (autoCompleteMutation.isAnyPending) return;
       autoCompleteMutation.mutate({ enabled: false });
     },
     [autoCompleteMutation],
@@ -244,9 +245,9 @@ export function PrAutoComplete({
             onClick={handleCancel}
             className={cancelClassName}
             title="Cancel auto-complete"
-            disabled={autoCompleteMutation.isPending}
+            disabled={autoCompleteMutation.isAnyPending}
           >
-            {autoCompleteMutation.isPending ? (
+            {autoCompleteMutation.isAnyPending ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <X className="h-3 w-3" />
@@ -275,9 +276,9 @@ export function PrAutoComplete({
           setIsModalOpen(true);
         }}
         className={triggerClassName}
-        disabled={autoCompleteMutation.isPending}
+        disabled={autoCompleteMutation.isAnyPending}
       >
-        {autoCompleteMutation.isPending ? (
+        {autoCompleteMutation.isAnyPending ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
           <GitMerge className="h-3.5 w-3.5" />
@@ -432,13 +433,13 @@ export function PrAutoComplete({
             <button
               type="button"
               onClick={handleEnable}
-              disabled={autoCompleteMutation.isPending}
+              disabled={autoCompleteMutation.isAnyPending}
               className={clsx(
                 'bg-acc text-ink-0 hover:bg-acc rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
-                autoCompleteMutation.isPending && 'opacity-50',
+                autoCompleteMutation.isAnyPending && 'opacity-50',
               )}
             >
-              {autoCompleteMutation.isPending ? (
+              {autoCompleteMutation.isAnyPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 'Enable auto-complete'

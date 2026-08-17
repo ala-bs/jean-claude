@@ -57,6 +57,32 @@ End with the following summary tables:
     contexts: { newTask: true, newTaskStep: true },
     autocomplete: { enabled: false, slugs: [] },
   },
+  {
+    id: 'builtin-update-branch',
+    name: 'update-branch',
+    description: 'Merge source branch into this branch and resolve conflicts',
+    template: `merge "{{task.sourceBranch}}" (most up to date between local and remote) into this branch and resolve conflicts
+
+fix all tests/lint/type check (even issues that is not from our changes)
+
+when you resolved conflicts, give a concise summary of what conflicted and what you did to resolve it
+
+i might have done some changes, so don't try to roll them back
+in case of doubt, ask first`,
+    enabled: true,
+    contexts: { newTask: true, newTaskStep: true },
+    autocomplete: { enabled: true, slugs: ['update-branch'] },
+  },
+  {
+    id: 'builtin-update-tests',
+    name: 'update tests',
+    description: 'updates tests after i made some additional changes',
+    template: `I made some additional changes, please update tests accordingly
+In case of doubt ask me first`,
+    enabled: true,
+    contexts: { newTask: true, newTaskStep: true },
+    autocomplete: { enabled: true, slugs: ['update-tests'] },
+  },
 ];
 
 export const BUILTIN_SNIPPET_IDS = new Set(BUILTIN_SNIPPETS.map((s) => s.id));

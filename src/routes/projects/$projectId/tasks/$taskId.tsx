@@ -9,5 +9,5 @@ export const Route = createFileRoute('/projects/$projectId/tasks/$taskId')({
 function ProjectTaskPanel() {
   const { taskId } = Route.useParams();
 
-  return <TaskPanel taskId={taskId} />;
+  return <TaskPanel key={taskId} taskId={taskId} />;
 }

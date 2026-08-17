@@ -59,6 +59,8 @@ export function ModeModelComboSelector({
   backend = 'claude-code',
   models,
   disabled = false,
+  modeDisabled = false,
+  modelDisabled = false,
 }: {
   mode: InteractionMode;
   onModeChange: (mode: InteractionMode) => void;
@@ -70,6 +72,8 @@ export function ModeModelComboSelector({
   backend?: AgentBackendType;
   models?: BackendModelOption[];
   disabled?: boolean;
+  modeDisabled?: boolean;
+  modelDisabled?: boolean;
 }) {
   const id = useId();
   const listboxId = `combo-select-${id}`;
@@ -191,12 +195,14 @@ export function ModeModelComboSelector({
                 role="option"
                 tabIndex={-1}
                 aria-selected={option.value === normalizedMode}
+                disabled={modeDisabled}
                 onClick={() => {
                   onModeChange(option.value);
                 }}
                 className={clsx(
                   'hover:bg-glass-medium flex w-full items-center gap-1.5 px-3 py-1 text-left text-xs transition-colors',
                   option.value === normalizedMode ? 'text-ink-1' : 'text-ink-2',
+                  modeDisabled && 'cursor-not-allowed opacity-50',
                 )}
               >
                 <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
@@ -278,12 +284,14 @@ export function ModeModelComboSelector({
                 role="option"
                 tabIndex={-1}
                 aria-selected={option.value === model}
+                disabled={modelDisabled}
                 onClick={() => {
                   onModelChange(option.value);
                 }}
                 className={clsx(
                   'hover:bg-glass-medium flex w-full items-center gap-1.5 px-3 py-1 text-left text-xs transition-colors',
                   option.value === model ? 'text-ink-1' : 'text-ink-2',
+                  modelDisabled && 'cursor-not-allowed opacity-50',
                 )}
               >
                 <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">

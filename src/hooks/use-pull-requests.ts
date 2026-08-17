@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useValue } from '@legendapp/state/react';
 
 
@@ -1245,8 +1250,11 @@ export function useSetAutoComplete(
   const queryClient = useQueryClient();
   const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
   const queryKey = ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)];
+  const mutationKey = ['set-pull-request-auto-complete', ...queryKey];
+  const isAnyPending = useIsMutating({ mutationKey, exact: true }) > 0;
 
-  return useMutation({
+  const mutation = useMutation({
+    mutationKey,
     mutationFn: (params: {
       enabled: boolean;
       autoCompleteSetById?: string;
@@ -1280,6 +1288,8 @@ export function useSetAutoComplete(
       });
     },
   });
+
+  return { ...mutation, isAnyPending };
 }
 
 export function usePublishPullRequest(
@@ -1316,6 +1326,51 @@ export function usePublishPullRequest(
       queryClient.invalidateQueries({
         queryKey,
       });
+      if (!repoInfoOverride) {
+        queryClient.invalidateQueries({
+          queryKey: ['pull-requests', projectId],
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ['all-projects-pull-requests'],
+      });
+      markFeedPullRequestsStale();
+    },
+  });
+}
+
+export function useMarkPullRequestDraft(
+  projectId: string,
+  prId: number,
+  repoInfoOverride?: PullRequestRepoInfo,
+) {
+  const queryClient = useQueryClient();
+  const repoInfo = useResolvedRepoInfo(projectId, repoInfoOverride);
+  const queryKey = ['pull-request', ...getPrQueryKey(projectId, prId, repoInfo)];
+
+  return useMutation({
+    mutationFn: () =>
+      api.azureDevOps.markPullRequestDraft({
+        providerId: repoInfo!.providerId,
+        projectId: repoInfo!.projectId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+      }),
+    onSuccess: () => {
+      patchPullRequestSnapshot({
+        providerId: repoInfo!.providerId,
+        repoId: repoInfo!.repoId,
+        pullRequestId: prId,
+        patch: { isDraft: true },
+      });
+      queryClient.setQueryData<AzureDevOpsPullRequestDetails | undefined>(
+        queryKey,
+        (old) => (old ? { ...old, isDraft: true } : old),
+      );
+      if (!repoInfoOverride) {
+        updateFeedPullRequest(projectId, prId, { isDraft: true });
+      }
+      queryClient.invalidateQueries({ queryKey });
       if (!repoInfoOverride) {
         queryClient.invalidateQueries({
           queryKey: ['pull-requests', projectId],

@@ -17,6 +17,7 @@ const input = {
           id: 'small',
           label: 'Small change',
           description: 'Keep the change scoped',
+          recommended: true,
         },
       ],
     },
@@ -60,6 +61,31 @@ describe('askQuestionViaBridge', () => {
     });
     expect(JSON.parse(String(init.body))).toEqual({
       sessionId: 'session-1',
+      questions: input.questions,
+    });
+  });
+
+  it('posts an optional Markdown context reminder', async () => {
+    const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ summary: 'Which approach?: Small change' }), {
+        status: 200,
+      }),
+    );
+
+    await askQuestionViaBridge({
+      input: {
+        ...input,
+        contextReminder: '**Current constraint:** keep the change scoped.',
+      },
+      env,
+      fetchImpl,
+    });
+
+    const [, init] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(String(init.body))).toEqual({
+      sessionId: 'session-1',
+      contextReminder: '**Current constraint:** keep the change scoped.',
       questions: input.questions,
     });
   });
@@ -224,6 +250,20 @@ describe('askQuestionViaBridge', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('rejects a blank context reminder', async () => {
+    const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi.fn();
+
+    await expect(
+      askQuestionViaBridge({
+        input: { ...input, contextReminder: '   ' },
+        env,
+        fetchImpl,
+      }),
+    ).rejects.toThrow('Context reminder must not be blank');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('rejects duplicate question ids', async () => {
     const env = await createQuestionBridgeEnv();
 
@@ -260,6 +300,29 @@ describe('askQuestionViaBridge', () => {
         fetchImpl: vi.fn(),
       }),
     ).rejects.toThrow('Invalid ask_question input');
+  });
+
+  it('rejects non-boolean recommended metadata', async () => {
+    const env = await createQuestionBridgeEnv();
+    const fetchImpl = vi.fn();
+
+    await expect(
+      askQuestionViaBridge({
+        input: {
+          questions: [
+            {
+              id: 'approach',
+              type: 'single_choice',
+              label: 'Which approach?',
+              options: [{ label: 'Small', recommended: 'yes' }],
+            },
+          ],
+        },
+        env,
+        fetchImpl,
+      }),
+    ).rejects.toThrow('Invalid ask_question input');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('rejects allowOther metadata', async () => {

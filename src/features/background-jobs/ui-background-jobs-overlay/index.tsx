@@ -288,7 +288,8 @@ function JobRow({
                 Retry
               </Button>
             )}
-            {job.type === 'task-creation' &&
+            {(job.type === 'task-creation' ||
+              job.type === 'pr-review-creation') &&
               job.status === 'succeeded' &&
               job.projectId &&
               job.taskId && (
@@ -297,7 +298,9 @@ function JobRow({
                   size="sm"
                   onClick={() => onOpenTask(job)}
                 >
-                  Open Task
+                  {job.type === 'pr-review-creation'
+                    ? 'Open Review Workspace'
+                    : 'Open Task'}
                 </Button>
               )}
             {job.type === 'verification-note' &&
@@ -376,6 +379,19 @@ function JobDetails({ job }: { job: BackgroundJob }) {
             <p>Task: {typedJob.details.taskName}</p>
           )}
           <p>Scope: git diff</p>
+        </div>
+      );
+    },
+    'work-item-summary-generation': (typedJob) => {
+      if (typedJob.type !== 'work-item-summary-generation') return null;
+
+      return (
+        <div className="text-ink-2 mt-1 space-y-0.5 text-xs">
+          <p className="truncate">
+            Work item: #{typedJob.details.workItemId}{' '}
+            {typedJob.details.workItemTitle}
+          </p>
+          <p>Project: {typedJob.details.projectName}</p>
         </div>
       );
     },

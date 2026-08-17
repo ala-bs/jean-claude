@@ -1,6 +1,8 @@
-import type {
-  AgentResourceSnapshot,
-  AgentResourceSummary,
+import {
+  AGENT_RESOURCE_HIGH_FREQUENCY_SAMPLING_INTERVAL_MS,
+  AGENT_RESOURCE_SAMPLING_INTERVAL_MS,
+  type AgentResourceSnapshot,
+  type AgentResourceSummary,
 } from '@shared/agent-resource-types';
 import type { AgentBackendType } from '@shared/agent-backend-types';
 
@@ -24,12 +26,14 @@ type TrackedSession = {
   peakRssBytes: number;
   latest: AgentResourceSnapshot | null;
   sampling: Promise<void> | null;
+  pendingImmediateSample: boolean;
 };
 
 const DEFAULT_RESOURCE_HISTORY_WINDOW_MS = 60 * 60 * 1_000;
 
 type AgentResourceMonitorDeps = {
   intervalMs?: number;
+  highFrequencyIntervalMs?: number;
   historyWindowMs?: number;
   sampler?: (rootPid: number) => Promise<ProcessTreeSample>;
   onSnapshot?: (snapshot: AgentResourceSnapshot) => void;
@@ -42,6 +46,8 @@ export class AgentResourceMonitorService {
   private historyByStepId = new Map<string, AgentResourceSnapshot[]>();
 
   private onSnapshot?: (snapshot: AgentResourceSnapshot) => void;
+
+  private highFrequencySampling = false;
 
   constructor(private readonly deps: AgentResourceMonitorDeps = {}) {
     this.onSnapshot = deps.onSnapshot;
@@ -72,14 +78,26 @@ export class AgentResourceMonitorService {
       peakRssBytes: 0,
       latest: null,
       sampling: null,
+      pendingImmediateSample: false,
     };
     this.sessions.set(params.stepId, session);
 
     this.queueSample(session);
-    session.timer = setInterval(
-      () => this.queueSample(session),
-      this.deps.intervalMs ?? 2_000,
-    );
+    this.scheduleTimer(session);
+  }
+
+  setHighFrequencySampling(enabled: boolean): void {
+    if (this.highFrequencySampling === enabled) return;
+
+    this.highFrequencySampling = enabled;
+    for (const session of this.sessions.values()) {
+      this.scheduleTimer(session);
+      if (enabled) {
+        this.queueSample(session, { resampleIfBusy: true });
+      } else {
+        session.pendingImmediateSample = false;
+      }
+    }
   }
 
   getSnapshots(): AgentResourceSnapshot[] {
@@ -100,6 +118,7 @@ export class AgentResourceMonitorService {
     if (!session) return null;
 
     if (session.timer) clearInterval(session.timer);
+    session.pendingImmediateSample = false;
     await session.sampling;
     if (this.sessions.get(stepId) === session) {
       this.sessions.delete(stepId);
@@ -129,14 +148,46 @@ export class AgentResourceMonitorService {
     return summary;
   }
 
-  private queueSample(session: TrackedSession): void {
-    if (session.sampling) return;
+  private queueSample(
+    session: TrackedSession,
+    { resampleIfBusy = false }: { resampleIfBusy?: boolean } = {},
+  ): void {
+    if (session.sampling) {
+      if (resampleIfBusy) session.pendingImmediateSample = true;
+      return;
+    }
 
-    session.sampling = this.sample(session).finally(() => {
-      if (session.sampling) {
-        session.sampling = null;
+    const sampling = this.sample(session).finally(() => {
+      if (session.sampling !== sampling) return;
+
+      session.sampling = null;
+      if (
+        session.pendingImmediateSample &&
+        this.sessions.get(session.stepId) === session
+      ) {
+        session.pendingImmediateSample = false;
+        this.queueSample(session);
       }
     });
+    session.sampling = sampling;
+  }
+
+  private scheduleTimer(session: TrackedSession): void {
+    if (session.timer) clearInterval(session.timer);
+    session.timer = setInterval(
+      () => this.queueSample(session),
+      this.getSamplingIntervalMs(),
+    );
+  }
+
+  private getSamplingIntervalMs(): number {
+    if (this.highFrequencySampling) {
+      return (
+        this.deps.highFrequencyIntervalMs ??
+        AGENT_RESOURCE_HIGH_FREQUENCY_SAMPLING_INTERVAL_MS
+      );
+    }
+    return this.deps.intervalMs ?? AGENT_RESOURCE_SAMPLING_INTERVAL_MS;
   }
 
   private async sample(session: TrackedSession): Promise<void> {
@@ -188,23 +239,27 @@ export class AgentResourceMonitorService {
   }
 
   private recordHistory(snapshot: AgentResourceSnapshot): void {
-    const existing = this.historyByStepId.get(snapshot.stepId) ?? [];
-    this.historyByStepId.set(snapshot.stepId, [...existing, snapshot]);
+    const existing = this.historyByStepId.get(snapshot.stepId);
+    if (existing) {
+      existing.push(snapshot);
+    } else {
+      this.historyByStepId.set(snapshot.stepId, [snapshot]);
+    }
     this.pruneHistory();
   }
 
   private pruneHistory(): void {
     const cutoff =
-      this.now() -
+    this.now() -
       (this.deps.historyWindowMs ?? DEFAULT_RESOURCE_HISTORY_WINDOW_MS);
     for (const [stepId, history] of this.historyByStepId.entries()) {
-      const pruned = history.filter(
+      const firstValidIndex = history.findIndex(
         (snapshot) => Date.parse(snapshot.sampledAt) >= cutoff,
       );
-      if (pruned.length === 0) {
+      if (firstValidIndex === -1) {
         this.historyByStepId.delete(stepId);
-      } else if (pruned.length !== history.length) {
-        this.historyByStepId.set(stepId, pruned);
+      } else if (firstValidIndex > 0) {
+        history.splice(0, firstValidIndex);
       }
     }
   }

@@ -10,48 +10,44 @@ import {
   GitMerge,
   GitPullRequest,
   Loader2,
+  MoreHorizontal,
   Plus,
   Save,
   Send,
+  Trash2,
   X,
 } from 'lucide-react';
-import type { ChangeEvent, FormEvent } from 'react';
-import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
+import { startTransition, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
 
-import {
-  getEditorLabel,
-  useBackendDefaultModelsSetting,
-  useBackendsSetting,
-  useEditorSetting,
-} from '@/hooks/use-settings';
-import type { ModelPreference, ThinkingEffort } from '@shared/types';
+import { api, type AzureDevOpsPullRequestDetails } from '@/lib/api';
+import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
+import { getEditorLabel, useEditorSetting } from '@/hooks/use-settings';
 import {
   type PullRequestRepoInfo,
+  useMarkPullRequestDraft,
   usePublishPullRequest,
   useUpdatePullRequestTitle,
 } from '@/hooks/use-pull-requests';
-import type { AgentBackendType } from '@shared/agent-backend-types';
-import { api } from '@/lib/api';
-import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Chip } from '@/common/ui/chip';
 import { encodeProxyUrl } from '@/lib/azure-image-proxy';
 import { formatRelativeTime } from '@/lib/time';
-import { getDefaultModelForBackend } from '@/lib/default-models';
 import { Input } from '@/common/ui/input';
 import { invalidateFeedItems } from '@/hooks/use-tasks';
+import { Kbd } from '@/common/ui/kbd';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useNewTaskFormStore } from '@/stores/new-task-form';
 import { useProject } from '@/hooks/use-projects';
 import { UserAvatar } from '@/common/ui/user-avatar';
+import { useToastStore } from '@/stores/toasts';
 
 
 
 import { PrAutoComplete } from '../ui-pr-auto-complete';
-import { PrReviewSetupDialog } from '../ui-pr-review-setup-dialog';
 import { PrVoteDropdown } from '../ui-pr-vote-dropdown';
 
 function getStatusBadge(
@@ -103,12 +99,16 @@ export function PrHeader({
   providerId,
   repoInfo,
   readOnly = false,
+  onCleanReviewWorkspace,
+  isCleaningReviewWorkspace = false,
 }: {
   pr: AzureDevOpsPullRequestDetails;
   projectId: string;
   providerId?: string;
   repoInfo?: PullRequestRepoInfo;
   readOnly?: boolean;
+  onCleanReviewWorkspace?: () => void;
+  isCleaningReviewWorkspace?: boolean;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -119,34 +119,16 @@ export function PrHeader({
   const { setDraft: setNewTaskDraft } = useNewTaskFormStore(projectId);
   const { data: editorSetting } = useEditorSetting();
   const publishMutation = usePublishPullRequest(projectId, pr.id, repoInfo);
+  const markDraftMutation = useMarkPullRequestDraft(projectId, pr.id, repoInfo);
   const updateTitle = useUpdatePullRequestTitle(projectId, pr.id, repoInfo);
+  const addToast = useToastStore((state) => state.addToast);
   const [isCreating, setIsCreating] = useState(false);
-  const [isReviewSetupOpen, setIsReviewSetupOpen] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(pr.title);
   const [titleError, setTitleError] = useState<string | null>(null);
   const sourceBranch = getBranchName(pr.sourceRefName);
   const targetBranch = getBranchName(pr.targetRefName);
   const avatarProviderId = providerId ?? project?.repoProviderId;
-  const { data: backendsSetting } = useBackendsSetting();
-  const { data: backendDefaultModelsSetting } =
-    useBackendDefaultModelsSetting();
-  const defaultReviewBackend = useMemo<AgentBackendType>(
-    () =>
-      (project?.defaultAgentBackend as AgentBackendType | null) ??
-      backendsSetting?.defaultBackend ??
-      'claude-code',
-    [backendsSetting?.defaultBackend, project?.defaultAgentBackend],
-  );
-  const defaultReviewModel = useMemo<ModelPreference>(
-    () =>
-      getDefaultModelForBackend({
-        backend: defaultReviewBackend,
-        project,
-        backendDefaultModels: backendDefaultModelsSetting,
-      }),
-    [backendDefaultModelsSetting, defaultReviewBackend, project],
-  );
 
   useEffect(() => {
     if (!isEditingTitle) {
@@ -162,27 +144,19 @@ export function PrHeader({
   }, [project]);
 
   const handleReview = useCallback(
-    async (selection: {
-      agentBackend: AgentBackendType;
-      modelPreference: ModelPreference;
-      thinkingEffort: ThinkingEffort;
-    }) => {
-      setIsReviewSetupOpen(false);
+    async () => {
       setIsCreating(true);
       const jobId = addRunningJob({
         type: 'pr-review-creation',
-        title: `Creating review for PR #${pr.id}`,
+        title: `Creating review workspace for PR #${pr.id}`,
         projectId,
         details: { pullRequestId: pr.id },
       });
 
       try {
-        const task = await api.tasks.createPrReview({
+        const task = await api.tasks.createPrReviewTask({
           projectId,
           pullRequestId: pr.id,
-          agentBackend: selection.agentBackend,
-          modelPreference: selection.modelPreference,
-          thinkingEffort: selection.thinkingEffort,
         });
         markJobSucceeded(jobId, { taskId: task.id, projectId });
         invalidateFeedItems(queryClient);
@@ -202,7 +176,7 @@ export function PrHeader({
           jobId,
           error instanceof Error
             ? error.message
-            : 'Failed to create review task',
+            : 'Failed to create review workspace',
         );
         setIsCreating(false);
       }
@@ -253,20 +227,18 @@ export function PrHeader({
     [titleDraft, updateTitle],
   );
 
+  const handleTitleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        handleSaveTitle();
+      }
+    },
+    [handleSaveTitle],
+  );
+
   return (
     <>
-      <PrReviewSetupDialog
-        isOpen={isReviewSetupOpen}
-        onClose={() => setIsReviewSetupOpen(false)}
-        onConfirm={handleReview}
-        prId={pr.id}
-        prTitle={pr.title}
-        defaultBackend={defaultReviewBackend}
-        defaultModel={defaultReviewModel}
-        defaultThinkingEffort="default"
-        isCreating={isCreating}
-      />
-
       {/* Top bar — breadcrumb + actions */}
       <div className="border-glass-border/50 flex h-[52px] shrink-0 items-center gap-2.5 border-b px-5">
         {/* Breadcrumb */}
@@ -297,6 +269,20 @@ export function PrHeader({
         <div className="flex-1" />
 
         {/* Actions */}
+        {onCleanReviewWorkspace && (
+          <button
+            onClick={onCleanReviewWorkspace}
+            disabled={isCleaningReviewWorkspace}
+            className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            {isCleaningReviewWorkspace ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+            Clean review workspace
+          </button>
+        )}
         {!readOnly && (
           <button
             onClick={handleCreateTaskFromPrBranch}
@@ -308,7 +294,7 @@ export function PrHeader({
         )}
         {!readOnly && pr.status === 'active' && (
           <button
-            onClick={() => setIsReviewSetupOpen(true)}
+            onClick={handleReview}
             disabled={isCreating}
             className="bg-acc text-ink-0 hover:bg-acc/90 flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
           >
@@ -317,7 +303,7 @@ export function PrHeader({
             ) : (
               <Eye className="h-3.5 w-3.5" />
             )}
-            Review
+            Create Review Workspace
           </button>
         )}
 
@@ -341,7 +327,48 @@ export function PrHeader({
         >
           <ExternalLink className="h-3.5 w-3.5" />
           Azure DevOps
+          <Kbd shortcut="cmd+shift+o" className="ml-1 text-[9px]" />
         </a>
+        {!readOnly && pr.status === 'active' && !pr.isDraft && (
+          <Dropdown
+            align="right"
+            trigger={
+              <button
+                type="button"
+                aria-label="More pull request actions"
+                className="border-glass-border bg-bg-1 hover:bg-bg-2 flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+            }
+          >
+            <DropdownItem
+              icon={
+                markDraftMutation.isPending ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <GitPullRequest />
+                )
+              }
+              disabled={markDraftMutation.isPending}
+              onClick={() =>
+                markDraftMutation.mutate(undefined, {
+                  onSuccess: () => {
+                    addToast({
+                      type: 'success',
+                      message: 'Pull request marked as draft',
+                    });
+                  },
+                  onError: (error) => {
+                    addToast({ type: 'error', message: error.message });
+                  },
+                })
+              }
+            >
+              Mark as draft
+            </DropdownItem>
+          </Dropdown>
+        )}
       </div>
 
       {/* Header — status + title + meta */}
@@ -373,6 +400,7 @@ export function PrHeader({
                     onChange={(event: ChangeEvent<HTMLInputElement>) =>
                       setTitleDraft(event.target.value)
                     }
+                    onKeyDown={handleTitleKeyDown}
                     className="font-mono text-base font-semibold"
                     disabled={updateTitle.isPending}
                     autoFocus
@@ -390,7 +418,7 @@ export function PrHeader({
                     }
                     disabled={updateTitle.isPending}
                   >
-                    Save
+                    Save <Kbd shortcut="cmd+enter" />
                   </Button>
                   <Button
                     type="button"

@@ -1,3 +1,7 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, PromptPart } from '@shared/agent-backend-types';
@@ -7,6 +11,11 @@ import { buildJcMcpServersConfigForCwd } from './jc-mcp-config';
 import { buildSessionIdStepUpdate } from './agent-session-update';
 import { JcMcpBridgeService } from './jc-mcp-bridge-service';
 import { QuestionBrokerService } from './question-broker-service';
+
+const TEST_ALLOWED_DIRECTORY = fs.realpathSync.native(os.tmpdir());
+const TEST_REQUESTED_DIRECTORY = path.join(TEST_ALLOWED_DIRECTORY, 'repo');
+const TEST_REQUESTED_PATH = path.join(TEST_REQUESTED_DIRECTORY, 'file.ts');
+const TEST_DIRECTORY_PATTERN = `${TEST_ALLOWED_DIRECTORY}/**`;
 
 const QUESTIONS = [
   {
@@ -24,6 +33,7 @@ const {
   buildToolPermissionConfigMock,
   claudeCompactRawMessagesForTaskMock,
   emitStepUpsertMock,
+  emitTaskPatchMock,
   emitTaskUpsertMock,
   getProviderMock,
   legacyBackendConstructorMock,
@@ -166,6 +176,7 @@ const {
     buildToolPermissionConfigMock: vi.fn(),
     claudeCompactRawMessagesForTaskMock: vi.fn(),
     emitStepUpsertMock: vi.fn(),
+    emitTaskPatchMock: vi.fn(),
     emitTaskUpsertMock: vi.fn(),
     getProviderMock: vi.fn(() => createProvider()),
     legacyBackendConstructorMock: vi.fn(() => {
@@ -184,7 +195,7 @@ const {
     providerCalls,
     providerState,
     rawMessageRepositoryMock: {
-      getMessageCountByStepId: vi.fn(),
+      getNextMessageIndexByStepId: vi.fn(),
       create: vi.fn(),
       updateRawData: vi.fn(),
     },
@@ -300,6 +311,7 @@ vi.mock('./ai-usage-tracking-service', () => ({
 
 vi.mock('./cache-event-service', () => ({
   emitStepUpsert: emitStepUpsertMock,
+  emitTaskPatch: emitTaskPatchMock,
   emitTaskUpsert: emitTaskUpsertMock,
 }));
 
@@ -321,6 +333,18 @@ vi.mock('./notification-service', () => ({
 
 vi.mock('./permission-settings-service', () => ({
   buildToolPermissionConfig: buildToolPermissionConfigMock,
+  flattenScope: (scope: Record<string, string | Record<string, string>>) =>
+    Object.entries(scope).flatMap(([tool, config]) => {
+      if (tool === 'extends') return [];
+      if (typeof config === 'string') {
+        return [{ tool, pattern: '*', action: config }];
+      }
+      return Object.entries(config).map(([pattern, action]) => ({
+        tool,
+        pattern,
+        action,
+      }));
+    }),
   normalizeToolRequest: normalizeToolRequestMock,
   readSettings: readSettingsMock,
   resolveRules: resolveRulesMock,
@@ -339,6 +363,7 @@ vi.mock('./system-project-service', () => ({
 }));
 
 import { agentService } from './agent-service';
+import { buildReadOnlyPrReviewSessionRules } from './pr-review-agent-service';
 
 const defaultStep = {
   id: 'step-1',
@@ -568,7 +593,7 @@ function setDefaultMocks(): void {
   rawMessageRepositoryMock.create.mockResolvedValue({ id: 'raw-1' });
   rawMessageRepositoryMock.updateRawData.mockResolvedValue(undefined);
   agentMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
-  rawMessageRepositoryMock.getMessageCountByStepId.mockResolvedValue(0);
+  rawMessageRepositoryMock.getNextMessageIndexByStepId.mockResolvedValue(0);
   agentMessageRepositoryMock.create.mockResolvedValue({ id: 'message-1' });
   agentMessageRepositoryMock.updateEntry.mockResolvedValue(undefined);
   agentMessageRepositoryMock.updateToolResult.mockResolvedValue(undefined);
@@ -686,6 +711,24 @@ describe('buildJcMcpServersConfigForCwd', () => {
       },
     });
     expect(config['jean-claude-mcp'].args.join(' ')).not.toContain('token-1');
+    expect(config['jean-claude-mcp'].env).not.toHaveProperty(
+      'JC_MCP_ENABLE_AGENT_TOOL',
+    );
+  });
+
+  it('enables the agent tool only when requested', () => {
+    const config = buildJcMcpServersConfigForCwd({
+      cwd: '/tmp/worktree',
+      enableAgentTool: true,
+      questionBridge: {
+        serverUrl: 'http://127.0.0.1:4321',
+        token: 'token-1',
+      },
+    });
+
+    expect(config['jean-claude-mcp'].env).toMatchObject({
+      JC_MCP_ENABLE_AGENT_TOOL: '1',
+    });
   });
 
   it('can inject question bridge settings through argv for OpenCode runtime MCP', () => {
@@ -705,6 +748,29 @@ describe('buildJcMcpServersConfigForCwd', () => {
         'JC_MCP_BRIDGE_URL=http://127.0.0.1:4321',
         'JC_MCP_SESSION_ID=session-1',
         'JC_MCP_AUTH_TOKEN=token-1',
+        'node',
+        '--workdir',
+        '/tmp/worktree',
+      ]),
+    });
+    expect(config['jean-claude-mcp']).not.toHaveProperty('env');
+  });
+
+  it('enables the agent tool through argv for OpenCode runtime MCP', () => {
+    const config = buildJcMcpServersConfigForCwd({
+      cwd: '/tmp/worktree',
+      environmentMode: 'argv',
+      enableAgentTool: true,
+      questionBridge: {
+        serverUrl: 'http://127.0.0.1:4321',
+        token: 'token-1',
+      },
+    });
+
+    expect(config['jean-claude-mcp']).toEqual({
+      command: '/usr/bin/env',
+      args: expect.arrayContaining([
+        'JC_MCP_ENABLE_AGENT_TOOL=1',
         'node',
         '--workdir',
         '/tmp/worktree',
@@ -1209,6 +1275,53 @@ describe('agentService provider runtime', () => {
     await agentService.stopAll({ reason: 'shutdown' }).catch(() => {});
   });
 
+  it('corrects an unread write when task becomes focused while it is pending', async () => {
+    const unreadWrite = createDeferred<typeof defaultTask>();
+    let windowDestroyed = false;
+    let windowFocused = false;
+    agentService.setMainWindow({
+      isDestroyed: () => windowDestroyed,
+      isFocused: () => windowFocused,
+      webContents: { isDestroyed: () => windowDestroyed },
+    } as never);
+    agentService.setFocusedTask(null);
+    taskRepositoryMock.setHasUnread
+      .mockReturnValueOnce(unreadWrite.promise)
+      .mockResolvedValueOnce({ ...defaultTask, hasUnread: false });
+
+    const markUnread = (
+      agentService as unknown as {
+        markTaskUnreadIfBackground: (taskId: string) => Promise<void>;
+      }
+    ).markTaskUnreadIfBackground('task-1');
+    await waitForAssertion(() => {
+      expect(taskRepositoryMock.setHasUnread).toHaveBeenCalledWith(
+        'task-1',
+        true,
+      );
+    });
+
+    windowFocused = true;
+    agentService.setFocusedTask('task-1');
+    unreadWrite.resolve({ ...defaultTask, hasUnread: true });
+    await markUnread;
+
+    expect(taskRepositoryMock.setHasUnread.mock.calls).toEqual([
+      ['task-1', true],
+      ['task-1', false],
+    ]);
+    expect(emitTaskPatchMock).toHaveBeenCalledTimes(1);
+    expect(emitTaskPatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-1',
+        patch: expect.objectContaining({ hasUnread: false }),
+      }),
+    );
+
+    windowDestroyed = true;
+    agentService.setFocusedTask(null);
+  });
+
   it('starts active runs through the provider without constructing legacy backend classes', async () => {
     const handle = createHandle({ events: [completeEvent()] });
     providerState.runStartImplementation = async () => handle;
@@ -1243,6 +1356,101 @@ describe('agentService provider runtime', () => {
     await waitForAssertion(() => {
       expect(handle.stop).toHaveBeenCalled();
       expect(handle.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('rejects PR review task starts when backend permissions are unsupported', async () => {
+    providerState.permissionsSupported = false;
+    taskRepositoryMock.findById.mockResolvedValue({
+      ...defaultTask,
+      type: 'pr-review',
+      pullRequestId: '12',
+      sessionRules: buildReadOnlyPrReviewSessionRules(),
+    });
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      meta: {
+        kind: 'pr-review-chat',
+        pullRequestId: 12,
+        filePath: 'src/auth.ts',
+        lineStart: 4,
+        selectedText: 'return user.id;',
+      },
+    });
+
+    await expect(agentService.start('step-1')).rejects.toThrow(
+      'requires backend permission support',
+    );
+
+    expect(stepServiceMock.update).not.toHaveBeenCalled();
+    expect(providerCalls.runStarts).toHaveLength(0);
+  });
+
+  it('rejects generic steps under PR review tasks before backend start', async () => {
+    taskRepositoryMock.findById.mockResolvedValue({
+      ...defaultTask,
+      type: 'pr-review',
+      pullRequestId: '12',
+      sessionRules: buildReadOnlyPrReviewSessionRules(),
+    });
+    taskStepRepositoryMock.findById.mockResolvedValue(defaultStep);
+
+    await expect(agentService.start('step-1')).rejects.toThrow(
+      'PR review tasks can only run PR review chat steps',
+    );
+
+    expect(stepServiceMock.update).not.toHaveBeenCalled();
+    expect(providerCalls.runStarts).toHaveLength(0);
+  });
+
+  it('passes persisted task session deny rules to backend permissionRules after project rules', async () => {
+    taskStepRepositoryMock.findById.mockResolvedValue({
+      ...defaultStep,
+      agentBackend: 'opencode',
+      interactionMode: 'ask',
+    });
+    taskRepositoryMock.findById.mockResolvedValue({
+      ...defaultTask,
+      sessionRules: {
+        read: 'allow',
+        write: 'deny',
+        bash: {
+          'npm test': 'deny',
+        },
+      },
+    });
+    resolveRulesMock.mockReturnValueOnce([
+      { tool: 'write', pattern: '*', action: 'allow' },
+      { tool: 'bash', pattern: 'npm test', action: 'allow' },
+    ]);
+
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    expect(providerCalls.runStarts[0]).toMatchObject({
+      config: {
+        type: 'opencode',
+        interactionMode: 'auto',
+        persistedSessionRules: {
+          read: 'allow',
+          write: 'deny',
+          bash: {
+            'npm test': 'deny',
+          },
+        },
+        permissionRules: [
+          { tool: 'write', pattern: '*', action: 'allow' },
+          { tool: 'bash', pattern: 'npm test', action: 'allow' },
+          { tool: 'read', pattern: '*', action: 'allow' },
+          { tool: 'write', pattern: '*', action: 'deny' },
+          { tool: 'bash', pattern: 'npm test', action: 'deny' },
+        ],
+      },
     });
   });
 
@@ -1379,6 +1587,316 @@ describe('agentService provider runtime', () => {
     expect(providerCalls.stops).toContain('provider-run-1');
   });
 
+  it('drains an admitted start before stopAll snapshots sessions', async () => {
+    const stepLookup = createDeferred<typeof defaultStep>();
+    taskStepRepositoryMock.findById.mockReturnValueOnce(stepLookup.promise);
+    const startPromise = agentService.start('step-1');
+    let stopSettled = false;
+    const stopPromise = agentService.stopAll({ reason: 'user' }).then(() => {
+      stopSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+
+    stepLookup.resolve(defaultStep);
+    await startPromise;
+    await stopPromise;
+
+    expect(providerCalls.runStarts).toHaveLength(0);
+    expect(stepServiceMock.interruptStep).toHaveBeenCalledWith('step-1');
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  it('does not start a backend after stopAll interrupts a registered session', async () => {
+    const promptResolution = createDeferred<{
+      resolvedPrompt: string;
+      step: typeof defaultStep;
+      warnings: never[];
+    }>();
+    stepServiceMock.resolveAndValidate.mockReturnValueOnce(
+      promptResolution.promise,
+    );
+    providerState.runStartImplementation = async () =>
+      createHandle({ events: [completeEvent()] });
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.resolveAndValidate).toHaveBeenCalled();
+    });
+
+    await agentService.stopAll({ reason: 'user' });
+    promptResolution.resolve({
+      resolvedPrompt: 'Resolved prompt',
+      step: defaultStep,
+      warnings: [],
+    });
+    await startPromise;
+    await Promise.resolve();
+
+    expect(providerCalls.runStarts).toHaveLength(0);
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  it('holds sendMessage registration through running-status updates', async () => {
+    const statusSync = createDeferred<void>();
+    const ordering: string[] = [];
+    stepServiceMock.syncTaskStatus.mockImplementationOnce(async () => {
+      ordering.push('status-sync-start');
+      await statusSync.promise;
+      ordering.push('status-sync-end');
+    });
+    stepServiceMock.interruptStep.mockImplementationOnce(async () => {
+      ordering.push('interrupt');
+    });
+    const sendPromise = agentService.sendMessage('step-1', [
+      { type: 'text', text: 'follow up' },
+    ]);
+    await waitForAssertion(() => {
+      expect(ordering).toContain('status-sync-start');
+    });
+    let stopSettled = false;
+    const stopPromise = agentService.stopAll({ reason: 'user' }).then(() => {
+      stopSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+
+    statusSync.resolve();
+    await Promise.all([sendPromise, stopPromise]);
+
+    expect(providerCalls.runStarts).toHaveLength(0);
+    expect(ordering).toEqual([
+      'status-sync-start',
+      'status-sync-end',
+      'interrupt',
+    ]);
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
+  it('rejects concurrent sendMessage registration for the same step', async () => {
+    const stepLookup = createDeferred<typeof defaultStep>();
+    taskStepRepositoryMock.findById.mockReturnValueOnce(stepLookup.promise);
+    const firstSend = agentService.sendMessage('step-1', [
+      { type: 'text', text: 'first' },
+    ]);
+
+    await expect(
+      agentService.sendMessage('step-1', [{ type: 'text', text: 'second' }]),
+    ).rejects.toThrow('Session registration already in progress for step step-1');
+
+    const stopPromise = agentService.stopAll({ reason: 'user' });
+    stepLookup.resolve(defaultStep);
+    await Promise.all([firstSend, stopPromise]);
+
+    expect(
+      agentMessageRepositoryMock.getMessageCountByStepId,
+    ).toHaveBeenCalledOnce();
+    expect(providerCalls.runStarts).toHaveLength(0);
+    expect(stepServiceMock.interruptStep).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores interruption when completion wins a terminal status race', async () => {
+    const terminalMutation = createDeferred<void>();
+    const ordering: string[] = [];
+    stepServiceMock.completeStep.mockImplementationOnce(async () => {
+      ordering.push('complete-start');
+      await terminalMutation.promise;
+      ordering.push('complete-end');
+      return ['step-2'];
+    });
+    stepServiceMock.interruptStep.mockImplementation(async () => {
+      ordering.push('interrupt');
+    });
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send: webContentsSendMock,
+        },
+      },
+    ] as never);
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(ordering).toContain('complete-start');
+    });
+
+    await agentService.stopAll({ reason: 'user' });
+    terminalMutation.resolve();
+    await waitForAssertion(() => {
+      expect(ordering).toContain('complete-end');
+    });
+
+    expect(ordering).toEqual([
+      'complete-start',
+      'interrupt',
+      'complete-end',
+      'interrupt',
+    ]);
+    expect(providerCalls.runStarts).toHaveLength(1);
+    expect(
+      webContentsSendMock.mock.calls.some(
+        ([, payload]) => payload?.type === 'status' && payload.status === 'completed',
+      ),
+    ).toBe(false);
+    expect(notificationServiceMock.notify).not.toHaveBeenCalled();
+  });
+
+  it('restores interruption when backend error handling races stopAll', async () => {
+    const terminalMutation = createDeferred<void>();
+    const ordering: string[] = [];
+    stepServiceMock.errorStep.mockImplementationOnce(async () => {
+      ordering.push('error-start');
+      await terminalMutation.promise;
+      ordering.push('error-end');
+    });
+    stepServiceMock.interruptStep.mockImplementation(async () => {
+      ordering.push('interrupt');
+    });
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send: webContentsSendMock,
+        },
+      },
+    ] as never);
+    const handle = createHandle({
+      events: [{ type: 'error', error: 'backend failed' }],
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(ordering).toContain('error-start');
+    });
+
+    await agentService.stopAll({ reason: 'user' });
+    terminalMutation.resolve();
+    await waitForAssertion(() => {
+      expect(ordering).toContain('error-end');
+    });
+
+    expect(ordering).toEqual([
+      'error-start',
+      'interrupt',
+      'error-end',
+      'interrupt',
+    ]);
+    expect(
+      webContentsSendMock.mock.calls.some(
+        ([, payload]) => payload?.type === 'status' && payload.status === 'errored',
+      ),
+    ).toBe(false);
+    expect(notificationServiceMock.notify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['completed', completeEvent()],
+    ['errored', { type: 'error', error: 'backend failed' } as AgentEvent],
+  ])(
+    'skips stale %s notification when stopAll wins during notification lookup',
+    async (_, terminalEvent) => {
+      const notificationSettings = createDeferred<{
+        modes: {
+          completed: 'always';
+          'permission-required': 'disabled';
+          question: 'disabled';
+          errored: 'always';
+        };
+      }>();
+      settingsRepositoryMock.get.mockReturnValueOnce(
+        notificationSettings.promise,
+      );
+      let windowDestroyed = false;
+      agentService.setMainWindow({
+        isDestroyed: () => windowDestroyed,
+        isFocused: () => false,
+        isMinimized: () => false,
+        focus: vi.fn(),
+        restore: vi.fn(),
+        webContents: {
+          isDestroyed: () => windowDestroyed,
+          send: vi.fn(),
+        },
+      } as never);
+      const terminalFinished = createDeferred<void>();
+      const baseHandle = createHandle();
+      const handle: AgentRunHandle = {
+        ...baseHandle,
+        events: (async function* () {
+          yield terminalEvent;
+          terminalFinished.resolve();
+        })(),
+      };
+      providerState.runStartImplementation = async () => handle;
+
+      try {
+        await agentService.start('step-1');
+        await waitForAssertion(() => {
+          expect(settingsRepositoryMock.get).toHaveBeenCalledWith(
+            'taskEventNotifications',
+          );
+        });
+
+        await agentService.stopAll({ reason: 'user' });
+        notificationSettings.resolve({
+          modes: {
+            completed: 'always',
+            'permission-required': 'disabled',
+            question: 'disabled',
+            errored: 'always',
+          },
+        });
+        await terminalFinished.promise;
+
+        expect(notificationServiceMock.notify).not.toHaveBeenCalled();
+      } finally {
+        windowDestroyed = true;
+      }
+    },
+  );
+
+  it('rejects new session producers and shares concurrent stopAll calls', async () => {
+    const sessions = (
+      agentService as unknown as { sessions: Map<string, unknown> }
+    ).sessions;
+    sessions.set('active-step', {});
+    const stopRelease = createDeferred<void>();
+    const stopMock = vi
+      .spyOn(agentService, 'stop')
+      .mockImplementation(async (stepId) => {
+        await stopRelease.promise;
+        sessions.delete(stepId);
+      });
+
+    try {
+      const firstStop = agentService.stopAll({ reason: 'user' });
+      const secondStop = agentService.stopAll({ reason: 'user' });
+      await Promise.resolve();
+      expect(stopMock).toHaveBeenCalledOnce();
+
+      await expect(agentService.start('step-1')).rejects.toThrow(
+        'Cannot start agent sessions while stopAll is active',
+      );
+      await expect(
+        agentService.sendMessage('step-1', [{ type: 'text', text: 'hello' }]),
+      ).rejects.toThrow('Cannot start agent sessions while stopAll is active');
+
+      stopRelease.resolve();
+      await Promise.all([firstStop, secondStop]);
+      expect(stopMock).toHaveBeenCalledOnce();
+    } finally {
+      stopMock.mockRestore();
+      sessions.delete('active-step');
+    }
+  });
+
   it('shares one stop workflow for concurrent stop calls', async () => {
     const { handle } = createIdleHandle();
     providerState.runStartImplementation = async () => handle;
@@ -1417,6 +1935,33 @@ describe('agentService provider runtime', () => {
     expect(interruptedStatusEvents).toHaveLength(1);
     expect(handle.stop).toHaveBeenCalledTimes(1);
     expect(handle.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('attempts every active session before reporting stopAll failures', async () => {
+    const sessions = (
+      agentService as unknown as { sessions: Map<string, unknown> }
+    ).sessions;
+    sessions.set('step-1', {});
+    sessions.set('step-2', {});
+    const stopMock = vi
+      .spyOn(agentService, 'stop')
+      .mockImplementation(async (stepId, options) => {
+        if (stepId === 'step-1') throw new Error('stop failed');
+        expect(options).toEqual({ reason: 'user' });
+      });
+
+    try {
+      await expect(
+        agentService.stopAll({ reason: 'user' }),
+      ).rejects.toThrow('Failed to stop 1 active agent sessions');
+      expect(stopMock).toHaveBeenCalledTimes(2);
+      expect(stopMock).toHaveBeenCalledWith('step-1', { reason: 'user' });
+      expect(stopMock).toHaveBeenCalledWith('step-2', { reason: 'user' });
+    } finally {
+      stopMock.mockRestore();
+      sessions.delete('step-1');
+      sessions.delete('step-2');
+    }
   });
 
   it('stops queued run handles independently when runBackend is nested', async () => {
@@ -1537,6 +2082,356 @@ describe('agentService provider runtime', () => {
     );
 
     release();
+    await startPromise;
+  });
+
+  it('validates and persists selected parent directory before responding', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {
+          filepath: TEST_REQUESTED_PATH,
+          parentDir: TEST_REQUESTED_DIRECTORY,
+        },
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [
+            { path: TEST_ALLOWED_DIRECTORY },
+            { path: path.dirname(TEST_ALLOWED_DIRECTORY) },
+          ],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).toMatchObject({
+        type: 'permission',
+        data: { requestId: 'permission-1' },
+      });
+    });
+
+    await agentService.respond('step-1', 'permission-1', {
+      behavior: 'allow',
+      allowMode: 'session',
+      allowedDirectory: TEST_ALLOWED_DIRECTORY,
+    });
+
+    expect(buildToolPermissionConfigMock).toHaveBeenCalledWith({
+      existing: undefined,
+      matchValue: TEST_DIRECTORY_PATTERN,
+    });
+    expect(taskRepositoryMock.update).toHaveBeenCalledWith('task-1', {
+      sessionRules: {
+        external_directory: { [TEST_DIRECTORY_PATTERN]: 'allow' },
+      },
+    });
+    expect(providerCalls.permissions).toEqual([
+      {
+        handle,
+        requestId: 'permission-1',
+        response: {
+          behavior: 'allow',
+          allowMode: 'session',
+          allowedDirectory: TEST_ALLOWED_DIRECTORY,
+        },
+      },
+    ]);
+
+    release();
+    await startPromise;
+  });
+
+  it('coalesces concurrent responses for the same permission request', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+
+    await Promise.all([
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+    ]);
+
+    expect(providerCalls.permissions).toHaveLength(1);
+    expect(buildToolPermissionConfigMock).toHaveBeenCalledTimes(1);
+
+    release();
+    await startPromise;
+  });
+
+  it('clears a provider-resolved request when directory persistence fails', async () => {
+    const { handle, release } = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+    taskRepositoryMock.update.mockImplementation(async (_id, update) => {
+      if ('sessionRules' in update) throw new Error('database unavailable');
+      return { ...defaultTask, ...update };
+    });
+
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(providerCalls.permissions).toHaveLength(1);
+    expect(agentService.getPendingRequest('step-1')).toBeNull();
+
+    release();
+    await startPromise;
+  });
+
+  it('does not restore running status when completion races directory persistence', async () => {
+    const complete = createDeferred<void>();
+    const persistenceStarted = createDeferred<void>();
+    const persistence = createDeferred<void>();
+    const handle = createHandle();
+    handle.events = (async function* () {
+      yield {
+        type: 'permission-request',
+        request: {
+          requestId: 'permission-1',
+          toolName: 'external_directory',
+          input: {},
+          directoryAccess: {
+            requestedPath: TEST_REQUESTED_PATH,
+            requestedDirectory: TEST_REQUESTED_DIRECTORY,
+            parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+          },
+        },
+      } satisfies AgentEvent;
+      await complete.promise;
+      yield completeEvent();
+    })();
+    providerState.runStartImplementation = async () => handle;
+    taskRepositoryMock.update.mockImplementation(async (_id, update) => {
+      if ('sessionRules' in update) {
+        persistenceStarted.resolve();
+        await persistence.promise;
+      }
+      return { ...defaultTask, ...update };
+    });
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+
+    const response = agentService.respond('step-1', 'permission-1', {
+      behavior: 'allow',
+      allowedDirectory: TEST_ALLOWED_DIRECTORY,
+    });
+    await persistenceStarted.promise;
+    complete.resolve();
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalledWith('step-1');
+      expect(agentService.getPendingRequest('step-1')).toBeNull();
+    });
+    persistence.resolve();
+    await response;
+
+    expect(taskRepositoryMock.update).not.toHaveBeenCalledWith('task-1', {
+      status: 'running',
+    });
+  });
+
+  it('does not restore running status when stop races directory persistence', async () => {
+    const persistenceStarted = createDeferred<void>();
+    const persistence = createDeferred<void>();
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+    taskRepositoryMock.update.mockImplementation(async (_id, update) => {
+      if ('sessionRules' in update) {
+        persistenceStarted.resolve();
+        await persistence.promise;
+      }
+      return { ...defaultTask, ...update };
+    });
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+
+    const response = agentService.respond('step-1', 'permission-1', {
+      behavior: 'allow',
+      allowedDirectory: TEST_ALLOWED_DIRECTORY,
+    });
+    await persistenceStarted.promise;
+    await agentService.stop('step-1');
+    persistence.resolve();
+    await response;
+
+    expect(taskRepositoryMock.update).not.toHaveBeenCalledWith('task-1', {
+      status: 'running',
+    });
+  });
+
+  it('rejects a directory not offered by the pending request', async () => {
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: path.dirname(TEST_ALLOWED_DIRECTORY),
+      }),
+    ).rejects.toThrow('not a valid parent choice');
+    expect(providerCalls.permissions).toEqual([]);
+    expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+
+    waiting.release();
+    await startPromise;
+  });
+
+  it('does not persist a new directory rule when provider response fails', async () => {
+    providerState.permissionResponseError = new Error('permission failed');
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+    ).rejects.toThrow('permission failed');
+
+    expect(
+      taskRepositoryMock.update.mock.calls.filter(
+        ([, update]) => 'sessionRules' in update,
+      ),
+    ).toEqual([]);
+    expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+
+    providerState.permissionResponseError = null;
+    waiting.release();
+    await startPromise;
+  });
+
+  it('leaves a prior directory deny unchanged when provider response fails', async () => {
+    providerState.permissionResponseError = new Error('permission failed');
+    const waiting = createWaitingHandle({
+      type: 'permission-request',
+      request: {
+        requestId: 'permission-1',
+        toolName: 'external_directory',
+        input: {},
+        directoryAccess: {
+          requestedPath: TEST_REQUESTED_PATH,
+          requestedDirectory: TEST_REQUESTED_DIRECTORY,
+          parentDirectories: [{ path: TEST_ALLOWED_DIRECTORY }],
+        },
+      },
+    });
+    providerState.runStartImplementation = async () => waiting.handle;
+
+    const startPromise = agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(agentService.getPendingRequest('step-1')).not.toBeNull();
+    });
+    await expect(
+      agentService.respond('step-1', 'permission-1', {
+        behavior: 'allow',
+        allowedDirectory: TEST_ALLOWED_DIRECTORY,
+      }),
+    ).rejects.toThrow('permission failed');
+
+    expect(
+      taskRepositoryMock.update.mock.calls.filter(
+        ([, update]) => 'sessionRules' in update,
+      ),
+    ).toEqual([]);
+
+    providerState.permissionResponseError = null;
+    waiting.release();
     await startPromise;
   });
 
@@ -1685,7 +2580,9 @@ describe('agentService provider runtime', () => {
             question: 'Which option?',
             header: 'Choice',
             multiSelect: false,
-            options: [{ label: 'A', description: 'Pick A' }],
+            options: [
+              { label: 'A', description: 'Pick A', recommended: true },
+            ],
           },
         ],
       },
@@ -1696,7 +2593,14 @@ describe('agentService provider runtime', () => {
     await waitForAssertion(() => {
       expect(agentService.getPendingRequest('step-1')).toMatchObject({
         type: 'question',
-        data: { requestId: 'question-1' },
+        data: {
+          requestId: 'question-1',
+          questions: [
+            {
+              options: [{ label: 'A', recommended: true }],
+            },
+          ],
+        },
       });
     });
 

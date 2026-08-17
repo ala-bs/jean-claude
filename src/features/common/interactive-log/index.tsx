@@ -64,6 +64,7 @@ export function InteractiveLog({
   runCommandId,
   isRunning,
   ignoredKeys,
+  ignoreBrowserShortcuts = false,
   stopKeyPropagation = false,
   emptyText = 'Waiting for output...',
   className,
@@ -74,6 +75,8 @@ export function InteractiveLog({
   isRunning: boolean;
   /** Keys to skip forwarding to PTY (let parent handle). */
   ignoredKeys?: ReadonlySet<string>;
+  /** Whether browser-style Ctrl/Cmd+A/F shortcuts should reach the parent. */
+  ignoreBrowserShortcuts?: boolean;
   /** Whether to call stopPropagation on forwarded key events. */
   stopKeyPropagation?: boolean;
   emptyText?: string;
@@ -110,6 +113,14 @@ export function InteractiveLog({
     (e: KeyboardEvent<HTMLDivElement>) => {
       if (!isRunning) return;
       if (ignoredKeys?.has(e.key)) return;
+      if (
+        ignoreBrowserShortcuts &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        (e.key === 'a' || e.key === 'f')
+      ) {
+        return;
+      }
 
       const input = keyEventToTerminalInput(e);
       if (input === null) return;
@@ -119,7 +130,14 @@ export function InteractiveLog({
 
       api.runCommands.sendInput({ taskId, runCommandId, input });
     },
-    [taskId, runCommandId, isRunning, ignoredKeys, stopKeyPropagation],
+    [
+      taskId,
+      runCommandId,
+      isRunning,
+      ignoredKeys,
+      ignoreBrowserShortcuts,
+      stopKeyPropagation,
+    ],
   );
 
   const focusLog = useCallback(() => {
@@ -137,6 +155,7 @@ export function InteractiveLog({
     <div className={clsx('flex min-h-0 flex-1 flex-col', className)}>
       <div
         ref={scrollRef}
+        data-command-log-content
         tabIndex={0}
         onScroll={handleScroll}
         onClick={focusLog}

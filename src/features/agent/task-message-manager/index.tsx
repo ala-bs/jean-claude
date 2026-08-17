@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { api } from '@/lib/api';
+import { invalidateTaskStatusResources } from '@/cache/status-invalidations';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 
@@ -138,9 +139,8 @@ export function TaskMessageManager() {
           break;
         case 'status':
           flushPendingEntryUpdates(stepId);
-          if (isLoaded(stepId)) {
-            setStatus(stepId, event.status, event.error);
-          }
+          setStatus(stepId, event.status, event.error, taskId);
+          invalidateTaskStatusResources(taskId, stepId);
           // Clear pending requests when agent resumes or reaches terminal state.
           if (clearsTaskPendingRequest(event.status)) {
             clearPendingRequestForTask(taskId);

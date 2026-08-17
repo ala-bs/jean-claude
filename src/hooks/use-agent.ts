@@ -179,7 +179,7 @@ export function useAgentControls({
               ? error.message
               : 'Failed to respond to question',
         });
-        return;
+        return false;
       }
       const currentState = useTaskMessagesStore.getState();
       if (
@@ -193,6 +193,7 @@ export function useAgentControls({
       ) {
         clearPendingRequestForTask(taskId);
       }
+      return true;
     },
     [
       stepId,

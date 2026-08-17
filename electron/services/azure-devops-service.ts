@@ -4,8 +4,6 @@ import { createHash } from 'crypto';
 import { spawn } from 'child_process';
 
 
-import TurndownService from 'turndown';
-
 import type {
   AzureBuildDefinition,
   AzureBuildDefinitionDetail,
@@ -29,20 +27,18 @@ import type {
   AzureDevOpsPullRequestTag,
   ReviewerVoteStatus,
 } from '@shared/azure-devops-types';
-
-
-import { dbg } from '../lib/debug';
-import { ProviderRepository } from '../database/repositories/providers';
-import { TokenRepository } from '../database/repositories/tokens';
-
-
 import {
   parseYamlParameters,
   validateYamlFilename,
 } from './yaml-pipeline-parser';
+
+import { azureHtmlToMarkdown } from './azure-html-to-markdown';
+import { dbg } from '../lib/debug';
+import { ProviderRepository } from '../database/repositories/providers';
 import { sendGlobalPromptToWindow } from './global-prompt-service';
+import { TokenRepository } from '../database/repositories/tokens';
 
-
+export { azureHtmlToMarkdown } from './azure-html-to-markdown';
 export type {
   AzureDevOpsPullRequest,
   AzureDevOpsPullRequestDetails,
@@ -107,11 +103,18 @@ export interface AzureDevOpsWorkItem {
     teamProject?: string;
     state: string;
     assignedTo?: string;
+    assignedToUniqueName?: string;
     description?: string;
+    acceptanceCriteria?: string;
     reproSteps?: string;
     changedDate?: string;
     boardColumn?: string;
     boardColumnDone?: boolean;
+    tags?: string;
+    priority?: number;
+    stackRank?: number;
+    storyPoints?: number;
+    iterationPath?: string;
   };
   testSteps?: TestStep[];
   parentId?: number;
@@ -119,6 +122,17 @@ export interface AzureDevOpsWorkItem {
   relatedWorkItemIds?: number[];
   linkedPrs?: LinkedPr[];
   relatedTestCaseIds?: number[];
+}
+
+export interface WorkItemComment {
+  id: number;
+  workItemId: number;
+  text: string;
+  rawText?: string;
+  format?: 'html' | 'markdown';
+  attachmentBaseUrl?: string;
+  createdBy: string;
+  createdDate: string;
 }
 
 export interface AzureDevOpsIteration {
@@ -141,7 +155,17 @@ export interface AzureDevOpsBoardColumn {
   name: string;
   columnType?: string;
   stateMappings: Record<string, string>;
+  teamId?: string;
+  boardId?: string;
 }
+
+type AzureDevOpsBoardConfiguration = {
+  columns: AzureDevOpsBoardColumn[];
+  columnFieldReferenceName: string;
+  doneFieldReferenceName: string;
+  teamId: string;
+  boardId: string;
+};
 
 export interface WorkItemHistoryEntry {
   id: number;
@@ -177,13 +201,19 @@ interface WorkItemsBatchResponse {
       'System.WorkItemType': string;
       'System.TeamProject'?: string;
       'System.State': string;
-      'System.AssignedTo'?: { displayName: string };
+      'System.AssignedTo'?: { displayName: string; uniqueName?: string };
       'System.Description'?: string;
+      'Microsoft.VSTS.Common.AcceptanceCriteria'?: string;
       'Microsoft.VSTS.TCM.ReproSteps'?: string;
       'Microsoft.VSTS.TCM.Steps'?: string;
       'System.ChangedDate'?: string;
       'System.BoardColumn'?: string;
       'System.BoardColumnDone'?: boolean;
+      'System.Tags'?: string;
+      'Microsoft.VSTS.Common.Priority'?: number;
+      'Microsoft.VSTS.Common.StackRank'?: number;
+      'Microsoft.VSTS.Scheduling.StoryPoints'?: number;
+      'System.IterationPath'?: string;
     };
     relations?: WorkItemRelation[];
   }>;
@@ -205,6 +235,10 @@ interface AzureDevOpsBoardResponse {
   id: string;
   name: string;
   columns?: AzureDevOpsBoardColumn[];
+  fields?: {
+    columnField?: { referenceName?: string };
+    doneField?: { referenceName?: string };
+  };
 }
 
 interface WorkItemUpdateRelation {
@@ -435,32 +469,6 @@ export async function getTokenExpiration(
 }
 
 /**
- * Lowercase all HTML/XML tag names so Turndown (HTML→Markdown) can parse them.
- * Azure DevOps TCM content uses uppercase tags like <DIV>, <P>, <STRONG>.
- */
-function lowercaseHtmlTags(html: string): string {
-  return html.replace(/<\/?[A-Z][A-Z0-9]*\b[^>]*>/g, (tag) =>
-    tag.toLowerCase(),
-  );
-}
-
-/** Shared Turndown instance for converting test step HTML to Markdown. */
-const turndown = new TurndownService({
-  headingStyle: 'atx',
-  codeBlockStyle: 'fenced',
-});
-
-/**
- * Convert Azure DevOps HTML content to Markdown.
- * Lowercases tags first (Azure uses uppercase), then converts via Turndown.
- */
-function htmlToMarkdown(html: string): string {
-  if (!html) return '';
-  const lowered = lowercaseHtmlTags(html.trim());
-  return turndown.turndown(lowered).trim();
-}
-
-/**
  * Parse Azure DevOps TCM Steps XML into structured test steps.
  * Each step has two parameterizedString elements (action + expected result)
  * containing HTML content, which is converted to Markdown.
@@ -472,8 +480,8 @@ function parseTestSteps(stepsXml: string): TestStep[] {
   let match;
   while ((match = stepRegex.exec(stepsXml)) !== null) {
     steps.push({
-      action: htmlToMarkdown(match[1] || ''),
-      expectedResult: htmlToMarkdown(match[2] || ''),
+      action: azureHtmlToMarkdown(match[1] || ''),
+      expectedResult: azureHtmlToMarkdown(match[2] || ''),
     });
   }
   return steps;
@@ -482,6 +490,16 @@ function parseTestSteps(stepsXml: string): TestStep[] {
 /** Escape single quotes for WIQL query string interpolation. */
 function escapeWiql(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+export function buildIterationPathsCondition(iterationPaths: string[]) {
+  const paths = [...new Set(iterationPaths.map((path) => path.trim()).filter(Boolean))];
+  if (paths.length === 0) {
+    throw new Error('At least one iteration path is required');
+  }
+  return `[System.IterationPath] IN (${paths
+    .map((path) => `'${escapeWiql(path)}'`)
+    .join(', ')})`;
 }
 
 /** Extract parent work item ID from a work item's relations array. */
@@ -573,6 +591,7 @@ type PullRequestStatusMetadata = {
   status: 'active' | 'completed' | 'abandoned';
   url: string;
   isDraft: boolean;
+  activeThreadCount?: number;
   mergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   approvedBy: Array<{
     displayName: string;
@@ -584,6 +603,7 @@ type PullRequestStatusMetadata = {
 export async function getPullRequestStatuses(params: {
   providerId: string;
   linkedPrs: LinkedPr[];
+  includeActiveThreadCount?: boolean;
 }): Promise<Map<string, PullRequestStatusMetadata>> {
   if (params.linkedPrs.length === 0) return new Map();
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
@@ -625,12 +645,31 @@ export async function getPullRequestStatuses(params: {
               ? `https://dev.azure.com/${orgName}/${encodeURIComponent(projectName)}/_git/${encodeURIComponent(repoName)}/pullrequest/${linkedPr.prId}`
               : '';
           const mappedStatus = mapPrStatus(pr.status);
+          let activeThreadCount: number | undefined;
+          if (mappedStatus === 'active' && params.includeActiveThreadCount) {
+            try {
+              const threads = await getPullRequestThreads({
+                providerId: params.providerId,
+                projectId: linkedPr.projectId,
+                repoId: linkedPr.repoId,
+                pullRequestId: linkedPr.prId,
+              });
+              activeThreadCount = getPullRequestThreadCounts(threads).active;
+            } catch (err) {
+              dbg.azure(
+                'getPullRequestStatuses: failed threads for PR#%d: %O',
+                linkedPr.prId,
+                err,
+              );
+            }
+          }
           results.set(
             `${linkedPr.projectId}:${linkedPr.repoId}:${linkedPr.prId}`,
             {
               status: mappedStatus,
               url,
               isDraft: !!pr.isDraft,
+              activeThreadCount,
               mergeStatus:
                 pr.mergeStatus as PullRequestStatusMetadata['mergeStatus'],
               approvedBy: (pr.reviewers ?? [])
@@ -671,6 +710,8 @@ export async function queryWorkItems(params: {
     excludeWorkItemTypes?: string[];
     searchText?: string;
     iterationPath?: string;
+    iterationPaths?: string[];
+    assignedTo?: string;
   };
 }): Promise<AzureDevOpsWorkItem[]> {
   const provider = await ProviderRepository.findById(params.providerId);
@@ -741,9 +782,17 @@ export async function queryWorkItems(params: {
   }
 
   // Filter by iteration path
-  if (params.filters.iterationPath) {
+  if (params.filters.iterationPaths?.length) {
+    conditions.push(buildIterationPathsCondition(params.filters.iterationPaths));
+  } else if (params.filters.iterationPath) {
     conditions.push(
       `[System.IterationPath] = '${escapeWiql(params.filters.iterationPath)}'`,
+    );
+  }
+
+  if (params.filters.assignedTo?.trim()) {
+    conditions.push(
+      `[System.AssignedTo] CONTAINS '${escapeWiql(params.filters.assignedTo.trim())}'`,
     );
   }
 
@@ -751,7 +800,7 @@ export async function queryWorkItems(params: {
 
   // POST WIQL query - use projectName in URL path (Azure DevOps requires name, not GUID)
   const wiqlResponse = await fetch(
-    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/wiql?api-version=7.0&$top=200`,
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/wiql?api-version=7.0`,
     {
       method: 'POST',
       headers: {
@@ -773,42 +822,84 @@ export async function queryWorkItems(params: {
     return [];
   }
 
-  // Batch-fetch work item details with relations to get parent info
-  // Note: $expand=relations cannot be used with the fields parameter, so we fetch all fields
   const ids = wiqlData.workItems.map((wi) => wi.id);
-  const batchResponse = await fetch(
-    `https://dev.azure.com/${orgName}/_apis/wit/workitems?ids=${ids.join(',')}&$expand=relations&api-version=7.0`,
+  return getWorkItemsByIds({
+    providerId: params.providerId,
+    projectName: params.projectName,
+    workItemIds: ids,
+  });
+}
+
+export async function queryWorkItemOwners(params: {
+  providerId: string;
+  projectName: string;
+}): Promise<Array<{ displayName: string; value: string }>> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const projectName = escapeWiql(params.projectName);
+  const query = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${projectName}' AND [System.AssignedTo] <> '' AND [System.WorkItemType] <> 'Test Suite' AND [System.WorkItemType] <> 'Test Plan'`;
+  const wiqlResponse = await fetch(
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/wiql?api-version=7.0`,
     {
-      headers: { Authorization: authHeader },
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query }),
     },
   );
-
-  if (!batchResponse.ok) {
-    const error = await batchResponse.text();
-    throw new Error(`Failed to fetch work item details: ${error}`);
+  if (!wiqlResponse.ok) {
+    const error = await wiqlResponse.text();
+    throw new Error(`Failed to query work item owners: ${error}`);
   }
 
-  const batchData: WorkItemsBatchResponse = await batchResponse.json();
-
-  // Map to AzureDevOpsWorkItem[]
-  return batchData.value.map((wi) => ({
-    id: wi.id,
-    url: `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_workitems/edit/${wi.id}`,
-    fields: {
-      title: wi.fields['System.Title'],
-      workItemType: wi.fields['System.WorkItemType'],
-      teamProject: wi.fields['System.TeamProject'] ?? params.projectName,
-      state: wi.fields['System.State'],
-      assignedTo: wi.fields['System.AssignedTo']?.displayName,
-      description: wi.fields['System.Description'],
-      reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
-      changedDate: wi.fields['System.ChangedDate'],
-      boardColumn: wi.fields['System.BoardColumn'],
-      boardColumnDone: wi.fields['System.BoardColumnDone'],
-    },
-    parentId: extractParentId(wi.relations),
-    relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
-  }));
+  const wiqlData: WiqlResponse = await wiqlResponse.json();
+  const ids = wiqlData.workItems.map((workItem) => workItem.id);
+  const chunks: number[][] = [];
+  for (let index = 0; index < ids.length; index += 200) {
+    chunks.push(ids.slice(index, index + 200));
+  }
+  const ownersByKey = new Map<
+    string,
+    { displayName: string; value: string }
+  >();
+  for (let index = 0; index < chunks.length; index += 4) {
+    const batches = await Promise.all(
+      chunks.slice(index, index + 4).map(async (chunk) => {
+        const response = await fetch(
+          `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemsbatch?api-version=7.0`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: authHeader,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              ids: chunk,
+              fields: ['System.AssignedTo'],
+              errorPolicy: 'Omit',
+            }),
+          },
+        );
+        if (!response.ok) {
+          const error = await response.text();
+          throw new Error(`Failed to fetch work item owners: ${error}`);
+        }
+        return (await response.json()) as WorkItemsBatchResponse;
+      }),
+    );
+    for (const item of batches.flatMap((batch) => batch.value)) {
+      const identity = item.fields['System.AssignedTo'];
+      const displayName = identity?.displayName.trim();
+      const value = identity?.uniqueName?.trim() || displayName;
+      if (displayName && value && !ownersByKey.has(value.toLocaleLowerCase())) {
+        ownersByKey.set(value.toLocaleLowerCase(), { displayName, value });
+      }
+    }
+  }
+  return [...ownersByKey.values()].sort((a, b) =>
+    a.displayName.localeCompare(b.displayName),
+  );
 }
 
 export async function queryAssignedWorkItems(params: {
@@ -874,13 +965,22 @@ export async function queryAssignedWorkItems(params: {
       teamProject: wi.fields['System.TeamProject'] ?? params.projectName,
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
+      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
       description: wi.fields['System.Description'],
+      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
       boardColumn: wi.fields['System.BoardColumn'],
       boardColumnDone: wi.fields['System.BoardColumnDone'],
+      tags: wi.fields['System.Tags'],
+      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
+      iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
+    childIds: extractChildIds(wi.relations),
+    relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
     linkedPrs: extractLinkedPrs(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
   }));
@@ -907,6 +1007,27 @@ export async function getWorkItemById(params: {
 
   const wi = await response.json();
 
+  if (
+    !wi.fields['System.Description'] &&
+    !wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'] &&
+    !wi.fields['Microsoft.VSTS.TCM.ReproSteps']
+  ) {
+    const contentFields = Object.entries(wi.fields)
+      .filter(([name]) =>
+        /(description|criteria|content|detail|repro|step)/i.test(name),
+      )
+      .map(([name, value]) => ({
+        name,
+        type: Array.isArray(value) ? 'array' : typeof value,
+        length: typeof value === 'string' ? value.length : undefined,
+      }));
+    dbg.azure(
+      'Work item %d has no mapped content fields; candidates=%o',
+      wi.id,
+      contentFields,
+    );
+  }
+
   return {
     id: wi.id,
     url:
@@ -918,11 +1039,18 @@ export async function getWorkItemById(params: {
       teamProject: wi.fields['System.TeamProject'],
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
+      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
       description: wi.fields['System.Description'],
+      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
       boardColumn: wi.fields['System.BoardColumn'],
       boardColumnDone: wi.fields['System.BoardColumnDone'],
+      tags: wi.fields['System.Tags'],
+      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
+      iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
     childIds: extractChildIds(wi.relations),
@@ -930,6 +1058,114 @@ export async function getWorkItemById(params: {
     linkedPrs: extractLinkedPrs(wi.relations),
     relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
   };
+}
+
+export async function getWorkItemsByIds(params: {
+  providerId: string;
+  projectName: string;
+  workItemIds: number[];
+}): Promise<AzureDevOpsWorkItem[]> {
+  const ids = [...new Set(params.workItemIds)];
+  if (ids.length === 0) return [];
+
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const chunks: number[][] = [];
+  for (let index = 0; index < ids.length; index += 200) {
+    chunks.push(ids.slice(index, index + 200));
+  }
+
+  const results = new Array<WorkItemsBatchResponse>(chunks.length);
+  const controller = new AbortController();
+  let firstError: unknown = null;
+  let failureClaimed = false;
+  let stopped = false;
+  let nextChunkIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(4, chunks.length) },
+    async () => {
+      while (!stopped && nextChunkIndex < chunks.length) {
+        const chunkIndex = nextChunkIndex++;
+        const chunk = chunks[chunkIndex];
+        try {
+          const response = await fetch(
+            `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workitemsbatch?api-version=7.0`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: authHeader,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                ids: chunk,
+                $expand: 'Relations',
+                errorPolicy: 'Omit',
+              }),
+              signal: controller.signal,
+            },
+          );
+          if (!response.ok) {
+            if (failureClaimed) return;
+            failureClaimed = true;
+            stopped = true;
+            const error = await response.text();
+            firstError = new Error(
+              `Failed to batch-fetch work items for ${params.projectName}: ${error}`,
+            );
+            controller.abort();
+            return;
+          }
+          results[chunkIndex] = (await response.json()) as WorkItemsBatchResponse;
+        } catch (error) {
+          if (!failureClaimed) {
+            failureClaimed = true;
+            stopped = true;
+            firstError = error;
+            controller.abort();
+          }
+          return;
+        }
+      }
+    },
+  );
+  await Promise.allSettled(workers);
+  if (firstError !== null) throw firstError;
+
+  const items = results.flatMap((result) =>
+    result.value.map((wi) => ({
+      id: wi.id,
+      url: `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_workitems/edit/${wi.id}`,
+      fields: {
+        title: wi.fields['System.Title'],
+        workItemType: wi.fields['System.WorkItemType'],
+        teamProject: wi.fields['System.TeamProject'],
+        state: wi.fields['System.State'],
+        assignedTo: wi.fields['System.AssignedTo']?.displayName,
+        assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
+        description: wi.fields['System.Description'],
+        acceptanceCriteria:
+          wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
+        reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
+        changedDate: wi.fields['System.ChangedDate'],
+        boardColumn: wi.fields['System.BoardColumn'],
+        boardColumnDone: wi.fields['System.BoardColumnDone'],
+        tags: wi.fields['System.Tags'],
+        priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+        stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+        storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
+        iterationPath: wi.fields['System.IterationPath'],
+      },
+      parentId: extractParentId(wi.relations),
+      childIds: extractChildIds(wi.relations),
+      relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
+      linkedPrs: extractLinkedPrs(wi.relations),
+      relatedTestCaseIds: extractLinkedTestCaseIds(wi.relations),
+    })),
+  );
+  const itemById = new Map(items.map((item) => [item.id, item]));
+  return ids.flatMap((id) => {
+    const item = itemById.get(id);
+    return item ? [item] : [];
+  });
 }
 
 export async function getWorkItemStates(params: {
@@ -968,6 +1204,15 @@ export async function getBoardColumns(params: {
   projectId: string;
   projectName: string;
 }): Promise<AzureDevOpsBoardColumn[]> {
+  const configuration = await getBoardConfiguration(params);
+  return configuration?.columns ?? [];
+}
+
+async function getBoardConfiguration(params: {
+  providerId: string;
+  projectId: string;
+  projectName: string;
+}): Promise<AzureDevOpsBoardConfiguration | null> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
   const projectPath = encodeURIComponent(params.projectName);
 
@@ -989,8 +1234,8 @@ export async function getBoardColumns(params: {
     return a.name.localeCompare(b.name);
   });
 
-  let bestColumns: AzureDevOpsBoardColumn[] = [];
-  let bestScore = 0;
+  let bestConfiguration: AzureDevOpsBoardConfiguration | null = null;
+  let bestScore = -1;
 
   for (const team of teams) {
     const teamPath = encodeURIComponent(team.name);
@@ -1002,27 +1247,76 @@ export async function getBoardColumns(params: {
 
     const boardsData: AzureDevOpsBoardsResponse = await boardsResponse.json();
     for (const board of boardsData.value ?? []) {
-      const columns = board.columns ?? (await fetchBoardColumns({
+      const fullBoard = await fetchBoard({
         authHeader,
         orgName,
         projectPath,
         teamPath,
         boardId: board.id,
-      }));
+      });
+      const columns = fullBoard?.columns ?? [];
+      const columnFieldReferenceName =
+        fullBoard?.fields?.columnField?.referenceName;
+      const doneFieldReferenceName = fullBoard?.fields?.doneField?.referenceName;
+      if (!columnFieldReferenceName || !doneFieldReferenceName) continue;
       const mappedColumns = columns.filter(
         (column) => Object.keys(column.stateMappings ?? {}).length > 0,
       );
       if (mappedColumns.length === 0) continue;
       const score = getTaskBoardScore(mappedColumns);
       if (score > bestScore) {
-        bestColumns = mappedColumns;
+        bestConfiguration = {
+          columns: mappedColumns.map((column) => ({
+            ...column,
+            teamId: team.id,
+            boardId: board.id,
+          })),
+          columnFieldReferenceName,
+          doneFieldReferenceName,
+          teamId: team.id,
+          boardId: board.id,
+        };
         bestScore = score;
       }
-      if (score >= TASK_BOARD_TYPES.length) return mappedColumns;
+      if (score >= TASK_BOARD_TYPES.length) return bestConfiguration;
     }
   }
 
-  return bestColumns;
+  return bestConfiguration;
+}
+
+async function getBoardConfigurationById(params: {
+  providerId: string;
+  projectName: string;
+  teamId: string;
+  boardId: string;
+}): Promise<AzureDevOpsBoardConfiguration | null> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const board = await fetchBoard({
+    authHeader,
+    orgName,
+    projectPath: encodeURIComponent(params.projectName),
+    teamPath: encodeURIComponent(params.teamId),
+    boardId: params.boardId,
+  });
+  const columnFieldReferenceName = board?.fields?.columnField?.referenceName;
+  const doneFieldReferenceName = board?.fields?.doneField?.referenceName;
+  if (!board?.columns || !columnFieldReferenceName || !doneFieldReferenceName) {
+    return null;
+  }
+  return {
+    columns: board.columns
+      .filter((column) => Object.keys(column.stateMappings ?? {}).length > 0)
+      .map((column) => ({
+        ...column,
+        teamId: params.teamId,
+        boardId: params.boardId,
+      })),
+    columnFieldReferenceName,
+    doneFieldReferenceName,
+    teamId: params.teamId,
+    boardId: params.boardId,
+  };
 }
 
 const TASK_BOARD_TYPES = ['Bug', 'Task', 'User Story', 'Product Backlog Item'];
@@ -1034,21 +1328,20 @@ function getTaskBoardScore(columns: AzureDevOpsBoardColumn[]): number {
   return TASK_BOARD_TYPES.filter((type) => mappedTypes.has(type)).length;
 }
 
-async function fetchBoardColumns(params: {
+async function fetchBoard(params: {
   authHeader: string;
   orgName: string;
   projectPath: string;
   teamPath: string;
   boardId: string;
-}): Promise<AzureDevOpsBoardColumn[]> {
+}): Promise<AzureDevOpsBoardResponse | null> {
   const response = await fetch(
     `https://dev.azure.com/${params.orgName}/${params.projectPath}/${params.teamPath}/_apis/work/boards/${encodeURIComponent(params.boardId)}?api-version=7.1`,
     { headers: { Authorization: params.authHeader } },
   );
-  if (!response.ok) return [];
+  if (!response.ok) return null;
 
-  const board: AzureDevOpsBoardResponse = await response.json();
-  return board.columns ?? [];
+  return response.json();
 }
 
 /**
@@ -1132,9 +1425,18 @@ export async function getRelatedTestCases(params: {
         teamProject: wi.fields['System.TeamProject'] ?? params.projectName,
         state: wi.fields['System.State'],
         assignedTo: wi.fields['System.AssignedTo']?.displayName,
+        assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
         description: wi.fields['System.Description'],
+        acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
         reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
         changedDate: wi.fields['System.ChangedDate'],
+        boardColumn: wi.fields['System.BoardColumn'],
+        boardColumnDone: wi.fields['System.BoardColumnDone'],
+         tags: wi.fields['System.Tags'],
+         priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+         stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+         storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
+        iterationPath: wi.fields['System.IterationPath'],
       },
       testSteps,
     };
@@ -1145,56 +1447,138 @@ export async function getWorkItemComments(params: {
   providerId: string;
   projectName: string;
   workItemId: number;
-}): Promise<
-  {
+}): Promise<WorkItemComment[]> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const baseUrl = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc&$expand=renderedText`;
+  const comments: {
     id: number;
     workItemId: number;
     text: string;
-    createdBy: string;
-    createdDate: string;
-  }[]
-> {
-  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+    renderedText?: string;
+    createdBy?: { displayName?: string };
+    createdDate?: string;
+  }[] = [];
+  const seenCommentIds = new Set<number>();
+  const seenContinuationTokens = new Set<string>();
+  let continuationToken: string | undefined;
 
-  const response = await fetch(
-    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4&$top=50&order=desc`,
-    {
+  do {
+    const url = continuationToken
+      ? `${baseUrl}&${new URLSearchParams({ continuationToken })}`
+      : baseUrl;
+    const response = await fetch(url, {
       headers: { Authorization: authHeader },
-    },
-  );
+    });
 
-  if (!response.ok) {
-    if (response.status === 404) return [];
-    const error = await response.text();
-    throw new Error(
-      `Failed to fetch comments for work item ${params.workItemId}: ${error}`,
-    );
-  }
+    if (!response.ok) {
+      if (response.status === 404) return [];
+      const error = await response.text();
+      throw new Error(
+        `Failed to fetch comments for work item ${params.workItemId}: ${error}`,
+      );
+    }
 
-  const data = await response.json();
-  console.log(
-    '[getWorkItemComments]',
-    `workItem=${params.workItemId}`,
-    `keys=${Object.keys(data).join(',')}`,
-    `totalCount=${data.totalCount}`,
-    `count=${data.count}`,
-    `commentsLength=${(data.comments ?? []).length}`,
-  );
+    const data: {
+      comments?: typeof comments;
+      continuationToken?: string;
+    } = await response.json();
+    for (const comment of data.comments ?? []) {
+      if (typeof comment.id === 'number') {
+        if (seenCommentIds.has(comment.id)) continue;
+        seenCommentIds.add(comment.id);
+      }
+      comments.push(comment);
+    }
 
-  return (data.comments ?? []).map(
-    (c: {
-      id: number;
-      workItemId: number;
-      text: string;
-      createdBy?: { displayName?: string };
-      createdDate?: string;
-    }) => ({
+    continuationToken =
+      typeof data.continuationToken === 'string'
+        ? data.continuationToken
+        : (response.headers.get('x-ms-continuationtoken') ?? undefined);
+    if (!continuationToken) break;
+    if (seenContinuationTokens.has(continuationToken)) {
+      throw new Error(
+        `Repeated continuation token while fetching comments for work item ${params.workItemId}`,
+      );
+    }
+    seenContinuationTokens.add(continuationToken);
+  } while (continuationToken);
+
+  const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({
+    orgName,
+    projectName: params.projectName,
+  });
+
+  return comments.map((c) => {
+    const renderedComment = getRenderedCommentText({
+      text: c.text,
+      renderedText: c.renderedText,
+      attachmentBaseUrl,
+    });
+    return {
       id: c.id,
       workItemId: c.workItemId,
-      text: c.text ?? '',
+      ...renderedComment,
+      rawText: c.text,
+      attachmentBaseUrl,
       createdBy: c.createdBy?.displayName ?? 'Unknown',
       createdDate: c.createdDate ?? '',
-    }),
+    };
+  });
+}
+
+function getRenderedCommentText(comment: {
+  text?: string;
+  renderedText?: string;
+  attachmentBaseUrl?: string;
+}): { text: string; format: 'html' | 'markdown' } {
+  if (comment.renderedText?.trim()) {
+    return {
+      text:
+        comment.attachmentBaseUrl
+          ? expandRelativeWorkItemAttachmentUrls({
+              content: comment.renderedText,
+              attachmentBaseUrl: comment.attachmentBaseUrl,
+            })
+          : comment.renderedText,
+      format: 'html',
+    };
+  }
+
+  return {
+    text:
+      comment.attachmentBaseUrl
+        ? expandRelativeWorkItemAttachmentUrls({
+            content: comment.text ?? '',
+            attachmentBaseUrl: comment.attachmentBaseUrl,
+          })
+        : (comment.text ?? ''),
+    format: 'markdown',
+  };
+}
+
+function getWorkItemAttachmentBaseUrl({
+  orgName,
+  projectName,
+}: {
+  orgName: string;
+  projectName: string;
+}) {
+  return `https://dev.azure.com/${orgName}/${encodeURIComponent(projectName)}/_apis/wit/attachments`;
+}
+
+function expandRelativeWorkItemAttachmentUrls({
+  content,
+  attachmentBaseUrl,
+}: {
+  content: string;
+  attachmentBaseUrl: string;
+}) {
+  const relativeAttachmentUrlPattern = new RegExp(
+    String.raw`(^|["'\s]|\(\s*)[\u0000-\u001f\u007f]*(\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\?[^"')\s<]*)?)`,
+    'g',
+  );
+  return content.replace(relativeAttachmentUrlPattern, (_match, prefix, path) =>
+    `${prefix.startsWith('(') ? '(' : prefix}${attachmentBaseUrl}${path}`,
   );
 }
 
@@ -1213,6 +1597,7 @@ const WORK_ITEM_FIELD_LABELS: Record<string, string> = {
   'System.WorkItemType': 'Work Item Type',
   'Microsoft.VSTS.Common.AcceptanceCriteria': 'Acceptance Criteria',
   'Microsoft.VSTS.Common.Priority': 'Priority',
+  'Microsoft.VSTS.Scheduling.StoryPoints': 'Story Points',
   'Microsoft.VSTS.Common.ResolvedReason': 'Resolved Reason',
   'Microsoft.VSTS.Scheduling.Effort': 'Effort',
   'Microsoft.VSTS.Scheduling.RemainingWork': 'Remaining Work',
@@ -1359,13 +1744,16 @@ export async function addWorkItemComment(params: {
   id: number;
   workItemId: number;
   text: string;
+  rawText?: string;
   createdBy: string;
   createdDate: string;
+  format: 'html' | 'markdown';
+  attachmentBaseUrl?: string;
 }> {
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
 
   const response = await fetch(
-    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?api-version=7.0-preview.4`,
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments?format=markdown&api-version=7.0-preview.4`,
     {
       method: 'POST',
       headers: {
@@ -1387,14 +1775,116 @@ export async function addWorkItemComment(params: {
     id: number;
     workItemId?: number;
     text?: string;
+    renderedText?: string;
     createdBy?: { displayName?: string };
     createdDate?: string;
   } = await response.json();
 
+  const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({
+    orgName,
+    projectName: params.projectName,
+  });
+  const renderedComment = getRenderedCommentText({
+    text: c.text ?? params.text,
+    renderedText: c.renderedText,
+    attachmentBaseUrl,
+  });
+
   return {
     id: c.id,
     workItemId: c.workItemId ?? params.workItemId,
-    text: c.text ?? params.text,
+    text: renderedComment.text,
+    rawText: c.text,
+    format: renderedComment.format,
+    attachmentBaseUrl,
+    createdBy: c.createdBy?.displayName ?? 'Unknown',
+    createdDate: c.createdDate ?? new Date().toISOString(),
+  };
+}
+
+export async function uploadWorkItemAttachment(params: {
+  providerId: string;
+  projectName: string;
+  filename: string;
+  mimeType: string;
+  base64: string;
+}): Promise<{ url: string }> {
+  const supportedMimeTypes = new Set([
+    'image/gif',
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+  ]);
+  if (!supportedMimeTypes.has(params.mimeType)) {
+    throw new Error('Only image attachments are supported');
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(params.base64) || params.base64.length % 4 !== 0) {
+    throw new Error('Invalid image attachment data');
+  }
+  const padding = params.base64.endsWith('==')
+    ? 2
+    : params.base64.endsWith('=')
+      ? 1
+      : 0;
+  const decodedSize = (params.base64.length / 4) * 3 - padding;
+  if (decodedSize > 50 * 1024 * 1024) {
+    throw new Error('Image attachment exceeds 50 MB');
+  }
+  const content = Buffer.from(params.base64, 'base64');
+  const hasValidSignature =
+    (params.mimeType === 'image/gif' && content.toString('ascii', 0, 3) === 'GIF') ||
+    (params.mimeType === 'image/jpeg' && content[0] === 0xff && content[1] === 0xd8) ||
+    (params.mimeType === 'image/png' && content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+    (params.mimeType === 'image/webp' && content.toString('ascii', 0, 4) === 'RIFF' && content.toString('ascii', 8, 12) === 'WEBP');
+  if (!hasValidSignature || content.length === 0) {
+    throw new Error('Image attachment content does not match MIME type');
+  }
+  if (content.length > 50 * 1024 * 1024) {
+    throw new Error('Image attachment exceeds 50 MB');
+  }
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const url = `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/attachments?fileName=${encodeURIComponent(params.filename)}&api-version=7.0`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: authHeader, 'Content-Type': 'application/octet-stream' },
+    body: content,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to upload work item attachment: ${await response.text()}`);
+  }
+  const result: { url?: string } = await response.json();
+  if (!result.url) throw new Error('Azure DevOps did not return an attachment URL');
+  return { url: result.url };
+}
+
+export async function updateWorkItemComment(params: {
+  providerId: string;
+  projectName: string;
+  workItemId: number;
+  commentId: number;
+  text: string;
+}): Promise<WorkItemComment> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/${encodeURIComponent(params.projectName)}/_apis/wit/workItems/${params.workItemId}/comments/${params.commentId}?format=markdown&api-version=7.0-preview.4`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: params.text }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to update comment for work item ${params.workItemId}: ${await response.text()}`);
+  }
+  const c: { id: number; workItemId?: number; text?: string; renderedText?: string; createdBy?: { displayName?: string }; createdDate?: string } = await response.json();
+  const attachmentBaseUrl = getWorkItemAttachmentBaseUrl({ orgName, projectName: params.projectName });
+  const renderedComment = getRenderedCommentText({ text: c.text ?? params.text, renderedText: c.renderedText, attachmentBaseUrl });
+  return {
+    id: c.id,
+    workItemId: c.workItemId ?? params.workItemId,
+    ...renderedComment,
+    rawText: c.text ?? params.text,
+    attachmentBaseUrl,
     createdBy: c.createdBy?.displayName ?? 'Unknown',
     createdDate: c.createdDate ?? new Date().toISOString(),
   };
@@ -1438,9 +1928,10 @@ export async function getIterations(params: {
     const startDate = iter.attributes.startDate ?? null;
     const finishDate = iter.attributes.finishDate ?? null;
     const isCurrent =
-      startDate && finishDate
+      iter.attributes.timeFrame?.toLocaleLowerCase() === 'current' ||
+      (startDate && finishDate
         ? now >= new Date(startDate) && now <= new Date(finishDate)
-        : false;
+        : false);
 
     return {
       id: iter.id,
@@ -2137,7 +2628,7 @@ async function getPullRequestIterations(params: {
 interface CommentResponse {
   id: number;
   parentCommentId?: number;
-  content: string;
+  content?: string;
   commentType?: string; // 'unknown', 'text', 'codeChange', 'system'
   isDeleted?: boolean;
   author: {
@@ -2161,7 +2652,7 @@ function mapCommentResponse(comment: CommentResponse): AzureDevOpsComment {
   return {
     id: comment.id,
     parentCommentId: comment.parentCommentId,
-    content: comment.content,
+    content: comment.content ?? '',
     commentType: mapCommentType(comment.commentType),
     author: {
       id: comment.author.id,
@@ -2821,6 +3312,31 @@ export async function publishPullRequest(params: {
   }
 }
 
+export async function markPullRequestDraft(params: {
+  providerId: string;
+  projectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<void> {
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+
+  const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ isDraft: true }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to mark pull request as draft: ${error}`);
+  }
+}
+
 export async function getPullRequestPolicyEvaluations(params: {
   providerId: string;
   projectId: string;
@@ -3030,11 +3546,22 @@ export async function getPullRequestWorkItems(params: {
       teamProject: wi.fields['System.TeamProject'],
       state: wi.fields['System.State'],
       assignedTo: wi.fields['System.AssignedTo']?.displayName,
+      assignedToUniqueName: wi.fields['System.AssignedTo']?.uniqueName,
       description: wi.fields['System.Description'],
+      acceptanceCriteria: wi.fields['Microsoft.VSTS.Common.AcceptanceCriteria'],
       reproSteps: wi.fields['Microsoft.VSTS.TCM.ReproSteps'],
       changedDate: wi.fields['System.ChangedDate'],
+      boardColumn: wi.fields['System.BoardColumn'],
+      boardColumnDone: wi.fields['System.BoardColumnDone'],
+      tags: wi.fields['System.Tags'],
+      priority: wi.fields['Microsoft.VSTS.Common.Priority'],
+      stackRank: wi.fields['Microsoft.VSTS.Common.StackRank'],
+      storyPoints: wi.fields['Microsoft.VSTS.Scheduling.StoryPoints'],
+      iterationPath: wi.fields['System.IterationPath'],
     },
     parentId: extractParentId(wi.relations),
+    childIds: extractChildIds(wi.relations),
+    relatedWorkItemIds: extractRelatedWorkItemIds(wi.relations),
   }));
 }
 
@@ -3308,7 +3835,10 @@ export async function getPullRequestThreads(params: {
         if (thread.isDeleted) return false;
         // Keep thread if it has at least one non-system comment
         return thread.comments.some(
-          (c) => c.commentType !== 'system' && c.content,
+          (c) =>
+            c.isDeleted !== true &&
+            c.commentType !== 'system' &&
+            Boolean(c.content),
         );
       })
       .map((thread) => ({
@@ -3330,7 +3860,12 @@ export async function getPullRequestThreads(params: {
           : undefined,
         comments: thread.comments
           // Filter out system comments within threads
-          .filter((c) => c.commentType !== 'system')
+          .filter(
+            (c) =>
+              c.isDeleted !== true &&
+              c.commentType !== 'system' &&
+              Boolean(c.content),
+          )
           .map(mapCommentResponse),
         isDeleted: thread.isDeleted,
       }))
@@ -3446,6 +3981,191 @@ export async function updateWorkItemState(params: {
   }
 }
 
+const EDITABLE_WORK_ITEM_FIELDS = new Set([
+  'System.Title',
+  'System.AssignedTo',
+  'System.Tags',
+  'Microsoft.VSTS.Common.Priority',
+  'Microsoft.VSTS.Scheduling.StoryPoints',
+  'System.State',
+  'System.IterationPath',
+]);
+
+export function buildWorkItemFieldPatch(params: {
+  field: string;
+  value: string | number | null;
+}) {
+  if (!EDITABLE_WORK_ITEM_FIELDS.has(params.field)) {
+    throw new Error(`Work item field is not editable: ${params.field}`);
+  }
+
+  const value = typeof params.value === 'string' ? params.value.trim() : params.value;
+  if (params.field === 'System.Title' && !value) {
+    throw new Error('Work item title cannot be empty');
+  }
+  if (params.field === 'System.State' && !value) {
+    throw new Error('Work item state cannot be empty');
+  }
+  if (params.field === 'System.IterationPath' && !value) {
+    throw new Error('Work item iteration cannot be empty');
+  }
+  if (params.field === 'Microsoft.VSTS.Common.Priority') {
+    if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 4) {
+      throw new Error('Work item priority must be an integer from 1 to 4');
+    }
+  }
+  if (params.field === 'Microsoft.VSTS.Scheduling.StoryPoints') {
+    if (value !== null && value !== '' && (!Number.isInteger(Number(value)) || Number(value) < 0)) {
+      throw new Error('Work item story points must be a non-negative integer');
+    }
+  }
+
+  const removable =
+    params.field === 'System.AssignedTo' ||
+    params.field === 'System.Tags' ||
+    params.field === 'Microsoft.VSTS.Scheduling.StoryPoints';
+  if ((value === null || value === '') && !removable) {
+    throw new Error(`Work item field cannot be empty: ${params.field}`);
+  }
+  return {
+    op: value === null || value === '' ? 'remove' : 'add',
+    path: `/fields/${params.field}`,
+    ...(value === null || value === '' ? {} : { value }),
+  };
+}
+
+export async function updateWorkItemField(params: {
+  providerId: string;
+  workItemId: number;
+  field: string;
+  value: string | number | null;
+}): Promise<void> {
+  const patch = buildWorkItemFieldPatch(params);
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/_apis/wit/workitems/${params.workItemId}?api-version=7.0`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json-patch+json',
+      },
+      body: JSON.stringify([patch]),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Failed to update work item ${params.workItemId}: ${await response.text()}`,
+    );
+  }
+}
+
+export function buildWorkItemBoardColumnPatch(params: {
+  column: string;
+  state: string;
+  isDone: boolean;
+  columnFieldReferenceName: string;
+  doneFieldReferenceName: string;
+}) {
+  const column = params.column.trim();
+  const state = params.state.trim();
+  if (!column) throw new Error('Work item board column cannot be empty');
+  if (!state) throw new Error('Work item state cannot be empty');
+
+  return [
+    { op: 'add', path: '/fields/System.State', value: state },
+    {
+      op: 'add',
+      path: `/fields/${params.columnFieldReferenceName}`,
+      value: column,
+    },
+    {
+      op: 'add',
+      path: `/fields/${params.doneFieldReferenceName}`,
+      value: params.isDone,
+    },
+  ];
+}
+
+export function resolveWorkItemBoardColumnUpdate(params: {
+  columns: AzureDevOpsBoardColumn[];
+  workItemType: string;
+  column: string;
+}) {
+  const columnName = params.column.trim();
+  const column = params.columns.find((candidate) => candidate.name === columnName);
+  if (!column) throw new Error(`Board column not found: ${columnName}`);
+  const state = column.stateMappings[params.workItemType];
+  if (!state) {
+    throw new Error(
+      `Board column ${column.name} is not mapped for ${params.workItemType}`,
+    );
+  }
+  return {
+    column: column.name,
+    state,
+    isDone: false,
+  };
+}
+
+export async function updateWorkItemBoardColumn(params: {
+  providerId: string;
+  projectId: string;
+  projectName: string;
+  workItemId: number;
+  column: string;
+  teamId: string;
+  boardId: string;
+}): Promise<void> {
+  const workItem = await getWorkItemById({
+    providerId: params.providerId,
+    workItemId: params.workItemId,
+  });
+  if (!workItem) throw new Error(`Work item not found: ${params.workItemId}`);
+  if (
+    workItem.fields.teamProject &&
+    workItem.fields.teamProject.toLowerCase() !== params.projectName.toLowerCase()
+  ) {
+    throw new Error(`Work item ${params.workItemId} does not belong to ${params.projectName}`);
+  }
+  const boardConfiguration = await getBoardConfigurationById({
+    providerId: params.providerId,
+    projectName: params.projectName,
+    teamId: params.teamId,
+    boardId: params.boardId,
+  });
+  if (!boardConfiguration) {
+    throw new Error(`No writable board configuration found for ${params.projectName}`);
+  }
+  const update = resolveWorkItemBoardColumnUpdate({
+    columns: boardConfiguration.columns,
+    workItemType: workItem.fields.workItemType,
+    column: params.column,
+  });
+  const patch = buildWorkItemBoardColumnPatch({
+    ...update,
+    columnFieldReferenceName: boardConfiguration.columnFieldReferenceName,
+    doneFieldReferenceName: boardConfiguration.doneFieldReferenceName,
+  });
+  const { authHeader, orgName } = await getProviderAuth(params.providerId);
+  const response = await fetch(
+    `https://dev.azure.com/${orgName}/_apis/wit/workitems/${params.workItemId}?api-version=7.0`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json-patch+json',
+      },
+      body: JSON.stringify(patch),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Failed to move work item ${params.workItemId} to ${update.column}: ${await response.text()}`,
+    );
+  }
+}
+
 export async function activateWorkItem(params: {
   providerId: string;
   workItemId: number;
@@ -3512,27 +4232,16 @@ export async function getPullRequestActivityMetadata(params: {
   // Latest commit date (commits are returned newest-first by Azure DevOps)
   const lastCommitDate = commits.length > 0 ? commits[0].author.date : null;
 
-  // Filter out deleted and system threads
-  const realThreads = threads.filter(
-    (t) => !t.isDeleted && t.comments.some((c) => c.commentType !== 'system'),
-  );
-
   // Find max lastUpdatedDate across all comments in all threads
   let lastThreadActivityDate: string | null = null;
-  let activeThreadCount = 0;
-  let unresolvedCommentCount = 0;
+  const threadCounts = getPullRequestThreadCounts(threads);
 
-  for (const thread of realThreads) {
-    const isActiveThread =
-      thread.status === 'active' ||
-      thread.status === 'pending' ||
-      thread.status === 'unknown';
-
-    if (isActiveThread) {
-      activeThreadCount++;
-      unresolvedCommentCount += thread.comments.filter(
-        (comment) => comment.commentType !== 'system',
-      ).length;
+  for (const thread of threads) {
+    if (
+      thread.isDeleted ||
+      !thread.comments.some((comment) => comment.commentType !== 'system')
+    ) {
+      continue;
     }
     for (const comment of thread.comments) {
       if (
@@ -3547,9 +4256,30 @@ export async function getPullRequestActivityMetadata(params: {
   return {
     lastCommitDate,
     lastThreadActivityDate,
-    activeThreadCount,
-    unresolvedCommentCount,
+    activeThreadCount: threadCounts.active,
+    unresolvedCommentCount: threadCounts.unresolvedComments,
   };
+}
+
+function getPullRequestThreadCounts(threads: AzureDevOpsCommentThread[]) {
+  let active = 0;
+  let unresolvedComments = 0;
+
+  for (const thread of threads) {
+    const comments = thread.comments.filter(
+      (comment) => comment.commentType !== 'system',
+    );
+    const isActive =
+      thread.status === 'active' ||
+      thread.status === 'pending' ||
+      thread.status === 'unknown';
+    if (!thread.isDeleted && comments.length > 0 && isActive) {
+      active++;
+      unresolvedComments += comments.length;
+    }
+  }
+
+  return { active, unresolvedComments };
 }
 
 export async function addThreadReply(params: {

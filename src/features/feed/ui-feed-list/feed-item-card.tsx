@@ -3,6 +3,7 @@ import {
   Bot,
   Bug,
   CheckCircle2,
+  CircleDotDashed,
   CircleHelp,
   ClipboardList,
   FolderOpen,
@@ -16,6 +17,7 @@ import {
   PinOff,
   ShieldAlert,
   ShieldQuestion,
+  Sparkles,
   SquareArrowOutUpRight,
   StickyNote,
   Terminal,
@@ -47,6 +49,11 @@ import {
 } from '@/common/ui/dropdown';
 import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
 import {
+  getPrStateColor,
+  getPrStatusLabel,
+  resolvePrStatus,
+} from '@/lib/feed-pr-state';
+import {
   useCachedPullRequest,
   usePullRequest,
   usePullRequestPolicyEvaluations,
@@ -59,6 +66,7 @@ import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { PrAutoComplete } from '@/features/pull-request/ui-pr-auto-complete';
 import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useFeedStore } from '@/stores/feed';
+import { useNavigationStore } from '@/stores/navigation';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
@@ -127,18 +135,7 @@ function FeedProjectBackgroundLogo({ item }: { item: FeedItem }) {
 const RAIL_W = 32; // rail column width in px
 const NODE_X = 16; // center X of main node
 const FEED_RAIL_COLOR = 'var(--color-ink-4)';
-
-function getPrStateColor({
-  isDraft,
-  isCompleted,
-}: {
-  isDraft: boolean | undefined;
-  isCompleted: boolean;
-}) {
-  if (isCompleted) return 'var(--color-status-done)';
-  if (isDraft) return 'var(--color-ink-3)';
-  return 'var(--color-status-azure)';
-}
+const PR_REVIEW_TASK_COLOR = 'oklch(0.74 0.19 295)';
 
 function isModifiedClick(e: React.MouseEvent): boolean {
   return e.metaKey || e.ctrlKey;
@@ -163,6 +160,7 @@ function GraphNode({
   const attentionColor = statusColor(attention);
   const needsPermission = attention === 'needs-permission';
   const hasQuestion = attention === 'has-question';
+  const isInterrupted = attention === 'interrupted';
   const needsAttention = needsPermission || hasQuestion;
 
   // For attention states, render icon instead of circle
@@ -194,6 +192,29 @@ function GraphNode({
         ) : (
           <CircleHelp style={{ width: iconSize, height: iconSize }} />
         )}
+      </div>
+    );
+  }
+
+  if (isInterrupted) {
+    const iconSize = isSubtask ? 12 : 14;
+    const left = isSubtask
+      ? RAIL_W - 9 - iconSize / 2 + 4
+      : NODE_X - iconSize / 2;
+    return (
+      <div
+        className="text-status-run"
+        style={{
+          position: 'absolute',
+          left,
+          top: 14 - 1,
+          width: iconSize,
+          height: iconSize,
+          zIndex: 2,
+        }}
+        title="Interrupted"
+      >
+        <CircleDotDashed style={{ width: iconSize, height: iconSize }} />
       </div>
     );
   }
@@ -492,9 +513,13 @@ export function FeedItemCard({
       ? (cachedPr?.creationDate ?? item.timestamp)
       : item.timestamp;
   const pullRequestUrl = cachedPr?.url ?? item.pullRequestUrl;
-  const isDraft = cachedPr?.isDraft ?? item.isDraft;
+  const isDraft = isTask
+    ? (item.isDraft ?? cachedPr?.isDraft)
+    : (cachedPr?.isDraft ?? item.isDraft);
   const pullRequestMergeStatus =
-    cachedPr?.mergeStatus ?? item.pullRequestMergeStatus;
+    isTask
+      ? (item.pullRequestMergeStatus ?? cachedPr?.mergeStatus)
+      : (cachedPr?.mergeStatus ?? item.pullRequestMergeStatus);
   const approvedBy =
     cachedPr?.reviewers
       .filter(
@@ -511,6 +536,7 @@ export function FeedItemCard({
     item.approvedBy ??
     [];
   const isRunning = item.attention === 'running';
+  const isInterrupted = isTask && item.attention === 'interrupted';
   const hasUnread = Boolean(item.hasUnread);
   const needsPermission = item.attention === 'needs-permission';
   const hasQuestion = item.attention === 'has-question';
@@ -521,15 +547,27 @@ export function FeedItemCard({
   );
   const hasChildren = !isSubtask && visibleChildren.length > 0;
   const hasPr = isTask && !!item.pullRequestId;
-  const prMerged =
-    item.workItemPrStatus === 'completed' || cachedPr?.status === 'completed';
+  const prStatus = resolvePrStatus({
+    cachedStatus: cachedPr?.status,
+    feedStatus: item.workItemPrStatus,
+  });
+  const prMerged = prStatus === 'completed';
+  const prStatusLabel = getPrStatusLabel(prStatus);
   const prHasConflicts = pullRequestMergeStatus === 'conflicts';
+  const prHasOpenComments = (item.activeThreadCount ?? 0) > 0;
   const prApprovalCount = approvedBy.length;
   const prStateColor = getPrStateColor({
+    status: prStatus,
     isDraft,
-    isCompleted: prMerged,
+    hasConflicts: prHasConflicts,
+    hasOpenComments: prHasOpenComments,
   });
-  const railColor = hasPr ? prStateColor : FEED_RAIL_COLOR;
+  const railColor =
+    hasPr
+      ? prStateColor
+      : item.taskType === 'pr-review'
+        ? PR_REVIEW_TASK_COLOR
+        : FEED_RAIL_COLOR;
   const showRail = isTask && !isSubtask && (hasChildren || hasPr);
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
   const canSetPrAutoComplete =
@@ -668,6 +706,21 @@ export function FeedItemCard({
     [navigate, item.projectId, item.pullRequestId, pullRequestUrl],
   );
 
+  const handleUncommittedClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!item.taskId) return;
+      const navigation = useNavigationStore.getState();
+      navigation.setTaskViewMode(item.taskId, 'diff');
+      navigation.setReviewMode(item.taskId, 'changes');
+      navigate({
+        to: '/all/$taskId',
+        params: { taskId: item.taskId },
+      });
+    },
+    [item.taskId, navigate],
+  );
+
   const handleWorkItemClick = useCallback(
     (e: React.MouseEvent, workItemId: string, workItemUrl?: string) => {
       e.stopPropagation();
@@ -731,13 +784,15 @@ export function FeedItemCard({
                       hasRunningCommand &&
                       'feed-command-running-row-focused',
                   ]
-                : needsPermission
-                  ? 'feed-permission-row border-transparent'
-                  : hasQuestion
-                    ? 'feed-question-row border-transparent'
-                    : hasUnread
-                      ? 'feed-unread-row border-transparent'
-                      : !showRail && 'border-line-soft',
+                  : needsPermission
+                    ? 'feed-permission-row border-transparent'
+                    : hasQuestion
+                      ? 'feed-question-row border-transparent'
+                      : isInterrupted
+                        ? 'bg-status-run/5 border-status-run/20'
+                        : hasUnread
+                          ? 'feed-unread-row border-transparent'
+                          : !showRail && 'border-line-soft',
               isSelected
                 ? 'border-l-[3px] border-l-[var(--color-acc)]'
                 : 'border-l-[3px] border-l-transparent',
@@ -842,6 +897,21 @@ export function FeedItemCard({
                 </span>
               </div>
 
+              {item.source === 'work-item' && item.workItemSummary && (
+                <div className="text-ink-3 flex min-w-0 items-center gap-1.5 text-[10.5px] leading-snug">
+                  <Sparkles className="text-acc h-3 w-3 shrink-0" />
+                  <span className="line-clamp-1 min-w-0">
+                    {item.workItemSummary}
+                  </span>
+                  {item.workItemSummaryStale && (
+                    <span
+                      className="bg-status-run h-1.5 w-1.5 shrink-0 rounded-full"
+                      title="Summary source updated"
+                    />
+                  )}
+                </div>
+              )}
+
               {/* Bottom row: project + time + status */}
               <div className="flex flex-wrap items-center gap-1.5">
                 {!isSubtask && <FeedProjectLabel item={item} />}
@@ -851,6 +921,14 @@ export function FeedItemCard({
                 <span className="text-ink-3/80 ml-auto shrink-0 font-mono text-[9.5px]">
                   {formatRelativeTime(itemTimestamp)}
                 </span>
+
+                {/* Interrupted task status */}
+                {isInterrupted && (
+                  <span className="bg-status-run/10 text-status-run ring-status-run/25 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1">
+                    <CircleDotDashed className="h-2.5 w-2.5" />
+                    Interrupted
+                  </span>
+                )}
 
                 {/* PR status badges for work items (non-task) */}
                 {item.source === 'work-item' &&
@@ -1035,7 +1113,7 @@ export function FeedItemCard({
                     )}{' '}
                     #{item.pullRequestId}
                   </span>
-                  <span>{prMerged ? 'merged' : 'open'}</span>
+                  <span>{prStatusLabel}</span>
                   {isDraft && (
                     <span className="border-glass-border text-ink-3 rounded border px-1 py-0 text-[9px]">
                       Draft
@@ -1061,6 +1139,18 @@ export function FeedItemCard({
                       <XCircle className="h-2.5 w-2.5" />
                       <span className="text-[9.5px]">Conflicts</span>
                     </span>
+                  )}
+                  {item.hasUncommittedChanges && (
+                    <button
+                      type="button"
+                      onClick={handleUncommittedClick}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      className="text-status-run hover:bg-status-run/15 flex items-center gap-0.5 rounded px-1 py-0.5 transition-colors"
+                      title="Open uncommitted worktree changes"
+                    >
+                      <CircleDotDashed className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">Uncommitted</span>
+                    </button>
                   )}
                   {(item.activeThreadCount ?? 0) > 0 && (
                     <span className="text-status-pr flex items-center gap-0.5">

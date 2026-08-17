@@ -18,6 +18,22 @@ describe('Content-Security-Policy', () => {
     expect(html).toContain("media-src 'self' blob:");
   });
 
+  it('allows bundled and blob Web Workers', () => {
+    const html = readFileSync(resolve(__dirname, '../../index.html'), 'utf8');
+    const decoderClient = readFileSync(
+      resolve(
+        __dirname,
+        '../features/agent/ui-markdown-content/gif-decoder-worker-client.ts',
+      ),
+      'utf8',
+    );
+
+    expect(html).toContain("worker-src 'self' blob:");
+    expect(decoderClient).toContain(
+      "new URL('./gif-decoder-worker.ts', import.meta.url)",
+    );
+  });
+
   it('allows local project logo images', () => {
     const html = readFileSync(resolve(__dirname, '../../index.html'), 'utf8');
 

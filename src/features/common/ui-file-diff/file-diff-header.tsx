@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import { MessageCircle } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 
 
@@ -15,11 +16,13 @@ export function FileDiffHeader({
   className,
   commentCount,
   hasAnnotations,
+  actions,
 }: {
   file: DiffFile;
   className?: string;
   commentCount?: number;
   hasAnnotations?: boolean;
+  actions?: ReactNode;
 }) {
   return (
     <>
@@ -52,6 +55,7 @@ export function FileDiffHeader({
             {commentCount} comment{commentCount !== 1 ? 's' : ''}
           </Chip>
         )}
+        {actions && <div className="ml-auto shrink-0">{actions}</div>}
       </div>
       <Separator />
     </>

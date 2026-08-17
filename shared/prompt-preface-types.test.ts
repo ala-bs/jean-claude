@@ -126,4 +126,45 @@ describe('prompt preface settings', () => {
       }),
     ).toEqual([{ type: 'text', text: 'Before\n\nPrompt\n\nAfter' }]);
   });
+
+  it('includes generic and matching backend model prefaces only', () => {
+    const entries = [
+      {
+        id: 'generic',
+        name: 'Generic',
+        enabled: true,
+        text: 'Generic',
+        placement: 'before' as const,
+        frequency: 'each' as const,
+      },
+      {
+        id: 'match',
+        name: 'Match',
+        enabled: true,
+        text: 'Match',
+        placement: 'before' as const,
+        frequency: 'each' as const,
+        targets: [{ backend: 'opencode' as const, models: ['openai/gpt-5'] }],
+      },
+      {
+        id: 'other',
+        name: 'Other',
+        enabled: true,
+        text: 'Other',
+        placement: 'before' as const,
+        frequency: 'each' as const,
+        targets: [{ backend: 'opencode' as const, models: ['*'] }],
+      },
+    ];
+
+    expect(
+      applyPromptPrefaceToParts({
+        parts: [{ type: 'text', text: 'Prompt' }],
+        entries,
+        isInitialPrompt: false,
+        backend: 'opencode',
+        model: 'anthropic/claude-sonnet',
+      }),
+    ).toEqual([{ type: 'text', text: 'Generic\n\nOther\n\nPrompt' }]);
+  });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 
@@ -6,6 +6,10 @@ import {
   COMMENT_ACCENT,
   InlineCommentComposer,
 } from '@/features/common/ui-inline-comments';
+import {
+  createPromptImageUploadCache,
+  type PromptImageUploadCache,
+} from '@/lib/prompt-image-upload-cache';
 import { REVIEW_PRESETS, type ReviewPresetId } from '@/stores/review-comments';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
@@ -14,9 +18,11 @@ import type { PromptImagePart } from '@shared/agent-backend-types';
 function PresetChips({
   selectedPresets,
   onToggle,
+  disabled,
 }: {
   selectedPresets: ReviewPresetId[];
   onToggle: (id: ReviewPresetId) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex flex-wrap gap-1">
@@ -24,6 +30,7 @@ function PresetChips({
         <button
           key={p.id}
           onClick={() => onToggle(p.id)}
+          disabled={disabled}
           className={clsx(
             'rounded-full border px-2 py-0.5 font-mono text-[10.5px] transition-colors',
             selectedPresets.includes(p.id)
@@ -45,6 +52,8 @@ export function ReviewCommentComposer({
   onCancel,
   initialBody,
   onBodyChange,
+  onSubmitAsPrComment,
+  onAskAgent,
 }: {
   lineStart: number;
   lineEnd?: number;
@@ -56,8 +65,24 @@ export function ReviewCommentComposer({
   onCancel: () => void;
   initialBody?: string;
   onBodyChange?: (body: string) => void;
+  onSubmitAsPrComment?: (
+    body: string,
+    images: PromptImagePart[],
+    uploadCache: PromptImageUploadCache,
+  ) => Promise<void> | void;
+  onAskAgent?: (question: string) => Promise<void> | void;
 }) {
   const [selectedPresets, setSelectedPresets] = useState<ReviewPresetId[]>([]);
+  const [isSubmittingPrComment, setIsSubmittingPrComment] = useState(false);
+  const [isAskingAgent, setIsAskingAgent] = useState(false);
+  const [prCommentError, setPrCommentError] = useState<string | null>(null);
+  const uploadCacheRef = useRef(createPromptImageUploadCache());
+  const prCommentInFlightRef = useRef(false);
+
+  useEffect(() => {
+    const uploadCache = uploadCacheRef.current;
+    return () => uploadCache.clear();
+  }, []);
 
   const togglePreset = useCallback((id: ReviewPresetId) => {
     setSelectedPresets((prev) =>
@@ -67,10 +92,65 @@ export function ReviewCommentComposer({
 
   const handleSubmit = useCallback(
     (body: string, images: PromptImagePart[]) => {
+      if (prCommentInFlightRef.current || isAskingAgent) return;
       onSubmit(body, selectedPresets, images);
     },
-    [onSubmit, selectedPresets],
+    [isAskingAgent, onSubmit, selectedPresets],
   );
+
+  const handleSubmitAsPrComment = useCallback(
+    async (body: string, images: PromptImagePart[]) => {
+      if (
+        !onSubmitAsPrComment ||
+        prCommentInFlightRef.current ||
+        isAskingAgent
+      )
+        return;
+      prCommentInFlightRef.current = true;
+      setPrCommentError(null);
+      setIsSubmittingPrComment(true);
+      try {
+        await onSubmitAsPrComment(body, images, uploadCacheRef.current);
+        uploadCacheRef.current.clear();
+      } catch (error) {
+        setPrCommentError(
+          error instanceof Error ? error.message : 'Failed to post PR comment',
+        );
+      } finally {
+        prCommentInFlightRef.current = false;
+        setIsSubmittingPrComment(false);
+      }
+    },
+    [isAskingAgent, onSubmitAsPrComment],
+  );
+
+  const handleCancel = useCallback(() => {
+    if (prCommentInFlightRef.current || isAskingAgent) return;
+    uploadCacheRef.current.clear();
+    onCancel();
+  }, [isAskingAgent, onCancel]);
+
+  const handleAskAgent = useCallback(
+    async (body: string) => {
+      if (!onAskAgent || isAskingAgent || prCommentInFlightRef.current) return;
+      const question = body.trim();
+      if (!question) return;
+      setPrCommentError(null);
+      setIsAskingAgent(true);
+      try {
+        await onAskAgent(question);
+      } catch (error) {
+        setPrCommentError(
+          error instanceof Error ? error.message : 'Failed to ask agent',
+        );
+      } finally {
+        setIsAskingAgent(false);
+      }
+    },
+    [isAskingAgent, onAskAgent],
+  );
+
+  const isPending = isSubmittingPrComment || isAskingAgent;
 
   return (
     <div
@@ -85,23 +165,50 @@ export function ReviewCommentComposer({
           lineStart={lineStart}
           lineEnd={lineEnd}
           onSubmit={handleSubmit}
-          onCancel={onCancel}
+          onCancel={handleCancel}
           initialBody={initialBody}
           onBodyChange={onBodyChange}
           canSubmitEmpty={selectedPresets.length > 0}
+          isSubmitting={isPending}
           placeholder="Leave an instruction for this line..."
           renderBeforeTextarea={
             <PresetChips
               selectedPresets={selectedPresets}
               onToggle={togglePreset}
+              disabled={isPending}
             />
           }
-          renderAfterActions={
-            <span className="text-ink-4 ml-auto text-[10.5px]">
-              {"Won't be sent until you submit the review."}
-            </span>
-          }
+          renderAfterActions={({ body, images, isDisabled }) => (
+            <>
+              {onAskAgent && (
+                <button
+                  type="button"
+                  className="border-glass-border/70 text-ink-2 hover:text-ink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
+                  onClick={() => void handleAskAgent(body)}
+                  disabled={isDisabled || isAskingAgent || !body.trim()}
+                >
+                  {isAskingAgent ? 'Asking...' : 'Ask Agent'}
+                </button>
+              )}
+              {onSubmitAsPrComment && (
+                <button
+                  type="button"
+                  className="border-glass-border/70 text-ink-2 hover:text-ink-0 rounded border px-2 py-1 text-xs disabled:opacity-50"
+                  onClick={() => void handleSubmitAsPrComment(body, images)}
+                  disabled={isDisabled || isSubmittingPrComment}
+                >
+                  {isSubmittingPrComment ? 'Posting...' : 'Post to PR'}
+                </button>
+              )}
+              <span className="text-ink-4 ml-auto text-[10.5px]">
+                {"Won't be sent until you submit the review."}
+              </span>
+            </>
+          )}
         />
+        {prCommentError && (
+          <p className="text-status-fail mt-2 text-xs">{prCommentError}</p>
+        )}
       </div>
     </div>
   );

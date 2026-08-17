@@ -94,7 +94,7 @@ describe('generateMergeMessageForTask', () => {
     await expect(
       generateMergeMessageForTask(task, project, 'main'),
     ).rejects.toThrow(
-      'Failed to generate merge commit message: AI did not return a valid merge commit message',
+      'Failed to generate merge commit message: AI returned no output. AI response: null',
     );
   });
 
@@ -107,7 +107,7 @@ describe('generateMergeMessageForTask', () => {
     await expect(
       generateMergeMessageForTask(task, project, 'main'),
     ).rejects.toThrow(
-      'Failed to generate merge commit message: AI did not return a valid merge commit message',
+      'Failed to generate merge commit message: AI response contains a blank title. AI response: {"title":"   ","body":"- Body without title"}',
     );
   });
 
@@ -120,7 +120,20 @@ describe('generateMergeMessageForTask', () => {
     await expect(
       generateMergeMessageForTask(task, project, 'main'),
     ).rejects.toThrow(
-      'Failed to generate merge commit message: AI did not return a valid merge commit message',
+      'Failed to generate merge commit message: AI response contains a blank body. AI response: {"title":"fix: valid title","body":"   "}',
+    );
+  });
+
+  it('reports when configured AI generation returns a malformed body', async () => {
+    generateTextMock.mockResolvedValue({
+      title: 'fix: valid title',
+      body: null,
+    });
+
+    await expect(
+      generateMergeMessageForTask(task, project, 'main'),
+    ).rejects.toThrow(
+      'Failed to generate merge commit message: AI response is missing a text body. AI response: {"title":"fix: valid title","body":null}',
     );
   });
 

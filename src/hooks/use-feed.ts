@@ -38,6 +38,30 @@ function shouldHideReviewPr(item: FeedItem) {
   );
 }
 
+export function useTaskFeedItems() {
+  const windowFocused = useWindowFocused();
+  const refetchInterval = windowFocused ? 3 * 60 * 1000 : false;
+  const query = useCacheResource({
+    key: 'feed:tasks',
+    load: async () => api.feed.getTaskItems(),
+    ingest: (items) => ingestFeedItems('feed:tasks', items),
+    staleTime: refetchInterval === false ? Infinity : refetchInterval,
+  });
+  const refetch = query.refetch;
+
+  useEffect(() => {
+    if (refetchInterval === false) return;
+
+    const intervalId = window.setInterval(() => {
+      void refetch();
+    }, refetchInterval);
+
+    return () => window.clearInterval(intervalId);
+  }, [refetch, refetchInterval]);
+
+  return query;
+}
+
 export function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
   const prByKey = new Map<string, FeedItem>();
   for (const item of prItems) {
@@ -49,7 +73,10 @@ export function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
 
   const mergeItem = (item: FeedItem): FeedItem => {
     const children = item.children?.map(mergeItem);
-    const withChildren = children ? { ...item, children } : item;
+    const childrenChanged = children?.some(
+      (child, index) => child !== item.children?.[index],
+    );
+    const withChildren = childrenChanged ? { ...item, children } : item;
 
     if (item.source !== 'task' || item.pullRequestId == null)
       return withChildren;
@@ -60,12 +87,18 @@ export function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
       return withChildren;
     }
 
-    return {
-      ...withChildren,
-      workItemPrStatus: 'active',
-      activeThreadCount: pr.activeThreadCount,
-      unresolvedCommentCount: pr.unresolvedCommentCount,
-    };
+    const activeThreadCount =
+      withChildren.activeThreadCount ?? pr.activeThreadCount;
+    const unresolvedCommentCount =
+      withChildren.unresolvedCommentCount ?? pr.unresolvedCommentCount;
+    if (
+      activeThreadCount === withChildren.activeThreadCount &&
+      unresolvedCommentCount === withChildren.unresolvedCommentCount
+    ) {
+      return withChildren;
+    }
+
+    return { ...withChildren, activeThreadCount, unresolvedCommentCount };
   };
 
   return taskItems.map(mergeItem);
@@ -111,7 +144,10 @@ export function refineFeedItemAttention(
 
   const refineItem = (item: FeedItem): FeedItem => {
     const children = item.children?.map(refineItem);
-    const itemWithChildren = children ? { ...item, children } : item;
+    const childrenChanged = children?.some(
+      (child, index) => child !== item.children?.[index],
+    );
+    const itemWithChildren = childrenChanged ? { ...item, children } : item;
 
     if (!item.taskId) {
       return itemWithChildren;
@@ -128,10 +164,14 @@ export function refineFeedItemAttention(
     }
 
     if (taskIdsWithQuestions.has(item.taskId)) {
+      if (itemWithChildren.attention === 'has-question') return itemWithChildren;
       return { ...itemWithChildren, attention: 'has-question' as const };
     }
 
     if (taskIdsWithPermissions.has(item.taskId)) {
+      if (itemWithChildren.attention === 'needs-permission') {
+        return itemWithChildren;
+      }
       return { ...itemWithChildren, attention: 'needs-permission' as const };
     }
 
@@ -143,6 +183,7 @@ export function refineFeedItemAttention(
 
 export function useFeed() {
   const windowFocused = useWindowFocused();
+  const taskQuery = useTaskFeedItems();
   const { data: projects = [] } = useProjects();
   const pinned = useFeedStore((s) => s.pinned);
   const dismissed = useFeedStore((s) => s.dismissed);
@@ -164,12 +205,6 @@ export function useFeed() {
     [hiddenProjectIds],
   );
 
-  const taskQuery = useCacheResource({
-    key: 'feed:tasks',
-    load: async () => api.feed.getTaskItems(),
-    ingest: (items) => ingestFeedItems('feed:tasks', items),
-    staleTime: feedRefetchInterval === false ? Infinity : feedRefetchInterval,
-  });
   const prQuery = useCacheResource({
     key: 'feed:pullRequests',
     load: async () => api.feed.getPullRequestItems(),
@@ -188,7 +223,6 @@ export function useFeed() {
     ingest: (items) => ingestFeedItems('feed:workItems', items),
     staleTime: feedRefetchInterval === false ? Infinity : feedRefetchInterval,
   });
-  const taskRefetch = taskQuery.refetch;
   const prRefetch = prQuery.refetch;
   const noteRefetch = noteQuery.refetch;
   const workItemRefetch = workItemQuery.refetch;
@@ -197,7 +231,6 @@ export function useFeed() {
     if (feedRefetchInterval === false) return;
 
     const intervalId = window.setInterval(() => {
-      void taskRefetch();
       void prRefetch();
       void noteRefetch();
       void workItemRefetch();
@@ -208,7 +241,6 @@ export function useFeed() {
     feedRefetchInterval,
     noteRefetch,
     prRefetch,
-    taskRefetch,
     workItemRefetch,
   ]);
 
@@ -319,14 +351,14 @@ export function useFeed() {
   const taskOwnedPrKeys = useMemo(() => {
     const keys = new Set<string>();
     for (const item of visibleFeedItems) {
-      if (item.source === 'task') {
+      if (item.source === 'task' && item.taskType !== 'pr-review') {
         const key = getFeedPullRequestIdentityKey(item);
         if (key) keys.add(key);
       }
       // Also check children (subtasks) that own PRs
       if (item.children) {
         for (const child of item.children) {
-          if (child.source === 'task') {
+          if (child.source === 'task' && child.taskType !== 'pr-review') {
             const key = getFeedPullRequestIdentityKey(child);
             if (key) keys.add(key);
           }

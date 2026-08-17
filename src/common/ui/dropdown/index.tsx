@@ -35,6 +35,15 @@ function setRef<T>(
   }
 }
 
+export function getDropdownMenuItems(container: HTMLElement | null) {
+  if (!container) return [];
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]',
+    ),
+  ).filter((element) => element.hasAttribute('tabindex'));
+}
+
 export function Dropdown({
   trigger,
   children,
@@ -130,12 +139,10 @@ export function Dropdown({
   }, [dropdownRef, toggle]);
 
   // Get all menu items
-  const getMenuItems = useCallback(() => {
-    if (!contentRef.current) return [];
-    return Array.from(
-      contentRef.current.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-    ).filter((element) => element.hasAttribute('tabindex'));
-  }, []);
+  const getMenuItems = useCallback(
+    () => getDropdownMenuItems(contentRef.current),
+    [],
+  );
 
   // Focus the item at the given index
   const focusItem = useCallback(
@@ -360,6 +367,7 @@ export function DropdownItem({
   variant = 'default',
   checked,
   shortcut,
+  disabled = false,
 }: {
   children: ReactNode;
   onClick: () => void;
@@ -367,14 +375,17 @@ export function DropdownItem({
   variant?: 'default' | 'danger';
   checked?: boolean;
   shortcut?: BindingKey;
+  disabled?: boolean;
 }) {
   return (
     <button
-      role="menuitem"
+      role={checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+      aria-checked={checked}
       tabIndex={-1}
       onClick={onClick}
+      disabled={disabled}
       className={clsx(
-        'hover:bg-glass-medium focus:bg-glass-medium flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors focus:outline-none',
+        'hover:bg-glass-medium focus:bg-glass-medium flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors focus:outline-none disabled:pointer-events-none disabled:opacity-50',
         variant === 'danger' ? 'text-status-fail' : 'text-ink-0',
       )}
     >

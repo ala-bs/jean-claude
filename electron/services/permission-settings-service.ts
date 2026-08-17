@@ -594,6 +594,18 @@ export function normalizeToolRequest(
       return { tool: 'todowrite', matchValue: '' };
     case 'skill':
       return { tool: 'skill', matchValue: String(input.name ?? '') };
+    case 'external_directory':
+      return {
+        tool: 'external_directory',
+        matchValue: String(
+          (Array.isArray(input.permissionPatterns)
+            ? input.permissionPatterns[0]
+            : undefined) ??
+            input.parentDir ??
+            input.filepath ??
+            '',
+        ),
+      };
     default:
       return { tool, matchValue: '' };
   }
@@ -975,11 +987,18 @@ export function compileForOpenCode(
     // OpenCode defaults to permissive allow-all unless a permission baseline is
     // provided. Keep Jean-Claude's default as ask, then let explicit rules win.
     { permission: '*', pattern: '*', action: 'ask' as const },
-    ...rules.map((rule) => ({
-      permission: rule.tool,
-      pattern: rule.pattern,
-      action: rule.action,
-    })),
+    ...rules
+      // External paths are canonicalized and evaluated by the adapter for each
+      // request so replacing a directory with a symlink cannot reuse a grant.
+      .filter((rule) => rule.tool !== 'external_directory')
+      .map((rule) => ({
+        permission: rule.tool,
+        pattern: rule.pattern,
+        action: rule.action,
+      })),
+    // External paths require adapter-side canonicalization even when a
+    // wildcard rule would otherwise allow every permission.
+    { permission: 'external_directory', pattern: '*', action: 'ask' as const },
   ];
 }
 

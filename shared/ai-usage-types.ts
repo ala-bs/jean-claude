@@ -13,6 +13,7 @@ export type AiUsageFeature =
   | 'review'
   | 'skill'
   | 'feature-map'
+  | 'work-item-summary'
   | 'other';
 
 export type AiUsagePricingStatus = 'priced' | 'unknown';

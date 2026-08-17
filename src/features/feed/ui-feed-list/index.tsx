@@ -8,6 +8,7 @@ import {
   Filter,
   GitPullRequest,
   GripVertical,
+  LayoutDashboard,
   ListTodo,
   Loader2,
   MessageSquare,
@@ -27,6 +28,7 @@ import type React from 'react';
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
 import type { FeedItem } from '@shared/feed-types';
 import { Modal } from '@/common/ui/modal';
+import { openPrLinkOnModifiedClick } from '@/lib/open-pr-link';
 import { ProjectLogo } from '@/features/project/ui-project-logo';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
@@ -948,6 +950,17 @@ function HorizontalPrReviewStack({
   );
 }
 
+const MemoHorizontalPrReviewStack = memo(
+  HorizontalPrReviewStack,
+  (prev, next) =>
+    prev.onOpen === next.onOpen &&
+    prev.onMarkLowPriority === next.onMarkLowPriority &&
+    prev.selection.currentPrId === next.selection.currentPrId &&
+    prev.selection.currentProjectId === next.selection.currentProjectId &&
+    prev.items.length === next.items.length &&
+    prev.items.every((item, index) => item === next.items[index]),
+);
+
 function PrReviewCarouselCard({
   item,
   position,
@@ -987,6 +1000,7 @@ function PrReviewCarouselCard({
     item.pullRequestId,
   );
   const title = cachedPr?.title ?? item.title;
+  const pullRequestUrl = cachedPr?.url ?? item.pullRequestUrl;
   const isDraft = cachedPr?.isDraft ?? item.isDraft ?? false;
   const ownerName =
     cachedPr?.createdBy.displayName ?? item.subtitle ?? item.ownerName ?? '';
@@ -1011,7 +1025,8 @@ function PrReviewCarouselCard({
     >
       <button
         type="button"
-        onClick={() => {
+        onClick={(event) => {
+          if (openPrLinkOnModifiedClick({ event, url: pullRequestUrl })) return;
           if (isCenter) {
             onOpen();
           } else {
@@ -1176,7 +1191,9 @@ export function FeedList() {
         return;
       }
 
-      const currentOrder = pinnedItems.map((item) => item.id);
+      const currentOrder = [...useFeedStore.getState().pinned]
+        .sort((a, b) => a.order - b.order)
+        .map((item) => item.id);
 
       // If dragged item is not yet pinned, pin it first
       if (!currentOrder.includes(draggedId)) {
@@ -1196,7 +1213,7 @@ export function FeedList() {
       setDragOverId(null);
       setDraggedId(null);
     },
-    [draggedId, pinnedItems, pin, reorderPinned],
+    [draggedId, pin, reorderPinned],
   );
 
   // --- Drag handlers for the pinned zone container ---
@@ -1325,42 +1342,6 @@ export function FeedList() {
         navigate({
           to: '/all/$taskId',
           params: { taskId: item.taskId },
-        });
-      }
-    },
-    [navigate],
-  );
-
-  const openInProject = useCallback(
-    (item: {
-      source: FeedItem['source'];
-      projectId: string;
-      taskId?: string;
-      pullRequestId?: number;
-      workItemId?: number;
-    }) => {
-      // Work items only exist in the cross-project (/all) context
-      if (item.source === 'work-item') return;
-      // Notes are global, not per-project
-      if (item.source === 'note') return;
-      if (item.source === 'pull-request' && item.pullRequestId) {
-        navigate({
-          to: '/projects/$projectId/prs/$prId',
-          params: {
-            projectId: item.projectId,
-            prId: String(item.pullRequestId),
-          },
-        });
-        return;
-      }
-
-      if (item.taskId) {
-        navigate({
-          to: '/projects/$projectId/tasks/$taskId',
-          params: {
-            projectId: item.projectId,
-            taskId: item.taskId,
-          },
         });
       }
     },
@@ -1504,16 +1485,6 @@ export function FeedList() {
       },
       hideInCommandPalette: true,
     },
-    {
-      label: 'Open Selected Feed Item in Project',
-      shortcut: 'cmd+shift+o',
-      handler: () => {
-        if (currentItem) {
-          openInProject(currentItem);
-        }
-      },
-      hideInCommandPalette: true,
-    },
   ]);
 
   const totalCount =
@@ -1651,6 +1622,15 @@ export function FeedList() {
             )}
             <button
               type="button"
+              onClick={() => openOverlay('azure-board')}
+              className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 flex h-5 w-5 items-center justify-center rounded transition-colors"
+              title="Azure Board (Cmd+Shift+A)"
+              aria-label="Open Azure Board"
+            >
+              <LayoutDashboard size={13} />
+            </button>
+            <button
+              type="button"
               onClick={() => openOverlay('new-task')}
               className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 flex h-5 w-5 items-center justify-center rounded transition-colors"
               title="New task"
@@ -1735,7 +1715,7 @@ export function FeedList() {
 
       {/* PR review zone - horizontal stack, priority sorted */}
       {prReviewItems.length > 0 && (
-        <HorizontalPrReviewStack
+        <MemoHorizontalPrReviewStack
           items={prReviewItems}
           selection={selection}
           onOpen={navigateToFeedItem}

@@ -22,10 +22,12 @@ interface ContextMenuState {
   items: ContextMenuItem[];
 }
 
-export function useMessageContextMenu() {
+export function useMessageContextMenu(
+  options: { overlayId?: string } = {},
+) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const overlayId = 'message-context-menu';
+  const overlayId = options.overlayId ?? 'message-context-menu';
 
   const close = useCallback(() => setMenu(null), []);
 

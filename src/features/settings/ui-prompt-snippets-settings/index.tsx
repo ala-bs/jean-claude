@@ -44,7 +44,12 @@ export function PromptSnippetsSettings() {
 
   const handleUpdate = useCallback(
     (id: string, updates: Partial<Omit<PromptSnippet, 'id'>>) => {
-      if (isBuiltinSnippet(id)) return;
+      if (
+        isBuiltinSnippet(id) &&
+        (Object.keys(updates).length !== 1 || !('enabled' in updates))
+      ) {
+        return;
+      }
       const updated = snippets.map((s) =>
         s.id === id ? { ...s, ...updates } : s,
       );

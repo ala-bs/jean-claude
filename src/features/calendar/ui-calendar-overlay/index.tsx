@@ -17,6 +17,11 @@ import { RemoveScroll } from 'react-remove-scroll';
 
 
 import {
+  beginCalendarLoad,
+  markCalendarLoadSucceeded,
+  shouldNotifyCalendarLoadError,
+} from '@/lib/calendar-load-error';
+import {
   dayBadge,
   groupByDay,
   isSameDay,
@@ -136,17 +141,19 @@ export function CalendarOverlay({ onClose }: { onClose: () => void }) {
     if (!canShow) return;
     let cancelled = false;
     const load = async () => {
+      const loadId = beginCalendarLoad();
       try {
         const [upcoming, today] = await Promise.all([
           api.calendar.listUpcomingMeetings(),
           api.calendar.listTodayMeetings(),
         ]);
         if (!cancelled) {
+          markCalendarLoadSucceeded(loadId);
           setMeetings(upcoming);
           setTodayMeetings(today);
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && shouldNotifyCalendarLoadError(error, loadId)) {
           addToast({
             message:
               error instanceof Error

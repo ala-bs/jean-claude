@@ -14,6 +14,7 @@ import { ensureUtc, formatDuration } from '@/lib/time';
 import type {
   NormalizedEntry,
   NormalizedToolUse,
+  TokenUsage,
   ToolUseByName,
 } from '@shared/normalized-message-v2';
 import { countUnifiedPatchStats } from '@/features/agent/ui-diff-view/diff-utils';
@@ -45,6 +46,17 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 const PROMPT_MAX_CHARS = 300;
 const RECENT_RUNNING_MESSAGE_COUNT = 5;
 const EMPTY_DISPLAY_MESSAGES: DisplayMessage[] = [];
+
+export function getResultDisplayTokenCount({
+  usage,
+  contextUsage,
+}: {
+  usage?: TokenUsage;
+  contextUsage?: TokenUsage;
+}): number {
+  const displayUsage = contextUsage ?? usage;
+  return (displayUsage?.inputTokens ?? 0) + (displayUsage?.outputTokens ?? 0);
+}
 
 type RunningActivityMessage =
   | {
@@ -710,6 +722,11 @@ function SubagentCard({
           <span className="text-ink-3 shrink-0 rounded bg-glass-subtle px-1.5 py-px text-[9.5px] font-semibold tracking-wide uppercase">
             {sa.kind}
           </span>
+          {sa.model && (
+            <span className="text-ink-4 shrink-0">
+              {formatModelName(sa.model)}
+            </span>
+          )}
         </div>
         {sa.step && (
           <div className="text-ink-3 flex items-center gap-2 font-mono text-[10.5px]">
@@ -720,11 +737,6 @@ function SubagentCard({
               {sa.step}
               <span className="rg-caret">▍</span>
             </span>
-            {sa.model && (
-              <span className="text-ink-4 shrink-0">
-                {formatModelName(sa.model)}
-              </span>
-            )}
           </div>
         )}
       </div>
@@ -733,16 +745,20 @@ function SubagentCard({
 }
 
 /** Todo row — checkbox with accent styling */
-function TodoRow({
-  todo,
+const TodoRow = memo(function TodoRow({
+  text,
+  done,
+  current,
 }: {
-  todo: { text: string; done: boolean; current: boolean };
+  text: string;
+  done: boolean;
+  current: boolean;
 }) {
   return (
     <div
       className="flex items-center gap-2 rounded px-1.5 py-0.5 font-mono text-xs"
       style={
-        todo.current
+        current
           ? {
               background: `color-mix(in oklch, var(--color-acc) 8%, transparent)`,
             }
@@ -753,19 +769,19 @@ function TodoRow({
       <span
         className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm"
         style={{
-          border: todo.done
+          border: done
             ? '1px solid var(--color-acc)'
-            : todo.current
+            : current
               ? '1px solid color-mix(in oklch, var(--color-acc) 60%, transparent)'
               : '1px solid var(--theme-agent-todo-checkbox-border)',
-          background: todo.done ? 'var(--color-acc)' : 'transparent',
+          background: done ? 'var(--color-acc)' : 'transparent',
           boxShadow:
-            todo.current && !todo.done
+            current && !done
               ? '0 0 8px -2px var(--color-acc)'
               : 'none',
         }}
       >
-        {todo.done && (
+        {done && (
           <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
             <path
               d="M2.5 6.5L5 9l4.5-5.5"
@@ -776,7 +792,7 @@ function TodoRow({
             />
           </svg>
         )}
-        {todo.current && !todo.done && (
+        {current && !done && (
           <span
             className="rg-pulse-glow bg-acc h-1.5 w-1.5 rounded-full"
             style={{ animation: 'rg-pulse-glow 1.4s ease-in-out infinite' }}
@@ -788,27 +804,27 @@ function TodoRow({
       <span
         className="min-w-0 flex-1 truncate"
         style={{
-          color: todo.done
+          color: done
             ? 'var(--color-ink-2)'
-            : todo.current
+            : current
               ? 'var(--color-ink-0)'
               : 'var(--color-ink-1)',
-          textDecoration: todo.done ? 'line-through' : 'none',
+          textDecoration: done ? 'line-through' : 'none',
           textDecorationColor: 'var(--theme-agent-todo-strike)',
         }}
       >
-        {todo.text}
+        {text}
       </span>
 
       {/* NOW label */}
-      {todo.current && (
+      {current && (
         <span className="text-acc-ink shrink-0 font-mono text-[9px] font-semibold tracking-wide uppercase">
           now
         </span>
       )}
     </div>
   );
-}
+});
 
 /** Result block — ✓ checkmark + text + bullets + cost line */
 function ResultBlock({
@@ -964,7 +980,12 @@ function RunningSummary({
           </div>
           <div className="flex flex-col gap-0.5">
             {activity.todos.map((td, i) => (
-              <TodoRow key={i} todo={td} />
+              <TodoRow
+                key={i}
+                text={td.text}
+                done={td.done}
+                current={td.current}
+              />
             ))}
           </div>
         </div>
@@ -1060,20 +1081,42 @@ type FileStats = {
   removed: number;
 };
 
-function isFileChangeToolEntry(entry: NormalizedEntry): boolean {
+function isFileChangeToolEntry(
+  entry: NormalizedEntry,
+): entry is NormalizedEntry &
+  (ToolUseByName<'edit'> | ToolUseByName<'write'>) {
   return (
     entry.type === 'tool-use' &&
     (entry.name === 'edit' || entry.name === 'write')
   );
 }
 
-function getFileChangeToolEntries(
+export function getFileChangeToolEntries(
   childMessages: DisplayMessage[],
+  promptEntry?: NormalizedEntry & { type: 'user-prompt' },
 ): NormalizedEntry[] {
   const entries: NormalizedEntry[] = [];
+  const promptMs = parseDateMs(promptEntry?.date);
 
   function addEntry(entry: NormalizedEntry) {
-    if (isFileChangeToolEntry(entry)) entries.push(entry);
+    if (!isFileChangeToolEntry(entry)) return;
+
+    const entryMs = parseDateMs(entry.date);
+    if (promptMs !== null && (entryMs === null || entryMs < promptMs)) {
+      if (import.meta.env.DEV) {
+        console.debug('[prompt-group-diff] Excluding stale edit', {
+          reason: entryMs === null ? 'invalid-entry-date' : 'predates-prompt',
+          promptId: promptEntry?.id,
+          promptDate: promptEntry?.date,
+          entryId: entry.id,
+          entryDate: entry.date,
+          input: entry.input,
+        });
+      }
+      return;
+    }
+
+    entries.push(entry);
   }
 
   for (const dm of childMessages) {
@@ -1194,6 +1237,8 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   onResultContextMenu,
   rootPath,
   taskId,
+  onOpenFileInReview,
+  onOpenFileInEditor,
 }: {
   group: PromptGroup;
   isLast?: boolean;
@@ -1217,6 +1262,8 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   rootPath?: string | null;
   /** Task ID for comment anchoring in assistant messages */
   taskId?: string;
+  onOpenFileInReview?: (filePath: string) => void;
+  onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
 }) {
   const isError = group.status === 'error';
   const isInterrupted = group.status === 'interrupted';
@@ -1249,9 +1296,7 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
     }
     const cost = entry.cost?.toFixed(2) || '0.00';
     const apiCost = entry.apiCost?.toFixed(2);
-    const tokens = formatNumber(
-      (entry.usage?.inputTokens ?? 0) + (entry.usage?.outputTokens ?? 0),
-    );
+    const tokens = formatNumber(getResultDisplayTokenCount(entry));
     const durationMs = group.durationMs ?? entry.durationMs ?? 0;
     const fallbackAssistantMessage =
       !entry.value || !entry.value.trim()
@@ -1332,10 +1377,18 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
   }, [group.childMessages, isActiveGroup]);
 
   // Compute file edit/write stats from child messages
-  const fileStats = useMemo(() => {
-    const fileChangeEntries = getFileChangeToolEntries(group.childMessages);
-    return getFileStats(fileChangeEntries);
-  }, [group.childMessages]);
+  const fileChangeEntries = useMemo(
+    () =>
+      getFileChangeToolEntries(
+      group.childMessages,
+      group.promptEntry,
+      ),
+    [group.childMessages, group.promptEntry],
+  );
+  const fileStats = useMemo(
+    () => getFileStats(fileChangeEntries),
+    [fileChangeEntries],
+  );
 
   return (
     <div className="mb-5">
@@ -1522,7 +1575,12 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
                     </div>
                     <div className="flex flex-col gap-0.5">
                       {completedTodos.map((td, i) => (
-                        <TodoRow key={i} todo={td} />
+                          <TodoRow
+                            key={i}
+                            text={td.text}
+                            done={td.done}
+                            current={td.current}
+                          />
                       ))}
                     </div>
                   </div>
@@ -1572,9 +1630,11 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
         <PromptGroupDiffModal
           isOpen={diffModalOpen}
           onClose={() => setDiffModalOpen(false)}
-          childMessages={group.childMessages}
+          fileChangeEntries={fileChangeEntries}
           rootPath={rootPath}
           taskId={taskId}
+          onOpenFileInReview={onOpenFileInReview}
+          onOpenFileInEditor={onOpenFileInEditor}
         />
       )}
     </div>

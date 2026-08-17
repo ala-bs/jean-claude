@@ -44,6 +44,10 @@ export interface ProjectCommand {
   name: string | null;
   command: string;
   ports: number[];
+  portConflictStrategy: 'prompt' | 'use-available-port';
+  portOverrideProvider: 'env' | 'args';
+  portOverrideEnvVar: string | null;
+  portOverrideArgs: string | null;
   envVars: RunCommandEnvVar[];
   confirmBeforeRun: boolean;
   confirmMessage: string | null;
@@ -61,6 +65,10 @@ export type UpdateProjectCommand = Partial<
     | 'name'
     | 'command'
     | 'ports'
+    | 'portConflictStrategy'
+    | 'portOverrideProvider'
+    | 'portOverrideEnvVar'
+    | 'portOverrideArgs'
     | 'envVars'
     | 'confirmBeforeRun'
     | 'confirmMessage'

@@ -47,8 +47,8 @@ describe('generateWorkItemVerificationNote', () => {
             title: 'Open settings',
             steps: [
               {
-                action: 'Click profile menu',
-                expectedResult: 'Settings entry is visible',
+                action: '<DIV><P>Click <strong>profile</strong> menu</P></DIV>',
+                expectedResult: '<DIV><P>Settings entry is visible</P></DIV>',
               },
             ],
           },
@@ -74,6 +74,13 @@ describe('generateWorkItemVerificationNote', () => {
     expect(generateTextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: expect.stringContaining('target 4-12 words'),
+      }),
+    );
+    expect(generateTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining(
+          '1. Action: &lt;p>Click &lt;strong>profile&lt;/strong> menu&lt;/p>\n       Expected: &lt;p>Settings entry is visible&lt;/p>',
+        ),
       }),
     );
     expect(generateTextMock).toHaveBeenCalledWith(

@@ -12,9 +12,11 @@ import {
 } from '@/hooks/use-pull-requests';
 import { useCurrentVisibleProject, useSidebarTab } from '@/stores/navigation';
 import type { AzureDevOpsPullRequest } from '@/lib/api';
+import type { FeedItem } from '@shared/feed-types';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentAzureUser } from '@/hooks/use-work-items';
+import { useTaskFeedItems } from '@/hooks/use-feed';
 
 
 
@@ -37,6 +39,27 @@ const TAB_LABELS: Record<PrTab, string> = {
   abandoned: 'Abandoned',
   all: 'All',
 };
+
+export function getUnpushedPullRequestKeys(items: FeedItem[]) {
+  const keys = new Set<string>();
+
+  for (const item of items) {
+    if (
+      item.source === 'task' &&
+      item.pullRequestId !== undefined &&
+      item.hasUnpushedCommits
+    ) {
+      keys.add(`${item.projectId}:${item.pullRequestId}`);
+    }
+    for (const child of item.children ?? []) {
+      if (child.pullRequestId !== undefined && child.hasUnpushedCommits) {
+        keys.add(`${child.projectId}:${child.pullRequestId}`);
+      }
+    }
+  }
+
+  return keys;
+}
 
 // Map tab to API status (my-prs and to-review both fetch active PRs)
 function getApiStatus(
@@ -73,6 +96,7 @@ export function PrSidebarList() {
   const { projectId } = useCurrentVisibleProject();
   const { sidebarTab } = useSidebarTab();
   const { data: projects = [] } = useActiveProjects();
+  const { data: taskFeedItems = [] } = useTaskFeedItems();
 
   const [tab, setTab] = useState<PrTab>('my-prs');
 
@@ -176,6 +200,10 @@ export function PrSidebarList() {
     singleProjectPrs.data,
     currentUser?.emailAddress,
   ]);
+  const unpushedPullRequestKeys = useMemo(
+    () => getUnpushedPullRequestKeys(taskFeedItems),
+    [taskFeedItems],
+  );
 
   // Split PRs into draft and published groups
   const { draftPrs, publishedPrs } = useMemo(() => {
@@ -293,6 +321,9 @@ export function PrSidebarList() {
                         projectColor={
                           (pr as PullRequestWithProject).projectColor
                         }
+                        hasUnpushedCommits={unpushedPullRequestKeys.has(
+                          `${(pr as PullRequestWithProject).projectId}:${pr.id}`,
+                        )}
                       />
                     ) : (
                       <PrListItem
@@ -301,6 +332,9 @@ export function PrSidebarList() {
                         projectId={selectedProject!.id}
                         isActive={currentPrId === String(pr.id)}
                         basePath="project"
+                        hasUnpushedCommits={unpushedPullRequestKeys.has(
+                          `${selectedProject!.id}:${pr.id}`,
+                        )}
                       />
                     ),
                   )}
@@ -325,6 +359,9 @@ export function PrSidebarList() {
                         projectColor={
                           (pr as PullRequestWithProject).projectColor
                         }
+                        hasUnpushedCommits={unpushedPullRequestKeys.has(
+                          `${(pr as PullRequestWithProject).projectId}:${pr.id}`,
+                        )}
                       />
                     ) : (
                       <PrListItem
@@ -333,6 +370,9 @@ export function PrSidebarList() {
                         projectId={selectedProject!.id}
                         isActive={currentPrId === String(pr.id)}
                         basePath="project"
+                        hasUnpushedCommits={unpushedPullRequestKeys.has(
+                          `${selectedProject!.id}:${pr.id}`,
+                        )}
                       />
                     ),
                   )}

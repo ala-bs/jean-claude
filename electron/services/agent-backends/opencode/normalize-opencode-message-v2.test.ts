@@ -1,4 +1,13 @@
-import type { AssistantMessage, Message, Part } from '@opencode-ai/sdk/v2';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import type {
+  AssistantMessage,
+  Event,
+  Message,
+  Part,
+} from '@opencode-ai/sdk/v2';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -31,6 +40,107 @@ function createAssistantMessage(id: string): AssistantMessage {
 }
 
 describe('normalizeOpenCodeV2', () => {
+  it('preserves external-directory metadata and parent choices', () => {
+    const temporaryDirectory = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'jc-opencode-normalizer-'),
+    );
+    const requestedDirectory = path.join(
+      temporaryDirectory,
+      'shared',
+      'repo',
+    );
+    fs.mkdirSync(requestedDirectory, { recursive: true });
+    const requestedPath = path.join(requestedDirectory, 'file.ts');
+    fs.writeFileSync(requestedPath, 'test');
+
+    try {
+      const events = normalizeOpenCodeV2(
+        {
+          kind: 'event',
+          event: {
+            type: 'permission.asked',
+            properties: {
+              id: 'permission-1',
+              sessionID: 'session-1',
+              permission: 'external_directory',
+              patterns: [`${requestedDirectory}/*`],
+              always: [`${requestedDirectory}/*`],
+              metadata: {
+                filepath: requestedPath,
+                parentDir: requestedDirectory,
+              },
+            },
+          } as unknown as Event,
+        },
+        createContext(),
+      );
+      const canonicalDirectory = fs.realpathSync.native(requestedDirectory);
+      const canonicalPath = fs.realpathSync.native(requestedPath);
+
+      expect(events).toMatchObject([
+        {
+          type: 'permission-request',
+          request: {
+            requestId: 'permission-1',
+            toolName: 'external_directory',
+            input: {
+              filepath: requestedPath,
+              parentDir: requestedDirectory,
+              permissionPatterns: [`${canonicalDirectory}/**`],
+              alwaysPatterns: [`${requestedDirectory}/*`],
+            },
+            description: 'external_directory',
+            directoryAccess: {
+              requestedPath: canonicalPath,
+              requestedDirectory: canonicalDirectory,
+              parentDirectories: expect.arrayContaining([
+                { path: path.dirname(canonicalDirectory) },
+              ]),
+            },
+          },
+        },
+      ]);
+    } finally {
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('disables auto-evaluation when external-directory metadata is inconsistent', () => {
+    const events = normalizeOpenCodeV2(
+      {
+        kind: 'event',
+        event: {
+          type: 'permission.asked',
+          properties: {
+            id: 'permission-1',
+            sessionID: 'session-1',
+            permission: 'external_directory',
+            patterns: ['/safe/repo/*'],
+            always: ['/safe/repo/*'],
+            metadata: {
+              filepath: '/outside/file.ts',
+              parentDir: '/safe/repo',
+            },
+          },
+        } as unknown as Event,
+      },
+      createContext(),
+    );
+
+    expect(events).toMatchObject([
+      {
+        type: 'permission-request',
+        request: {
+          input: {
+            externalDirectoryAutoEvaluate: false,
+            permissionPatterns: ['/safe/repo/*'],
+          },
+          directoryAccess: undefined,
+        },
+      },
+    ]);
+  });
+
   it('emits both reasoning and text entries for prompt results', () => {
     const info = createAssistantMessage('msg-1');
     const ctx = createContext();

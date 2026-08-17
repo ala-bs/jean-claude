@@ -5,12 +5,14 @@ import {
 import type { FeedItem, FeedItemAttention, FeedNote } from '@shared/feed-types';
 import type { TaskStatus, TaskStep, TaskStepStatus } from '@shared/types';
 import type { AzureDevOpsPullRequest } from '@shared/azure-devops-types';
+import { getWorkItemSummaryExcerpt } from '@shared/work-item-summary';
 
 
 import {
   FeedNoteRepository,
   ProjectRepository,
   TaskRepository,
+  WorkItemSummaryRepository,
 } from '../database/repositories';
 import { dbg } from '../lib/debug';
 import { PrViewSnapshotRepository } from '../database/repositories/pr-view-snapshots';
@@ -26,6 +28,11 @@ import {
   listPullRequests,
   queryAssignedWorkItems,
 } from './azure-devops-service';
+import {
+  hasUncommittedWorktreeChanges,
+  hasUnpushedWorktreeCommits,
+} from './worktree-service';
+import { completePrReviewTasksForMergedPr } from './pr-review-task-service';
 import { emitCacheEvent } from './cache-event-service';
 import { getMostRecentlyUpdatedStep } from './step-service';
 import type { LinkedPr } from './azure-devops-service';
@@ -346,11 +353,60 @@ export async function getTaskFeedItems({
     });
   }
 
-  await enrichTaskFeedItemsWithWorkItemTypes({ feedItems });
-  await enrichTaskFeedItemsWithPrStatus({ feedItems, prItems });
+  const allTaskFeedItems = feedItems.flatMap((item) => [
+    item,
+    ...(item.children ?? []),
+  ]);
+  const feedItemsByTaskId = new Map(
+    allTaskFeedItems.flatMap((item) =>
+      item.taskId ? [[item.taskId, item] as const] : [],
+    ),
+  );
+  await runInChunks(
+    [...activeTasks, ...allChildTasks].filter(
+      (task) => task.pullRequestId && task.worktreePath,
+    ),
+    10,
+    async (task) => {
+      const item = feedItemsByTaskId.get(task.id);
+      if (!item) return;
 
-  dbg.feed('getTaskFeedItems: returning %d tasks', feedItems.length);
-  return feedItems;
+      const [uncommittedResult, unpushedResult] = await Promise.allSettled([
+        hasUncommittedWorktreeChanges(task.worktreePath!),
+        hasUnpushedWorktreeCommits(task.worktreePath!),
+      ]);
+      if (uncommittedResult.status === 'fulfilled') {
+        item.hasUncommittedChanges = uncommittedResult.value;
+      } else {
+        dbg.feed(
+          'getTaskFeedItems: failed checking uncommitted status for task %s: %O',
+          task.id,
+          uncommittedResult.reason,
+        );
+      }
+      if (unpushedResult.status === 'fulfilled') {
+        item.hasUnpushedCommits = unpushedResult.value;
+      } else {
+        dbg.feed(
+          'getTaskFeedItems: failed checking unpushed status for task %s: %O',
+          task.id,
+          unpushedResult.reason,
+        );
+      }
+    },
+  );
+
+  await enrichTaskFeedItemsWithWorkItemTypes({ feedItems });
+  const completedTaskIds = await enrichTaskFeedItemsWithPrStatus({
+    feedItems,
+    prItems,
+  });
+  const activeFeedItems = feedItems.filter(
+    (item) => !item.taskId || !completedTaskIds.has(item.taskId),
+  );
+
+  dbg.feed('getTaskFeedItems: returning %d tasks', activeFeedItems.length);
+  return activeFeedItems;
 }
 
 /**
@@ -454,7 +510,8 @@ async function enrichTaskFeedItemsWithPrStatus({
 }: {
   feedItems: FeedItem[];
   prItems: FeedItem[];
-}): Promise<void> {
+}): Promise<Set<string>> {
+  const completedTaskIds = new Set<string>();
   // --- Enrich task feed items with PR status ---
   // Build a set of known active PRs from the PR feed.
   const activePrMap = new Map<
@@ -480,7 +537,7 @@ async function enrichTaskFeedItemsWithPrStatus({
     });
   }
 
-  // Collect task PRs that need status fetching (not already active in feed)
+  // Refresh linked task PRs directly; active-feed data remains fallback metadata.
   const projects = await ProjectRepository.findAll();
   const projectsById = new Map(projects.map((p) => [p.id, p]));
 
@@ -498,31 +555,30 @@ async function enrichTaskFeedItemsWithPrStatus({
       const itemPrKey = feedItemPrIdentityKey(item);
       const activePrInfo = itemPrKey ? activePrMap.get(itemPrKey) : undefined;
       if (activePrInfo) {
-        // PR is active in the feed — mark it
+        // Use active-feed metadata as fallback if direct status refresh fails.
         item.workItemPrStatus = 'active';
         item.isDraft = activePrInfo.isDraft;
         item.pullRequestMergeStatus = activePrInfo.mergeStatus;
         item.approvedBy = activePrInfo.approvedBy;
         item.activeThreadCount = activePrInfo.activeThreadCount;
         item.unresolvedCommentCount = activePrInfo.unresolvedCommentCount;
-      } else {
-        // Need to fetch status — parse project/repo from the task's project config
-        const project = projectsById.get(item.projectId);
-        if (
-          project?.repoProviderId &&
-          project.repoProjectId &&
-          project.repoId
-        ) {
-          taskPrsToFetch.push({
-            item,
-            linkedPr: {
-              prId: item.pullRequestId,
-              projectId: project.repoProjectId,
-              repoId: project.repoId,
-            },
-            providerId: project.repoProviderId,
-          });
-        }
+      }
+
+      const project = projectsById.get(item.projectId);
+      if (
+        project?.repoProviderId &&
+        project.repoProjectId &&
+        project.repoId
+      ) {
+        taskPrsToFetch.push({
+          item,
+          linkedPr: {
+            prId: item.pullRequestId,
+            projectId: project.repoProjectId,
+            repoId: project.repoId,
+          },
+          providerId: project.repoProviderId,
+        });
       }
       continue;
     }
@@ -550,7 +606,15 @@ async function enrichTaskFeedItemsWithPrStatus({
       try {
         const statuses = await getPullRequestStatuses({
           providerId,
-          linkedPrs: entries.map((e) => e.linkedPr),
+          linkedPrs: Array.from(
+            new Map(
+              entries.map((entry) => [
+                linkedPrKey(entry.linkedPr),
+                entry.linkedPr,
+              ]),
+            ).values(),
+          ),
+          includeActiveThreadCount: true,
         });
         for (const entry of entries) {
           const status = statuses.get(linkedPrKey(entry.linkedPr));
@@ -559,6 +623,18 @@ async function enrichTaskFeedItemsWithPrStatus({
             entry.item.isDraft = status.isDraft;
             entry.item.pullRequestMergeStatus = status.mergeStatus;
             entry.item.approvedBy = status.approvedBy;
+            if (status.activeThreadCount !== undefined) {
+              entry.item.activeThreadCount = status.activeThreadCount;
+            }
+            if (status.status === 'completed') {
+              const completedTasks = await completePrReviewTasksForMergedPr({
+                projectId: entry.item.projectId,
+                pullRequestId: entry.linkedPr.prId,
+              });
+              for (const task of completedTasks) {
+                completedTaskIds.add(task.id);
+              }
+            }
             if (status.url) {
               entry.item.workItemPrUrl = status.url;
             }
@@ -573,6 +649,8 @@ async function enrichTaskFeedItemsWithPrStatus({
       }
     }
   }
+
+  return completedTaskIds;
 }
 
 async function fetchNoteFeedItems(): Promise<FeedItem[]> {
@@ -715,6 +793,7 @@ async function fetchPrFeedItems(): Promise<FeedItem[]> {
             pullRequestId: pr.id,
             pullRequestProviderId: project.repoProviderId ?? undefined,
             pullRequestRepoId: project.repoId ?? undefined,
+            pullRequestUrl: pr.url,
             isApprovedByMe:
               !!project.repoProviderId &&
               pr.reviewers.some(
@@ -944,8 +1023,19 @@ async function fetchWorkItemFeedItems(
         providerId: project.workItemProviderId!,
         projectName: project.workItemProjectName!,
       });
+      const summaries = await WorkItemSummaryRepository.findByWorkItems({
+        providerId: project.workItemProviderId!,
+        workItemIds: workItems.map((workItem) => workItem.id),
+      });
+      const summariesByWorkItemId = new Map(
+        summaries.map((summary) => [summary.workItemId, summary] as const),
+      );
 
       for (const wi of workItems) {
+        const cachedSummary = summariesByWorkItemId.get(wi.id);
+        const workItemSummary = cachedSummary
+          ? getWorkItemSummaryExcerpt(cachedSummary.content)
+          : null;
         // Track linked PRs — only queue unknown ones for fetching
         if (wi.linkedPrs && wi.linkedPrs.length > 0) {
           const providerId = project.workItemProviderId!;
@@ -980,6 +1070,11 @@ async function fetchWorkItemFeedItems(
           workItemUrl: wi.url,
           workItemType: wi.fields.workItemType,
           workItemState: wi.fields.state,
+          workItemSummary: workItemSummary || undefined,
+          workItemSummaryStale:
+            !!cachedSummary &&
+            cachedSummary.sourceChangedDate !==
+              (wi.fields.changedDate ?? null),
         });
       }
     } catch (err) {

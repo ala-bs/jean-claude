@@ -11,6 +11,7 @@ export type OverlayType =
   | 'activity-center'
   | 'settings'
   | 'backlog'
+  | 'azure-board'
   | 'pipelines'
   | 'running-commands'
   | 'calendar'

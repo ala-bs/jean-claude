@@ -54,6 +54,12 @@ export const ProviderRepository = {
   },
 
   delete: async (id: string): Promise<void> => {
-    await db.deleteFrom('providers').where('id', '=', id).execute();
+    await db.transaction().execute(async (trx) => {
+      await trx
+        .deleteFrom('work_item_summaries')
+        .where('providerId', '=', id)
+        .execute();
+      await trx.deleteFrom('providers').where('id', '=', id).execute();
+    });
   },
 };

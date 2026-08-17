@@ -1,7 +1,11 @@
-import type { PromptPart } from './agent-backend-types';
+import type { AgentBackendType, PromptPart } from './agent-backend-types';
 
 export type PromptPrefacePlacement = 'before' | 'after';
 export type PromptPrefaceFrequency = 'initial' | 'each';
+export type PromptPrefaceTarget = {
+  backend: AgentBackendType;
+  models: string[];
+};
 
 export interface PromptPrefaceEntry {
   id: string;
@@ -10,6 +14,7 @@ export interface PromptPrefaceEntry {
   text: string;
   placement: PromptPrefacePlacement;
   frequency: PromptPrefaceFrequency;
+  targets?: PromptPrefaceTarget[];
 }
 
 export type PromptPrefaceSetting = PromptPrefaceEntry[];
@@ -49,6 +54,16 @@ function isPromptPrefaceFrequency(
   return value === 'initial' || value === 'each';
 }
 
+function isAgentBackendType(value: unknown): value is AgentBackendType {
+  return (
+    value === 'claude-code' ||
+    value === 'opencode' ||
+    value === 'codex' ||
+    value === 'copilot' ||
+    value === 'vibe'
+  );
+}
+
 function isPromptPrefaceEntry(value: unknown): value is PromptPrefaceEntry {
   if (!isRecord(value)) return false;
   return (
@@ -57,7 +72,16 @@ function isPromptPrefaceEntry(value: unknown): value is PromptPrefaceEntry {
     typeof value.enabled === 'boolean' &&
     typeof value.text === 'string' &&
     isPromptPrefacePlacement(value.placement) &&
-    isPromptPrefaceFrequency(value.frequency)
+    isPromptPrefaceFrequency(value.frequency) &&
+    (value.targets === undefined ||
+      (Array.isArray(value.targets) &&
+        value.targets.every(
+          (target) =>
+            isRecord(target) &&
+            isAgentBackendType(target.backend) &&
+            Array.isArray(target.models) &&
+            target.models.every((model) => typeof model === 'string'),
+        )))
   );
 }
 
@@ -155,14 +179,20 @@ export function applyPromptPrefaceToParts({
   parts,
   entries,
   isInitialPrompt,
+  backend,
+  model,
 }: {
   parts: PromptPart[];
   entries: PromptPrefaceEntry[];
   isInitialPrompt: boolean;
+  backend?: AgentBackendType;
+  model?: string;
 }): PromptPart[] {
   const enabledEntries = entries.filter(
     (entry) =>
-      entry.enabled && (isInitialPrompt || entry.frequency !== 'initial'),
+      entry.enabled &&
+      (isInitialPrompt || entry.frequency !== 'initial') &&
+      matchesPromptPrefaceTarget({ entry, backend, model }),
   );
   const beforeText = enabledEntries
     .filter((entry) => entry.placement === 'before')
@@ -192,4 +222,23 @@ export function applyPromptPrefaceToParts({
       text: [beforeText, part.text, afterText].filter(Boolean).join('\n\n'),
     };
   });
+}
+
+function matchesPromptPrefaceTarget({
+  entry,
+  backend,
+  model,
+}: {
+  entry: PromptPrefaceEntry;
+  backend?: AgentBackendType;
+  model?: string;
+}): boolean {
+  if (!entry.targets || entry.targets.length === 0) return true;
+  if (!backend || !model) return false;
+
+  return entry.targets.some(
+    (target) =>
+      target.backend === backend &&
+      (target.models.includes('*') || target.models.includes(model)),
+  );
 }
