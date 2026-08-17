@@ -9,3 +9,6 @@ src/features/task/ui-task-panel/file-explorer-pane/file-tree.tsx
 src/features/pull-request/ui-pr-ci-inline/index.tsx
 src/features/pull-request/ui-pr-checks/index.tsx
 src/features/task/ui-pr-review-validation/index.tsx
+
+# Upstream work-activity charts use a 12-hue categorical data-viz palette
+src/features/work-activity/ui-work-activity-overlay/index.tsx

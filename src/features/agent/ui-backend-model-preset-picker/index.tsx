@@ -26,9 +26,9 @@ import { useBackendModels } from '@/hooks/use-backend-models';
 import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 
 const ACTIVE_PICKER_STYLE = {
-  background: 'color-mix(in oklch, oklch(0.78 0.18 295) 14%, transparent)',
-  border: '1px solid color-mix(in oklch, oklch(0.78 0.18 295) 30%, transparent)',
-  color: 'oklch(0.78 0.18 295)',
+  background: 'color-mix(in srgb, var(--color-acc) 14%, transparent)',
+  border: '1px solid color-mix(in srgb, var(--color-acc) 30%, transparent)',
+  color: 'var(--color-acc)',
 };
 
 

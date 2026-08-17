@@ -37,10 +37,11 @@ const MIN_PANE_WIDTH = 400;
 const SVG_PREVIEW_WIDTH = 160;
 const SVG_PREVIEW_MIN_WIDTH = 120;
 const SVG_PREVIEW_MAX_WIDTH = 320;
+// Transparency checkerboard — intentionally theme-independent (standard convention)
 const TRANSPARENCY_GRID_STYLE = {
-  backgroundColor: '#f8fafc',
+  backgroundColor: 'rgb(248, 250, 252)',
   backgroundImage:
-    'linear-gradient(45deg, #cbd5e1 25%, transparent 25%), linear-gradient(-45deg, #cbd5e1 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #cbd5e1 75%), linear-gradient(-45deg, transparent 75%, #cbd5e1 75%)',
+    'linear-gradient(45deg, rgb(203, 213, 225) 25%, transparent 25%), linear-gradient(-45deg, rgb(203, 213, 225) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgb(203, 213, 225) 75%), linear-gradient(-45deg, transparent 75%, rgb(203, 213, 225) 75%)',
   backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
   backgroundSize: '16px 16px',
 };
@@ -225,8 +226,8 @@ export function FileExplorerPane({
             <span>
               <span className="text-ink-1">{summary.changed}</span> changed
             </span>
-            <span className="text-green-400">+{summary.adds}</span>
-            <span className="text-red-400">&minus;{summary.dels}</span>
+            <span className="text-status-done">+{summary.adds}</span>
+            <span className="text-status-fail">&minus;{summary.dels}</span>
           </>
         )}
       </div>
@@ -288,8 +289,8 @@ export function FileExplorerPane({
       {/* Bottom status bar */}
       <div className="bg-bg-1 text-ink-3 flex shrink-0 items-center gap-3.5 border-t border-[var(--line)] px-3.5 py-1 font-mono text-[10.5px]">
         <span>{summary.changed} changed</span>
-        <span className="text-green-400">+{summary.adds}</span>
-        <span className="text-red-400">&minus;{summary.dels}</span>
+        <span className="text-status-done">+{summary.adds}</span>
+        <span className="text-status-fail">&minus;{summary.dels}</span>
       </div>
     </div>
   );
@@ -355,9 +356,9 @@ function ExplorerContentHeader({
         <span
           className={clsx(
             'shrink-0 rounded px-1 font-mono text-[9.5px] font-semibold',
-            status === 'modified' && 'bg-orange-500/15 text-orange-400',
-            status === 'added' && 'bg-green-500/15 text-green-400',
-            status === 'deleted' && 'bg-red-500/15 text-red-400',
+            status === 'modified' && 'bg-status-run/15 text-status-run',
+            status === 'added' && 'bg-status-done/15 text-status-done',
+            status === 'deleted' && 'bg-status-fail/15 text-status-fail',
           )}
         >
           {status === 'modified' ? 'M' : status === 'added' ? 'A' : 'D'}
@@ -366,10 +367,10 @@ function ExplorerContentHeader({
       {(additions != null || deletions != null) && (
         <span className="flex gap-1 font-mono text-[10px]">
           {additions != null && additions > 0 ? (
-            <span className="text-green-400">+{additions}</span>
+            <span className="text-status-done">+{additions}</span>
           ) : null}
           {deletions != null && deletions > 0 ? (
-            <span className="text-red-400">&minus;{deletions}</span>
+            <span className="text-status-fail">&minus;{deletions}</span>
           ) : null}
         </span>
       )}

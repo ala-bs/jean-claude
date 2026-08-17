@@ -135,7 +135,7 @@ function FeedProjectBackgroundLogo({ item }: { item: FeedItem }) {
 const RAIL_W = 32; // rail column width in px
 const NODE_X = 16; // center X of main node
 const FEED_RAIL_COLOR = 'var(--color-ink-4)';
-const PR_REVIEW_TASK_COLOR = 'oklch(0.74 0.19 295)';
+const PR_REVIEW_TASK_COLOR = 'var(--color-acc)';
 
 function isModifiedClick(e: React.MouseEvent): boolean {
   return e.metaKey || e.ctrlKey;

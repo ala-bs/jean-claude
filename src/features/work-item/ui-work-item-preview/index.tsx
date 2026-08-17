@@ -1101,7 +1101,7 @@ export function EditableMetadataValue({
   return (
     <span className={`inline-flex min-w-0 flex-col${fullWidth ? ' flex-1' : ''}`}>
       {options ? <select autoFocus aria-label={label} aria-invalid={!!error} value={draft} className={inputClassName} onChange={(event) => { selectCommitRef.current = true; setDraft(event.target.value); void save(event.target.value).finally(() => { selectCommitRef.current = false; }); }} onBlur={() => { if (!selectCommitRef.current) setEditing(false); }} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); cancelMetadataEdit(lifecycleRef.current); setDraft(value); setError(null); setEditing(false); } }}>{options.map((option) => <option key={option}>{option}</option>)}</select> : <input autoFocus aria-label={label} aria-invalid={!!error} value={draft} className={inputClassName} onChange={(event) => setDraft(event.target.value)} onBlur={() => void save()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.stopPropagation(); cancelMetadataEdit(lifecycleRef.current); setDraft(value); setError(null); setEditing(false); } }} />}
-      {error && <span role="alert" className="mt-0.5 text-[10px] leading-tight text-red-400">{error}</span>}
+      {error && <span role="alert" className="text-status-fail mt-0.5 text-[10px] leading-tight">{error}</span>}
     </span>
   );
 }

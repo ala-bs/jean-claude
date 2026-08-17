@@ -81,7 +81,7 @@ function ToolInputDisplay({
       return (
         <code
           className={`block truncate text-sm ${
-            isExternal ? 'text-orange-400' : 'text-ink-1'
+            isExternal ? 'text-status-run' : 'text-ink-1'
           }`}
           title={isExternal ? `External path: ${filePath}` : filePath}
         >
@@ -94,7 +94,7 @@ function ToolInputDisplay({
       const filePath = String(input.filepath || input.parentDir || '');
       return (
         <code
-          className="block truncate text-sm text-orange-400"
+          className="text-status-run block truncate text-sm"
           title={`External path: ${filePath}`}
         >
           {filePath}
@@ -130,7 +130,7 @@ function ToolInputDisplay({
       return (
         <div className="text-ink-1 text-sm">
           Launch{' '}
-          <span className="font-medium text-yellow-400">
+          <span className="text-status-run font-medium">
             {String(input.subagent_type)}
           </span>{' '}
           agent: {String(input.description || '')}
@@ -169,7 +169,7 @@ function ExitPlanModeDisplay({
           <ul className="text-ink-1 list-inside list-disc space-y-0.5 text-sm">
             {allowedPrompts.map((p, i) => (
               <li key={i}>
-                <span className="text-yellow-400">{p.tool}</span>: {p.prompt}
+                <span className="text-status-run">{p.tool}</span>: {p.prompt}
               </li>
             ))}
           </ul>
@@ -419,16 +419,16 @@ export function PermissionBar({
   };
 
   return (
-    <div className="border border-yellow-700/50 bg-yellow-900/20 px-4 py-3">
+    <div className="border-status-run/50 bg-status-run/10 border px-4 py-3">
       <div className="flex flex-col gap-3">
         {/* Header + Content */}
         <div className="flex items-start gap-3">
           <Shield
-            className="mt-0.5 h-5 w-5 shrink-0 text-yellow-500"
+            className="text-status-run mt-0.5 h-5 w-5 shrink-0"
             aria-hidden
           />
           <div className="min-w-0 flex-1">
-            <div className="mb-1 text-xs font-medium text-yellow-400">
+            <div className="mb-1 text-xs text-status-run font-medium">
               Permission Required: {request.toolName}
             </div>
             {isExitPlanMode ? (
@@ -598,7 +598,7 @@ export function PermissionBar({
                   variant="primary"
                   size="sm"
                   icon={<ShieldCheck />}
-                  className="bg-amber-600 hover:bg-amber-500"
+                  className="bg-status-run hover:bg-status-run/80"
                 >
                   Allow for Project Worktrees
                 </Button>
@@ -616,7 +616,7 @@ export function PermissionBar({
               )}
             </div>
             {showAllowAll && sessionAllowButton && (
-              <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-yellow-700/30 pt-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-status-run/30 border-t pt-2">
                 <span className="text-ink-2 text-xs">
                   Allow all {request.toolName}:
                 </span>
@@ -644,7 +644,7 @@ export function PermissionBar({
                     variant="secondary"
                     size="sm"
                     icon={<ShieldCheck />}
-                    className="bg-amber-600/30 hover:bg-amber-500/30"
+                    className="bg-status-run/30 hover:bg-status-run/40"
                   >
                     Worktree
                   </Button>

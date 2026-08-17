@@ -35,10 +35,10 @@ const BADGE_ICON_CLASSES: Record<AvatarSize, string> = {
 
 // Border colors for the 'border' variant
 const VOTE_BORDER_CLASSES: Record<ReviewerVoteStatus, string> = {
-  approved: 'border-green-500',
-  'approved-with-suggestions': 'border-green-400',
-  waiting: 'border-yellow-500',
-  rejected: 'border-red-500',
+  approved: 'border-status-done',
+  'approved-with-suggestions': 'border-status-done/80',
+  waiting: 'border-status-run',
+  rejected: 'border-status-fail',
   none: 'border-glass-border',
 };
 
@@ -124,7 +124,7 @@ export function UserAvatar({
       {showBadge && isApproved && (
         <div
           className={clsx(
-            'absolute -right-0.5 -bottom-0.5 flex items-center justify-center rounded-full bg-green-600',
+            'bg-status-done absolute -right-0.5 -bottom-0.5 flex items-center justify-center rounded-full',
             BADGE_SIZE_CLASSES[size],
           )}
         >
@@ -137,7 +137,7 @@ export function UserAvatar({
       {showBadge && isRejected && (
         <div
           className={clsx(
-            'absolute -right-0.5 -bottom-0.5 flex items-center justify-center rounded-full bg-red-600',
+            'bg-status-fail absolute -right-0.5 -bottom-0.5 flex items-center justify-center rounded-full',
             BADGE_SIZE_CLASSES[size],
           )}
         >

@@ -40,10 +40,11 @@ const SVG_PREVIEW_WIDTH = 192;
 const SVG_PREVIEW_MIN_WIDTH = 140;
 const SVG_PREVIEW_MAX_WIDTH = 360;
 const SELECTION_POPOVER_OFFSET = 8;
+// Transparency checkerboard — intentionally theme-independent (standard convention)
 const TRANSPARENCY_GRID_STYLE = {
-  backgroundColor: '#f8fafc',
+  backgroundColor: 'rgb(248, 250, 252)',
   backgroundImage:
-    'linear-gradient(45deg, #cbd5e1 25%, transparent 25%), linear-gradient(-45deg, #cbd5e1 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #cbd5e1 75%), linear-gradient(-45deg, transparent 75%, #cbd5e1 75%)',
+    'linear-gradient(45deg, rgb(203, 213, 225) 25%, transparent 25%), linear-gradient(-45deg, rgb(203, 213, 225) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgb(203, 213, 225) 75%), linear-gradient(-45deg, transparent 75%, rgb(203, 213, 225) 75%)',
   backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
   backgroundSize: '16px 16px',
 };
@@ -954,7 +955,7 @@ function AskAgentComposer({
       />
       <div className="flex items-center justify-end gap-2">
         {error ? (
-          <span className="mr-auto text-xs text-red-300" role="alert">
+          <span className="text-status-fail mr-auto text-xs" role="alert">
             {error}
           </span>
         ) : null}
@@ -1005,7 +1006,7 @@ function LineSelectionActionPopover({
   return (
     <div
       ref={popoverRef}
-      className="border-glass-border bg-bg-1 fixed z-50 flex overflow-hidden rounded-lg border p-1 shadow-[0_12px_32px_oklch(0_0_0_/_0.35)]"
+      className="border-glass-border bg-bg-1 fixed z-50 flex overflow-hidden rounded-lg border p-1 shadow-[0_12px_32px_var(--color-scrim)]"
       style={{
         left: x,
         top: y + SELECTION_POPOVER_OFFSET,

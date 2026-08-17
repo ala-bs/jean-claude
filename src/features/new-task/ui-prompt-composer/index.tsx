@@ -83,8 +83,7 @@ export const PromptImageAttachments = memo(function PromptImageAttachments({
     return (
       <div
         key={`${image.filename ?? 'img'}-${index}`}
-        className="group relative h-12 w-12 shrink-0 rounded border"
-        style={{ borderColor: 'oklch(1 0 0 / 0.08)' }}
+        className="border-glass-border group relative h-12 w-12 shrink-0 rounded border"
       >
         {previewUrl ? (
           <button
@@ -100,18 +99,12 @@ export const PromptImageAttachments = memo(function PromptImageAttachments({
               className="h-full w-full object-cover transition duration-150 group-focus-within:scale-105 group-focus-within:brightness-75 group-hover:scale-105 group-hover:brightness-75"
             />
             <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-focus-within:opacity-100 group-hover:opacity-100">
-              <span
-                className="flex h-6 w-6 items-center justify-center rounded-full border"
-                style={{
-                  background: 'oklch(0.2 0.02 280 / 0.72)',
-                  borderColor: 'oklch(1 0 0 / 0.14)',
-                }}
-              >
+              <span className="border-glass-border-strong bg-scrim-strong flex h-6 w-6 items-center justify-center rounded-full border">
                 <Eye className="text-ink-0 h-3.5 w-3.5" />
               </span>
             </span>
             {image.sizeBytes && (
-              <span className="absolute right-0 bottom-0 left-0 bg-black/70 px-0.5 py-px text-center font-mono text-[9px] leading-3 text-white">
+              <span className="bg-scrim-strong text-chrome-fg absolute right-0 bottom-0 left-0 px-0.5 py-px text-center font-mono text-[9px] leading-3">
                 {formatBytes(image.sizeBytes)}
               </span>
             )}
@@ -133,11 +126,7 @@ export const PromptImageAttachments = memo(function PromptImageAttachments({
               event.stopPropagation();
               onRemove(index);
             }}
-            className="absolute top-0 right-0 flex h-4 w-4 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border transition-transform hover:scale-110"
-            style={{
-              background: 'oklch(0.2 0.02 280 / 0.92)',
-              borderColor: 'oklch(1 0 0 / 0.16)',
-            }}
+            className="border-glass-border-strong bg-scrim-strong absolute top-0 right-0 flex h-4 w-4 translate-x-1/4 -translate-y-1/4 items-center justify-center rounded-full border transition-transform hover:scale-110"
             aria-label={`Remove ${image.filename ?? `image ${index + 1}`}`}
           >
             <X className="text-ink-0 h-2.5 w-2.5" />

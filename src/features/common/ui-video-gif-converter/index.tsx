@@ -494,7 +494,7 @@ function VideoSizeErrorDialog({
           <h2 id={titleId} className="text-ink-0 text-sm font-semibold">
             Video cannot be converted
           </h2>
-          <p className="mt-2 text-sm text-red-400" role="alert">
+          <p className="text-status-fail mt-2 text-sm" role="alert">
             {error}
           </p>
           <div className="mt-5 flex justify-end">
@@ -1223,7 +1223,7 @@ function VideoGifConverterDialog({
                 </div>
               </div>
               {conversionLimitError && (
-                <p className="mt-3 text-xs text-red-400" role="alert">
+                <p className="text-status-fail mt-3 text-xs" role="alert">
                   {conversionLimitError}
                 </p>
               )}

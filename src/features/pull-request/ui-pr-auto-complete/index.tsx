@@ -223,13 +223,13 @@ export function PrAutoComplete({
     const activeClassName =
       variant === 'compact'
         ? 'text-status-done bg-status-done/10 ring-status-done/20 ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ring-1'
-        : 'flex items-center gap-1 rounded-lg bg-green-600/20 px-3 py-1.5 text-xs font-medium text-green-400';
+        : 'bg-status-done/20 text-status-done flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium';
     const activeMutedClassName =
-      variant === 'compact' ? 'text-status-done/70' : 'text-green-400/70';
+      variant === 'compact' ? 'text-status-done/70' : 'text-status-done/70';
     const cancelClassName =
       variant === 'compact'
         ? 'ml-0.5 rounded p-0.5 hover:bg-status-done/20'
-        : 'ml-1 rounded p-0.5 hover:bg-green-600/30';
+        : 'hover:bg-status-done/30 ml-1 rounded p-0.5';
 
     return (
       <div className={activeClassName}>
@@ -330,7 +330,7 @@ export function PrAutoComplete({
                       className="border-glass-border/60 flex items-center gap-2 border-b px-3 py-2 last:border-b-0"
                     >
                       {isQueued ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-yellow-400" />
+                        <Loader2 className="h-3.5 w-3.5 text-status-run animate-spin" />
                       ) : (
                         <Circle className="text-ink-3 h-3.5 w-3.5" />
                       )}
@@ -448,7 +448,7 @@ export function PrAutoComplete({
           </div>
 
           {autoCompleteMutation.error && (
-            <p className="text-xs text-red-400">
+            <p className="text-status-fail text-xs">
               {autoCompleteMutation.error.message}
             </p>
           )}

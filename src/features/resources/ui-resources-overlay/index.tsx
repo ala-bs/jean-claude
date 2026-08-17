@@ -245,7 +245,7 @@ function Gauge({
           strokeDasharray={`${arc} ${circumference}`}
           strokeLinecap="round"
           strokeWidth={stroke}
-          className="text-white/8"
+          className="text-ink-0/10"
         />
         <circle
           cx={size / 2}
@@ -257,7 +257,7 @@ function Gauge({
           strokeLinecap="round"
           strokeWidth={stroke + 3}
           filter="url(#resources-gauge-glow)"
-          className="resource-gauge-arc text-[oklch(0.74_0.19_295)] opacity-55"
+          className="resource-gauge-arc text-[var(--color-acc)] opacity-55"
         />
         <circle
           cx={size / 2}
@@ -268,7 +268,7 @@ function Gauge({
           strokeDasharray={activeDash}
           strokeLinecap="round"
           strokeWidth={stroke}
-          className="resource-gauge-arc text-[oklch(0.74_0.19_295)]"
+          className="resource-gauge-arc text-[var(--color-acc)]"
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
@@ -305,7 +305,7 @@ function SessionRow({
     <div className="grid items-center gap-4 border-t border-white/7 px-1 py-3 lg:grid-cols-[minmax(0,1fr)_84px_132px_84px_132px_56px]">
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="resource-overlay-status-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-[oklch(0.74_0.19_295)] shadow-[0_0_8px_oklch(0.74_0.19_295)]" />
+          <span className="resource-overlay-status-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-acc)] shadow-[0_0_8px_var(--color-acc)]" />
           <span className="text-ink-0 truncate text-[13px] font-semibold tracking-[-0.01em]">
             {taskName}
           </span>
@@ -321,7 +321,7 @@ function SessionRow({
         <div className="mt-2 ml-3.5 max-w-60">
           <LoadBar
             percent={loadShare}
-            className="bg-[oklch(0.74_0.19_295)] shadow-[0_0_10px_oklch(0.74_0.19_295/0.55)]"
+            className="bg-[var(--color-acc)] shadow-[0_0_10px_color-mix(in_srgb,var(--color-acc)_55%,transparent)]"
           />
         </div>
       </div>
@@ -338,8 +338,8 @@ function SessionRow({
           values={cpuValues}
           width={132}
           height={30}
-          className="text-[oklch(0.74_0.19_295)]"
-          fillClassName="fill-[oklch(0.74_0.19_295/0.13)]"
+          className="text-[var(--color-acc)]"
+          fillClassName="fill-[color-mix(in_srgb,var(--color-acc)_13%,transparent)]"
         />
       </div>
       <span className="text-ink-1 text-sm font-semibold tabular-nums lg:text-right">
@@ -353,8 +353,8 @@ function SessionRow({
           values={rssValues}
           width={132}
           height={30}
-          className="text-[oklch(0.78_0.16_155)]"
-          fillClassName="fill-[oklch(0.78_0.16_155/0.12)]"
+          className="text-[var(--color-status-done)]"
+          fillClassName="fill-[color-mix(in_srgb,var(--color-status-done)_12%,transparent)]"
         />
       </div>
       <span className="text-ink-2 text-sm tabular-nums lg:text-right">
@@ -508,7 +508,7 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
           onClick={(event) => event.stopPropagation()}
         >
           <div className="border-glass-border relative flex items-center gap-3 border-b px-4 py-3 sm:px-5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-sky-300/25 bg-sky-400/12 text-sky-200">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-status-azure/25 bg-status-azure/10 text-status-azure">
               <Cpu className="h-4 w-4" />
             </div>
             <div className="min-w-0 flex-1">
@@ -522,8 +522,8 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
                 System monitor - agent trees + Jean-Claude app
               </div>
             </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-[oklch(0.78_0.16_155/0.3)] bg-[oklch(0.78_0.16_155/0.12)] px-2.5 py-1 text-[11px] font-medium text-[oklch(0.78_0.16_155)]">
-              <span className="resource-overlay-status-pulse h-1.5 w-1.5 rounded-full bg-[oklch(0.78_0.16_155)] shadow-[0_0_8px_oklch(0.78_0.16_155)]" />
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-status-done)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-done)_12%,transparent)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-status-done)]">
+              <span className="resource-overlay-status-pulse h-1.5 w-1.5 rounded-full bg-[var(--color-status-done)] shadow-[0_0_8px_var(--color-status-done)]" />
               live
             </span>
             <Button
@@ -569,19 +569,19 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
                       label="Agent memory"
                       value={formatBytes(totalRss)}
                       percent={(totalRss / trackedRss) * 100}
-                      colorClass="bg-[oklch(0.78_0.16_155)] shadow-[0_0_10px_oklch(0.78_0.16_155/0.55)]"
+                      colorClass="bg-[var(--color-status-done)] shadow-[0_0_10px_color-mix(in_srgb,var(--color-status-done)_55%,transparent)]"
                     />
                     <MeterRow
                       label="App memory"
                       value={memory ? formatBytes(memory.totalRssBytes) : '-'}
                       percent={(appRss / trackedRss) * 100}
-                      colorClass="bg-[oklch(0.78_0.16_205)] shadow-[0_0_10px_oklch(0.78_0.16_205/0.55)]"
+                      colorClass="bg-[var(--color-status-azure)] shadow-[0_0_10px_color-mix(in_srgb,var(--color-status-azure)_55%,transparent)]"
                     />
                     <MeterRow
                       label="App CPU"
                       value={memory ? formatCpu(appCpu) : '-'}
                       percent={appCpu}
-                      colorClass="bg-[oklch(0.78_0.16_205)] shadow-[0_0_10px_oklch(0.78_0.16_205/0.55)]"
+                      colorClass="bg-[var(--color-status-azure)] shadow-[0_0_10px_color-mix(in_srgb,var(--color-status-azure)_55%,transparent)]"
                     />
                   </div>
                 </div>
@@ -641,15 +641,15 @@ export function ResourcesOverlay({ onClose }: { onClose: () => void }) {
                       label="App CPU"
                       value={memory ? formatCpu(appCpu) : '-'}
                       values={appCpuValues}
-                      colorClass="text-[oklch(0.78_0.16_205)]"
-                      fillClass="fill-[oklch(0.78_0.16_205/0.12)]"
+                      colorClass="text-[var(--color-status-azure)]"
+                      fillClass="fill-[color-mix(in_srgb,var(--color-status-azure)_12%,transparent)]"
                     />
                     <AppResourceChart
                       label="App RSS"
                       value={memory ? formatBytes(memory.totalRssBytes) : '-'}
                       values={appRssValues}
-                      colorClass="text-[oklch(0.78_0.16_155)]"
-                      fillClass="fill-[oklch(0.78_0.16_155/0.12)]"
+                      colorClass="text-[var(--color-status-done)]"
+                      fillClass="fill-[color-mix(in_srgb,var(--color-status-done)_12%,transparent)]"
                     />
                   </div>
                 </div>

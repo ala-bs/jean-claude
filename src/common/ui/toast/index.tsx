@@ -19,15 +19,15 @@ export function Toaster() {
           className={clsx(
             'flex items-start gap-2 rounded-lg border px-4 py-3 shadow-lg backdrop-blur-sm',
             toast.type === 'error' &&
-              'border-red-800 bg-red-950/90 text-red-100',
+              'border-status-fail/40 bg-status-fail-soft text-ink-0',
             toast.type === 'success' &&
-              'border-emerald-800 bg-emerald-950/90 text-emerald-100',
+              'border-status-done/40 bg-status-done-soft text-ink-0',
           )}
         >
           {toast.type === 'error' ? (
-            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+            <CircleAlert className="text-status-fail mt-0.5 h-4 w-4 shrink-0" />
           ) : (
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+            <CheckCircle2 className="text-status-done mt-0.5 h-4 w-4 shrink-0" />
           )}
           <p className="text-sm">{toast.message}</p>
           <button

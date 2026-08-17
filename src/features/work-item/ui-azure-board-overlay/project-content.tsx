@@ -125,7 +125,7 @@ function MultiFilterDropdown({
             />}
             <span className="truncate">{option.label}</span>
             {option.badge && (
-              <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase">
+              <span className="rounded-full border-status-run/20 bg-status-run/10 text-status-run border px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">
                 {option.badge}
               </span>
             )}

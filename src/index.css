@@ -147,7 +147,11 @@ button {
 }
 
 .diff-line-range-selected > td {
-  background-color: oklch(0.62 0.2 250 / 0.3) !important;
+  background-color: color-mix(
+    in srgb,
+    var(--color-status-azure) 30%,
+    transparent
+  ) !important;
 }
 
 .jc-markdown-ul > .jc-markdown-li {
@@ -757,8 +761,8 @@ button {
 
 .prompt-input-border:focus-within {
   box-shadow:
-    0 0 14px 0 oklch(0.72 0.2 295 / 0.25),
-    0 0 6px 0 oklch(0.6 0.22 320 / 0.15),
+    0 0 14px 0 color-mix(in srgb, var(--color-acc) 25%, transparent),
+    0 0 6px 0 color-mix(in srgb, var(--color-acc-2, var(--color-acc)) 15%, transparent),
     0 4px 6px -1px rgba(0, 0, 0, 0.25);
 }
 

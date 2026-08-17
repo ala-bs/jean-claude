@@ -162,7 +162,7 @@ export function DiffMinimap({
       {markers.map((marker, i) => (
         <div
           key={i}
-          className={marker.type === 'addition' ? 'bg-green-800' : 'bg-red-800'}
+          className={marker.type === 'addition' ? 'bg-status-done/60' : 'bg-status-fail/60'}
           style={{
             position: 'absolute',
             top: `${marker.startPercent}%`,

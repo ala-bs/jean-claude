@@ -359,7 +359,7 @@ function TreeNodeRow({
       ) : null}
       {draftCount > 0 && (
         <span
-          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-yellow-900/40 px-1.5 font-mono text-[9.5px] text-yellow-300"
+          className="inline-flex shrink-0 items-center gap-1 bg-status-run/15 text-status-run rounded-full px-1.5 font-mono text-[9.5px]"
           aria-label={`${draftCount} draft comment${draftCount !== 1 ? 's' : ''}`}
         >
           <PenLine className="h-2.5 w-2.5" />

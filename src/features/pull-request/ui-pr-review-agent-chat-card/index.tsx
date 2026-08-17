@@ -33,11 +33,11 @@ const STATUS_LABELS: Record<TaskStepStatus, string> = {
 };
 
 const STATUS_CLASSES: Record<TaskStepStatus, string> = {
-  pending: 'border-amber-400/20 bg-amber-400/10 text-amber-300',
-  ready: 'border-sky-400/20 bg-sky-400/10 text-sky-300',
+  pending: 'border-status-run/20 bg-status-run/10 text-status-run',
+  ready: 'border-status-azure/20 bg-status-azure/10 text-status-azure',
   running: 'border-acc/25 bg-acc/10 text-acc-ink',
-  completed: 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300',
-  errored: 'border-red-400/25 bg-red-400/10 text-red-300',
+  completed: 'border-status-done/20 bg-status-done/10 text-status-done',
+  errored: 'border-status-fail/25 bg-status-fail/10 text-status-fail',
   interrupted: 'border-ink-4/25 bg-bg-3 text-ink-3',
 };
 
@@ -253,7 +253,7 @@ export function PrReviewAgentChatCard({
               <div className="flex flex-col gap-3">
                 {loadError ? (
                   <div
-                    className="rounded-md border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-200"
+                    className="border-status-fail/20 bg-status-fail/10 text-status-fail rounded-md border px-3 py-2 text-sm"
                     role="alert"
                   >
                     <div className="mb-1 text-[10px] font-medium tracking-wide uppercase">
@@ -289,7 +289,7 @@ export function PrReviewAgentChatCard({
                       {submitError ? (
                         <span
                           id={followUpErrorId}
-                          className="text-xs text-red-300"
+                          className="text-status-fail text-xs"
                           role="alert"
                         >
                           {submitError}
@@ -311,7 +311,7 @@ export function PrReviewAgentChatCard({
                 <div
                   className={`max-h-28 overflow-hidden text-sm ${
                     collapsedResponse.type === 'error'
-                      ? 'text-red-300'
+                      ? 'text-status-fail'
                       : 'text-ink-2'
                   }`}
                   role={collapsedResponse.type === 'error' ? 'alert' : undefined}
@@ -381,7 +381,7 @@ function ChatBubble({ entry }: { entry: ChatEntry }) {
         isUser
           ? 'border-stroke-1 bg-bg-2 text-ink-2'
           : isError
-            ? 'border-red-400/20 bg-red-400/10 text-red-200'
+            ? 'border-status-fail/20 bg-status-fail/10 text-status-fail'
           : 'border-acc/15 bg-acc/5 text-ink-1'
       }`}
       role={isError ? 'alert' : undefined}

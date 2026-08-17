@@ -53,6 +53,8 @@ function loadAllowlist() {
 
 function isExcluded(filePath, allowlist) {
   if (allowlist.has(filePath)) return true;
+  // Test files don't render themed UI; skip to avoid false positives (e.g. "#123" IDs)
+  if (/\.test\.(tsx|ts)$/.test(filePath)) return true;
   return EXCLUDE_DIRS.some((dir) => filePath.startsWith(dir));
 }
 
@@ -84,7 +86,8 @@ function changedFiles(base) {
     return out
       .split('\n')
       .map((f) => f.trim())
-      .filter((f) => f && /\.(tsx|css)$/.test(f) && f.startsWith('src/'));
+      .filter((f) => f && /\.(tsx|css)$/.test(f) && f.startsWith('src/'))
+      .filter((f) => fs.existsSync(path.join(ROOT, f)));
   } catch {
     console.error(`theme-audit: could not diff against "${base}"`);
     process.exit(2);

@@ -351,7 +351,7 @@ const SideBySideRowComponent = memo(function SideBySideRowComponent({
         data-old-line={oldLineNumber}
         data-line-side={newLineNumber === undefined ? 'old' : 'new'}
         className={clsx('group', {
-          'bg-blue-500/10': isInCommentRange,
+          'bg-status-azure/10': isInCommentRange,
         })}
         style={{
           cursor: canSelect ? 'pointer' : undefined,
@@ -495,9 +495,9 @@ const SideBySideCell = memo(function SideBySideCell({
   const bgClass = isInCommentRange
       ? '' // Row-level comment range handles bg
       : line.type === 'deletion'
-        ? 'bg-red-500/20'
+        ? 'bg-status-fail/20'
         : line.type === 'addition'
-          ? 'bg-green-500/20'
+          ? 'bg-status-done/20'
           : '';
 
   const lineNumClass =

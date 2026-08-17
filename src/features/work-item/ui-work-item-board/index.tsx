@@ -378,7 +378,7 @@ export function WorkItemBoard({
                     <HighlightedSearchText text={`#${workItem.id}`} search={search} />
                   </span>
                   {isExactMatch && <span className="bg-acc text-bg-1 rounded px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase">Exact</span>}
-                  {isOutOfSprint && <span className="max-w-28 truncate rounded border border-amber-400/20 bg-amber-400/10 px-1.5 py-px text-[9px] font-semibold tracking-wide text-amber-300 uppercase" title={`Iteration: ${workItem.fields.iterationPath}`}>{workItem.fields.iterationPath?.split(/[\\/]/).at(-1)}</span>}
+                  {isOutOfSprint && <span className="max-w-28 truncate border-status-run/20 bg-status-run/10 text-status-run rounded border px-1.5 py-px text-[9px] font-semibold tracking-wide uppercase" title={`Iteration: ${workItem.fields.iterationPath}`}>{workItem.fields.iterationPath?.split(/[\\/]/).at(-1)}</span>}
                   {!isEditorial && <span className="text-ink-2 max-w-[80px] truncate text-[10px]">{workItem.fields.workItemType}</span>}
                 </>;
               const cardMetadata = <span className="flex items-center gap-1.5">
@@ -434,9 +434,9 @@ export function WorkItemBoard({
                     isExactMatch
                       ? 'border-acc bg-acc/15 shadow-[0_0_0_2px_color-mix(in_srgb,var(--color-acc)_45%,transparent),0_0_28px_color-mix(in_srgb,var(--color-acc)_35%,transparent)]'
                       : isHighlighted
-                        ? 'border-acc bg-acc/10 shadow-[0_0_0_3px_oklch(0.72_0.2_295_/_0.1)]'
+                        ? 'border-acc bg-acc/10 shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-acc)_10%,transparent)]'
                         : isRelatedBug
-                          ? 'border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_oklch(0.72_0.18_25_/_0.12)]'
+                          ? 'border-status-fail/60 bg-status-fail/10 shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-status-fail)_12%,transparent)]'
                         : 'hover:bg-bg-2 border-line',
                   )}
                 >

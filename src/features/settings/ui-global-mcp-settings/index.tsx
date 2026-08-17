@@ -592,7 +592,7 @@ function ServerForm({
       </h4>
 
       {error && (
-        <div className="text-status-error rounded border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs" role="alert">
+        <div className="text-status-error rounded border-status-fail/20 bg-status-fail/10 border px-3 py-2 text-xs" role="alert">
           {error}
         </div>
       )}

@@ -632,10 +632,10 @@ const DiffLineRow = memo(function DiffLineRow({
         data-old-line={line.oldLineNumber}
         data-line-side={line.newLineNumber === undefined ? 'old' : 'new'}
         className={clsx('group', {
-          'bg-blue-500/10': isInCommentRange,
-          'bg-green-500/20':
+          'bg-status-azure/10': isInCommentRange,
+          'bg-status-done/20':
             !isInCommentRange && line.type === 'addition',
-          'bg-red-500/20':
+          'bg-status-fail/20':
             !isInCommentRange && line.type === 'deletion',
         })}
         style={{

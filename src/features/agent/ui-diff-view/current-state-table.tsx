@@ -300,8 +300,8 @@ const CurrentStateRow = memo(function CurrentStateRow({
         data-old-line={side === 'old' ? lineNumber : undefined}
         data-line-side={side}
         className={clsx('group', {
-          'bg-blue-500/10': isInCommentRange,
-          'bg-green-500/15': !isInCommentRange && isChanged,
+          'bg-status-azure/10': isInCommentRange,
+          'bg-status-done/15': !isInCommentRange && isChanged,
         })}
         style={{
           cursor: canSelect ? 'pointer' : undefined,

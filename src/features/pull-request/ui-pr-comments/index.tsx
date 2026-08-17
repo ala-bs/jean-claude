@@ -61,7 +61,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   wontFix: { label: "Won't fix", color: 'bg-glass-medium text-ink-2' },
   closed: { label: 'Closed', color: 'bg-glass-medium text-ink-2' },
   byDesign: { label: 'By design', color: 'bg-acc/50 text-acc-ink' },
-  pending: { label: 'Pending', color: 'bg-yellow-900/50 text-status-run' },
+  pending: { label: 'Pending', color: 'bg-status-run/20 text-status-run' },
   unknown: { label: 'Unknown', color: 'bg-glass-medium text-ink-2' },
 };
 
@@ -1009,7 +1009,7 @@ function ThreadComment({
                       );
                     }}
                     loading={deleteComment.isPending}
-                    className="h-6 px-1.5 text-[11px] text-red-400 hover:text-red-300"
+                    className="h-6 px-1.5 text-status-fail hover:text-status-fail/80 text-[11px]"
                   >
                     Delete
                   </Button>
@@ -1058,7 +1058,7 @@ function ThreadComment({
               mentionOptions={mentionOptions}
               onSearchMentions={onSearchMentions}
             />
-            {editError && <p className="text-xs text-red-400">{editError}</p>}
+            {editError && <p className="text-status-fail text-xs">{editError}</p>}
           </div>
         ) : (
           <div className="text-ink-1 pr-1 text-xs leading-relaxed [&_code]:text-[11px] [&_pre]:text-[11px]">

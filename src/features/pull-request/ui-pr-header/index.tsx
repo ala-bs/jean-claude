@@ -61,7 +61,7 @@ function getStatusBadge(
         color="neutral"
         pill
         icon={<GitPullRequest />}
-        className="!bg-amber-300 !font-semibold !text-amber-950 ring-1 ring-amber-100/70"
+        className="!bg-status-run !text-bg-0 ring-status-run/40 !font-semibold ring-1"
       >
         Draft
       </Chip>
@@ -432,7 +432,7 @@ export function PrHeader({
                   </Button>
                 </div>
                 {titleError && (
-                  <p className="text-xs text-red-400">{titleError}</p>
+                  <p className="text-status-fail text-xs">{titleError}</p>
                 )}
               </form>
             ) : (

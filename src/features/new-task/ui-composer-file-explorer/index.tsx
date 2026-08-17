@@ -145,7 +145,7 @@ export function ComposerFileExplorer({
           <button
             type="button"
             onClick={clearComments}
-            className="text-ink-3 ml-auto shrink-0 rounded p-0.5 hover:text-red-400"
+            className="text-ink-3 ml-auto shrink-0 rounded p-0.5 hover:text-status-fail"
             aria-label="Clear all comments"
           >
             <Trash2 className="h-3.5 w-3.5" />
