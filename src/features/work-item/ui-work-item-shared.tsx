@@ -2,6 +2,27 @@ import { BookOpen, Bug, Check, CheckSquare, FileText, Sparkles } from 'lucide-re
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
+import { BOARD_PRIORITY_TONES } from '@/features/work-item/utils-board-colors';
+
+/** Azure DevOps priority chip (P1–P4); renders nothing when priority is unset. */
+export function WorkItemPriorityBadge({ priority }: { priority?: number }) {
+  if (typeof priority !== 'number') return null;
+  const tone = BOARD_PRIORITY_TONES[priority] ?? 'var(--color-ink-2)';
+  return (
+    <span
+      aria-label={`Priority ${priority}`}
+      title={`Priority ${priority}`}
+      className="shrink-0 rounded px-1.5 py-px font-mono text-[9.5px] font-semibold"
+      style={{
+        color: tone,
+        background: `color-mix(in oklch, ${tone} 14%, transparent)`,
+      }}
+    >
+      P{priority}
+    </span>
+  );
+}
+
 
 
 const ICON_SIZE = {

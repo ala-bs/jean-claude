@@ -1,4 +1,5 @@
 import {
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -1083,6 +1084,12 @@ function PrReviewCarouselCard({
               {item.unresolvedCommentCount}
             </span>
           )}
+          {(item.resolvedThreadCount ?? 0) > 0 && (
+            <span className="text-status-done flex items-center gap-0.5 font-mono text-[9.5px]">
+              <CheckCircle2 className="h-3 w-3" />
+              {item.resolvedThreadCount}
+            </span>
+          )}
         </div>
       </button>
     </div>
@@ -1306,13 +1313,11 @@ export function FeedList() {
           },
         });
       } else if (item.taskId) {
-        navigate({
-          to: '/all/$taskId',
-          params: { taskId: item.taskId },
-        });
+        if (item.taskId === currentTaskId) return;
+        navigate({ to: '/all/$taskId', params: { taskId: item.taskId } });
       }
     },
-    [allVisibleItems, navigate],
+    [allVisibleItems, currentTaskId, navigate],
   );
 
   const navigateToFeedItem = useCallback(
@@ -1339,13 +1344,11 @@ export function FeedList() {
           },
         });
       } else if (item.taskId) {
-        navigate({
-          to: '/all/$taskId',
-          params: { taskId: item.taskId },
-        });
+        if (item.taskId === currentTaskId) return;
+        navigate({ to: '/all/$taskId', params: { taskId: item.taskId } });
       }
     },
-    [navigate],
+    [currentTaskId, navigate],
   );
 
   const navigateRelative = useCallback(
@@ -1499,7 +1502,7 @@ export function FeedList() {
   return (
     <div
       ref={listRef}
-      className="flex h-full flex-col overflow-y-auto overscroll-contain"
+      className="flex h-full flex-col overflow-x-hidden overflow-y-auto overscroll-contain"
       style={{
         maskImage:
           'linear-gradient(to bottom, black 0, black calc(100% - 8px), transparent 100%)',

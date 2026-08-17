@@ -1,5 +1,7 @@
 import {
+  AlertTriangle,
   ArrowDownNarrowWide,
+  ArrowUpFromLine,
   Bot,
   Bug,
   CheckCircle2,
@@ -9,6 +11,7 @@ import {
   FolderOpen,
   GitMerge,
   GitPullRequest,
+  Hand,
   ListTodo,
   Loader2,
   MessageSquare,
@@ -48,6 +51,7 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import type { FeedItem, FeedItemAttention } from '@shared/feed-types';
+import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
 import {
   getPrStateColor,
   getPrStatusLabel,
@@ -72,6 +76,7 @@ import { useOpenReviewCommentCount } from '@/stores/review-comments';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useToastStore } from '@/stores/toasts';
+import { useWorkItemModalStore } from '@/stores/work-item-modal';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
 
 
@@ -361,6 +366,43 @@ function RailPrAutoCompleteButton({
   return <PrAutoComplete pr={pr} projectId={projectId} variant="compact" />;
 }
 
+/**
+ * Bucket build-policy evaluations for the compact PR rail indicator.
+ *
+ * Azure marks a stale evaluation with `context.isExpired` while leaving
+ * `status: 'queued'` and the previous run's `buildId` in place, so the
+ * `queued && buildId` running heuristic must be checked *after* expiry or
+ * stale CI spins forever. Failures are classified first so a rejected check
+ * stays red once it also expires, matching the PR checks panel summary.
+ */
+export function countRailCiStatuses(
+  evaluations: AzureDevOpsPolicyEvaluation[],
+) {
+  return evaluations.reduce(
+    (counts, evaluation) => {
+      if (!evaluation.configuration.settings.buildDefinitionId) {
+        return counts;
+      }
+
+      if (evaluation.status === 'rejected' || evaluation.status === 'broken') {
+        counts.failed += 1;
+      } else if (evaluation.context?.isExpired) {
+        counts.expired += 1;
+      } else if (
+        evaluation.status === 'running' ||
+        (evaluation.status === 'queued' && !!evaluation.context?.buildId)
+      ) {
+        counts.running += 1;
+      } else if (evaluation.status === 'queued') {
+        counts.pending += 1;
+      }
+
+      return counts;
+    },
+    { running: 0, pending: 0, failed: 0, expired: 0 },
+  );
+}
+
 function RailPrCiStatus({
   projectId,
   prId,
@@ -380,30 +422,7 @@ function RailPrCiStatus({
     },
   );
 
-  const ciCounts = evaluations.reduce(
-    (counts, evaluation) => {
-      if (!evaluation.configuration.settings.buildDefinitionId) {
-        return counts;
-      }
-
-      if (
-        evaluation.status === 'running' ||
-        (evaluation.status === 'queued' && !!evaluation.context?.buildId)
-      ) {
-        counts.running += 1;
-      } else if (evaluation.status === 'queued') {
-        counts.pending += 1;
-      } else if (
-        evaluation.status === 'rejected' ||
-        evaluation.status === 'broken'
-      ) {
-        counts.failed += 1;
-      }
-
-      return counts;
-    },
-    { running: 0, pending: 0, failed: 0 },
-  );
+  const ciCounts = countRailCiStatuses(evaluations);
 
   useEffect(() => {
     startTransition(() => setShouldPollCi(ciCounts.running > 0));
@@ -416,7 +435,8 @@ function RailPrCiStatus({
   if (
     ciCounts.running === 0 &&
     ciCounts.pending === 0 &&
-    ciCounts.failed === 0
+    ciCounts.failed === 0 &&
+    ciCounts.expired === 0
   ) {
     return null;
   }
@@ -424,21 +444,39 @@ function RailPrCiStatus({
   return (
     <span className="flex items-center gap-1">
       {ciCounts.running > 0 && (
-        <span className="text-status-azure flex items-center gap-0.5">
+        <span
+          className="text-status-azure flex items-center gap-0.5"
+          title={`${ciCounts.running} running`}
+        >
           <Loader2 className="h-2.5 w-2.5 animate-spin" />
           <span className="text-[9.5px]">{ciCounts.running}</span>
         </span>
       )}
       {ciCounts.pending > 0 && (
-        <span className="text-status-run flex items-center gap-0.5">
+        <span
+          className="text-status-run flex items-center gap-0.5"
+          title={`${ciCounts.pending} pending`}
+        >
           <MinusCircle className="h-2.5 w-2.5" />
           <span className="text-[9.5px]">{ciCounts.pending}</span>
         </span>
       )}
       {ciCounts.failed > 0 && (
-        <span className="text-status-fail flex items-center gap-0.5">
+        <span
+          className="text-status-fail flex items-center gap-0.5"
+          title={`${ciCounts.failed} failed`}
+        >
           <XCircle className="h-2.5 w-2.5" />
           <span className="text-[9.5px]">{ciCounts.failed}</span>
+        </span>
+      )}
+      {ciCounts.expired > 0 && (
+        <span
+          className="flex items-center gap-0.5 text-orange-400"
+          title={`${ciCounts.expired} expired`}
+        >
+          <AlertTriangle className="h-2.5 w-2.5" />
+          <span className="text-[9.5px]">{ciCounts.expired}</span>
         </span>
       )}
       <span className="text-ink-3 text-[9.5px]">CI</span>
@@ -553,6 +591,13 @@ export function FeedItemCard({
   });
   const prMerged = prStatus === 'completed';
   const prStatusLabel = getPrStatusLabel(prStatus);
+  const prWaitingForAuthor =
+    item.isWaitingForAuthor ??
+    cachedPr?.reviewers.some(
+      (reviewer) =>
+        !reviewer.isContainer && reviewer.voteStatus === 'waiting',
+    ) ??
+    false;
   const prHasConflicts = pullRequestMergeStatus === 'conflicts';
   const prHasOpenComments = (item.activeThreadCount ?? 0) > 0;
   const prApprovalCount = approvedBy.length;
@@ -572,6 +617,7 @@ export function FeedItemCard({
   const isPrFocused = hasPr && currentPrId === String(item.pullRequestId);
   const canSetPrAutoComplete =
     hasPr &&
+    item.taskType !== 'pr-review' &&
     prApprovalCount > 0 &&
     !prMerged &&
     !prHasConflicts &&
@@ -621,13 +667,14 @@ export function FeedItemCard({
           },
         });
       } else if (item.taskId) {
+        if (item.taskId === currentTaskId) return;
         navigate({
           to: '/all/$taskId',
           params: { taskId: item.taskId },
         });
       }
     },
-    [navigate, item, pullRequestUrl],
+    [currentTaskId, navigate, item, pullRequestUrl],
   );
 
   const openMenu = useCallback((e: React.MouseEvent | React.KeyboardEvent) => {
@@ -727,15 +774,14 @@ export function FeedItemCard({
       if (isModifiedClick(e) && openExternalUrl(workItemUrl)) {
         return;
       }
-      navigate({
-        to: '/all/work-items/$projectId/$workItemId',
-        params: {
-          projectId: item.projectId,
-          workItemId,
-        },
+      const numericId = Number(workItemId);
+      if (!Number.isFinite(numericId)) return;
+      useWorkItemModalStore.getState().open({
+        projectId: item.projectId,
+        workItemId: numericId,
       });
     },
-    [navigate, item.projectId],
+    [item.projectId],
   );
 
   return (
@@ -879,9 +925,17 @@ export function FeedItemCard({
               )}
 
               {/* Title */}
-              <div className="flex items-start gap-1.5">
+              <div className="flex flex-wrap items-start gap-1.5">
                 {item.taskType === 'skill-creation' && (
                   <Bot className="text-status-pr mt-0.5 h-3.5 w-3.5 shrink-0" />
+                )}
+                {item.taskType === 'pr-review' && (
+                  <span
+                    aria-label="PR Workspace"
+                    className="border-status-pr/30 bg-status-pr/10 text-status-pr mt-px shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium leading-none uppercase"
+                  >
+                    PR Workspace
+                  </span>
                 )}
                 <span
                   className={clsx(
@@ -895,6 +949,28 @@ export function FeedItemCard({
                 >
                   {itemTitle}
                 </span>
+                {item.source === 'task' && needsAttention && (
+                  <span
+                    className={clsx(
+                      'mt-px flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ring-1',
+                      needsPermission
+                        ? 'bg-status-run/10 text-status-run ring-status-run/25'
+                        : 'bg-status-azure/10 text-status-azure ring-status-azure/25',
+                    )}
+                  >
+                    {needsPermission ? (
+                      <>
+                        <ShieldQuestion className="h-2.5 w-2.5 shrink-0" />
+                        Waiting for permission
+                      </>
+                    ) : (
+                      <>
+                        <MessageSquare className="h-2.5 w-2.5 shrink-0" />
+                        Waiting for answer
+                      </>
+                    )}
+                  </span>
+                )}
               </div>
 
               {item.source === 'work-item' && item.workItemSummary && (
@@ -987,9 +1063,8 @@ export function FeedItemCard({
                     hasQuestion ? 'text-status-azure' : 'text-status-run',
                   )}
                 >
-                  {needsPermission ? (
-                    <ShieldQuestion className="h-3 w-3 shrink-0" />
-                  ) : (
+                  {/* Icon omitted when the title-row badge already signals state */}
+                  {!needsAttention && (
                     <MessageSquare className="h-3 w-3 shrink-0" />
                   )}
                   <span className="min-w-0 truncate">
@@ -997,30 +1072,6 @@ export function FeedItemCard({
                   </span>
                 </div>
               )}
-
-              {/* Permission/question indicator when no pending message text */}
-              {item.source === 'task' &&
-                !item.pendingMessage &&
-                needsAttention && (
-                  <div
-                    className={clsx(
-                      'flex items-center gap-1 pt-0.5 text-[11px]',
-                      hasQuestion ? 'text-status-azure' : 'text-status-run',
-                    )}
-                  >
-                    {needsPermission ? (
-                      <>
-                        <ShieldQuestion className="h-3 w-3 shrink-0" />
-                        <span>Waiting for permission</span>
-                      </>
-                    ) : (
-                      <>
-                        <MessageSquare className="h-3 w-3 shrink-0" />
-                        <span>Waiting for answer</span>
-                      </>
-                    )}
-                  </div>
-                )}
 
               {/* Pending review comments */}
               {item.source === 'task' && pendingCommentCount > 0 && (
@@ -1098,8 +1149,8 @@ export function FeedItemCard({
                 />
                 <PrDiamond color={prStateColor} />
               </div>
-              <div className="flex flex-1 flex-col gap-1 py-1.5 pr-3.5">
-                <div className="text-ink-3 flex items-center gap-1.5 text-[10.5px]">
+              <div className="flex min-w-0 flex-1 flex-col gap-1 py-1.5 pr-3.5">
+                <div className="text-ink-3 flex min-w-0 flex-wrap items-center gap-1.5 text-[10.5px]">
                   <span
                     className={clsx(
                       'font-mono',
@@ -1114,6 +1165,12 @@ export function FeedItemCard({
                     #{item.pullRequestId}
                   </span>
                   <span>{prStatusLabel}</span>
+                  {prWaitingForAuthor && (
+                    <span className="flex items-center gap-0.5 text-amber-400">
+                      <Hand className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">Waiting for author</span>
+                    </span>
+                  )}
                   {isDraft && (
                     <span className="border-glass-border text-ink-3 rounded border px-1 py-0 text-[9px]">
                       Draft
@@ -1140,7 +1197,7 @@ export function FeedItemCard({
                       <span className="text-[9.5px]">Conflicts</span>
                     </span>
                   )}
-                  {item.hasUncommittedChanges && (
+                  {item.hasUncommittedChanges && !prMerged && (
                     <button
                       type="button"
                       onClick={handleUncommittedClick}
@@ -1151,6 +1208,15 @@ export function FeedItemCard({
                       <CircleDotDashed className="h-2.5 w-2.5" />
                       <span className="text-[9.5px]">Uncommitted</span>
                     </button>
+                  )}
+                  {item.hasUnpushedCommits && !prMerged && (
+                    <span
+                      className="text-status-run flex items-center gap-0.5"
+                      title="Local commits not pushed to remote"
+                    >
+                      <ArrowUpFromLine className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">Unpushed</span>
+                    </span>
                   )}
                   {(item.activeThreadCount ?? 0) > 0 && (
                     <span className="text-status-pr flex items-center gap-0.5">
@@ -1278,15 +1344,14 @@ function SubtaskRow({
       if (isModifiedClick(e) && openExternalUrl(workItemUrl)) {
         return;
       }
-      navigate({
-        to: '/all/work-items/$projectId/$workItemId',
-        params: {
-          projectId: child.projectId,
-          workItemId,
-        },
+      const numericId = Number(workItemId);
+      if (!Number.isFinite(numericId)) return;
+      useWorkItemModalStore.getState().open({
+        projectId: child.projectId,
+        workItemId: numericId,
       });
     },
-    [navigate, child.projectId],
+    [child.projectId],
   );
 
   const childNeedsPermission = child.attention === 'needs-permission';
@@ -1364,31 +1429,32 @@ function SubtaskRow({
           <span className="text-ink-2 min-w-0 flex-1 truncate text-[11.5px]">
             {child.title}
           </span>
+          {childNeedsAttention && (
+            <span
+              className={clsx(
+                'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ring-1',
+                childNeedsPermission
+                  ? 'bg-status-run/10 text-status-run ring-status-run/25'
+                  : 'bg-status-azure/10 text-status-azure ring-status-azure/25',
+              )}
+            >
+              {childNeedsPermission ? (
+                <>
+                  <ShieldQuestion className="h-2.5 w-2.5 shrink-0" />
+                  Waiting for permission
+                </>
+              ) : (
+                <>
+                  <MessageSquare className="h-2.5 w-2.5 shrink-0" />
+                  Waiting for answer
+                </>
+              )}
+            </span>
+          )}
           <span className="text-ink-4 shrink-0 font-mono text-[9px]">
             {formatRelativeTime(child.timestamp)}
           </span>
         </div>
-        {/* Permission/question indicator */}
-        {childNeedsAttention && (
-          <div
-            className={clsx(
-              'flex items-center gap-1 pt-0.5 text-[10px]',
-              childHasQuestion ? 'text-status-azure' : 'text-status-run',
-            )}
-          >
-            {childNeedsPermission ? (
-              <>
-                <ShieldQuestion className="h-2.5 w-2.5 shrink-0" />
-                <span>Waiting for permission</span>
-              </>
-            ) : (
-              <>
-                <MessageSquare className="h-2.5 w-2.5 shrink-0" />
-                <span>Waiting for answer</span>
-              </>
-            )}
-          </div>
-        )}
         {/* Background merge jobs */}
         {childMergeJobs.length > 0 && (
           <div className="bg-acc/10 ring-acc/20 mt-0.5 flex items-center gap-1.5 rounded px-2 py-0.5 ring-1">

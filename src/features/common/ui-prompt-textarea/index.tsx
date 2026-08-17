@@ -8,8 +8,6 @@ import type {
   UIEvent,
 } from 'react';
 import {
-  ChevronLeft,
-  ChevronRight,
   File,
   FilePlus,
   ImageIcon,
@@ -71,7 +69,7 @@ import { useToastStore } from '@/stores/toasts';
 
 
 
-import { useLatestRef } from '@/hooks/use-latest-ref';
+import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
 const COMMANDS = [
   { command: '/init', description: 'Initialize CLAUDE.md in project' },
   { command: '/compact', description: 'Compact conversation history' },
@@ -1813,83 +1811,14 @@ function ImagePreviewDialog({
   initialIndex: number;
   onClose: () => void;
 }) {
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const img = images[currentIndex];
-
-  const onCloseRef = useLatestRef(onClose);
-
-  useEffect(() => {
-    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onCloseRef.current();
-      } else if (e.key === 'ArrowLeft') {
-        setCurrentIndex((i) => Math.max(0, i - 1));
-      } else if (e.key === 'ArrowRight') {
-        setCurrentIndex((i) => Math.min(images.length - 1, i + 1));
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [images.length, onCloseRef]);
-
-  if (!img) return null;
-
-  return createPortal(
-    <div
-      className="bg-bg-0/80 fixed inset-0 z-50 flex items-center justify-center"
-      onClick={onClose}
-    >
-      <button
-        type="button"
-        onClick={onClose}
-        className="bg-bg-1/80 text-ink-1 hover:bg-glass-medium hover:text-ink-0 absolute top-4 right-4 rounded-full p-2"
-        aria-label="Close preview"
-      >
-        <X className="h-5 w-5" />
-      </button>
-
-      {images.length > 1 && currentIndex > 0 && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setCurrentIndex((i) => i - 1);
-          }}
-          className="bg-bg-1/80 text-ink-1 hover:bg-glass-medium hover:text-ink-0 absolute left-4 rounded-full p-2"
-          aria-label="Previous image"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-      )}
-
-      <img
-        src={`data:${img.mimeType};base64,${img.data}`}
-        alt={img.filename || 'Image preview'}
-        className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain"
-        onClick={(e) => e.stopPropagation()}
-      />
-
-      {images.length > 1 && currentIndex < images.length - 1 && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setCurrentIndex((i) => i + 1);
-          }}
-          className="bg-bg-1/80 text-ink-1 hover:bg-glass-medium hover:text-ink-0 absolute right-4 rounded-full p-2"
-          aria-label="Next image"
-        >
-          <ChevronRight className="h-5 w-5" />
-        </button>
-      )}
-
-      {images.length > 1 && (
-        <div className="text-ink-2 absolute bottom-4 text-sm">
-          {currentIndex + 1} / {images.length}
-        </div>
-      )}
-    </div>,
-    document.body,
+  return (
+    <ImagePreviewModal
+      images={images.map((img) => ({
+        src: `data:${img.mimeType};base64,${img.data}`,
+        alt: img.filename || 'Image preview',
+      }))}
+      initialIndex={initialIndex}
+      onClose={onClose}
+    />
   );
 }

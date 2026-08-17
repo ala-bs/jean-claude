@@ -1,6 +1,7 @@
 import { join } from 'path';
 
-import { app, BrowserWindow, protocol, shell } from 'electron';
+import type { MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, Menu, protocol, shell } from 'electron';
 import fixPath from 'fix-path';
 
 import {
@@ -15,13 +16,19 @@ import {
   fetchLocalImage,
   LOCAL_IMAGE_PROTOCOL,
 } from './services/local-image-protocol-service';
+import { agentMemorySchedulerService } from './services/agent-memory-scheduler-service';
 import { agentService } from './services/agent-service';
 import { cleanupOrphanedWorkspaces } from './services/system-project-service';
 import { createReloadPreviewReadinessRegistrar } from './services/reload-preview-service';
 import { dbg } from './lib/debug';
 import { migrateDatabase } from './database';
+import { mobilePreviewNetworkProxyService } from './services/mobile-preview-network-proxy-service';
+import { killOrphanedCoreSimulatorHelpers } from './services/mobile-preview-ios-idb-adapter';
+import {
+  runBeforeQuitCleanups,
+  stopVetoingQuit,
+} from './services/mobile-preview-lifecycle';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
-import { preferenceMemoryConsolidationService } from './services/preference-memory-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { registerIpcHandlers } from './ipc/handlers';
 import { runCommandService } from './services/run-command-service';
@@ -98,6 +105,63 @@ if (process.env.JC_SKIP_INSTANCE_LOCK) {
 if (!process.env.TERM) {
   dbg.main('Fixing PATH for non-terminal launch');
   fixPath();
+}
+
+/** Converts a live Menu back into a template we can rebuild from. */
+function menuToTemplate(menu: Menu): MenuItemConstructorOptions[] {
+  return menu.items.map((item): MenuItemConstructorOptions => {
+    if (item.type === 'separator') return { type: 'separator' };
+
+    // Submenu roles (e.g. 'windowMenu') regenerate Electron's defaults and
+    // would reintroduce the Close item, so expand them explicitly instead.
+    if (item.submenu) {
+      return { label: item.label, submenu: menuToTemplate(item.submenu) };
+    }
+
+    return { role: item.role, label: item.label };
+  });
+}
+
+/**
+ * Rebuilds the application menu with the "Close Window" item stripped of its
+ * Cmd+W accelerator, so the shortcut no longer closes the window.
+ *
+ * The item is kept (greyed out) rather than made invisible: a present-but-
+ * accelerator-less item is skipped by macOS `performKeyEquivalent`, so the
+ * keydown reaches the renderer and the in-app cmd+w binding ("Open Worktree
+ * in Editor") keeps working.
+ *
+ * macOS only — Windows/Linux default menus have no 'close' role.
+ */
+function disableCloseWindowShortcut() {
+  const menu = Menu.getApplicationMenu();
+  if (!menu) {
+    dbg.main('No application menu found; Cmd+W close is still active');
+    return;
+  }
+
+  let stripped = false;
+  const template = menuToTemplate(menu).map((topLevelItem) => {
+    if (!Array.isArray(topLevelItem.submenu)) return topLevelItem;
+
+    return {
+      ...topLevelItem,
+      submenu: topLevelItem.submenu.map((item) => {
+        if (item.role !== 'close') return item;
+        stripped = true;
+        // Drop the role (and with it the accelerator + close behaviour).
+        return { label: item.label ?? 'Close Window', enabled: false };
+      }),
+    };
+  });
+
+  if (!stripped) {
+    dbg.main('No "Close Window" menu item found; nothing to disable');
+    return;
+  }
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  dbg.main('Removed Cmd+W accelerator from "Close Window"');
 }
 
 function createWindow() {
@@ -312,6 +376,10 @@ app.whenReady().then(async () => {
   dbg.main('App ready, initializing...');
   showDockIcon();
 
+  // Reap framebuffer helpers left behind by a previous run (they otherwise keep
+  // encoding frames at full CPU forever).
+  void killOrphanedCoreSimulatorHelpers();
+
   // Register azure-image-proxy protocol handler
   dbg.main('Registering azure-image-proxy protocol handler...');
   protocol.handle('azure-image-proxy', async (request) => {
@@ -395,7 +463,7 @@ app.whenReady().then(async () => {
   systemCalendarService.start();
   pipelineTrackingService.start();
   rawMessageCleanupService.start();
-  preferenceMemoryConsolidationService.start();
+  agentMemorySchedulerService.start();
 
   dbg.main('Registering IPC handlers...');
   registerIpcHandlers();
@@ -411,6 +479,7 @@ app.whenReady().then(async () => {
   });
 
   canCreateMainWindow = true;
+  disableCloseWindowShortcut();
   createWindow();
   dbg.main('Main window created, app ready');
 
@@ -458,6 +527,13 @@ app.on('before-quit', (event) => {
           dbg.main('Idle shared OpenCode server stopped');
           await runCommandService.stopAllCommands();
           dbg.main('All commands stopped');
+          // Stops mobile preview sessions and their helper processes. Awaited
+          // here so this handler stays the single owner of app.quit(): the
+          // registry must not quit while agents/DB writes are still in flight.
+          await runBeforeQuitCleanups();
+          dbg.main('Mobile preview sessions stopped');
+          await mobilePreviewNetworkProxyService.stopAll();
+          dbg.main('Mobile preview network proxies stopped');
         })(),
         QUIT_CLEANUP_TIMEOUT_MS,
       );
@@ -466,6 +542,9 @@ app.on('before-quit', (event) => {
       runCommandService.killAllProcessGroupsSync();
       killAllOpenCodeServersSync();
     } finally {
+      // A timed-out or failed preview cleanup must not leave the registry
+      // vetoing quits forever.
+      stopVetoingQuit();
       app.quit();
     }
   })();
@@ -473,7 +552,7 @@ app.on('before-quit', (event) => {
   systemCalendarService.stop();
   pipelineTrackingService.stop();
   rawMessageCleanupService.stop();
-  preferenceMemoryConsolidationService.stop();
+  agentMemorySchedulerService.stop();
 });
 
 // Synchronous last-resort cleanup: kill all process groups when the Node.js

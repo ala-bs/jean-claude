@@ -100,7 +100,6 @@ export function isOverlayTarget(target: string): target is OverlayType {
     'new-task',
     'command-palette',
     'project-switcher',
-    'keyboard-help',
     'activity-center',
     'settings',
     'backlog',

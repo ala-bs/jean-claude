@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { Shield } from 'lucide-react';
 
 
@@ -9,21 +9,25 @@ import { parseCompoundCommand } from '@shared/shell-parse';
 import { useToastStore } from '@/stores/toasts';
 
 
-type PermissionScope = 'project' | 'worktree' | 'global';
+type PermissionScope = 'session' | 'project' | 'worktree' | 'global';
 
 export function AddPermissionModal({
   isOpen,
   onClose,
   command,
-  taskId,
+  stepId,
+  stepName,
   hasWorktree,
 }: {
   isOpen: boolean;
   onClose: () => void;
   command: string;
-  taskId: string;
+  stepId: string;
+  stepName: string;
   hasWorktree: boolean;
 }) {
+  const formId = useId();
+  const targetDescriptionId = `${formId}-target-description`;
   const parsedCommands = useMemo(
     () => parseCompoundCommand(command),
     [command],
@@ -69,15 +73,21 @@ export function AddPermissionModal({
     setIsSubmitting(true);
     try {
       const addFn =
-        scope === 'global'
-          ? api.tasks.allowGlobally
+        scope === 'session'
+          ? api.steps.addSessionAllowedTool
+          : scope === 'global'
+          ? api.steps.allowGlobally
           : scope === 'worktree'
-            ? api.tasks.allowForProjectWorktrees
-            : api.tasks.allowForProject;
+            ? api.steps.allowForProjectWorktrees
+            : api.steps.allowForProject;
 
       await Promise.all(
         toAdd.map((entry) =>
-          addFn(taskId, 'Bash', { command: entry.value.trim() }),
+          addFn({
+            stepId,
+            toolName: 'Bash',
+            input: { command: entry.value.trim() },
+          }),
         ),
       );
       addToast({
@@ -88,27 +98,39 @@ export function AddPermissionModal({
     } catch (error) {
       console.error('Failed to add permissions:', error);
       addToast({
-        message: 'Failed to add permissions',
+        message: `Failed to add permissions: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
         type: 'error',
       });
     } finally {
       setIsSubmitting(false);
     }
-  }, [entries, scope, taskId, onClose, addToast]);
+  }, [entries, scope, stepId, onClose, addToast]);
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
       title="Add to Permissions"
+      ariaLabel="Add to Permissions"
+      ariaDescribedBy={targetDescriptionId}
       size="lg"
     >
       <div className="space-y-4">
+        <p
+          id={targetDescriptionId}
+          className="border-glass-border bg-bg-0/50 text-ink-2 rounded border px-3 py-2 text-xs"
+        >
+          Originating step:{' '}
+          <strong className="text-ink-1 font-medium">{stepName}</strong>
+        </p>
+
         {/* Commands list */}
         <div>
-          <label className="text-ink-2 mb-2 block text-xs font-medium">
+          <div className="text-ink-2 mb-2 text-xs font-medium">
             Commands
-          </label>
+          </div>
           <div className="space-y-2">
             {entries.map((entry, index) => (
               <div key={index} className="flex items-start gap-2">
@@ -120,7 +142,14 @@ export function AddPermissionModal({
                   compact
                   ariaLabel={`Toggle permission command ${index + 1}`}
                 />
+                <label
+                  htmlFor={`${formId}-command-${index}`}
+                  className="sr-only"
+                >
+                  Permission command {index + 1}
+                </label>
                 <input
+                  id={`${formId}-command-${index}`}
                   type="text"
                   value={entry.value}
                   onChange={(e) => handleValueChange(index, e.target.value)}
@@ -133,48 +162,79 @@ export function AddPermissionModal({
         </div>
 
         {/* Scope selector */}
-        <div>
-          <label className="text-ink-2 mb-2 block text-xs font-medium">
-            Scope
-          </label>
-          <div className="flex gap-4">
-            <label className="text-ink-1 flex cursor-pointer items-center gap-2 text-sm">
+        <fieldset>
+          <legend className="text-ink-2 mb-2 text-xs font-medium">Scope</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="border-glass-border bg-bg-0/35 flex cursor-pointer items-start gap-2 rounded border px-2.5 py-2">
+              <input
+                type="radio"
+                name="permission-scope"
+                value="session"
+                checked={scope === 'session'}
+                onChange={() => setScope('session')}
+                className="border-glass-border bg-glass-medium text-acc focus:ring-acc/30 mt-0.5 h-3.5 w-3.5"
+              />
+              <span>
+                <span className="text-ink-1 block text-sm">Session</span>
+                <span className="text-ink-3 block text-[11px]">Current step only.</span>
+              </span>
+            </label>
+            <label className="border-glass-border bg-bg-0/35 flex cursor-pointer items-start gap-2 rounded border px-2.5 py-2">
               <input
                 type="radio"
                 name="permission-scope"
                 value="project"
                 checked={scope === 'project'}
                 onChange={() => setScope('project')}
-                className="border-glass-border bg-glass-medium text-acc focus:ring-acc/30 h-3.5 w-3.5"
+                className="border-glass-border bg-glass-medium text-acc focus:ring-acc/30 mt-0.5 h-3.5 w-3.5"
               />
-              Project
+              <span>
+                <span className="text-ink-1 block text-sm">Project</span>
+                <span className="text-ink-3 block text-[11px]">
+                  All sessions in this project.
+                </span>
+              </span>
             </label>
             {hasWorktree && (
-              <label className="text-ink-1 flex cursor-pointer items-center gap-2 text-sm">
+              <label className="border-glass-border bg-bg-0/35 flex cursor-pointer items-start gap-2 rounded border px-2.5 py-2">
                 <input
                   type="radio"
                   name="permission-scope"
                   value="worktree"
                   checked={scope === 'worktree'}
                   onChange={() => setScope('worktree')}
-                  className="border-glass-border bg-glass-medium text-acc focus:ring-acc/30 h-3.5 w-3.5"
+                  className="border-glass-border bg-glass-medium text-acc focus:ring-acc/30 mt-0.5 h-3.5 w-3.5"
                 />
-                Worktree
+                <span>
+                  <span className="text-ink-1 block text-sm">Worktree</span>
+                  <span className="text-ink-3 block text-[11px]">
+                    All worktrees for this project.
+                  </span>
+                </span>
               </label>
             )}
-            <label className="text-ink-1 flex cursor-pointer items-center gap-2 text-sm">
+            <label className="border-glass-border bg-bg-0/35 flex cursor-pointer items-start gap-2 rounded border px-2.5 py-2">
               <input
                 type="radio"
                 name="permission-scope"
                 value="global"
                 checked={scope === 'global'}
                 onChange={() => setScope('global')}
-                className="border-glass-border bg-glass-medium text-acc focus:ring-acc/30 h-3.5 w-3.5"
+                className="border-glass-border bg-glass-medium text-acc focus:ring-acc/30 mt-0.5 h-3.5 w-3.5"
               />
-              Global
+              <span>
+                <span className="text-ink-1 block text-sm">Global</span>
+                <span className="text-ink-3 block text-[11px]">All projects.</span>
+              </span>
             </label>
           </div>
-        </div>
+          {scope !== 'session' && (
+            <p className="text-status-run mt-2 text-[11px] leading-relaxed">
+              Persistent Bash permissions can apply broadly. Keep command
+              patterns specific.
+            </p>
+          )}
+        </fieldset>
 
         {/* Actions */}
         <div className="border-glass-border flex items-center justify-end gap-2 border-t pt-4">

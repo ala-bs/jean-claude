@@ -16,6 +16,14 @@ export const ProviderRepository = {
       .executeTakeFirst();
   },
 
+  findByTokenId: async (tokenId: string): Promise<Provider[]> => {
+    return db
+      .selectFrom('providers')
+      .selectAll()
+      .where('tokenId', '=', tokenId)
+      .execute();
+  },
+
   create: async (data: NewProvider): Promise<Provider> => {
     const now = new Date().toISOString();
     const id = data.id ?? crypto.randomUUID();

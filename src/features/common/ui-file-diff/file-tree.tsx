@@ -13,6 +13,9 @@ import clsx from 'clsx';
 
 import type { DiffFile, DiffFileStatus } from './types';
 import { getStatusIndicator } from './status-badge';
+import { ReviewCheck } from './review-check';
+import type { ReviewedTreatment } from '@/stores/diff-review';
+import { selectionAfterClick } from './utils-selection';
 
 type TreeNode = {
   name: string;
@@ -64,6 +67,25 @@ function getFileName(path: string) {
   return path.split('/').pop() || path;
 }
 
+/** File paths in the order they are rendered, skipping collapsed folders. */
+function visibleFilePaths(
+  nodes: TreeNode[],
+  expandedFolders: Set<string>,
+  out: string[] = [],
+) {
+  for (const node of nodes) {
+    if (node.type === 'file') {
+      out.push(node.path);
+      continue;
+    }
+    const folderPaths = node.folderPaths ?? [node.path];
+    if (folderPaths.every((path) => expandedFolders.has(path))) {
+      visibleFilePaths(node.children ?? [], expandedFolders, out);
+    }
+  }
+  return out;
+}
+
 function getStatusIndicatorOrEmpty(status?: DiffFileStatus) {
   if (!status) return { label: '', color: '' };
   return getStatusIndicator(status);
@@ -81,6 +103,10 @@ export function DiffFileTree({
   collapsedFolders: externalCollapsedFolders,
   onToggleFolder: externalOnToggleFolder,
   stickyFolders = false,
+  reviewedPaths,
+  stalePaths,
+  onToggleReviewed,
+  reviewedTreatment = 'dim',
 }: {
   files: DiffFile[];
   selectedPath: string | null;
@@ -96,9 +122,44 @@ export function DiffFileTree({
   collapsedFolders?: Set<string>;
   onToggleFolder?: (path: string) => void;
   stickyFolders?: boolean;
+  /** Paths the user has marked as reviewed. Enables the review checkboxes. */
+  reviewedPaths?: Set<string>;
+  /** Reviewed files that changed since — they stay in place, flagged. */
+  stalePaths?: Set<string>;
+  onToggleReviewed?: (paths: string[], reviewed: boolean) => void;
+  reviewedTreatment?: ReviewedTreatment;
 }) {
-  const tree = useMemo(() => compressTree(buildTree(files)), [files]);
-  const allFolderPaths = useMemo(() => collectFolderPaths(buildTree(files)), [files]);
+  const showReview = Boolean(reviewedPaths && onToggleReviewed);
+  const hiddenFiles = useMemo(() => {
+    if (!showReview || reviewedTreatment === 'dim') return [];
+    return files.filter(
+      (file) =>
+        reviewedPaths?.has(file.path) &&
+        !stalePaths?.has(file.path) &&
+        file.path !== selectedPath,
+    );
+  }, [
+    files,
+    reviewedPaths,
+    stalePaths,
+    reviewedTreatment,
+    selectedPath,
+    showReview,
+  ]);
+  const visibleFiles = useMemo(() => {
+    if (hiddenFiles.length === 0) return files;
+    const hidden = new Set(hiddenFiles.map((file) => file.path));
+    return files.filter((file) => !hidden.has(file.path));
+  }, [files, hiddenFiles]);
+
+  const tree = useMemo(
+    () => compressTree(buildTree(visibleFiles)),
+    [visibleFiles],
+  );
+  const allFolderPaths = useMemo(
+    () => collectFolderPaths(buildTree(visibleFiles)),
+    [visibleFiles],
+  );
   const stickyFolderBaseZIndex = Math.max(allFolderPaths.size + 1, 1);
   const [localExpandedFolders, setLocalExpandedFolders] = useState<Set<string>>(
     () => new Set(allFolderPaths),
@@ -110,6 +171,82 @@ export function DiffFileTree({
     );
   }, [allFolderPaths, externalCollapsedFolders, localExpandedFolders]);
   const treeRef = useRef<HTMLDivElement>(null);
+  // Multi-select is view-local: ⇧/⌘-click a row, then one checkbox click (or
+  // the context menu) applies to every selected file at once.
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const anchorRef = useRef<string | null>(null);
+  const rowOrder = useMemo(
+    () => visibleFilePaths(tree, expandedFolders),
+    [tree, expandedFolders],
+  );
+  const selection = useMemo(() => {
+    const known = new Set(rowOrder);
+    return selectedPaths.filter((path) => known.has(path));
+  }, [selectedPaths, rowOrder]);
+  const selectionSet = useMemo(() => new Set(selection), [selection]);
+
+  // Opening a file elsewhere (tab strip, J/K) abandons the tree's selection.
+  // Adjusted during render rather than in an effect so there is no extra pass.
+  const [lastOpenedPath, setLastOpenedPath] = useState(selectedPath);
+  if (lastOpenedPath !== selectedPath) {
+    setLastOpenedPath(selectedPath);
+    if (
+      selectedPath &&
+      selectedPaths.length > 1 &&
+      !selectedPaths.includes(selectedPath)
+    ) {
+      setSelectedPaths([]);
+    }
+  }
+
+  const handleRowClick = useCallback(
+    (path: string, event: React.MouseEvent) => {
+      const next = selectionAfterClick({
+        rowPaths: rowOrder,
+        path,
+        anchor: anchorRef.current ?? selectedPath,
+        selection,
+        shiftKey: event.shiftKey,
+        toggleKey: event.metaKey || event.ctrlKey,
+      });
+      anchorRef.current = next.anchor;
+      setSelectedPaths(next.selection);
+      if (next.activate) onSelectFile(path);
+    },
+    [rowOrder, selection, selectedPath, onSelectFile],
+  );
+
+  /**
+   * Every file under a folder — including ones the current treatment hides, so
+   * folder counters and their tri-state stay truthful.
+   */
+  const filePathsUnder = useCallback(
+    (folderPath: string) => {
+      const prefix = `${folderPath}/`;
+      return files
+        .filter((file) => file.path.startsWith(prefix))
+        .map((file) => file.path);
+    },
+    [files],
+  );
+
+  /** A file checkbox applies to the whole selection when its row is in it. */
+  const handleToggleRowReviewed = useCallback(
+    (path: string, reviewed: boolean) => {
+      onToggleReviewed?.(selectionSet.has(path) ? selection : [path], reviewed);
+    },
+    [selection, selectionSet, onToggleReviewed],
+  );
+
+  // Escape drops a multi-selection without touching the opened file.
+  useEffect(() => {
+    if (selection.length < 2) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectedPaths([]);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selection.length]);
 
   useEffect(() => {
     if (!selectedPath) return;
@@ -181,8 +318,77 @@ export function DiffFileTree({
           getLlmThreadCount={getLlmThreadCount}
           stickyFolders={stickyFolders}
           stickyFolderBaseZIndex={stickyFolderBaseZIndex}
+          reviewedPaths={reviewedPaths}
+          stalePaths={stalePaths}
+          onToggleReviewed={onToggleReviewed}
+          onToggleRowReviewed={handleToggleRowReviewed}
+          filePathsUnder={filePathsUnder}
+          selectedPaths={selectionSet}
+          onRowClick={handleRowClick}
         />
       ))}
+      {reviewedTreatment === 'bottom' && hiddenFiles.length > 0 && (
+        <ReviewedGroup
+          files={hiddenFiles}
+          onSelectFile={onSelectFile}
+          onToggleReviewed={onToggleReviewed}
+        />
+      )}
+      {reviewedTreatment === 'hide' && hiddenFiles.length > 0 && (
+        <p className="text-ink-4 px-2 pt-2 text-[11px]">
+          {hiddenFiles.length} reviewed file
+          {hiddenFiles.length > 1 ? 's' : ''} hidden
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ReviewedGroup({
+  files,
+  onSelectFile,
+  onToggleReviewed,
+}: {
+  files: DiffFile[];
+  onSelectFile: (path: string) => void;
+  onToggleReviewed?: (paths: string[], reviewed: boolean) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <div className="border-glass-border mt-2 border-t pt-1.5">
+      <button
+        onClick={() => setIsOpen((previous) => !previous)}
+        className="text-status-done flex h-[26px] w-full items-center gap-1.5 px-2 text-left text-xs"
+      >
+        {isOpen ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        )}
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span className="flex-1">Reviewed</span>
+        <span className="text-ink-4 font-mono text-[9.5px]">{files.length}</span>
+      </button>
+      {isOpen &&
+        files.map((file) => (
+          <button
+            key={file.path}
+            onClick={() => onSelectFile(file.path)}
+            className="text-ink-2 hover:bg-glass-medium/50 flex h-[24px] w-full items-center gap-1.5 pr-2 pl-6 text-left text-xs opacity-60"
+          >
+            <ReviewCheck
+              checked
+              size={13}
+              onToggle={(next) => onToggleReviewed?.([file.path], next)}
+            />
+            <span className="min-w-0 truncate" title={file.path}>
+              <span className="text-ink-4">
+                {file.path.slice(0, file.path.lastIndexOf('/') + 1)}
+              </span>
+              {getFileName(file.path)}
+            </span>
+          </button>
+        ))}
     </div>
   );
 }
@@ -201,6 +407,13 @@ function TreeNodeRow({
   getLlmThreadCount,
   stickyFolders,
   stickyFolderBaseZIndex,
+  reviewedPaths,
+  stalePaths,
+  onToggleReviewed,
+  onToggleRowReviewed,
+  filePathsUnder,
+  selectedPaths,
+  onRowClick,
 }: {
   node: TreeNode;
   depth: number;
@@ -217,6 +430,13 @@ function TreeNodeRow({
   getLlmThreadCount: (path: string) => number;
   stickyFolders: boolean;
   stickyFolderBaseZIndex: number;
+  reviewedPaths?: Set<string>;
+  stalePaths?: Set<string>;
+  onToggleReviewed?: (paths: string[], reviewed: boolean) => void;
+  onToggleRowReviewed: (path: string, reviewed: boolean) => void;
+  filePathsUnder: (folderPath: string) => string[];
+  selectedPaths: Set<string>;
+  onRowClick: (path: string, event: React.MouseEvent) => void;
 }) {
   const indent = 10;
   const paddingLeft = 8 + depth * indent;
@@ -232,6 +452,11 @@ function TreeNodeRow({
     const folderPaths = node.folderPaths ?? [node.path];
     const isExpanded = folderPaths.every((path) => expandedFolders.has(path));
     const togglePath = folderPaths[folderPaths.length - 1] ?? node.path;
+    const descendantPaths = reviewedPaths ? filePathsUnder(node.path) : [];
+    const isFolderFullyReviewed =
+      Boolean(reviewedPaths) &&
+      descendantPaths.length > 0 &&
+      descendantPaths.every((path) => reviewedPaths?.has(path) && !stalePaths?.has(path));
     return (
       <div>
         <button
@@ -246,7 +471,9 @@ function TreeNodeRow({
           }}
           aria-expanded={isExpanded}
           className={clsx(
-            'text-ink-2 relative flex h-[26px] w-full items-center gap-1.5 rounded-md px-2 text-left text-[13px] transition-colors hover:bg-glass-medium/50',
+            'relative flex h-[26px] w-full items-center gap-1.5 px-2 text-left text-[13px] transition-colors hover:bg-glass-medium/50',
+            isFolderFullyReviewed ? 'text-status-done' : 'text-ink-2',
+            isFolderFullyReviewed && !stickyFolders && 'bg-status-done-soft',
             stickyFolders && 'bg-bg-0 sticky z-10',
           )}
           style={
@@ -259,6 +486,9 @@ function TreeNodeRow({
               : { paddingLeft }
           }
         >
+          {isFolderFullyReviewed && stickyFolders && (
+            <span className="bg-status-done-soft pointer-events-none absolute inset-0" aria-hidden />
+          )}
           {guides}
           {isExpanded ? (
             <ChevronDown className="text-ink-3 h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -269,6 +499,14 @@ function TreeNodeRow({
           <span className="min-w-0 truncate" title={node.name}>
             <PathName name={node.name} />
           </span>
+          {reviewedPaths && onToggleReviewed && (
+            <FolderReviewCheck
+              paths={filePathsUnder(node.path)}
+              reviewedPaths={reviewedPaths}
+              stalePaths={stalePaths}
+              onToggleReviewed={onToggleReviewed}
+            />
+          )}
         </button>
         {isExpanded &&
           node.children?.map((child) => (
@@ -287,6 +525,13 @@ function TreeNodeRow({
               getLlmThreadCount={getLlmThreadCount}
               stickyFolders={stickyFolders}
               stickyFolderBaseZIndex={stickyFolderBaseZIndex}
+              reviewedPaths={reviewedPaths}
+              stalePaths={stalePaths}
+              onToggleReviewed={onToggleReviewed}
+              onToggleRowReviewed={onToggleRowReviewed}
+              filePathsUnder={filePathsUnder}
+              selectedPaths={selectedPaths}
+              onRowClick={onRowClick}
             />
           ))}
       </div>
@@ -302,22 +547,45 @@ function TreeNodeRow({
   const draftCount = getDraftCount(node.path);
   const llmThreadCount = getLlmThreadCount(node.path);
   const isSelected = node.path === selectedPath;
+  const showReview = Boolean(reviewedPaths && onToggleReviewed);
+  const isReviewed = reviewedPaths?.has(node.path) ?? false;
+  const isStale = stalePaths?.has(node.path) ?? false;
+  const isMultiSelected = selectedPaths.size > 1 && selectedPaths.has(node.path);
 
   return (
     <button
-      onClick={() => onSelectFile(node.path)}
+      onClick={(event) => onRowClick(node.path, event)}
       aria-current={isSelected ? 'true' : undefined}
+      aria-selected={isMultiSelected || undefined}
       data-file-path={node.path}
       className={clsx(
-        'relative flex h-[26px] w-full items-center gap-1.5 rounded-md px-2 text-left text-[13px] transition-colors',
+        'relative flex h-[26px] w-full items-center gap-1.5 px-2 text-left text-[13px] transition-colors',
         isSelected
           ? 'text-ink-0 bg-glass-medium shadow-[inset_2px_0_0_var(--acc)]'
-          : 'text-ink-1 hover:bg-glass-medium/50',
+          : isMultiSelected
+            ? 'bg-acc-soft text-ink-0'
+            : isReviewed && !isStale
+              ? 'text-status-done bg-status-done-soft hover:bg-status-done-soft'
+              : 'text-ink-1 hover:bg-glass-medium/50',
       )}
-      style={{ paddingLeft: 8 + depth * indent + 21 }}
+      style={{ paddingLeft: 8 + depth * indent + (showReview ? 6 : 21) }}
     >
       {guides}
-      <File className="text-ink-3 h-[15px] w-[15px] shrink-0" aria-hidden />
+      {showReview ? (
+        <ReviewCheck
+          checked={isReviewed}
+          stale={isStale}
+          size={14}
+          title={
+            isMultiSelected
+              ? `${isReviewed ? 'Unmark' : 'Mark'} ${selectedPaths.size} selected files`
+              : undefined
+          }
+          onToggle={(next) => onToggleRowReviewed(node.path, next)}
+        />
+      ) : (
+        <File className="text-ink-3 h-[15px] w-[15px] shrink-0" aria-hidden />
+      )}
       <span className={clsx('min-w-0 truncate', node.status === 'deleted' && 'line-through')}>
         {node.name}
       </span>
@@ -383,6 +651,43 @@ function TreeNodeRow({
   );
 }
 
+function FolderReviewCheck({
+  paths,
+  reviewedPaths,
+  stalePaths,
+  onToggleReviewed,
+}: {
+  paths: string[];
+  reviewedPaths: Set<string>;
+  stalePaths?: Set<string>;
+  onToggleReviewed: (paths: string[], reviewed: boolean) => void;
+}) {
+  const reviewedCount = paths.filter(
+    (path) => reviewedPaths.has(path) && !stalePaths?.has(path),
+  ).length;
+  const staleCount = paths.filter((path) => stalePaths?.has(path)).length;
+  const isComplete = paths.length > 0 && reviewedCount === paths.length;
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+      <span className="text-ink-4 font-mono text-[9.5px] tabular-nums">
+        {reviewedCount}/{paths.length}
+      </span>
+      <ReviewCheck
+        checked={isComplete}
+        stale={!isComplete && staleCount > 0}
+        partial={reviewedCount > 0 && !isComplete}
+        size={14}
+        title={
+          isComplete
+            ? `Unmark ${paths.length} files`
+            : `Mark all ${paths.length} files reviewed`
+        }
+        onToggle={(next) => onToggleReviewed(paths, next)}
+      />
+    </span>
+  );
+}
+
 function PathName({ name }: { name: string }) {
   const parts = name.split('/');
   const leaf = parts.pop() ?? name;
@@ -399,13 +704,20 @@ function buildTree(files: DiffFile[]): TreeNode[] {
   const folderMap = new Map<string, TreeNode>();
 
   for (const file of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
-    const parts = file.path.split('/');
+    // Pull request paths are repo-absolute ("/src/a.ts"); worktree paths are
+    // relative ("src/a.ts"). Split off any leading slash and put it back on the
+    // first segment, so folder paths stay a true prefix of their files' paths
+    // instead of producing an empty root segment that matches nothing.
+    const rooted = file.path.startsWith('/');
+    const parts = (rooted ? file.path.slice(1) : file.path).split('/');
     let currentLevel = root;
     let currentPath = '';
 
     for (let index = 0; index < parts.length - 1; index++) {
       const part = parts[index];
-      currentPath = currentPath ? `${currentPath}/${part}` : part;
+      currentPath = currentPath
+        ? `${currentPath}/${part}`
+        : `${rooted ? '/' : ''}${part}`;
       let folder = folderMap.get(currentPath);
       if (!folder) {
         folder = { name: part, path: currentPath, type: 'folder', children: [] };

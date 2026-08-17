@@ -104,4 +104,3 @@ Expected: pass.
 **Step 6: No commit**
 
 Leave changes uncommitted.
-

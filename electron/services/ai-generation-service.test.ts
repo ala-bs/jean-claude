@@ -177,6 +177,9 @@ describe('generateText claude-code structured output', () => {
       },
       allowEmptyUsage: true,
     });
+    expect(rateLimitResolveBackendMock).toHaveBeenCalledWith('claude-code', {
+      notify: false,
+    });
   });
 
   it('returns falsy structured output from Claude instead of text fallback', async () => {
@@ -296,6 +299,36 @@ describe('generateText claude-code structured output', () => {
       }),
     );
   });
+
+  it.each(['extraction', 'grounding'])(
+    'advertises zero Claude tools and denies attempted tools for Agent Memory %s',
+    async (phase) => {
+      queryMock.mockReturnValue(
+        createClaudeQueryResponse({ type: 'result', structured_output: {} }),
+      );
+
+      await generateText({
+        backend: 'claude-code',
+        model: 'default',
+        prompt: `Agent Memory ${phase}`,
+        outputSchema: { type: 'object' },
+        toolPolicy: 'none',
+      });
+
+      const options = queryMock.mock.calls[0][0].options;
+      expect(options.tools).toEqual([]);
+      expect(options.allowedTools).toEqual([]);
+      expect(options.disallowedTools).toEqual(
+        expect.arrayContaining(['Read', 'Bash', 'Glob', 'Grep']),
+      );
+      await expect(
+        options.canUseTool('Read', { file_path: '/etc/passwd' }, {}),
+      ).resolves.toMatchObject({ behavior: 'deny' });
+      await expect(
+        options.canUseTool('Bash', { command: 'pwd' }, {}),
+      ).resolves.toMatchObject({ behavior: 'deny' });
+    },
+  );
 });
 
 describe('generateText opencode structured output', () => {
@@ -461,6 +494,38 @@ describe('generateText opencode structured output', () => {
     }
   });
 
+  it('distinguishes caller cancellation from timeout', async () => {
+    const client = createMockClient(null);
+    let releasePrompt: (() => void) | undefined;
+    client.session.prompt.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releasePrompt = () => resolve({ data: { info: {}, parts: [] } });
+        }),
+    );
+    getOrCreateServerMock.mockResolvedValue({ client });
+    const controller = new AbortController();
+    const generation = generateText({
+      backend: 'opencode',
+      model: 'default',
+      prompt: 'Generate message',
+      outputSchema: { type: 'object' },
+      timeoutMs: 10_000,
+      throwOnError: true,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(client.session.prompt).toHaveBeenCalledOnce());
+    controller.abort(new Error('User disabled Agent Memory'));
+    releasePrompt?.();
+
+    await expect(generation).rejects.toThrow('User disabled Agent Memory');
+    expect(client.session.abort).toHaveBeenCalledWith({
+      sessionID: 'session-1',
+      directory: expect.any(String),
+    });
+  });
+
   it('surfaces OpenCode assistant errors instead of returning null', async () => {
     const client = createMockClient({
       data: {
@@ -564,13 +629,13 @@ describe('generateText opencode structured output', () => {
     await generateText({
       backend: 'opencode',
       model: 'default',
-      prompt: 'Update memory',
-      skillName: 'user-preference-memory',
+      prompt: 'Update generated output',
+      skillName: 'generated-output-maintenance',
       allowedTools: ['Read', 'Write', 'Edit'],
       allowedToolPatterns: {
-        Read: ['.jean-claude/memory/**'],
-        Write: ['.jean-claude/memory/**'],
-        Edit: ['.jean-claude/memory/**'],
+        Read: ['.jean-claude/generated/**'],
+        Write: ['.jean-claude/generated/**'],
+        Edit: ['.jean-claude/generated/**'],
       },
     });
 
@@ -582,22 +647,22 @@ describe('generateText opencode structured output', () => {
             { permission: '*', pattern: '*', action: 'deny' },
             {
               permission: 'read',
-              pattern: '.jean-claude/memory/**',
+              pattern: '.jean-claude/generated/**',
               action: 'allow',
             },
             {
               permission: 'write',
-              pattern: '.jean-claude/memory/**',
+              pattern: '.jean-claude/generated/**',
               action: 'allow',
             },
             {
               permission: 'edit',
-              pattern: '.jean-claude/memory/**',
+              pattern: '.jean-claude/generated/**',
               action: 'allow',
             },
             {
               permission: 'skill',
-              pattern: 'user-preference-memory',
+              pattern: 'generated-output-maintenance',
               action: 'allow',
             },
           ],
@@ -627,6 +692,32 @@ describe('generateText opencode structured output', () => {
         directory: expect.any(String),
       },
       { throwOnError: true },
+    );
+  });
+
+  it.each(['extraction', 'grounding'])('denies and disables OpenCode tools for Agent Memory %s', async (phase) => {
+    const client = createMockClient({
+      data: { info: {}, parts: [{ type: 'text', text: '{}' }] },
+    });
+    getOrCreateServerMock.mockResolvedValue({ client });
+
+    await generateText({
+      backend: 'opencode',
+      model: 'default',
+      prompt: `Agent Memory ${phase}`,
+      toolPolicy: 'none',
+    });
+
+    expect(client.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: { permission: [{ permission: '*', pattern: '*', action: 'deny' }] },
+      }),
+      { throwOnError: true },
+    );
+    expect(client.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({ read: false, bash: false, glob: false, grep: false }),
+      }),
     );
   });
 });

@@ -1,11 +1,11 @@
 import {
+  AGENT_MEMORY_EXTRACTION_BACKENDS,
+  type AgentMemorySetting,
   AppSettings,
   type BackendDefaultModelsSetting,
   type CalendarNotificationsSetting,
   DEFAULT_TASK_NOTIFICATION_MODES,
   normalizePromptPrefaceSetting,
-  PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS,
-  type PreferenceMemorySetting,
   type RateLimitSwapSetting,
   SETTINGS_DEFINITIONS,
   type SummaryModelsSetting,
@@ -198,42 +198,36 @@ function normalizeWorkActivitySetting(
   return { enabled: value.enabled !== false };
 }
 
-function normalizePreferenceMemorySetting(
+function migrateLegacyMemorySettingToAgentMemory(
   value: unknown,
-): PreferenceMemorySetting | null {
-  if (!isRecord(value) || typeof value.enabled !== 'boolean') {
-    return null;
-  }
+): AgentMemorySetting | null {
+  if (!isRecord(value) || typeof value.enabled !== 'boolean') return null;
 
-  const defaults = SETTINGS_DEFINITIONS.preferenceMemory.defaultValue;
+  const defaults = SETTINGS_DEFINITIONS.agentMemory.defaultValue;
   return {
     enabled: value.enabled,
-    consolidationEnabled:
-      typeof value.consolidationEnabled === 'boolean'
-        ? value.consolidationEnabled
-        : defaults.consolidationEnabled,
-    consolidationIntervalMinutes:
+    extractionIntervalMinutes:
       typeof value.consolidationIntervalMinutes === 'number' &&
       Number.isFinite(value.consolidationIntervalMinutes) &&
       value.consolidationIntervalMinutes >= 15
         ? value.consolidationIntervalMinutes
-        : defaults.consolidationIntervalMinutes,
-    consolidationBackend:
+        : defaults.extractionIntervalMinutes,
+    extractionBackend:
       typeof value.consolidationBackend === 'string' &&
-      PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS.includes(
-        value.consolidationBackend as (typeof PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS)[number],
+      AGENT_MEMORY_EXTRACTION_BACKENDS.includes(
+        value.consolidationBackend as (typeof AGENT_MEMORY_EXTRACTION_BACKENDS)[number],
       )
         ? (value.consolidationBackend as AgentBackendType)
-        : defaults.consolidationBackend,
-    consolidationModel:
+        : defaults.extractionBackend,
+    extractionModel:
       typeof value.consolidationModel === 'string'
         ? value.consolidationModel
-        : defaults.consolidationModel,
-    consolidationThinkingEffort: isThinkingEffort(
+        : defaults.extractionModel,
+    extractionThinkingEffort: isThinkingEffort(
       value.consolidationThinkingEffort,
     )
       ? value.consolidationThinkingEffort
-      : defaults.consolidationThinkingEffort,
+      : defaults.extractionThinkingEffort,
   };
 }
 
@@ -259,9 +253,6 @@ function normalizeSettingValue<K extends keyof AppSettings>(
   if (key === 'promptPreface') {
     return normalizePromptPrefaceSetting(value) as AppSettings[K];
   }
-  if (key === 'preferenceMemory') {
-    return normalizePreferenceMemorySetting(value) as AppSettings[K];
-  }
   return null;
 }
 
@@ -280,6 +271,49 @@ async function writeSettingValue<K extends keyof AppSettings>(
       }),
     )
     .execute();
+}
+
+function parseAgentMemorySettingRow(
+  row: { value: string } | undefined,
+): AgentMemorySetting | null {
+  if (!row) return null;
+  try {
+    const value = JSON.parse(row.value) as unknown;
+    return SETTINGS_DEFINITIONS.agentMemory.validate(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function persistMigratedAgentMemorySetting(
+  migrated: AgentMemorySetting,
+): Promise<AgentMemorySetting> {
+  return db.transaction().execute(async (trx) => {
+    const concurrent = await trx
+      .selectFrom('settings')
+      .where('key', '=', 'agentMemory')
+      .selectAll()
+      .executeTakeFirst();
+    const concurrentValue = parseAgentMemorySettingRow(concurrent);
+    if (concurrentValue) return concurrentValue;
+
+    const now = new Date().toISOString();
+    await trx
+      .insertInto('settings')
+      .values({
+        key: 'agentMemory',
+        value: JSON.stringify(migrated),
+        updatedAt: now,
+      })
+      .onConflict((oc) => oc.column('key').doNothing())
+      .execute();
+    const persisted = await trx
+      .selectFrom('settings')
+      .where('key', '=', 'agentMemory')
+      .selectAll()
+      .executeTakeFirst();
+    return parseAgentMemorySettingRow(persisted) ?? migrated;
+  });
 }
 
 function migrateTaskEventNotificationsSetting(
@@ -390,6 +424,39 @@ export const SettingsRepository = {
       .where('key', '=', key)
       .selectAll()
       .executeTakeFirst();
+
+    if (!row && key === 'agentMemory') {
+      const legacyRow = await db
+        .selectFrom('settings')
+        .where('key', '=', 'preferenceMemory')
+        .selectAll()
+        .executeTakeFirst();
+      if (legacyRow) {
+        try {
+          const migrated = migrateLegacyMemorySettingToAgentMemory(
+            JSON.parse(legacyRow.value),
+          );
+          if (migrated && def.validate(migrated)) {
+            try {
+              return (await persistMigratedAgentMemorySetting(
+                migrated,
+              )) as AppSettings[K];
+            } catch (e) {
+              dbg.db(
+                'Failed to persist migrated Agent Memory setting: %O',
+                e,
+              );
+            }
+            return migrated as AppSettings[K];
+          }
+        } catch (e) {
+          dbg.db(
+            'Failed to migrate legacy Preference Memory setting: %O',
+            e,
+          );
+        }
+      }
+    }
 
     if (!row) {
       return def.defaultValue as AppSettings[K];

@@ -1066,6 +1066,8 @@ function ThreadComment({
               markdown={comment.content}
               providerId={providerId}
               mentionDisplayNames={mentionDisplayNames}
+              imageClassName="max-h-72 w-auto object-contain"
+              enableImageModal
             />
           </div>
         )}
@@ -1203,6 +1205,8 @@ export function PrInlineCommentTimeline({
                 markdown={firstComment.content}
                 providerId={providerId}
                 mentionDisplayNames={mentionDisplayNames}
+                imageClassName="max-h-72 w-auto object-contain"
+                enableImageModal
               />
             </div>
           )}

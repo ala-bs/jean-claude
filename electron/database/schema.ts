@@ -6,7 +6,13 @@ import type {
   AiUsageFeature,
   AiUsagePricingStatus,
 } from '@shared/ai-usage-types';
-import type { ProjectType, ProviderType, TaskStatus } from '@shared/types';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
+import type {
+  ProjectType,
+  ProviderType,
+  PrWorkspaceState,
+  TaskStatus,
+} from '@shared/types';
 
 // Re-export shared types for convenience
 export type {
@@ -59,6 +65,7 @@ export interface Database {
   ai_usage_daily_totals: AiUsageDailyTotalTable;
   work_activity_events: WorkActivityEventTable;
   work_item_summaries: WorkItemSummaryTable;
+  mobile_preview_device_usage: MobilePreviewDeviceUsageTable;
 }
 
 export interface TokenTable {
@@ -111,6 +118,7 @@ export interface ProjectTable {
   completionContext: string | null;
   summary: string | null;
   aiSkillSlots: string | null; // JSON text
+  mobilePreviewConfig: string | null; // JSON text
   protectedBranches: string | null; // JSON array of branch names
   favoriteBranches: string | null; // JSON array of branch names
   prPriority: string;
@@ -135,9 +143,12 @@ export interface TaskTable {
   startCommitHash: string | null;
   sourceBranch: string | null;
   branchName: string | null;
+  cleanupWorktreePath: Generated<string | null>;
+  cleanupBranchName: Generated<string | null>;
+  prWorkspaceState: Generated<PrWorkspaceState | null>;
+  prWorkspacePendingAt: Generated<string | null>;
   hasUnread: number; // SQLite boolean: 0 = read, 1 = unread
   userCompleted: number; // SQLite stores booleans as 0/1
-  sessionRules: string | null; // JSON PermissionScope object (e.g. {"bash": {"git status": "allow"}, "read": "allow"})
   sortOrder: number;
   // Provider integration tracking (JSON arrays)
   workItemIds: string | null; // JSON array: ["123", "456"]
@@ -198,6 +209,7 @@ export interface TaskStepTable {
   output: string | null;
   images: string | null; // JSON stringified PromptImagePart[]
   meta: string | null; // JSON, shape depends on type
+  sessionRules: string | null; // JSON PermissionScope object
   autoStart: number; // 0 or 1 (boolean stored as integer)
   archivedAt: string | null;
   sortOrder: number;
@@ -531,3 +543,23 @@ export interface WorkItemSummaryTable {
 export type WorkItemSummaryRow = Selectable<WorkItemSummaryTable>;
 export type NewWorkItemSummaryRow = Insertable<WorkItemSummaryTable>;
 export type UpdateWorkItemSummaryRow = Updateable<WorkItemSummaryTable>;
+
+/**
+ * Remembers which task last ran a mobile preview on a given device, so the
+ * device rail can show a task association even when nothing is streaming.
+ * `deviceKey` is `${platform}:${deviceId}` — one row per device.
+ */
+export interface MobilePreviewDeviceUsageTable {
+  deviceKey: string;
+  platform: MobilePlatform;
+  deviceId: string;
+  taskId: string;
+  lastUsedAt: string;
+}
+
+export type MobilePreviewDeviceUsageRow =
+  Selectable<MobilePreviewDeviceUsageTable>;
+export type NewMobilePreviewDeviceUsageRow =
+  Insertable<MobilePreviewDeviceUsageTable>;
+export type UpdateMobilePreviewDeviceUsageRow =
+  Updateable<MobilePreviewDeviceUsageTable>;

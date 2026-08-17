@@ -151,4 +151,3 @@ Expected: pass.
 **Step 11: No commit**
 
 Leave changes uncommitted.
-

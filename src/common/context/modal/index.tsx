@@ -17,6 +17,7 @@ import {
 } from '@/common/context/keyboard-bindings';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
+import { ModalArbitrationScope } from '@/common/context/modal-arbitration';
 
 
 
@@ -30,6 +31,16 @@ import type {
 } from './types';
 
 const ModalContext = createContext<ModalContextValue | null>(null);
+const QueuedModalOpenContext = createContext(false);
+
+/**
+ * True while a queued modal (modal.confirm/info/error/open) is displayed.
+ * Always-mounted global modals use it to yield: queued modals are exempt from
+ * modal arbitration, so they would otherwise stack on top of them.
+ */
+export function useHasQueuedModal(): boolean {
+  return useContext(QueuedModalOpenContext);
+}
 
 export function ModalProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<QueuedModal[]>([]);
@@ -83,7 +94,9 @@ export function ModalProvider({ children }: { children: ReactNode }) {
 
   return (
     <ModalContext.Provider value={value}>
-      {children}
+      <QueuedModalOpenContext.Provider value={currentModal !== null}>
+        {children}
+      </QueuedModalOpenContext.Provider>
       {currentModal && (
         <ModalExclusiveLayer modal={currentModal} onClose={removeFromQueue} />
       )}
@@ -101,7 +114,12 @@ function ModalExclusiveLayer({
   const layer = useKeyboardLayer('dialog', { exclusive: true });
   return (
     <KeyboardLayerProvider layer={layer}>
-      <ModalRenderer modal={modal} onClose={onClose} />
+      {/* Queued modals are opened by an explicit user action (often from
+          inside an overlay). They must never be suppressed by overlay
+          arbitration, so they render inside their own scope. */}
+      <ModalArbitrationScope>
+        <ModalRenderer modal={modal} onClose={onClose} />
+      </ModalArbitrationScope>
     </KeyboardLayerProvider>
   );
 }
@@ -168,6 +186,7 @@ function ModalRenderer({
     return (
       <Modal
         isOpen
+        overlayClassName="z-[10000]"
         onClose={handleClose}
         title={title}
         closeOnClickOutside={!isLoading}
@@ -207,6 +226,7 @@ function ModalRenderer({
     return (
       <Modal
         isOpen
+        overlayClassName="z-[10000]"
         onClose={handleCancel}
         title={title}
         closeOnClickOutside={!isLoading}
@@ -250,7 +270,12 @@ function ModalRenderer({
     const { title, content } = options as OpenModalOptions;
 
     return (
-      <Modal isOpen onClose={onClose} title={title}>
+      <Modal
+        isOpen
+        overlayClassName="z-[10000]"
+        onClose={onClose}
+        title={title}
+      >
         {typeof content === 'function' ? content(onClose) : content}
       </Modal>
     );
@@ -268,6 +293,7 @@ function ModalRenderer({
     return (
       <Modal
         isOpen
+        overlayClassName="z-[10000]"
         onClose={handleClose}
         title={title}
         closeOnClickOutside={!isLoading}

@@ -4,9 +4,14 @@ import { useEffect } from 'react';
 import { api } from '@/lib/api';
 import type { CacheEvent } from '@shared/cache-events';
 import { feedQueryKeys } from '@/lib/feed-query-keys';
+import type { PermissionsChangedEvent } from '@shared/permission-types';
 
 
-import { applyCacheEvent } from './cache-events';
+import {
+  applyCacheEvent,
+  isPrWorkspaceDecisionTaskEvent,
+  PR_WORKSPACE_DECISIONS_QUERY_KEY,
+} from './cache-events';
 import { shouldApplyCacheEvent } from './cache-subscriptions';
 import { startCacheGarbageCollector } from './cache-gc';
 
@@ -65,7 +70,11 @@ export function getReactQueryKeysForCacheEvent(event: CacheEvent) {
   }
 
   if (event.type === 'project.delete') {
-    queryKeys.push(feedQueryKeys.pullRequests, feedQueryKeys.workItems);
+    queryKeys.push(
+      feedQueryKeys.pullRequests,
+      feedQueryKeys.workItems,
+      PR_WORKSPACE_DECISIONS_QUERY_KEY,
+    );
   }
 
   if (event.type === 'pullRequest.threadsChanged') {
@@ -87,20 +96,83 @@ export function getReactQueryKeysForCacheEvent(event: CacheEvent) {
     queryKeys.push(['tasks', 'allCompleted']);
   }
 
+  if (isPrWorkspaceDecisionTaskEvent(event)) {
+    queryKeys.push(PR_WORKSPACE_DECISIONS_QUERY_KEY);
+  }
+
   return queryKeys;
 }
 
 export function handleCacheEvent(
   event: CacheEvent,
-  queryClient: Pick<QueryClient, 'invalidateQueries'>,
+  queryClient: Pick<QueryClient, 'invalidateQueries'> &
+    Partial<Pick<QueryClient, 'getQueryData'>>,
 ) {
-  if (!shouldApplyCacheEvent(event)) {
+  const queuedDecisions = queryClient.getQueryData?.<
+    Array<{ taskIds: string[] }>
+  >(PR_WORKSPACE_DECISIONS_QUERY_KEY);
+  const deletesQueuedPrWorkspaceTask =
+    event.type === 'task.delete' &&
+    queuedDecisions?.some((decision) =>
+      decision.taskIds.includes(event.taskId),
+    ) === true;
+  const invalidatesPrWorkspaceDecisions =
+    event.type === 'project.delete' ||
+    deletesQueuedPrWorkspaceTask ||
+    isPrWorkspaceDecisionTaskEvent(event);
+  const mustApplyPrWorkspaceDeletion =
+    invalidatesPrWorkspaceDecisions && event.type === 'task.delete';
+
+  if (!shouldApplyCacheEvent(event) && !mustApplyPrWorkspaceDeletion) {
+    if (invalidatesPrWorkspaceDecisions) {
+      void queryClient.invalidateQueries({
+        queryKey: PR_WORKSPACE_DECISIONS_QUERY_KEY,
+      });
+    }
     return;
   }
 
+  const queryKeys = getReactQueryKeysForCacheEvent(event);
+  if (
+    invalidatesPrWorkspaceDecisions &&
+    !queryKeys.includes(PR_WORKSPACE_DECISIONS_QUERY_KEY)
+  ) {
+    queryKeys.push(PR_WORKSPACE_DECISIONS_QUERY_KEY);
+  }
   applyCacheEvent(event);
 
-  for (const queryKey of getReactQueryKeysForCacheEvent(event)) {
+  for (const queryKey of queryKeys) {
+    void queryClient.invalidateQueries({ queryKey });
+  }
+}
+
+/**
+ * Query keys to invalidate when persisted permission rules change anywhere.
+ * Project-scoped changes invalidate that project's key; global changes (or a
+ * change without a known project path) invalidate the whole prefix.
+ */
+export function getPermissionQueryKeysForEvent(
+  event: PermissionsChangedEvent,
+): Array<readonly unknown[]> {
+  if (event.scope === 'global') {
+    return [['globalPermissions'], ['projectPermissions']];
+  }
+  // Session rules live on the step itself and arrive through step cache events.
+  if (event.scope === 'session') {
+    return [];
+  }
+  return [
+    event.projectPath
+      ? ['projectPermissions', event.projectPath]
+      : ['projectPermissions'],
+  ];
+}
+
+export function handlePermissionsChangedEvent(
+  event: PermissionsChangedEvent,
+  queryClient: Pick<QueryClient, 'invalidateQueries'>,
+) {
+  for (const queryKey of getPermissionQueryKeysForEvent(event)) {
     void queryClient.invalidateQueries({ queryKey });
   }
 }
@@ -112,6 +184,13 @@ export function CacheListener() {
     () =>
       api.cache.onEvent((event) => {
         handleCacheEvent(event, queryClient);
+      }),
+    [queryClient],
+  );
+  useEffect(
+    () =>
+      api.permissionEvents.onChanged((event) => {
+        handlePermissionsChangedEvent(event, queryClient);
       }),
     [queryClient],
   );

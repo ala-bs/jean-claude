@@ -50,20 +50,22 @@ import {
   type SnippetVariableContext,
 } from '@/lib/resolve-snippet-template';
 import {
+  reviewCommentToAgentMemoryCapture,
+  synthesizeReviewPrompt,
+  useReviewComments,
+} from '@/stores/review-comments';
+import {
   reviewCommentToPill,
   ReviewPillsQueue,
 } from '@/features/common/ui-review-pills';
 import { Select, type SelectOption } from '@/common/ui/select';
-import {
-  synthesizeReviewPrompt,
-  useReviewComments,
-} from '@/stores/review-comments';
 import {
   useBackendDefaultModelsSetting,
   useBackendsSetting,
   usePromptSnippetsSetting,
 } from '@/hooks/use-settings';
 import { useProject, useProjectFeatureMap } from '@/hooks/use-projects';
+import type { AgentMemoryTaskReviewCapture } from '@shared/agent-memory-types';
 import { BackendModelPresetPicker } from '@/features/agent/ui-backend-model-preset-picker';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
 import { buildWorkItemSnippetContext } from '@/features/new-task/ui-prompt-composer';
@@ -375,6 +377,7 @@ export function AddStepDialog({
   activeStepId,
   projectRoot,
   projectId,
+  canContinue = true,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -389,6 +392,8 @@ export function AddStepDialog({
     images: PromptImagePart[];
     start: boolean;
     includedReviewCommentIds: string[];
+    agentMemoryUserText: string;
+    agentMemoryReviews: AgentMemoryTaskReviewCapture[];
     reviewers?: ReviewerConfig[];
   }) => boolean | Promise<boolean>;
   defaultBackend?: AgentBackendType;
@@ -398,11 +403,15 @@ export function AddStepDialog({
   activeStepId?: string;
   projectRoot?: string | null;
   projectId?: string;
+  canContinue?: boolean;
 }) {
   const layer = useKeyboardLayer('dialog', { exclusive: isOpen });
   const presetType = useNavigationStore(
     (state) => state.addStepDrafts[taskId]?.presetType ?? 'new-session',
   );
+  const presetOptions = canContinue
+    ? STEP_PRESET_OPTIONS
+    : STEP_PRESET_OPTIONS.filter((option) => option.value !== 'continue');
   const setDraftAction = useNavigationStore((state) => state.setAddStepDraft);
   const clearDraftAction = useNavigationStore(
     (state) => state.clearAddStepDraft,
@@ -420,6 +429,13 @@ export function AddStepDialog({
     () => clearDraftAction(taskId),
     [taskId, clearDraftAction],
   );
+
+  useEffect(() => {
+    if (isOpen && !canContinue && presetType === 'continue') {
+      setDraft({ presetType: 'new-session' });
+    }
+  }, [canContinue, isOpen, presetType, setDraft]);
+
   const [interactionMode, setInteractionMode] =
     useState<InteractionMode>('ask');
   const [backend, setBackend] = useState<AgentBackendType>(defaultBackend);
@@ -684,7 +700,11 @@ export function AddStepDialog({
   const handleSubmit = useCallback(async () => {
     const currentDraft = useNavigationStore.getState().addStepDrafts[taskId];
     const promptTemplate = currentDraft?.promptTemplate ?? '';
-    const submitPresetType = currentDraft?.presetType ?? 'new-session';
+    const draftPresetType = currentDraft?.presetType ?? 'new-session';
+    const submitPresetType =
+      !canContinue && draftPresetType === 'continue'
+        ? 'new-session'
+        : draftPresetType;
     const canSubmit =
       submitPresetType === 'review-changes'
         ? reviewersValid
@@ -738,6 +758,10 @@ export function AddStepDialog({
       includedReviewCommentIds: shouldIncludeReviewComments
         ? openReviewComments.map((comment) => comment.id)
         : [],
+      agentMemoryUserText: promptTemplate.trim(),
+      agentMemoryReviews: shouldIncludeReviewComments
+        ? openReviewComments.map(reviewCommentToAgentMemoryCapture)
+        : [],
       reviewers:
         submitPresetType === 'review-changes'
           ? reviewers.map((reviewer) => ({
@@ -750,6 +774,7 @@ export function AddStepDialog({
     if (didConfirm) clearDraft();
   }, [
     taskId,
+    canContinue,
     onConfirm,
     interactionMode,
     backend,
@@ -826,7 +851,7 @@ export function AddStepDialog({
               onChange={(value) =>
                 setDraft({ presetType: value as AddStepPresetType })
               }
-              options={[...STEP_PRESET_OPTIONS]}
+              options={[...presetOptions]}
               shortcut="cmd+t"
               side="top"
             />
@@ -1002,6 +1027,7 @@ export function AddStepDialog({
               backend={backend}
               model={model}
               selectedPresetId={backendModelPresetId}
+              enabledBackends={enabledBackends}
               backendShortcut="cmd+j"
               modelShortcut="cmd+l"
               side="top"

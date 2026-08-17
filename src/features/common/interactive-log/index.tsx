@@ -23,7 +23,13 @@ import { keyEventToTerminalInput } from './key-event-to-terminal-input';
 const TERMINAL_FONT_FAMILY =
   'var(--font-mono), "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols 2", sans-serif';
 
-const LogLine = memo(function LogLine({ entry }: { entry: RunCommandLogLine }) {
+const LogLine = memo(function LogLine({
+  entry,
+  workingDir,
+}: {
+  entry: RunCommandLogLine;
+  workingDir?: string;
+}) {
   return (
     <div
       className={clsx(
@@ -33,20 +39,26 @@ const LogLine = memo(function LogLine({ entry }: { entry: RunCommandLogLine }) {
           : 'text-ink-1 border-ink-4/25 hover:border-ink-3/60',
       )}
     >
-      <AnsiLine line={entry.line} />
+      <AnsiLine line={entry.line} workingDir={workingDir} />
     </div>
   );
 });
 
 const LogChunk = memo(function LogChunk({
   chunk,
+  workingDir,
 }: {
   chunk: RunCommandLogChunk;
+  workingDir?: string;
 }) {
   return (
     <>
       {chunk.lines.map((entry, index) => (
-        <LogLine key={`${entry.timestamp}-${index}`} entry={entry} />
+        <LogLine
+          key={`${entry.timestamp}-${index}`}
+          entry={entry}
+          workingDir={workingDir}
+        />
       ))}
     </>
   );
@@ -68,8 +80,11 @@ export function InteractiveLog({
   stopKeyPropagation = false,
   emptyText = 'Waiting for output...',
   className,
+  workingDir,
 }: {
   log: RunCommandLogState | null;
+  /** Worktree/project dir used to resolve relative file paths in logs. */
+  workingDir?: string;
   taskId: string;
   runCommandId: string;
   isRunning: boolean;
@@ -117,7 +132,7 @@ export function InteractiveLog({
         ignoreBrowserShortcuts &&
         (e.ctrlKey || e.metaKey) &&
         !e.altKey &&
-        (e.key === 'a' || e.key === 'f')
+        (e.key === 'a' || e.key === 'f' || e.key === 'k')
       ) {
         return;
       }
@@ -171,13 +186,19 @@ export function InteractiveLog({
         ) : (
           <>
             {log.chunks.map((chunk) => (
-              <LogChunk key={chunk.id} chunk={chunk} />
+              <LogChunk key={chunk.id} chunk={chunk} workingDir={workingDir} />
             ))}
             {log.pendingLines.stdout && (
-              <LogLine entry={log.pendingLines.stdout} />
+              <LogLine
+                entry={log.pendingLines.stdout}
+                workingDir={workingDir}
+              />
             )}
             {log.pendingLines.stderr && (
-              <LogLine entry={log.pendingLines.stderr} />
+              <LogLine
+                entry={log.pendingLines.stderr}
+                workingDir={workingDir}
+              />
             )}
           </>
         )}

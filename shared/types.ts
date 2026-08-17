@@ -54,6 +54,11 @@ export interface UpdateToken {
 
 export type ProjectType = 'local' | 'git-provider' | 'system';
 export type TaskType = 'agent' | 'skill-creation' | 'feature-map' | 'pr-review';
+export type PrWorkspaceState = 'active' | 'cleanup-pending' | 'kept';
+export type PrWorkspaceResolutionResult = {
+  action: 'deleted' | 'kept';
+  taskIds: string[];
+};
 export type TaskStatus =
   | 'running'
   | 'waiting'
@@ -61,6 +66,104 @@ export type TaskStatus =
   | 'errored'
   | 'interrupted';
 export type InteractionMode = 'ask' | 'auto' | 'plan';
+
+export type MobilePreviewIntegrationMode = 'auto' | 'enabled' | 'disabled';
+export type MobilePreviewProjectStack =
+  | 'expo'
+  | 'react-native'
+  | 'ios'
+  | 'android';
+export type MobilePreviewDetectionConfidence = 'high' | 'medium' | 'low';
+
+export interface MobilePreviewDetectedApp {
+  path: string;
+  stacks: MobilePreviewProjectStack[];
+  androidProjectPath?: string | null;
+  detectedAndroidPackageName?: string | null;
+  detectedIosBundleId?: string | null;
+  detectedAppScheme?: string | null;
+  detectedDependenciesInstallCommand?: string | null;
+  detectedMetroStartCommand?: string | null;
+  detectedAndroidPrebuildCommand?: string | null;
+  detectedIosPrebuildCommand?: string | null;
+  detectedAndroidBuildCommand?: string | null;
+  detectedIosBuildCommand?: string | null;
+  confidence: MobilePreviewDetectionConfidence;
+  reasons: string[];
+}
+
+export interface MobilePreviewProjectConfig {
+  mode: MobilePreviewIntegrationMode;
+  selectedAppPath: string | null;
+  androidProjectPath?: string | null;
+  androidPackageName?: string | null;
+  detectedApps: MobilePreviewDetectedApp[];
+  detectionUpdatedAt: string | null;
+  packageManager?: 'pnpm' | 'npm' | 'yarn' | 'bun' | null;
+  dependenciesInstallCommand?: string | null;
+  metroPort?: number;
+  metroStartCommand?: string | null;
+  androidPrebuildCommand?: string | null;
+  iosPrebuildCommand?: string | null;
+  androidBuildCommand?: string | null;
+  iosBuildCommand?: string | null;
+  iosBundleId?: string | null;
+  /** URL scheme used to deeplink into the app (dev builds use `exp+<scheme>://`). */
+  appScheme?: string | null;
+  mobilePreviewRecordingFolder?: string | null;
+}
+
+export const DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG: MobilePreviewProjectConfig =
+  {
+    mode: 'auto',
+    selectedAppPath: null,
+    androidProjectPath: null,
+    androidPackageName: null,
+    detectedApps: [],
+    detectionUpdatedAt: null,
+    packageManager: null,
+    dependenciesInstallCommand: null,
+    metroPort: 8081,
+    metroStartCommand: null,
+    androidPrebuildCommand: null,
+    iosPrebuildCommand: null,
+    androidBuildCommand: null,
+    iosBuildCommand: null,
+    iosBundleId: null,
+    appScheme: null,
+  };
+
+export function isMobilePreviewProjectConfig(
+  value: unknown,
+): value is MobilePreviewProjectConfig {
+  if (!value || typeof value !== 'object') return false;
+  const config = value as Record<string, unknown>;
+  return (
+    (config.mode === 'auto' ||
+      config.mode === 'enabled' ||
+      config.mode === 'disabled') &&
+    (typeof config.selectedAppPath === 'string' ||
+      config.selectedAppPath === null) &&
+    (typeof config.androidProjectPath === 'string' ||
+      config.androidProjectPath === null ||
+      config.androidProjectPath === undefined) &&
+    (typeof config.iosBundleId === 'string' ||
+      config.iosBundleId === null ||
+      config.iosBundleId === undefined) &&
+    Array.isArray(config.detectedApps) &&
+    (typeof config.detectionUpdatedAt === 'string' ||
+      config.detectionUpdatedAt === null)
+  );
+}
+
+export function isMobilePreviewProjectEnabled(
+  config: MobilePreviewProjectConfig | null | undefined,
+) {
+  if (!config) return false;
+  if (config.mode === 'disabled') return false;
+  if (config.mode === 'enabled') return true;
+  return config.detectedApps.length > 0;
+}
 
 export interface TaskTodoItem {
   id: string;
@@ -270,6 +373,7 @@ export interface Project {
   completionContext: string | null;
   summary: string | null;
   aiSkillSlots: AiSkillSlotsSetting | null;
+  mobilePreviewConfig?: MobilePreviewProjectConfig;
   protectedBranches: string[];
   favoriteBranches: string[];
   prPriority: ProjectPriority;
@@ -309,6 +413,7 @@ export interface NewProject {
   completionContext?: string | null;
   summary?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
+  mobilePreviewConfig?: MobilePreviewProjectConfig;
   protectedBranches?: string[];
   favoriteBranches?: string[];
   prPriority?: ProjectPriority;
@@ -348,6 +453,7 @@ export interface UpdateProject {
   completionContext?: string | null;
   summary?: string | null;
   aiSkillSlots?: AiSkillSlotsSetting | null;
+  mobilePreviewConfig?: MobilePreviewProjectConfig;
   protectedBranches?: string[];
   favoriteBranches?: string[];
   prPriority?: ProjectPriority;
@@ -367,9 +473,9 @@ export interface Task {
   startCommitHash: string | null;
   sourceBranch: string | null;
   branchName: string | null;
+  prWorkspaceState: PrWorkspaceState | null;
   hasUnread: boolean;
   userCompleted: boolean;
-  sessionRules: PermissionScope;
   workItemIds: string[] | null;
   workItemUrls: string[] | null;
   pullRequestId: string | null;
@@ -394,9 +500,9 @@ export interface NewTask {
   startCommitHash?: string | null;
   sourceBranch?: string | null;
   branchName?: string | null;
+  prWorkspaceState?: PrWorkspaceState | null;
   hasUnread?: boolean;
   userCompleted?: boolean;
-  sessionRules?: PermissionScope;
   workItemIds?: string[] | null;
   workItemUrls?: string[] | null;
   updateWorkItemStatus?: boolean;
@@ -418,9 +524,9 @@ export interface UpdateTask {
   startCommitHash?: string | null;
   sourceBranch?: string | null;
   branchName?: string | null;
+  prWorkspaceState?: PrWorkspaceState | null;
   hasUnread?: boolean;
   userCompleted?: boolean;
-  sessionRules?: PermissionScope;
   workItemIds?: string[] | null;
   workItemUrls?: string[] | null;
   pullRequestId?: string | null;
@@ -603,6 +709,7 @@ export interface TaskStep {
   output: string | null;
   images: PromptImagePart[] | null;
   meta: TaskStepMeta;
+  sessionRules: PermissionScope;
   autoStart: boolean;
   archivedAt?: string | null;
   sortOrder: number;
@@ -623,6 +730,7 @@ export interface NewTaskStep {
   agentBackend?: AgentBackendType | null;
   images?: PromptImagePart[] | null;
   meta?: TaskStepMeta;
+  sessionRules?: PermissionScope;
   autoStart?: boolean;
   sortOrder?: number;
 }
@@ -642,6 +750,7 @@ export interface UpdateTaskStep {
   output?: string | null;
   images?: PromptImagePart[] | null;
   meta?: TaskStepMeta;
+  sessionRules?: PermissionScope;
   autoStart?: boolean;
   archivedAt?: string | null;
   sortOrder?: number;
@@ -757,25 +866,23 @@ export interface RawMessageCleanupSetting {
   retentionHours: number;
 }
 
-export interface PreferenceMemorySetting {
+export interface AgentMemorySetting {
   enabled: boolean;
-  consolidationEnabled: boolean;
-  consolidationIntervalMinutes: number;
-  consolidationBackend: AgentBackendType;
-  consolidationModel: ModelPreference;
-  consolidationThinkingEffort: ThinkingEffort;
+  extractionIntervalMinutes: number;
+  extractionBackend: AgentBackendType;
+  extractionModel: ModelPreference;
+  extractionThinkingEffort: ThinkingEffort;
 }
 
-export const DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_INTERVAL_MINUTES = 24 * 60;
-export const PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS = [
+export const DEFAULT_AGENT_MEMORY_EXTRACTION_INTERVAL_MINUTES = 24 * 60;
+export const AGENT_MEMORY_EXTRACTION_BACKENDS = [
   'claude-code',
   'opencode',
 ] as const satisfies readonly AgentBackendType[];
-export const DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_BACKEND: AgentBackendType =
+export const DEFAULT_AGENT_MEMORY_EXTRACTION_BACKEND: AgentBackendType =
   'claude-code';
-export const DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL: ModelPreference =
-  'haiku';
-export const DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT: ThinkingEffort =
+export const DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL: ModelPreference = 'haiku';
+export const DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT: ThinkingEffort =
   'default';
 
 export interface ThinkingSettingsSetting {
@@ -828,6 +935,13 @@ export interface CalendarNotificationsSetting {
 }
 
 export const DEFAULT_CALENDAR_NOTIFICATION_LEAD_TIME_MINUTES = 5;
+
+export interface EureciaSetting {
+  baseUrl: string;
+  axis1Label: string;
+  axis2Label: string;
+  axis3Label: string;
+}
 
 export interface AiSkillSlotConfig {
   backend: AgentBackendType;
@@ -1076,23 +1190,36 @@ function isRawMessageCleanupSetting(v: unknown): v is RawMessageCleanupSetting {
   );
 }
 
-function isPreferenceMemorySetting(v: unknown): v is PreferenceMemorySetting {
-  if (!v || typeof v !== 'object') return false;
+function isAgentMemorySetting(v: unknown): v is AgentMemorySetting {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const obj = v as Record<string, unknown>;
+  if (
+    Object.keys(obj).some(
+      (key) =>
+        ![
+          'enabled',
+          'extractionIntervalMinutes',
+          'extractionBackend',
+          'extractionModel',
+          'extractionThinkingEffort',
+        ].includes(key),
+    )
+  ) {
+    return false;
+  }
   return (
     typeof obj.enabled === 'boolean' &&
-    typeof obj.consolidationEnabled === 'boolean' &&
-    typeof obj.consolidationIntervalMinutes === 'number' &&
-    Number.isFinite(obj.consolidationIntervalMinutes) &&
-    obj.consolidationIntervalMinutes >= 15 &&
-    typeof obj.consolidationBackend === 'string' &&
-    PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS.includes(
-      obj.consolidationBackend as (typeof PREFERENCE_MEMORY_CONSOLIDATION_BACKENDS)[number],
+    typeof obj.extractionIntervalMinutes === 'number' &&
+    Number.isFinite(obj.extractionIntervalMinutes) &&
+    obj.extractionIntervalMinutes >= 15 &&
+    typeof obj.extractionBackend === 'string' &&
+    AGENT_MEMORY_EXTRACTION_BACKENDS.includes(
+      obj.extractionBackend as (typeof AGENT_MEMORY_EXTRACTION_BACKENDS)[number],
     ) &&
-    typeof obj.consolidationModel === 'string' &&
-    typeof obj.consolidationThinkingEffort === 'string' &&
+    typeof obj.extractionModel === 'string' &&
+    typeof obj.extractionThinkingEffort === 'string' &&
     VALID_THINKING_EFFORTS.includes(
-      obj.consolidationThinkingEffort as ThinkingEffort,
+      obj.extractionThinkingEffort as ThinkingEffort,
     )
   );
 }
@@ -1213,6 +1340,57 @@ function isCalendarNotificationsSetting(
   );
 }
 
+function isEureciaSetting(v: unknown): v is EureciaSetting {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const obj = v as Record<string, unknown>;
+  if (
+    Object.keys(obj).length !== 4 ||
+    ![
+      'baseUrl',
+      'axis1Label',
+      'axis2Label',
+      'axis3Label',
+    ].every((key) => key in obj)
+  ) {
+    return false;
+  }
+
+  const labels = [
+    obj.axis1Label,
+    obj.axis2Label,
+    obj.axis3Label,
+  ];
+  if (
+    !labels.every(
+      (label) =>
+        typeof label === 'string' &&
+        label === label.trim() &&
+        label.length > 0 &&
+        label.length <= 100 &&
+        !Array.from(label).some((character) => {
+          const code = character.charCodeAt(0);
+          return code <= 31 || code === 127;
+        }),
+    )
+  ) {
+    return false;
+  }
+
+  if (typeof obj.baseUrl !== 'string') return false;
+  if (obj.baseUrl !== obj.baseUrl.trim()) return false;
+  try {
+    const url = new URL(obj.baseUrl);
+    return (
+      url.protocol === 'https:' &&
+      url.username === '' &&
+      url.password === '' &&
+      (obj.baseUrl === url.origin || obj.baseUrl === `${url.origin}/`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 const VALID_SLOT_KEYS: AiSkillSlotKey[] = [
   'merge-commit-message',
   'commit-message',
@@ -1326,6 +1504,11 @@ function isWorkActivitySetting(value: unknown): value is WorkActivitySetting {
 }
 
 export const SETTINGS_DEFINITIONS = {
+  mobilePreviewRecordingFolder: {
+    defaultValue: null as string | null,
+    validate: (value: unknown): value is string | null =>
+      value === null || typeof value === 'string',
+  },
   editor: {
     defaultValue: { type: 'preset', id: 'vscode' } as EditorSetting,
     validate: isEditorSetting,
@@ -1418,18 +1601,17 @@ export const SETTINGS_DEFINITIONS = {
     } as RawMessageCleanupSetting,
     validate: isRawMessageCleanupSetting,
   },
-  preferenceMemory: {
+  agentMemory: {
     defaultValue: {
       enabled: false,
-      consolidationEnabled: false,
-      consolidationIntervalMinutes:
-        DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_INTERVAL_MINUTES,
-      consolidationBackend: DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_BACKEND,
-      consolidationModel: DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_MODEL,
-      consolidationThinkingEffort:
-        DEFAULT_PREFERENCE_MEMORY_CONSOLIDATION_THINKING_EFFORT,
-    } as PreferenceMemorySetting,
-    validate: isPreferenceMemorySetting,
+      extractionIntervalMinutes:
+        DEFAULT_AGENT_MEMORY_EXTRACTION_INTERVAL_MINUTES,
+      extractionBackend: DEFAULT_AGENT_MEMORY_EXTRACTION_BACKEND,
+      extractionModel: DEFAULT_AGENT_MEMORY_EXTRACTION_MODEL,
+      extractionThinkingEffort:
+        DEFAULT_AGENT_MEMORY_EXTRACTION_THINKING_EFFORT,
+    } as AgentMemorySetting,
+    validate: isAgentMemorySetting,
   },
   thinkingSettings: {
     defaultValue: {
@@ -1472,6 +1654,15 @@ export const SETTINGS_DEFINITIONS = {
       meetingJoinTarget: 'web',
     } as CalendarNotificationsSetting,
     validate: isCalendarNotificationsSetting,
+  },
+  eurecia: {
+    defaultValue: {
+      baseUrl: 'https://plateforme.eurecia.com',
+      axis1Label: 'Project',
+      axis2Label: 'Activity',
+      axis3Label: 'Role',
+    } as EureciaSetting,
+    validate: isEureciaSetting,
   },
   aiSkillSlots: {
     defaultValue: {

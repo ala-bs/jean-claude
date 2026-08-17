@@ -8,12 +8,15 @@ import {
   Link2,
   Loader2,
   MessagesSquare,
+  RefreshCw,
 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   type ReactNode,
   startTransition,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -22,9 +25,13 @@ import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
-import { getOwnerColor, normalizeOwnerName } from '@/features/work-item/utils-owner-color';
+import { getOwnerColor } from '@/features/work-item/utils-owner-color';
+import { getAssigneeDropdownOptions } from '@/lib/work-item-assignee-options';
+
+const EMPTY_STRING_ARRAY: string[] = [];
 import {
   useAddWorkItemComment,
+  useCurrentAzureUser,
   useRelatedTestCases,
   useUpdateWorkItemComment,
   useUpdateWorkItemField,
@@ -39,8 +46,8 @@ import { canShowWorkItemSummary } from '@/lib/work-item-summary';
 import { Kbd } from '@/common/ui/kbd';
 import { ParsedWorkItemTitle } from '@/features/work-item/ui-parsed-work-item-title';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
-import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { UserAvatar } from '@/common/ui/user-avatar';
+import { useWorkItemCommentsPaneWidth } from '@/stores/navigation';
 import { WorkItemGeneratedSummary } from '@/features/work-item/ui-work-item-generated-summary';
 
 
@@ -69,7 +76,7 @@ export function WorkItemPreview({
   showCommentsAside = false,
   readOnly = false,
   editableMetadata = false,
-  assigneeOptions = [],
+  assigneeOptions = EMPTY_STRING_ARRAY,
   iterationOptions = [],
   boardColumns = [],
   tagOptions = [],
@@ -175,6 +182,18 @@ export function WorkItemPreview({
       projectName: projectName ?? null,
       workItemType: workItem?.fields.workItemType ?? null,
     });
+  const { data: currentAzureUser } = useCurrentAzureUser(providerId ?? null);
+  // Board/preview assignee lists are display-name based (unlike the details
+  // panel, which keys owners by unique name) — keep the two value spaces apart.
+  const ownerDropdownOptions = useMemo(
+    () =>
+      getAssigneeDropdownOptions({
+        currentUserName: currentAzureUser?.displayName,
+        assignedTo: workItem?.fields.assignedTo,
+        assigneeOptions,
+      }),
+    [currentAzureUser?.displayName, workItem?.fields.assignedTo, assigneeOptions],
+  );
   const addComment = useAddWorkItemComment();
   const updateComment = useUpdateWorkItemComment();
   const updateState = useUpdateWorkItemState();
@@ -196,6 +215,28 @@ export function WorkItemPreview({
       projectName: projectName ?? null,
       workItemIds: [...new Set(relatedIds)],
     });
+
+  const queryClient = useQueryClient();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleRefresh = useCallback(() => {
+    if (!workItemId) return;
+    setIsRefreshing(true);
+    const keys = [
+      'work-item',
+      'work-items',
+      'work-items-by-ids',
+      'work-item-comments',
+      'work-item-history',
+      'related-test-cases',
+      'related-test-cases-batch',
+      'pull-request-work-items',
+    ];
+    void queryClient
+      .invalidateQueries({
+        predicate: (query) => keys.includes(query.queryKey[0] as string),
+      })
+      .finally(() => setIsRefreshing(false));
+  }, [queryClient, workItemId]);
 
   const hasTestCases = relatedTestCases.length > 0 || !!relatedTestCasesError;
   const canEditMetadata = editableMetadata && !readOnly;
@@ -273,7 +314,7 @@ export function WorkItemPreview({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {(editableMetadata || headerLeading || headerActions) && <div className={isEditorial ? 'border-line flex items-start gap-2 border-b px-4 py-3' : 'border-glass-border flex items-start gap-2 border-b px-3 py-2.5'}>
+      {(editableMetadata || headerLeading || headerActions || !!workItemId) && <div className={isEditorial ? 'border-line flex items-start gap-2 border-b px-4 py-3' : 'border-glass-border flex items-start gap-2 border-b px-3 py-2.5'}>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <WorkItemTypeIcon type={workItemType} size="sm" variant={variant} />
@@ -317,13 +358,7 @@ export function WorkItemPreview({
                   label="Owner"
                   value={assignedTo ?? ''}
                   emptyLabel="Unassigned"
-                  options={[
-                    '',
-                    ...(assignedTo ? [assignedTo] : []),
-                    ...assigneeOptions.filter(
-                      (assignee) => normalizeOwnerName(assignee) !== normalizeOwnerName(assignedTo ?? ''),
-                    ),
-                  ]}
+                  options={ownerDropdownOptions}
                   colorizeOwners
                   disabled={!canEditMetadata || !providerId}
                   onSave={(value) => updateField.mutateAsync({ providerId: providerId!, workItemId: id, field: 'System.AssignedTo', value })}
@@ -413,7 +448,7 @@ export function WorkItemPreview({
                   </div>
                 )}
               </div>
-              {canEditMetadata && providerId && (
+              {providerId && canEditMetadata && (
                 <WorkItemTagEditor
                   key={`${id}:tags:${fields.tags ?? ''}`}
                   value={fields.tags ?? ''}
@@ -423,8 +458,32 @@ export function WorkItemPreview({
               )}
             </div>
           )}
+          {!isEditorial && providerId && !canEditMetadata && (
+            <WorkItemTagEditor
+              key={`${id}:tags:${fields.tags ?? ''}`}
+              value={fields.tags ?? ''}
+              suggestions={tagOptions}
+              readOnly
+              onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })}
+            />
+          )}
         </div>
-        {headerActions && <div className="flex shrink-0 items-center gap-1">{headerActions}</div>}
+        <div className="flex shrink-0 items-center gap-1">
+          {!!workItemId && (
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              title="Refresh work item"
+              className="text-ink-3 hover:text-ink-1 flex items-center rounded p-1 transition-colors disabled:opacity-60"
+            >
+              <RefreshCw
+                className={isRefreshing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
+              />
+            </button>
+          )}
+          {headerActions}
+        </div>
       </div>}
        <div className={isEditorial ? 'border-line flex gap-1 border-b px-3 pt-2' : 'border-glass-border flex gap-0 border-b'}>
         <TabButton

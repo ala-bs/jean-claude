@@ -333,6 +333,13 @@ describe('PrDiffView comment submission', () => {
     );
 
     expect(onAddFileComment).toHaveBeenCalledTimes(2);
+    expect(onAddFileComment).toHaveBeenLastCalledWith({
+      filePath: '/src/file.ts',
+      line: 2,
+      lineEnd: undefined,
+      selectedLines: 'beta changed',
+      content: 'Persist this file comment',
+    });
     expect(
       usePrCommentDraftsStore.getState().drafts[
         prFileKey(7, '/src/file.ts')

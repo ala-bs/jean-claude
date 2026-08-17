@@ -16,6 +16,7 @@ export type SetDocumentResourceOptions<T> = {
 };
 
 const resourceChangeVersions = new Map<string, number>();
+const resourceDeletionVersions = new Map<string, number>();
 
 function getResourceMeta(key: string): ResourceMeta {
   return cache$.resources[key].get() ?? createEmptyResourceMeta();
@@ -66,6 +67,19 @@ export function markResourceChanged(key: string) {
 
 export function getResourceChangeVersion(key: string) {
   return resourceChangeVersions.get(key) ?? 0;
+}
+
+/**
+ * Deletions are tracked separately from generic changes so an in-flight load
+ * started before the delete can never resurrect the entity.
+ */
+export function markResourceDeleted(key: string) {
+  markResourceChanged(key);
+  resourceDeletionVersions.set(key, getResourceDeletionVersion(key) + 1);
+}
+
+export function getResourceDeletionVersion(key: string) {
+  return resourceDeletionVersions.get(key) ?? 0;
 }
 
 export function retainResource(key: string) {

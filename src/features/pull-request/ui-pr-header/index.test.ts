@@ -21,6 +21,12 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
+vi.mock('@/lib/api', () => ({
+  api: {
+    shell: { openInEditor: vi.fn() },
+    tasks: { createPrReviewTask: vi.fn() },
+  },
+}));
 vi.mock('@/hooks/use-pull-requests', () => ({
   useMarkPullRequestDraft: () => ({ mutate: markDraft, isPending: false }),
   usePublishPullRequest: () => ({ mutate: vi.fn(), isPending: false }),
@@ -36,8 +42,11 @@ vi.mock('@/hooks/use-settings', () => ({
 vi.mock('@/hooks/use-projects', () => ({
   useProject: () => ({ data: undefined }),
 }));
+vi.mock('@/hooks/use-tasks', () => ({ invalidateFeedItems: vi.fn() }));
 vi.mock('@/stores/background-jobs', () => ({
-  useBackgroundJobsStore: (selector: (state: Record<string, unknown>) => unknown) =>
+  useBackgroundJobsStore: (
+    selector: (state: Record<string, unknown>) => unknown,
+  ) =>
     selector({
       addRunningJob: vi.fn(),
       markJobSucceeded: vi.fn(),
@@ -52,6 +61,9 @@ vi.mock('@/stores/toasts', () => ({
     selector({ addToast }),
 }));
 vi.mock('../ui-pr-auto-complete', () => ({ PrAutoComplete: () => null }));
+vi.mock('../ui-pr-run-control', () => ({
+  PrRunControl: () => createElement('button', null, 'Start project'),
+}));
 vi.mock('../ui-pr-vote-dropdown', () => ({ PrVoteDropdown: () => null }));
 
 import { PrHeader } from '.';
@@ -219,5 +231,62 @@ describe('PrHeader', () => {
     expect(
       container.querySelector('[aria-label="More pull request actions"]'),
     ).toBeNull();
+  });
+
+  it('orders PR Workspace actions around the project run control', () => {
+    const onDeletePrWorkspaces = vi.fn();
+    flushSync(() => {
+      root.render(
+        withProviders(
+          createElement(PrHeader, {
+            pr,
+            projectId: 'project-1',
+            onDeletePrWorkspaces,
+          }),
+        ),
+      );
+    });
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('Delete PR Workspaces');
+    expect(text.indexOf('New Task')).toBeLessThan(text.indexOf('Start project'));
+    expect(text.indexOf('Start project')).toBeLessThan(
+      text.indexOf('Create Review Workspace'),
+    );
+
+    const deleteButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Delete PR Workspaces',
+    );
+    deleteButton?.click();
+    expect(onDeletePrWorkspaces).toHaveBeenCalledOnce();
+  });
+
+  it('uses wrapping, dynamic-height toolbar contracts at narrow widths', () => {
+    container.style.width = '320px';
+    flushSync(() => {
+      root.render(
+        withProviders(
+          createElement(PrHeader, {
+            pr,
+            projectId: 'project-1',
+            onDeletePrWorkspaces: vi.fn(),
+          }),
+        ),
+      );
+    });
+
+    const toolbar = container.querySelector(
+      '[data-testid="pr-header-toolbar"]',
+    );
+    const actions = container.querySelector(
+      '[data-testid="pr-header-actions"]',
+    );
+    expect(toolbar?.className).toContain('flex-wrap');
+    expect(toolbar?.className).toContain('min-h-[52px]');
+    expect(toolbar?.className.split(' ')).not.toContain('h-[52px]');
+    expect(actions?.className).toContain('flex-wrap');
+    expect(container.textContent).toContain('Delete PR Workspaces');
+    expect(container.textContent).toContain('Create Review Workspace');
+    expect(container.textContent).toContain('Azure DevOps');
   });
 });

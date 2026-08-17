@@ -263,6 +263,20 @@ function normalizeEvent(
       const permissionPatterns = canonicalPermissionPattern
         ? [canonicalPermissionPattern]
         : permission.patterns;
+      const normalizedRequest = normalizeToolRequest(
+        permission.permission,
+        permission.metadata,
+      );
+      const permissionEvaluation = ctx.permissionRules
+        ? evaluatePermissionWithMatch(
+            ctx.permissionRules,
+            normalizedRequest.tool,
+            normalizedRequest.matchValue,
+            normalizedRequest.tool === 'bash'
+              ? String(permission.metadata.command ?? '')
+              : undefined,
+          )
+        : undefined;
       return [
         {
           type: 'permission-request',
@@ -281,6 +295,27 @@ function normalizeEvent(
               alwaysPatterns: permission.always,
             },
             description: permission.permission,
+            ...(permissionEvaluation
+              ? {
+                  permissionEvaluation: {
+                    action:
+                      permission.permission === 'external_directory' &&
+                      !canAutoEvaluateExternalDirectory
+                        ? 'ask'
+                        : permissionEvaluation.action,
+                    matchValue: normalizedRequest.matchValue,
+                    ...(permissionEvaluation.matchedRule
+                      ? {
+                          matchedRule: {
+                            tool: permissionEvaluation.matchedRule.tool,
+                            pattern: permissionEvaluation.matchedRule.pattern,
+                            action: permissionEvaluation.matchedRule.action,
+                          },
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
             directoryAccess,
           },
         },
@@ -801,7 +836,17 @@ function getToolPermission(
   }
 
   const permissionDecision = ctx.permissionRules
-    ? evaluatePermissionWithMatch(ctx.permissionRules, tool, matchValue)
+    ? evaluatePermissionWithMatch(
+        ctx.permissionRules,
+        tool,
+        matchValue,
+        tool === 'bash'
+          ? String(
+              (toolUse.input as Record<string, unknown> | undefined)?.command ??
+                '',
+            )
+          : undefined,
+      )
     : undefined;
   const permission =
     permissionDecision?.action === 'allow'

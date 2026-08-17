@@ -44,8 +44,11 @@ import { PromptGroupDiffModal } from './prompt-group-diff-modal';
 // ── Helpers ────────────────────────────────────────────────────────────
 
 const PROMPT_MAX_CHARS = 300;
+/** Assistant messages at least this long are surfaced in the collapsed view */
+const LONG_ASSISTANT_MESSAGE_MIN_CHARS = 280;
 const RECENT_RUNNING_MESSAGE_COUNT = 5;
 const EMPTY_DISPLAY_MESSAGES: DisplayMessage[] = [];
+const EMPTY_LONG_MESSAGES: Array<{ text: string; entryId: string }> = [];
 
 export function getResultDisplayTokenCount({
   usage,
@@ -432,6 +435,21 @@ function getLastAssistantMessage(
   return null;
 }
 
+/** All substantial assistant messages, in order (used for collapsed view) */
+function getLongAssistantMessages(
+  childMessages: DisplayMessage[],
+): Array<{ text: string; entryId: string }> {
+  const messages: Array<{ text: string; entryId: string }> = [];
+  for (const dm of childMessages) {
+    if (dm.kind !== 'entry' || dm.entry.type !== 'assistant-message') continue;
+    const text = dm.entry.value.trim();
+    if (text.length < LONG_ASSISTANT_MESSAGE_MIN_CHARS) continue;
+    messages.push({ text, entryId: dm.entry.id });
+  }
+
+  return messages;
+}
+
 function getRunningStartDate({
   promptDate,
   previousPromptDate,
@@ -608,7 +626,10 @@ const AgentHeader = memo(function AgentHeader({
           : 'none',
         background: 'var(--theme-agent-panel-header-bg)',
       }}
-      onClick={onToggleDetails}
+      onClick={(event) => {
+        if (hasActiveTextSelectionWithin(event.currentTarget)) return;
+        onToggleDetails();
+      }}
       onContextMenu={onContextMenu}
     >
       {detailsExpanded ? (
@@ -891,6 +912,44 @@ function ResultBlock({
   return content;
 }
 
+/** Long assistant message shown in the collapsed view (no result styling) */
+function AssistantMessageBlock({
+  text,
+  entryId,
+  taskId,
+  onFilePathClick,
+}: {
+  text: string;
+  entryId: string;
+  taskId?: string;
+  onFilePathClick?: (
+    filePath: string,
+    lineStart?: number,
+    lineEnd?: number,
+  ) => void;
+}) {
+  const content = (
+    <div className="text-ink-2 font-mono text-xs leading-relaxed">
+      <div className="flex items-baseline gap-2">
+        <span className="text-ink-4 w-3 shrink-0 text-center">·</span>
+        <div className="min-w-0 flex-1">
+          <MarkdownContent content={text} onFilePathClick={onFilePathClick} />
+        </div>
+      </div>
+    </div>
+  );
+
+  if (taskId) {
+    return (
+      <CommentableWrapper entryId={entryId} taskId={taskId}>
+        {content}
+      </CommentableWrapper>
+    );
+  }
+
+  return content;
+}
+
 /** Running summary — subagent cards, todo checklist, recent messages */
 function RunningSummary({
   activity,
@@ -1091,6 +1150,37 @@ function isFileChangeToolEntry(
   );
 }
 
+/**
+ * True when two tool-reported paths denote the same file.
+ *
+ * Both sides are normally absolute, in which case equality is required. A
+ * relative path is only matched against an absolute one by suffix, since that
+ * is the only case where the same file can be spelled two ways.
+ */
+function pathsMatch(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const aAbsolute = a.startsWith('/');
+  const bAbsolute = b.startsWith('/');
+  if (aAbsolute === bAbsolute) return false;
+  return aAbsolute ? a.endsWith(`/${b}`) : b.endsWith(`/${a}`);
+}
+
+/** The synthetic entry that aggregates every file changed during a turn. */
+function isTurnSummaryEntry(entry: NormalizedEntry): boolean {
+  return (
+    entry.type === 'tool-use' &&
+    entry.name === 'edit' &&
+    (entry as ToolUseByName<'edit'>).input.isTurnSummary === true
+  );
+}
+
+function getEditedFilePaths(entry: NormalizedEntry): string[] {
+  if (!isFileChangeToolEntry(entry)) return [];
+  const files = entry.input.files ?? [{ filePath: entry.input.filePath }];
+  return files.map((file) => file.filePath).filter(Boolean);
+}
+
 export function getFileChangeToolEntries(
   childMessages: DisplayMessage[],
   promptEntry?: NormalizedEntry & { type: 'user-prompt' },
@@ -1125,7 +1215,21 @@ export function getFileChangeToolEntries(
     if (dm.kind === 'skill') dm.childEntries.forEach(addEntry);
   }
 
-  return entries;
+  // A turn summary already reports the final state of every file it lists, so
+  // drop the per-tool entries it supersedes to avoid double-counting.
+  const summaryPaths = entries
+    .filter(isTurnSummaryEntry)
+    .flatMap(getEditedFilePaths);
+
+  if (summaryPaths.length === 0) return entries;
+
+  return entries.filter((entry) => {
+    if (isTurnSummaryEntry(entry)) return true;
+    if (!isFileChangeToolEntry(entry)) return true;
+    return !getEditedFilePaths(entry).some((filePath) =>
+      summaryPaths.some((summaryPath) => pathsMatch(filePath, summaryPath)),
+    );
+  });
 }
 
 function getFileStats(fileChangeEntries: NormalizedEntry[]): FileStats | null {
@@ -1310,6 +1414,25 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
       isAssistantFallback: fallbackAssistantMessage !== null,
     };
   }, [group.childMessages, group.durationMs, group.resultEntry]);
+
+  // Collapsed view: show every long assistant message, not just the last one.
+  // The one already rendered by ResultBlock is excluded to avoid duplication.
+  const shownResultEntryId = resultSummary?.entryId;
+  const shownResultText = resultSummary?.text;
+  const precedingLongMessages = useMemo(() => {
+    if (isActiveGroup || detailsExpanded) return EMPTY_LONG_MESSAGES;
+    const shownText = shownResultText?.trim();
+    const messages = getLongAssistantMessages(group.childMessages).filter(
+      (m) => m.entryId !== shownResultEntryId && m.text !== shownText,
+    );
+    return messages.length > 0 ? messages : EMPTY_LONG_MESSAGES;
+  }, [
+    isActiveGroup,
+    detailsExpanded,
+    group.childMessages,
+    shownResultEntryId,
+    shownResultText,
+  ]);
 
   const completedDurationLabel = useMemo(() => {
     if (isActiveGroup) return null;
@@ -1585,6 +1708,15 @@ export const PromptGroupEntry = memo(function PromptGroupEntry({
                     </div>
                   </div>
                 )}
+                {precedingLongMessages.map((m) => (
+                  <AssistantMessageBlock
+                    key={m.entryId}
+                    text={m.text}
+                    entryId={m.entryId}
+                    taskId={taskId}
+                    onFilePathClick={onFilePathClick}
+                  />
+                ))}
                 {resultSummary ? (
                   <ResultBlock
                     resultText={resultSummary.text}

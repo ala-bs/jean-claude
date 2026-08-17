@@ -45,11 +45,15 @@ export function RateLimitSwapPreview({
   requestedBackend,
   model,
   thinkingEffort,
+  selectedPresetId,
+  suggestedPresetId,
   onApplySuggestion,
 }: {
   requestedBackend: AgentBackendType;
   model?: string | null;
   thinkingEffort?: string | null;
+  selectedPresetId?: string | null;
+  suggestedPresetId?: string | null;
   onApplySuggestion?: (selection: {
     backend: AgentBackendType;
     model: string;
@@ -64,9 +68,10 @@ export function RateLimitSwapPreview({
   const effectiveThinking =
     data.thinkingEffort ?? (backendChanged ? 'default' : thinkingEffort);
   const selectionAlreadyMatchesSuggestion =
-    !backendChanged &&
+    (selectedPresetId != null && selectedPresetId === suggestedPresetId) ||
+    (!backendChanged &&
     effectiveModel === model &&
-    effectiveThinking === thinkingEffort;
+    effectiveThinking === thinkingEffort);
   if (selectionAlreadyMatchesSuggestion) return null;
 
   const details = [

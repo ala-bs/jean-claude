@@ -193,6 +193,18 @@ export function useUpdateProject() {
   });
 }
 
+export function useDetectMobilePreviewProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) =>
+      api.projects.detectMobilePreview(projectId),
+    onSuccess: (_, projectId) => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId] });
+    },
+  });
+}
+
 export function useUploadProjectLogo() {
   const queryClient = useQueryClient();
   return useMutation({

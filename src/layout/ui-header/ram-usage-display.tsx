@@ -3,105 +3,98 @@ import {
   type MemoryUsageSample,
   useMemoryUsage,
 } from '@/hooks/use-memory-usage';
-import { MemoryStick } from 'lucide-react';
+import { Sparkline } from '@/common/ui/sparkline';
 import { Tooltip } from '@/common/ui/tooltip';
+import {
+  formatCpuPercentValue,
+  splitResourceBytes,
+} from '@/lib/format-resource-usage';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useState } from 'react';
 
-function formatBytes(bytes: number): string {
-  const megabytes = bytes / 1_048_576;
-  if (megabytes > 1000) {
-    return `${(megabytes / 1000).toFixed(1).replace('.', ',')}GB`;
-  }
-  if (megabytes >= 1) return `${megabytes.toFixed(0)} MB`;
-  return `${(bytes / 1_024).toFixed(0)} KB`;
-}
+const COLOR_MEM = 'var(--color-acc-ink)';
+const COLOR_PROC = 'var(--color-status-done)';
+const COLOR_CPU = 'var(--color-status-review)';
 
-function formatCpu(percent: number): string {
-  return `${Math.max(0, percent).toFixed(1)}%`;
-}
-
-function getSparklinePath({
+function Spark({
   values,
+  color,
   width,
   height,
-  expectedSampleCount,
+  strokeWidth = 1.3,
+  fillArea = false,
 }: {
   values: number[];
+  color: string;
   width: number;
   height: number;
-  expectedSampleCount: number;
+  strokeWidth?: number;
+  fillArea?: boolean;
 }) {
-  if (values.length === 0) return '';
-
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min;
-  const xStep = expectedSampleCount > 1 ? width / (expectedSampleCount - 1) : 0;
-
-  return values
-    .map((value, index) => {
-      const samplesFromLatest = values.length - 1 - index;
-      const x = width - samplesFromLatest * xStep;
-      const normalized = range === 0 ? 0.5 : (value - min) / range;
-      const y = height - normalized * height;
-      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(' ');
+  return (
+    <Sparkline
+      data={values}
+      width={width}
+      height={height}
+      strokeWidth={strokeWidth}
+      color={color}
+      normalize="minmax"
+      gradientFill={fillArea}
+      fillOpacity={0}
+      className="block"
+    />
+  );
 }
 
-function ResourceMetricRow({
+function Num({
+  value,
+  unit,
+  className,
+}: {
+  value: string;
+  unit: string;
+  className?: string;
+}) {
+  return (
+    <span
+      className={`text-ink-0 font-mono font-semibold tabular-nums tracking-tight ${className ?? ''}`}
+    >
+      {value}
+      <span className="text-ink-3 ml-0.5 text-[0.75em] font-medium">
+        {unit}
+      </span>
+    </span>
+  );
+}
+
+function Cell({
   label,
   value,
+  unit,
   values,
-  formatValue,
+  color,
 }: {
   label: string;
-  value: number;
+  value: string;
+  unit: string;
   values: number[];
-  formatValue: (value: number) => string;
+  color: string;
 }) {
-  const width = 96;
-  const height = 22;
-  const path = getSparklinePath({
-    values,
-    width,
-    height,
-    expectedSampleCount: MAX_MEMORY_USAGE_SAMPLES,
-  });
-
   return (
-    <div className="grid grid-cols-[74px_66px_96px] items-center gap-2 text-[11px]">
-      <div className="text-ink-3 truncate">{label}</div>
-      <div className="text-ink-1 text-right font-mono">
-        {formatValue(value)}
-      </div>
-      <svg
-        width={width}
-        height={height}
-        viewBox={`0 0 ${width} ${height}`}
-        className="overflow-visible"
-        aria-hidden
-      >
-        <path
-          d={`M 0 ${height - 0.5} H ${width}`}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1"
-          className="text-ink-4/25"
-        />
-        {path ? (
-          <path
-            d={path}
-            fill="none"
-            stroke="currentColor"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="1.5"
-            className="text-accent-1"
-          />
-        ) : null}
-      </svg>
+    <div className="flex h-[22px] items-center gap-2">
+      <span className="text-ink-3 min-w-0 flex-1 truncate text-[10.5px]">
+        {label}
+      </span>
+      <Num value={value} unit={unit} className="text-[11.5px]" />
+      <Spark values={values} color={color} width={30} height={11} />
+    </div>
+  );
+}
+
+function ColumnHeading({ children }: { children: string }) {
+  return (
+    <div className="text-ink-4 mb-1 text-[9.5px] font-semibold tracking-[0.08em] uppercase">
+      {children}
     </div>
   );
 }
@@ -116,70 +109,31 @@ export function RamUsageDisplay() {
 
   if (!data) return null;
 
-  const metrics = [
-    {
-      label: 'Total RSS',
-      value: data.totalRssBytes,
-      values: history.map((sample) => sample.totalRssBytes),
-      formatValue: formatBytes,
-    },
-    {
-      label: 'Main RSS',
-      value: data.mainProcess.rssBytes,
-      values: history.map((sample) => sample.mainProcess.rssBytes),
-      formatValue: formatBytes,
-    },
-    {
-      label: 'Main Heap',
-      value: data.mainProcess.heapUsedBytes,
-      values: history.map((sample) => sample.mainProcess.heapUsedBytes),
-      formatValue: formatBytes,
-    },
-    {
-      label: 'Main CPU',
-      value: data.mainProcess.cpuPercent,
-      values: history.map((sample) => sample.mainProcess.cpuPercent),
-      formatValue: formatCpu,
-    },
-    {
-      label: 'Renderer RSS',
-      value: data.rendererProcess.rssBytes,
-      values: history.map((sample) => sample.rendererProcess.rssBytes),
-      formatValue: formatBytes,
-    },
-    {
-      label: 'Renderer Private',
-      value: data.rendererProcess.privateBytes,
-      values: history.map((sample) => sample.rendererProcess.privateBytes),
-      formatValue: formatBytes,
-    },
-    {
-      label: 'Renderer CPU',
-      value: data.rendererProcess.cpuPercent,
-      values: history.map((sample) => sample.rendererProcess.cpuPercent),
-      formatValue: formatCpu,
-    },
-    {
-      label: 'GPU CPU',
-      value: data.gpuCpuPercent,
-      values: history.map((sample) => sample.gpuCpuPercent),
-      formatValue: formatCpu,
-    },
-  ] satisfies Array<{
-    label: string;
-    value: number;
-    values: number[];
-    formatValue: (value: number) => string;
-  }>;
+  const series = {
+    totalRss: history.map((sample) => sample.totalRssBytes),
+    mainRss: history.map((sample) => sample.mainProcess.rssBytes),
+    mainHeap: history.map((sample) => sample.mainProcess.heapUsedBytes),
+    mainCpu: history.map((sample) => sample.mainProcess.cpuPercent),
+    rendererRss: history.map((sample) => sample.rendererProcess.rssBytes),
+    rendererPrivate: history.map(
+      (sample) => sample.rendererProcess.privateBytes,
+    ),
+    rendererCpu: history.map((sample) => sample.rendererProcess.cpuPercent),
+    gpuCpu: history.map((sample) => sample.gpuCpuPercent),
+  };
 
   const oldestSample = history[0] as MemoryUsageSample | undefined;
   const historyMinutes = oldestSample
     ? Math.max(1, Math.round((nowMs - oldestSample.sampledAt) / 60_000))
     : 0;
 
+  const totalCpu =
+    data.mainProcess.cpuPercent + data.rendererProcess.cpuPercent;
+  const totalRss = splitResourceBytes(data.totalRssBytes);
+
   const trigger = (
     <div
-      className="text-ink-2 flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-white/5 focus:outline-none focus-visible:ring-1 focus-visible:ring-white/25"
+      className="border-line-soft hover:border-line flex h-[22px] cursor-pointer items-center gap-1.5 rounded-[5px] border bg-black/25 px-1.5 hover:bg-white/[0.07] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/25"
       role="button"
       tabIndex={0}
       title="Open resource metrics"
@@ -192,13 +146,21 @@ export function RamUsageDisplay() {
         }
       }}
     >
-      <MemoryStick size={14} />
-      <span className="text-xs">
-        {formatBytes(data.totalRssBytes)} ·{' '}
-        {formatCpu(
-          data.mainProcess.cpuPercent + data.rendererProcess.cpuPercent,
-        )}{' '}
-        · GPU {formatCpu(data.gpuCpuPercent)}
+      <Spark
+        values={series.totalRss}
+        color={COLOR_MEM}
+        width={18}
+        height={10}
+      />
+      <span className="text-ink-1 font-mono text-[10.5px] font-semibold tabular-nums">
+        {totalRss.value}
+        <span className="text-ink-3 ml-px font-medium">
+          {totalRss.unit[0]}
+        </span>
+      </span>
+      <span className="text-ink-2 font-mono text-[10.5px] font-semibold tabular-nums">
+        {formatCpuPercentValue(totalCpu)}
+        <span className="text-ink-3 ml-px font-medium">%</span>
       </span>
     </div>
   );
@@ -207,24 +169,106 @@ export function RamUsageDisplay() {
 
   return (
     <Tooltip
+      className="!w-[296px] !overflow-hidden !p-0"
       content={
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between gap-5">
-            <div className="text-ink-1 font-medium">Jean-Claude Resources</div>
-            <div className="text-ink-4 font-mono text-[10px]">
-              {history.length}/{MAX_MEMORY_USAGE_SAMPLES} samples ·{' '}
-              {historyMinutes}m
+        <div>
+          <div className="px-3 pt-2.5 pb-2">
+            <div className="mb-1.5 flex items-center gap-2">
+              <span className="text-ink-3 text-[10.5px] font-semibold tracking-[0.07em] uppercase">
+                Total RSS
+              </span>
+              <div className="flex-1" />
+              <span className="text-ink-4 font-mono text-[10px]">
+                {history.length}/{MAX_MEMORY_USAGE_SAMPLES} samples
+              </span>
+            </div>
+            <div className="flex items-end gap-2.5">
+              <Num
+                {...splitResourceBytes(data.totalRssBytes)}
+                className="text-[22px]"
+              />
+              <div className="mb-0.5 flex-1">
+                <Spark
+                  values={series.totalRss}
+                  color={COLOR_MEM}
+                  width={170}
+                  height={30}
+                  strokeWidth={1.5}
+                  fillArea
+                />
+              </div>
             </div>
           </div>
-          <div className="space-y-1.5">
-            {metrics.map((metric) => (
-              <ResourceMetricRow key={metric.label} {...metric} />
-            ))}
+          <div className="bg-line-soft h-px" />
+          <div className="grid grid-cols-[1fr_1px_1fr]">
+            <div className="px-3 pt-2 pb-2.5">
+              <ColumnHeading>Main</ColumnHeading>
+              <Cell
+                label="RSS"
+                {...splitResourceBytes(data.mainProcess.rssBytes)}
+                values={series.mainRss}
+                color={COLOR_PROC}
+              />
+              <Cell
+                label="Heap"
+                {...splitResourceBytes(data.mainProcess.heapUsedBytes)}
+                values={series.mainHeap}
+                color={COLOR_PROC}
+              />
+              <Cell
+                label="CPU"
+                value={formatCpuPercentValue(data.mainProcess.cpuPercent)}
+                unit="%"
+                values={series.mainCpu}
+                color={COLOR_CPU}
+              />
+            </div>
+            <div className="bg-line-soft" />
+            <div className="px-3 pt-2 pb-2.5">
+              <ColumnHeading>Renderer</ColumnHeading>
+              <Cell
+                label="RSS"
+                {...splitResourceBytes(data.rendererProcess.rssBytes)}
+                values={series.rendererRss}
+                color={COLOR_PROC}
+              />
+              <Cell
+                label="Private"
+                {...splitResourceBytes(data.rendererProcess.privateBytes)}
+                values={series.rendererPrivate}
+                color={COLOR_PROC}
+              />
+              <Cell
+                label="CPU"
+                value={formatCpuPercentValue(data.rendererProcess.cpuPercent)}
+                unit="%"
+                values={series.rendererCpu}
+                color={COLOR_CPU}
+              />
+            </div>
+          </div>
+          <div className="bg-line-soft h-px" />
+          <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5">
+            <span className="text-ink-3 text-[10.5px]">GPU CPU</span>
+            <Num
+              value={formatCpuPercentValue(data.gpuCpuPercent)}
+              unit="%"
+              className="text-[11.5px]"
+            />
+            <Spark
+              values={series.gpuCpu}
+              color={COLOR_CPU}
+              width={34}
+              height={11}
+            />
+            <div className="flex-1" />
+            <span className="text-ink-4 font-mono text-[9.5px]">
+              {historyMinutes}m window
+            </span>
           </div>
         </div>
       }
       side="bottom"
-      minWidth={270}
     >
       {trigger}
     </Tooltip>

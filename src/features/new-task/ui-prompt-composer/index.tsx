@@ -4,7 +4,6 @@ import {
   type DragEvent,
   memo,
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -20,7 +19,6 @@ import {
   Paperclip,
   X,
 } from 'lucide-react';
-import { createPortal } from 'react-dom';
 
 
 import type { AzureDevOpsWorkItem, WorkItemComment } from '@/lib/api';
@@ -57,7 +55,7 @@ import { useToastStore } from '@/stores/toasts';
 
 
 import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
-import { useLatestRef } from '@/hooks/use-latest-ref';
+import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
 
 const EMPTY_IMAGES: PromptImagePart[] = [];
 
@@ -695,7 +693,8 @@ export function PromptComposer({
   );
 
   const handlePaste = useCallback(
-    (e: ClipboardEvent<HTMLElement>) => {
+    (e: ClipboardEvent<HTMLElement> | globalThis.ClipboardEvent) => {
+      if (!e.clipboardData) return;
       const items = Array.from(e.clipboardData.items);
       const imageItems = items.filter((item) => item.type.startsWith('image/'));
       const nextVideoFile = Array.from(e.clipboardData.files).find(isVideoFile);
@@ -1172,7 +1171,6 @@ export function PromptComposer({
           </div>
           <div
             className="flex-1"
-            onPaste={handlePaste}
             onDragOver={handleTextareaDragOver}
           >
             <HandlebarsEditor
@@ -1183,6 +1181,7 @@ export function PromptComposer({
               minHeight="200px"
               maxHeight="500px"
               featureMap={featureMap}
+              onPaste={handlePaste}
             />
           </div>
           <div className="border-glass-border bg-section-strip border-t px-4 py-2">
@@ -1312,93 +1311,15 @@ export function ImagePreviewDialog({
   initialIndex: number;
   onClose: () => void;
 }) {
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const img = images[currentIndex];
-  const previewUrl = previewUrls[currentIndex];
-
-  const onCloseRef = useLatestRef(onClose);
-
-  useEffect(() => {
-    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onCloseRef.current();
-      } else if (e.key === 'ArrowLeft') {
-        setCurrentIndex((i) => Math.max(0, i - 1));
-      } else if (e.key === 'ArrowRight') {
-        setCurrentIndex((i) => Math.min(images.length - 1, i + 1));
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [images.length, onCloseRef]);
-
-  if (!img) return null;
-
-  return createPortal(
-    <div
-      className="bg-bg-0/80 fixed inset-0 z-50 flex items-center justify-center"
-      onClick={onClose}
-    >
-      <button
-        type="button"
-        onClick={onClose}
-        className="bg-bg-1/80 text-ink-1 hover:bg-glass-medium hover:text-ink-0 absolute top-4 right-4 rounded-full p-2"
-        aria-label="Close preview"
-      >
-        <X className="h-5 w-5" />
-      </button>
-
-      {images.length > 1 && currentIndex > 0 && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setCurrentIndex((i) => i - 1);
-          }}
-          className="bg-bg-1/80 text-ink-1 hover:bg-glass-medium hover:text-ink-0 absolute left-4 rounded-full p-2"
-          aria-label="Previous image"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-      )}
-
-      {previewUrl ? (
-        <img
-          src={previewUrl}
-          alt={img.filename || 'Image preview'}
-          className="max-h-[85vh] max-w-[85vw] rounded-lg object-contain"
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <div
-          className="bg-bg-1 text-ink-2 border-glass-border max-w-[85vw] rounded-lg border px-6 py-5 text-sm"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {img.filename ?? img.mimeType}
-        </div>
-      )}
-
-      {images.length > 1 && currentIndex < images.length - 1 && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setCurrentIndex((i) => i + 1);
-          }}
-          className="bg-bg-1/80 text-ink-1 hover:bg-glass-medium hover:text-ink-0 absolute right-4 rounded-full p-2"
-          aria-label="Next image"
-        >
-          <ChevronRight className="h-5 w-5" />
-        </button>
-      )}
-
-      {images.length > 1 && (
-        <div className="text-ink-2 absolute bottom-4 text-sm">
-          {currentIndex + 1} / {images.length}
-        </div>
-      )}
-    </div>,
-    document.body,
+  return (
+    <ImagePreviewModal
+      images={images.map((img, index) => ({
+        src: previewUrls[index],
+        alt: img.filename || 'Image preview',
+        fallbackLabel: img.filename ?? img.mimeType,
+      }))}
+      initialIndex={initialIndex}
+      onClose={onClose}
+    />
   );
 }

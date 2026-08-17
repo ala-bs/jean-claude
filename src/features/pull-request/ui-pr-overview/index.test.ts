@@ -47,10 +47,18 @@ vi.mock('@/hooks/use-pull-requests', () => ({
   }),
 }));
 
-vi.mock('@/lib/image-utils', () => ({
-  MAX_IMAGES: 5,
-  processImageFile,
-}));
+vi.mock('@/lib/image-utils', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/image-utils')>(
+      '@/lib/image-utils',
+    );
+  return {
+    MAX_IMAGES: 5,
+    processImageFile,
+    getAttachmentFileName: actual.getAttachmentFileName,
+    getAzureAttachmentPayload: actual.getAzureAttachmentPayload,
+  };
+});
 
 vi.mock('@/features/common/ui-video-gif-converter', () => ({
   isVideoFile: () => false,
@@ -275,7 +283,9 @@ describe('PR description save locking', () => {
       click(save);
     });
 
-    expect(uploadAttachment).toHaveBeenCalledTimes(1);
+    // Upload starts after an async attachment conversion, so it lands a
+    // microtask later than the click.
+    await waitFor(() => expect(uploadAttachment).toHaveBeenCalledTimes(1));
     expect(updateDescription).not.toHaveBeenCalled();
     expect(container?.querySelector('textarea')).toBe(draft);
     expect(draft.value).toContain('Original description');

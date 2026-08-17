@@ -38,6 +38,7 @@ function createStep(overrides: Partial<TaskStep> = {}): TaskStep {
     output: null,
     images: null,
     meta: {},
+    sessionRules: {},
     autoStart: false,
     sortOrder: 0,
     createdAt: '2026-01-01T00:00:00.000Z',

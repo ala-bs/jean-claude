@@ -1,8 +1,12 @@
 import {
+  DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG,
+  isAiSkillSlotsSetting,
+  isMobilePreviewProjectConfig,
+} from '@shared/types';
+import {
   isWorkItemTitleParserSetting,
   type WorkItemTitleParserSetting,
 } from '@shared/work-item-title-parser-types';
-import { isAiSkillSlotsSetting } from '@shared/types';
 
 import { NewProject, ProjectRow, ProjectType, UpdateProject } from '../schema';
 import { db } from '../index';
@@ -93,6 +97,17 @@ function parseProjectRow(row: ProjectRow) {
       // Malformed JSON — fall back to empty
     }
   }
+  let mobilePreviewConfig = DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG;
+  if (row.mobilePreviewConfig) {
+    try {
+      const parsed: unknown = JSON.parse(row.mobilePreviewConfig);
+      mobilePreviewConfig = isMobilePreviewProjectConfig(parsed)
+        ? parsed
+        : DEFAULT_MOBILE_PREVIEW_PROJECT_CONFIG;
+    } catch {
+      // Malformed JSON — fall back to default
+    }
+  }
   return {
     ...row,
     logoSource:
@@ -104,6 +119,7 @@ function parseProjectRow(row: ProjectRow) {
     autoPullSourceBranch: row.autoPullSourceBranch === 1,
     commitWithNoVerify: row.commitWithNoVerify === 1,
     aiSkillSlots,
+    mobilePreviewConfig,
     workItemTitleParser,
     protectedBranches,
     favoriteBranches,
@@ -155,6 +171,7 @@ export const ProjectRepository = {
       autoPullSourceBranch,
       commitWithNoVerify,
       aiSkillSlots,
+      mobilePreviewConfig,
       workItemTitleParser,
       protectedBranches,
       favoriteBranches,
@@ -172,6 +189,9 @@ export const ProjectRepository = {
         autoPullSourceBranch: autoPullSourceBranch === true ? 1 : 0,
         commitWithNoVerify: commitWithNoVerify === true ? 1 : 0,
         aiSkillSlots: aiSkillSlots ? JSON.stringify(aiSkillSlots) : null,
+        mobilePreviewConfig: mobilePreviewConfig
+          ? JSON.stringify(mobilePreviewConfig)
+          : null,
         workItemTitleParser: serializeWorkItemTitleParser(
           workItemTitleParser ?? null,
         ),
@@ -192,6 +212,7 @@ export const ProjectRepository = {
       autoPullSourceBranch,
       commitWithNoVerify,
       aiSkillSlots,
+      mobilePreviewConfig,
       workItemTitleParser,
       protectedBranches,
       favoriteBranches,
@@ -215,6 +236,11 @@ export const ProjectRepository = {
         }),
         ...(aiSkillSlots !== undefined && {
           aiSkillSlots: aiSkillSlots ? JSON.stringify(aiSkillSlots) : null,
+        }),
+        ...(mobilePreviewConfig !== undefined && {
+          mobilePreviewConfig: mobilePreviewConfig
+            ? JSON.stringify(mobilePreviewConfig)
+            : null,
         }),
         ...serializeWorkItemTitleParserUpdate(workItemTitleParser),
         ...(protectedBranches !== undefined && {

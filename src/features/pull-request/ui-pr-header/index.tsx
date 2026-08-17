@@ -12,6 +12,7 @@ import {
   Loader2,
   MoreHorizontal,
   Plus,
+  RefreshCw,
   Save,
   Send,
   Trash2,
@@ -48,7 +49,9 @@ import { useToastStore } from '@/stores/toasts';
 
 
 import { PrAutoComplete } from '../ui-pr-auto-complete';
+import { PrRunControl } from '../ui-pr-run-control';
 import { PrVoteDropdown } from '../ui-pr-vote-dropdown';
+import type { Task } from '@shared/types';
 
 function getStatusBadge(
   status: AzureDevOpsPullRequestDetails['status'],
@@ -99,16 +102,24 @@ export function PrHeader({
   providerId,
   repoInfo,
   readOnly = false,
+  onRefresh,
+  isRefreshing = false,
+  associatedPrReviewTask,
   onCleanReviewWorkspace,
   isCleaningReviewWorkspace = false,
+  onDeletePrWorkspaces,
 }: {
   pr: AzureDevOpsPullRequestDetails;
   projectId: string;
   providerId?: string;
   repoInfo?: PullRequestRepoInfo;
   readOnly?: boolean;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
+  associatedPrReviewTask?: Task | null;
   onCleanReviewWorkspace?: () => void;
   isCleaningReviewWorkspace?: boolean;
+  onDeletePrWorkspaces?: () => void;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -240,7 +251,10 @@ export function PrHeader({
   return (
     <>
       {/* Top bar — breadcrumb + actions */}
-      <div className="border-glass-border/50 flex h-[52px] shrink-0 items-center gap-2.5 border-b px-5">
+      <div
+        data-testid="pr-header-toolbar"
+        className="border-glass-border/50 flex min-h-[52px] shrink-0 flex-wrap items-center gap-2.5 border-b px-5 py-2"
+      >
         {/* Breadcrumb */}
         <div className="text-ink-3 flex min-w-0 items-center gap-1.5 text-xs">
           {project && (
@@ -266,109 +280,148 @@ export function PrHeader({
           <span className="text-ink-1 font-mono">#{pr.id}</span>
         </div>
 
-        <div className="flex-1" />
-
         {/* Actions */}
-        {onCleanReviewWorkspace && (
-          <button
-            onClick={onCleanReviewWorkspace}
-            disabled={isCleaningReviewWorkspace}
-            className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
-          >
-            {isCleaningReviewWorkspace ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
+        <div
+          data-testid="pr-header-actions"
+          className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2.5"
+        >
+          {onRefresh && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onRefresh}
+              disabled={isRefreshing}
+              aria-label="Refresh pull request"
+              title="Refresh pull request"
+              icon={
+                <RefreshCw
+                  className={isRefreshing ? 'animate-spin' : undefined}
+                />
+              }
+            />
+          )}
+          {onCleanReviewWorkspace && (
+            <button
+              type="button"
+              onClick={onCleanReviewWorkspace}
+              disabled={isCleaningReviewWorkspace}
+              className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {isCleaningReviewWorkspace ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              Clean review workspace
+            </button>
+          )}
+          {onDeletePrWorkspaces && (
+            <button
+              type="button"
+              onClick={onDeletePrWorkspaces}
+              className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+            >
               <Trash2 className="h-3.5 w-3.5" />
-            )}
-            Clean review workspace
-          </button>
-        )}
-        {!readOnly && (
-          <button
-            onClick={handleCreateTaskFromPrBranch}
-            className="bg-acc/15 text-acc-ink border-acc/30 hover:bg-acc/25 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            New Task
-          </button>
-        )}
-        {!readOnly && pr.status === 'active' && (
-          <button
-            onClick={handleReview}
-            disabled={isCreating}
-            className="bg-acc text-ink-0 hover:bg-acc/90 flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
-          >
-            {isCreating ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Eye className="h-3.5 w-3.5" />
-            )}
-            Create Review Workspace
-          </button>
-        )}
+              Delete PR Workspaces
+            </button>
+          )}
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={handleCreateTaskFromPrBranch}
+              className="bg-acc/15 text-acc-ink border-acc/30 hover:bg-acc/25 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New Task
+            </button>
+          )}
+          <PrRunControl
+            projectId={projectId}
+            pullRequestId={pr.id}
+            status={pr.status}
+            readOnly={readOnly}
+            associatedTask={associatedPrReviewTask}
+          />
+          {!readOnly && pr.status === 'active' && (
+            <button
+              type="button"
+              onClick={handleReview}
+              disabled={isCreating}
+              className="bg-acc text-ink-0 hover:bg-acc/90 flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {isCreating ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Eye className="h-3.5 w-3.5" />
+              )}
+              Create Review Workspace
+            </button>
+          )}
 
-        <div className="bg-glass-border mx-1 h-4 w-px" />
+          <div className="bg-glass-border mx-1 h-4 w-px" aria-hidden />
 
-        {/* External links */}
-        {project?.path && (
-          <button
-            onClick={handleOpenInEditor}
+          {/* External links */}
+          {project?.path && (
+            <button
+              type="button"
+              onClick={handleOpenInEditor}
+              className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs transition-colors"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              {editorSetting ? getEditorLabel(editorSetting) : 'Editor'}
+            </button>
+          )}
+          <a
+            href={pr.url}
+            target="_blank"
+            rel="noopener noreferrer"
             className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs transition-colors"
           >
-            <FolderOpen className="h-3.5 w-3.5" />
-            {editorSetting ? getEditorLabel(editorSetting) : 'Editor'}
-          </button>
-        )}
-        <a
-          href={pr.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs transition-colors"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Azure DevOps
-          <Kbd shortcut="cmd+shift+o" className="ml-1 text-[9px]" />
-        </a>
-        {!readOnly && pr.status === 'active' && !pr.isDraft && (
-          <Dropdown
-            align="right"
-            trigger={
-              <button
-                type="button"
-                aria-label="More pull request actions"
-                className="border-glass-border bg-bg-1 hover:bg-bg-2 flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
-              >
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </button>
-            }
-          >
-            <DropdownItem
-              icon={
-                markDraftMutation.isPending ? (
-                  <Loader2 className="animate-spin" />
-                ) : (
-                  <GitPullRequest />
-                )
-              }
-              disabled={markDraftMutation.isPending}
-              onClick={() =>
-                markDraftMutation.mutate(undefined, {
-                  onSuccess: () => {
-                    addToast({
-                      type: 'success',
-                      message: 'Pull request marked as draft',
-                    });
-                  },
-                  onError: (error) => {
-                    addToast({ type: 'error', message: error.message });
-                  },
-                })
+            <ExternalLink className="h-3.5 w-3.5" />
+            Azure DevOps
+            <Kbd shortcut="cmd+shift+o" className="ml-1 text-[9px]" />
+          </a>
+          {!readOnly && pr.status === 'active' && !pr.isDraft && (
+            <Dropdown
+              align="right"
+              trigger={
+                <button
+                  type="button"
+                  aria-label="More pull request actions"
+                  className="border-glass-border bg-bg-1 hover:bg-bg-2 flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </button>
               }
             >
-              Mark as draft
-            </DropdownItem>
-          </Dropdown>
-        )}
+              <DropdownItem
+                icon={
+                  markDraftMutation.isPending ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <GitPullRequest />
+                  )
+                }
+                disabled={markDraftMutation.isPending}
+                onClick={() =>
+                  markDraftMutation.mutate(undefined, {
+                    onSuccess: () => {
+                      addToast({
+                        type: 'success',
+                        message: 'Pull request marked as draft',
+                      });
+                    },
+                    onError: (error) => {
+                      addToast({ type: 'error', message: error.message });
+                    },
+                  })
+                }
+              >
+                Mark as draft
+              </DropdownItem>
+            </Dropdown>
+          )}
+        </div>
       </div>
 
       {/* Header — status + title + meta */}

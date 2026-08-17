@@ -23,6 +23,8 @@ import {
 import { useGenerateSummary, useTaskSummary } from '@/hooks/use-task-summary';
 import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 import {
+  getAttachmentFileName,
+  getAzureAttachmentPayload,
   MAX_FILE_SIZE,
   MAX_IMAGES,
   processImageFile,
@@ -469,6 +471,7 @@ export function PrCreationForm({
         let warningMessage = result.editorCloseWarning ?? null;
 
         if (imagesToUpload.length > 0) {
+          const uploadFailures: string[] = [];
           try {
             let updatedDescription = descriptionToCreate;
             if (imageOnlyDescription) {
@@ -482,24 +485,48 @@ export function PrCreationForm({
               updatedDescription = createdPullRequest.description ?? '';
             }
             for (const image of imagesToUpload) {
-              const attachment =
-                await api.azureDevOps.uploadPullRequestAttachment({
-                  providerId: repoProviderId,
-                  projectId: repoProjectId,
-                  repoId,
-                  pullRequestId: result.id,
-                  fileName: image.filename || 'image.png',
-                  mimeType: image.storageMimeType ?? image.mimeType,
-                  dataBase64: image.storageData ?? image.data,
-                });
-              const pattern = placeholderPattern(image.placeholderMarkdown);
-              const replacement = replaceMarkdownImageUrl(
-                image.placeholderMarkdown,
-                attachment.url,
-              );
-              updatedDescription = pattern?.test(updatedDescription)
-                ? updatedDescription.replace(pattern, replacement)
-                : `${updatedDescription}${updatedDescription ? '\n\n' : ''}${replacement}`;
+              // AVIF storage bytes render broken in Azure DevOps; pick a
+              // format the host actually serves (GIF kept for animation).
+              try {
+                const payload = await getAzureAttachmentPayload(image);
+                const mimeType = payload.mimeType;
+                const attachment =
+                  await api.azureDevOps.uploadPullRequestAttachment({
+                    providerId: repoProviderId,
+                    projectId: repoProjectId,
+                    repoId,
+                    pullRequestId: result.id,
+                    // Extension must match the actual bytes: the host serves
+                    // attachments with a content type derived from it.
+                    fileName: getAttachmentFileName(
+                      image.filename || 'image.png',
+                      mimeType,
+                    ),
+                    mimeType,
+                    dataBase64: payload.dataBase64,
+                  });
+                const pattern = placeholderPattern(image.placeholderMarkdown);
+                const replacement = replaceMarkdownImageUrl(
+                  image.placeholderMarkdown,
+                  attachment.url,
+                );
+                updatedDescription = pattern?.test(updatedDescription)
+                  ? updatedDescription.replace(pattern, replacement)
+                  : `${updatedDescription}${updatedDescription ? '\n\n' : ''}${replacement}`;
+              } catch (uploadError) {
+                // Keep going: already-uploaded images should still land in the
+                // description instead of being discarded by one failure.
+                console.error(
+                  '[pr-creation] attachment upload failed',
+                  { pullRequestId: result.id, fileName: image.filename },
+                  uploadError,
+                );
+                uploadFailures.push(image.filename || 'image');
+                const pattern = placeholderPattern(image.placeholderMarkdown);
+                updatedDescription = pattern
+                  ? updatedDescription.replace(pattern, '')
+                  : updatedDescription;
+              }
             }
             await api.azureDevOps.updatePullRequestDescription({
               providerId: repoProviderId,
@@ -521,10 +548,38 @@ export function PrCreationForm({
               queryClient.invalidateQueries({ queryKey: ['tasks', taskId] }),
             ]);
             invalidateFeedResource(queryClient, 'pullRequests');
-          } catch {
+
+            if (uploadFailures.length > 0) {
+              const partialWarning = `PR created, but ${uploadFailures.length} image(s) could not be uploaded: ${uploadFailures.join(', ')}`;
+              warningMessage = warningMessage
+                ? `${warningMessage}\n${partialWarning}`
+                : partialWarning;
+              addToast({ type: 'error', message: partialWarning });
+            }
+          } catch (error) {
+            const rawDetail =
+              error instanceof Error ? error.message : String(error);
+            const detail =
+              rawDetail.length > 200
+                ? `${rawDetail.slice(0, 200)}…`
+                : rawDetail;
+            console.error(
+              '[pr-creation] failed to attach description images',
+              {
+                pullRequestId: result.id,
+                providerId: repoProviderId,
+                repoProjectId,
+                repoId,
+                imageCount: imagesToUpload.length,
+                imageOnlyDescription,
+              },
+              error,
+            );
+            const detailedWarning = `PR created, but the description could not be updated with attachments: ${detail}`;
             warningMessage = warningMessage
-              ? `${warningMessage}\nPR created, but attachments could not be uploaded.`
-              : 'PR created, but attachments could not be uploaded.';
+              ? `${warningMessage}\n${detailedWarning}`
+              : detailedWarning;
+            addToast({ type: 'error', message: detailedWarning });
           }
         }
 
@@ -538,27 +593,6 @@ export function PrCreationForm({
               pullRequestId: result.id,
               comments: checkedAnnotations,
             });
-            void api.preferenceMemory
-              .recordEvidence({
-                source: 'pr-file-comment',
-                taskId,
-                projectId,
-                comments: checkedAnnotations.map((annotation) => ({
-                  body: annotation.content,
-                  filePath: annotation.filePath,
-                  lineStart: annotation.line,
-                  pullRequestId: result.id,
-                })),
-                context: {
-                  repoId,
-                  azureProjectId: repoProjectId,
-                  pullRequestTitle: displayTitle,
-                  pullRequestUrl: result.url,
-                },
-              })
-              .catch((error: unknown) => {
-                console.warn('Failed to record preference evidence', error);
-              });
           } catch {
             // Comments are best-effort; don't fail the job
             addToast({

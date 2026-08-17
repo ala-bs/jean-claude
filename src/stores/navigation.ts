@@ -1,9 +1,12 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-
+import type {
+  MobilePlatform,
+  MobilePreviewQuality,
+} from '@shared/mobile-simulator-types';
 
 import { clearReviewCommentsForTask } from './review-comments';
 import { clearTaskReviewDraftsForTask } from './task-review-comment-drafts';
@@ -60,6 +63,19 @@ interface FileExplorerState {
 
 type TaskViewMode = 'diff' | 'pr' | undefined;
 
+type LegacyMobilePreviewPane = { type: 'mobilePreview' };
+
+function isLegacyMobilePreviewPane(
+  pane: unknown,
+): pane is LegacyMobilePreviewPane {
+  return (
+    typeof pane === 'object' &&
+    pane !== null &&
+    'type' in pane &&
+    pane.type === 'mobilePreview'
+  );
+}
+
 interface PrDraft {
   title?: string;
   description?: string;
@@ -73,6 +89,22 @@ interface PrViewState {
   selectedCommitId: string | null;
   selectedCommitFile: string | null;
 }
+
+type MobilePreviewVisibleDeviceIdsByPlatform = Record<
+  MobilePlatform,
+  string[] | null
+>;
+
+type MobilePreviewSelectedDevice = {
+  platform: MobilePlatform;
+  deviceId: string;
+};
+
+type MobilePreviewVisibleDeviceIdsUpdate =
+  | MobilePreviewVisibleDeviceIdsByPlatform
+  | ((
+      current: MobilePreviewVisibleDeviceIdsByPlatform,
+    ) => MobilePreviewVisibleDeviceIdsByPlatform);
 
 const defaultPrViewState: PrViewState = {
   selectedFile: null,
@@ -142,6 +174,18 @@ const DEFAULT_TOOL_DIFF_PREVIEW_PANE_WIDTH = 520;
 const MIN_TOOL_DIFF_PREVIEW_PANE_WIDTH = 360;
 const MAX_TOOL_DIFF_PREVIEW_PANE_WIDTH = 1400;
 
+// Constants for mobile preview pane width
+const DEFAULT_MOBILE_PREVIEW_PANE_WIDTH = 420;
+const MIN_MOBILE_PREVIEW_PANE_WIDTH = 320;
+const MAX_MOBILE_PREVIEW_PANE_WIDTH = 1400;
+const LEGACY_DEFAULT_MOBILE_PREVIEW_FPS = 30;
+const DEFAULT_MOBILE_PREVIEW_FPS = 60;
+const MIN_MOBILE_PREVIEW_FPS = 1;
+const MAX_MOBILE_PREVIEW_FPS = 60;
+const DEFAULT_MOBILE_PREVIEW_QUALITY: MobilePreviewQuality = 'high';
+const MOBILE_PREVIEW_QUALITY_DEFAULT_VERSION = 2;
+const EMPTY_MOBILE_PREVIEW_DEVICE_IDS: string[] = [];
+
 // Constants for work item comments pane width
 const DEFAULT_WORK_ITEM_COMMENTS_PANE_WIDTH = 360;
 const MIN_WORK_ITEM_COMMENTS_PANE_WIDTH = 280;
@@ -193,6 +237,34 @@ interface NavigationState {
   // App-level: tool diff preview pane width (global setting)
   toolDiffPreviewPaneWidth: number;
 
+  // App-level: mobile preview pane width (global setting)
+  mobilePreviewPaneWidth: number;
+
+  // App-level: mobile preview frame rate (global setting)
+  mobilePreviewFps: number;
+
+  // App-level: mobile preview quality (global setting)
+  mobilePreviewQuality: MobilePreviewQuality;
+  mobilePreviewQualityDefaultVersion: number;
+
+  // App-level: include network proxy in mobile preview setup flow
+  mobilePreviewAutoStartProxy: boolean;
+
+  // App-level: show pointer gestures over mobile preview
+  mobilePreviewShowGestures: boolean;
+
+  // App-level: mobile preview favorite devices by platform
+  mobilePreviewFavoriteDeviceIdsByPlatform: Record<MobilePlatform, string[]>;
+
+  // App-level: mobile preview visible devices by platform (global setting)
+  mobilePreviewVisibleDeviceIdsByPlatform: MobilePreviewVisibleDeviceIdsByPlatform;
+
+  // Per-task/app key: mobile preview selected device
+  mobilePreviewSelectedDeviceByKey: Record<
+    string,
+    MobilePreviewSelectedDevice | null
+  >;
+
   // App-level: work item comments pane width (global setting)
   workItemCommentsPaneWidth: number;
 
@@ -224,6 +296,26 @@ interface NavigationState {
   setFileExplorerPaneWidth: (width: number) => void;
   setCommandLogsPaneWidth: (width: number) => void;
   setToolDiffPreviewPaneWidth: (width: number) => void;
+  setMobilePreviewPaneWidth: (width: number) => void;
+  setMobilePreviewFps: (fps: number) => void;
+  setMobilePreviewQuality: (quality: MobilePreviewQuality) => void;
+  setMobilePreviewAutoStartProxy: (autoStart: boolean) => void;
+  setMobilePreviewShowGestures: (showGestures: boolean) => void;
+  toggleMobilePreviewFavoriteDeviceId: (
+    platform: MobilePlatform,
+    deviceId: string,
+  ) => void;
+  setMobilePreviewVisibleDeviceIds: (
+    update: MobilePreviewVisibleDeviceIdsUpdate,
+  ) => void;
+  setMobilePreviewSelectedDevice: (
+    key: string,
+    device: MobilePreviewSelectedDevice | null,
+  ) => void;
+  migrateMobilePreviewDeviceSelection: (
+    key: string,
+    legacyKey: string,
+  ) => void;
   setWorkItemCommentsPaneWidth: (width: number) => void;
   setSkillsRailWidth: (width: number) => void;
   setSnippetsRailWidth: (width: number) => void;
@@ -268,6 +360,16 @@ const useStore = create<NavigationState>()(
       fileExplorerPaneWidth: DEFAULT_FILE_EXPLORER_PANE_WIDTH,
       commandLogsPaneWidth: DEFAULT_COMMAND_LOGS_PANE_WIDTH,
       toolDiffPreviewPaneWidth: DEFAULT_TOOL_DIFF_PREVIEW_PANE_WIDTH,
+      mobilePreviewPaneWidth: DEFAULT_MOBILE_PREVIEW_PANE_WIDTH,
+      mobilePreviewFps: DEFAULT_MOBILE_PREVIEW_FPS,
+      mobilePreviewQuality: DEFAULT_MOBILE_PREVIEW_QUALITY,
+      mobilePreviewQualityDefaultVersion:
+        MOBILE_PREVIEW_QUALITY_DEFAULT_VERSION,
+      mobilePreviewAutoStartProxy: false,
+      mobilePreviewShowGestures: true,
+      mobilePreviewFavoriteDeviceIdsByPlatform: { ios: [], android: [] },
+      mobilePreviewVisibleDeviceIdsByPlatform: { ios: null, android: null },
+      mobilePreviewSelectedDeviceByKey: {},
       workItemCommentsPaneWidth: DEFAULT_WORK_ITEM_COMMENTS_PANE_WIDTH,
       skillsRailWidth: DEFAULT_SKILLS_RAIL_WIDTH,
       snippetsRailWidth: DEFAULT_SNIPPETS_RAIL_WIDTH,
@@ -324,6 +426,101 @@ const useStore = create<NavigationState>()(
           ),
         }),
 
+      setMobilePreviewPaneWidth: (width) =>
+        set({
+          mobilePreviewPaneWidth: Math.min(
+            Math.max(MIN_MOBILE_PREVIEW_PANE_WIDTH, width),
+            MAX_MOBILE_PREVIEW_PANE_WIDTH,
+          ),
+        }),
+
+      setMobilePreviewFps: (fps) =>
+        set({
+          mobilePreviewFps: Math.min(
+            Math.max(MIN_MOBILE_PREVIEW_FPS, Math.round(fps)),
+            MAX_MOBILE_PREVIEW_FPS,
+          ),
+        }),
+
+      setMobilePreviewQuality: (quality) =>
+        set({
+          mobilePreviewQuality: quality,
+        }),
+
+      setMobilePreviewAutoStartProxy: (autoStart) =>
+        set({ mobilePreviewAutoStartProxy: autoStart }),
+
+      setMobilePreviewShowGestures: (showGestures) =>
+        set({ mobilePreviewShowGestures: showGestures }),
+
+      toggleMobilePreviewFavoriteDeviceId: (platform, deviceId) =>
+        set((state) => {
+          const existing =
+            state.mobilePreviewFavoriteDeviceIdsByPlatform[platform] ?? [];
+          const isFavorite = existing.includes(deviceId);
+          return {
+            mobilePreviewFavoriteDeviceIdsByPlatform: {
+              ...state.mobilePreviewFavoriteDeviceIdsByPlatform,
+              [platform]: isFavorite
+                ? existing.filter((id) => id !== deviceId)
+                : [...existing, deviceId],
+            },
+          };
+        }),
+
+      setMobilePreviewVisibleDeviceIds: (update) =>
+        set((state) => {
+          const current = state.mobilePreviewVisibleDeviceIdsByPlatform ?? {
+            android: null,
+            ios: null,
+          };
+          const next = typeof update === 'function' ? update(current) : update;
+          return { mobilePreviewVisibleDeviceIdsByPlatform: next };
+        }),
+
+      setMobilePreviewSelectedDevice: (key, device) =>
+        set((state) => {
+          const hasCurrent = Object.hasOwn(
+            state.mobilePreviewSelectedDeviceByKey,
+            key,
+          );
+          const current = state.mobilePreviewSelectedDeviceByKey[key] ?? null;
+          if (
+            hasCurrent &&
+            current?.platform === device?.platform &&
+            current?.deviceId === device?.deviceId
+          ) {
+            return state;
+          }
+          return {
+            mobilePreviewSelectedDeviceByKey: {
+              ...state.mobilePreviewSelectedDeviceByKey,
+              [key]: device,
+            },
+          };
+        }),
+
+      migrateMobilePreviewDeviceSelection: (key, legacyKey) =>
+        set((state) => {
+          const hasSelectedDevice = Object.hasOwn(
+            state.mobilePreviewSelectedDeviceByKey,
+            key,
+          );
+          const hasLegacySelectedDevice = Object.hasOwn(
+            state.mobilePreviewSelectedDeviceByKey,
+            legacyKey,
+          );
+          if (hasSelectedDevice || !hasLegacySelectedDevice) {
+            return state;
+          }
+          return {
+            mobilePreviewSelectedDeviceByKey: {
+              ...state.mobilePreviewSelectedDeviceByKey,
+              [key]: state.mobilePreviewSelectedDeviceByKey[legacyKey] ?? null,
+            },
+          };
+        }),
+
       setWorkItemCommentsPaneWidth: (width) =>
         set({
           workItemCommentsPaneWidth: Math.min(
@@ -377,6 +574,7 @@ const useStore = create<NavigationState>()(
             [taskId]: {
               ...defaultTaskState,
               ...state.taskState[taskId],
+              rightPane: state.taskState[taskId]?.rightPane ?? null,
               activeView: mode,
             },
           },
@@ -709,8 +907,13 @@ const useStore = create<NavigationState>()(
               ([taskId, taskState]) => [
                 taskId,
                 (() => {
-                  const legacyTaskState = taskState as TaskState & {
+                  const legacyTaskState = taskState as unknown as Omit<
+                    TaskState,
+                    'activeView' | 'rightPane'
+                  > & {
+                    activeView?: TaskViewMode | 'mobile';
                     addStepDraft?: AddStepDialogDraft;
+                    rightPane?: RightPane | LegacyMobilePreviewPane | null;
                   };
                   if (legacyTaskState.addStepDraft) {
                     migratedAddStepDrafts[taskId] =
@@ -718,9 +921,24 @@ const useStore = create<NavigationState>()(
                   }
                   const { addStepDraft: _, ...taskStateWithoutDraft } =
                     legacyTaskState;
+                  const rightPane =
+                    isLegacyMobilePreviewPane(
+                      taskStateWithoutDraft.rightPane,
+                    )
+                      ? null
+                      : (taskStateWithoutDraft.rightPane ?? null);
+                  const activeView =
+                    taskStateWithoutDraft.activeView === 'mobile' ||
+                    isLegacyMobilePreviewPane(
+                      taskStateWithoutDraft.rightPane,
+                    )
+                      ? undefined
+                      : taskStateWithoutDraft.activeView;
                   return {
                     ...defaultTaskState,
                     ...taskStateWithoutDraft,
+                    rightPane,
+                    activeView,
                     diffView: {
                       ...defaultDiffViewState,
                       ...taskState.diffView,
@@ -742,6 +960,58 @@ const useStore = create<NavigationState>()(
           };
         }
 
+        merged.mobilePreviewFavoriteDeviceIdsByPlatform = {
+          ios: [],
+          android: [],
+          ...persistedState.mobilePreviewFavoriteDeviceIdsByPlatform,
+        };
+        const legacyVisibleDeviceIdsByKey = (
+          persistedState as {
+            mobilePreviewVisibleDeviceIdsByKey?: Record<
+              string,
+              MobilePreviewVisibleDeviceIdsByPlatform
+            >;
+          }
+        ).mobilePreviewVisibleDeviceIdsByKey;
+        const persistedVisibleDeviceIds =
+          persistedState.mobilePreviewVisibleDeviceIdsByPlatform ??
+          // Legacy: per project/app key map -> first non-null list per platform
+          Object.values(legacyVisibleDeviceIdsByKey ?? {}).reduce<
+            MobilePreviewVisibleDeviceIdsByPlatform
+          >(
+            (acc, entry) => ({
+              ios: acc.ios ?? entry?.ios ?? null,
+              android: acc.android ?? entry?.android ?? null,
+            }),
+            { ios: null, android: null },
+          );
+        merged.mobilePreviewVisibleDeviceIdsByPlatform = {
+          ios: persistedVisibleDeviceIds.ios ?? null,
+          android: persistedVisibleDeviceIds.android ?? null,
+        };
+        // Drop legacy per-key map so it stops being re-persisted
+        delete (merged as { mobilePreviewVisibleDeviceIdsByKey?: unknown })
+          .mobilePreviewVisibleDeviceIdsByKey;
+        merged.mobilePreviewSelectedDeviceByKey = {
+          ...persistedState.mobilePreviewSelectedDeviceByKey,
+        };
+        if (
+          persistedState.mobilePreviewQualityDefaultVersion !==
+          MOBILE_PREVIEW_QUALITY_DEFAULT_VERSION
+        ) {
+          merged.mobilePreviewQuality =
+            persistedState.mobilePreviewQuality === undefined ||
+            persistedState.mobilePreviewQuality === 'balanced'
+              ? DEFAULT_MOBILE_PREVIEW_QUALITY
+              : persistedState.mobilePreviewQuality;
+          merged.mobilePreviewQualityDefaultVersion =
+            MOBILE_PREVIEW_QUALITY_DEFAULT_VERSION;
+        }
+        if (
+          persistedState.mobilePreviewFps === LEGACY_DEFAULT_MOBILE_PREVIEW_FPS
+        ) {
+          merged.mobilePreviewFps = DEFAULT_MOBILE_PREVIEW_FPS;
+        }
         return merged as NavigationState;
       },
     },
@@ -874,6 +1144,15 @@ export function useTaskState(taskId: string) {
     () => ({
       ...defaultTaskState,
       ...storedTaskState,
+      rightPane:
+        isLegacyMobilePreviewPane(storedTaskState?.rightPane)
+          ? null
+          : (storedTaskState?.rightPane ?? defaultTaskState.rightPane),
+      activeView:
+        (storedTaskState?.activeView as TaskViewMode | 'mobile') === 'mobile' ||
+        isLegacyMobilePreviewPane(storedTaskState?.rightPane)
+          ? undefined
+          : (storedTaskState?.activeView ?? defaultTaskState.activeView),
       diffView: storedTaskState?.diffView ?? defaultDiffViewState,
     }),
     [storedTaskState],
@@ -1312,6 +1591,119 @@ export function useToolDiffPreviewPaneWidth() {
     setWidth,
     minWidth: MIN_TOOL_DIFF_PREVIEW_PANE_WIDTH,
     maxWidth: MAX_TOOL_DIFF_PREVIEW_PANE_WIDTH,
+  };
+}
+
+// Hook for mobile preview pane width
+export function useMobilePreviewPaneWidth() {
+  const width = useStore((state) => state.mobilePreviewPaneWidth);
+  const setWidth = useStore((state) => state.setMobilePreviewPaneWidth);
+  return {
+    width,
+    setWidth,
+    minWidth: MIN_MOBILE_PREVIEW_PANE_WIDTH,
+    maxWidth: MAX_MOBILE_PREVIEW_PANE_WIDTH,
+  };
+}
+
+// Hook for mobile preview frame rate
+export function useMobilePreviewFps() {
+  const fps = useStore((state) => state.mobilePreviewFps);
+  const setFps = useStore((state) => state.setMobilePreviewFps);
+  return { fps, setFps };
+}
+
+export function useMobilePreviewQuality() {
+  const quality = useStore((state) => state.mobilePreviewQuality);
+  const setQuality = useStore((state) => state.setMobilePreviewQuality);
+  return { quality, setQuality };
+}
+
+export function useMobilePreviewAutoStartProxy() {
+  const autoStartProxy = useStore((state) => state.mobilePreviewAutoStartProxy);
+  const setAutoStartProxy = useStore(
+    (state) => state.setMobilePreviewAutoStartProxy,
+  );
+  return { autoStartProxy, setAutoStartProxy };
+}
+
+export function useMobilePreviewShowGestures() {
+  const showGestures = useStore((state) => state.mobilePreviewShowGestures);
+  const setShowGestures = useStore(
+    (state) => state.setMobilePreviewShowGestures,
+  );
+  return { showGestures, setShowGestures };
+}
+
+export function useMobilePreviewDevicePreferences(platform: MobilePlatform) {
+  const favoriteDeviceIds = useStore(
+    (state) =>
+      state.mobilePreviewFavoriteDeviceIdsByPlatform[platform] ??
+      EMPTY_MOBILE_PREVIEW_DEVICE_IDS,
+  );
+  const toggleFavoriteDeviceIdAction = useStore(
+    (state) => state.toggleMobilePreviewFavoriteDeviceId,
+  );
+
+  const toggleFavoriteDeviceId = useCallback(
+    (deviceId: string) => toggleFavoriteDeviceIdAction(platform, deviceId),
+    [platform, toggleFavoriteDeviceIdAction],
+  );
+
+  return {
+    favoriteDeviceIds,
+    toggleFavoriteDeviceId,
+  };
+}
+
+export function useMobilePreviewDeviceSelection({
+  key,
+  legacyKey,
+}: {
+  key: string;
+  legacyKey?: string;
+}) {
+  const visibleDeviceIdsByPlatform = useStore(
+    (state) => state.mobilePreviewVisibleDeviceIdsByPlatform,
+  );
+  const selectedDevice = useStore(
+    (state) => {
+      if (Object.hasOwn(state.mobilePreviewSelectedDeviceByKey, key)) {
+        return state.mobilePreviewSelectedDeviceByKey[key] ?? null;
+      }
+      return legacyKey
+        ? (state.mobilePreviewSelectedDeviceByKey[legacyKey] ?? null)
+        : null;
+    },
+  );
+  const setVisibleDeviceIdsAction = useStore(
+    (state) => state.setMobilePreviewVisibleDeviceIds,
+  );
+  const setSelectedDeviceAction = useStore(
+    (state) => state.setMobilePreviewSelectedDevice,
+  );
+  const migrateDeviceSelection = useStore(
+    (state) => state.migrateMobilePreviewDeviceSelection,
+  );
+
+  useEffect(() => {
+    if (legacyKey && legacyKey !== key) {
+      migrateDeviceSelection(key, legacyKey);
+    }
+  }, [key, legacyKey, migrateDeviceSelection]);
+
+  const setVisibleDeviceIdsByPlatform = setVisibleDeviceIdsAction;
+  const setSelectedDevice = useCallback(
+    (device: MobilePreviewSelectedDevice | null) =>
+      setSelectedDeviceAction(key, device),
+    [key, setSelectedDeviceAction],
+  );
+
+  return {
+    selectedDevice,
+    setSelectedDevice,
+    setVisibleDeviceIdsByPlatform,
+    visibleDeviceIdsByPlatform,
   };
 }
 

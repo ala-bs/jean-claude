@@ -1,9 +1,14 @@
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 
 import picomatch from 'picomatch';
 import writeFileAtomic from 'write-file-atomic';
 
+import {
+  analyzeScriptEditCommand,
+  SCRIPT_EDIT_TOOL,
+} from '@shared/script-edit-detect';
 import {
   DEFAULT_PROJECT_PROMPT_PREFACE_SETTING,
   isProjectPromptPrefaceSetting,
@@ -12,20 +17,28 @@ import {
 import {
   parseCompoundCommand,
   stripRedirections,
+  stripRedirectionsWithNested,
   validateSubpathArgs,
 } from '@shared/shell-parse';
 
+import {
+  containsDigitRegex,
+  matchPermissionPattern,
+} from '../../shared/permission-pattern';
 import type {
   JeanClaudeSettings,
   PermissionAction,
   PermissionEvalDetails,
   PermissionEvalResult,
   PermissionScope,
+  PermissionSubCommandEval,
   ResolvedPermissionRule,
   ToolPermissionConfig,
   WorktreePermissionScope,
 } from '../../shared/permission-types';
 import { dbg } from '../lib/debug';
+
+import { emitPermissionsChanged } from './permission-event-service';
 
 // Re-export types for convenience
 export type { JeanClaudeSettings, PermissionAction, PermissionEvalResult };
@@ -107,7 +120,7 @@ function legacyArraysToScope(allow: string[], deny: string[]): PermissionScope {
   const applyAction = (entry: string, action: PermissionAction): void => {
     const normalized = parseLegacyPermissionEntry(entry);
     if (!normalized) return;
-    if (isBareBash(normalized.tool, normalized.pattern ?? '*')) return;
+    if (isUnrestrictedBashPattern(normalized.tool, normalized.pattern ?? '*')) return;
 
     if (!normalized.pattern) {
       scope[normalized.tool] = action;
@@ -235,6 +248,61 @@ export async function writeSettings(
   await writeFileAtomic(filePath, JSON.stringify(settings, null, 2) + '\n', {
     encoding: 'utf-8',
   });
+}
+
+/**
+ * Default permissions seeded when a project is added for the first time.
+ * Safe, read/edit-oriented tools are allowed; everything else falls back to ask.
+ */
+const SELF_CONFIG_GUARD: Record<string, PermissionAction> = {
+  // Rules are last-match-wins, so these must come after the `*` entry.
+  // Prevents the agent from silently widening its own permissions or hooks.
+  '**/.jean-claude/**': 'ask',
+  '**/.claude/**': 'ask',
+};
+
+const DEFAULT_PROJECT_PERMISSIONS: PermissionScope = {
+  edit: { '*': 'allow', ...SELF_CONFIG_GUARD },
+  write: { '*': 'allow', ...SELF_CONFIG_GUARD },
+  grep: 'allow',
+  glob: 'allow',
+  read: 'allow',
+};
+
+/**
+ * Seeds `.jean-claude/settings.local.json` with default permissions.
+ * No-op if a settings file (or legacy settings) already exists.
+ */
+export async function seedDefaultProjectPermissions(
+  rootDir: string,
+): Promise<void> {
+  if (!rootDir) {
+    dbg.agentPermission('seedDefaultProjectPermissions: empty rootDir');
+    return;
+  }
+
+  const seeded = await withProjectWriteLock(rootDir, async () => {
+    try {
+      await fs.access(getSettingsPath(rootDir));
+      return false; // already configured
+    } catch {
+      // no settings file yet
+    }
+
+    // Conservative: any parseable legacy `.claude` settings means the project
+    // was already configured elsewhere, so don't overwrite it.
+    if (await readLegacySettings(rootDir)) return false;
+
+    await writeSettings(rootDir, {
+      version: 1,
+      permissions: { project: { ...DEFAULT_PROJECT_PERMISSIONS } },
+    });
+    return true;
+  });
+
+  if (seeded) {
+    emitPermissionsChanged({ scope: 'project', projectPath: rootDir });
+  }
 }
 
 export async function readProjectPromptPreface(
@@ -374,6 +442,11 @@ function expandSubpathPlaceholders(
   workingDir: string,
 ): ResolvedPermissionRule[] {
   return rules.map((rule) => {
+    // The script-edit toggle needs the working dir to verify that every file
+    // the snippet touches stays inside it.
+    if (rule.tool === SCRIPT_EDIT_TOOL) {
+      return { ...rule, subpathRoot: workingDir };
+    }
     if (rule.tool !== 'bash' || !rule.pattern.includes('{subpath}')) {
       return rule;
     }
@@ -398,13 +471,24 @@ function expandSubpathPlaceholders(
  * paths (e.g. `pnpm install /path/to/pkg`).
  */
 function matchBashPattern(pattern: string, value: string): boolean {
-  // Escape regex special chars except * and ?
-  const regexStr = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*+/g, '.*') // any sequence of * → match anything (including /)
-    .replace(/\?/g, '.') // ?  → match single character
-    .replace(/(\.\*)+/g, '.*'); // collapse consecutive .* to prevent ReDoS
+  let regexStr = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i];
+    if (char === '\\' && i + 1 < pattern.length) {
+      regexStr += `\\${pattern[++i]}`;
+    } else if (char === '*') {
+      regexStr += '.*';
+    } else if (char === '?') {
+      regexStr += '.';
+    } else {
+      regexStr += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
   return new RegExp(`^${regexStr}$`).test(value);
+}
+
+function escapeExactBashPattern(value: string): string {
+  return value.replace(/[\\*?]/g, '\\$&');
 }
 
 /**
@@ -426,6 +510,9 @@ const PICOMATCH_OPTIONS: picomatch.PicomatchOptions = { dot: true };
  */
 function matchPattern(pattern: string, value: string, isBash = false): boolean {
   if (pattern === '*') return true;
+  if (containsDigitRegex(pattern)) {
+    return matchPermissionPattern(pattern, value, isBash);
+  }
   if (isBash) return matchBashPattern(pattern, value);
   return picomatch.isMatch(value, pattern, PICOMATCH_OPTIONS);
 }
@@ -448,11 +535,34 @@ export function evaluatePermission(
   rules: ResolvedPermissionRule[],
   toolKey: string,
   matchValue: string,
+  rawCommand?: string,
 ): PermissionEvalResult {
-  return evaluatePermissionWithMatch(rules, toolKey, matchValue).action;
+  return evaluatePermissionWithMatch(rules, toolKey, matchValue, rawCommand)
+    .action;
 }
 
+/**
+ * @param rawCommand - The unstripped bash command. Required for the
+ *   script-edit auto-allow path, which must see the heredoc body that
+ *   `normalizeToolRequest` sanitizes out of `matchValue`.
+ */
 export function evaluatePermissionWithMatch(
+  rules: ResolvedPermissionRule[],
+  toolKey: string,
+  matchValue: string,
+  rawCommand?: string,
+): PermissionEvalDetails {
+  const details = evaluateBasePermission(rules, toolKey, matchValue);
+
+  if (toolKey === 'bash' && details.action === 'ask' && rawCommand) {
+    const autoAllowed = evaluateScriptEdit(rules, rawCommand);
+    if (autoAllowed) return autoAllowed;
+  }
+
+  return details;
+}
+
+function evaluateBasePermission(
   rules: ResolvedPermissionRule[],
   toolKey: string,
   matchValue: string,
@@ -466,6 +576,143 @@ export function evaluatePermissionWithMatch(
   }
 
   return evaluateSinglePermission(rules, toolKey, matchValue);
+}
+
+/**
+ * Real path of `target`, resolving symlinks. For a path that does not exist
+ * yet (a file the script is about to create), resolve the deepest existing
+ * ancestor and re-append the missing tail, so a symlinked parent directory
+ * still gets caught.
+ *
+ * `realpath` is injectable so the containment rules can be tested without a
+ * real filesystem.
+ */
+export function realpathOrSelf(
+  target: string,
+  realpath: (value: string) => string = fsSync.realpathSync,
+): string {
+  let current = path.resolve(target);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return path.join(realpath(current), ...tail);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Resolve `target` against `root`, following symlinks.
+ *
+ * Returns the paths the caller must use for rule matching, or `null` when the
+ * target escapes the root. Both paths are returned because a symlink can stay
+ * inside the root while pointing at a guarded file (`link -> .jean-claude/...`)
+ * — matching rules against the lexical path alone would miss that, so callers
+ * must check BOTH.
+ */
+export function resolveWithinRoot({
+  root,
+  target,
+  realpath = fsSync.realpathSync,
+}: {
+  root: string;
+  target: string;
+  realpath?: (value: string) => string;
+}): { lexical: string; real: string } | null {
+  const lexical = path.resolve(root, target);
+  if (path.relative(root, lexical).startsWith('..')) return null;
+
+  const realRoot = realpathOrSelf(root, realpath);
+  const real = realpathOrSelf(lexical, realpath);
+  const relative = path.relative(realRoot, real);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+
+  return { lexical, real };
+}
+
+/** True when `target` stays inside `root`, lexically and after symlinks. */
+export function isContainedInRoot(params: {
+  root: string;
+  target: string;
+  realpath?: (value: string) => string;
+}): boolean {
+  return resolveWithinRoot(params) !== null;
+}
+
+/**
+ * Decide whether a bash command that would otherwise prompt can be
+ * auto-allowed because it is a safe, fully-static script edit.
+ *
+ * NOTE: this is a permission-time check; the script runs slightly later, so a
+ * path that is swapped for a symlink in between is a genuine (small) TOCTOU
+ * window — the same one every path-based permission rule already has.
+ */
+function evaluateScriptEdit(
+  rules: ResolvedPermissionRule[],
+  command: string,
+): PermissionEvalDetails | null {
+  // Last match wins, like every other rule. The toggle is scope-wide, so a
+  // narrowing pattern is meaningless and must not be read as a grant.
+  let toggle: ResolvedPermissionRule | undefined;
+  for (const rule of rules) {
+    if (rule.tool === SCRIPT_EDIT_TOOL && rule.pattern === '*') toggle = rule;
+  }
+  if (!toggle || toggle.action === 'ask') return null;
+
+  const analysis = analyzeScriptEditCommand(command);
+  if (!analysis.ok) {
+    dbg.agentPermission(`script edit not auto-allowed: ${analysis.reason}`);
+    return null;
+  }
+
+  // Deny is scoped to script edits, so it must be decided only once the
+  // command is known to be one — otherwise it would swallow every bash
+  // command that happens to need a prompt.
+  if (toggle.action === 'deny') {
+    return { action: 'deny', matchedRule: toggle };
+  }
+
+  const root = toggle.subpathRoot;
+  if (!root) return null;
+
+  const check = (targets: string[], tools: ('read' | 'edit' | 'write')[]): boolean =>
+    targets.every((target) => {
+      const resolved = resolveWithinRoot({ root, target });
+      if (!resolved) {
+        dbg.agentPermission(`script edit escapes working dir: ${target}`);
+        return false;
+      }
+      // The file must be one this agent could have touched with the real
+      // tools, so guards like `**/.jean-claude/**` still apply. A snippet
+      // write can both modify and create, so it must satisfy `edit` AND
+      // `write` — a guard the user put on only one of them still binds.
+      //
+      // Both the written path and its symlink target are matched: `ln -s
+      // .jean-claude/settings.local.json link` stays inside the root, so
+      // matching only the lexical path would walk straight through the guard.
+      const candidates = new Set([resolved.lexical, resolved.real]);
+      return tools.every((tool) =>
+        [...candidates].every((candidate) => {
+          const nested = evaluateSinglePermission(rules, tool, candidate);
+          if (nested.action !== 'allow') {
+            dbg.agentPermission(
+              `script edit blocked by ${tool} rules: ${candidate}`,
+            );
+            return false;
+          }
+          return true;
+        }),
+      );
+    });
+
+  if (!check(analysis.reads, ['read'])) return null;
+  if (!check(analysis.writes, ['edit', 'write'])) return null;
+
+  return { action: 'allow', matchedRule: toggle };
 }
 
 function evaluateSinglePermission(
@@ -508,15 +755,35 @@ function evaluateCompoundPermission(
 ): PermissionEvalDetails {
   let combined: PermissionEvalResult = 'allow';
   let matchedRule: ResolvedPermissionRule | undefined;
+  let denied: PermissionEvalDetails | undefined;
+  const breakdown: PermissionSubCommandEval[] = [];
 
+  // Every subcommand is evaluated even after a deny so `subCommands` is always
+  // a complete breakdown — the UI renders it as the full command.
   for (const subCommand of subCommands) {
     const result = evaluateSinglePermission(rules, 'bash', subCommand);
-    if (result.matchedRule) matchedRule = result.matchedRule;
-    if (result.action === 'deny') return result;
-    if (result.action === 'ask') combined = 'ask';
+    breakdown.push({
+      command: subCommand,
+      action: result.action,
+      matchedRule: result.matchedRule,
+    });
+    if (result.action === 'deny') {
+      denied ??= result;
+      continue;
+    }
+    if (result.action === 'ask') {
+      // Prefer the rule responsible for the final outcome: the first
+      // subcommand that forced `ask`. An allow rule from another subcommand
+      // must not be reported as the reason for the prompt.
+      if (combined !== 'ask') matchedRule = result.matchedRule;
+      combined = 'ask';
+    } else if (combined !== 'ask') {
+      matchedRule ??= result.matchedRule;
+    }
   }
 
-  return { action: combined, matchedRule };
+  if (denied) return { ...denied, subCommands: breakdown };
+  return { action: combined, matchedRule, subCommands: breakdown };
 }
 
 // ---------------------------------------------------------------------------
@@ -527,10 +794,10 @@ function evaluateCompoundPermission(
  * Returns true if a permission string represents bare "bash" without a
  * specific command. Bare bash must never be allowed.
  */
-function isBareBash(tool: string, pattern: string): boolean {
-  const t = tool.toLowerCase();
-  const p = pattern.trim();
-  return t === 'bash' && (p === '*' || p === '' || p === '**');
+export function isUnrestrictedBashPattern(tool: string, pattern: string): boolean {
+  return (
+    tool.toLowerCase() === 'bash' && pattern.replaceAll(/[*?]/g, '').trim() === ''
+  );
 }
 
 /**
@@ -554,7 +821,15 @@ export function normalizeToolRequest(
     case 'bash':
       return {
         tool: 'bash',
-        matchValue: stripRedirections(String(input.command ?? '')),
+        // Commands nested in heredoc bodies and substitution redirect targets
+        // are appended to the stripped text so they stay visible to
+        // `parseCompoundCommand` and cannot ride along on an allow rule.
+        matchValue:
+          input.__permissionExact === true
+            ? escapeExactBashPattern(
+                stripRedirectionsWithNested(String(input.command ?? '')),
+              )
+            : stripRedirectionsWithNested(String(input.command ?? '')),
       };
     case 'read':
       return {
@@ -658,7 +933,7 @@ export async function addProjectPermission(
 ): Promise<void> {
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
 
-  if (isBareBash(tool, matchValue || '*')) {
+  if (isUnrestrictedBashPattern(tool, matchValue)) {
     dbg.agentPermission(
       'Refusing to allow bare "bash" — a specific command pattern is required',
     );
@@ -672,6 +947,7 @@ export async function addProjectPermission(
   });
 
   await writeSettings(projectPath, settings);
+  emitPermissionsChanged({ scope: 'project', projectPath });
 }
 
 /**
@@ -680,36 +956,67 @@ export async function addProjectPermission(
  *
  * Security: refuses to add bare bash (no command pattern).
  */
-export async function addWorktreePermission(
+export function addWorktreePermission(
   projectPath: string,
   toolName: string,
   input: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean>;
+export function addWorktreePermission<T>(
+  projectPath: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  afterPersisted: () => Promise<T>,
+): Promise<T | false>;
+export async function addWorktreePermission<T>(
+  projectPath: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  afterPersisted?: () => Promise<T>,
+): Promise<boolean | T> {
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
 
-  if (isBareBash(tool, matchValue || '*')) {
+  if (isUnrestrictedBashPattern(tool, matchValue)) {
     dbg.agentPermission(
       'Refusing to allow bare "bash" — a specific command pattern is required',
     );
-    return;
+    return false;
   }
 
-  const settings = await readSettings(projectPath);
+  return withProjectWriteLock(projectPath, async () => {
+    const settings = await readSettings(projectPath);
+    const hadWorktreeScope = settings.permissions.worktrees !== undefined;
+    if (!settings.permissions.worktrees) {
+      settings.permissions.worktrees = { extends: 'project' };
+    }
 
-  if (!settings.permissions.worktrees) {
-    settings.permissions.worktrees = { extends: 'project' };
-  }
+    const previous = settings.permissions.worktrees[tool];
+    settings.permissions.worktrees[tool] = buildToolPermissionConfig({
+      existing:
+        previous === 'project' || previous === undefined
+          ? undefined
+          : (previous as ToolPermissionConfig),
+      matchValue,
+    });
 
-  const existing = settings.permissions.worktrees[tool];
-  settings.permissions.worktrees[tool] = buildToolPermissionConfig({
-    existing:
-      existing === 'project' || existing === undefined
-        ? undefined
-        : (existing as ToolPermissionConfig),
-    matchValue,
+    await writeSettings(projectPath, settings);
+    emitPermissionsChanged({ scope: 'worktree', projectPath });
+    try {
+      return afterPersisted ? await afterPersisted() : true;
+    } catch (error) {
+      const current = await readSettings(projectPath);
+      const worktrees = current.permissions.worktrees;
+      if (worktrees) {
+        if (previous === undefined) delete worktrees[tool];
+        else worktrees[tool] = previous;
+        if (!hadWorktreeScope && Object.keys(worktrees).every((key) => key === 'extends')) {
+          delete current.permissions.worktrees;
+        }
+        await writeSettings(projectPath, current);
+        emitPermissionsChanged({ scope: 'worktree', projectPath });
+      }
+      throw error;
+    }
   });
-
-  await writeSettings(projectPath, settings);
 }
 
 // ---------------------------------------------------------------------------
@@ -767,6 +1074,9 @@ async function writeProjectPermissions(
   const settings = await readSettings(projectPath);
   settings.permissions.project = projectScope;
   await writeSettings(projectPath, settings);
+  // Single choke point for the UI-driven project CRUD paths (add/remove/edit
+  // rule, plus their rollbacks) — every one of them writes through here.
+  emitPermissionsChanged({ scope: 'project', projectPath });
 }
 
 /**
@@ -774,20 +1084,33 @@ async function writeProjectPermissions(
  *
  * @returns `true` if added, `false` if rejected (bare bash).
  */
-export async function addProjectPermissionRule({
-  projectPath,
-  toolName,
-  input,
-  action = 'allow',
-}: {
+type AddProjectPermissionRuleParams = {
   projectPath: string;
   toolName: string;
   input: Record<string, unknown>;
   action?: PermissionAction;
-}): Promise<boolean> {
+};
+
+export function addProjectPermissionRule(
+  params: AddProjectPermissionRuleParams,
+): Promise<boolean>;
+export function addProjectPermissionRule<T>(
+  params: AddProjectPermissionRuleParams & {
+    afterPersisted: () => Promise<T>;
+  },
+): Promise<T | false>;
+export async function addProjectPermissionRule<T>({
+  projectPath,
+  toolName,
+  input,
+  action = 'allow',
+  afterPersisted,
+}: AddProjectPermissionRuleParams & {
+  afterPersisted?: () => Promise<T>;
+}): Promise<boolean | T> {
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
 
-  if (isBareBash(tool, matchValue || '*') && action === 'allow') {
+  if (isUnrestrictedBashPattern(tool, matchValue) && action === 'allow') {
     dbg.agentPermission(
       'Refusing to allow bare "bash" at project level — a specific command pattern is required',
     );
@@ -796,14 +1119,23 @@ export async function addProjectPermissionRule({
 
   return withProjectWriteLock(projectPath, async () => {
     const permissions = await readProjectPermissions(projectPath);
+    const previous = permissions[tool];
     permissions[tool] = buildToolPermissionConfig({
-      existing: permissions[tool],
+      existing: previous,
       matchValue,
       action,
     });
 
     await writeProjectPermissions(projectPath, permissions);
-    return true;
+    try {
+      return afterPersisted ? await afterPersisted() : true;
+    } catch (error) {
+      const current = await readProjectPermissions(projectPath);
+      if (previous === undefined) delete current[tool];
+      else current[tool] = previous;
+      await writeProjectPermissions(projectPath, current);
+      throw error;
+    }
   });
 }
 
@@ -864,7 +1196,7 @@ export async function editProjectPermissionRule({
 }): Promise<void> {
   const newMatchValue = newPattern?.trim() || '';
 
-  if (isBareBash(tool, newMatchValue || '*') && action === 'allow') {
+  if (isUnrestrictedBashPattern(tool, newMatchValue) && action === 'allow') {
     throw new Error(
       'Bare "bash" without a command pattern is not allowed at project level',
     );
@@ -946,7 +1278,10 @@ export function compileForClaude(rules: ResolvedPermissionRule[]): {
   };
 
   for (const rule of rules) {
+    if (containsDigitRegex(rule.pattern)) continue;
     if (rule.tool === '*') continue; // Claude doesn't support wildcard tool
+    // Pseudo-tool: evaluated by our runtime, meaningless to the backend.
+    if (rule.tool === SCRIPT_EDIT_TOOL) continue;
     if (rule.subpathRoot) continue; // Subpath rules handled by runtime evaluator
     const claudeName = toolNameMap[rule.tool] ?? rule.tool;
 
@@ -988,9 +1323,12 @@ export function compileForOpenCode(
     // provided. Keep Jean-Claude's default as ask, then let explicit rules win.
     { permission: '*', pattern: '*', action: 'ask' as const },
     ...rules
+      .filter((rule) => !containsDigitRegex(rule.pattern))
       // External paths are canonicalized and evaluated by the adapter for each
       // request so replacing a directory with a symlink cannot reuse a grant.
       .filter((rule) => rule.tool !== 'external_directory')
+      // Pseudo-tool: evaluated by our runtime, meaningless to the backend.
+      .filter((rule) => rule.tool !== SCRIPT_EDIT_TOOL)
       .map((rule) => ({
         permission: rule.tool,
         pattern: rule.pattern,
@@ -1079,7 +1417,12 @@ export async function evaluateToolPermission({
   const settings = await readSettings(projectPath);
   const rules = resolveRules(settings, isWorktree, globalRules, workingDir);
   const { tool, matchValue } = normalizeToolRequest(toolName, input);
-  return evaluatePermission(rules, tool, matchValue);
+  return evaluatePermission(
+    rules,
+    tool,
+    matchValue,
+    tool === 'bash' ? String(input.command ?? '') : undefined,
+  );
 }
 
 // ---------------------------------------------------------------------------

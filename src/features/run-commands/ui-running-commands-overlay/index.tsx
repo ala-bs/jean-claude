@@ -1,5 +1,13 @@
 import { Loader2, Square, Terminal, X } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
@@ -16,9 +24,10 @@ import { InteractiveLog } from '@/features/common/interactive-log';
 import { Kbd } from '@/common/ui/kbd';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
+import { useOverlaysStore } from '@/stores/overlays';
 import { useProjects } from '@/hooks/use-projects';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import { useTasks } from '@/hooks/use-tasks';
+import { useTask, useTasks } from '@/hooks/use-tasks';
 import { useToastStore } from '@/stores/toasts';
 
 
@@ -34,19 +43,34 @@ interface RunningCommand {
 }
 
 export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
+  const titleId = useId();
+  const returnFocusRef = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
   const layer = useKeyboardLayer('overlay', {
     exclusive: true,
     passthrough: ['global-nav'],
   });
 
   const runCommandRunning = useTaskMessagesStore((s) => s.runCommandRunning);
+  const target = useOverlaysStore((s) => s.runningCommandTarget);
   const { data: tasks } = useTasks();
   const { data: projects } = useProjects();
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(() =>
+    target ? makeKey(target.taskId, target.runCommandId) : null,
+  );
   const [stoppingKeys, setStoppingKeys] = useState<Set<string>>(new Set());
   const addToast = useToastStore((s) => s.addToast);
   const resetRunCommandLogs = useTaskMessagesStore(
     (s) => s.resetRunCommandLogs,
+  );
+
+  useEffect(
+    () => () => {
+      const returnFocus = returnFocusRef.current;
+      setTimeout(() => returnFocus?.focus(), 0);
+    },
+    [],
   );
 
   const runningCommands = useMemo(() => {
@@ -59,7 +83,9 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
       const project = task ? projectMap.get(task.projectId) : undefined;
 
       for (const cmd of status.commands) {
-        if (cmd.status !== 'running') continue;
+        const isTarget =
+          target?.taskId === taskId && target.runCommandId === cmd.id;
+        if (cmd.status !== 'running' && !isTarget) continue;
         result.push({
           taskId,
           taskName:
@@ -69,8 +95,45 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         });
       }
     }
+
+    if (
+      target &&
+      !result.some(
+        (command) =>
+          command.taskId === target.taskId &&
+          command.commandStatus.id === target.runCommandId,
+      )
+    ) {
+      const task = taskMap.get(target.taskId);
+      const project = task ? projectMap.get(task.projectId) : undefined;
+      result.push({
+        taskId: target.taskId,
+        taskName:
+          task?.name ??
+          task?.prompt.split('\n')[0].slice(0, 30) ??
+          target.taskId,
+        projectName: project?.name ?? 'Unknown Project',
+        commandStatus: {
+          id: target.runCommandId,
+          name: null,
+          command: target.runCommandId,
+          status: 'stopped',
+        },
+      });
+    }
     return result;
-  }, [runCommandRunning, tasks, projects]);
+  }, [runCommandRunning, tasks, projects, target]);
+  const runningCount = runningCommands.filter(
+    (command) => command.commandStatus.status === 'running',
+  ).length;
+
+  useEffect(() => {
+    if (target) {
+      startTransition(() =>
+        setSelectedKey(makeKey(target.taskId, target.runCommandId)),
+      );
+    }
+  }, [target]);
 
   // Auto-select first command if nothing selected or selected got removed
   useEffect(() => {
@@ -84,11 +147,18 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         )
       : false;
     if (!stillExists) {
-      startTransition(() => setSelectedKey(
-        makeKey(runningCommands[0].taskId, runningCommands[0].commandStatus.id),
-      ));
+      startTransition(() =>
+        setSelectedKey(
+          target
+            ? makeKey(target.taskId, target.runCommandId)
+            : makeKey(
+                runningCommands[0].taskId,
+                runningCommands[0].commandStatus.id,
+              ),
+        ),
+      );
     }
-  }, [runningCommands, selectedKey]);
+  }, [runningCommands, selectedKey, target]);
 
   const selectedCommand = useMemo(
     () =>
@@ -97,6 +167,13 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
       ),
     [runningCommands, selectedKey],
   );
+  const selectedCommandKey = selectedCommand
+    ? makeKey(selectedCommand.taskId, selectedCommand.commandStatus.id)
+    : null;
+  const canStopSelected =
+    selectedCommand?.commandStatus.status === 'running' &&
+    selectedCommandKey !== null &&
+    !stoppingKeys.has(selectedCommandKey);
 
   const handleStop = useCallback(
     async (taskId: string, runCommandId: string) => {
@@ -122,14 +199,9 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   );
 
   const handleStopSelected = useCallback(() => {
-    if (!selectedCommand) return;
-    const key = makeKey(
-      selectedCommand.taskId,
-      selectedCommand.commandStatus.id,
-    );
-    if (stoppingKeys.has(key)) return;
+    if (!selectedCommand || !canStopSelected) return;
     void handleStop(selectedCommand.taskId, selectedCommand.commandStatus.id);
-  }, [selectedCommand, stoppingKeys, handleStop]);
+  }, [canStopSelected, selectedCommand, handleStop]);
 
   const handleClearSelectedLogs = useCallback(() => {
     if (!selectedCommand) return;
@@ -208,7 +280,10 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         onClick={onClose}
       >
         <div
-          className="bg-bg-0/85 flex max-h-[75svh] w-[min(1000px,96vw)] flex-col overflow-hidden rounded-xl border border-glass-border shadow-2xl shadow-black/50 backdrop-blur-xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          className="bg-bg-0/85 border-glass-border flex max-h-[75svh] w-[min(1000px,96vw)] flex-col overflow-hidden rounded-xl border shadow-2xl shadow-black/50 backdrop-blur-xl"
           onClick={(event) => event.stopPropagation()}
         >
           {/* Header */}
@@ -216,13 +291,13 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
             <div className="flex items-center gap-2">
               <Terminal className="text-status-done h-4 w-4" />
               <div>
-                <h2 className="text-ink-0 text-sm font-semibold">
+                <h2 id={titleId} className="text-ink-0 text-sm font-semibold">
                   Running Commands
                 </h2>
                 <p className="text-ink-2 mt-0.5 text-xs">
-                  {runningCommands.length === 0
+                  {runningCount === 0
                     ? 'No running commands'
-                    : `${runningCommands.length} running`}
+                    : `${runningCount} running`}
                 </p>
               </div>
             </div>
@@ -254,51 +329,54 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                   return (
                     <div
                       key={key}
-                      role="button"
-                      tabIndex={0}
                       className={clsx(
-                        'group flex w-full cursor-pointer items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors',
+                        'group flex w-full items-start rounded-lg transition-colors',
                         isSelected
                           ? 'text-ink-0 bg-glass-medium'
                           : 'text-ink-2 hover:text-ink-1 hover:bg-glass-light',
                       )}
-                      onClick={() => setSelectedKey(key)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          setSelectedKey(key);
-                        }
-                      }}
                     >
-                      <Loader2 className="text-status-done mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-medium">
-                          {getRunCommandDisplayName(cmd.commandStatus)}
-                        </p>
-                        <p className="text-ink-3 mt-0.5 truncate text-[11px]">
-                          {cmd.taskName}
-                        </p>
-                        <p className="text-ink-4 truncate text-[11px]">
-                          {cmd.projectName}
-                        </p>
-                      </div>
                       <button
+                        type="button"
+                        aria-pressed={isSelected}
+                        onClick={() => setSelectedKey(key)}
+                        className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2 text-left"
+                      >
+                        {cmd.commandStatus.status === 'running' ? (
+                          <Loader2 className="text-status-done mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+                        ) : (
+                          <Terminal className="text-ink-4 mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        )}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs font-medium">
+                            {getRunCommandDisplayName(cmd.commandStatus)}
+                          </span>
+                          <span className="text-ink-3 mt-0.5 block truncate text-[11px]">
+                            {cmd.taskName}
+                          </span>
+                          <span className="text-ink-4 block truncate text-[11px]">
+                            {cmd.projectName}
+                          </span>
+                        </span>
+                      </button>
+                      {cmd.commandStatus.status === 'running' && <button
+                        type="button"
+                        aria-label={`${isStopping ? 'Stopping' : 'Stop'} ${getRunCommandDisplayName(cmd.commandStatus)}`}
+                        aria-busy={isStopping}
+                        disabled={isStopping}
                         className={clsx(
-                          'mt-0.5 shrink-0 cursor-pointer rounded p-1 transition-colors',
+                          'mt-2 mr-2 shrink-0 cursor-pointer rounded p-1 transition-colors',
                           isStopping
                             ? 'text-ink-4 cursor-not-allowed'
                             : 'text-ink-4 hover:bg-status-fail/20 hover:text-status-fail',
                         )}
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (!isStopping) {
-                            void handleStop(cmd.taskId, cmd.commandStatus.id);
-                          }
+                          void handleStop(cmd.taskId, cmd.commandStatus.id);
                         }}
-                        title="Stop command"
                       >
                         <Square className="h-3 w-3" />
-                      </button>
+                      </button>}
                     </div>
                   );
                 })}
@@ -313,17 +391,21 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                     command={getRunCommandDisplayName(
                       selectedCommand.commandStatus,
                     )}
+                    isRunning={selectedCommand.commandStatus.status === 'running'}
                     isStopping={stoppingKeys.has(
                       makeKey(
                         selectedCommand.taskId,
                         selectedCommand.commandStatus.id,
                       ),
                     )}
-                    onStop={() =>
-                      handleStop(
-                        selectedCommand.taskId,
-                        selectedCommand.commandStatus.id,
-                      )
+                    onStop={
+                      selectedCommand.commandStatus.status === 'running'
+                        ? () =>
+                            handleStop(
+                              selectedCommand.taskId,
+                              selectedCommand.commandStatus.id,
+                            )
+                        : undefined
                     }
                   />
                 ) : (
@@ -336,16 +418,21 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
           )}
 
           {/* Footer with shortcut hints */}
-          <div className="flex items-center gap-4 border-t border-glass-border px-4 py-2">
+          <div
+            data-testid="running-commands-footer"
+            className="border-glass-border flex items-center gap-4 border-t px-4 py-2"
+          >
             <div className="text-ink-3 flex items-center gap-1.5 text-[11px]">
               <Kbd shortcut="up" />
               <Kbd shortcut="down" />
               <span>Navigate</span>
             </div>
-            <div className="text-ink-3 flex items-center gap-1.5 text-[11px]">
-              <Kbd shortcut="cmd+backspace" />
-              <span>Stop</span>
-            </div>
+            {canStopSelected && (
+              <div className="text-ink-3 flex items-center gap-1.5 text-[11px]">
+                <Kbd shortcut="cmd+backspace" />
+                <span>Stop</span>
+              </div>
+            )}
             <div className="text-ink-3 flex items-center gap-1.5 text-[11px]">
               <Kbd shortcut="cmd+k" />
               <span>Clear Logs</span>
@@ -366,18 +453,21 @@ function LogViewer({
   taskId,
   runCommandId,
   command,
+  isRunning,
   isStopping,
   onStop,
 }: {
   taskId: string;
   runCommandId: string;
   command: string;
+  isRunning: boolean;
   isStopping: boolean;
-  onStop: () => void;
+  onStop?: () => void;
 }) {
   const log = useTaskMessagesStore(
     (s) => s.runCommandLogs[taskId]?.[runCommandId] ?? null,
   );
+  const { data: task } = useTask(taskId);
 
   return (
     <div className="flex h-full flex-col">
@@ -385,12 +475,15 @@ function LogViewer({
       <div className="flex items-center justify-between border-b border-glass-border px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-ink-1 font-mono text-xs">{command}</span>
-          <span className="text-status-done flex items-center gap-1 text-[11px]">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            running
+          <span className={clsx(
+            'flex items-center gap-1 text-[11px]',
+            isRunning ? 'text-status-done' : 'text-ink-3',
+          )}>
+            {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
+            {isRunning ? 'running' : 'stopped'}
           </span>
         </div>
-        <button
+        {onStop && <button
           className={clsx(
             'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
             isStopping
@@ -402,14 +495,15 @@ function LogViewer({
         >
           <Square className="h-3 w-3" />
           {isStopping ? 'Stopping...' : 'Stop'}
-        </button>
+        </button>}
       </div>
 
       <InteractiveLog
         log={log}
         taskId={taskId}
         runCommandId={runCommandId}
-        isRunning
+        isRunning={isRunning}
+        workingDir={task?.worktreePath ?? undefined}
         ignoredKeys={OVERLAY_IGNORED_KEYS}
         stopKeyPropagation
       />

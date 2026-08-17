@@ -94,7 +94,30 @@ export const TokenRepository = {
     return toToken(row);
   },
 
+  // Refuses to delete a token that any provider still references. The check
+  // and the delete share a transaction so a concurrent provider update can't
+  // slip a reference in between them.
   delete: async (id: string): Promise<void> => {
-    await db.deleteFrom('tokens').where('id', '=', id).execute();
+    await db.transaction().execute(async (trx) => {
+      const usedBy = await trx
+        .selectFrom('providers')
+        .select('label')
+        .where('tokenId', '=', id)
+        .execute();
+
+      if (usedBy.length > 0) {
+        const labels = usedBy.map((provider) => provider.label).join(', ');
+        const plural = usedBy.length > 1;
+        throw new Error(
+          `Cannot delete token: still used by ${usedBy.length} organization${
+            plural ? 's' : ''
+          } (${labels}). Assign another token to ${
+            plural ? 'them' : 'it'
+          } first.`,
+        );
+      }
+
+      await trx.deleteFrom('tokens').where('id', '=', id).execute();
+    });
   },
 };

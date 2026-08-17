@@ -21,8 +21,10 @@ import type {
   RunCommandEnvVar,
   RunCommandLogStream,
   RunStatus,
+  StartAdHocRunCommandParams,
   WorkspacePackage,
 } from '@shared/run-command-types';
+import { MOBILE_DEV_SERVER_COMMAND_PREFIX } from '@shared/mobile-preview-runtime';
 import { RUN_COMMAND_ENV_SOURCES } from '@shared/run-command-types';
 
 import { dbg } from '../lib/debug';
@@ -34,6 +36,7 @@ import { TaskRepository } from '../database/repositories/tasks';
 
 const execAsync = promisify(exec);
 const RUN_COMMAND_LOG_FLUSH_INTERVAL_MS = 50;
+const PORT_SCAN_TAIL_LENGTH = 200;
 const RUN_COMMAND_LOG_FLUSH_BYTES = 16 * 1024;
 const PROJECT_SUGGESTIONS_PATH = '.jean-claude/suggestions.json';
 const RUN_COMMAND_ENV_SOURCE_KEYS = new Set(
@@ -41,6 +44,70 @@ const RUN_COMMAND_ENV_SOURCE_KEYS = new Set(
 );
 
 type ProcessSignal = 'SIGINT' | 'SIGTERM' | 'SIGKILL';
+
+/**
+ * A port-conflict override rewrites the command with `--port <n>` (or sets an
+ * env var). Prefer that port over the declared one so status consumers point at
+ * the server that actually came up.
+ */
+export function resolveEffectivePorts({
+  declaredPorts,
+  commandOverride,
+  envOverrides,
+  portEnvVarName,
+}: {
+  declaredPorts: number[];
+  commandOverride?: string;
+  envOverrides?: Record<string, string>;
+  /** The env var this command uses to receive an overridden port, if any. */
+  portEnvVarName?: string | null;
+}): number[] {
+  const envValue = portEnvVarName ? envOverrides?.[portEnvVarName] : undefined;
+  const fromEnv = envValue === undefined ? null : Number(envValue);
+  if (
+    fromEnv !== null &&
+    Number.isInteger(fromEnv) &&
+    fromEnv > 0 &&
+    fromEnv <= 65_535
+  ) {
+    return [fromEnv];
+  }
+
+  const match = commandOverride?.match(/--port[= ](\d{1,5})/);
+  const fromArgs = match ? Number(match[1]) : null;
+  if (fromArgs && fromArgs > 0 && fromArgs <= 65_535) return [fromArgs];
+
+  return declaredPorts;
+}
+
+/**
+ * Metro/Expo can bind a different port than requested (its own fallback when
+ * the port is taken). Learn the real one from the banner it prints.
+ */
+export function parseDevServerPortFromOutput(chunk: string): number | null {
+  // PTY output carries ANSI styling, and dev-client banners percent-encode the
+  // embedded URL (`...%3A8081`), so normalize before matching.
+  const text = chunk
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/%3A/gi, ':')
+    .replace(/%2F/gi, '/');
+
+  const patterns = [
+    /Metro waiting on \S*?:(\d{2,5})(?!\d)/i,
+    /(?:Dev server ready|Web is waiting on|Waiting on)\s+\S*?:(\d{2,5})(?!\d)/i,
+    /exp\+?[\w.-]*:\/\/[^\s/]*?:(\d{2,5})(?!\d)/i,
+    /url=https?:\/\/[^\s]*?:(\d{2,5})(?!\d)/i,
+    /(?:Metro|Bundler|Dev server).{0,40}?https?:\/\/[^\s:]+:(\d{2,5})(?!\d)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (Number.isInteger(port) && port > 0 && port <= 65_535) return port;
+  }
+  return null;
+}
 
 function parseSuggestionEnvVar(value: unknown): RunCommandEnvVar | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -246,10 +313,17 @@ type LogCallback = (
   generation: number,
 ) => void;
 
+type StartOptions = {
+  afterStop?: () => void | Promise<void>;
+};
+
 interface TrackedProcess {
   commandId: string;
   name: string | null;
   command: string;
+  ports: number[];
+  /** Set once the real listening port has been read from command output. */
+  portLearnedFromOutput?: boolean;
   pty: nodePty.IPty;
   pid: number;
   status: 'running' | 'stopped' | 'errored';
@@ -274,7 +348,7 @@ interface RunCommandContext {
   prUrl: string;
 }
 
-class RunCommandService {
+export class RunCommandService {
   private runningProcesses = new Map<string, Map<string, TrackedProcess>>();
   private logGenerations = new Map<string, number>();
   private commandOperationLocks = new Map<string, Promise<void>>();
@@ -320,23 +394,44 @@ class RunCommandService {
     runCommandId: string;
     operation: () => Promise<T>;
   }): Promise<T> {
-    const key = this.getCommandKey({ taskId, runCommandId });
-    const previous = this.commandOperationLocks.get(key) ?? Promise.resolve();
+    return this.withCommandLocks({
+      taskId,
+      runCommandIds: [runCommandId],
+      operation,
+    });
+  }
 
-    let release = () => {};
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
+  private async withCommandLocks<T>({
+    taskId,
+    runCommandIds,
+    operation,
+  }: {
+    taskId: string;
+    runCommandIds: string[];
+    operation: () => Promise<T>;
+  }): Promise<T> {
+    const keys = [...new Set(runCommandIds)]
+      .map((runCommandId) => this.getCommandKey({ taskId, runCommandId }))
+      .sort();
+    const locks = keys.map((key) => {
+      const previous = this.commandOperationLocks.get(key) ?? Promise.resolve();
+      let release = () => {};
+      const current = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      this.commandOperationLocks.set(key, current);
+      return { key, previous, current, release };
     });
 
-    this.commandOperationLocks.set(key, current);
-    await previous;
-
+    await Promise.all(locks.map((lock) => lock.previous));
     try {
       return await operation();
     } finally {
-      release();
-      if (this.commandOperationLocks.get(key) === current) {
-        this.commandOperationLocks.delete(key);
+      for (const lock of locks) {
+        lock.release();
+        if (this.commandOperationLocks.get(lock.key) === lock.current) {
+          this.commandOperationLocks.delete(lock.key);
+        }
       }
     }
   }
@@ -690,6 +785,15 @@ class RunCommandService {
   }): Promise<void> {
     const commandValue = commandOverride ?? command.command;
     dbg.runCommand('Spawning command via PTY: %s', commandValue);
+    // A port conflict rewrites the command (or env) with a freshly allocated
+    // port. Report that port instead of the declared one, otherwise callers
+    // (mobile preview: Metro/DevTools/deeplinks) talk to the wrong server.
+    const effectivePorts = resolveEffectivePorts({
+      declaredPorts: command.ports,
+      commandOverride,
+      envOverrides,
+      portEnvVarName: this.getPortOverrideEnvVar(command),
+    });
     const commandEnv = await this.getCommandEnv({ command, context });
 
     const shell =
@@ -707,6 +811,11 @@ class RunCommandService {
       env: getChildProcessEnv({ overrides: { ...commandEnv, ...envOverrides } }),
     });
 
+    // Only dev servers advertise their listening port in output; scanning every
+    // command would latch onto unrelated localhost URLs.
+    const canLearnPort = command.id.startsWith(MOBILE_DEV_SERVER_COMMAND_PREFIX);
+    let portScanTail = '';
+
     let exitResolve: (value: { exitCode: number; signal?: number }) => void;
     const exitPromise = new Promise<{ exitCode: number; signal?: number }>(
       (resolve) => {
@@ -718,6 +827,7 @@ class RunCommandService {
       commandId: command.id,
       name: command.name,
       command: commandValue,
+      ports: effectivePorts,
       pty: ptyProcess,
       pid: ptyProcess.pid,
       status: 'running',
@@ -738,6 +848,27 @@ class RunCommandService {
     );
 
     ptyProcess.onData((data: string) => {
+      // Dev servers can bind a port of their own choosing; adopt it once so
+      // status consumers stop talking to the requested-but-unused port.
+      if (canLearnPort && !trackedProcess.portLearnedFromOutput) {
+        // Metro's banner can straddle two PTY chunks, so match against a small
+        // carry-over window instead of the raw chunk.
+        const window = `${portScanTail}${data}`;
+        portScanTail = window.slice(-PORT_SCAN_TAIL_LENGTH);
+        const observedPort = parseDevServerPortFromOutput(window);
+        if (observedPort && trackedProcess.ports?.[0] !== observedPort) {
+          trackedProcess.portLearnedFromOutput = true;
+          trackedProcess.ports = [observedPort];
+          dbg.runCommand(
+            'Observed dev server port %d for command %s',
+            observedPort,
+            trackedProcess.commandId,
+          );
+          this.notifyStatusChange(taskId);
+        } else if (observedPort) {
+          trackedProcess.portLearnedFromOutput = true;
+        }
+      }
       this.appendLogChunk({
         taskId,
         tracked: trackedProcess,
@@ -770,6 +901,7 @@ class RunCommandService {
           id: t.commandId,
           name: t.name,
           command: t.command,
+          ports: t.ports,
           status: t.status,
           pid: t.pid,
         }))
@@ -860,38 +992,42 @@ class RunCommandService {
     }
   }
 
-  async startCommand({
-    taskId,
-    projectId,
-    workingDir,
-    runCommandId,
-  }: {
-    taskId: string;
-    projectId: string;
-    workingDir: string;
-    runCommandId: string;
-  }): Promise<RunStatus | PortsInUseErrorData> {
+  async startCommand(
+    {
+      taskId,
+      projectId,
+      workingDir,
+      runCommandId,
+    }: {
+      taskId: string;
+      projectId: string;
+      workingDir: string;
+      runCommandId: string;
+    },
+    options: StartOptions = {},
+  ): Promise<RunStatus | PortsInUseErrorData> {
     return this.trackStart(() =>
-      this.startCommandAdmitted({
-        taskId,
-        projectId,
-        workingDir,
-        runCommandId,
-      }),
+      this.startCommandAdmitted(
+        { taskId, projectId, workingDir, runCommandId },
+        options,
+      ),
     );
   }
 
-  private async startCommandAdmitted({
-    taskId,
-    projectId,
-    workingDir,
-    runCommandId,
-  }: {
-    taskId: string;
-    projectId: string;
-    workingDir: string;
-    runCommandId: string;
-  }): Promise<RunStatus | PortsInUseErrorData> {
+  private async startCommandAdmitted(
+    {
+      taskId,
+      projectId,
+      workingDir,
+      runCommandId,
+    }: {
+      taskId: string;
+      projectId: string;
+      workingDir: string;
+      runCommandId: string;
+    },
+    options: StartOptions = {},
+  ): Promise<RunStatus | PortsInUseErrorData> {
     return this.withCommandLock({
       taskId,
       runCommandId,
@@ -901,6 +1037,7 @@ class RunCommandService {
           projectId,
           workingDir,
           runCommandId,
+          options,
         }),
     });
   }
@@ -910,11 +1047,13 @@ class RunCommandService {
     projectId,
     workingDir,
     runCommandId,
+    options,
   }: {
     taskId: string;
     projectId: string;
     workingDir: string;
     runCommandId: string;
+    options: StartOptions;
   }): Promise<RunStatus | PortsInUseErrorData> {
     dbg.runCommand(
       'Starting command %s for task %s in %s',
@@ -936,6 +1075,7 @@ class RunCommandService {
     if (!didStop) {
       return this.getRunStatus(taskId);
     }
+    await options.afterStop?.();
 
     const commands = [command];
     const portsInUse = await this.getPortsInUse(commands);
@@ -974,57 +1114,94 @@ class RunCommandService {
     return this.getRunStatus(taskId);
   }
 
-  async startGroup({
-    taskId,
-    projectId,
-    workingDir,
-    runCommandIds,
-  }: {
-    taskId: string;
-    projectId: string;
-    workingDir: string;
-    runCommandIds: string[];
-  }): Promise<RunStatus | PortsInUseErrorData> {
+  async startGroup(
+    {
+      taskId,
+      projectId,
+      workingDir,
+      runCommandIds,
+    }: {
+      taskId: string;
+      projectId: string;
+      workingDir: string;
+      runCommandIds: string[];
+    },
+    options: StartOptions = {},
+  ): Promise<RunStatus | PortsInUseErrorData> {
+    const commandIds = [...new Set(runCommandIds)];
+
     return this.trackStart(() =>
-      this.startGroupAdmitted({
-        taskId,
-        projectId,
-        workingDir,
-        runCommandIds,
-      }),
+      this.startGroupAdmitted(
+        { taskId, projectId, workingDir, runCommandIds: commandIds },
+        options,
+      ),
     );
   }
 
-  private async startGroupAdmitted({
+  private async startGroupAdmitted(
+    {
+      taskId,
+      projectId,
+      workingDir,
+      runCommandIds,
+    }: {
+      taskId: string;
+      projectId: string;
+      workingDir: string;
+      runCommandIds: string[];
+    },
+    options: StartOptions = {},
+  ): Promise<RunStatus | PortsInUseErrorData> {
+    return this.withCommandLocks({
+        taskId,
+        runCommandIds,
+        operation: async () => {
+          const commands = await Promise.all(
+            runCommandIds.map((runCommandId) =>
+              ProjectCommandRepository.findById(runCommandId),
+            ),
+          );
+          const invalidIndex = commands.findIndex(
+            (command) => !command || command.projectId !== projectId,
+          );
+          if (invalidIndex !== -1) {
+            throw new Error(
+              `Command ${runCommandIds[invalidIndex]} not found for project ${projectId}`,
+            );
+          }
+          return this.startGroupWithoutLock({
+            taskId,
+            projectId,
+            workingDir,
+            validCommands: commands as ProjectCommand[],
+            options,
+          });
+        },
+      });
+  }
+
+  private async startGroupWithoutLock({
     taskId,
     projectId,
     workingDir,
-    runCommandIds,
+    validCommands,
+    options,
   }: {
     taskId: string;
     projectId: string;
     workingDir: string;
-    runCommandIds: string[];
+    validCommands: ProjectCommand[];
+    options: StartOptions;
   }): Promise<RunStatus | PortsInUseErrorData> {
-    const commandIds = [...new Set(runCommandIds)];
-    const commands = await Promise.all(
-      commandIds.map((runCommandId) =>
-        ProjectCommandRepository.findById(runCommandId),
-      ),
-    );
-    const validCommands = commands.filter(
-      (command): command is ProjectCommand =>
-        command != null && command.projectId === projectId,
-    );
-
     const stopResults = await Promise.all(
       validCommands.map((command) =>
-        this.stopCommandWithLock({ taskId, runCommandId: command.id }),
+        this.stopCommandWithoutLock({ taskId, runCommandId: command.id }),
       ),
     );
     if (stopResults.some((didStop) => !didStop)) {
       return this.getRunStatus(taskId);
     }
+    await options.afterStop?.();
 
     const portsInUse = await this.getPortsInUse(validCommands);
     const blockingPortsInUse = this.getBlockingPortsInUse(
@@ -1073,14 +1250,94 @@ class RunCommandService {
     return this.getRunStatus(taskId);
   }
 
+  async startAdHocCommand({
+    taskId,
+    projectId,
+    workingDir,
+    runCommandId,
+    name,
+    command,
+    ports,
+    availablePort,
+    envVars = [],
+  }: StartAdHocRunCommandParams): Promise<RunStatus | PortsInUseErrorData> {
+    const adHocCommand: ProjectCommand = {
+      id: runCommandId,
+      projectId,
+      name,
+      command,
+      ports,
+      portConflictStrategy: availablePort ? 'use-available-port' : 'prompt',
+      portOverrideProvider: availablePort?.provider ?? 'env',
+      portOverrideEnvVar:
+        availablePort?.provider === 'env' ? (availablePort.envVar ?? null) : null,
+      portOverrideArgs:
+        availablePort?.provider === 'args' ? (availablePort.args ?? null) : null,
+      envVars,
+      confirmBeforeRun: false,
+      confirmMessage: null,
+      sortOrder: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    return this.trackStart(() =>
+      this.withCommandLock({
+        taskId,
+        runCommandId,
+        operation: async () => {
+          const didStop = await this.stopCommandWithoutLock({
+            taskId,
+            runCommandId,
+          });
+          if (!didStop) return this.getRunStatus(taskId);
+
+          const portsInUse = await this.getPortsInUse([adHocCommand]);
+          const blockingPortsInUse = this.getBlockingPortsInUse(portsInUse, [
+            adHocCommand,
+          ]);
+          if (blockingPortsInUse.length > 0) {
+            return {
+              type: 'PortsInUseError',
+              message: `Ports in use: ${blockingPortsInUse.map((p) => p.port).join(', ')}`,
+              portsInUse: blockingPortsInUse,
+            };
+          }
+
+          const portOverrides = await this.getPortOverrides({
+            commands: [adHocCommand],
+            portsInUse,
+          });
+          const portOverride = portOverrides.get(adHocCommand.id);
+          const context = await this.getRunCommandContext({
+            taskId,
+            projectId,
+            workingDir,
+          });
+
+          await this.spawnTrackedCommand({
+            taskId,
+            workingDir,
+            command: adHocCommand,
+            context,
+            envOverrides: portOverride?.envOverrides,
+            commandOverride: portOverride?.command,
+          });
+
+          this.notifyStatusChange(taskId);
+          return this.getRunStatus(taskId);
+        },
+      }),
+    );
+  }
+
   async stopCommand({
     taskId,
     runCommandId,
   }: {
     taskId: string;
     runCommandId: string;
-  }): Promise<void> {
-    await this.stopCommandWithLock({ taskId, runCommandId });
+  }): Promise<boolean> {
+    return this.stopCommandWithLock({ taskId, runCommandId });
   }
 
   private async stopCommandWithLock({
@@ -1340,15 +1597,36 @@ class RunCommandService {
     }
   }
 
-  async stopCommandsForTask(taskId: string): Promise<void> {
+  async stopCommandsForTask(taskId: string): Promise<boolean> {
     const taskProcesses = this.runningProcesses.get(taskId);
     if (!taskProcesses) {
-      return;
+      return true;
     }
 
+    let stopped = true;
     for (const runCommandId of [...taskProcesses.keys()]) {
-      await this.stopCommand({ taskId, runCommandId });
+      if (!(await this.stopCommandWithLock({ taskId, runCommandId }))) {
+        stopped = false;
+      }
     }
+    return stopped;
+  }
+
+  resetTaskAfterReactivation(taskId: string): void {
+    const taskProcesses = this.runningProcesses.get(taskId);
+    if (!taskProcesses) return;
+
+    // Only drop already-terminated entries. Dropping live processes would
+    // orphan them (ports held, never stoppable, missed on shutdown cleanup)
+    // — reachable because reactivation can happen without a prior stop.
+    let removed = false;
+    for (const [runCommandId, tracked] of [...taskProcesses]) {
+      if (tracked.status === 'running' && !tracked.exited) continue;
+      taskProcesses.delete(runCommandId);
+      removed = true;
+    }
+    if (taskProcesses.size === 0) this.runningProcesses.delete(taskId);
+    if (removed) this.notifyStatusChange(taskId);
   }
 
   async getPackageScripts(projectPath: string): Promise<PackageScriptsResult> {

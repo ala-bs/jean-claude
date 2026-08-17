@@ -7,6 +7,7 @@ import {
   Menu,
   RefreshCw,
   SlidersHorizontal,
+  Smartphone,
   Terminal,
   Workflow,
   X,
@@ -29,14 +30,17 @@ import {
   DropdownInfo,
   DropdownItem,
 } from '@/common/ui/dropdown';
+import { useActiveProjects, useProjects } from '@/hooks/use-projects';
+import { useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { Button } from '@/common/ui/button';
+import { getMobilePreviewHeaderState } from '@/features/mobile-preview/utils-mobile-preview-header';
 import { Kbd } from '@/common/ui/kbd';
-import { useActiveProjects } from '@/hooks/use-projects';
 import { useBacklogSelectedProjectId } from '@/stores/backlog-overlay-draft';
 import { useChangelogStore } from '@/stores/changelog';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentVisibleProject } from '@/stores/navigation';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
+import { useMobilePreviewWorkspaceStore } from '@/stores/mobile-preview-workspace';
 import { useModal } from '@/common/context/modal';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjectTodoCount } from '@/hooks/use-project-todos';
@@ -404,6 +408,7 @@ export function Header() {
   const [reloadStartedAt, setReloadStartedAt] = useState(() => Date.now());
   const { projectId } = useCurrentVisibleProject();
   const { data: projects = [] } = useActiveProjects();
+  const { data: allProjects = [] } = useProjects();
   const openOverlay = useOverlaysStore((state) => state.open);
   const openChangelog = useChangelogStore((state) => state.open);
   const persistedBacklogProjectId = useBacklogSelectedProjectId();
@@ -416,6 +421,31 @@ export function Header() {
   const modal = useModal();
   const commitHash = import.meta.env.VITE_COMMIT_HASH;
   const devBadgeLabel = api.app.devBadgeLabel ?? 'DEV';
+  const isMobilePreviewWorkspaceOpen = useMobilePreviewWorkspaceStore(
+    (state) => state.isOpen,
+  );
+  const toggleMobilePreviewWorkspace = useMobilePreviewWorkspaceStore(
+    (state) => state.toggle,
+  );
+  const navigate = useNavigate();
+  const routeParams = useParams({ strict: false });
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const routeTaskId = (routeParams.taskId as string | undefined) ?? null;
+  // Only the `all` feed has a mobile route today, so leave project-scoped
+  // routes where they are instead of teleporting out of the project.
+  const canNavigateToMobileRoute = pathname.startsWith('/all/');
+  const toggleMobileMode = useCallback(() => {
+    toggleMobilePreviewWorkspace();
+    if (!routeTaskId || !canNavigateToMobileRoute) return;
+    // Always go to task details; `useMobileModeRedirect` sends it on to the
+    // mobile route when the task actually has a mobile runtime.
+    void navigate({ to: '/all/$taskId', params: { taskId: routeTaskId } });
+  }, [
+    canNavigateToMobileRoute,
+    navigate,
+    routeTaskId,
+    toggleMobilePreviewWorkspace,
+  ]);
 
   const runningCommandsCount = useTaskMessagesStore((s) => {
     let count = 0;
@@ -426,6 +456,20 @@ export function Header() {
     }
     return count;
   });
+  const runCommandRunning = useTaskMessagesStore(
+    (state) => state.runCommandRunning,
+  );
+  const {
+    runningCount: runningMobileDevServerCount,
+    isVisible: showMobilePreviewWorkspace,
+  } = useMemo(
+    () =>
+      getMobilePreviewHeaderState({
+        projects: allProjects,
+        runCommandRunning,
+      }),
+    [allProjects, runCommandRunning],
+  );
   const menuDropdownRef = useRef<{ toggle: () => void } | null>(null);
   const activityButtonRef = useRef<HTMLDivElement | null>(null);
   const reloadUpdateRequestRef = useRef(0);
@@ -452,6 +496,15 @@ export function Header() {
     : DEFAULT_ACTIVITY_RESERVE_PX;
 
   useCommands('header-menu-trigger', [
+    showMobilePreviewWorkspace && {
+      shortcut: 'cmd+ctrl+m' as const,
+      label: 'Toggle Mobile Preview',
+      section: 'General',
+      keywords: ['mobile', 'preview', 'simulator', 'device'],
+      handler: () => {
+        toggleMobileMode();
+      },
+    },
     {
       shortcut: 'cmd+\\',
       label: 'Toggle Menu',
@@ -594,6 +647,15 @@ export function Header() {
           >
             Pipelines
           </DropdownItem>
+          {showMobilePreviewWorkspace && (
+            <DropdownItem
+              icon={<Smartphone />}
+              onClick={toggleMobileMode}
+              shortcut="cmd+ctrl+m"
+            >
+              Mobile Preview
+            </DropdownItem>
+          )}
           <DropdownItem icon={<History />} onClick={openChangelog}>
             Changelog
           </DropdownItem>
@@ -664,6 +726,24 @@ export function Header() {
           onClick={() => openOverlay('work-activity')}
           className="px-2"
         />
+        {showMobilePreviewWorkspace ? (
+          <Button
+            variant={isMobilePreviewWorkspaceOpen ? 'secondary' : 'ghost'}
+            size="sm"
+            icon={<Smartphone />}
+            title="Toggle mobile workspace"
+            aria-label="Toggle mobile workspace"
+            aria-pressed={isMobilePreviewWorkspaceOpen}
+            onClick={toggleMobileMode}
+            className="relative px-2"
+          >
+            {runningMobileDevServerCount > 0 ? (
+              <span className="bg-status-done text-bg-0 absolute -top-1 -right-1 min-w-3.5 rounded-full px-1 font-mono text-[9px] leading-[14px] tabular-nums shadow-[0_0_7px_var(--color-status-done)]">
+                {runningMobileDevServerCount}
+              </span>
+            ) : null}
+          </Button>
+        ) : null}
         <NextMeetingButton />
       </div>
 

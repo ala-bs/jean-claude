@@ -21,7 +21,7 @@ function subscriptionId(subscription: CacheSubscription) {
 
 function flushSubscriptions() {
   subscriptionRevision += 1;
-  void api.cache.setSubscriptions({
+  return api.cache.setSubscriptions({
     revision: subscriptionRevision,
     subscriptions: Array.from(subscriptionCounts.values()).map(
       ({ subscription }) => subscription,
@@ -41,7 +41,7 @@ export function subscribeCacheResources(subscriptions: CacheSubscription[]) {
     }
   }
 
-  flushSubscriptions();
+  void flushSubscriptions();
 
   return () => {
     for (const subscription of subscriptions) {
@@ -59,8 +59,44 @@ export function subscribeCacheResources(subscriptions: CacheSubscription[]) {
       }
     }
 
-    flushSubscriptions();
+    void flushSubscriptions();
   };
+}
+
+export async function subscribeCacheResourcesAndWait(
+  subscriptions: CacheSubscription[],
+) {
+  for (const subscription of subscriptions) {
+    const id = subscriptionId(subscription);
+    const current = subscriptionCounts.get(id);
+    if (current) {
+      current.count += 1;
+    } else {
+      subscriptionCounts.set(id, { subscription, count: 1 });
+    }
+  }
+
+  const release = () => {
+    for (const subscription of subscriptions) {
+      const id = subscriptionId(subscription);
+      const current = subscriptionCounts.get(id);
+      if (!current) continue;
+      if (current.count <= 1) {
+        subscriptionCounts.delete(id);
+      } else {
+        current.count -= 1;
+      }
+    }
+    void flushSubscriptions();
+  };
+
+  try {
+    await flushSubscriptions();
+    return release;
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 export function shouldApplyCacheEvent(event: CacheEvent) {
@@ -84,5 +120,5 @@ export function shouldApplyCacheEvent(event: CacheEvent) {
 export function resetCacheResourceSubscriptionsForTests() {
   subscriptionCounts.clear();
   subscriptionRevision = 0;
-  flushSubscriptions();
+  void flushSubscriptions();
 }

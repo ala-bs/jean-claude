@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { CacheListener } from './cache/cache-listener';
 import { DetectKeyboardLayout } from './common/context/keyboard-layout';
+import { ModalArbitrationProvider } from './common/context/modal-arbitration';
 import { ModalProvider } from './common/context/modal';
 import { RootKeyboardBindings } from './common/context/keyboard-bindings';
 import { RootOverlay } from './common/context/overlay';
@@ -15,7 +16,12 @@ import { routeTree } from './routeTree.gen';
 import { Toaster } from './common/ui/toast';
 
 
-const queryClient = new QueryClient();
+// All queries are backed by Electron IPC, not the network. Without
+// `networkMode: 'always'` react-query pauses every fetch when the OS reports
+// offline, leaving queries stuck at `data: undefined` forever.
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { networkMode: 'always' } },
+});
 
 // Use hash-based routing for Electron compatibility.
 // Browser history (pushState) doesn't work with file:// protocol in production builds -
@@ -36,12 +42,14 @@ export default function App() {
       <DetectKeyboardLayout />
       <RootKeyboardBindings>
         <RootOverlay>
-          <QueryClientProvider client={queryClient}>
-            <CacheListener />
-            <ModalProvider>
-              <RouterProvider router={router} />
-            </ModalProvider>
-          </QueryClientProvider>
+          <ModalArbitrationProvider>
+            <QueryClientProvider client={queryClient}>
+              <CacheListener />
+              <ModalProvider>
+                <RouterProvider router={router} />
+              </ModalProvider>
+            </QueryClientProvider>
+          </ModalArbitrationProvider>
         </RootOverlay>
       </RootKeyboardBindings>
       <Toaster />

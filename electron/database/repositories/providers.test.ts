@@ -17,11 +17,30 @@ const mocks = vi.hoisted(() => {
     }),
   };
 
+  const selects: Array<{ table: string; column: string; value: string }> = [];
+  const selectResult: Array<Record<string, unknown>> = [];
+
   return {
-    db: { transaction: () => transaction },
+    db: {
+      transaction: () => transaction,
+      selectFrom: (table: string) => ({
+        selectAll: () => ({
+          where: (column: string, _operator: string, value: string) => ({
+            execute: async () => {
+              selects.push({ table, column, value });
+              return selectResult;
+            },
+          }),
+        }),
+      }),
+    },
+    selects,
+    selectResult,
     deleted,
     reset: () => {
       deleted.splice(0, deleted.length);
+      selects.splice(0, selects.length);
+      selectResult.splice(0, selectResult.length);
       transaction.execute.mockClear();
     },
   };
@@ -45,5 +64,16 @@ describe('ProviderRepository', () => {
       },
       { table: 'providers', column: 'id', value: 'provider-1' },
     ]);
+  });
+
+  it('finds the providers referencing a token', async () => {
+    mocks.selectResult.push({ id: 'provider-1', label: 'contoso' });
+
+    const providers = await ProviderRepository.findByTokenId('token-1');
+
+    expect(mocks.selects).toEqual([
+      { table: 'providers', column: 'tokenId', value: 'token-1' },
+    ]);
+    expect(providers).toEqual([{ id: 'provider-1', label: 'contoso' }]);
   });
 });

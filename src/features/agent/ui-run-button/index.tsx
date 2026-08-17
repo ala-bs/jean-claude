@@ -2,21 +2,25 @@ import { FileText, Loader2, Play, Square } from 'lucide-react';
 import { type MutableRefObject, useMemo, useState } from 'react';
 import clsx from 'clsx';
 
-
+import {
+  type CommandRunStatus,
+  getRunCommandDisplayName,
+} from '@shared/run-command-types';
 import { Dropdown, DropdownDivider, DropdownItem } from '@/common/ui/dropdown';
+import {
+  getRunCommandAction,
+  getRunConfirmation,
+  resolveRunCommandIds,
+} from '@/lib/run-command-items';
 import {
   getRunCommandLogLineCount,
   useTaskMessagesStore,
 } from '@/stores/task-messages';
 import { Button } from '@/common/ui/button';
 import { Chip } from '@/common/ui/chip';
-import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { Kbd } from '@/common/ui/kbd';
-import { useProjectCommandGroups } from '@/hooks/use-project-command-groups';
-import { useProjectCommands } from '@/hooks/use-project-commands';
+import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { useRunCommands } from '@/hooks/use-run-commands';
-
-
 
 import { ConfirmRunModal } from './confirm-run-modal';
 import { KillPortsModal } from './kill-ports-modal';
@@ -29,6 +33,7 @@ export function RunButton({
   onRunCommand,
   isLogsPaneOpen,
   dropdownRef,
+  showAvailabilityState = true,
 }: {
   taskId: string;
   projectId: string;
@@ -37,9 +42,10 @@ export function RunButton({
   onRunCommand: (runCommandIds: string[]) => void;
   isLogsPaneOpen: boolean;
   dropdownRef?: MutableRefObject<{ toggle: () => void } | null>;
+  showAvailabilityState?: boolean;
 }) {
-  const { data: commands = [] } = useProjectCommands(projectId);
-  const { data: groups = [] } = useProjectCommandGroups(projectId);
+  const commandAvailability = useProjectCommandAvailability(projectId);
+  const { commands, groups, items: menuItems } = commandAvailability;
   const {
     status,
     statusByCommandId,
@@ -70,42 +76,82 @@ export function RunButton({
     );
   });
 
-  const menuItems = useMemo(
+  const hasLogEntries =
+    hasRunCommandLogEntries || (status?.commands.length ?? 0) > 0;
+  const logsButton = hasLogEntries ? (
+    <Button
+      onClick={onToggleLogs}
+      variant={isLogsPaneOpen ? 'primary' : 'secondary'}
+      size="xs"
+      icon={<FileText />}
+      aria-label="Open command logs"
+      title="Open command logs (⌘L)"
+    >
+      <Kbd
+        shortcut="cmd+l"
+        className={clsx(
+          isLogsPaneOpen && 'border-white/25 bg-white/10 text-white/90',
+        )}
+      />
+    </Button>
+  ) : null;
+
+  const configuredCommandIds = useMemo(
+    () => new Set(commands.map((command) => command.id)),
+    [commands],
+  );
+  const adHocRunningCommands = useMemo(
     () =>
-      [
-        ...commands.map((command) => ({
-          type: 'command' as const,
-          item: command,
-        })),
-        ...groups.map((group) => ({ type: 'group' as const, item: group })),
-      ].sort(
-        (a, b) =>
-          a.item.sortOrder - b.item.sortOrder ||
-          a.item.createdAt.localeCompare(b.item.createdAt),
+      (status?.commands ?? []).filter(
+        (command) =>
+          command.status === 'running' && !configuredCommandIds.has(command.id),
       ),
-    [commands, groups],
+    [configuredCommandIds, status?.commands],
   );
 
-  // Don't show button if no commands configured
-  if (menuItems.length === 0) {
+  if (commandAvailability.state === 'loading') {
+    return showAvailabilityState ? (
+      <div className="flex items-center gap-2">
+        <span className="text-ink-3 flex items-center gap-1.5 text-xs">
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+          Loading commands...
+        </span>
+        {logsButton}
+      </div>
+    ) : null;
+  }
+
+  if (commandAvailability.state === 'error') {
+    return showAvailabilityState ? (
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={() => void commandAvailability.retry()}
+        >
+          Retry commands
+        </Button>
+        {logsButton}
+      </div>
+    ) : null;
+  }
+
+  // Keep historical logs reachable after command configuration is removed.
+  if (menuItems.length === 0 && adHocRunningCommands.length === 0 && !hasLogEntries) {
     return null;
   }
 
-  const runningCount = Object.values(statusByCommandId).filter(
-    (c) => c.status === 'running',
-  ).length;
-  const firstRunningMenuIndex = menuItems.findIndex((menuItem) => {
-    if (menuItem.type === 'command') {
-      return statusByCommandId[menuItem.item.id]?.status === 'running';
-    }
-
-    return menuItem.item.commandIds.some(
-      (commandId) => statusByCommandId[commandId]?.status === 'running',
-    );
-  });
-
-  const hasLogEntries =
-    hasRunCommandLogEntries || (status?.commands.length ?? 0) > 0;
+  const runningCommandIds = Object.values(statusByCommandId)
+    .filter((command) => command.status === 'running')
+    .map((command) => command.id);
+  const runningCount = runningCommandIds.length;
+  const runningCommandIdSet = new Set(runningCommandIds);
+  const firstRunningMenuIndex = menuItems.findIndex((menuItem) =>
+    resolveRunCommandIds({ item: menuItem, commands }).some((commandId) =>
+      runningCommandIdSet.has(commandId),
+    ),
+  );
 
   const executeCommand = (runCommandId: string) => {
     onRunCommand([runCommandId]);
@@ -123,18 +169,28 @@ export function RunButton({
       return;
     }
 
-    const commandStatus = statusByCommandId[runCommandId];
-    if (commandStatus?.status === 'running') {
-      void stopCommand(runCommandId);
+    const command = commands.find((entry) => entry.id === runCommandId);
+    if (!command) {
       return;
     }
 
-    const cmd = commands.find((c) => c.id === runCommandId);
-    if (cmd?.confirmBeforeRun) {
+    const action = getRunCommandAction({
+      commandIds: [runCommandId],
+      runningCommandIds,
+    });
+    if (action.type === 'stop') {
+      void stopCommand(action.commandIds[0]);
+      return;
+    }
+
+    const confirmation = getRunConfirmation({
+      item: { type: 'command', item: command },
+      commands,
+    });
+    if (confirmation) {
       setPendingConfirm({
         commandIds: [runCommandId],
-        label: getRunCommandDisplayName(cmd),
-        message: cmd.confirmMessage,
+        ...confirmation,
       });
       return;
     }
@@ -142,56 +198,51 @@ export function RunButton({
     executeCommand(runCommandId);
   };
 
+  const handleRunningAdHocAction = (command: CommandRunStatus) => {
+    if (isCommandStopping(command.id)) return;
+    void stopCommand(command.id);
+  };
+
   const handleGroupAction = (groupId: string) => {
     const group = groups.find((entry) => entry.id === groupId);
-    if (!group || group.commandIds.length === 0) {
+    if (!group) {
       return;
     }
 
-    const groupCommands = group.commandIds
-      .map((commandId) => commands.find((command) => command.id === commandId))
-      .filter(
-        (command): command is (typeof commands)[number] => command != null,
-      );
-    if (groupCommands.length === 0) {
+    const item = { type: 'group' as const, item: group };
+    const groupCommandIds = resolveRunCommandIds({ item, commands });
+    const action = getRunCommandAction({
+      commandIds: groupCommandIds,
+      runningCommandIds,
+    });
+    if (action.type === 'disabled') {
       return;
     }
 
     if (
-      groupCommands.some(
-        (command) =>
-          isCommandStarting(command.id) || isCommandStopping(command.id),
+      groupCommandIds.some(
+        (commandId) =>
+          isCommandStarting(commandId) || isCommandStopping(commandId),
       )
     ) {
       return;
     }
 
-    const runningCommandIds = groupCommands
-      .filter((command) => statusByCommandId[command.id]?.status === 'running')
-      .map((command) => command.id);
-    if (runningCommandIds.length > 0) {
-      void stopGroup(runningCommandIds);
+    if (action.type === 'stop') {
+      void stopGroup(action.commandIds);
       return;
     }
 
-    const confirmCommands = groupCommands.filter(
-      (command) => command.confirmBeforeRun,
-    );
-    if (confirmCommands.length > 0) {
+    const confirmation = getRunConfirmation({ item, commands });
+    if (confirmation) {
       setPendingConfirm({
-        commandIds: groupCommands.map((command) => command.id),
-        label: group.name,
-        message:
-          confirmCommands
-            .map((command) => command.confirmMessage?.trim())
-            .filter(Boolean)
-            .join('\n') ||
-          `Run group ${group.name} (${groupCommands.length} commands)?`,
+        commandIds: action.commandIds,
+        ...confirmation,
       });
       return;
     }
 
-    executeGroup(groupCommands.map((command) => command.id));
+    executeGroup(action.commandIds);
   };
 
   const handleConfirmRun = () => {
@@ -221,34 +272,52 @@ export function RunButton({
   return (
     <>
       <div className="flex items-center gap-2">
-        <Dropdown
-          align="right"
-          dropdownRef={dropdownRef}
-          initialFocusIndex={
-            firstRunningMenuIndex >= 0 ? firstRunningMenuIndex : 0
-          }
-          trigger={
-            <button
-              className={clsx(
-                'flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium transition-colors',
-                runningCount > 0
-                  ? 'bg-status-fail text-on-acc hover:brightness-95'
-                  : 'bg-status-done text-on-acc hover:brightness-95',
-              )}
-              aria-label="Run command"
-            >
-              {runningCount > 0 ? (
-                <>
-                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-                  <Square className="h-3 w-3" aria-hidden />
-                </>
-              ) : (
-                <Play className="h-3 w-3" aria-hidden />
-              )}
-              <Kbd shortcut="cmd+u" variant="on-accent" />
-            </button>
-          }
-        >
+        {menuItems.length > 0 || adHocRunningCommands.length > 0 ? (
+          <Dropdown
+            align="right"
+            dropdownRef={dropdownRef}
+            initialFocusIndex={
+              firstRunningMenuIndex >= 0 ? firstRunningMenuIndex : 0
+            }
+            trigger={
+              <button
+                className={clsx(
+                  'flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium transition-colors',
+                  runningCount > 0
+                    ? 'bg-status-fail text-on-acc hover:brightness-95'
+                    : 'bg-status-done text-on-acc hover:brightness-95',
+                )}
+                aria-label="Run command"
+              >
+                {runningCount > 0 ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                    <Square className="h-3 w-3" aria-hidden />
+                  </>
+                ) : (
+                  <Play className="h-3 w-3" aria-hidden />
+                )}
+                <Kbd shortcut="cmd+u" variant="on-accent" />
+              </button>
+            }
+          >
+            {adHocRunningCommands.map((command, index) => {
+              const isBusy = isCommandStopping(command.id);
+              return (
+                <div key={`adhoc:${command.id}`}>
+                  <DropdownItem onClick={() => handleRunningAdHocAction(command)}>
+                    <span className="text-ink-2 mr-2 truncate text-xs">
+                      {getRunCommandDisplayName(command)}
+                    </span>
+                    <Chip size="xs" color="red" className="uppercase">
+                      {isBusy ? '...' : 'Stop'}
+                    </Chip>
+                  </DropdownItem>
+                  {(index < adHocRunningCommands.length - 1 ||
+                    menuItems.length > 0) && <DropdownDivider />}
+                </div>
+              );
+            })}
           {menuItems.map((menuItem, index) => {
             if (menuItem.type === 'command') {
               const command = menuItem.item;
@@ -277,9 +346,10 @@ export function RunButton({
             }
 
             const group = menuItem.item;
-            const groupCommandIds = group.commandIds.filter((commandId) =>
-              commands.some((command) => command.id === commandId),
-            );
+            const groupCommandIds = resolveRunCommandIds({
+              item: menuItem,
+              commands,
+            });
             const runningInGroup = groupCommandIds.filter(
               (commandId) => statusByCommandId[commandId]?.status === 'running',
             ).length;
@@ -309,25 +379,10 @@ export function RunButton({
               </div>
             );
           })}
-        </Dropdown>
+          </Dropdown>
+        ) : null}
 
-        {hasLogEntries && (
-          <Button
-            onClick={onToggleLogs}
-            variant={isLogsPaneOpen ? 'primary' : 'secondary'}
-            size="xs"
-            icon={<FileText />}
-            aria-label="Open command logs"
-            title="Open command logs (⌘L)"
-          >
-            <Kbd
-              shortcut="cmd+l"
-              className={clsx(
-                isLogsPaneOpen && 'border-white/25 bg-white/10 text-white/90',
-              )}
-            />
-          </Button>
-        )}
+        {logsButton}
       </div>
 
       {pendingConfirm && (

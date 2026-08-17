@@ -78,9 +78,9 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     startCommitHash: 'abc123',
     sourceBranch: 'feature/fix-auth',
     branchName: 'review-pr-12',
+    prWorkspaceState: 'active',
     hasUnread: false,
     userCompleted: false,
-    sessionRules: buildReadOnlyPrReviewSessionRules(),
     workItemIds: null,
     workItemUrls: null,
     pullRequestId: '12',
@@ -162,6 +162,7 @@ function makeStep(overrides: Partial<TaskStep> = {}): TaskStep {
       lineEnd: 6,
       selectedText: 'return user.id;',
     },
+    sessionRules: buildReadOnlyPrReviewSessionRules(),
     autoStart: false,
     sortOrder: 0,
     createdAt: '2026-07-05T00:00:00.000Z',
@@ -274,6 +275,7 @@ describe('createPrReviewChatStep', () => {
         taskId: 'task-1',
         type: 'agent',
         interactionMode: 'ask',
+        sessionRules: buildReadOnlyPrReviewSessionRules(),
         agentBackend: 'opencode',
         modelPreference: 'gpt-5.5',
         thinkingEffort: 'default',
@@ -623,6 +625,25 @@ describe('continuePrReviewChatStep', () => {
     ).rejects.toThrow('pr-review tasks');
     expect(deps.markStepRunning).not.toHaveBeenCalled();
     expect(deps.continueAgent).not.toHaveBeenCalled();
+  });
+
+  it('rejects PR review chat follow-ups whose PR does not match the parent', async () => {
+    const deps = {
+      findStepById: vi.fn().mockResolvedValue(makeStep({ sessionId: 'session-1' })),
+      findTaskById: vi
+        .fn()
+        .mockResolvedValue(makeTask({ pullRequestId: '99' })),
+      markStepRunning: vi.fn(),
+      continueAgent: vi.fn(),
+    };
+
+    await expect(
+      continuePrReviewChatStep(
+        { stepId: 'step-1', question: 'What changed?' },
+        deps,
+      ),
+    ).rejects.toThrow('pull request does not match');
+    expect(deps.markStepRunning).not.toHaveBeenCalled();
   });
 
   it('rejects PR review chat follow-ups after worktree cleanup', async () => {

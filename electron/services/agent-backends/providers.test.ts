@@ -59,8 +59,9 @@ const { backendCalls, resetBackendCalls, TestBackend } = vi.hoisted(() => {
       sessionId: string,
       requestId: string,
       answer: unknown,
+      metadata: unknown,
     ) {
-      backendCalls.questions.push({ sessionId, requestId, answer });
+      backendCalls.questions.push({ sessionId, requestId, answer, metadata });
     }
     async setMode(sessionId: string, mode: string) {
       backendCalls.modes.push({ sessionId, mode });
@@ -130,6 +131,7 @@ const CAPABILITY_KEYS = {
     'questions',
     'runtimeModeSwitch',
     'sessionAllowedTools',
+    'permissionRuleUpdates',
     'resourceTracking',
   ],
   generation: ['text', 'structured'],
@@ -223,6 +225,15 @@ describe('agent backend providers', () => {
           provider.capabilities[groupName as keyof AgentBackendCapabilities];
         expect(Object.keys(group).sort()).toEqual([...expectedKeys].sort());
       }
+    }
+  });
+
+  it('only supports permission rule refresh where the backend can honor it', () => {
+    for (const type of BACKEND_TYPES) {
+      const provider = getAgentBackendProvider(type);
+      expect(
+        provider.capabilities.agent.permissionRuleUpdates?.supported,
+      ).toBe(type !== 'codex');
     }
   });
 
@@ -351,6 +362,7 @@ describe('agent backend providers', () => {
       handle,
       requestId: 'question-request',
       answer: { answer: 'yes' },
+      metadata: { questionKeys: ['answer'] },
     });
     await modeCapability.implementation.setMode({
       handle,
@@ -372,6 +384,7 @@ describe('agent backend providers', () => {
         sessionId: 'session-id',
         requestId: 'question-request',
         answer: { answer: 'yes' },
+        metadata: { questionKeys: ['answer'] },
       },
     ]);
     expect(backendCalls.modes).toEqual([

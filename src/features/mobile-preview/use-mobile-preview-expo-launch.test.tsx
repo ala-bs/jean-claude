@@ -1,0 +1,126 @@
+// @vitest-environment happy-dom
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type {
+  MobilePreviewExpoLaunchParams,
+  MobilePreviewExpoLaunchResult,
+} from '@shared/mobile-simulator-types';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+
+import { clearAllCompletedExpoLaunches } from './mobile-preview-expo-launch-store';
+import { useMobilePreviewExpoLaunch } from './use-mobile-preview-expo-launch';
+
+const apiMocks = vi.hoisted(() => ({
+  cancelExpoLaunch: vi.fn((_requestId: string) => Promise.resolve(true)),
+  launchExpo: vi.fn(
+    (_params: MobilePreviewExpoLaunchParams) =>
+      new Promise<MobilePreviewExpoLaunchResult>(() => {}),
+  ),
+}));
+
+vi.mock('@/lib/api', () => ({
+  api: { mobilePreview: apiMocks },
+}));
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true;
+
+function Harness({
+  deviceId,
+  isRunningRuntime = true,
+}: {
+  deviceId: string;
+  isRunningRuntime?: boolean;
+}) {
+  useMobilePreviewExpoLaunch({
+    isRunningRuntime,
+    isLoadingDevices: false,
+    selectedDevice: { id: deviceId, platform: 'ios', state: 'booted' },
+    isExpoApp: true,
+    taskId: 'task-1',
+    projectId: 'project-1',
+    appPath: 'apps/mobile',
+    metroPort: 19001,
+    retryGeneration: 0,
+    isSelectedDeviceReady: false,
+  });
+  return null;
+}
+
+describe('useMobilePreviewExpoLaunch', () => {
+  afterEach(() => {
+    apiMocks.cancelExpoLaunch.mockClear();
+    apiMocks.launchExpo.mockClear();
+    clearAllCompletedExpoLaunches();
+    document.body.innerHTML = '';
+  });
+
+  it('does not relaunch the app when the pane remounts for the same runtime', async () => {
+    apiMocks.launchExpo.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true } as unknown as MobilePreviewExpoLaunchResult),
+    );
+    const container = document.createElement('div');
+    document.body.append(container);
+
+    const first = createRoot(container);
+    await act(async () => first.render(<Harness deviceId="device-1" />));
+    expect(apiMocks.launchExpo).toHaveBeenCalledTimes(1);
+    await act(async () => first.unmount());
+
+    const second = createRoot(container);
+    await act(async () => second.render(<Harness deviceId="device-1" />));
+
+    expect(apiMocks.launchExpo).toHaveBeenCalledTimes(1);
+
+    await act(async () => second.unmount());
+  });
+
+  it('cancels the active launch when the workspace closes', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    await act(async () => root.render(<Harness deviceId="device-1" />));
+    const requestId = apiMocks.launchExpo.mock.calls[0]![0].requestId;
+
+    await act(async () => root.unmount());
+
+    expect(apiMocks.cancelExpoLaunch).toHaveBeenCalledWith(requestId);
+  });
+
+  it('does not launch while retained sessions are hydrating', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    await act(async () =>
+      root.render(<Harness deviceId="device-1" isRunningRuntime={false} />),
+    );
+
+    expect(apiMocks.launchExpo).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it('cancels the old launch before starting one for a different device', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    await act(async () => root.render(<Harness deviceId="device-1" />));
+    const firstRequest = apiMocks.launchExpo.mock.calls[0]![0];
+
+    await act(async () => root.render(<Harness deviceId="device-2" />));
+    const secondRequest = apiMocks.launchExpo.mock.calls[1]![0];
+
+    expect(apiMocks.cancelExpoLaunch).toHaveBeenCalledWith(
+      firstRequest.requestId,
+    );
+    expect(firstRequest.deviceId).toBe('device-1');
+    expect(secondRequest.deviceId).toBe('device-2');
+    expect(secondRequest.requestId).not.toBe(firstRequest.requestId);
+
+    await act(async () => root.unmount());
+  });
+});

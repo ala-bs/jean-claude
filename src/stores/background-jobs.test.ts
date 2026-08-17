@@ -36,3 +36,52 @@ describe('work item summary background jobs', () => {
     );
   });
 });
+
+describe('agent memory extraction background jobs', () => {
+  beforeEach(() => {
+    useBackgroundJobsStore.setState({ jobs: [] });
+  });
+
+  it('tracks a running extraction job and can settle it with a warning', () => {
+    const id = useBackgroundJobsStore.getState().addRunningJob({
+      type: 'agent-memory-extraction',
+      title: 'Extract agent memory',
+      projectId: 'project-1',
+      details: { projectName: 'Jean-Claude' },
+    });
+
+    expect(useBackgroundJobsStore.getState().jobs[0]).toMatchObject({
+      id,
+      type: 'agent-memory-extraction',
+      status: 'running',
+      projectId: 'project-1',
+      details: { projectName: 'Jean-Claude' },
+    });
+    expect(bgJobLabel('agent-memory-extraction')).toBe('Extracting agent memory…');
+
+    useBackgroundJobsStore
+      .getState()
+      .markJobSucceeded(id, { warningMessage: 'Nothing to extract' });
+
+    expect(useBackgroundJobsStore.getState().jobs[0]).toMatchObject({
+      status: 'succeeded',
+      warningMessage: 'Nothing to extract',
+    });
+  });
+
+  it('marks a failed extraction with the error message', () => {
+    const id = useBackgroundJobsStore.getState().addRunningJob({
+      type: 'agent-memory-extraction',
+      title: 'Retry agent memory extraction',
+      projectId: 'project-1',
+      details: { projectName: null },
+    });
+
+    useBackgroundJobsStore.getState().markJobFailed(id, 'boom');
+
+    expect(useBackgroundJobsStore.getState().jobs[0]).toMatchObject({
+      status: 'failed',
+      errorMessage: 'boom',
+    });
+  });
+});

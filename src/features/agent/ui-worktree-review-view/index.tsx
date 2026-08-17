@@ -18,9 +18,17 @@ import {
 } from '@/lib/api';
 import type { DiffFile, DiffFileStatus } from '@/features/common/ui-file-diff';
 import {
+  diffFileSignature,
+  useDiffReview,
+  useDiffTabs,
+} from '@/stores/diff-review';
+import {
   DiffFileTree,
+  DiffReviewBar,
+  DiffTabStrip,
   FileDiffContent,
   normalizeWorktreeStatus,
+  ReviewProgress,
 } from '@/features/common/ui-file-diff';
 import { isImagePath, isSvgPath } from '@shared/image-types';
 import { type ReviewMode, useDiffFileTreeWidth } from '@/stores/navigation';
@@ -337,8 +345,189 @@ export function WorktreeReviewView({
     return (data?.files ?? []).map((f) => ({
       path: f.path,
       status: normalizeWorktreeStatus(f.status),
+      additions: f.additions,
+      deletions: f.deletions,
     }));
   }, [data]);
+
+  // Content of the file under review. Shares the query cache with the diff
+  // pane below, so this is a cache read rather than a second fetch.
+  const selectedFileContent = useWorktreeFileContent(
+    gitReviewEnabled ? taskId : null,
+    selectedFilePath,
+    (data?.files ?? []).find((f) => f.path === selectedFilePath)?.status ?? null,
+  ).data;
+
+  /**
+   * Fingerprint of each file's current diff. Compared against the fingerprint
+   * stored when the file was marked reviewed, so files that changed afterwards
+   * surface as "changed since reviewed" instead of silently staying green.
+   * The open file also gets a content hash, which catches same-size edits.
+   */
+  const diffSignatures = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const file of diffFiles) {
+      map.set(
+        file.path,
+        diffFileSignature({
+          ...file,
+          content:
+            file.path === selectedFilePath
+              ? selectedFileContent?.newContent
+              : undefined,
+        }),
+      );
+    }
+    return map;
+  }, [diffFiles, selectedFilePath, selectedFileContent?.newContent]);
+  // ── per-file review state + open tabs ──
+  const { reviewed, stale, treatment, setReviewed, cycleTreatment } =
+    useDiffReview(taskId, diffSignatures);
+  const {
+    tabs,
+    groups,
+    setTabs,
+    setGroups,
+    openTab,
+    closeTabs,
+    pruneToPaths,
+  } = useDiffTabs(taskId);
+  const [tabSelection, setTabSelection] = useState<string[]>([]);
+
+  const diffPaths = useMemo(() => diffFiles.map((f) => f.path), [diffFiles]);
+  const reviewedCount = useMemo(
+    () =>
+      diffPaths.filter((path) => reviewed.has(path) && !stale.has(path)).length,
+    [diffPaths, reviewed, stale],
+  );
+  const staleCount = useMemo(
+    () => diffPaths.filter((path) => stale.has(path)).length,
+    [diffPaths, stale],
+  );
+  const allReviewed =
+    diffPaths.length > 0 && reviewedCount === diffPaths.length;
+  const activeIndex = selectedFilePath
+    ? diffPaths.indexOf(selectedFilePath)
+    : -1;
+
+  /**
+   * Opening a file keeps an existing multi-selection that already contains it
+   * (⇧-click in the tab strip selects a range *and* opens the clicked tab).
+   */
+  const handleSelectDiffFile = useCallback(
+    (path: string) => {
+      openTab(path);
+      setTabSelection((previous) =>
+        previous.length > 1 && previous.includes(path) ? previous : [path],
+      );
+      onSelectFile(path);
+    },
+    [openTab, onSelectFile],
+  );
+
+  const goToFileAt = useCallback(
+    (index: number) => {
+      const path = diffPaths[Math.max(0, Math.min(diffPaths.length - 1, index))];
+      if (path) handleSelectDiffFile(path);
+    },
+    [diffPaths, handleSelectDiffFile],
+  );
+
+  const nextUnreviewedPath = useMemo(() => {
+    if (activeIndex < 0) return null;
+    return (
+      diffPaths
+        .slice(activeIndex + 1)
+        .find((path) => !reviewed.has(path) || stale.has(path)) ??
+      diffPaths.find(
+        (path) =>
+          (!reviewed.has(path) || stale.has(path)) &&
+          path !== selectedFilePath,
+      ) ??
+      null
+    );
+  }, [diffPaths, activeIndex, reviewed, stale, selectedFilePath]);
+
+  const toggleActiveReviewed = useCallback(() => {
+    if (!selectedFilePath) return;
+    // A stale file re-stamps its signature instead of toggling back off.
+    const isStale = stale.has(selectedFilePath);
+    const wasReviewed = reviewed.has(selectedFilePath) && !isStale;
+    setReviewed([selectedFilePath], !wasReviewed);
+    // Marking a file reviewed moves on to the next one that still needs it.
+    if (!wasReviewed && nextUnreviewedPath) {
+      handleSelectDiffFile(nextUnreviewedPath);
+    }
+  }, [
+    selectedFilePath,
+    reviewed,
+    stale,
+    setReviewed,
+    nextUnreviewedPath,
+    handleSelectDiffFile,
+  ]);
+
+  const handleCloseTabs = useCallback(
+    (paths: string[]) => {
+      closeTabs(paths);
+      setTabSelection((previous) =>
+        previous.filter((path) => !paths.includes(path)),
+      );
+      if (selectedFilePath && paths.includes(selectedFilePath)) {
+        // Fall back to the neighbouring tab, like an editor would.
+        const closedAt = tabs.indexOf(selectedFilePath);
+        const remaining = tabs.filter((path) => !paths.includes(path));
+        const neighbour =
+          remaining
+            .slice()
+            .reverse()
+            .find((path) => tabs.indexOf(path) < closedAt) ??
+          remaining.find((path) => tabs.indexOf(path) > closedAt) ??
+          null;
+        onSelectFile(neighbour);
+      }
+    },
+    [closeTabs, selectedFilePath, tabs, onSelectFile],
+  );
+
+  // keep the selected file present in the tab strip
+  useEffect(() => {
+    if (selectedFilePath) openTab(selectedFilePath);
+  }, [selectedFilePath, openTab]);
+
+  // Drop tabs/groups for files that are no longer part of the diff.
+  useEffect(() => {
+    if (diffPaths.length === 0) return;
+    pruneToPaths(new Set(diffPaths));
+  }, [diffPaths, pruneToPaths]);
+
+  // Keyboard shortcuts for stepping through files and marking them reviewed
+  useCommands(
+    'worktree-diff-view-review',
+    gitReviewEnabled && effectiveReviewMode === 'changes'
+      ? [
+          {
+            label: 'Next file',
+            shortcut: 'j',
+            ignoreIfInput: true,
+            handler: () => goToFileAt(activeIndex + 1),
+          },
+          {
+            label: 'Previous file',
+            shortcut: 'k',
+            ignoreIfInput: true,
+            handler: () => goToFileAt(activeIndex - 1),
+          },
+          {
+            label: 'Mark file reviewed',
+            shortcut: 'v',
+            ignoreIfInput: true,
+            handler: toggleActiveReviewed,
+          },
+        ]
+      : [],
+  );
+
   const localFiles = useMemo(
     () => ({
       staged: (localChanges?.staged ?? []).map((file) => ({
@@ -516,16 +705,27 @@ export function WorktreeReviewView({
         >
           {effectiveReviewMode === 'changes' && (
             <>
+              <ReviewProgress
+                reviewedCount={reviewedCount}
+                staleCount={staleCount}
+                totalCount={diffPaths.length}
+                treatment={treatment}
+                onCycleTreatment={cycleTreatment}
+              />
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <DiffFileTree
                   files={diffFiles}
                   selectedPath={selectedFilePath}
-                  onSelectFile={onSelectFile}
+                  onSelectFile={handleSelectDiffFile}
                   filesWithAnnotations={filesWithAnnotations}
                   commentCountByFile={commentCountByFile}
                   draftCountByFile={draftCountByFile}
                   collapsedFolders={collapsedFolders}
                   onToggleFolder={onToggleFolder}
+                  reviewedPaths={reviewed}
+                  stalePaths={stale}
+                  onToggleReviewed={setReviewed}
+                  reviewedTreatment={treatment}
                   stickyFolders
                 />
               </div>
@@ -607,11 +807,29 @@ export function WorktreeReviewView({
               onGenerate={handleGenerateSummary}
             />
 
+            <DiffTabStrip
+              tabs={tabs}
+              files={diffFiles}
+              activePath={selectedFilePath}
+              reviewedPaths={reviewed}
+              stalePaths={stale}
+              groups={groups}
+              selection={tabSelection}
+              onSelect={handleSelectDiffFile}
+              onClose={handleCloseTabs}
+              onSetTabs={setTabs}
+              onSetGroups={setGroups}
+              onSetSelection={setTabSelection}
+              onToggleReviewed={setReviewed}
+            />
+
             {/* File diff content */}
             <div
-              className="flex-1 overflow-auto"
+              className="min-h-0 flex-1 overflow-auto"
               style={
-                bottomPadding > 0 ? { paddingBottom: bottomPadding } : undefined
+                bottomPadding > 0 && !selectedFile
+                  ? { paddingBottom: bottomPadding }
+                  : undefined
               }
             >
               {selectedFile ? (
@@ -631,6 +849,32 @@ export function WorktreeReviewView({
                 </div>
               )}
             </div>
+
+            {selectedFilePath && activeIndex >= 0 && (
+              <div
+                style={
+                  bottomPadding > 0
+                    ? { marginBottom: bottomPadding }
+                    : undefined
+                }
+              >
+                <DiffReviewBar
+                  index={activeIndex}
+                  total={diffPaths.length}
+                  isReviewed={reviewed.has(selectedFilePath)}
+                  isStale={stale.has(selectedFilePath)}
+                  nextFileName={
+                    nextUnreviewedPath
+                      ? (nextUnreviewedPath.split('/').pop() ?? null)
+                      : null
+                  }
+                  allReviewed={allReviewed}
+                  onPrev={() => goToFileAt(activeIndex - 1)}
+                  onNext={() => goToFileAt(activeIndex + 1)}
+                  onToggleReviewed={toggleActiveReviewed}
+                />
+              </div>
+            )}
           </>
         )}
         {effectiveReviewMode === 'unstaged' && (

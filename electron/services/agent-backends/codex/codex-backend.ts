@@ -14,6 +14,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type { InteractionMode } from '@shared/types';
+import type { QuestionResponseMetadata } from '@shared/agent-types';
 
 import {
   createCodexNormalizationContext,
@@ -206,6 +207,7 @@ export class CodexBackend implements AgentBackend {
     _sessionId: string,
     _requestId: string,
     _answer: Record<string, string>,
+    _metadata: QuestionResponseMetadata,
   ): Promise<void> {}
 
   async setMode(_sessionId: string, _mode: InteractionMode): Promise<void> {}

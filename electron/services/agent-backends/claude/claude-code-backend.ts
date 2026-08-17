@@ -33,7 +33,11 @@ import type {
   NormalizedQuestionRequest,
   PromptPart,
 } from '@shared/agent-backend-types';
-import type { AgentMessage, AgentQuestion } from '@shared/agent-types';
+import type {
+  AgentMessage,
+  AgentQuestion,
+  QuestionResponseMetadata,
+} from '@shared/agent-types';
 import type { InteractionMode } from '@shared/types';
 
 import {
@@ -144,6 +148,27 @@ interface ClaudeSession {
   normalizationCtx: NormalizationContext;
   // Next raw message index for persistence ordering
   messageIndex: number;
+  // Events from a background-task-notification `result` that were withheld so
+  // they don't finalize the turn while background work keeps streaming. Pushed
+  // at stream end if no real result arrives after them.
+  deferredResultEvents: AgentEvent[] | null;
+}
+
+/**
+ * A `result` emitted because a background task (background bash, Monitor,
+ * background subagent) notified the agent. It reports a zero-turn no-op, not
+ * the end of the user's turn — finalizing on it marks the step completed while
+ * the agent is still working.
+ */
+function isBackgroundNotificationResult(message: AgentMessage): boolean {
+  if (message.type !== 'result') return false;
+  // Origins other than a human prompt (`task-notification`, `auto-continuation`,
+  // `observer`, …) never end the user's turn.
+  const origin = message.origin?.kind;
+  if (!origin || origin === 'human') return false;
+  // A notification-triggered turn that actually did work still reports a real
+  // turn end; only the zero-turn no-op is withheld.
+  return !message.num_turns;
 }
 
 export class ClaudeCodeBackend implements AgentBackend {
@@ -192,6 +217,7 @@ export class ClaudeCodeBackend implements AgentBackend {
         pendingToolPermissionDecisions: [],
       },
       messageIndex: this.taskContext.sessionStartIndex,
+      deferredResultEvents: null,
     };
     this.sessions.set(sessionKey, session);
 
@@ -278,6 +304,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
+    _metadata: QuestionResponseMetadata,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -306,6 +333,22 @@ export class ClaudeCodeBackend implements AgentBackend {
     if (session?.queryInstance) {
       await session.queryInstance.setPermissionMode(SDK_PERMISSION_MODES[mode]);
     }
+  }
+
+  /**
+   * Replace the permission-rule snapshot used by `canUseTool` evaluation.
+   * Safe to call while a run is in flight.
+   */
+  updatePermissionRules({
+    sessionId,
+    rules,
+  }: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.permissionRules = rules;
   }
 
   /**
@@ -355,6 +398,9 @@ export class ClaudeCodeBackend implements AgentBackend {
       cwd: config.cwd,
       env: getChildProcessEnv(),
       allowedTools: [],
+      // Disable the built-in question tool: we expose our own
+      // `mcp__jean-claude-mcp__ask_question` which renders in the task UI.
+      disallowedTools: ['AskUserQuestion'],
       canUseTool: async (
         toolName: string,
         input: Record<string, unknown>,
@@ -445,6 +491,7 @@ export class ClaudeCodeBackend implements AgentBackend {
 
     const generator = query({ prompt, options: queryOptions });
     session.queryInstance = generator;
+    let sawRealResult = false;
 
     try {
       for await (const rawMessage of generator) {
@@ -478,12 +525,26 @@ export class ClaudeCodeBackend implements AgentBackend {
         // 4. Convert normalization events to AgentEvents and push
         // Only 'entry' needs special handling (add rawMessageId);
         // all other variants are structurally compatible.
-        for (const event of events) {
-          if (event.type === 'entry') {
-            session.eventChannel.push({ ...event, rawMessageId });
-          } else {
-            session.eventChannel.push(event as AgentEvent);
-          }
+        const agentEvents = events.map((event) =>
+          event.type === 'entry'
+            ? ({ ...event, rawMessageId } as AgentEvent)
+            : (event as AgentEvent),
+        );
+
+        // A background-task notification produces a no-op `result`. Withhold it
+        // (it would finalize the turn while the agent keeps working) and replay
+        // it only if the run ends without ever emitting a real result.
+        if (isBackgroundNotificationResult(message)) {
+          if (!sawRealResult) session.deferredResultEvents = agentEvents;
+          continue;
+        }
+        if (message.type === 'result') {
+          sawRealResult = true;
+          session.deferredResultEvents = null;
+        }
+
+        for (const event of agentEvents) {
+          session.eventChannel.push(event);
         }
       }
     } catch (error) {
@@ -497,11 +558,21 @@ export class ClaudeCodeBackend implements AgentBackend {
         sessionKey,
         errorMessage,
       );
+      // A terminal error already finalizes the step — replaying a success
+      // result on top of it would resurrect a failed run.
+      session.deferredResultEvents = null;
       session.eventChannel.push({
         type: 'error',
         error: errorMessage,
       });
     } finally {
+      // The stream ended on a withheld background-notification result and no
+      // real result ever arrived: replay it so the step isn't stuck `running`.
+      const deferred = session.deferredResultEvents;
+      session.deferredResultEvents = null;
+      if (deferred && !session.abortController.signal.aborted) {
+        for (const event of deferred) session.eventChannel.push(event);
+      }
       session.eventChannel.close();
       this.sessions.delete(sessionKey);
     }
@@ -554,6 +625,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       session.permissionRules,
       tool,
       matchValue,
+      tool === 'bash' ? String(input.command ?? '') : undefined,
     );
     const action = permissionDecision.action;
     if (action === 'allow' && !options.blockedPath) {
@@ -656,6 +728,36 @@ export class ClaudeCodeBackend implements AgentBackend {
             toolName,
             input,
             sessionAllowButton,
+            permissionEvaluation: {
+              action: options.blockedPath ? 'ask' : action,
+              matchValue,
+              ...(permissionDecision.matchedRule
+                ? {
+                    matchedRule: {
+                      tool: permissionDecision.matchedRule.tool,
+                      pattern: permissionDecision.matchedRule.pattern,
+                      action: permissionDecision.matchedRule.action,
+                    },
+                  }
+                : {}),
+              ...(permissionDecision.subCommands
+                ? {
+                    subCommands: permissionDecision.subCommands.map((sub) => ({
+                      command: sub.command,
+                      action: sub.action,
+                      ...(sub.matchedRule
+                        ? {
+                            matchedRule: {
+                              tool: sub.matchedRule.tool,
+                              pattern: sub.matchedRule.pattern,
+                              action: sub.matchedRule.action,
+                            },
+                          }
+                        : {}),
+                    })),
+                  }
+                : {}),
+            },
             directoryAccess,
           } satisfies NormalizedPermissionRequest,
         });

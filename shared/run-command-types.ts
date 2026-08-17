@@ -1,5 +1,7 @@
 // shared/run-command-types.ts
 
+import type { Task } from './types';
+
 export type CommandStatus = 'running' | 'stopped' | 'errored';
 
 export type RunCommandEnvSource =
@@ -77,6 +79,22 @@ export type UpdateProjectCommand = Partial<
 
 export type ProjectSuggestionCommand = Omit<NewProjectCommand, 'projectId'>;
 
+export function getAvailablePortOverrideValidationError(command: {
+  id?: string;
+  ports: number[];
+  portConflictStrategy: ProjectCommand['portConflictStrategy'];
+}): string | null {
+  if (
+    command.portConflictStrategy !== 'use-available-port' ||
+    command.ports.length === 1
+  ) {
+    return null;
+  }
+
+  const commandLabel = command.id ? `command ${command.id}` : 'command';
+  return `Available-port override requires exactly one requested port; ${commandLabel} has ${command.ports.length}`;
+}
+
 export interface ProjectSuggestions {
   runCommands: ProjectSuggestionCommand[];
 }
@@ -103,10 +121,30 @@ export type RunCommandConfigItem =
   | ({ type: 'command' } & Pick<ProjectCommand, 'id' | 'sortOrder'>)
   | ({ type: 'group' } & Pick<ProjectCommandGroup, 'id' | 'sortOrder'>);
 
+export type PrRunTarget =
+  | { type: 'command'; id: string }
+  | { type: 'group'; id: string };
+
+export interface StartPrCommandParams {
+  projectId: string;
+  pullRequestId: number;
+  target: PrRunTarget;
+}
+
+export interface StartPrCommandResult {
+  task: Task;
+  created: boolean;
+  runCommandIds: string[];
+  runResult: RunStatus | PortsInUseErrorData;
+}
+
+export const START_PR_COMMAND_CHANNEL = 'tasks:startPrCommand';
+
 export interface CommandRunStatus {
   id: string;
   name: string | null;
   command: string;
+  ports?: number[];
   status: CommandStatus;
   pid?: number;
 }
@@ -125,6 +163,22 @@ export interface RunCommandLogEvent {
   text: string;
   generation: number;
 }
+
+export type StartAdHocRunCommandParams = {
+  taskId: string;
+  projectId: string;
+  workingDir: string;
+  runCommandId: string;
+  name: string | null;
+  command: string;
+  ports: number[];
+  availablePort?: {
+    provider: 'env' | 'args';
+    envVar?: string;
+    args?: string;
+  };
+  envVars?: RunCommandEnvVar[];
+};
 
 export interface PortInUse {
   port: number;

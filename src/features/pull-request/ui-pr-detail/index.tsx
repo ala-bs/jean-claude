@@ -1,15 +1,28 @@
 import { FileCode, FileText, GitCommit, Loader2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import clsx from 'clsx';
-import type { ReactNode } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 
 
 import {
   DiffFileTree,
   normalizeAzureChangeType,
+  ReviewProgress,
 } from '@/features/common/ui-file-diff';
 import {
+  diffFileSignature,
+  prReviewScopeId,
+  useDiffReview,
+} from '@/stores/diff-review';
+import {
+  containsAzureDevOpsMention,
   type MentionDisplayNames,
   normalizeMentionId,
 } from '@/lib/azure-devops-mentions';
@@ -43,11 +56,16 @@ import {
   useTaskReviewFileDrafts,
 } from '@/stores/task-review-comment-drafts';
 import { api } from '@/lib/api';
+import {
+  getAttachmentFileName,
+  getAzureAttachmentPayload,
+} from '@/lib/image-utils';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import { isPrReviewChatStepMeta } from '@shared/types';
 import type { MentionOption } from '@/common/ui/mention-textarea';
 import type { PrDetailTab } from '@/stores/navigation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
+import { selectNewestPrReviewTask } from '@/lib/select-pr-review-task';
 import type { TaskStep } from '@shared/types';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
@@ -55,6 +73,7 @@ import { useLatestRef } from '@/hooks/use-latest-ref';
 import { usePrDetailState } from '@/stores/navigation';
 import { usePrDraftCountByFile } from '@/stores/pr-comment-drafts';
 import { useProject } from '@/hooks/use-projects';
+import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { useRecordPrView } from '@/hooks/use-pr-view-snapshot';
 import { useSteps } from '@/hooks/use-steps';
 import { useTaskMessages } from '@/hooks/use-task-messages';
@@ -62,6 +81,7 @@ import { useToastStore } from '@/stores/toasts';
 
 
 
+import { DeletePrWorkspaceDialog } from '../ui-delete-pr-workspace-dialog';
 import { getCommentStatusCountByPrFile } from '../utils-pr-comment-counts';
 import { getPrThreadImageUploader } from './utils-pr-thread-image-uploader';
 import { PrCommitDiffView } from '../ui-pr-commit-diff-view';
@@ -107,11 +127,55 @@ export function PrDetail({
     MentionOption[]
   >([]);
   const [commentMode, setCommentMode] = useState<CommentMode | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const { data: project } = useProject(projectId);
   const { data: pr, isLoading: isPrLoading } = usePullRequest(
     projectId,
     prId,
     repoInfo,
   );
+  const queryClient = useQueryClient();
+  const refreshQueryPrefix = useMemo(
+    () =>
+      repoInfo
+        ? [
+            projectId,
+            repoInfo.providerId,
+            repoInfo.projectId,
+            repoInfo.repoId,
+            prId,
+          ]
+        : project?.repoProviderId && project.repoProjectId && project.repoId
+          ? [
+              projectId,
+              project.repoProviderId,
+              project.repoProjectId,
+              project.repoId,
+              prId,
+            ]
+          : [projectId, prId],
+    [prId, project, projectId, repoInfo],
+  );
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await queryClient.invalidateQueries({
+        predicate: (query) => {
+          const rootKey = query.queryKey[0];
+          return (
+            typeof rootKey === 'string' &&
+            rootKey.startsWith('pull-request') &&
+            refreshQueryPrefix.every(
+              (value, index) => query.queryKey[index + 1] === value,
+            )
+          );
+        },
+      });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const navigateTab = useCallback(
     (direction: 'next' | 'prev') => {
@@ -165,7 +229,6 @@ export function PrDetail({
     } : false,
   ]);
 
-  const { data: project } = useProject(projectId);
   const { data: currentUser } = useCurrentAzureUser(projectId, repoInfo);
   const { data: projectTasks = [] } = useProjectTasks(projectId);
   const addReviewComment = useReviewCommentsStore((state) => state.addComment);
@@ -230,14 +293,17 @@ export function PrDetail({
       if (task.pullRequestId !== pullRequestId) continue;
       if (task.type === 'agent' && !result.agentTask) {
         result.agentTask = task;
-      } else if (task.type === 'pr-review' && !result.prReviewTask) {
-        result.prReviewTask = task;
       }
-      if (result.agentTask && result.prReviewTask) break;
     }
 
+    result.prReviewTask = selectNewestPrReviewTask({
+      tasks: projectTasks,
+      projectId,
+      pullRequestId,
+    });
+
     return result;
-  }, [projectTasks, prId]);
+  }, [projectId, projectTasks, prId]);
   const taskCommentTask = associatedTasks.agentTask;
   const taskCommentTaskId = taskCommentTask?.id ?? '';
   const associatedPrReviewTask = associatedTasks.prReviewTask;
@@ -246,6 +312,7 @@ export function PrDetail({
   const createOrGetPrReviewTask = useCreateOrGetPrReviewTask();
   const createPrReviewChatStep = useCreatePrReviewChatStep();
   const deleteWorktree = useDeleteWorktree();
+  const { deleteAll } = usePrWorkspaceActions();
   const addToast = useToastStore((state) => state.addToast);
 
   const isPrAuthor = useMemo(() => {
@@ -321,6 +388,7 @@ export function PrDetail({
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) => {
       await addFileComment.mutateAsync(params);
@@ -398,10 +466,14 @@ export function PrDetail({
 
   const handleUploadImage = useCallback(
     async (image: PromptImagePart, fileName: string) => {
+      const payload = await getAzureAttachmentPayload(image);
+      const mimeType = payload.mimeType || 'application/octet-stream';
       const attachment = await uploadAttachment.mutateAsync({
-        fileName,
-        mimeType: image.mimeType || 'application/octet-stream',
-        dataBase64: image.data,
+        // Extension must match the uploaded bytes: attachments are served with
+        // a content type derived from the file name, not the request.
+        fileName: getAttachmentFileName(fileName, mimeType),
+        mimeType,
+        dataBase64: payload.dataBase64,
       });
       return attachment.url;
     },
@@ -467,6 +539,15 @@ export function PrDetail({
     }
   }, [addToast, associatedPrReviewTask, deleteWorktree]);
 
+  const handleDeletePrWorkspaces = useCallback(async () => {
+    try {
+      await deleteAll.mutateAsync({ projectId, pullRequestId: prId });
+      setIsDeleteDialogOpen(false);
+    } catch {
+      // Mutation error remains visible in the confirmation dialog for retry.
+    }
+  }, [deleteAll, prId, projectId]);
+
   // Convert PR files to unified DiffFile format for the tree
   const diffFiles: DiffFile[] = useMemo(() => {
     return files.map((f) => ({
@@ -475,6 +556,75 @@ export function PrDetail({
       originalPath: f.originalPath,
     }));
   }, [files]);
+
+  /**
+   * Fingerprint of each file's current diff, so a file marked reviewed that
+   * changed afterwards (force-push, new commit) surfaces as "changed since
+   * reviewed" instead of staying green. Only the open file carries a content
+   * hash — that's the only content we have loaded.
+   */
+  const prRevision = useMemo(
+    // Sorted so a provider reshuffling the commit list can't read as a change.
+    // Any push adds or rewrites a sha, which is the signal we want: it marks
+    // every reviewed file as needing another look. That is deliberately
+    // conservative — the PR moved, so the previous pass is no longer proof.
+    () =>
+      commits
+        .map((commit) => commit.commitId)
+        .sort()
+        .join(','),
+    [commits],
+  );
+  const diffSignatures = useMemo(() => {
+    const map = new Map<string, string>();
+    // Until the commit list lands we can't tell one revision of the PR from
+    // another, so record nothing rather than a signature that's about to move.
+    if (!prRevision) return map;
+    for (const file of diffFiles) {
+      map.set(
+        file.path,
+        diffFileSignature({
+          ...file,
+          revision: prRevision,
+          // Only the open file has content loaded, and only once it has
+          // settled — hashing the empty placeholder would go stale on arrival.
+          content:
+            file.path === selectedFile && !isHeadLoading
+              ? headContent
+              : undefined,
+        }),
+      );
+    }
+    return map;
+  }, [diffFiles, selectedFile, headContent, isHeadLoading, prRevision]);
+  const reviewScopeId = useMemo(
+    () => prReviewScopeId({ projectId: stateProjectId, prId }),
+    [stateProjectId, prId],
+  );
+  const {
+    reviewed,
+    stale,
+    treatment,
+    setReviewed,
+    cycleTreatment,
+  } = useDiffReview(reviewScopeId, diffSignatures);
+  /**
+   * Marking a file before the commit list lands would store a blank signature,
+   * which can never be compared and so would exempt that file from staleness
+   * for good. Withhold the checkboxes for that (brief) window instead.
+   */
+  const canReview = Boolean(prRevision);
+  const reviewedCount = useMemo(
+    () =>
+      diffFiles.filter(
+        (file) => reviewed.has(file.path) && !stale.has(file.path),
+      ).length,
+    [diffFiles, reviewed, stale],
+  );
+  const staleCount = useMemo(
+    () => diffFiles.filter((file) => stale.has(file.path)).length,
+    [diffFiles, stale],
+  );
 
   const commentStatusCountByFile = useMemo(() => {
     return getCommentStatusCountByPrFile({ files, threads });
@@ -548,6 +698,27 @@ export function PrDetail({
     selectedFile,
   ]);
 
+  const mentionProviderId = repoInfo?.providerId ?? project?.repoProviderId;
+  const hasUnresolvedMentions = useMemo(
+    () =>
+      threads.some((thread) =>
+        thread.comments.some((comment) =>
+          containsAzureDevOpsMention(comment.content ?? ''),
+        ),
+      ) || containsAzureDevOpsMention(pr?.description ?? ''),
+    [pr?.description, threads],
+  );
+  const { data: initialMentionOptions } = useQuery({
+    queryKey: ['azure-identities', mentionProviderId, 'pr-detail'],
+    queryFn: () =>
+      api.azureDevOps.searchIdentities({
+        providerId: mentionProviderId!,
+        query: '',
+      }),
+    enabled: !!mentionProviderId && hasUnresolvedMentions,
+    staleTime: 5 * 60_000,
+  });
+
   const { mentionDisplayNames, mentionOptions } = useMemo(() => {
     const names: MentionDisplayNames = {};
     const optionsById = new Map<string, MentionOption>();
@@ -572,6 +743,7 @@ export function PrDetail({
     for (const thread of threads) {
       for (const comment of thread.comments) addPerson(comment.author);
     }
+    for (const option of initialMentionOptions ?? []) addPerson(option);
     for (const option of searchedMentionOptions) addPerson(option);
 
     return {
@@ -580,7 +752,13 @@ export function PrDetail({
         a.displayName.localeCompare(b.displayName),
       ),
     };
-  }, [pr?.createdBy, pr?.reviewers, searchedMentionOptions, threads]);
+  }, [
+    initialMentionOptions,
+    pr?.createdBy,
+    pr?.reviewers,
+    searchedMentionOptions,
+    threads,
+  ]);
 
   const handleSearchMentions = useCallback(
     async (query: string) => {
@@ -626,6 +804,9 @@ export function PrDetail({
         providerId={repoInfo?.providerId}
         repoInfo={repoInfo}
         readOnly={readOnly}
+        onRefresh={handleRefresh}
+        isRefreshing={isRefreshing}
+        associatedPrReviewTask={associatedPrReviewTask}
         onCleanReviewWorkspace={
           !readOnly && associatedPrReviewTask?.worktreePath
             ? handleCleanReviewWorkspace
@@ -635,6 +816,22 @@ export function PrDetail({
           deleteWorktree.isPending &&
           deleteWorktree.variables?.taskId === associatedPrReviewTask?.id
         }
+        onDeletePrWorkspaces={
+          !readOnly && associatedPrReviewTask
+            ? () => {
+                deleteAll.reset();
+                setIsDeleteDialogOpen(true);
+              }
+            : undefined
+        }
+      />
+      <DeletePrWorkspaceDialog
+        isOpen={isDeleteDialogOpen}
+        scope="all"
+        isPending={deleteAll.isPending}
+        error={deleteAll.error}
+        onClose={() => setIsDeleteDialogOpen(false)}
+        onConfirm={handleDeletePrWorkspaces}
       />
 
       {/* Tab bar */}
@@ -707,6 +904,7 @@ export function PrDetail({
             bottomPadding={bottomPadding}
             fileCount={files.length}
             files={files}
+            mentionDisplayNames={mentionDisplayNames}
             mentionOptions={mentionOptions}
             onSearchMentions={handleSearchMentions}
             commentSubmitLabel={undefined}
@@ -731,27 +929,48 @@ export function PrDetail({
                   <Loader2 className="text-ink-3 h-5 w-5 animate-spin" />
                 </div>
               ) : (
-                <DiffFileTree
-                  files={diffFiles}
-                  selectedPath={selectedFile}
-                  onSelectFile={setSelectedFile}
-                  commentStatusCountByFile={
-                    activeCommentMode === 'task'
-                      ? undefined
-                      : commentStatusCountByFile
-                  }
-                  commentCountByFile={
-                    activeCommentMode === 'task'
-                      ? taskReviewCommentCountByFile
-                      : undefined
-                  }
-                  draftCountByFile={
-                    activeCommentMode === 'task'
-                      ? taskReviewDraftCountByFile
-                      : draftCountByFile
-                  }
-                  llmThreadCountByFile={prReviewChatCountByFile}
-                />
+                <>
+                  {canReview && diffFiles.length > 0 && (
+                    <div className="shrink-0">
+                      <ReviewProgress
+                        reviewedCount={reviewedCount}
+                        staleCount={staleCount}
+                        totalCount={diffFiles.length}
+                        treatment={treatment}
+                        onCycleTreatment={cycleTreatment}
+                      />
+                    </div>
+                  )}
+                  {/* stickyFolders delegates scrolling to this wrapper */}
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <DiffFileTree
+                      files={diffFiles}
+                      selectedPath={selectedFile}
+                      onSelectFile={setSelectedFile}
+                      commentStatusCountByFile={
+                        activeCommentMode === 'task'
+                          ? undefined
+                          : commentStatusCountByFile
+                      }
+                      commentCountByFile={
+                        activeCommentMode === 'task'
+                          ? taskReviewCommentCountByFile
+                          : undefined
+                      }
+                      draftCountByFile={
+                        activeCommentMode === 'task'
+                          ? taskReviewDraftCountByFile
+                          : draftCountByFile
+                      }
+                      llmThreadCountByFile={prReviewChatCountByFile}
+                      reviewedPaths={canReview ? reviewed : undefined}
+                      stalePaths={canReview ? stale : undefined}
+                      onToggleReviewed={canReview ? setReviewed : undefined}
+                      reviewedTreatment={treatment}
+                      stickyFolders
+                    />
+                  </div>
+                </>
               )}
               {/* Resize handle */}
               <div

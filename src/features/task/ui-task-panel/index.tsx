@@ -1,5 +1,6 @@
 import {
   Bug,
+  ChevronsDownUp,
   ExternalLink,
   FolderSymlink,
   FolderTree,
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Smartphone,
   Trash2,
 } from 'lucide-react';
 import type { ComponentProps, PointerEvent, ReactNode } from 'react';
@@ -21,9 +23,8 @@ import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useStat
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { createPortal } from 'react-dom';
+import { nanoid } from 'nanoid';
 import { useShallow } from 'zustand/react/shallow';
-
-
 
 import {
   type AddStepPresetType,
@@ -39,11 +40,19 @@ import type {
   PromptImagePart,
   PromptPart,
 } from '@shared/agent-backend-types';
+import type {
+  AgentMemoryFollowUpCapture,
+  AgentMemoryPromptCapture,
+  AgentMemoryQueuedPromptCapture,
+  AgentMemoryTaskReviewCapture,
+} from '@shared/agent-memory-types';
 import {
   AVAILABLE_BACKENDS,
+  getModelLabel,
   getModelsForBackend,
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
+import { ComposerCollapsedBar } from '@/features/agent/ui-composer-collapsed-bar';
 import { DiffViewMode, useUIStore } from '@/stores/ui';
 import {
   Dropdown,
@@ -52,9 +61,12 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import { formatModelName, getModelFromEntry } from '@/hooks/use-model';
+
 import {
   getDefaultInteractionModeForBackend,
+  getInteractionModeOptions,
   type InteractionMode,
+  isPrReviewChatStepMeta,
   type ModelPreference,
   type TaskStep,
   type ThinkingEffort,
@@ -67,6 +79,10 @@ import {
   usePromptSnippetsSetting,
 } from '@/hooks/use-settings';
 import {
+  getTaskMobilePreviewRuntimeKey,
+  openTaskMobilePreviewWorkspace,
+} from '@/features/mobile-preview/utils-mobile-preview-task-action';
+import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
@@ -75,51 +91,60 @@ import {
   ReviewProvider,
 } from '@/common/context/review-context';
 import {
-  reviewCommentToPill,
-  ReviewPillsQueue,
-} from '@/features/common/ui-review-pills';
-import {
+  reviewCommentToAgentMemoryCapture,
   type ReviewPresetId,
   synthesizeReviewPrompt,
   useReviewComments,
   useReviewCommentsStore,
 } from '@/stores/review-comments';
 import {
+  reviewCommentToPill,
+  ReviewPillsQueue,
+} from '@/features/common/ui-review-pills';
+import {
   useAddSessionAllowedTool,
   useAllowForProject,
   useAllowForProjectWorktrees,
   useAllowGlobally,
+  useRemoveSessionAllowedTool,
+} from '@/hooks/use-step-permissions';
+import { useAgentControls, useAgentStream } from '@/hooks/use-agent';
+import {
   useClearTaskUserCompleted,
   useCompleteTask,
   useDeleteTask,
   useDeleteWorktree,
-  useRemoveSessionAllowedTool,
   useSetTaskMode,
   useTask,
   useToggleTaskUserCompleted,
   useUpdateTask,
 } from '@/hooks/use-tasks';
-import { useAgentControls, useAgentStream } from '@/hooks/use-agent';
 import {
   useCreateStep,
   useStep,
   useSteps,
   useUpdateStep,
 } from '@/hooks/use-steps';
-import { useProject, useProjectIsGitRepository } from '@/hooks/use-projects';
+import {
+  useProject,
+  useProjectIsGitRepository,
+} from '@/hooks/use-projects';
 import { AddPermissionModal } from '@/features/agent/ui-add-permission-modal';
 import type { AgentResourceSample } from '@/hooks/use-agent-resource-snapshots';
 import { api } from '@/lib/api';
+import { AutoAcceptToggle } from '@/features/agent/ui-auto-accept-toggle';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Chip } from '@/common/ui/chip';
 import { ContextUsageDisplay } from '@/features/agent/ui-context-usage-display';
+import { DeletePrWorkspaceDialog } from '@/features/pull-request/ui-delete-pr-workspace-dialog';
 import { FeatureMapSaveAction } from '@/features/task/ui-feature-map-save-action';
 import { FilePreviewPane } from '@/features/agent/ui-file-preview-pane';
 import { formatNumber } from '@/lib/number';
 import { getBranchFromWorktreePath } from '@/lib/worktree';
 import { getContextWindowForModel } from '@/lib/model-context-window';
 import { getDefaultModelForBackend } from '@/lib/default-models';
+import { getPrWorkspaceDeletionDestination } from '@/lib/pr-workspace-navigation';
 import { Input } from '@/common/ui/input';
 import { Kbd } from '@/common/ui/kbd';
 import { MessageInput } from '@/features/agent/ui-message-input';
@@ -132,35 +157,49 @@ import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import { PermissionBar } from '@/features/agent/ui-permission-bar';
 import { PrBadge } from '@/features/agent/ui-pr-badge';
 import { PrReviewValidation } from '@/features/task/ui-pr-review-validation';
+import { PrWorkspaceEmptyState } from '@/features/task/ui-pr-workspace-empty-state';
 import { QuestionOptions } from '@/features/agent/ui-question-options';
 import { RunButton } from '@/features/agent/ui-run-button';
 import { Separator } from '@/common/ui/separator';
+import { shouldShowPrWorkspaceEmptyState } from '@/features/task/ui-pr-workspace-empty-state';
 import { SkillPublishAction } from '@/features/task/ui-skill-publish-action';
 import type { SnippetVariableContext } from '@/lib/resolve-snippet-template';
 import { StepFlowBar } from '@/features/task/ui-step-flow-bar';
 import { TaskPrView } from '@/features/task/ui-task-pr-view';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useAgentResourceSnapshots } from '@/hooks/use-agent-resource-snapshots';
+import { useAutoAccept } from '@/stores/auto-accept';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useContextUsage } from '@/hooks/use-context-usage';
+import { useMobilePreviewWorkspaceStore } from '@/stores/mobile-preview-workspace';
 import { useModal } from '@/common/context/modal';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
+import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
+import { usePullBranch } from '@/hooks/use-worktree-diff';
+import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useSkills } from '@/hooks/use-skills';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import { useTaskPrompt } from '@/stores/task-prompts';
+import {
+  reconcileTaskPromptFiles,
+  useTaskPrompt,
+} from '@/stores/task-prompts';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 import { useToastStore } from '@/stores/toasts';
 import { useWorkItemById } from '@/hooks/use-work-items';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
+import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
 
-
-
+import {
+  createPermissionModalState,
+  type PermissionModalState,
+} from './permission-modal-state';
 import { getTaskTitle, TaskNameEditor } from './task-name-editor';
 import { AddStepDialog } from './add-step-dialog';
 import { ChangeWorktreePathDialog } from './change-worktree-path-dialog';
@@ -931,6 +970,18 @@ function useStepModel(stepId: string | null): string | undefined {
   });
 }
 
+const HEADER_WORK_ITEM_VISIBLE_COUNT = 3;
+
+export function splitHeaderWorkItems(workItemIds: string[]) {
+  return {
+    visible: workItemIds.slice(0, HEADER_WORK_ITEM_VISIBLE_COUNT),
+    hiddenCount: Math.max(
+      0,
+      workItemIds.length - HEADER_WORK_ITEM_VISIBLE_COUNT,
+    ),
+  };
+}
+
 function TaskHeaderWorkItemChip({
   providerId,
   workItemId,
@@ -950,7 +1001,7 @@ function TaskHeaderWorkItemChip({
     <WorkItemChip
       label={`#${workItemId}`}
       type={workItem?.fields.workItemType}
-      size="sm"
+      size="xs"
       onClick={
         workItemUrl ? () => window.open(workItemUrl, '_blank') : undefined
       }
@@ -961,6 +1012,57 @@ function TaskHeaderWorkItemChip({
           : `Work item #${workItemId}`
       }
     />
+  );
+}
+
+function TaskHeaderWorkItems({
+  providerId,
+  workItemIds,
+  workItemUrls,
+}: {
+  providerId: string | null;
+  workItemIds: string[];
+  workItemUrls?: string[] | null;
+}) {
+  const { visible, hiddenCount } = splitHeaderWorkItems(workItemIds);
+
+  return (
+    <>
+      {visible.map((workItemId, index) => (
+        <TaskHeaderWorkItemChip
+          key={workItemId}
+          providerId={providerId}
+          workItemId={workItemId}
+          workItemUrl={workItemUrls?.[index]}
+        />
+      ))}
+      {hiddenCount > 0 && (
+        <Dropdown
+          align="right"
+          trigger={
+            <button
+              type="button"
+              aria-label={`Show all ${workItemIds.length} linked work items`}
+              title={`${hiddenCount} more work items`}
+              className="text-ink-3 hover:text-ink-1 ring-line inline-flex cursor-pointer items-center rounded px-1.5 font-mono text-[9.5px] ring-1 transition-colors"
+            >
+              {`+${hiddenCount}`}
+            </button>
+          }
+        >
+          <div className="flex max-w-56 flex-wrap gap-1 p-1.5">
+            {workItemIds.map((workItemId, index) => (
+              <TaskHeaderWorkItemChip
+                key={workItemId}
+                providerId={providerId}
+                workItemId={workItemId}
+                workItemUrl={workItemUrls?.[index]}
+              />
+            ))}
+          </div>
+        </Dropdown>
+      )}
+    </>
   );
 }
 
@@ -999,13 +1101,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const projectId = task?.projectId;
 
   // Permission modal state — hoisted here so it survives MessageStream unmount/remount cycles
-  const [permissionModal, setPermissionModal] = useState<{
-    command: string;
-  } | null>(null);
-  const handleAddBashToPermissions = useCallback(
-    (command: string) => setPermissionModal({ command }),
-    [],
-  );
+  const [permissionModal, setPermissionModal] =
+    useState<PermissionModalState | null>(null);
   const closePermissionModal = useCallback(() => setPermissionModal(null), []);
   const {
     data: project,
@@ -1013,29 +1110,42 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     isError: isProjectError,
     isLoading: isProjectLoading,
   } = useProject(projectId ?? '');
+  const projectCommandAvailability = useProjectCommandAvailability(
+    projectId ?? '',
+  );
+  const isMobilePreviewWorkspaceOpen = useMobilePreviewWorkspaceStore(
+    (state) => state.isOpen,
+  );
+  const selectedMobilePreviewRuntimeKey = useMobilePreviewWorkspaceStore(
+    (state) => state.selectedRuntimeKey,
+  );
+  const openMobilePreviewWorkspace = useMobilePreviewWorkspaceStore(
+    (state) => state.open,
+  );
+  const openTaskInMobilePreview = useCallback(
+    (runtimeKey: string) => {
+      openTaskMobilePreviewWorkspace({
+        runtimeKey,
+        open: openMobilePreviewWorkspace,
+      });
+      void navigate({ to: '/all/mobile/$taskId', params: { taskId } });
+    },
+    [navigate, openMobilePreviewWorkspace, taskId],
+  );
   const { data: projectIsGitRepository } = useProjectIsGitRepository(
     projectId ?? null,
   );
   const { data: editorSetting } = useEditorSetting();
   const deleteTask = useDeleteTask();
   const deleteWorktree = useDeleteWorktree();
+  const { deleteCurrent: deletePrWorkspace } = usePrWorkspaceActions();
   const updateTask = useUpdateTask();
   const setTaskMode = useSetTaskMode();
   const addSessionAllowedTool = useAddSessionAllowedTool();
   const removeSessionAllowedTool = useRemoveSessionAllowedTool();
   const allowForProject = useAllowForProject();
   const allowForProjectWorktrees = useAllowForProjectWorktrees();
-  const allowGlobally = useAllowGlobally({
-    onError: (error) => {
-      addToast({
-        type: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to add global permission',
-      });
-    },
-  });
+  const allowGlobally = useAllowGlobally();
   const unloadStep = useTaskMessagesStore((state) => state.unloadStep);
   const addRunningJob = useBackgroundJobsStore((state) => state.addRunningJob);
   const markJobSucceeded = useBackgroundJobsStore(
@@ -1067,10 +1177,54 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     closeRightPane,
     toggleRightPane,
   } = useTaskState(taskId);
-
   // Steps data for auto-selection
   const { data: steps } = useSteps(taskId);
+  const isZeroStepPrWorkspace = shouldShowPrWorkspaceEmptyState({
+    taskType: task?.type ?? '',
+    steps,
+  });
+  const visibleRightPane =
+    isZeroStepPrWorkspace &&
+    (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
+      ? null
+      : rightPane;
+
+  useEffect(() => {
+    if (
+      isZeroStepPrWorkspace &&
+      (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
+    ) {
+      closeRightPane();
+    }
+  }, [closeRightPane, isZeroStepPrWorkspace, rightPane?.type]);
   const { data: activeStep } = useStep(activeStepId ?? '');
+  const handleAddBashToPermissions = useCallback(
+    (command: string) => {
+      if (
+        !activeStepId ||
+        activeStep?.id !== activeStepId ||
+        isPrReviewChatStepMeta(activeStep.meta)
+      ) {
+        return;
+      }
+      setPermissionModal(createPermissionModalState(activeStepId, command));
+    },
+    [activeStep, activeStepId],
+  );
+  const permissionModalStep = permissionModal
+    ? steps?.find((step) => step.id === permissionModal.stepId)
+    : undefined;
+
+  useEffect(() => {
+    if (
+      permissionModal &&
+      steps !== undefined &&
+      (!permissionModalStep || isPrReviewChatStepMeta(permissionModalStep.meta))
+    ) {
+      const timeout = window.setTimeout(closePermissionModal, 0);
+      return () => window.clearTimeout(timeout);
+    }
+  }, [closePermissionModal, permissionModal, permissionModalStep, steps]);
   const { data: backendsSetting } = useBackendsSetting();
   const { data: backendDefaultModelsSetting } =
     useBackendDefaultModelsSetting();
@@ -1087,6 +1241,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       backendDefaultModels: backendDefaultModelsSetting,
     });
   const isSkillCreationTask = task?.type === 'skill-creation';
+  const isPrWorkspaceTask = task?.type === 'pr-review';
 
   // Diff view state
   const {
@@ -1127,7 +1282,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     togglePrView,
     closePrView,
   } = usePrViewState(taskId);
-
   // File explorer state for review view
   const { rootPath: taskRootPathForExplorer } = useTaskRootPath(taskId);
   const {
@@ -1178,6 +1332,22 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   } = useAgentControls({ taskId, stepId: activeStepId });
 
   const addToast = useToastStore((s) => s.addToast);
+  const pullBranchMutation = usePullBranch();
+  const handlePullPrWorkspace = useCallback(() => {
+    pullBranchMutation.mutate(
+      { taskId },
+      {
+        onSuccess: () =>
+          addToast({ type: 'success', message: 'Pulled latest changes' }),
+        onError: (error: unknown) =>
+          addToast({
+            type: 'error',
+            message:
+              error instanceof Error ? error.message : 'Failed to pull changes',
+          }),
+      },
+    );
+  }, [addToast, pullBranchMutation, taskId]);
   const removeReviewComment = useReviewCommentsStore((s) => s.removeComment);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
@@ -1196,6 +1366,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const stepStartJobIdsRef = useRef<Map<string, string>>(new Map());
   const [showWorkItemsEditor, setShowWorkItemsEditor] = useState(false);
   const [workItemsFilter, setWorkItemsFilter] = useState('');
+  const {
+    iterationFilter: workItemsIterationFilter,
+    setIterationFilter: setWorkItemsIterationFilter,
+  } = useWorkItemPickerIterationFilter(projectId);
   // Buffered selection state for work items modal (applied on submit)
   const [draftWorkItemIds, setDraftWorkItemIds] = useState<string[]>([]);
   const [draftWorkItemUrls, setDraftWorkItemUrls] = useState<string[]>([]);
@@ -1252,6 +1426,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const taskPanelRef = useRef<HTMLDivElement>(null);
   const overflowMenuRef = useRef<{ toggle: () => void } | null>(null);
   const runButtonRef = useRef<{ toggle: () => void } | null>(null);
+
+  // Composer collapse — only meaningful while the review/diff view is open,
+  // where every pixel given back to the diff counts.
+  const [composerCollapsed, setComposerCollapsed] = useState(false);
+  const isComposerCollapsed = isDiffViewOpen && composerCollapsed;
+  const collapseComposer = useCallback(() => setComposerCollapsed(true), []);
+  const expandComposer = useCallback(() => setComposerCollapsed(false), []);
 
   // Track floating footer height so scroll containers can add matching bottom padding
   const [footerHeight, setFooterHeight] = useState(0);
@@ -1420,6 +1601,63 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     ],
   );
 
+  const openDeleteDialog = useCallback(() => {
+    if (isPrWorkspaceTask) {
+      deletePrWorkspace.reset();
+    }
+    setIsDeleteDialogOpen(true);
+  }, [deletePrWorkspace, isPrWorkspaceTask]);
+
+  const handleDeletePrWorkspace = useCallback(() => {
+    if (!task || task.type !== 'pr-review') return;
+
+    const jobId = addRunningJob({
+      type: 'task-deletion',
+      title: `Deleting "${task.name ?? task.prompt.slice(0, 40)}"`,
+      taskId,
+      projectId: task.projectId,
+      details: {
+        taskName: task.name ?? task.prompt.slice(0, 40),
+        projectName: project?.name ?? null,
+        deleteWorktree: true,
+      },
+    });
+
+    setIsDeleteDialogOpen(false);
+    clearTaskNavHistoryState(taskId);
+    const destination = getPrWorkspaceDeletionDestination({
+      pathname,
+      deletedTaskIds: [taskId],
+      currentTaskId: taskId,
+      projectId: task.projectId,
+      pullRequestId: task.pullRequestId ?? '',
+    });
+    if (destination) void navigate(destination);
+
+    void deletePrWorkspace
+      .mutateAsync({ taskId })
+      .then(() => {
+        markJobSucceeded(jobId);
+      })
+      .catch((error: unknown) => {
+        markJobFailed(
+          jobId,
+          error instanceof Error ? error.message : 'Failed to delete PR workspace',
+        );
+      });
+  }, [
+    addRunningJob,
+    clearTaskNavHistoryState,
+    deletePrWorkspace,
+    markJobFailed,
+    markJobSucceeded,
+    navigate,
+    pathname,
+    project,
+    task,
+    taskId,
+  ]);
+
   const handleOpenInEditor = () => {
     if (project?.path) {
       api.shell.openInEditor(project.path);
@@ -1515,44 +1753,103 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [taskId, updateTask, modal],
   );
 
-  const addSessionAllowedToolMutate = addSessionAllowedTool.mutate;
+  const showPermissionError = useCallback(
+    (error: unknown) => {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Failed to update permission',
+      });
+    },
+    [addToast],
+  );
+  const addSessionAllowedToolMutate = addSessionAllowedTool.mutateAsync;
   const handleAllowToolsForSession = useCallback(
-    (toolName: string, input: Record<string, unknown>) => {
-      addSessionAllowedToolMutate({ id: taskId, toolName, input });
+    async (toolName: string, input: Record<string, unknown>) => {
+      if (!activeStepId || isPrReviewChatStepMeta(activeStep?.meta)) {
+        throw new Error('Session permissions cannot be changed for review chat');
+      }
+      try {
+        await addSessionAllowedToolMutate({
+          stepId: activeStepId,
+          toolName,
+          input,
+        });
+      } catch (error) {
+        showPermissionError(error);
+        throw error;
+      }
     },
-    [taskId, addSessionAllowedToolMutate],
+    [activeStep, activeStepId, addSessionAllowedToolMutate, showPermissionError],
   );
 
-  const removeSessionAllowedToolMutate = removeSessionAllowedTool.mutate;
+  const removeSessionAllowedToolMutate = removeSessionAllowedTool.mutateAsync;
   const handleRemoveSessionAllowedTool = useCallback(
-    ({ toolName, pattern }: { toolName: string; pattern?: string }) => {
-      removeSessionAllowedToolMutate({ id: taskId, toolName, pattern });
+    async ({ toolName, pattern }: { toolName: string; pattern?: string }) => {
+      if (!activeStepId || isPrReviewChatStepMeta(activeStep?.meta)) return;
+      try {
+        await removeSessionAllowedToolMutate({
+          stepId: activeStepId,
+          toolName,
+          pattern,
+        });
+      } catch (error) {
+        showPermissionError(error);
+      }
     },
-    [taskId, removeSessionAllowedToolMutate],
+    [activeStep, activeStepId, removeSessionAllowedToolMutate, showPermissionError],
   );
 
-  const allowForProjectMutate = allowForProject.mutate;
+  const allowForProjectMutate = allowForProject.mutateAsync;
   const handleAllowForProject = useCallback(
-    (toolName: string, input: Record<string, unknown>) => {
-      allowForProjectMutate({ id: taskId, toolName, input });
+    async (toolName: string, input: Record<string, unknown>) => {
+      if (!activeStepId || isPrReviewChatStepMeta(activeStep?.meta)) {
+        throw new Error('Permissions cannot be changed for review chat');
+      }
+      try {
+        await allowForProjectMutate({ stepId: activeStepId, toolName, input });
+      } catch (error) {
+        showPermissionError(error);
+        throw error;
+      }
     },
-    [taskId, allowForProjectMutate],
+    [activeStep, activeStepId, allowForProjectMutate, showPermissionError],
   );
 
-  const allowForProjectWorktreesMutate = allowForProjectWorktrees.mutate;
+  const allowForProjectWorktreesMutate = allowForProjectWorktrees.mutateAsync;
   const handleAllowForProjectWorktrees = useCallback(
-    (toolName: string, input: Record<string, unknown>) => {
-      allowForProjectWorktreesMutate({ id: taskId, toolName, input });
+    async (toolName: string, input: Record<string, unknown>) => {
+      if (!activeStepId || isPrReviewChatStepMeta(activeStep?.meta)) {
+        throw new Error('Permissions cannot be changed for review chat');
+      }
+      try {
+        await allowForProjectWorktreesMutate({
+          stepId: activeStepId,
+          toolName,
+          input,
+        });
+      } catch (error) {
+        showPermissionError(error);
+        throw error;
+      }
     },
-    [taskId, allowForProjectWorktreesMutate],
+    [activeStep, activeStepId, allowForProjectWorktreesMutate, showPermissionError],
   );
 
-  const allowGloballyMutate = allowGlobally.mutate;
+  const allowGloballyMutate = allowGlobally.mutateAsync;
   const handleAllowGlobally = useCallback(
-    (toolName: string, input: Record<string, unknown>) => {
-      allowGloballyMutate({ id: taskId, toolName, input });
+    async (toolName: string, input: Record<string, unknown>) => {
+      if (!activeStepId || isPrReviewChatStepMeta(activeStep?.meta)) {
+        throw new Error('Permissions cannot be changed for review chat');
+      }
+      try {
+        await allowGloballyMutate({ stepId: activeStepId, toolName, input });
+      } catch (error) {
+        showPermissionError(error);
+        throw error;
+      }
     },
-    [taskId, allowGloballyMutate],
+    [activeStep, activeStepId, allowGloballyMutate, showPermissionError],
   );
 
   const handleSetMode = useCallback(
@@ -1564,20 +1861,35 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     [activeStepId, setTaskMode],
   );
 
+  const { enabled: isAutoAccepting, setEnabled: setAutoAccept } =
+    useAutoAccept(activeStepId ?? undefined);
+  const enableAutoAccept = useCallback(
+    () => setAutoAccept(true),
+    [setAutoAccept],
+  );
+
   const permissionProps = useMemo(() => {
     if (!agentMeta.pendingPermission) return null;
+    const canChangeRules = !isPrReviewChatStepMeta(activeStep?.meta);
     return {
       request: agentMeta.pendingPermission,
       onRespond: respondToPermission,
-      onAllowForSession: handleAllowToolsForSession,
-      onAllowForProject: handleAllowForProject,
-      onAllowForProjectWorktrees: handleAllowForProjectWorktrees,
-      onAllowGlobally: handleAllowGlobally,
+      onAllowForSession: canChangeRules ? handleAllowToolsForSession : undefined,
+      onAllowForProject: canChangeRules ? handleAllowForProject : undefined,
+      onAllowForProjectWorktrees: canChangeRules
+        ? handleAllowForProjectWorktrees
+        : undefined,
+      onAllowGlobally: canChangeRules ? handleAllowGlobally : undefined,
       onSetMode: handleSetMode,
+      onAutoAcceptAll:
+        canChangeRules && !isAutoAccepting ? enableAutoAccept : undefined,
       worktreePath: task?.worktreePath,
     };
   }, [
+    isAutoAccepting,
+    enableAutoAccept,
     agentMeta.pendingPermission,
+    activeStep,
     respondToPermission,
     handleAllowToolsForSession,
     handleAllowForProject,
@@ -1622,6 +1934,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       images: PromptImagePart[];
       start: boolean;
       includedReviewCommentIds: string[];
+      agentMemoryUserText: string;
+      agentMemoryReviews: AgentMemoryTaskReviewCapture[];
       reviewers?: import('@shared/types').ReviewerConfig[];
       preferredStepId?: string | null;
     }) => {
@@ -1696,6 +2010,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         const step = await createStep.mutateAsync({
           taskId,
           name,
+          type: 'agent',
           promptTemplate,
           interactionMode: data.interactionMode,
           agentBackend: data.agentBackend,
@@ -1705,6 +2020,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           dependsOn,
           sortOrder: insertionSortOrder,
           start: data.start,
+          agentMemoryCapture:
+            data.agentMemoryUserText || (data.agentMemoryReviews?.length ?? 0) > 0
+              ? {
+                  userText: data.agentMemoryUserText,
+                  reviews: data.agentMemoryReviews ?? [],
+                  contextStepId: referenceStep?.id ?? null,
+                }
+              : undefined,
           ...(isReview && reviewers
             ? {
                 type: 'review' as const,
@@ -1919,6 +2242,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         openDiffView();
       },
     },
+    isDiffViewOpen && {
+      label: isComposerCollapsed ? 'Expand Composer' : 'Collapse Composer',
+      shortcut: 'cmd+/',
+      section: 'Task',
+      handler: () => {
+        setComposerCollapsed((collapsed) => !collapsed);
+      },
+    },
     {
       label: 'Cycle Diff Mode',
       shortcut: 'cmd+shift+d',
@@ -1947,14 +2278,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         setReviewMode(next);
       },
     },
-    {
+    !isZeroStepPrWorkspace && {
       label: 'Toggle Task Settings',
       section: 'Task',
       handler: () => {
         toggleRightPane();
       },
     },
-    {
+    !isZeroStepPrWorkspace && {
       label:
         rightPane?.type === 'debugMessages'
           ? 'Close Raw Message Pane'
@@ -1980,7 +2311,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         handleOpenWorktreeInEditor();
       },
     },
-    task?.status !== 'running' &&
+    !isPrWorkspaceTask &&
+      task?.status !== 'running' &&
       agentMeta.status !== 'running' &&
       !!task?.worktreePath && {
         label: 'Delete Worktree',
@@ -2024,19 +2356,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         }
       },
     },
-    {
+    !isZeroStepPrWorkspace && {
       label: 'Copy Session ID',
       section: 'Task',
       handler: () => {
         handleCopySessionId();
       },
     },
-    task?.status !== 'running' &&
-      agentMeta.status !== 'running' && {
-        label: 'Delete Task',
+    (isPrWorkspaceTask ||
+      (task?.status !== 'running' && agentMeta.status !== 'running')) && {
+        label: isPrWorkspaceTask ? 'Delete PR Workspace' : 'Delete Task',
         section: 'Task',
         handler: () => {
-          setIsDeleteDialogOpen(true);
+          openDeleteDialog();
         },
       },
   ]);
@@ -2198,13 +2530,58 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     !!project.workItemProviderId &&
     !!project.workItemProjectId &&
     !!project.workItemProjectName;
+  const mobilePreviewRuntimeKey = getTaskMobilePreviewRuntimeKey({
+    taskId,
+    mobilePreviewConfig: project.mobilePreviewConfig,
+  });
+  const mobilePreviewEnabled = mobilePreviewRuntimeKey !== null;
+  const isTaskMobilePreviewOpen =
+    isMobilePreviewWorkspaceOpen &&
+    selectedMobilePreviewRuntimeKey === mobilePreviewRuntimeKey;
   const shouldRenderMessageSection =
-    !isPrViewOpen && !isDiffViewOpen && activeStep?.type !== 'pr-review';
+    !isPrViewOpen &&
+    !isDiffViewOpen &&
+    activeStep?.type !== 'pr-review';
   const backendLabel =
     AVAILABLE_BACKENDS.find(
       (backend) => backend.value === activeStep?.agentBackend,
     )?.label ?? 'Claude Code';
   const taskTitle = getTaskTitle({ name: task.name, prompt: task.prompt });
+  const runButton = (
+    <RunButton
+      taskId={taskId}
+      projectId={project.id}
+      workingDir={taskRootPath}
+      dropdownRef={runButtonRef}
+      onToggleLogs={() => {
+        if (rightPane?.type === 'commandLogs') {
+          closeRightPane();
+        } else {
+          openCommandLogs();
+        }
+      }}
+      onRunCommand={(runCommandIds) => {
+        openCommandLogs(runCommandIds[0] ?? null);
+      }}
+      isLogsPaneOpen={rightPane?.type === 'commandLogs'}
+      showAvailabilityState={!isZeroStepPrWorkspace}
+    />
+  );
+  const openMatchingPullRequest = task.pullRequestId
+    ? () => {
+        if (pathname.startsWith('/all')) {
+          navigate({
+            to: '/all/prs/$projectId/$prId',
+            params: { projectId: project.id, prId: task.pullRequestId! },
+          });
+          return;
+        }
+        navigate({
+          to: '/projects/$projectId/prs/$prId',
+          params: { projectId: project.id, prId: task.pullRequestId! },
+        });
+      }
+    : undefined;
 
   return (
     <ReviewProvider value={reviewContextValue}>
@@ -2219,7 +2596,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         <div
           className={clsx(
             'relative flex min-w-0 flex-1 flex-col',
-            rightPane && 'mr-2',
+            visibleRightPane && 'mr-2',
           )}
         >
           {/* Header */}
@@ -2255,9 +2632,11 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               )}
 
               {/* Backend chip */}
-              <Chip size="sm" className="max-w-40">
-                {backendLabel}
-              </Chip>
+              {!isZeroStepPrWorkspace && (
+                <Chip size="sm" className="max-w-40">
+                  {backendLabel}
+                </Chip>
+              )}
 
               {/* Branch chip */}
               {task.worktreePath ? null : task.branchName ? (
@@ -2280,19 +2659,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               )}
 
               {/* Work item badges */}
-              {task.workItemIds &&
-                task.workItemIds.length > 0 &&
-                task.workItemIds.map((workItemId, index) => {
-                  const workItemUrl = task.workItemUrls?.[index];
-                  return (
-                    <TaskHeaderWorkItemChip
-                      key={workItemId}
-                      providerId={project.workItemProviderId}
-                      workItemId={workItemId}
-                      workItemUrl={workItemUrl}
-                    />
-                  );
-                })}
+              {task.workItemIds && task.workItemIds.length > 0 && (
+                <TaskHeaderWorkItems
+                  providerId={project.workItemProviderId}
+                  workItemIds={task.workItemIds}
+                  workItemUrls={task.workItemUrls}
+                />
+              )}
             </div>
 
             {/* Work items editor modal */}
@@ -2327,6 +2700,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                       onToggleSelect={handleWorkItemToggle}
                       onClearSelection={handleClearWorkItems}
                       filter={workItemsFilter}
+                      iterationFilter={workItemsIterationFilter}
+                      onIterationFilterChange={setWorkItemsIterationFilter}
                     />
                   </div>
 
@@ -2354,23 +2729,20 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
             {/* Right: Run + Overflow menu */}
             <div className="flex shrink-0 items-center gap-2">
-              <RunButton
-                taskId={taskId}
-                projectId={project.id}
-                workingDir={taskRootPath}
-                dropdownRef={runButtonRef}
-                onToggleLogs={() => {
-                  if (rightPane?.type === 'commandLogs') {
-                    closeRightPane();
-                  } else {
-                    openCommandLogs();
+              {mobilePreviewEnabled && (
+                <Button
+                  variant={isTaskMobilePreviewOpen ? 'secondary' : 'ghost'}
+                  size="xs"
+                  icon={<Smartphone />}
+                  title="Mobile Preview"
+                  aria-label="Open task in mobile workspace"
+                  aria-pressed={isTaskMobilePreviewOpen}
+                  onClick={() =>
+                    openTaskInMobilePreview(mobilePreviewRuntimeKey)
                   }
-                }}
-                onRunCommand={(runCommandIds) => {
-                  openCommandLogs(runCommandIds[0] ?? null);
-                }}
-                isLogsPaneOpen={rightPane?.type === 'commandLogs'}
-              />
+                />
+              )}
+              {!isZeroStepPrWorkspace && runButton}
 
               {/* Overflow menu */}
               <Dropdown
@@ -2423,6 +2795,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                       : 'Link Work Items'}
                   </DropdownItem>
                 )}
+                {mobilePreviewEnabled && (
+                  <DropdownItem
+                    icon={<Smartphone />}
+                    onClick={() =>
+                      openTaskInMobilePreview(mobilePreviewRuntimeKey)
+                    }
+                    checked={isTaskMobilePreviewOpen}
+                  >
+                    Mobile Preview
+                  </DropdownItem>
+                )}
 
                 <DropdownDivider />
 
@@ -2463,20 +2846,24 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Sub Task
                   </DropdownItem>
                 )}
-                <DropdownItem
-                  icon={<Settings />}
-                  onClick={handleToggleSettingsPane}
-                  checked={rightPane?.type === 'settings'}
-                >
-                  Task Settings
-                </DropdownItem>
-                <DropdownItem
-                  icon={<Bug />}
-                  onClick={handleToggleDebugMessagesPane}
-                  checked={rightPane?.type === 'debugMessages'}
-                >
-                  Raw Messages
-                </DropdownItem>
+                {!isZeroStepPrWorkspace && (
+                  <DropdownItem
+                    icon={<Settings />}
+                    onClick={handleToggleSettingsPane}
+                    checked={rightPane?.type === 'settings'}
+                  >
+                    Task Settings
+                  </DropdownItem>
+                )}
+                {!isZeroStepPrWorkspace && (
+                  <DropdownItem
+                    icon={<Bug />}
+                    onClick={handleToggleDebugMessagesPane}
+                    checked={rightPane?.type === 'debugMessages'}
+                  >
+                    Raw Messages
+                  </DropdownItem>
+                )}
                 {task.worktreePath && (
                   <DropdownItem
                     icon={<FolderSymlink />}
@@ -2485,7 +2872,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Change Worktree Path
                   </DropdownItem>
                 )}
-                {task.worktreePath && !isAgentBusy && (
+                {task.worktreePath && !isAgentBusy && !isPrWorkspaceTask && (
                   <DropdownItem
                     icon={<Trash2 />}
                     variant="danger"
@@ -2494,13 +2881,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Delete Worktree
                   </DropdownItem>
                 )}
-                {!isAgentBusy && (
+                {(isPrWorkspaceTask || !isAgentBusy) && (
                   <DropdownItem
                     icon={<Trash2 />}
                     variant="danger"
-                    onClick={() => setIsDeleteDialogOpen(true)}
+                    onClick={openDeleteDialog}
                   >
-                    Delete Task
+                    {isPrWorkspaceTask ? 'Delete PR Workspace' : 'Delete Task'}
                   </DropdownItem>
                 )}
 
@@ -2605,6 +2992,26 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   showWorktreeActions={!!task.worktreePath}
                   gitReviewEnabled={hasGitReviewModes}
                 />
+              ) : isZeroStepPrWorkspace ? (
+                <PrWorkspaceEmptyState
+                  pullRequestId={task.pullRequestId}
+                  projectName={project.name}
+                  commandAvailability={projectCommandAvailability}
+                  onAddStep={() => {
+                    setAddStepAtEnd(true);
+                    setAddStepAfterStepId(null);
+                    setIsAddStepDialogOpen(true);
+                  }}
+                  onDelete={openDeleteDialog}
+                  onOpenPullRequest={openMatchingPullRequest}
+                  onPull={handlePullPrWorkspace}
+                  isPulling={pullBranchMutation.isPending}
+                  onOpenLogs={() => openCommandLogs()}
+                  onOpenProjectSettings={() =>
+                    useOverlaysStore.getState().open('settings')
+                  }
+                  commandControls={runButton}
+                />
               ) : activeStep?.type === 'pr-review' ? (
                 <PrReviewValidation step={activeStep} />
               ) : (
@@ -2629,15 +3036,40 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   bottomPadding={footerHeight}
                   pendingPermission={permissionProps}
                   pendingQuestion={questionProps}
-                  onAddBashToPermissions={handleAddBashToPermissions}
+                  onAddBashToPermissions={
+                    isPrReviewChatStepMeta(activeStep?.meta)
+                      ? undefined
+                      : handleAddBashToPermissions
+                  }
                   rootPath={taskRootPath}
                   respondToPermission={respondToPermission}
                   respondToQuestion={respondToQuestion}
-                  onAllowForSession={handleAllowToolsForSession}
-                  onAllowForProject={handleAllowForProject}
-                  onAllowForProjectWorktrees={handleAllowForProjectWorktrees}
-                  onAllowGlobally={handleAllowGlobally}
+                  onAllowForSession={
+                    isPrReviewChatStepMeta(activeStep?.meta)
+                      ? undefined
+                      : handleAllowToolsForSession
+                  }
+                  onAllowForProject={
+                    isPrReviewChatStepMeta(activeStep?.meta)
+                      ? undefined
+                      : handleAllowForProject
+                  }
+                  onAllowForProjectWorktrees={
+                    isPrReviewChatStepMeta(activeStep?.meta)
+                      ? undefined
+                      : handleAllowForProjectWorktrees
+                  }
+                  onAllowGlobally={
+                    isPrReviewChatStepMeta(activeStep?.meta)
+                      ? undefined
+                      : handleAllowGlobally
+                  }
                   onSetMode={handleSetMode}
+                  onAutoAcceptAll={
+                    isPrReviewChatStepMeta(activeStep?.meta) || isAutoAccepting
+                      ? undefined
+                      : enableAutoAccept
+                  }
                   worktreePath={task.worktreePath}
                   afterLastPromptGroup={
                     canContinueInterruptedStep ? (
@@ -2658,7 +3090,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           </div>
 
           {/* Message input — floats above content so messages scroll underneath */}
-          {(canSendMessage || isWaiting || hasMessages) && (
+          {!isZeroStepPrWorkspace &&
+            (canSendMessage || isWaiting || hasMessages) && (
             <div
               ref={footerRef}
               className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
@@ -2676,6 +3109,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   <FeatureMapSaveAction step={activeStep} />
                 )}
                 <TaskInputFooter
+                  collapsed={isComposerCollapsed}
+                  onExpand={expandComposer}
+                  onCollapse={isDiffViewOpen ? collapseComposer : undefined}
                   taskId={taskId}
                   activeStepId={activeStepId}
                   isRunning={isAgentBusy}
@@ -2716,13 +3152,22 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         )}
 
         {/* Task settings pane */}
-        {rightPane?.type === 'settings' && (
+        {!isZeroStepPrWorkspace && rightPane?.type === 'settings' && (
           <TaskSettingsPane
-            sessionRules={task.sessionRules ?? {}}
+            activeStep={activeStep ?? null}
             sourceBranch={task.sourceBranch}
             sourceCommit={task.startCommitHash}
             taskId={taskId}
-            stepId={activeStepId ?? undefined}
+            projectId={task.projectId}
+            taskBranchName={
+              task.branchName ??
+              (task.worktreePath
+                ? getBranchFromWorktreePath(task.worktreePath)
+                : null)
+            }
+            canEditSourceBranch={
+              Boolean(task.worktreePath) && task.type !== 'pr-review'
+            }
             onRemoveTool={handleRemoveSessionAllowedTool}
             onClose={closeRightPane}
             onOpenDebugMessages={openDebugMessages}
@@ -2730,7 +3175,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         )}
 
         {/* Debug messages pane */}
-        {rightPane?.type === 'debugMessages' && (
+        {!isZeroStepPrWorkspace && rightPane?.type === 'debugMessages' && (
           <DebugMessagesPane
             taskId={taskId}
             stepId={activeStepId}
@@ -2767,6 +3212,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           activeStepId={activeStepId ?? undefined}
           projectRoot={taskRootPath}
           projectId={project.id}
+          canContinue={isZeroStepPrWorkspace ? false : undefined}
         />
 
         {/* Change worktree path dialog */}
@@ -2781,14 +3227,25 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         )}
 
         {/* Delete confirmation modal */}
-        <DeleteTaskDialog
-          isOpen={isDeleteDialogOpen}
-          onClose={() => setIsDeleteDialogOpen(false)}
-          onConfirm={handleDeleteConfirm}
-          taskName={taskTitle}
-          hasWorktree={!!task.worktreePath}
-          isPending={false}
-        />
+        {isPrWorkspaceTask ? (
+          <DeletePrWorkspaceDialog
+            isOpen={isDeleteDialogOpen}
+            scope="current"
+            isPending={deletePrWorkspace.isPending}
+            error={deletePrWorkspace.error}
+            onClose={() => setIsDeleteDialogOpen(false)}
+            onConfirm={handleDeletePrWorkspace}
+          />
+        ) : (
+          <DeleteTaskDialog
+            isOpen={isDeleteDialogOpen}
+            onClose={() => setIsDeleteDialogOpen(false)}
+            onConfirm={handleDeleteConfirm}
+            taskName={taskTitle}
+            hasWorktree={!!task.worktreePath}
+            isPending={false}
+          />
+        )}
 
         {/* Complete task with worktree cleanup dialog */}
         <CompleteTaskDialog
@@ -2802,15 +3259,18 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         {/* Add to permissions modal — rendered here (outside the conditional
           message-stream / loading / diff chain) so it survives MessageStream
           unmount/remount when new messages arrive */}
-        {permissionModal && (
+        {permissionModal &&
+          permissionModalStep &&
+          !isPrReviewChatStepMeta(permissionModalStep.meta) && (
           <AddPermissionModal
             isOpen
             onClose={closePermissionModal}
             command={permissionModal.command}
-            taskId={task.id}
+            stepId={permissionModal.stepId}
+            stepName={permissionModalStep.name}
             hasWorktree={!!task.worktreePath}
           />
-        )}
+          )}
       </div>
     </ReviewProvider>
   );
@@ -2855,6 +3315,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onAllowForProjectWorktrees,
   onAllowGlobally,
   onSetMode,
+  onAutoAcceptAll,
   worktreePath,
   afterLastPromptGroup,
 }: {
@@ -2879,7 +3340,11 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onOpenFileInReview?: (filePath: string) => void;
   onOpenFileInEditor?: (filePath: string) => void | Promise<void>;
   onCancelQueuedPrompt?: (promptId: string) => void;
-  onUpdateQueuedPrompt?: (promptId: string, content: string) => void;
+  onUpdateQueuedPrompt?: (
+    promptId: string,
+    content: string,
+    capture?: AgentMemoryPromptCapture,
+  ) => void;
   onShowRawMessage?: (entryId: string) => void;
   bottomPadding: number;
   pendingPermission: ComponentProps<typeof MessageStream>['pendingPermission'];
@@ -2891,17 +3356,21 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
   onAllowForSession?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
+  ) => Promise<void>;
   onAllowForProject?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
+  ) => Promise<void>;
   onAllowForProjectWorktrees?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => void;
-  onAllowGlobally?: (toolName: string, input: Record<string, unknown>) => void;
+  ) => Promise<void>;
+  onAllowGlobally?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => Promise<void>;
   onSetMode?: (mode: InteractionMode) => void;
+  onAutoAcceptAll?: () => void | Promise<void>;
   worktreePath?: string | null;
   afterLastPromptGroup?: ReactNode;
 }) {
@@ -3044,6 +3513,7 @@ const TaskMessageStreamSection = memo(function TaskMessageStreamSection({
             onAllowForProjectWorktrees={onAllowForProjectWorktrees}
             onAllowGlobally={onAllowGlobally}
             onSetMode={onSetMode}
+            onAutoAcceptAll={onAutoAcceptAll}
             worktreePath={worktreePath}
           />
         </div>
@@ -3111,18 +3581,28 @@ const TaskInputFooter = memo(function TaskInputFooter({
   onStop,
   projectRoot,
   getCompletionContextBeforePrompt,
+  collapsed = false,
+  onExpand,
+  onCollapse,
 }: {
   taskId: string;
   activeStepId: string | null;
   isRunning: boolean;
   isStopping: boolean;
   canSendMessage: boolean;
-  onSend: (parts: PromptPart[]) => void;
-  onQueue: (parts: PromptPart[]) => void;
+  onSend: (parts: PromptPart[], capture?: AgentMemoryFollowUpCapture) => void;
+  onQueue: (
+    parts: PromptPart[],
+    capture?: AgentMemoryQueuedPromptCapture,
+  ) => void;
   queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
   projectRoot: string | null;
   getCompletionContextBeforePrompt: () => string;
+  /** Collapse the composer to a single line (used while reviewing a diff). */
+  collapsed?: boolean;
+  onExpand?: () => void;
+  onCollapse?: () => void;
 }) {
   const { data: task } = useTask(taskId);
   const { data: footerProject } = useProject(task?.projectId ?? '');
@@ -3197,9 +3677,23 @@ const TaskInputFooter = memo(function TaskInputFooter({
 
   const {
     text: promptDraft,
+    files: promptDraftFiles,
     setDraft: setPromptDraft,
+    setFiles: setPromptDraftFiles,
     clearDraft: clearPromptDraft,
   } = useTaskPrompt(taskId);
+
+  const handlePromptFilesChange = useCallback(
+    (update: (prev: PromptFilePart[]) => PromptFilePart[]) =>
+      setPromptDraftFiles(update, projectRoot),
+    [setPromptDraftFiles, projectRoot],
+  );
+
+  // Persisted attachments can point at files that were deleted since; drop
+  // those pills quietly on mount.
+  useEffect(() => {
+    void reconcileTaskPromptFiles(taskId);
+  }, [taskId]);
 
   // Review comments — pending pills in composer
   const reviewComments = useReviewComments(taskId);
@@ -3261,6 +3755,9 @@ const TaskInputFooter = memo(function TaskInputFooter({
     },
     [activeStepId, setStepMode],
   );
+
+  const { enabled: autoAcceptEnabled, toggle: toggleAutoAccept } =
+    useAutoAccept(activeStepId ?? undefined);
 
   const updateStep = useUpdateStep();
   const mutateStepAsync = updateStep.mutateAsync;
@@ -3355,33 +3852,12 @@ const TaskInputFooter = memo(function TaskInputFooter({
           clearUserCompleted.mutate(taskId);
         }
 
-        // Append synthesized review comments to prompt
         let finalParts = parts;
         if (openReviewComments.length > 0) {
           const reviewParts = synthesizeReviewPrompt(openReviewComments);
           if (reviewParts) {
             finalParts = [...parts, ...reviewParts];
           }
-          void api.preferenceMemory
-            .recordEvidence({
-            source: 'task-review-comment',
-            taskId,
-            comments: openReviewComments.map((comment) => ({
-              body: comment.body,
-              filePath: comment.anchor.filePath,
-              lineStart: comment.anchor.lineStart,
-              lineEnd: comment.anchor.lineEnd,
-              presets: comment.presets,
-              selectedText: comment.anchor.selectedText,
-            })),
-            context: {
-              targetStepId: activeStepId,
-            },
-            })
-            .catch((error: unknown) => {
-              console.warn('Failed to record preference evidence', error);
-            });
-          // Resolve and clear all open comments after send
           for (const comment of openReviewComments) {
             resolveComment(taskId, comment.id);
           }
@@ -3389,7 +3865,14 @@ const TaskInputFooter = memo(function TaskInputFooter({
         }
 
         clearPromptDraft();
-        onSend(finalParts);
+        onSend(finalParts, {
+          submissionId: nanoid(),
+          userText: parts
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n'),
+          reviews: openReviewComments.map(reviewCommentToAgentMemoryCapture),
+        });
       } finally {
         setIsSubmittingPrompt(false);
       }
@@ -3412,7 +3895,14 @@ const TaskInputFooter = memo(function TaskInputFooter({
         }
 
         clearPromptDraft();
-        onQueue(finalParts);
+        onQueue(finalParts, {
+          submissionId: nanoid(),
+          userText: parts
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n'),
+          reviews: openReviewComments.map(reviewCommentToAgentMemoryCapture),
+        });
       } finally {
         setIsSubmittingPrompt(false);
       }
@@ -3464,6 +3954,16 @@ const TaskInputFooter = memo(function TaskInputFooter({
         disabled={isRunning || isTaskCompleted}
         size="sm"
       />
+      <AutoAcceptToggle
+        enabled={autoAcceptEnabled}
+        onToggle={toggleAutoAccept}
+        disabled={
+          !activeStepId ||
+          isTaskCompleted ||
+          isPrReviewChatStepMeta(activeStep?.meta)
+        }
+        size="sm"
+      />
       <ModelSelector
         value={effectiveModel}
         onChange={handleModelChange}
@@ -3483,6 +3983,17 @@ const TaskInputFooter = memo(function TaskInputFooter({
     </div>
   );
 
+  const collapseButton = onCollapse ? (
+    <button
+      type="button"
+      onClick={onCollapse}
+      title="Collapse composer — ⌘/"
+      className="text-ink-4 hover:text-ink-1 flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors"
+    >
+      <ChevronsDownUp className="h-3.5 w-3.5" />
+    </button>
+  ) : null;
+
   const tokenControls = (
     <TaskMessageUsageControls
       stepId={activeStepId}
@@ -3490,6 +4001,29 @@ const TaskInputFooter = memo(function TaskInputFooter({
       contextWindow={contextWindow}
     />
   );
+
+  if (collapsed && onExpand) {
+    return (
+      <div ref={containerRef} className="mx-3 mb-3">
+        <ComposerCollapsedBar
+          draft={promptDraft}
+          queuedCount={queuedPrompts.length}
+          isRunning={isRunning}
+          modeLabel={
+            getInteractionModeOptions({ backend: effectiveBackend }).find(
+              (option) => option.value === effectiveMode,
+            )?.label ?? effectiveMode
+          }
+          modelLabel={getModelLabel(
+            effectiveModel,
+            effectiveBackend,
+            dynamicModels,
+          )}
+          onExpand={onExpand}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -3526,6 +4060,8 @@ const TaskInputFooter = memo(function TaskInputFooter({
             projectRoot={projectRoot}
             value={promptDraft}
             onValueChange={setPromptDraft}
+            files={promptDraftFiles}
+            onFilesChange={handlePromptFilesChange}
             supportsImages={backendSupportsImages(activeStep?.agentBackend)}
             projectId={task?.projectId}
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}
@@ -3548,9 +4084,26 @@ const TaskInputFooter = memo(function TaskInputFooter({
                   modeDisabled={isRunning}
                   modelDisabled={isRunning}
                 />
+                <div className="bg-glass-light flex h-7 items-center rounded-md">
+                  <AutoAcceptToggle
+                    enabled={autoAcceptEnabled}
+                    onToggle={toggleAutoAccept}
+                    disabled={
+                      !activeStepId ||
+                      isTaskCompleted ||
+                      isPrReviewChatStepMeta(activeStep?.meta)
+                    }
+                    size="sm"
+                  />
+                </div>
               </>
             }
-            controlsBeforeButtons={tokenControls}
+            controlsBeforeButtons={
+              <>
+                {tokenControls}
+                {collapseButton}
+              </>
+            }
             buttonSize="sm"
             textareaClassName="bg-transparent px-1 py-0 text-sm leading-[20px]"
           />
@@ -3576,12 +4129,23 @@ const TaskInputFooter = memo(function TaskInputFooter({
             projectRoot={projectRoot}
             value={promptDraft}
             onValueChange={setPromptDraft}
+            files={promptDraftFiles}
+            onFilesChange={handlePromptFilesChange}
             supportsImages={backendSupportsImages(activeStep?.agentBackend)}
             projectId={task?.projectId}
             getCompletionContextBeforePrompt={getCompletionContextBeforePrompt}
             promptSnippets={footerSnippets}
             snippetVariableContext={snippetVariableContext}
-            controlsAboveButtons={selectorGroup}
+            controlsAboveButtons={
+              collapseButton ? (
+                <div className="flex items-center gap-1.5">
+                  {selectorGroup}
+                  {collapseButton}
+                </div>
+              ) : (
+                selectorGroup
+              )
+            }
             controlsBeforeButtons={tokenControls}
             buttonSize="sm"
             fillAvailableHeight

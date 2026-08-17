@@ -240,20 +240,18 @@ export function PrAutoComplete({
             ({MERGE_STRATEGY_LABELS[pr.completionOptions.mergeStrategy]})
           </span>
         )}
-        {variant !== 'compact' && (
-          <button
-            onClick={handleCancel}
-            className={cancelClassName}
-            title="Cancel auto-complete"
-            disabled={autoCompleteMutation.isAnyPending}
-          >
-            {autoCompleteMutation.isAnyPending ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <X className="h-3 w-3" />
-            )}
-          </button>
-        )}
+        <button
+          onClick={handleCancel}
+          className={cancelClassName}
+          title="Unset auto-complete"
+          disabled={autoCompleteMutation.isAnyPending}
+        >
+          {autoCompleteMutation.isAnyPending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <X className="h-3 w-3" />
+          )}
+        </button>
       </div>
     );
   }

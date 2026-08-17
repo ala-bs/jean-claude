@@ -16,6 +16,7 @@ import {
   useSensors,
 } from '@dnd-kit/core';
 import React, {
+  memo,
   startTransition,
   useCallback,
   useEffect,
@@ -47,7 +48,6 @@ import {
 import {
   expandFeatureReferencesInPrompt,
   getReferencedFeatures,
-  type PreparedProjectFeature,
   type PreparedProjectFeatures,
   prepareProjectFeatureReferences,
 } from '@/lib/prompt-feature-context';
@@ -65,6 +65,11 @@ import {
   useNewTaskDraftStore,
   type WorkItemsViewMode,
 } from '@/stores/new-task-draft';
+import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
+import {
+  deleteAttachmentFiles,
+  findMissingAttachmentPaths,
+} from '@/lib/prompt-attachment-cleanup';
 import {
   KeyboardLayerProvider,
   useKeyboardLayer,
@@ -101,6 +106,7 @@ import {
   useBackendModelPresetsSetting,
   useBackendsSetting,
   useCompletionSetting,
+  useModelQuickSwitcherSetting,
   usePromptSnippetsSetting,
   useThinkingSettingsSetting,
 } from '@/hooks/use-settings';
@@ -121,7 +127,9 @@ import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
 import { Button } from '@/common/ui/button';
 import { compressImage } from '@/lib/image-compression';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
+import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { getDefaultModelForBackend } from '@/lib/default-models';
+import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
@@ -132,6 +140,7 @@ import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useDeleteProjectTodo } from '@/hooks/use-project-todos';
 import { useProjectSkills } from '@/hooks/use-skills';
+import { NewTaskMoreMenu } from '@/features/new-task/ui-new-task-more-menu';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
 
@@ -158,18 +167,20 @@ function projectHasWorkItems(project: Project | null): boolean {
   );
 }
 
-function FinalPromptPreviewButton({
-  prompt,
+const EMPTY_PROMPT_FILES: PromptFilePart[] = [];
+
+const FinalPromptPreviewButton = memo(function FinalPromptPreviewButton({
+  getPrompt,
   projectRoot,
   preparedFeatures,
-  referencedFeatures,
+  referencedFeatureCount,
   fileComments,
   files,
 }: {
-  prompt: string;
+  getPrompt: () => string;
   projectRoot: string | null | undefined;
   preparedFeatures: PreparedProjectFeatures;
-  referencedFeatures: PreparedProjectFeature[];
+  referencedFeatureCount: number;
   fileComments: ComposerFileComment[];
   files: PromptFilePart[];
 }) {
@@ -188,7 +199,7 @@ function FinalPromptPreviewButton({
   const finalPromptPreview = useMemo(() => {
     if (!isOpen) return '';
 
-    let finalPrompt = prompt;
+    let finalPrompt = getPrompt();
     if (fileCommentText) {
       finalPrompt = finalPrompt.trim()
         ? `${finalPrompt}\n\n${fileCommentText}`
@@ -200,10 +211,10 @@ function FinalPromptPreviewButton({
     });
     finalPrompt += buildAttachedFilesXml(files);
     return finalPrompt;
-  }, [isOpen, prompt, fileCommentText, preparedFeatures, files]);
+  }, [isOpen, getPrompt, fileCommentText, preparedFeatures, files]);
 
   const hasGeneratedContext =
-    referencedFeatures.length > 0 ||
+    referencedFeatureCount > 0 ||
     fileComments.length > 0 ||
     files.length > 0;
   if (!hasGeneratedContext) return null;
@@ -218,9 +229,9 @@ function FinalPromptPreviewButton({
         <Eye className="h-3 w-3" />
         <span className="text-acc font-mono text-[10px]">Preview</span>
         <span className="text-ink-3 text-[10px]">final prompt</span>
-        {referencedFeatures.length > 0 && (
+        {referencedFeatureCount > 0 && (
           <span className="bg-acc-soft text-acc rounded px-1.5 py-px font-mono text-[10px]">
-            {referencedFeatures.length} feat
+            {referencedFeatureCount} feat
           </span>
         )}
         {fileComments.length > 0 && (
@@ -249,8 +260,8 @@ function FinalPromptPreviewButton({
               ~{Math.ceil(finalPromptPreview.length / 4).toLocaleString()}{' '}
               tokens
             </span>
-            {referencedFeatures.length > 0 && (
-              <span>{referencedFeatures.length} feature refs</span>
+            {referencedFeatureCount > 0 && (
+              <span>{referencedFeatureCount} feature refs</span>
             )}
             {fileComments.length > 0 && (
               <span>{fileComments.length} comments</span>
@@ -264,7 +275,7 @@ function FinalPromptPreviewButton({
       </Modal>
     </>
   );
-}
+});
 
 function resolveDefaultBackend({
   selectedProject,
@@ -379,6 +390,14 @@ function NewTaskPromptInput({
     [prompt, preparedFeatures],
   );
 
+  // Keep the latest prompt in a ref so the preview button (memoized) doesn't
+  // re-render on every keystroke; it reads the prompt lazily when opened.
+  const promptRef = useRef(prompt);
+  useEffect(() => {
+    promptRef.current = prompt;
+  }, [prompt]);
+  const getPrompt = useCallback(() => promptRef.current, []);
+
   const handlePromptChange = useCallback(
     (nextPrompt: string) => {
       if (hasCreateTaskError) {
@@ -426,12 +445,12 @@ function NewTaskPromptInput({
         {!isNoteMode && selectedProject && (
           <div className="px-[18px] pb-3.5">
             <FinalPromptPreviewButton
-              prompt={prompt}
+              getPrompt={getPrompt}
               projectRoot={selectedProject.path}
               preparedFeatures={preparedFeatures}
-              referencedFeatures={referencedFeatures}
+              referencedFeatureCount={referencedFeatures.length}
               fileComments={fileComments}
-              files={files ?? []}
+              files={files ?? EMPTY_PROMPT_FILES}
             />
           </div>
         )}
@@ -514,7 +533,10 @@ export function NewTaskOverlay({
   });
 
   // Prompt template state (not persisted - derived from selections)
-  const [promptTemplate, setPromptTemplate] = useState<string>('');
+  // null = user has not edited it yet, fall back to the derived default
+  const [promptTemplateOverride, setPromptTemplate] = useState<string | null>(
+    null,
+  );
 
   // Sort projects by sortOrder
   const sortedProjects = useMemo(
@@ -539,6 +561,10 @@ export function NewTaskOverlay({
         : null,
     [selectedProjectId, projects],
   );
+  const {
+    iterationFilter: workItemsIterationFilter,
+    setIterationFilter: setWorkItemsIterationFilter,
+  } = useWorkItemPickerIterationFilter(selectedProjectId);
   useEffect(() => {
     if (projectsLoading || selectedProjectId === null || selectedProject) {
       return;
@@ -633,6 +659,12 @@ export function NewTaskOverlay({
   );
   const previousSelectedWorkItemIdsSignatureRef = useRef<string | null>(null);
 
+  // Identity of the compose-step seeding (project + selected work items), so we
+  // seed the prompt template at most once per selection and never overwrite
+  // what the user typed.
+  const composeSeedKey = `${selectedProjectId ?? 'all'}:${selectedWorkItemIdsSignature}`;
+  const seededComposeKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (previousSelectedWorkItemIdsSignatureRef.current === null) {
       previousSelectedWorkItemIdsSignatureRef.current =
@@ -675,6 +707,19 @@ export function NewTaskOverlay({
 
   // Current search step (only relevant in search mode)
   const searchStep = draft?.searchStep ?? 'select';
+
+  // Effective prompt template: what the user typed, else the default generated
+  // from the selected work items. Deriving it (instead of seeding via effect)
+  // also covers entry points that jump straight to the compose step, e.g.
+  // "Create task" from the Azure board details pane.
+  const promptTemplate =
+    promptTemplateOverride ??
+    (inputMode === 'search' &&
+    searchStep === 'compose' &&
+    selectedWorkItems.length > 0 &&
+    selectedWorkItems.length === (draft?.workItemIds ?? []).length
+      ? generateInitialTemplate(draft?.workItemIds ?? [])
+      : '');
 
   // Toggle input mode
   const toggleInputMode = useCallback(() => {
@@ -768,6 +813,7 @@ export function NewTaskOverlay({
     useBackendDefaultModelsSetting();
   const { data: backendModelPresets = [] } = useBackendModelPresetsSetting();
   const { data: thinkingSettings } = useThinkingSettingsSetting();
+  const { data: quickSwitcherSetting } = useModelQuickSwitcherSetting();
 
   const defaultBackend = useMemo(() => {
     if (!backendsSetting) {
@@ -796,7 +842,8 @@ export function NewTaskOverlay({
       : defaultBackend;
   }, [draft?.agentBackend, defaultBackend, backendsSetting]);
 
-  const { data: dynamicModels } = useBackendModels(currentBackend);
+  const { data: dynamicModels, isFetched: areBackendModelsFetched } =
+    useBackendModels(currentBackend);
 
   const availableModelPreferences = useMemo(
     () =>
@@ -810,58 +857,43 @@ export function NewTaskOverlay({
     backend: currentBackend,
     mode: draft?.interactionMode ?? 'ask',
   });
-  const currentBackendPresetId =
-    draft?.shouldAutoSelectBackendModelPreset === false
-      ? (draft.backendModelPresetId ?? null)
-      : (draft?.backendModelPresetId ??
-        findMatchingBackendModelPresetId({
-          presets: backendModelPresets,
-          backend:
-            draft?.agentBackend ??
-            selectedProject?.defaultAgentBackend ??
-            currentBackend,
-          model:
-            draft?.modelPreference ??
-            ((draft?.agentBackend ??
-            selectedProject?.defaultAgentBackend ??
-            currentBackend)
-              ? getDefaultModelForBackend({
-                  backend:
-                    draft?.agentBackend ??
-                    selectedProject?.defaultAgentBackend ??
-                    currentBackend,
-                  project: selectedProject,
-                  backendDefaultModels: backendDefaultModelsSetting,
-                })
-              : undefined),
-        }));
-  const currentBackendModelPreset = currentBackendPresetId
-    ? backendModelPresets.find((preset) => preset.id === currentBackendPresetId)
-    : null;
-  const currentModelPreference = useMemo(() => {
-    const draftModelPreference =
-      draft?.modelPreference ??
-      getDefaultModelForBackend({
+  const backendModelSelection = useMemo(
+    () =>
+      resolveBackendModelSelection({
+        presets: backendModelPresets,
         backend: currentBackend,
-        project: selectedProject,
-        backendDefaultModels: backendDefaultModelsSetting,
-      });
-
-    if (currentBackendPresetId) {
-      return draftModelPreference;
-    }
-
-    return availableModelPreferences.includes(draftModelPreference)
-      ? draftModelPreference
-      : 'default';
-  }, [
-    backendDefaultModelsSetting,
-    currentBackend,
-    currentBackendPresetId,
-    draft?.modelPreference,
-    availableModelPreferences,
-    selectedProject,
-  ]);
+        defaultModel: getDefaultModelForBackend({
+          backend: currentBackend,
+          project: selectedProject,
+          backendDefaultModels: backendDefaultModelsSetting,
+        }),
+        draftModelPreference: draft?.modelPreference,
+        draftAgentBackend: draft?.agentBackend,
+        draftPresetId: draft?.backendModelPresetId,
+        shouldAutoSelectPreset: draft?.shouldAutoSelectBackendModelPreset,
+        enabledBackends: backendsSetting?.enabledBackends,
+        quickSwitcherEnabled: quickSwitcherSetting?.enabled,
+        availableModels: availableModelPreferences,
+        areModelsFetched: areBackendModelsFetched,
+      }),
+    [
+      areBackendModelsFetched,
+      availableModelPreferences,
+      backendDefaultModelsSetting,
+      backendModelPresets,
+      backendsSetting?.enabledBackends,
+      currentBackend,
+      draft?.agentBackend,
+      draft?.backendModelPresetId,
+      draft?.modelPreference,
+      draft?.shouldAutoSelectBackendModelPreset,
+      quickSwitcherSetting?.enabled,
+      selectedProject,
+    ],
+  );
+  const currentBackendModelPreset = backendModelSelection.preset;
+  const currentBackendPresetId = backendModelSelection.presetId;
+  const currentModelPreference = backendModelSelection.model;
   const thinkingCapabilities = getModelThinkingCapabilities(
     currentModelPreference,
     dynamicModels,
@@ -901,6 +933,27 @@ export function NewTaskOverlay({
     currentBackend,
     !isNoteMode && !draft?.agentBackend && !draft?.modelPreference,
   );
+  const rateLimitSuggestedPresetId = useMemo(() => {
+    if (!rateLimitSuggestion?.swapped) return null;
+
+    const backendChanged = rateLimitSuggestion.backend !== currentBackend;
+    return findMatchingBackendModelPresetId({
+      presets: backendModelPresets,
+      backend: rateLimitSuggestion.backend,
+      model:
+        rateLimitSuggestion.model ??
+        (backendChanged ? 'default' : currentModelPreference),
+      thinkingEffort:
+        rateLimitSuggestion.thinkingEffort ??
+        (backendChanged ? 'default' : currentThinkingEffort),
+    });
+  }, [
+    backendModelPresets,
+    currentBackend,
+    currentModelPreference,
+    currentThinkingEffort,
+    rateLimitSuggestion,
+  ]);
   useEffect(() => {
     if (
       isNoteMode ||
@@ -1005,14 +1058,8 @@ export function NewTaskOverlay({
   const [isFetchingWorkItemImages, setIsFetchingWorkItemImages] =
     useState(false);
 
-  // Advance to compose step and extract work item images
-  const advanceToCompose = useCallback(async () => {
-    if (!canAdvanceToCompose) return;
-    const template = generateInitialTemplate(draft?.workItemIds ?? []);
-    setPromptTemplate(template);
-    updateDraft({ searchStep: 'compose' });
-
-    // Extract and fetch images from work item HTML in background
+  // Extract and fetch images from work item HTML in background
+  const fetchWorkItemImages = useCallback(async () => {
     const providerId = selectedProject?.workItemProviderId;
     if (!providerId) return;
 
@@ -1027,7 +1074,7 @@ export function NewTaskOverlay({
     const urlsToFetch = imageUrls.slice(0, slotsAvailable);
     const fetchSessionId = ++workItemImageFetchSessionRef.current;
     const imageDraftKey = selectedProjectId ?? 'all';
-    setIsFetchingWorkItemImages(true);
+    startTransition(() => setIsFetchingWorkItemImages(true));
     try {
       const fetchedImages = await Promise.all(
         urlsToFetch.map(async (imageUrl) => {
@@ -1128,13 +1175,43 @@ export function NewTaskOverlay({
       }
     }
   }, [
-    canAdvanceToCompose,
-    draft?.workItemIds,
     draft?.images,
     selectedProjectId,
     selectedWorkItems,
     selectedProject?.workItemProviderId,
+  ]);
+
+  // Advance to compose step and extract work item images
+  const advanceToCompose = useCallback(async () => {
+    if (!canAdvanceToCompose) return;
+    seededComposeKeyRef.current = composeSeedKey;
+    setPromptTemplate(null);
+    updateDraft({ searchStep: 'compose' });
+    await fetchWorkItemImages();
+  }, [
+    canAdvanceToCompose,
+    composeSeedKey,
+    fetchWorkItemImages,
     updateDraft,
+  ]);
+
+  // Entry points that jump straight to the compose step (e.g. "Create task"
+  // from the Azure board details pane) bypass advanceToCompose, so fetch the
+  // work item images here. The prompt template itself is derived.
+  useEffect(() => {
+    if (inputMode !== 'search' || searchStep !== 'compose') return;
+    if (seededComposeKeyRef.current === composeSeedKey) return;
+    const ids = draft?.workItemIds ?? [];
+    if (ids.length === 0 || selectedWorkItems.length !== ids.length) return;
+    seededComposeKeyRef.current = composeSeedKey;
+    void fetchWorkItemImages();
+  }, [
+    inputMode,
+    searchStep,
+    composeSeedKey,
+    draft?.workItemIds,
+    selectedWorkItems,
+    fetchWorkItemImages,
   ]);
 
   // Go back to select step
@@ -1228,7 +1305,14 @@ export function NewTaskOverlay({
       } else {
         finalPrompt = submissionDraft.prompt ?? '';
       }
-
+      const agentMemoryPrompt = getOriginalTaskAgentMemoryPrompt({
+        inputMode:
+          inputMode === 'search' && searchStep === 'compose'
+            ? 'work-item'
+            : 'prompt',
+        prompt: submissionDraft.prompt ?? '',
+        workItemTemplate: promptTemplate,
+      });
       let draftImages: PromptImagePart[] | undefined =
         submissionDraft.images && submissionDraft.images.length > 0
           ? submissionDraft.images
@@ -1285,6 +1369,7 @@ export function NewTaskOverlay({
           creationInput: {
             projectId: selectedProjectId,
             prompt: finalPrompt,
+            agentMemoryPrompt,
             interactionMode: normalizeInteractionModeForBackend({
               backend: submitSelection.backend,
               mode: currentInteractionMode,
@@ -1331,6 +1416,7 @@ export function NewTaskOverlay({
         .mutateAsync({
           projectId: selectedProjectId,
           prompt: finalPrompt,
+          agentMemoryPrompt,
           images: draftImages,
           interactionMode: normalizeInteractionModeForBackend({
             backend: submitSelection.backend,
@@ -1417,9 +1503,17 @@ export function NewTaskOverlay({
     ).trim();
     if (!content) return;
 
+    // Notes carry only the prompt text, so any attachments are discarded here
+    // and their temp files would otherwise leak.
+    const draftState = useNewTaskDraftStore.getState().drafts[draftKey];
+
     try {
       await createNoteMutation.mutateAsync({ content });
       clearDraft();
+      void deleteAttachmentFiles({
+        projectPath: draftState?.projectPath,
+        files: draftState?.files,
+      });
       setTimeout(() => {
         promptInputRef.current?.focus();
       }, 50);
@@ -1458,8 +1552,16 @@ export function NewTaskOverlay({
       },
     });
 
+    // Built from the selected work items, not the draft's attachments, so any
+    // attached files are discarded and their temp copies must be reclaimed.
+    const discardedDraft = useNewTaskDraftStore.getState().drafts[draftKey];
+
     void triggerAnimation();
     clearDraft();
+    void deleteAttachmentFiles({
+      projectPath: discardedDraft?.projectPath,
+      files: discardedDraft?.files,
+    });
     onClose();
 
     void createVerificationNoteMutation
@@ -1483,6 +1585,7 @@ export function NewTaskOverlay({
     addRunningJob,
     createVerificationNoteMutation,
     clearDraft,
+    draftKey,
     onClose,
     triggerAnimation,
     markJobSucceeded,
@@ -1576,21 +1679,63 @@ export function NewTaskOverlay({
 
   const handleFileAttach = useCallback(
     (file: PromptFilePart) => {
+      const projectPath = selectedProject?.path;
       updateDraft((prev) => ({
         files: [...(prev?.files ?? []), file],
+        // Recorded so a discarded draft can reclaim these temp files.
+        ...(projectPath ? { projectPath } : {}),
       }));
     },
-    [updateDraft],
+    [updateDraft, selectedProject?.path],
   );
 
   const handleFileRemove = useCallback(
     (index: number) => {
+      // Read the entry from current store state before updating, so the
+      // updater stays side-effect free.
+      const removed =
+        useNewTaskDraftStore.getState().drafts[draftKey]?.files?.[index];
+
       updateDraft((prev) => ({
         files: (prev?.files ?? []).filter((_, i) => i !== index),
       }));
+
+      // Unsent attachment — reclaim its temp file. The main process refuses
+      // paths outside the managed tmp dir, so original user files are safe.
+      void deleteAttachmentFiles({
+        projectPath: selectedProject?.path ?? null,
+        files: removed ? [removed] : [],
+      });
     },
-    [updateDraft],
+    [updateDraft, selectedProject?.path, draftKey],
   );
+
+  // Persisted attachments can point at files deleted since the draft was
+  // written; drop those pills quietly when the overlay opens.
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      const files =
+        useNewTaskDraftStore.getState().drafts[draftKey]?.files ?? [];
+      if (files.length === 0) return;
+
+      const missing = await findMissingAttachmentPaths(files);
+      if (cancelled || missing.size === 0) return;
+
+      // Functional update: files attached while the checks were in flight
+      // must survive.
+      updateDraft((prev) => ({
+        files: (prev?.files ?? []).filter(
+          (file) => !missing.has(file.filePath),
+        ),
+      }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draftKey, updateDraft]);
 
   const searchInputValue = draft?.workItemsFilter ?? '';
 
@@ -1833,12 +1978,8 @@ export function NewTaskOverlay({
                   onViewModeChange={(mode: WorkItemsViewMode) =>
                     updateDraft({ workItemsViewMode: mode })
                   }
-                  iterationFilter={
-                    draft?.workItemsIterationFilter ?? '__current__'
-                  }
-                  onIterationFilterChange={(iterationFilter) =>
-                    updateDraft({ workItemsIterationFilter: iterationFilter })
-                  }
+                  iterationFilter={workItemsIterationFilter}
+                  onIterationFilterChange={setWorkItemsIterationFilter}
                   onWorkItemToggle={handleWorkItemToggle}
                   onClearSelectedWorkItems={handleClearSelectedWorkItems}
                   onHighlightChange={setHighlightedWorkItemId}
@@ -1906,6 +2047,7 @@ export function NewTaskOverlay({
                     backend={currentBackend}
                     model={currentModelPreference}
                     selectedPresetId={currentBackendPresetId}
+                    enabledBackends={backendsSetting?.enabledBackends}
                     backendShortcut="cmd+j"
                     modelShortcut="cmd+l"
                     side="top"
@@ -1968,6 +2110,8 @@ export function NewTaskOverlay({
                     requestedBackend={currentBackend}
                     model={currentModelPreference}
                     thinkingEffort={currentThinkingEffort}
+                    selectedPresetId={currentBackendPresetId}
+                    suggestedPresetId={rateLimitSuggestedPresetId}
                     onApplySuggestion={(selection) => {
                       userTouchedSelectionRef.current = true;
                       updateDraft({
@@ -2150,6 +2294,10 @@ export function NewTaskOverlay({
                       />
                     </div>
                   )}
+
+                {!isNoteMode && selectedProjectId && (
+                  <NewTaskMoreMenu projectId={selectedProjectId} />
+                )}
               </div>
 
               <div className="flex-1" />

@@ -2,6 +2,7 @@ import type { Project } from '@shared/types';
 
 import {
   markResourceChanged,
+  markResourceDeleted,
   setIndexResource,
   setResourceSuccess,
 } from '../cache-actions';
@@ -55,6 +56,8 @@ export function appendProjectToIndex(projectId: string) {
 
 export function removeProject(projectId: string) {
   cache$.projects[projectId].delete();
+  // See removeTask: guards in-flight loads against resurrecting the project.
+  markResourceDeleted(projectResourceKey(projectId));
 
   const ids = cache$.indexes[PROJECTS_INDEX_KEY].ids.get();
   if (ids) {

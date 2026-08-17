@@ -11,7 +11,7 @@ import type {
   ResolvedPermissionRule,
 } from './permission-types';
 import type { NormalizationEvent } from './normalized-message-v2';
-import type { QuestionResponse } from './agent-types';
+import type { QuestionResponseMetadata } from './agent-types';
 
 
 
@@ -149,10 +149,21 @@ export interface AgentBackend {
     sessionId: string,
     requestId: string,
     answer: Record<string, string>,
-    metadata?: Pick<QuestionResponse, 'wasFreeform' | 'wasFreeformByQuestion'>,
+    metadata: QuestionResponseMetadata,
   ): Promise<void>;
   setMode(sessionId: string, mode: InteractionMode): Promise<void>;
   getSessionAllowedTools?(sessionId: string): string[];
+  /**
+   * Replace the resolved permission-rule snapshot used for runtime evaluation.
+   *
+   * Safe to call mid-run: it only swaps the array consulted by the next
+   * permission evaluation. Optional so backends without runtime permission
+   * evaluation keep type-checking.
+   */
+  updatePermissionRules?(params: {
+    sessionId: string;
+    rules: ResolvedPermissionRule[];
+  }): void;
   dispose(): Promise<void>;
 }
 

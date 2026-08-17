@@ -25,19 +25,18 @@ describe('new task draft store', () => {
     vi.unstubAllGlobals();
   });
 
-  it('preserves the per-project iteration filter when clearing a draft', async () => {
+  it('removes the draft entry when clearing a draft', async () => {
     const { useNewTaskDraftStore } = await import('./new-task-draft');
 
     useNewTaskDraftStore.getState().setDraft('project-1', {
       prompt: 'draft prompt',
       workItemIds: ['123'],
-      workItemsIterationFilter: 'Project\\Iteration 1',
     });
 
     useNewTaskDraftStore.getState().clearDraft('project-1');
 
-    expect(useNewTaskDraftStore.getState().drafts['project-1']).toEqual({
-      workItemsIterationFilter: 'Project\\Iteration 1',
-    });
+    expect(
+      useNewTaskDraftStore.getState().drafts['project-1'],
+    ).toBeUndefined();
   });
 });

@@ -38,6 +38,7 @@ import {
 } from '@/common/context/keyboard-bindings';
 import { api } from '@/lib/api';
 import type { AppNotification } from '@shared/notification-types';
+import { buildTaskCreationRetryInput } from '@/lib/agent-memory-prompt-input';
 import type { DebugLogEntry } from '@shared/debug-log-types';
 import { formatRelativeTime } from '@/lib/time';
 import type { Project } from '@shared/types';
@@ -675,10 +676,9 @@ export function ActivityCenterOverlay({
       markJobRunning(job.id);
       try {
         if (job.type === 'task-creation') {
-          const result = await api.tasks.createWithWorktree({
-            ...job.details.creationInput,
-            updatedAt: new Date().toISOString(),
-          });
+          const result = await api.tasks.createWithWorktree(
+            buildTaskCreationRetryInput(job.details.creationInput),
+          );
           markJobSucceeded(job.id, {
             taskId: result.id,
             projectId: result.projectId,

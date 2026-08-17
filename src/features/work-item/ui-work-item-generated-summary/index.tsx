@@ -121,7 +121,12 @@ export function WorkItemGeneratedSummary({
       aria-label="Generated work item summary"
     >
       <div className="bg-acc absolute inset-y-0 left-0 w-0.5" />
-      <header className="border-line flex min-h-11 items-center gap-3 border-b px-4 py-2.5">
+      <header
+        className={clsx(
+          'border-line flex items-center gap-3 border-b px-4',
+          summary ? 'min-h-11 py-2.5' : 'min-h-10 py-2',
+        )}
+      >
         <div className="bg-acc/10 text-acc flex h-7 w-7 shrink-0 items-center justify-center rounded-sm">
           <Sparkles className="h-3.5 w-3.5" />
         </div>
@@ -137,9 +142,13 @@ export function WorkItemGeneratedSummary({
               </span>
             )}
           </div>
-          <p className="text-ink-4 mt-0.5 text-[10px]">
-            Generated from work item fields and full comment history
-          </p>
+          {summary ? (
+            <p className="text-ink-4 mt-0.5 text-[10px]">
+              Generated from work item fields and full comment history
+            </p>
+          ) : (
+            <p className="text-ink-4 text-[10px]">No brief generated</p>
+          )}
         </div>
         {summary && (
           <button
@@ -179,14 +188,7 @@ export function WorkItemGeneratedSummary({
         <div className="px-4 py-3">
           <MarkdownContent content={summary.content} renderMermaid />
         </div>
-      ) : (
-        <div className="px-4 py-5 text-center">
-          <p className="text-ink-2 text-sm">No generated brief yet</p>
-          <p className="text-ink-4 mt-1 text-xs">
-            Generate compact context without replacing source details.
-          </p>
-        </div>
-      )}
+      ) : null}
     </section>
   );
 }

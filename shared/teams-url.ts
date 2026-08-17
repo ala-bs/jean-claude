@@ -32,8 +32,10 @@ export function getTeamsJoinUrl(
   try {
     const url = new URL(teamsUrl);
     if (url.protocol === 'https:' && isValidTeamsHost(url.hostname)) {
-      url.protocol = 'msteams:';
-      return url.toString();
+      // NOTE: `url.protocol = 'msteams:'` is a silent no-op — the WHATWG URL
+      // spec forbids switching a "special" scheme (https) to a non-special one.
+      // Rewrite the string prefix instead.
+      return `msteams://${url.toString().slice('https://'.length)}`;
     }
   } catch {
     // fall back to original URL

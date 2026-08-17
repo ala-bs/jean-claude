@@ -18,6 +18,14 @@ export function useProvider(id: string) {
   });
 }
 
+export function useProvidersByTokenId(tokenId: string) {
+  return useQuery({
+    queryKey: ['providers', 'byTokenId', tokenId],
+    queryFn: () => api.providers.findByTokenId(tokenId),
+    enabled: !!tokenId,
+  });
+}
+
 export function useCreateProvider() {
   const queryClient = useQueryClient();
   return useMutation({

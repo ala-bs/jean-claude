@@ -6,6 +6,14 @@ import type {
 } from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
+  AgentMemoryCaptureWarning,
+  AgentMemoryDashboard,
+  AgentMemoryExtractionRun,
+  AgentMemoryFollowUpCapture,
+  AgentMemoryPromptCapture,
+  AgentMemoryQueuedPromptCapture,
+} from '@shared/agent-memory-types';
+import type {
   AgentMigrationExecuteResult,
   AgentMigrationPreviewResult,
   ManagedAgent,
@@ -39,6 +47,7 @@ import type {
   ProjectLogoHistoryItem,
   ProjectTodo,
   Provider,
+  PrWorkspaceResolutionResult,
   Task,
   TaskStep,
   ThinkingEffort,
@@ -105,6 +114,70 @@ import type {
   UpdateMcpServerTemplate,
 } from '@shared/mcp-types';
 import type {
+  MobileColorScheme,
+  MobilePlatform,
+  MobilePreviewAndroidAppRestartParams,
+  MobilePreviewAndroidAppRestartResult,
+  MobilePreviewAndroidAppStatus,
+  MobilePreviewAndroidAppStatusParams,
+  MobilePreviewAndroidAppTrustParams,
+  MobilePreviewAndroidAppTrustResult,
+  MobilePreviewAndroidCreateDeviceParams,
+  MobilePreviewAndroidDeviceProfile,
+  MobilePreviewAndroidInstallSystemImageParams,
+  MobilePreviewAndroidSystemImage,
+  MobilePreviewAndroidToolStatus,
+  MobilePreviewAttachSessionParams,
+  MobilePreviewDetachSessionParams,
+  MobilePreviewDevice,
+  MobilePreviewDeviceAssignment,
+  MobilePreviewExpoLaunchParams,
+  MobilePreviewExpoLaunchResult,
+  MobilePreviewForwardPortParams,
+  MobilePreviewFrameEvent,
+  MobilePreviewInputEvent,
+  MobilePreviewIosAppRequestParams,
+  MobilePreviewIosAppRestartResult,
+  MobilePreviewIosAppStatus,
+  MobilePreviewIosAppStatusCancelParams,
+  MobilePreviewIosAppStatusRequestParams,
+  MobilePreviewIosCreateDeviceParams,
+  MobilePreviewIosDeviceType,
+  MobilePreviewIosRenameDeviceParams,
+  MobilePreviewIosRuntime,
+  MobilePreviewIosToolStatus,
+  MobilePreviewListSessionsParams,
+  MobilePreviewNativeLogEvent,
+  MobilePreviewNativeLogSession,
+  MobilePreviewNativeLogSessionEvent,
+  MobilePreviewNativeLogStartParams,
+  MobilePreviewNetworkProxyCertificate,
+  MobilePreviewNetworkProxyCertificateParams,
+  MobilePreviewNetworkProxyEvent,
+  MobilePreviewNetworkProxySession,
+  MobilePreviewNetworkProxySessionEvent,
+  MobilePreviewNetworkProxyStartParams,
+  MobilePreviewOpenDeeplinkParams,
+  MobilePreviewOpenDevMenuParams,
+  MobilePreviewPacketCaptureEvent,
+  MobilePreviewPacketCaptureSession,
+  MobilePreviewPacketCaptureSessionEvent,
+  MobilePreviewPacketCaptureStartParams,
+  MobilePreviewReloadExpoParams,
+  MobilePreviewSession,
+  MobilePreviewSessionEvent,
+  MobilePreviewSetTextSizeParams,
+  MobilePreviewStartParams,
+  MobileRotationDirection,
+  ReactNativeDevToolsEmbeddedBoundsParams,
+  ReactNativeDevToolsEmbeddedCloseParams,
+  ReactNativeDevToolsEmbeddedOpenParams,
+  ReactNativeDevToolsEmbeddedVisibilityParams,
+  ReactNativeDevToolsOpenParams,
+  ReactNativeDevToolsResolveParams,
+  ReactNativeDevToolsResolveResult,
+} from '@shared/mobile-simulator-types';
+import type {
   NewProjectCommand,
   NewProjectCommandGroup,
   PackageScriptsResult,
@@ -114,6 +187,9 @@ import type {
   ProjectSuggestions,
   RunCommandConfigItem,
   RunStatus,
+  StartAdHocRunCommandParams,
+  StartPrCommandParams,
+  StartPrCommandResult,
   UpdateProjectCommand,
   UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
@@ -127,10 +203,24 @@ import type {
   NormalizedPermissionRequest,
 } from '@shared/normalized-message-v2';
 import type {
-  PreferenceMemoryDashboard,
-  RecordPreferenceEvidenceParams,
-  RecordPreferenceEvidenceResult,
-} from '@shared/preference-memory-types';
+  TimesheetAction,
+  TimesheetAdapterCapability,
+  TimesheetAuthStatus,
+  TimesheetAxisLookupRequest,
+  TimesheetAxisLookupResult,
+  TimesheetDraftParams,
+  TimesheetDraftResult,
+  TimesheetDryRunResult,
+  TimesheetEditorModel,
+  TimesheetEntryInput,
+  TimesheetProviderType,
+  TimesheetRowDeletion,
+  TimesheetRowUpdate,
+  TimesheetSaveResult,
+  TimesheetSheetSummary,
+  TimesheetSyncParams,
+  TimesheetSyncResult,
+} from '@shared/timesheet-types';
 import type { UsageProviderMap, UsageSnapshot } from '@shared/usage-types';
 import type {
   WorkItemSummary,
@@ -335,6 +425,21 @@ export interface WorkItemComment {
   attachmentBaseUrl?: string;
   createdBy: string;
   createdDate: string;
+  reactions?: WorkItemCommentReaction[];
+}
+
+export type WorkItemCommentReactionType =
+  | 'like'
+  | 'dislike'
+  | 'heart'
+  | 'hooray'
+  | 'smile'
+  | 'confused';
+
+export interface WorkItemCommentReaction {
+  type: WorkItemCommentReactionType;
+  count: number;
+  isCurrentUserEngaged: boolean;
 }
 
 export interface WorkItemHistoryEntry {
@@ -474,6 +579,7 @@ export interface Api {
     findById: (id: string) => Promise<Project | undefined>;
     create: (data: NewProject) => Promise<Project>;
     update: (id: string, data: UpdateProject) => Promise<Project>;
+    detectMobilePreview: (projectId: string) => Promise<Project>;
     detectAzureRemote: (
       projectPath: string,
     ) => Promise<DetectedAzureRemote | null>;
@@ -514,20 +620,31 @@ export interface Api {
     detectLogos: (projectPath: string) => Promise<DetectedProjectLogo[]>;
     getSkills: (projectId: string) => Promise<Skill[]>;
   };
-  preferenceMemory: {
+  agentMemory: {
     getDashboard: (params: {
-      projectId: string;
-      page?: number;
+      projectId?: string;
+      evidencePage?: number;
+      extractionRunPage?: number;
       pageSize?: number;
-    }) => Promise<PreferenceMemoryDashboard>;
-    consolidate: (projectId: string) => Promise<{ processed: boolean }>;
-    recordEvidence: (
-      params: RecordPreferenceEvidenceParams,
-    ) => Promise<RecordPreferenceEvidenceResult>;
+    }) => Promise<AgentMemoryDashboard>;
+    extractNow: (
+      projectId: string,
+    ) => Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }>;
+    retryRun: (params: {
+      projectId?: string;
+      runId: string;
+      scope: 'project' | 'global';
+    }) => Promise<{ processed: boolean; run: AgentMemoryExtractionRun | null }>;
+    onCaptureWarning: (
+      callback: (warning: AgentMemoryCaptureWarning) => void,
+    ) => UnsubscribeFn;
   };
   tasks: {
     focused: (taskId: string) => void;
     findAll: () => Promise<Task[]>;
+    listPendingPrWorkspaceDecisions: () => Promise<
+      Array<{ projectId: string; pullRequestId: number; taskIds: string[] }>
+    >;
     findByProjectId: (projectId: string) => Promise<Task[]>;
     findAllActive: () => Promise<TaskWithProject[]>;
     findAllCompleted: (params: {
@@ -541,6 +658,7 @@ export interface Api {
         modelPreference?: string | null;
         thinkingEffort?: ThinkingEffort | null;
         agentBackend?: AgentBackendType | null;
+        agentMemoryPrompt?: string;
       },
     ) => Promise<Task>;
     createWithWorktree: (
@@ -553,6 +671,7 @@ export interface Api {
         modelPreference?: string | null;
         thinkingEffort?: ThinkingEffort | null;
         agentBackend?: AgentBackendType | null;
+        agentMemoryPrompt?: string;
       },
     ) => Promise<Task>;
     update: (id: string, data: UpdateTask) => Promise<Task>;
@@ -560,48 +679,34 @@ export interface Api {
       id: string,
       pendingMessage: string | null,
     ) => Promise<Task>;
+    setSourceBranch: (params: {
+      taskId: string;
+      sourceBranch: string;
+    }) => Promise<Task>;
     delete: (
       id: string,
       options?: { deleteWorktree?: boolean },
     ) => Promise<void>;
+    deletePrWorkspaceTask: (params: {
+      taskId: string;
+    }) => Promise<PrWorkspaceResolutionResult>;
+    deleteAllPrWorkspaces: (params: {
+      projectId: string;
+      pullRequestId: number;
+    }) => Promise<PrWorkspaceResolutionResult>;
+    resolveClosedPrWorkspace: (params: {
+      projectId: string;
+      pullRequestId: number;
+      action: 'keep' | 'delete';
+    }) => Promise<PrWorkspaceResolutionResult>;
     toggleUserCompleted: (id: string) => Promise<Task>;
     complete: (
       id: string,
       options: { cleanupWorktree?: boolean },
     ) => Promise<{
       task: Task;
-      worktreeCleanup?: {
-        worktreePath: string;
-        branchName: string;
-        keepBranch: boolean;
-      };
     }>;
     clearUserCompleted: (id: string) => Promise<Task>;
-    addSessionAllowedTool: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => Promise<Task>;
-    removeSessionAllowedTool: (
-      id: string,
-      toolName: string,
-      pattern?: string,
-    ) => Promise<Task>;
-    allowForProject: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => Promise<Task>;
-    allowForProjectWorktrees: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => Promise<Task>;
-    allowGlobally: (
-      id: string,
-      toolName: string,
-      input: Record<string, unknown>,
-    ) => Promise<Task>;
     reorder: (
       projectId: string,
       activeIds: string[],
@@ -660,17 +765,10 @@ export interface Api {
         taskId: string,
         params?: { commitUnstaged?: boolean },
       ) => Promise<void>;
+      pullBranch: (taskId: string) => Promise<void>;
       delete: (
         taskId: string,
         options?: { keepBranch?: boolean },
-      ) => Promise<{ editorCloseWarning?: string }>;
-      cleanupAfterCompletion: (
-        taskId: string,
-        params: {
-          worktreePath: string;
-          branchName: string;
-          keepBranch?: boolean;
-        },
       ) => Promise<{ editorCloseWarning?: string }>;
     };
     summary: {
@@ -689,11 +787,19 @@ export interface Api {
       projectId: string;
       pullRequestId: number;
     }) => Promise<Task>;
+    startPrCommand: (params: StartPrCommandParams) => Promise<StartPrCommandResult>;
   };
   steps: {
     findByTaskId: (taskId: string) => Promise<TaskStep[]>;
     findById: (stepId: string) => Promise<TaskStep | undefined>;
-    create: (data: NewTaskStep & { start?: boolean }) => Promise<TaskStep>;
+    create: (
+      data: NewTaskStep & {
+        start?: boolean;
+        agentMemoryCapture?: AgentMemoryPromptCapture & {
+          contextStepId?: string | null;
+        };
+      },
+    ) => Promise<TaskStep>;
     createPrReviewChatStep: (params: {
       taskId: string;
       pullRequestId: number;
@@ -717,11 +823,39 @@ export interface Api {
       warnings: string[];
     }>;
     setMode: (stepId: string, mode: InteractionMode) => Promise<TaskStep>;
+    setAutoAccept: (stepId: string, enabled: boolean) => Promise<boolean>;
+    getAutoAccept: (stepId: string) => Promise<boolean>;
     submitPrReview: (stepId: string) => Promise<TaskStep>;
+    addSessionAllowedTool: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => Promise<TaskStep>;
+    removeSessionAllowedTool: (params: {
+      stepId: string;
+      toolName: string;
+      pattern?: string;
+    }) => Promise<TaskStep>;
+    allowForProject: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => Promise<TaskStep>;
+    allowForProjectWorktrees: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => Promise<TaskStep>;
+    allowGlobally: (params: {
+      stepId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }) => Promise<TaskStep>;
   };
   providers: {
     findAll: () => Promise<Provider[]>;
     findById: (id: string) => Promise<Provider | undefined>;
+    findByTokenId: (tokenId: string) => Promise<Provider[]>;
     create: (data: NewProvider) => Promise<Provider>;
     update: (id: string, data: UpdateProvider) => Promise<Provider>;
     delete: (id: string) => Promise<void>;
@@ -839,6 +973,14 @@ export interface Api {
       commentId: number;
       text: string;
     }) => Promise<WorkItemComment>;
+    setWorkItemCommentReaction: (params: {
+      providerId: string;
+      projectName: string;
+      workItemId: number;
+      commentId: number;
+      reactionType: WorkItemCommentReactionType;
+      engaged: boolean;
+    }) => Promise<void>;
     uploadWorkItemAttachment: (params: {
       providerId: string;
       projectName: string;
@@ -979,6 +1121,7 @@ export interface Api {
       workItemId: number;
     }) => Promise<void>;
     addPullRequestComment: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -986,6 +1129,7 @@ export interface Api {
       content: string;
     }) => Promise<AzureDevOpsCommentThread>;
     addPullRequestFileComment: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -993,9 +1137,11 @@ export interface Api {
       filePath: string;
       line: number;
       lineEnd?: number;
+      selectedLines?: string;
       content: string;
     }) => Promise<AzureDevOpsCommentThread>;
     addThreadReply: (params: {
+      localProjectId?: string;
       providerId: string;
       projectId: string;
       repoId: string;
@@ -1096,6 +1242,11 @@ export interface Api {
     openImageFile: () => Promise<string | null>;
     openFiles: () => Promise<string[] | null>;
     openApplication: () => Promise<{ path: string; name: string } | null>;
+    saveFile: (params: {
+      defaultPath?: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+      content?: Uint8Array;
+    }) => Promise<string | null>;
   };
   fs: {
     readPackageJson: (dirPath: string) => Promise<PackageJson | null>;
@@ -1120,6 +1271,14 @@ export interface Api {
       projectPath: string,
       sourcePath: string,
     ) => Promise<{ filePath: string; filename: string }>;
+    /**
+     * Deletes an attachment file. Only succeeds for files inside
+     * `<projectPath>/.jean-claude/tmp`; externally referenced paths are refused.
+     */
+    deleteAttachmentFile: (
+      projectPath: string,
+      filePath: string,
+    ) => Promise<boolean>;
     getPathForFile: (file: File) => string | null;
   };
   settings: {
@@ -1174,6 +1333,13 @@ export interface Api {
       action: import('@shared/permission-types').PermissionAction,
     ) => Promise<import('@shared/permission-types').PermissionScope>;
   };
+  permissionEvents: {
+    onChanged: (
+      callback: (
+        event: import('@shared/permission-types').PermissionsChangedEvent,
+      ) => void,
+    ) => () => void;
+  };
   projectPermissions: {
     get: (
       projectPath: string,
@@ -1208,6 +1374,7 @@ export interface Api {
   };
   shell: {
     openInEditor: (dirPath: string, folderContext?: string) => Promise<void>;
+    openPath: (targetPath: string) => Promise<void>;
     openTeamsJoinUrl: (url: string) => Promise<void>;
     getAvailableEditors: () => Promise<{ id: string; available: boolean }[]>;
     getAgentCliStatus: () => Promise<
@@ -1236,15 +1403,21 @@ export interface Api {
       requestId: string,
       response: PermissionResponse | QuestionResponse,
     ) => Promise<void>;
-    sendMessage: (stepId: string, parts: PromptPart[]) => Promise<void>;
+    sendMessage: (
+      stepId: string,
+      parts: PromptPart[],
+      capture?: AgentMemoryFollowUpCapture,
+    ) => Promise<void>;
     queuePrompt: (
       stepId: string,
       parts: PromptPart[],
+      capture?: AgentMemoryQueuedPromptCapture,
     ) => Promise<{ promptId: string }>;
     updateQueuedPrompt: (
       stepId: string,
       promptId: string,
       content: string,
+      capture?: AgentMemoryPromptCapture,
     ) => Promise<void>;
     cancelQueuedPrompt: (stepId: string, promptId: string) => Promise<void>;
     getBackendModels: (backend: AgentBackendType) => Promise<
@@ -1285,6 +1458,138 @@ export interface Api {
     >;
     onEvent: (callback: AgentEventCallback<AgentUIEvent>) => UnsubscribeFn;
   };
+  mobilePreview: {
+    listDevices: (platform: MobilePlatform) => Promise<MobilePreviewDevice[]>;
+    listSessions: (
+      params: MobilePreviewListSessionsParams,
+    ) => Promise<MobilePreviewSession[]>;
+    listDeviceAssignments: () => Promise<MobilePreviewDeviceAssignment[]>;
+    getAndroidToolStatus: () => Promise<MobilePreviewAndroidToolStatus>;
+    listAndroidDeviceProfiles: () => Promise<
+      MobilePreviewAndroidDeviceProfile[]
+    >;
+    listAndroidSystemImages: () => Promise<MobilePreviewAndroidSystemImage[]>;
+    createAndroidDevice: (
+      params: MobilePreviewAndroidCreateDeviceParams,
+    ) => Promise<void>;
+    deleteAndroidDevice: (name: string) => Promise<void>;
+    installAndroidSystemImage: (
+      params: MobilePreviewAndroidInstallSystemImageParams,
+    ) => Promise<void>;
+    getIosToolStatus: () => Promise<MobilePreviewIosToolStatus>;
+    listIosRuntimes: () => Promise<MobilePreviewIosRuntime[]>;
+    listIosDeviceTypes: () => Promise<MobilePreviewIosDeviceType[]>;
+    createIosDevice: (
+      params: MobilePreviewIosCreateDeviceParams,
+    ) => Promise<string>;
+    deleteIosDevice: (deviceId: string) => Promise<void>;
+    eraseIosDevice: (deviceId: string) => Promise<void>;
+    renameIosDevice: (
+      params: MobilePreviewIosRenameDeviceParams,
+    ) => Promise<void>;
+    getIosAppStatus: (
+      params: MobilePreviewIosAppStatusRequestParams,
+    ) => Promise<MobilePreviewIosAppStatus>;
+    cancelIosAppStatus: (
+      params: MobilePreviewIosAppStatusCancelParams,
+    ) => Promise<boolean>;
+    restartIosApp: (
+      params: MobilePreviewIosAppRequestParams,
+    ) => Promise<MobilePreviewIosAppRestartResult>;
+    launchExpo: (
+      params: MobilePreviewExpoLaunchParams,
+    ) => Promise<MobilePreviewExpoLaunchResult>;
+    cancelExpoLaunch: (requestId: string) => Promise<boolean>;
+    start: (params: MobilePreviewStartParams) => Promise<MobilePreviewSession>;
+    attachSession: (
+      params: MobilePreviewAttachSessionParams,
+    ) => Promise<MobilePreviewSession>;
+    detachSession: (params: MobilePreviewDetachSessionParams) => Promise<void>;
+    stop: (sessionId: string) => Promise<void>;
+    sendInput: (
+      sessionId: string,
+      event: MobilePreviewInputEvent,
+    ) => Promise<void>;
+    openDeeplink: (params: MobilePreviewOpenDeeplinkParams) => Promise<void>;
+    openDevMenu: (params: MobilePreviewOpenDevMenuParams) => Promise<void>;
+    reloadExpo: (params: MobilePreviewReloadExpoParams) => Promise<void>;
+    forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
+    setTextSize: (params: MobilePreviewSetTextSizeParams) => Promise<void>;
+    setColorScheme: (
+      sessionId: string,
+      scheme: MobileColorScheme,
+    ) => Promise<void>;
+    rotate: (
+      sessionId: string,
+      direction: MobileRotationDirection,
+    ) => Promise<void>;
+    startNativeLogs: (
+      params: MobilePreviewNativeLogStartParams,
+    ) => Promise<MobilePreviewNativeLogSession>;
+    stopNativeLogs: (sessionId: string) => Promise<void>;
+    startNetworkProxy: (
+      params: MobilePreviewNetworkProxyStartParams,
+    ) => Promise<MobilePreviewNetworkProxySession>;
+    stopNetworkProxy: (sessionId: string) => Promise<void>;
+    startPacketCapture: (
+      params: MobilePreviewPacketCaptureStartParams,
+    ) => Promise<MobilePreviewPacketCaptureSession>;
+    stopPacketCapture: (sessionId: string) => Promise<void>;
+    resolveReactNativeDevTools: (
+      params: ReactNativeDevToolsResolveParams,
+    ) => Promise<ReactNativeDevToolsResolveResult>;
+    openReactNativeDevTools: (
+      params: ReactNativeDevToolsOpenParams,
+    ) => Promise<void>;
+    openEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedOpenParams,
+    ) => Promise<void>;
+    setEmbeddedReactNativeDevToolsBounds: (
+      params: ReactNativeDevToolsEmbeddedBoundsParams,
+    ) => Promise<void>;
+    setEmbeddedReactNativeDevToolsVisibility: (
+      params: ReactNativeDevToolsEmbeddedVisibilityParams,
+    ) => Promise<void>;
+    closeEmbeddedReactNativeDevTools: (
+      params: ReactNativeDevToolsEmbeddedCloseParams,
+    ) => Promise<void>;
+    installNetworkProxyCertificate: (
+      params: MobilePreviewNetworkProxyCertificateParams,
+    ) => Promise<MobilePreviewNetworkProxyCertificate>;
+    prepareAndroidAppTrust: (
+      params: MobilePreviewAndroidAppTrustParams,
+    ) => Promise<MobilePreviewAndroidAppTrustResult>;
+    getAndroidAppStatus: (
+      params: MobilePreviewAndroidAppStatusParams,
+    ) => Promise<MobilePreviewAndroidAppStatus>;
+    restartAndroidApp: (
+      params: MobilePreviewAndroidAppRestartParams,
+    ) => Promise<MobilePreviewAndroidAppRestartResult>;
+    onNativeLogSession: (
+      callback: (event: MobilePreviewNativeLogSessionEvent) => void,
+    ) => UnsubscribeFn;
+    onNativeLog: (
+      callback: (event: MobilePreviewNativeLogEvent) => void,
+    ) => UnsubscribeFn;
+    onNetworkProxySession: (
+      callback: (event: MobilePreviewNetworkProxySessionEvent) => void,
+    ) => UnsubscribeFn;
+    onNetworkProxyRequest: (
+      callback: (event: MobilePreviewNetworkProxyEvent) => void,
+    ) => UnsubscribeFn;
+    onPacketCaptureSession: (
+      callback: (event: MobilePreviewPacketCaptureSessionEvent) => void,
+    ) => UnsubscribeFn;
+    onPacketCaptureRequest: (
+      callback: (event: MobilePreviewPacketCaptureEvent) => void,
+    ) => UnsubscribeFn;
+    onFrame: (
+      callback: (event: MobilePreviewFrameEvent) => void,
+    ) => UnsubscribeFn;
+    onSession: (
+      callback: (event: MobilePreviewSessionEvent) => void,
+    ) => UnsubscribeFn;
+  };
   debug: {
     getTableNames: () => Promise<string[]>;
     getDatabaseSize: () => Promise<DebugDatabaseSizeResult>;
@@ -1308,6 +1613,40 @@ export interface Api {
     getRange: (params: WorkActivityWeekParams) => Promise<WorkActivityEvent[]>;
     deleteBefore: (before: string) => Promise<void>;
     deleteAll: () => Promise<void>;
+  };
+  timesheets: {
+    listAdapters: () => Promise<TimesheetAdapterCapability[]>;
+    buildDraft: (params: TimesheetDraftParams) => Promise<TimesheetDraftResult>;
+    sync: (params: TimesheetSyncParams) => Promise<TimesheetSyncResult>;
+    authStatus: (provider: TimesheetProviderType) => Promise<TimesheetAuthStatus>;
+    login: (provider: TimesheetProviderType) => Promise<TimesheetAuthStatus>;
+    logout: (provider: TimesheetProviderType) => Promise<void>;
+    listSheets: (
+      provider: TimesheetProviderType,
+    ) => Promise<TimesheetSheetSummary[]>;
+    inspectSheet: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      navigationUrl: string;
+    }) => Promise<TimesheetEditorModel>;
+    lookupAxisOptions: (
+      params: TimesheetAxisLookupRequest & { provider: TimesheetProviderType },
+    ) => Promise<TimesheetAxisLookupResult>;
+    dryRun: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      entries: TimesheetEntryInput[];
+      deletions?: TimesheetRowDeletion[];
+      action: TimesheetAction;
+    }) => Promise<TimesheetDryRunResult>;
+    save: (params: {
+      provider: TimesheetProviderType;
+      sheetId: string;
+      entries: TimesheetEntryInput[];
+      deletions?: TimesheetRowDeletion[];
+      updates?: TimesheetRowUpdate[];
+      action: TimesheetAction;
+    }) => Promise<TimesheetSaveResult>;
   };
   rateLimitSwap: {
     getStatus: () => Promise<{
@@ -1366,14 +1705,13 @@ export interface Api {
   runCommands: {
     startCommand: (params: {
       taskId: string;
-      projectId: string;
-      workingDir: string;
       runCommandId: string;
     }) => Promise<RunStatus | PortsInUseErrorData>;
+    startAdHocCommand: (
+      params: StartAdHocRunCommandParams,
+    ) => Promise<RunStatus | PortsInUseErrorData>;
     startGroup: (params: {
       taskId: string;
-      projectId: string;
-      workingDir: string;
       runCommandIds: string[];
     }) => Promise<RunStatus | PortsInUseErrorData>;
     stopCommand: (params: {
@@ -1843,6 +2181,9 @@ export const api: Api = hasWindowApi
         update: async () => {
           throw new Error('API not available');
         },
+        detectMobilePreview: async () => {
+          throw new Error('API not available');
+        },
         detectAzureRemote: async () => null,
         uploadLogo: async () => {
           throw new Error('API not available');
@@ -1886,20 +2227,22 @@ export const api: Api = hasWindowApi
         detectLogos: async () => [],
         getSkills: async () => [],
       },
-      preferenceMemory: {
+      agentMemory: {
         getDashboard: async () => {
           throw new Error('API not available');
         },
-        consolidate: async () => {
+        extractNow: async () => {
           throw new Error('API not available');
         },
-        recordEvidence: async () => {
+        retryRun: async () => {
           throw new Error('API not available');
         },
+        onCaptureWarning: () => () => {},
       },
       tasks: {
         focused: () => {},
         findAll: async () => [],
+        listPendingPrWorkspaceDecisions: async () => [],
         findByProjectId: async () => [],
         findAllActive: async () => [],
         findAllCompleted: async () => ({ tasks: [], total: 0 }),
@@ -1916,7 +2259,22 @@ export const api: Api = hasWindowApi
         updatePendingMessage: async () => {
           throw new Error('API not available');
         },
+        setSourceBranch: async () => {
+          throw new Error('API not available');
+        },
         delete: async () => {},
+        deletePrWorkspaceTask: async ({ taskId }) => ({
+          action: 'deleted',
+          taskIds: [taskId],
+        }),
+        deleteAllPrWorkspaces: async () => ({
+          action: 'deleted',
+          taskIds: [],
+        }),
+        resolveClosedPrWorkspace: async ({ action }) => ({
+          action: action === 'delete' ? 'deleted' : 'kept',
+          taskIds: [],
+        }),
         toggleUserCompleted: async () => {
           throw new Error('API not available');
         },
@@ -1924,21 +2282,6 @@ export const api: Api = hasWindowApi
           throw new Error('API not available') as never;
         },
         clearUserCompleted: async () => {
-          throw new Error('API not available');
-        },
-        addSessionAllowedTool: async () => {
-          throw new Error('API not available');
-        },
-        removeSessionAllowedTool: async () => {
-          throw new Error('API not available');
-        },
-        allowForProject: async () => {
-          throw new Error('API not available');
-        },
-        allowForProjectWorktrees: async () => {
-          throw new Error('API not available');
-        },
-        allowGlobally: async () => {
           throw new Error('API not available');
         },
         reorder: async () => [],
@@ -1979,8 +2322,8 @@ export const api: Api = hasWindowApi
             }) as MergeWorktreeResult,
           getBranches: async () => [],
           pushBranch: async () => {},
+          pullBranch: async () => {},
           delete: async () => ({}),
-          cleanupAfterCompletion: async () => ({}),
         },
         summary: {
           get: async () => undefined,
@@ -1990,6 +2333,9 @@ export const api: Api = hasWindowApi
         },
         createPullRequest: async () => ({ id: 0, url: '' }),
         createPrReviewTask: async () => {
+          throw new Error('API not available');
+        },
+        startPrCommand: async () => {
           throw new Error('API not available');
         },
       },
@@ -2019,13 +2365,35 @@ export const api: Api = hasWindowApi
         setMode: async () => {
           throw new Error('API not available');
         },
+        setAutoAccept: async () => {
+          throw new Error('API not available');
+        },
+        getAutoAccept: async () => {
+          throw new Error('API not available');
+        },
         submitPrReview: async () => {
+          throw new Error('API not available');
+        },
+        addSessionAllowedTool: async () => {
+          throw new Error('API not available');
+        },
+        removeSessionAllowedTool: async () => {
+          throw new Error('API not available');
+        },
+        allowForProject: async () => {
+          throw new Error('API not available');
+        },
+        allowForProjectWorktrees: async () => {
+          throw new Error('API not available');
+        },
+        allowGlobally: async () => {
           throw new Error('API not available');
         },
       },
       providers: {
         findAll: async () => [],
         findById: async () => undefined,
+        findByTokenId: async () => [],
         create: async () => {
           throw new Error('API not available');
         },
@@ -2088,6 +2456,9 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         updateWorkItemComment: async () => {
+          throw new Error('API not available');
+        },
+        setWorkItemCommentReaction: async () => {
           throw new Error('API not available');
         },
         uploadWorkItemAttachment: async () => {
@@ -2172,6 +2543,7 @@ export const api: Api = hasWindowApi
         openImageFile: async () => null,
         openFiles: async () => null,
         openApplication: async () => null,
+        saveFile: async () => null,
       },
       fs: {
         readPackageJson: async () => null,
@@ -2183,6 +2555,7 @@ export const api: Api = hasWindowApi
         listProjectFiles: async () => [],
         writeAttachmentFile: async () => '',
         copyAttachmentFile: async () => ({ filePath: '', filename: '' }),
+        deleteAttachmentFile: async () => false,
         getPathForFile: () => null,
       },
       settings: {
@@ -2216,6 +2589,9 @@ export const api: Api = hasWindowApi
         removeRule: async () => ({}),
         editRule: async () => ({}),
       },
+      permissionEvents: {
+        onChanged: () => () => {},
+      },
       projectPermissions: {
         get: async () => ({}),
         addRule: async () => ({}),
@@ -2228,6 +2604,7 @@ export const api: Api = hasWindowApi
       },
       shell: {
         openInEditor: async () => {},
+        openPath: async () => {},
         openTeamsJoinUrl: async () => {},
         getAvailableEditors: async () => [],
         getAgentCliStatus: async () => [],
@@ -2276,6 +2653,107 @@ export const api: Api = hasWindowApi
         reprocessNormalization: async () => 0,
         getPendingRequest: async () => null,
         onEvent: () => () => {},
+      },
+      mobilePreview: {
+        listDevices: async () => [],
+        listSessions: async () => [],
+        listDeviceAssignments: async () => [],
+        getAndroidToolStatus: async () => ({
+          hostArch: 'unknown',
+          sdkRoot: null,
+          adbPath: null,
+          emulatorPath: null,
+          avdmanagerPath: null,
+          sdkmanagerPath: null,
+          missingTools: ['adb', 'emulator', 'avdmanager', 'sdkmanager'],
+        }),
+        listAndroidDeviceProfiles: async () => [],
+        listAndroidSystemImages: async () => [],
+        createAndroidDevice: async () => {},
+        deleteAndroidDevice: async () => {},
+        installAndroidSystemImage: async () => {},
+        getIosToolStatus: async () => ({
+          xcrunPath: null,
+          missingTools: ['xcrun'],
+        }),
+        listIosRuntimes: async () => [],
+        listIosDeviceTypes: async () => [],
+        createIosDevice: async () => '',
+        deleteIosDevice: async () => {},
+        eraseIosDevice: async () => {},
+        renameIosDevice: async () => {},
+        getIosAppStatus: async () => {
+          throw new Error('API not available');
+        },
+        cancelIosAppStatus: async () => false,
+        restartIosApp: async () => {
+          throw new Error('API not available');
+        },
+        launchExpo: async () => {
+          throw new Error('API not available');
+        },
+        cancelExpoLaunch: async () => false,
+        start: async () => {
+          throw new Error('API not available');
+        },
+        attachSession: async () => {
+          throw new Error('API not available');
+        },
+        detachSession: async () => {},
+        stop: async () => {},
+        sendInput: async () => {},
+        openDeeplink: async () => {},
+        openDevMenu: async () => {},
+        reloadExpo: async () => {},
+        forwardPort: async () => {},
+        setTextSize: async () => {},
+        setColorScheme: async () => {},
+        rotate: async () => {},
+        startNativeLogs: async () => {
+          throw new Error('API not available');
+        },
+        stopNativeLogs: async () => {},
+        startNetworkProxy: async () => {
+          throw new Error('API not available');
+        },
+        stopNetworkProxy: async () => {},
+        startPacketCapture: async () => {
+          throw new Error('API not available');
+        },
+        stopPacketCapture: async () => {},
+        resolveReactNativeDevTools: async (params) => ({
+          metroBaseUrl: `http://localhost:${params.metroPort}`,
+          frontendUrl: null,
+          targets: [],
+          error: 'API not available',
+        }),
+        openReactNativeDevTools: async () => {},
+        openEmbeddedReactNativeDevTools: async () => {
+          throw new Error('API not available');
+        },
+        setEmbeddedReactNativeDevToolsBounds: async () => {},
+        setEmbeddedReactNativeDevToolsVisibility: async () => {},
+        closeEmbeddedReactNativeDevTools: async () => {},
+        installNetworkProxyCertificate: async () => {
+          throw new Error('API not available');
+        },
+        prepareAndroidAppTrust: async () => {
+          throw new Error('API not available');
+        },
+        getAndroidAppStatus: async () => {
+          throw new Error('API not available');
+        },
+        restartAndroidApp: async () => {
+          throw new Error('API not available');
+        },
+        onNativeLogSession: () => () => {},
+        onNativeLog: () => () => {},
+        onNetworkProxySession: () => () => {},
+        onNetworkProxyRequest: () => () => {},
+        onPacketCaptureSession: () => () => {},
+        onPacketCaptureRequest: () => () => {},
+        onFrame: () => () => {},
+        onSession: () => () => {},
       },
       debug: {
         getTableNames: async () => [],
@@ -2332,6 +2810,45 @@ export const api: Api = hasWindowApi
         deleteBefore: async () => {},
         deleteAll: async () => {},
       },
+      timesheets: {
+        listAdapters: async () => [],
+        buildDraft: async (params) => ({
+          provider: params.provider,
+          displayName: params.provider,
+          entries: [],
+          warnings: [],
+        }),
+        sync: async (params) => ({
+          provider: params.provider,
+          status: 'unsupported',
+          externalIds: [],
+          message: 'API not available',
+        }),
+        authStatus: async () => ({
+          configured: false,
+          authenticated: false,
+          baseUrl: '',
+        }),
+        login: async () => {
+          throw new Error('API not available');
+        },
+        logout: async () => {},
+        listSheets: async () => [],
+        inspectSheet: async () => {
+          throw new Error('API not available');
+        },
+        lookupAxisOptions: async (params) => ({
+          axis: params.axis,
+          options: [],
+          selectedId: null,
+        }),
+        dryRun: async () => {
+          throw new Error('API not available');
+        },
+        save: async () => {
+          throw new Error('API not available');
+        },
+      },
       rateLimitSwap: {
         getStatus: async () => ({ active: false, swaps: [] }),
         resolve: async (backend) => ({ backend, swapped: false }),
@@ -2381,6 +2898,10 @@ export const api: Api = hasWindowApi
       },
       runCommands: {
         startCommand: async () => ({
+          isRunning: false,
+          commands: [],
+        }),
+        startAdHocCommand: async () => ({
           isRunning: false,
           commands: [],
         }),

@@ -16,13 +16,7 @@ import { useQuery } from '@tanstack/react-query';
 
 
 import { api, type AzureDevOpsWorkItem } from '@/lib/api';
-import {
-  KeyboardLayerProvider,
-  useKeyboardLayer,
-} from '@/common/context/keyboard-bindings';
-import { Modal } from '@/common/ui/modal';
-import { useCommands } from '@/common/hooks/use-commands';
-import { WorkItemPreview } from '@/features/work-item/ui-work-item-preview';
+import { useWorkItemModalStore } from '@/stores/work-item-modal';
 
 
 import { WorkItemTypeIcon } from '../../work-item/ui-work-item-shared';
@@ -247,6 +241,7 @@ function WorkItemSearchInput({
 }
 
 export function PrWorkItems({
+  projectId,
   workItems,
   isLoading,
   providerId,
@@ -256,8 +251,8 @@ export function PrWorkItems({
   onUnlink,
   isLinking,
   isUnlinking,
-  readOnly = false,
 }: {
+  projectId: string;
   workItems: AzureDevOpsWorkItem[];
   isLoading: boolean;
   providerId?: string;
@@ -267,44 +262,26 @@ export function PrWorkItems({
   onUnlink?: (workItemId: number) => void;
   isLinking?: boolean;
   isUnlinking?: boolean;
-  readOnly?: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [showSearch, setShowSearch] = useState(false);
   const [unlinkingId, setUnlinkingId] = useState<number | null>(null);
-  const [previewItem, setPreviewItem] = useState<AzureDevOpsWorkItem | null>(
-    null,
-  );
-  const previewLayer = useKeyboardLayer('dialog', {
-    exclusive: !!previewItem,
-  });
-
-  const openPreviewInAzure = useCallback(() => {
-    if (!previewItem) return false;
-    window.open(previewItem.url, '_blank', 'noopener,noreferrer');
-  }, [previewItem]);
-
-  useCommands(
-    'pr-work-item-preview',
-    [
-      previewItem && {
-        label: 'Open Work Item in Azure DevOps',
-        shortcut: 'cmd+shift+o',
-        hideInCommandPalette: true,
-        handler: openPreviewInAzure,
-      },
-    ],
-    { layer: previewLayer },
+  const openWorkItemModal = useWorkItemModalStore((state) => state.open);
+  const openPreview = useCallback(
+    (wi: AzureDevOpsWorkItem) => {
+      openWorkItemModal({ projectId, workItemId: wi.id });
+    },
+    [openWorkItemModal, projectId],
   );
 
   const handleRowKeyDown = useCallback(
     (e: React.KeyboardEvent, wi: AzureDevOpsWorkItem) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        setPreviewItem(wi);
+        openPreview(wi);
       }
     },
-    [],
+    [openPreview],
   );
 
   const linkedWorkItemIds = new Set(workItems.map((wi) => wi.id));
@@ -394,7 +371,7 @@ export function PrWorkItems({
                   key={wi.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setPreviewItem(wi)}
+                  onClick={() => openPreview(wi)}
                   onKeyDown={(e) => handleRowKeyDown(e, wi)}
                   className="hover:bg-bg-2 group flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 transition-colors"
                 >
@@ -471,7 +448,7 @@ export function PrWorkItems({
               azureProjectName={azureProjectName}
               linkedWorkItemIds={linkedWorkItemIds}
               onLink={onLink}
-              onPreview={setPreviewItem}
+              onPreview={openPreview}
               isLinking={!!isLinking}
               onClose={() => setShowSearch(false)}
             />
@@ -479,38 +456,6 @@ export function PrWorkItems({
         </>
       )}
 
-      {/* Work item preview modal */}
-      <KeyboardLayerProvider layer={previewLayer}>
-        <Modal
-          isOpen={!!previewItem}
-          onClose={() => setPreviewItem(null)}
-          title={
-            previewItem ? (
-              <span className="flex items-center gap-2">
-                <WorkItemTypeIcon type={previewItem.fields.workItemType} />
-                <span className="text-ink-2 text-sm font-medium">
-                  #{previewItem.id}
-                </span>
-                <span className="text-ink-1 text-sm">
-                  {previewItem.fields.title}
-                </span>
-              </span>
-            ) : undefined
-          }
-          size="xl"
-          panelClassName="h-[85vh]"
-          contentClassName="flex min-h-0 flex-1 overflow-hidden p-4"
-        >
-          <WorkItemPreview
-            workItem={previewItem}
-            providerId={providerId}
-            projectName={previewItem?.fields.teamProject ?? azureProjectName}
-            showCommentsAside
-            readOnly={readOnly}
-            onOpenInBrowser={openPreviewInAzure}
-          />
-        </Modal>
-      </KeyboardLayerProvider>
     </div>
   );
 }

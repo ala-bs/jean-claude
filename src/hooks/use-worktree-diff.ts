@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { invalidateFeedResource } from '@/cache/feed-cache';
+import {
+  invalidateFeedResource,
+  updateFeedTaskWorktreeFlags,
+} from '@/cache/feed-cache';
 import { useCallback } from 'react';
 
 
@@ -221,6 +224,42 @@ export function useWorktreeBranches(taskId: string | null) {
   });
 }
 
+/**
+ * Feed worktree badges (Uncommitted / unpushed) only come from the server feed
+ * enrichment, and a feed reload can be discarded when the resource changes
+ * mid-flight. After a commit/push, patch them from the authoritative worktree
+ * status instead of guessing, so the badges cannot stay stale (or lie).
+ */
+const feedWorktreeSyncTokens = new Map<string, number>();
+
+export async function syncFeedWorktreeFlags(taskId: string) {
+  const token = (feedWorktreeSyncTokens.get(taskId) ?? 0) + 1;
+  feedWorktreeSyncTokens.set(taskId, token);
+
+  try {
+    // Feed enrichment only derives these flags from a task worktree; without
+    // one getStatus falls back to the project repo, whose state is unrelated
+    // (e.g. after a merge clears worktreePath). Read the task fresh rather
+    // than trusting the renderer cache, which may not have caught up.
+    const task = await api.tasks.findById(taskId);
+    if (!task?.worktreePath) return;
+
+    const status = await api.tasks.worktree.getStatus(taskId);
+    // A newer sync started meanwhile; its result wins.
+    if (feedWorktreeSyncTokens.get(taskId) !== token) return;
+    updateFeedTaskWorktreeFlags(taskId, {
+      hasUncommittedChanges: status.hasUncommittedChanges,
+      hasUnpushedCommits: status.hasUnpushedCommits,
+    });
+  } catch {
+    // Feed refetch remains the fallback.
+  } finally {
+    if (feedWorktreeSyncTokens.get(taskId) === token) {
+      feedWorktreeSyncTokens.delete(taskId);
+    }
+  }
+}
+
 export function useCommitWorktree() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -240,6 +279,7 @@ export function useCommitWorktree() {
       queryClient.invalidateQueries({
         queryKey: ['worktree-file-content', taskId],
       });
+      void syncFeedWorktreeFlags(taskId);
       invalidateFeedResource(queryClient, 'tasks');
     },
   });
@@ -270,6 +310,7 @@ export function useMergeWorktree() {
       });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
+      void syncFeedWorktreeFlags(taskId);
       invalidateFeedItems(queryClient);
     },
   });
@@ -291,6 +332,27 @@ export function useGenerateCommitMessage() {
   });
 }
 
+export function usePullBranch() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: { taskId: string }) =>
+      api.tasks.worktree.pullBranch(params.taskId),
+    onSuccess: (_, { taskId }) => {
+      queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+      queryClient.invalidateQueries({ queryKey: ['worktree-diff', taskId] });
+      queryClient.invalidateQueries({
+        queryKey: ['worktree-file-content', taskId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['worktree-local-changes', taskId],
+      });
+      queryClient.invalidateQueries({ queryKey: ['worktree-commits', taskId] });
+      invalidateFeedResource(queryClient, 'tasks');
+    },
+  });
+}
+
 export function usePushBranch() {
   const queryClient = useQueryClient();
   const invalidateWorktreeQueries = (taskId: string) => {
@@ -308,11 +370,14 @@ export function usePushBranch() {
       }),
     onSuccess: (_, { taskId }) => {
       invalidateWorktreeQueries(taskId);
+      void syncFeedWorktreeFlags(taskId);
       invalidateFeedResource(queryClient, 'tasks');
     },
     onError: (_, { taskId, commitUnstaged }) => {
       if (commitUnstaged) {
         invalidateWorktreeQueries(taskId);
+        // A commit may have landed before the push failed.
+        void syncFeedWorktreeFlags(taskId);
         invalidateFeedResource(queryClient, 'tasks');
       }
     },
