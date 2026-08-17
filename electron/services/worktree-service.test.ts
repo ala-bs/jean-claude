@@ -593,6 +593,57 @@ describe('pullBranch', () => {
     expect(content).toBe('remote\n');
   });
 
+  it('pulls via the upstream ref when the local branch name differs', async () => {
+    // Mimics a PR review workspace: local branch tracks origin/main.
+    await git([
+      'checkout',
+      '-b',
+      'jean-claude/review-pr-1',
+      '--track',
+      'origin/main',
+    ]);
+    await pushRemoteCommit();
+
+    await pullBranch({
+      worktreePath: testDir,
+      branchName: 'jean-claude/review-pr-1',
+    });
+
+    const content = await fs.readFile(
+      path.join(testDir, 'tracked.txt'),
+      'utf-8',
+    );
+    expect(content).toBe('remote\n');
+  });
+
+  it('ignores a local-tracking upstream and falls back to the remote', async () => {
+    // branch.<name>.remote='.' — must not be parsed as remote "feature".
+    await git(['branch', 'feature/base', 'main']);
+    await git(['checkout', '-b', 'local-tracker', '--track', 'feature/base']);
+    await git(['branch', '--set-upstream-to=origin/main', 'main']);
+    await git(['checkout', 'main']);
+    await pushRemoteCommit();
+
+    await pullBranch({ worktreePath: testDir, branchName: 'main' });
+
+    const content = await fs.readFile(
+      path.join(testDir, 'tracked.txt'),
+      'utf-8',
+    );
+    expect(content).toBe('remote\n');
+  });
+
+  it('explains a branch that does not exist on the remote yet', async () => {
+    await git(['checkout', '-b', 'jean-claude/never-pushed', '--no-track']);
+
+    await expect(
+      pullBranch({
+        worktreePath: testDir,
+        branchName: 'jean-claude/never-pushed',
+      }),
+    ).rejects.toThrow(/does not exist on the remote yet/i);
+  });
+
   it('explains uncommitted local changes instead of raw git output', async () => {
     await pushRemoteCommit();
     await writeFile('tracked.txt', 'dirty\n');

@@ -2104,6 +2104,9 @@ export async function pushBranch(params: {
 /**
  * Pulls the latest commits for a branch from a remote into the worktree.
  * Uses the same interactive SSH prompt handling as pushBranch.
+ *
+ * `remote` is only a fallback: when the branch has an upstream configured, its
+ * remote wins.
  */
 export async function pullBranch(params: {
   worktreePath: string;
@@ -2111,23 +2114,94 @@ export async function pullBranch(params: {
   remote?: string;
 }): Promise<void> {
   const remote = params.remote ?? 'origin';
-  dbg.worktree('pullBranch: %s from %s', params.branchName, remote);
+
+  // The local branch name is not always the remote branch name (PR review
+  // worktrees create a local `jean-claude/review-...` branch from
+  // `origin/<pr-branch>`), so prefer the configured upstream ref.
+  const upstream = await getUpstreamRef({
+    worktreePath: params.worktreePath,
+    branchName: params.branchName,
+  });
+  const remoteRef = upstream ?? { remote, branch: params.branchName };
+
+  dbg.worktree(
+    'pullBranch: local=%s remote=%s/%s (upstream=%s)',
+    params.branchName,
+    remoteRef.remote,
+    remoteRef.branch,
+    upstream ? 'yes' : 'no',
+  );
 
   try {
     await runGitWithSshPrompt({
-      args: ['pull', '--ff-only', remote, params.branchName],
+      args: ['pull', '--ff-only', remoteRef.remote, remoteRef.branch],
       cwd: params.worktreePath,
       label: 'git pull',
     });
   } catch (error) {
-    throw new Error(explainPullFailure(getExecErrorMessage(error)));
+    throw new Error(
+      explainPullFailure({
+        message: getExecErrorMessage(error),
+        remoteBranch: remoteRef.branch,
+      }),
+    );
   }
+}
+
+/**
+ * Resolves the upstream tracking ref of a branch from git config, e.g.
+ * `branch.x.remote=origin` + `branch.x.merge=refs/heads/feature/a` ->
+ * `{ remote: 'origin', branch: 'feature/a' }`.
+ *
+ * Reads config instead of parsing `rev-parse --abbrev-ref @{u}` because that
+ * output is ambiguous: `feature/a` could mean remote `feature` branch `a`, or a
+ * local-tracking branch named `feature/a`. Returns null when the branch has no
+ * upstream, or when it tracks a local branch (`branch.x.remote='.'`).
+ */
+async function getUpstreamRef(params: {
+  worktreePath: string;
+  branchName: string;
+}): Promise<{ remote: string; branch: string } | null> {
+  const readConfig = async (key: string): Promise<string | null> => {
+    try {
+      const { stdout } = await execFileAsync('git', ['config', '--get', key], {
+        cwd: params.worktreePath,
+      });
+      return stdout.trim() || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const [remote, merge] = await Promise.all([
+    readConfig(`branch.${params.branchName}.remote`),
+    readConfig(`branch.${params.branchName}.merge`),
+  ]);
+
+  // '.' means the branch tracks another local branch — nothing to pull from.
+  if (!remote || !merge || remote === '.') return null;
+
+  const branch = merge.startsWith('refs/heads/')
+    ? merge.slice('refs/heads/'.length)
+    : merge;
+  if (!branch) return null;
+
+  return { remote, branch };
 }
 
 /**
  * Turns raw `git pull --ff-only` stderr into actionable guidance.
  */
-function explainPullFailure(message: string): string {
+function explainPullFailure(params: {
+  message: string;
+  remoteBranch: string;
+}): string {
+  const { message, remoteBranch } = params;
+
+  if (/couldn['’]t find remote ref|no such ref was fetched/i.test(message)) {
+    return `Pull failed because "${remoteBranch}" does not exist on the remote yet. Push the branch first, then pull again.\n\n${message}`;
+  }
+
   if (/would be overwritten by merge|local changes/i.test(message)) {
     return `Pull failed because the worktree has uncommitted changes. Commit or discard them, then pull again.\n\n${message}`;
   }
