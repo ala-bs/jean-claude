@@ -69,6 +69,30 @@ Rules for this table:
 Formatting rules so the table stays valid: escape every \`|\` inside a cell as \`\\|\`, strip any HTML tags coming from work item descriptions and keep only their text, and never emit a raw newline inside a cell — use \`<br>\` instead. If a cell gets long, break it with \`<br>\` rather than shortening the explanation.
 {{/if}}
 
+**Final report — always end with these two sections, in this order:**
+
+**1. Implemented as expected:**
+| # | Requirement | Spec Source | How it is implemented |
+|---|-------------|-------------|-----------------------|
+- One row per requirement (work item statement or test case) that is correctly implemented.
+- **Requirement**: what the spec asks for, in one clear sentence.
+- **Spec Source**: verbatim quote + artifact it comes from (\`Work item #17 description: "..."\` or \`Test case #42, step 2: "..."\`, step numbers 1-based).
+- **How it is implemented**: the concrete file + function/symbol that satisfies it, and briefly how.
+- If nothing is correctly implemented, write \`None\` instead of an empty table.
+
+**2. Mismatches:**
+| # | Requirement | Spec Source | Expected (detailed) | Implemented (detailed) | Mismatch recap | Status |
+|---|-------------|-------------|---------------------|------------------------|----------------|--------|
+- One row per mismatch. Never merge rows, never silently drop one.
+- **Spec Source**: mandatory verbatim quote + artifact, same rules as above. No citation ⇒ not a mismatch ⇒ move it to Observations.
+- **Expected (detailed)**: 2-4 sentences describing precondition/setup, exact action, observable outcome, and any edge case or state transition the spec requires. Name concrete UI labels, fields, statuses, values, side effects.
+- **Implemented (detailed)**: if partially implemented, describe exactly what the code does today and what is missing, with file + function/symbol. If nothing exists, write \`Not implemented\` and state where it would belong.
+- **Mismatch recap**: one sentence of the form \`expected X, but implementation does Y\`.
+- **Status**: ❌ MISSING (nothing implemented), ⚠️ PARTIAL (implemented but diverges), or ⬚ NOT TESTED (could not verify — say what blocked it).
+- If there is no mismatch, write \`None\` instead of an empty table.
+
+Same formatting rules apply to both tables: escape \`|\` as \`\\|\`, strip HTML from work item text, use \`<br>\` instead of raw newlines, and break long cells with \`<br>\` rather than shortening the explanation.
+
 Finally, add an **Observations** section (omit it if empty) — this is the only place where anything not explicitly written in the work items may appear. Use it for: ambiguous or contradictory requirements, expectations that seem implied but were never stated, behaviors in the code that look wrong or risky but are not covered by any requirement, and missing test coverage. Format each as a short bullet: what you noticed, why it is unclear/suspicious, and the question that needs answering. Keep these strictly out of the MISMATCH/FAIL results — they are notes, not verdicts.`,
     enabled: true,
     contexts: { newTask: true, newTaskStep: true },
