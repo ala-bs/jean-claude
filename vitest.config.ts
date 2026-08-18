@@ -46,6 +46,7 @@ export default defineConfig({
       'src/features/mobile-preview/**/*.test.ts',
       'src/features/mobile-preview/**/*.test.tsx',
       'src/features/new-task/ui-prompt-composer/**/*.test.ts',
+      'src/common/ui/handlebars-editor/**/*.test.ts',
       'src/features/work-activity/**/*.test.ts',
       'src/features/work-activity/**/*.test.tsx',
       'src/features/pull-request/**/*.test.ts',

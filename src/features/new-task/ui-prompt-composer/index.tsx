@@ -1203,6 +1203,7 @@ export function PromptComposer({
               maxHeight="500px"
               featureMap={featureMap}
               onPaste={handlePaste}
+              moveCursorBelowPaste
             />
           </div>
           <div
