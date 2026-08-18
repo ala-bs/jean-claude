@@ -307,6 +307,7 @@ import {
   mergeWorktree,
   pullBranch,
   pushBranch,
+  renameWorktreeBranch,
   resolveSourceBranchMergeBase,
   updateProjectCommitIgnore,
 } from '../services/worktree-service';
@@ -522,8 +523,11 @@ import {
   validateRendererStepUpdate,
   validateRendererTaskUpdate,
 } from './task-update-validation';
+import {
+  validateTaskBranchRename,
+  validateTaskSourceBranchChange,
+} from './task-source-branch-validation';
 import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
-import { validateTaskSourceBranchChange } from './task-source-branch-validation';
 
 function redactAiGenerationSetting(
   setting: AiGenerationSetting,
@@ -2092,6 +2096,37 @@ export function registerIpcHandlers() {
         );
       }
       return updateTaskAndEmit(taskId, { sourceBranch });
+    },
+  );
+  ipcMain.handle(
+    'tasks:setBranchName',
+    async (_, params: { taskId: string; branchName: string }) => {
+      const { taskId } = params;
+      const branchName = params.branchName.trim();
+      const task = await TaskRepository.findById(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      const project = await ProjectRepository.findById(task.projectId);
+      if (!project) throw new Error(`Project ${task.projectId} not found`);
+      const branches = await getProjectBranches(project.path);
+      validateTaskBranchRename({ task, newBranch: branchName, branches });
+      const worktreePath = task.worktreePath;
+      if (!worktreePath) throw new Error('Only worktree tasks have a branch');
+
+      const { previousBranch } = await renameWorktreeBranch({
+        worktreePath,
+        newBranch: branchName,
+      });
+      try {
+        return await updateTaskAndEmit(taskId, { branchName });
+      } catch (error) {
+        // Keep git and the database in agreement: a stale branchName breaks
+        // every later push/merge/cleanup path.
+        await renameWorktreeBranch({
+          worktreePath,
+          newBranch: previousBranch,
+        }).catch(() => undefined);
+        throw error;
+      }
     },
   );
   ipcMain.handle(

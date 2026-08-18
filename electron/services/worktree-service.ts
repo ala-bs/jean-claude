@@ -2147,6 +2147,69 @@ export async function pushBranch(params: {
 }
 
 /**
+ * Renames the local branch a worktree is checked out on and returns the branch
+ * it was previously on.
+ *
+ * The branch to rename is read from the worktree's actual HEAD rather than
+ * taken from the caller: `Task.branchName` can be null on older tasks, and the
+ * path-derived fallback is only a naming convention, so trusting it risks
+ * renaming an unrelated branch.
+ *
+ * Refuses to rename a branch that has an upstream. `git branch -m` moves the
+ * tracking config to the new name while the remote branch keeps the old one,
+ * which silently splits a subsequent push (and any open PR) across two refs.
+ */
+export async function renameWorktreeBranch(params: {
+  worktreePath: string;
+  newBranch: string;
+}): Promise<{ previousBranch: string }> {
+  const { worktreePath, newBranch } = params;
+
+  const currentBranch = await getCurrentBranchName(worktreePath);
+  if (!currentBranch || currentBranch === 'HEAD') {
+    throw new Error(
+      'This worktree is not on a branch (detached HEAD) and cannot be renamed',
+    );
+  }
+  dbg.worktree('renameWorktreeBranch: %s -> %s', currentBranch, newBranch);
+
+  await execFileAsync(
+    'git',
+    ['check-ref-format', `refs/heads/${newBranch}`],
+    { cwd: worktreePath, encoding: 'utf-8' },
+  ).catch(() => {
+    throw new Error(`"${newBranch}" is not a valid git branch name`);
+  });
+
+  const { stdout: existing } = await execFileAsync(
+    'git',
+    ['branch', '--list', newBranch, '--format=%(refname:short)'],
+    { cwd: worktreePath, encoding: 'utf-8' },
+  );
+  if (existing.trim()) {
+    throw new Error(`Branch ${newBranch} already exists`);
+  }
+
+  const upstream = await getUpstreamRef({
+    worktreePath,
+    branchName: currentBranch,
+  });
+  if (upstream) {
+    throw new Error(
+      `Branch ${currentBranch} is already pushed to ${upstream.remote}/${upstream.branch}. ` +
+        'Renaming it would leave the remote branch (and any open pull request) behind.',
+    );
+  }
+
+  await execFileAsync('git', ['branch', '-m', currentBranch, newBranch], {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+  });
+
+  return { previousBranch: currentBranch };
+}
+
+/**
  * Pulls the latest commits for a branch from a remote into the worktree.
  * Uses the same interactive SSH prompt handling as pushBranch.
  *

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   resolveTaskBranchName,
+  validateTaskBranchRename,
   validateTaskSourceBranchChange,
 } from './task-source-branch-validation';
 
@@ -90,5 +91,78 @@ describe('validateTaskSourceBranchChange', () => {
         branches,
       }),
     ).toThrow(/required/);
+  });
+});
+
+describe('validateTaskBranchRename', () => {
+  const renamableTask = {
+    ...worktreeTask,
+    sourceBranch: 'main',
+    status: 'completed' as const,
+    pullRequestId: null,
+  };
+
+  it('rejects renaming a task that has a pull request', () => {
+    expect(() =>
+      validateTaskBranchRename({
+        task: { ...renamableTask, pullRequestId: '42' },
+        newBranch: 'feature/new',
+        branches,
+      }),
+    ).toThrow(/pull request/);
+  });
+
+  it('rejects renaming while a session is running', () => {
+    expect(() =>
+      validateTaskBranchRename({
+        task: { ...renamableTask, status: 'running' },
+        newBranch: 'feature/new',
+        branches,
+      }),
+    ).toThrow(/Stop the running session/);
+  });
+
+  it('returns the current branch for a valid rename', () => {
+    expect(
+      validateTaskBranchRename({
+        task: renamableTask,
+        newBranch: ' feature/new ',
+        branches,
+      }),
+    ).toBe('jean-claude/my-task');
+  });
+
+  it('rejects pr-review tasks', () => {
+    expect(() =>
+      validateTaskBranchRename({
+        task: { ...renamableTask, type: 'pr-review' },
+        newBranch: 'feature/new',
+        branches,
+      }),
+    ).toThrow(/cannot rename/);
+  });
+
+  it('rejects blank, unchanged, source, and existing branch names', () => {
+    const cases: [string, RegExp][] = [
+      ['  ', /required/],
+      ['jean-claude/my-task', /unchanged/],
+      ['main', /source branch/],
+      ['develop', /already exists/],
+    ];
+    for (const [newBranch, matcher] of cases) {
+      expect(() =>
+        validateTaskBranchRename({ task: renamableTask, newBranch, branches }),
+      ).toThrow(matcher);
+    }
+  });
+
+  it('rejects tasks without a worktree', () => {
+    expect(() =>
+      validateTaskBranchRename({
+        task: { ...renamableTask, worktreePath: null, branchName: null },
+        newBranch: 'feature/new',
+        branches,
+      }),
+    ).toThrow(/Only worktree tasks/);
   });
 });
