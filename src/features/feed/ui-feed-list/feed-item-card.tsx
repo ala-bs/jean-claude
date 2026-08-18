@@ -900,6 +900,14 @@ export function FeedItemCard({
                     PR Workspace
                   </span>
                 )}
+                {item.taskType === 'pr-review' && isDraft && (
+                  <span
+                    aria-label="Draft"
+                    className="border-glass-border text-ink-3 mt-px shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium leading-none uppercase"
+                  >
+                    Draft
+                  </span>
+                )}
                 <span
                   className={clsx(
                     'min-w-0 flex-1 truncate leading-snug',
