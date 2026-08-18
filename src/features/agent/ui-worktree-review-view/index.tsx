@@ -57,6 +57,7 @@ import { getFilesWithAnnotations } from '@/features/agent/ui-diff-annotation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import { Separator } from '@/common/ui/separator';
 import { SummaryPanel } from '@/features/agent/ui-summary-panel';
+import { TaskTodoDropdown } from '@/features/task/ui-task-todo-dropdown';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
@@ -678,18 +679,21 @@ export function WorktreeReviewView({
             commitsCount={commits?.length}
             showGitModes={gitReviewEnabled}
           />
-          {gitReviewEnabled && (
-            <button
-              onClick={() => {
-                refresh();
-                void refetchLocalChanges();
-              }}
-              className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1 transition-colors"
-              title="Refresh"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-            </button>
-          )}
+          <div className="flex shrink-0 items-center gap-0.5">
+            <TaskTodoDropdown taskId={taskId} />
+            {gitReviewEnabled && (
+              <button
+                onClick={() => {
+                  refresh();
+                  void refetchLocalChanges();
+                }}
+                className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1 transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         </div>
         <Separator />
         <div
