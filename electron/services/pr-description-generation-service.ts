@@ -1,6 +1,7 @@
 import { dbg } from '../lib/debug';
 
 import {
+  getDiffBaseInfo,
   getWorktreeCommitLog,
   getWorktreeDiff,
   getWorktreeUnifiedDiff,
@@ -33,6 +34,12 @@ const PR_DESCRIPTION_LIMITS = {
   MAX_CHANGED_FILES: 200,
   MAX_DIFF_CHARS: 50_000,
 } as const;
+
+/** Turn `refs/remotes/origin/main` into `origin/main` for user-facing errors. */
+function shortenRef(ref: string | null): string | null {
+  if (!ref) return null;
+  return ref.replace(/^refs\/remotes\//, '').replace(/^refs\/heads\//, '');
+}
 
 /** Escape content that goes inside XML-like prompt tags to prevent injection. */
 function sanitizeForPrompt(text: string): string {
@@ -179,9 +186,52 @@ export async function generatePrDescriptionForTask(
     // Truncate changed file list
     let changedFiles = diff.files.map((f) => `${f.status}: ${f.path}`);
     if (changedFiles.length === 0) {
-      throw new Error(
-        'task has no changed files for PR description generation',
+      if (diff.worktreeDeleted) {
+        throw new Error(
+          `worktree ${task.worktreePath} no longer exists, so the PR diff cannot be read`,
+        );
+      }
+
+      // Diagnose *why* the file list is empty instead of failing opaquely.
+      const baseInfo = await getDiffBaseInfo(
+        task.worktreePath,
+        task.startCommitHash,
+        task.sourceBranch,
       );
+      dbg.agent(
+        'PR description: empty changed-file list %o',
+        {
+          worktreePath: task.worktreePath,
+          branchName: task.branchName,
+          sourceBranch: task.sourceBranch,
+          targetBranch,
+          startCommitHash: task.startCommitHash,
+          worktreeDeleted: diff.worktreeDeleted ?? false,
+          commitLogLines: commitLogRaw.trim() ? commitLogLines.length : 0,
+          unifiedDiffChars: unifiedDiffRaw.length,
+          ...baseInfo,
+        },
+      );
+
+      // The unified diff shares this base commit AND the same merge-artifact
+      // filter as the file list, so it is the only trustworthy signal that
+      // real work exists. The commit log is computed from startCommitHash and
+      // can be full of merged-in source commits, so it must NOT unlock
+      // generation — that would describe work this branch never did.
+      if (!unifiedDiffRaw.trim()) {
+        if (baseInfo.headIsMergedIntoSource) {
+          throw new Error(
+            `branch ${task.branchName ?? 'HEAD'} has no changes relative to ${targetBranch} ` +
+              `(HEAD ${baseInfo.headCommit?.slice(0, 8)} is already contained in ` +
+              `${shortenRef(baseInfo.sourceRef) ?? targetBranch}) — there is nothing to open a PR for`,
+          );
+        }
+        throw new Error(
+          `no changed files or diff found between ${baseInfo.baseCommit.slice(0, 8)} ` +
+            `(base from ${shortenRef(baseInfo.sourceRef) ?? 'the task start commit'}) and HEAD ` +
+            `${baseInfo.headCommit?.slice(0, 8) ?? '(unknown)'}`,
+        );
+      }
     }
     if (changedFiles.length > PR_DESCRIPTION_LIMITS.MAX_CHANGED_FILES) {
       changedFiles = [

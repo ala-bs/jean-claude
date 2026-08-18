@@ -29,6 +29,7 @@ const fs =
 const {
   cleanupMissingWorktree,
   cleanupWorktree,
+  getDiffBaseInfo,
   getWorktreeDiff,
   getWorktreeFileContent,
   getWorktreeUnifiedDiff,
@@ -254,6 +255,56 @@ describe('worktree cleanup branch safety', () => {
     await expect(fs.stat(worktreePath)).rejects.toThrow();
     const { stdout } = await git(['branch', '--list', 'feature-merge']);
     expect(stdout).toBe('');
+  });
+});
+
+describe('getDiffBaseInfo', () => {
+  beforeEach(async () => {
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-diff-base-'));
+    await git(['init', '-b', 'main']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test User']);
+    await writeFile('base.txt', 'base\n');
+    await commit('base');
+  });
+
+  afterEach(async () => {
+    if (testDir) await fs.rm(testDir, { force: true, recursive: true });
+  });
+
+  it('reports headIsMergedIntoSource when the branch adds nothing to source', async () => {
+    await git(['switch', '-c', 'task']);
+
+    const info = await getDiffBaseInfo(testDir, 'unused', 'main');
+
+    expect(info.sourceRef).toBe('refs/heads/main');
+    expect(info.baseCommit).toBe(info.headCommit);
+    expect(info.headIsMergedIntoSource).toBe(true);
+  });
+
+  it('reports headIsMergedIntoSource false when the branch has its own commits', async () => {
+    await git(['switch', '-c', 'task']);
+    await writeFile('task.txt', 'task\n');
+    await commit('task work');
+
+    const info = await getDiffBaseInfo(testDir, 'unused', 'main');
+
+    expect(info.baseCommit).not.toBe(info.headCommit);
+    expect(info.headIsMergedIntoSource).toBe(false);
+  });
+
+  it('never claims merged-into-source when no source ref resolves', async () => {
+    const { stdout } = await git(['rev-parse', 'HEAD']);
+    const head = stdout.trim();
+
+    // No sourceBranch → baseCommit falls back to startCommitHash, which here
+    // equals HEAD. That must NOT be reported as "already merged into source".
+    const info = await getDiffBaseInfo(testDir, head, null);
+
+    expect(info.sourceRef).toBeNull();
+    expect(info.baseCommit).toBe(head);
+    expect(info.headCommit).toBe(head);
+    expect(info.headIsMergedIntoSource).toBe(false);
   });
 });
 

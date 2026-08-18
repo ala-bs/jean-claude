@@ -6,12 +6,14 @@ const {
   getWorktreeDiffMock,
   getWorktreeUnifiedDiffMock,
   resolveAiSkillSlotMock,
+  getDiffBaseInfoMock,
 } = vi.hoisted(() => ({
   generateTextMock: vi.fn(),
   getWorktreeCommitLogMock: vi.fn(),
   getWorktreeDiffMock: vi.fn(),
   getWorktreeUnifiedDiffMock: vi.fn(),
   resolveAiSkillSlotMock: vi.fn(),
+  getDiffBaseInfoMock: vi.fn(),
 }));
 
 vi.mock('./ai-generation-service', () => ({
@@ -26,6 +28,7 @@ vi.mock('./worktree-service', () => ({
   getWorktreeCommitLog: getWorktreeCommitLogMock,
   getWorktreeDiff: getWorktreeDiffMock,
   getWorktreeUnifiedDiff: getWorktreeUnifiedDiffMock,
+  getDiffBaseInfo: getDiffBaseInfoMock,
 }));
 
 import { generatePrDescriptionForTask } from './pr-description-generation-service';
@@ -64,6 +67,12 @@ describe('generatePrDescriptionForTask', () => {
     getWorktreeUnifiedDiffMock.mockResolvedValue(
       'diff --git a/file.ts b/file.ts',
     );
+    getDiffBaseInfoMock.mockResolvedValue({
+      baseCommit: 'base1234',
+      sourceRef: 'refs/remotes/origin/main',
+      headCommit: 'head5678',
+      headIsMergedIntoSource: false,
+    });
   });
 
   it('returns undefined when PR description generation is not configured', async () => {
@@ -118,13 +127,65 @@ describe('generatePrDescriptionForTask', () => {
     expect(generateTextMock).not.toHaveBeenCalled();
   });
 
-  it('rejects when configured AI generation has no changed files', async () => {
+  it('still generates when the file list is empty but a real diff exists', async () => {
     getWorktreeDiffMock.mockResolvedValue({ files: [] });
+    generateTextMock.mockResolvedValue({
+      title: 'fix: something',
+      description: 'body',
+    });
+
+    await expect(generatePrDescriptionForTask(task, project)).resolves.toEqual({
+      title: 'fix: something',
+      description: 'body',
+    });
+  });
+
+  it('does not generate from merged-in source commits when the diff is empty', async () => {
+    // Classic merge artifact: the branch merged main, so the commit log is full
+    // of main's commits while the branch itself changed nothing.
+    getWorktreeDiffMock.mockResolvedValue({ files: [] });
+    getWorktreeUnifiedDiffMock.mockResolvedValue('');
+    getWorktreeCommitLogMock.mockResolvedValue(
+      'aaa1111 someone else commit\nbbb2222 another main commit',
+    );
 
     await expect(generatePrDescriptionForTask(task, project)).rejects.toThrow(
-      'Failed to generate PR title and description: task has no changed files for PR description generation',
+      'no changed files or diff found',
     );
     expect(generateTextMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects with a merged-branch explanation when nothing differs from the target', async () => {
+    getWorktreeDiffMock.mockResolvedValue({ files: [] });
+    getWorktreeCommitLogMock.mockResolvedValue('');
+    getWorktreeUnifiedDiffMock.mockResolvedValue('');
+    getDiffBaseInfoMock.mockResolvedValue({
+      baseCommit: 'head5678',
+      sourceRef: 'refs/remotes/origin/main',
+      headCommit: 'head5678',
+      headIsMergedIntoSource: true,
+    });
+
+    await expect(generatePrDescriptionForTask(task, project)).rejects.toThrow(
+      'branch feature/test has no changes relative to main',
+    );
+    await expect(generatePrDescriptionForTask(task, project)).rejects.toThrow(
+      'is already contained in origin/main',
+    );
+    expect(generateTextMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the worktree is gone', async () => {
+    getWorktreeDiffMock.mockResolvedValue({
+      files: [],
+      worktreeDeleted: true,
+    });
+    getWorktreeCommitLogMock.mockResolvedValue('');
+    getWorktreeUnifiedDiffMock.mockResolvedValue('');
+
+    await expect(generatePrDescriptionForTask(task, project)).rejects.toThrow(
+      'no longer exists',
+    );
   });
 
   it('rejects with backend errors when configured AI generation fails', async () => {

@@ -620,6 +620,51 @@ function getSourceBranchRefs(
 }
 
 /**
+ * Diagnostic helper: resolves the base commit / source ref that the diff
+ * functions would use, plus the current HEAD. Used to explain why a task
+ * reports an empty diff (e.g. HEAD already merged into the source branch).
+ */
+export async function getDiffBaseInfo(
+  worktreePath: string,
+  startCommitHash: string,
+  sourceBranch: string | null,
+): Promise<{
+  baseCommit: string;
+  sourceRef: string | null;
+  headCommit: string | null;
+  headIsMergedIntoSource: boolean;
+}> {
+  const { baseCommit, sourceRef } = await getDiffBaseCommit(
+    worktreePath,
+    startCommitHash,
+    sourceBranch,
+  );
+
+  let headCommit: string | null = null;
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+    headCommit = stdout.trim();
+  } catch {
+    // HEAD unavailable (e.g. worktree removed) — leave null.
+  }
+
+  return {
+    baseCommit,
+    sourceRef,
+    headCommit,
+    // Only meaningful when a real source ref was resolved: without one,
+    // baseCommit is just the (possibly stale) startCommitHash, so equality
+    // says nothing about the source branch.
+    headIsMergedIntoSource: Boolean(
+      sourceRef && headCommit && baseCommit && headCommit === baseCommit,
+    ),
+  };
+}
+
+/**
  * Resolves the merge-base a source branch would produce for a worktree.
  * Returns null when no common ancestor is reachable, meaning the diff would
  * silently fall back to the (stale) start commit.
