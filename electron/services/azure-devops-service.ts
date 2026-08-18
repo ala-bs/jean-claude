@@ -3158,8 +3158,9 @@ export async function uploadPullRequestAttachment(params: {
   mimeType: string;
   dataBase64: string;
 }): Promise<{ url: string }> {
-  await assertCurrentUserOwnsPullRequest(params);
-
+  // No ownership check here: attachments back both description edits (owner
+  // only, enforced in updatePullRequestDescription) and comments, which any
+  // user with repo access may post on someone else's pull request.
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
   const data = Buffer.from(params.dataBase64, 'base64');
   const hashSuffix = createHash('sha256')

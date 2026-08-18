@@ -955,6 +955,61 @@ describe('uploadPullRequestAttachment', () => {
       'https://dev.azure.com/org/project/_apis/git/repositories/repo/pullRequests/123/attachments/image-6105d6cc-1.png?api-version=7.1-preview.1',
     );
   });
+
+  it('allows uploading an attachment to a pull request owned by someone else', async () => {
+    const dataBase64 = Buffer.from('image').toString('base64');
+
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes('/_apis/profile/profiles/me')) {
+        return jsonResponse(
+          {
+            id: 'profile-id',
+            displayName: 'Other User',
+            emailAddress: 'other@example.com',
+          },
+          { ok: true },
+        );
+      }
+
+      if (url.includes('/_apis/connectionData')) {
+        return jsonResponse(
+          { authenticatedUser: { id: 'other-id' } },
+          { ok: true },
+        );
+      }
+
+      if (url.includes('/attachments/')) {
+        return jsonResponse(
+          {
+            url: 'https://dev.azure.com/org/project/_apis/attachment/image-6105d6cc.png',
+          },
+          { ok: true },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await expect(
+      uploadPullRequestAttachment({
+        providerId: 'provider-1',
+        projectId: 'project',
+        repoId: 'repo',
+        pullRequestId: 123,
+        fileName: 'image.png',
+        mimeType: 'image/png',
+        dataBase64,
+      }),
+    ).resolves.toEqual({
+      url: 'https://dev.azure.com/org/project/_apis/attachment/image-6105d6cc.png',
+    });
+
+    // Uploading must not depend on a pull request ownership lookup.
+    const urls = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+    expect(urls.some((url) => url.includes('/pullrequests/123?'))).toBe(false);
+  });
 });
 
 describe('addWorkItemComment', () => {
