@@ -42,6 +42,22 @@ describe('restoreEscapedMarkdownLinks', () => {
     ).toBe('Test ![image.png](azure-image-proxy://provider/image) done');
   });
 
+  it('restores image links carrying the Azure width-only size suffix', () => {
+    expect(
+      restoreEscapedMarkdownLinks(
+        '!\\[image.png\\](azure-image-proxy://provider/image =640x)',
+      ),
+    ).toBe('![image.png](azure-image-proxy://provider/image =640x)');
+  });
+
+  it('restores image links carrying a width and height size suffix', () => {
+    expect(
+      restoreEscapedMarkdownLinks(
+        '!\\[image.png\\](azure-image-proxy://provider/image =640x480)',
+      ),
+    ).toBe('![image.png](azure-image-proxy://provider/image =640x480)');
+  });
+
   it('does not restore ordinary escaped markdown links', () => {
     expect(
       restoreEscapedMarkdownLinks(
