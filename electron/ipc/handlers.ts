@@ -6,6 +6,7 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 import { deleteAttachmentFile } from './attachment-file-deletion';
+import { resolveSourceBranchStartPoint } from './pull-source-branch';
 
 
 import {
@@ -570,29 +571,12 @@ async function pullSourceBranch({
   repoPath: string;
   sourceBranch: string;
 }): Promise<string> {
-  const remoteBranch = sourceBranch.startsWith('origin/')
-    ? sourceBranch.slice('origin/'.length)
-    : sourceBranch;
-  await runGit(
-    [
-      'fetch',
-      'origin',
-      `+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}`,
-    ],
+  return resolveSourceBranchStartPoint({
     repoPath,
-  );
-
-  const currentBranch = await runGit(
-    ['rev-parse', '--abbrev-ref', 'HEAD'],
-    repoPath,
-  );
-
-  if (currentBranch === sourceBranch) {
-    await runGit(['pull', '--ff-only', 'origin', remoteBranch], repoPath);
-    return sourceBranch;
-  }
-
-  return `origin/${remoteBranch}`;
+    sourceBranch,
+    runGit: (args, cwd) => runGit(args, cwd),
+    debug: (message, ...args) => dbg.ipc(message, ...args),
+  });
 }
 
 const VALID_BACKENDS = new Set<string>([
