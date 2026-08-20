@@ -200,6 +200,7 @@ import {
   createPermissionModalState,
   type PermissionModalState,
 } from './permission-modal-state';
+import { runPromptSubmission } from './utils-prompt-submit-error';
 import { getTaskTitle, TaskNameEditor } from './task-name-editor';
 import { AddStepDialog } from './add-step-dialog';
 import { ChangeWorktreePathDialog } from './change-worktree-path-dialog';
@@ -3590,11 +3591,14 @@ const TaskInputFooter = memo(function TaskInputFooter({
   isRunning: boolean;
   isStopping: boolean;
   canSendMessage: boolean;
-  onSend: (parts: PromptPart[], capture?: AgentMemoryFollowUpCapture) => void;
+  onSend: (
+    parts: PromptPart[],
+    capture?: AgentMemoryFollowUpCapture,
+  ) => void | Promise<void>;
   onQueue: (
     parts: PromptPart[],
     capture?: AgentMemoryQueuedPromptCapture,
-  ) => void;
+  ) => void | Promise<unknown>;
   queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
   projectRoot: string | null;
@@ -3674,6 +3678,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   });
   const setStepMode = useSetTaskMode();
   const clearUserCompleted = useClearTaskUserCompleted();
+  const addFooterToast = useToastStore((s) => s.addToast);
 
   const {
     text: promptDraft,
@@ -3844,68 +3849,72 @@ const TaskInputFooter = memo(function TaskInputFooter({
     [activeStepId, mutateStepAsync],
   );
 
-  const handleSendMessage = async (parts: PromptPart[]) => {
-      setIsSubmittingPrompt(true);
-      try {
-        await waitForThinkingUpdate();
-        if (task?.userCompleted) {
-          clearUserCompleted.mutate(taskId);
-        }
-
-        let finalParts = parts;
-        if (openReviewComments.length > 0) {
-          const reviewParts = synthesizeReviewPrompt(openReviewComments);
-          if (reviewParts) {
-            finalParts = [...parts, ...reviewParts];
-          }
-          for (const comment of openReviewComments) {
+  const submitPrompt = async ({
+    parts,
+    submit,
+    fallbackMessage,
+  }: {
+    parts: PromptPart[];
+    submit: (
+      finalParts: PromptPart[],
+      capture: {
+        submissionId: string;
+        userText: string;
+        reviews: ReturnType<typeof reviewCommentToAgentMemoryCapture>[];
+      },
+    ) => void | Promise<unknown>;
+    fallbackMessage: string;
+  }) => {
+    setIsSubmittingPrompt(true);
+    try {
+      await waitForThinkingUpdate();
+      await runPromptSubmission({
+        parts,
+        openReviewComments,
+        synthesizeReviewParts: synthesizeReviewPrompt,
+        submit: async (finalParts, submittedComments) =>
+          submit(finalParts, {
+            submissionId: nanoid(),
+            userText: parts
+              .filter((part) => part.type === 'text')
+              .map((part) => part.text)
+              .join('\n'),
+            reviews: submittedComments.map(reviewCommentToAgentMemoryCapture),
+          }),
+        onSuccess: (submittedComments) => {
+          clearPromptDraft();
+          for (const comment of submittedComments) {
             resolveComment(taskId, comment.id);
           }
-          clearResolvedComments(taskId);
-        }
+          if (submittedComments.length > 0) {
+            clearResolvedComments(taskId);
+          }
+        },
+        onError: (message) => addFooterToast({ type: 'error', message }),
+        fallbackMessage,
+      });
+    } finally {
+      setIsSubmittingPrompt(false);
+    }
+  };
 
-        clearPromptDraft();
-        onSend(finalParts, {
-          submissionId: nanoid(),
-          userText: parts
-            .filter((part) => part.type === 'text')
-            .map((part) => part.text)
-            .join('\n'),
-          reviews: openReviewComments.map(reviewCommentToAgentMemoryCapture),
-        });
-      } finally {
-        setIsSubmittingPrompt(false);
-      }
+  const handleSendMessage = async (parts: PromptPart[]) => {
+    if (task?.userCompleted) {
+      clearUserCompleted.mutate(taskId);
+    }
+    await submitPrompt({
+      parts,
+      submit: onSend,
+      fallbackMessage: 'Failed to send follow-up message',
+    });
   };
 
   const handleQueuePrompt = async (parts: PromptPart[]) => {
-      setIsSubmittingPrompt(true);
-      try {
-        await waitForThinkingUpdate();
-        let finalParts = parts;
-        if (openReviewComments.length > 0) {
-          const reviewParts = synthesizeReviewPrompt(openReviewComments);
-          if (reviewParts) {
-            finalParts = [...parts, ...reviewParts];
-          }
-          for (const comment of openReviewComments) {
-            resolveComment(taskId, comment.id);
-          }
-          clearResolvedComments(taskId);
-        }
-
-        clearPromptDraft();
-        onQueue(finalParts, {
-          submissionId: nanoid(),
-          userText: parts
-            .filter((part) => part.type === 'text')
-            .map((part) => part.text)
-            .join('\n'),
-          reviews: openReviewComments.map(reviewCommentToAgentMemoryCapture),
-        });
-      } finally {
-        setIsSubmittingPrompt(false);
-      }
+    await submitPrompt({
+      parts,
+      submit: onQueue,
+      fallbackMessage: 'Failed to queue follow-up message',
+    });
   };
 
   const handleStop = useCallback(async () => {

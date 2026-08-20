@@ -68,8 +68,12 @@ export function MessageInput({
   textareaClassName,
   isCompact = false,
 }: {
-  onSend: (parts: PromptPart[]) => void;
-  onQueue?: (parts: PromptPart[]) => void;
+  /**
+   * Awaited on submit. Rejecting keeps the composer's text, images and file
+   * attachments intact, so callers should throw rather than swallow failures.
+   */
+  onSend: (parts: PromptPart[]) => void | Promise<unknown>;
+  onQueue?: (parts: PromptPart[]) => void | Promise<unknown>;
   onStop?: () => void;
   disabled?: boolean;
   /** Disables input even while running, bypassing queue mode. */

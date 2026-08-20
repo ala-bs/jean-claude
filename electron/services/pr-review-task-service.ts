@@ -767,6 +767,16 @@ export async function startAgentWithPrReviewLifecycle(
     return operation(stepId);
   }
 
+  dbg.agent(
+    'pr-review lifecycle: step=%s task=%s state=%s status=%s userCompleted=%s worktree=%s',
+    stepId,
+    initialTask.id,
+    initialTask.prWorkspaceState,
+    initialTask.status,
+    initialTask.userCompleted,
+    initialTask.worktreePath,
+  );
+
   const identity = {
     stepId,
     taskId: initialTask.id,
@@ -791,6 +801,7 @@ export async function startAgentWithPrReviewLifecycle(
       ) {
         throw new Error(`PR review task ${task.id} has no active worktree`);
       }
+      dbg.agent('pr-review lifecycle: lock acquired for step=%s', step.id);
       await operation(step.id);
     },
   );
