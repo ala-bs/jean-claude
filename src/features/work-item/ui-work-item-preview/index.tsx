@@ -314,42 +314,62 @@ export function WorkItemPreview({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {(editableMetadata || headerLeading || headerActions || !!workItemId) && <div className={isEditorial ? 'border-line flex items-start gap-2 border-b px-4 py-3' : 'border-glass-border flex items-start gap-2 border-b px-3 py-2.5'}>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <WorkItemTypeIcon type={workItemType} size="sm" variant={variant} />
-            <span className="text-ink-3 font-mono text-[10px]">#{id} · {workItemType}</span>
+      {(editableMetadata || headerLeading || headerActions || !!workItemId) && <div className={isEditorial ? 'border-line border-b px-4 py-3' : 'border-glass-border border-b px-3 py-2.5'}>
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <WorkItemTypeIcon type={workItemType} size="sm" variant={variant} />
+              <span className="text-ink-3 font-mono text-[10px]">#{id} · {workItemType}</span>
+            </div>
+            <div className="mt-1 flex items-start gap-1.5">
+              {headerLeading}
+              {canEditMetadata && providerId ? (
+                <EditableMetadataValue
+                  key={`${id}:title:${fields.title}`}
+                  value={fields.title}
+                  label="Title"
+                  className="text-ink-0 block min-w-0 flex-1 text-left text-sm font-semibold leading-snug"
+                  displayValue={parserSetting ? (
+                    <ParsedWorkItemTitle
+                      title={fields.title}
+                      parserSetting={parserSetting}
+                      titleClassName="text-ink-0 text-sm font-semibold leading-snug"
+                      titleElement="span"
+                      inline
+                    />
+                  ) : undefined}
+                  fullWidth
+                  validate={(value) => value.trim() ? null : 'Title cannot be empty'}
+                  onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Title', value })}
+                />
+              ) : (
+                parserSetting ? <div className="min-w-0 flex-1"><ParsedWorkItemTitle
+                  title={fields.title}
+                  parserSetting={parserSetting}
+                  titleClassName="text-ink-0 text-sm font-medium"
+                  titleElement="h3"
+                /></div> : <h3 className="text-ink-0 min-w-0 flex-1 text-sm font-medium">{fields.title}</h3>
+              )}
+            </div>
           </div>
-          <div className="mt-1 flex items-start gap-1.5">
-            {headerLeading}
-            {canEditMetadata && providerId ? (
-              <EditableMetadataValue
-                key={`${id}:title:${fields.title}`}
-                value={fields.title}
-                label="Title"
-                className="text-ink-0 block min-w-0 flex-1 text-left text-sm font-semibold leading-snug"
-                displayValue={parserSetting ? (
-                  <ParsedWorkItemTitle
-                    title={fields.title}
-                    parserSetting={parserSetting}
-                    titleClassName="text-ink-0 text-sm font-semibold leading-snug"
-                    titleElement="span"
-                    inline
-                  />
-                ) : undefined}
-                fullWidth
-                validate={(value) => value.trim() ? null : 'Title cannot be empty'}
-                onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Title', value })}
-              />
-            ) : (
-              parserSetting ? <div className="min-w-0 flex-1"><ParsedWorkItemTitle
-                title={fields.title}
-                parserSetting={parserSetting}
-                titleClassName="text-ink-0 text-sm font-medium"
-                titleElement="h3"
-              /></div> : <h3 className="text-ink-0 min-w-0 flex-1 text-sm font-medium">{fields.title}</h3>
+          <div className="flex shrink-0 items-center gap-1">
+            {!!workItemId && (
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                title="Refresh work item"
+                className="text-ink-3 hover:text-ink-1 flex items-center rounded p-1 transition-colors disabled:opacity-60"
+              >
+                <RefreshCw
+                  className={isRefreshing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
+                />
+              </button>
             )}
+            {headerActions}
           </div>
+        </div>
+        <div className="min-w-0">
           {isEditorial && (
             <div className="mt-2 space-y-2">
               <div className="flex flex-wrap gap-2">
@@ -467,22 +487,6 @@ export function WorkItemPreview({
               onSave={(value) => updateField.mutateAsync({ providerId, workItemId: id, field: 'System.Tags', value })}
             />
           )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {!!workItemId && (
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              title="Refresh work item"
-              className="text-ink-3 hover:text-ink-1 flex items-center rounded p-1 transition-colors disabled:opacity-60"
-            >
-              <RefreshCw
-                className={isRefreshing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
-              />
-            </button>
-          )}
-          {headerActions}
         </div>
       </div>}
        <div className={isEditorial ? 'border-line flex gap-1 border-b px-3 pt-2' : 'border-glass-border flex gap-0 border-b'}>
