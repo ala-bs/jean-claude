@@ -605,6 +605,7 @@ export function PrDetail({
     reviewed,
     stale,
     treatment,
+    autoReviewedBy,
     setReviewed,
     cycleTreatment,
   } = useDiffReview(reviewScopeId, diffSignatures);
@@ -967,6 +968,7 @@ export function PrDetail({
                       stalePaths={canReview ? stale : undefined}
                       onToggleReviewed={canReview ? setReviewed : undefined}
                       reviewedTreatment={treatment}
+                      autoReviewedBy={canReview ? autoReviewedBy : undefined}
                       stickyFolders
                     />
                   </div>

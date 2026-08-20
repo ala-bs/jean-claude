@@ -222,3 +222,131 @@ describe('diff review store', () => {
     expect(reviewedOf(TASK)['a.ts']).toBeDefined();
   });
 });
+
+describe('auto-review overrides', () => {
+  beforeEach(() => {
+    useDiffReviewStore.setState({
+      reviewedByTask: {},
+      overriddenByTask: {},
+      tabsByTask: {},
+      groupsByTask: {},
+    });
+  });
+
+  const overriddenOf = (taskId: string) =>
+    Object.keys(useDiffReviewStore.getState().overriddenByTask[taskId] ?? {});
+
+  it('records an override when an auto-matched file is un-checked', () => {
+    useDiffReviewStore
+      .getState()
+      .setReviewed(
+        TASK,
+        [{ path: 'a.test.ts', signature: '', autoMatched: true }],
+        false,
+        1,
+      );
+
+    expect(overriddenOf(TASK)).toEqual(['a.test.ts']);
+  });
+
+  it('does not record an override for a file no rule matched', () => {
+    useDiffReviewStore
+      .getState()
+      .setReviewed(TASK, [{ path: 'a.ts', signature: 'v1' }], false, 1);
+
+    expect(overriddenOf(TASK)).toEqual([]);
+  });
+
+  it('clears the override when the file is checked again', () => {
+    const store = useDiffReviewStore.getState();
+    store.setReviewed(
+      TASK,
+      [{ path: 'a.test.ts', signature: '', autoMatched: true }],
+      false,
+      1,
+    );
+    store.setReviewed(
+      TASK,
+      [{ path: 'a.test.ts', signature: '', autoMatched: true }],
+      true,
+      2,
+    );
+
+    expect(overriddenOf(TASK)).toEqual([]);
+  });
+
+  it('forgets overrides for files that left the diff', () => {
+    const store = useDiffReviewStore.getState();
+    store.setReviewed(
+      TASK,
+      [
+        { path: 'gone.test.ts', signature: '', autoMatched: true },
+        { path: 'kept.test.ts', signature: '', autoMatched: true },
+      ],
+      false,
+      1,
+    );
+
+    store.pruneOverridesToPaths(TASK, new Set(['kept.test.ts']));
+
+    expect(overriddenOf(TASK)).toEqual(['kept.test.ts']);
+  });
+
+  it('expires a pull request scope holding only overrides', () => {
+    const scope = prReviewScopeId({ projectId: 'p1', prId: 7 });
+    const store = useDiffReviewStore.getState();
+    store.setReviewed(
+      scope,
+      [{ path: 'a.test.ts', signature: '', autoMatched: true }],
+      false,
+      1,
+    );
+
+    store.prunePrScopes(PR_REVIEW_MAX_AGE_MS + 2);
+
+    expect(
+      useDiffReviewStore.getState().overriddenByTask[scope],
+    ).toBeUndefined();
+  });
+
+  it('keeps a recent override-only pull request scope', () => {
+    const scope = prReviewScopeId({ projectId: 'p1', prId: 8 });
+    const store = useDiffReviewStore.getState();
+    store.setReviewed(
+      scope,
+      [{ path: 'a.test.ts', signature: '', autoMatched: true }],
+      false,
+      Date.now(),
+    );
+
+    store.prunePrScopes(Date.now() - PR_REVIEW_MAX_AGE_MS);
+
+    expect(overriddenOf(scope)).toEqual(['a.test.ts']);
+  });
+
+  it('does not leave an empty reviewed entry behind after un-checking', () => {
+    const store = useDiffReviewStore.getState();
+    store.setReviewed(
+      TASK,
+      [{ path: 'a.test.ts', signature: '', autoMatched: true }],
+      false,
+      1,
+    );
+
+    expect(useDiffReviewStore.getState().reviewedByTask[TASK]).toBeUndefined();
+  });
+
+  it('drops overrides for tasks that no longer exist', () => {
+    const store = useDiffReviewStore.getState();
+    store.setReviewed(
+      TASK,
+      [{ path: 'a.test.ts', signature: '', autoMatched: true }],
+      false,
+      1,
+    );
+
+    store.pruneTasks(new Set(['other-task']));
+
+    expect(useDiffReviewStore.getState().overriddenByTask[TASK]).toBeUndefined();
+  });
+});

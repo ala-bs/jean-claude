@@ -42,6 +42,7 @@ import {
   UsageDisplaySettings,
   WorkActivitySettings,
 } from '@/features/settings/ui-general-settings';
+import { AutoReviewSettings } from '@/features/settings/ui-auto-review-settings';
 import { SettingsErrorBoundary } from '@/features/settings/ui-settings-error-boundary';
 import {
   BackendConfigSettings,
@@ -123,6 +124,7 @@ function getGlobalSections(): GlobalSection[] {
 
   const generalSubs: GlobalSubItem[] = [
     { id: 'appearance', label: 'Appearance' },
+    { id: 'auto-review', label: 'Auto File Review' },
     { id: 'mobile-preview', label: 'Mobile Preview' },
     { id: 'editor', label: 'Editor' },
     { id: 'notifications', label: 'Notifications' },
@@ -426,6 +428,7 @@ function getGlobalNavGroups(): SettingsNavGroup[] {
       items: [
         globalLeaf('general', 'editor', 'General'),
         globalLeaf('general', 'appearance'),
+        globalLeaf('general', 'auto-review', 'Auto File Review'),
         globalLeaf('general', 'notifications'),
         globalLeaf('general', 'work-activity', 'Work Activity'),
         globalLeaf('general', 'agent-memory'),
@@ -735,6 +738,8 @@ function getGlobalSubtitle(sectionId: string, subId: string): string {
         return 'Where projects open and how they launch.';
       case 'appearance':
         return 'Visual effects and motion preferences.';
+      case 'auto-review':
+        return 'Patterns whose files count as reviewed automatically.';
       case 'mobile-preview':
         return 'Mobile preview setup and proxy behavior.';
       case 'notifications':
@@ -772,6 +777,8 @@ function GlobalContentInner({ selection }: { selection: ActiveSelection }) {
         return <EditorSettings />;
       case 'general:appearance':
         return <AppearanceSettings />;
+      case 'general:auto-review':
+        return <AutoReviewSettings />;
       case 'general:mobile-preview':
         return <MobilePreviewSettings />;
       case 'general:notifications':

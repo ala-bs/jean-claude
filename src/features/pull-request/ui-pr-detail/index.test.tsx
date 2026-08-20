@@ -45,6 +45,8 @@ vi.mock('@/hooks/use-projects', () => ({
 vi.mock('@/hooks/use-settings', () => ({
   getEditorLabel: () => 'Editor',
   useEditorSetting: () => ({ data: null }),
+  // useDiffReview reads the auto-review rules through this.
+  useSetting: () => ({ data: undefined }),
 }));
 
 vi.mock('@/hooks/use-pr-view-snapshot', () => ({

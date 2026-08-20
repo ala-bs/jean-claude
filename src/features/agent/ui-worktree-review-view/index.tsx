@@ -382,8 +382,14 @@ export function WorktreeReviewView({
     return map;
   }, [diffFiles, selectedFilePath, selectedFileContent?.newContent]);
   // ── per-file review state + open tabs ──
-  const { reviewed, stale, treatment, setReviewed, cycleTreatment } =
-    useDiffReview(taskId, diffSignatures);
+  const {
+    reviewed,
+    stale,
+    treatment,
+    autoReviewedBy,
+    setReviewed,
+    cycleTreatment,
+  } = useDiffReview(taskId, diffSignatures);
   const {
     tabs,
     groups,
@@ -730,6 +736,7 @@ export function WorktreeReviewView({
                   stalePaths={stale}
                   onToggleReviewed={setReviewed}
                   reviewedTreatment={treatment}
+                  autoReviewedBy={autoReviewedBy}
                   stickyFolders
                 />
               </div>
