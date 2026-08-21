@@ -31,6 +31,7 @@ import {
   ReviewProgress,
 } from '@/features/common/ui-file-diff';
 import { isImagePath, isSvgPath } from '@shared/image-types';
+import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 import { type ReviewMode, useDiffFileTreeWidth } from '@/stores/navigation';
 import {
   type ReviewPresetId,
@@ -356,7 +357,8 @@ export function WorktreeReviewView({
   const selectedFileContent = useWorktreeFileContent(
     gitReviewEnabled ? taskId : null,
     selectedFilePath,
-    (data?.files ?? []).find((f) => f.path === selectedFilePath)?.status ?? null,
+    selectedFile?.status ?? null,
+    selectedFile?.originalPath,
   ).data;
 
   /**
@@ -1058,6 +1060,9 @@ function LocalFileDiffContent({
       isBinary={data?.isBinary}
       oldImageDataUrl={data?.oldImageDataUrl}
       newImageDataUrl={data?.newImageDataUrl}
+      oldSpreadsheetBase64={data?.oldSpreadsheetBase64}
+      newSpreadsheetBase64={data?.newSpreadsheetBase64}
+      spreadsheetTooLarge={data?.spreadsheetTooLarge}
       headerClassName={HEADER_HEIGHT_CLS}
     />
   );
@@ -1099,6 +1104,7 @@ function WorktreeFileDiffContent({
     taskId,
     file.path,
     file.status,
+    file.originalPath,
   );
 
   // Get review comments for this specific file
@@ -1142,6 +1148,9 @@ function WorktreeFileDiffContent({
       isBinary={data?.isBinary}
       oldImageDataUrl={data?.oldImageDataUrl}
       newImageDataUrl={data?.newImageDataUrl}
+      oldSpreadsheetBase64={data?.oldSpreadsheetBase64}
+      newSpreadsheetBase64={data?.newSpreadsheetBase64}
+      spreadsheetTooLarge={data?.spreadsheetTooLarge}
       headerClassName={headerClassName}
       annotations={annotations}
       reviewComments={fileReviewComments}
@@ -1282,12 +1291,13 @@ function PlainFileViewer({
   onResolveReviewComment?: (commentId: string) => void;
 }) {
   const isRasterImage = isImagePath(filePath) && !isSvgPath(filePath);
+  const spreadsheet = useSpreadsheetFile(filePath);
   const { data, isLoading } = useQuery({
     queryKey: ['file-content', filePath],
     queryFn: () => api.fs.readFile(filePath),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
-    enabled: !isRasterImage,
+    enabled: !isRasterImage && !spreadsheet.isSpreadsheet,
   });
   const { data: imageDataUrl, isLoading: isImageLoading } = useQuery({
     queryKey: ['image-content', filePath],
@@ -1311,11 +1321,24 @@ function PlainFileViewer({
     [setDraft, clearDraft],
   );
 
-  if (isLoading || isImageLoading) {
+  if (isLoading || isImageLoading || spreadsheet.isLoading) {
     return (
       <div className="text-ink-3 flex h-full items-center justify-center text-sm">
         Loading...
       </div>
+    );
+  }
+
+  if (spreadsheet.isSpreadsheet) {
+    return (
+      <FileDiffContent
+        key={relativePath}
+        file={{ path: relativePath, status: 'unchanged' }}
+        oldContent=""
+        newContent=""
+        isBinary
+        newSpreadsheetBase64={spreadsheet.base64}
+      />
     );
   }
 
@@ -1496,6 +1519,9 @@ function CommitFileDiffContent({
       isBinary={data?.isBinary}
       oldImageDataUrl={data?.oldImageDataUrl}
       newImageDataUrl={data?.newImageDataUrl}
+      oldSpreadsheetBase64={data?.oldSpreadsheetBase64}
+      newSpreadsheetBase64={data?.newSpreadsheetBase64}
+      spreadsheetTooLarge={data?.spreadsheetTooLarge}
       reviewComments={fileReviewComments}
       onAddReviewComment={handleAddCommitReviewComment}
       onDeleteReviewComment={onDeleteReviewComment}

@@ -36,6 +36,7 @@ export default defineConfig({
       'src/features/common/ui-inline-comments/**/*.test.ts',
       'src/features/common/ui-file-diff/**/*.test.ts',
       'src/features/common/ui-file-diff/**/*.test.tsx',
+      'src/features/common/ui-spreadsheet-viewer/**/*.test.ts',
       'src/features/common/ui-prompt-textarea/**/*.test.ts',
       'src/features/common/ui-mermaid-diagram/**/*.test.tsx',
       'src/features/common/ui-ai-skill-slot/**/*.test.tsx',

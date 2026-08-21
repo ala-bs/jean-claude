@@ -282,6 +282,10 @@ export interface WorktreeFileContent {
   isBinary: boolean;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+  /** Raw base64 bytes of a spreadsheet file, parsed client-side. */
+  oldSpreadsheetBase64?: string | null;
+  newSpreadsheetBase64?: string | null;
+  spreadsheetTooLarge?: boolean;
 }
 
 export interface DetectedProject {
@@ -744,6 +748,7 @@ export interface Api {
         taskId: string,
         filePath: string,
         status: 'added' | 'modified' | 'deleted',
+        originalPath?: string,
       ) => Promise<WorktreeFileContent>;
       getLocalFileContent: (
         taskId: string,
@@ -1269,6 +1274,7 @@ export interface Api {
     ) => Promise<{ content: string; language: string } | null>;
     getFileSize: (filePath: string) => Promise<number | null>;
     readImageAsDataUrl: (filePath: string) => Promise<string | null>;
+    readSpreadsheetAsBase64: (filePath: string) => Promise<string | null>;
     getImageUrl: (filePath: string) => Promise<string | null>;
     listDirectory: (
       dirPath: string,
@@ -2573,6 +2579,7 @@ export const api: Api = hasWindowApi
         readFile: async () => null,
         getFileSize: async () => null,
         readImageAsDataUrl: async () => null,
+        readSpreadsheetAsBase64: async () => null,
         getImageUrl: async () => null,
         listDirectory: async () => null,
         listProjectFiles: async () => [],

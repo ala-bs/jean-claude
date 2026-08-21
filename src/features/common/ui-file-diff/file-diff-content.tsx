@@ -19,7 +19,9 @@ import {
 import type { ReviewComment, ReviewPresetId } from '@/stores/review-comments';
 import type { FileAnnotation } from '@/lib/api';
 import { getSelectedTextForRange } from '@/stores/utils-comment-prompt';
+import { isSpreadsheetPath } from '@shared/spreadsheet-types';
 import { isSvgPath } from '@shared/image-types';
+import { SpreadsheetViewer } from '@/features/common/ui-spreadsheet-viewer';
 import type { LineRangeSelectionPosition } from '@/features/agent/ui-diff-view/use-line-range-selection';
 import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import type { PromptImagePart } from '@shared/agent-backend-types';
@@ -59,6 +61,9 @@ export function FileDiffContent({
   // Optional image support
   oldImageDataUrl,
   newImageDataUrl,
+  oldSpreadsheetBase64,
+  newSpreadsheetBase64,
+  spreadsheetTooLarge,
   // Optional comment support
   threads,
   renderThread,
@@ -94,6 +99,9 @@ export function FileDiffContent({
   headerActions?: ReactNode;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+  oldSpreadsheetBase64?: string | null;
+  newSpreadsheetBase64?: string | null;
+  spreadsheetTooLarge?: boolean;
   // Comment props - all optional
   threads?: CommentThread[];
   renderThread?: (thread: CommentThread) => ReactNode;
@@ -680,6 +688,30 @@ export function FileDiffContent({
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="text-ink-3 h-5 w-5 animate-spin" />
+      </div>
+    );
+  }
+
+  // Spreadsheets are binary but renderable as a cell grid, so they take
+  // priority over the generic "Binary file changed" fallback below.
+  if (
+    isSpreadsheetPath(file.path) &&
+    (oldSpreadsheetBase64 || newSpreadsheetBase64 || spreadsheetTooLarge)
+  ) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden">
+        <FileDiffHeader
+          file={file}
+          className={headerClassName}
+          actions={headerActions}
+        />
+        <SpreadsheetViewer
+          key={file.path}
+          oldBase64={oldSpreadsheetBase64}
+          newBase64={newSpreadsheetBase64}
+          isTooLarge={spreadsheetTooLarge}
+          className="min-h-0 flex-1"
+        />
       </div>
     );
   }

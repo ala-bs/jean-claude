@@ -269,12 +269,14 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         filePath: string,
         status: 'added' | 'modified' | 'deleted',
+        originalPath?: string,
       ) =>
         ipcRenderer.invoke(
           'tasks:worktree:getFileContent',
           taskId,
           filePath,
           status,
+          originalPath,
         ),
       getLocalFileContent: (
         taskId: string,
@@ -928,6 +930,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('fs:getFileSize', filePath),
     readImageAsDataUrl: (filePath: string) =>
       ipcRenderer.invoke('fs:readImageAsDataUrl', filePath),
+    readSpreadsheetAsBase64: (filePath: string) =>
+      ipcRenderer.invoke('fs:readSpreadsheetAsBase64', filePath),
     getImageUrl: (filePath: string) =>
       ipcRenderer.invoke('fs:getImageUrl', filePath),
     listDirectory: (dirPath: string, projectRoot: string) =>

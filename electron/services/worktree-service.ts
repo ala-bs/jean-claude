@@ -11,6 +11,10 @@ import { nanoid } from 'nanoid';
 
 
 import { getImageMimeType, isSvgPath } from '@shared/image-types';
+import {
+  isSpreadsheetPath,
+  MAX_SPREADSHEET_BYTES,
+} from '@shared/spreadsheet-types';
 import type { BranchInfo } from '@shared/types';
 import type { WorktreeFileCopyEntry } from '@shared/permission-types';
 
@@ -431,6 +435,10 @@ export interface WorktreeFileContent {
   isBinary: boolean;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+  /** Raw base64 bytes of a spreadsheet file, parsed client-side. */
+  oldSpreadsheetBase64?: string | null;
+  newSpreadsheetBase64?: string | null;
+  spreadsheetTooLarge?: boolean;
 }
 
 function parseNameStatusOutput(output: string): WorktreeDiffFile[] {
@@ -483,6 +491,66 @@ async function readGitFileContent(
   }
 }
 
+/**
+ * Reads a file from a git ref as base64. Unlike readGitFileContent this keeps
+ * the raw bytes intact, which is required for binary formats like spreadsheets.
+ */
+async function readGitFileBase64(
+  worktreePath: string,
+  ref: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['show', `${ref === ':' ? ':' : `${ref}:`}${filePath}`],
+      {
+        cwd: worktreePath,
+        encoding: 'buffer',
+        maxBuffer: MAX_SPREADSHEET_BYTES,
+      },
+    );
+    return Buffer.from(stdout).toString('base64');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads a spreadsheet from the working tree as base64.
+ *
+ * Resolves symlinks and rejects anything that escapes the worktree, matching
+ * the guard the text path applies in getWorktreeLocalFileContent — without it
+ * a tracked symlink pointing outside the repo would leak its target's bytes
+ * into the renderer.
+ */
+async function readSpreadsheetBase64FromDisk(
+  worktreePath: string,
+  filePath: string,
+): Promise<{ base64: string | null; tooLarge: boolean }> {
+  try {
+    const fullPath = path.join(worktreePath, filePath);
+    const [realRoot, realPath] = await Promise.all([
+      fs.realpath(worktreePath),
+      fs.realpath(fullPath),
+    ]);
+    if (
+      realPath !== realRoot &&
+      !realPath.startsWith(`${realRoot}${path.sep}`)
+    ) {
+      throw new Error(`File path escapes worktree: ${filePath}`);
+    }
+    const stats = await fs.stat(realPath);
+    if (stats.size > MAX_SPREADSHEET_BYTES) {
+      return { base64: null, tooLarge: true };
+    }
+    const buffer = await fs.readFile(realPath);
+    return { base64: buffer.toString('base64'), tooLarge: false };
+  } catch {
+    return { base64: null, tooLarge: false };
+  }
+}
+
 export async function getWorktreeLocalFileContent(
   worktreePath: string,
   filePath: string,
@@ -499,6 +567,45 @@ export async function getWorktreeLocalFileContent(
     throw new Error(`Invalid worktree file path: ${filePath}`);
   }
   const oldRef = scope === 'staged' ? 'HEAD' : ':';
+
+  // Spreadsheets are binary: ship raw bytes and let the renderer parse them.
+  if (isSpreadsheetPath(filePath)) {
+    const oldSpreadsheetBase64 =
+      status === 'added'
+        ? null
+        : await readGitFileBase64(
+            worktreePath,
+            oldRef,
+            originalPath ?? filePath,
+          );
+    let newSpreadsheetBase64: string | null = null;
+    let spreadsheetTooLarge = false;
+    if (status !== 'deleted') {
+      if (scope === 'staged') {
+        newSpreadsheetBase64 = await readGitFileBase64(
+          worktreePath,
+          ':',
+          filePath,
+        );
+      } else {
+        const result = await readSpreadsheetBase64FromDisk(
+          worktreePath,
+          filePath,
+        );
+        newSpreadsheetBase64 = result.base64;
+        spreadsheetTooLarge = result.tooLarge;
+      }
+    }
+    return {
+      oldContent: null,
+      newContent: null,
+      isBinary: true,
+      oldSpreadsheetBase64,
+      newSpreadsheetBase64,
+      spreadsheetTooLarge,
+    };
+  }
+
   const oldContent = status === 'added'
     ? null
     : await readGitFileContent(worktreePath, oldRef, originalPath ?? filePath);
@@ -1046,6 +1153,7 @@ export async function getWorktreeFileContent(
   filePath: string,
   status: 'added' | 'modified' | 'deleted',
   sourceBranch?: string | null,
+  originalPath?: string,
 ): Promise<WorktreeFileContent> {
   dbg.worktree('getWorktreeFileContent called %o', {
     worktreePath,
@@ -1061,6 +1169,37 @@ export async function getWorktreeFileContent(
     startCommitHash,
     sourceBranch ?? null,
   );
+
+  // Spreadsheets are binary: ship raw bytes and let the renderer parse them.
+  if (isSpreadsheetPath(filePath)) {
+    // Renames arrive here as 'modified' with the *new* path, so the old side
+    // must be read from originalPath or git show finds nothing.
+    const oldSpreadsheetBase64 =
+      status === 'added'
+        ? null
+        : await readGitFileBase64(
+            worktreePath,
+            baseCommit,
+            originalPath ?? filePath,
+          );
+    const newResult =
+      status === 'deleted'
+        ? { base64: null, tooLarge: false }
+        : await readSpreadsheetBase64FromDisk(worktreePath, filePath);
+    dbg.worktree('Spreadsheet file %s %o', filePath, {
+      hasOld: oldSpreadsheetBase64 !== null,
+      hasNew: newResult.base64 !== null,
+      tooLarge: newResult.tooLarge,
+    });
+    return {
+      oldContent: null,
+      newContent: null,
+      isBinary: true,
+      oldSpreadsheetBase64,
+      newSpreadsheetBase64: newResult.base64,
+      spreadsheetTooLarge: newResult.tooLarge,
+    };
+  }
 
   let oldContent: string | null = null;
   let newContent: string | null = null;
@@ -2662,10 +2801,31 @@ export async function getWorktreeCommitFileContent(
   isBinary: boolean;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+  oldSpreadsheetBase64?: string | null;
+  newSpreadsheetBase64?: string | null;
 }> {
   // Validate commit hash
   if (!/^[0-9a-f]{7,40}$/i.test(commitHash)) {
     return { oldContent: null, newContent: null, isBinary: false };
+  }
+
+  // Spreadsheets are binary: both sides come straight from git as raw bytes.
+  if (isSpreadsheetPath(filePath)) {
+    const [oldSpreadsheetBase64, newSpreadsheetBase64] = await Promise.all([
+      status === 'added'
+        ? Promise.resolve(null)
+        : readGitFileBase64(worktreePath, `${commitHash}^`, filePath),
+      status === 'deleted'
+        ? Promise.resolve(null)
+        : readGitFileBase64(worktreePath, commitHash, filePath),
+    ]);
+    return {
+      oldContent: null,
+      newContent: null,
+      isBinary: true,
+      oldSpreadsheetBase64,
+      newSpreadsheetBase64,
+    };
   }
 
   try {

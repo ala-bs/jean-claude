@@ -122,6 +122,10 @@ import type {
 } from '@shared/work-activity-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import { getImageMimeType } from '@shared/image-types';
+import {
+  isSpreadsheetPath,
+  MAX_SPREADSHEET_BYTES,
+} from '@shared/spreadsheet-types';
 import type { GlobalPromptResponse } from '@shared/global-prompt-types';
 import { isValidTeamsJoinUrl } from '@shared/teams-url';
 import { parseAzureRemoteUrl } from '@shared/azure-remote-utils';
@@ -2860,6 +2864,7 @@ export function registerIpcHandlers() {
       taskId: string,
       filePath: string,
       status: 'added' | 'modified' | 'deleted',
+      originalPath?: string,
     ) => {
       const task = await TaskRepository.findById(taskId);
       if (!task) {
@@ -2882,6 +2887,7 @@ export function registerIpcHandlers() {
         filePath,
         status,
         task.worktreePath ? task.sourceBranch : null,
+        originalPath,
       );
     },
   );
@@ -4494,6 +4500,18 @@ export function registerIpcHandlers() {
       const buffer = await fs.readFile(filePath);
       const base64 = buffer.toString('base64');
       return `data:${mimeType};base64,${base64}`;
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('fs:readSpreadsheetAsBase64', async (_, filePath: string) => {
+    try {
+      if (!isSpreadsheetPath(filePath)) return null;
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile() || stat.size > MAX_SPREADSHEET_BYTES) return null;
+      const buffer = await fs.readFile(filePath);
+      return buffer.toString('base64');
     } catch {
       return null;
     }
