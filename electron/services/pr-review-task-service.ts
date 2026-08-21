@@ -816,6 +816,22 @@ export async function sendMessageWithPrReviewLifecycle(
   deps?: {
     findStepById: (stepId: string) => Promise<TaskStep | undefined>;
     findTaskById: (taskId: string) => Promise<Task | undefined>;
+    /**
+     * When false, resolve as soon as the prompt is ACCEPTED rather than when
+     * the agent turn finishes.
+     *
+     * The renderer awaits this call before clearing the composer, so waiting
+     * for the whole turn would pin the user's text and attachments in the
+     * input box for the entire agent run.
+     *
+     * Safe to skip because a turn that fails *after* starting has already
+     * surfaced itself: synthetic timeline entry, errored step status and a
+     * notification (see `agentService.performSendMessage`). A prompt that never
+     * starts rejects `started`, which still propagates from here. Internal
+     * callers that genuinely chain off turn completion (e.g. PR review chat
+     * continuation) leave this at its default.
+     */
+    waitForCompletion?: boolean;
   },
 ): Promise<void> {
   let completion: Promise<void> | undefined;
@@ -824,11 +840,20 @@ export async function sendMessageWithPrReviewLifecycle(
     async (authoritativeStepId) => {
       const followUp = await beginFollowUp(authoritativeStepId);
       completion = followUp.completion;
+      // Observe it the moment we own it. `await followUp.started` below can
+      // throw, and every path out of here either awaits `completion` or
+      // abandons it -- an abandoned rejection would crash the main process.
+      completion.catch((error) => {
+        dbg.agent('follow-up turn for step %s failed: %O', stepId, error);
+      });
       await followUp.started;
     },
     deps,
   );
   if (!completion) throw new Error(`Follow-up for step ${stepId} did not start`);
+
+  if (deps?.waitForCompletion === false) return;
+
   await completion;
 }
 

@@ -2077,6 +2077,31 @@ describe('agentService provider runtime', () => {
     expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
   });
 
+  /**
+   * `performSendMessage` rethrows without surfacing anything when it never got
+   * a session (`if (!session) throw error`) — no timeline entry, no errored
+   * status, no notification. The renderer clears the composer as soon as
+   * `started` resolves, so if `started` resolved here the user's prompt would
+   * be destroyed with zero feedback.
+   */
+  it('rejects `started` when the session is never created', async () => {
+    taskStepRepositoryMock.findById.mockResolvedValueOnce(undefined);
+
+    const { started, completion } = await agentService.beginSendMessage(
+      'step-1',
+      [{ type: 'text', text: 'follow up' }],
+    );
+    // Both settle from the same chain; observe completion so the rejection
+    // isn't reported as unhandled.
+    const completionResult = completion.catch((error: unknown) => error);
+
+    await expect(started).rejects.toThrow();
+    await completionResult;
+
+    // Nothing surfaced it, which is exactly why `started` must reject.
+    expect(stepServiceMock.errorStep).not.toHaveBeenCalled();
+  });
+
   it('rejects concurrent sendMessage registration for the same step', async () => {
     const stepLookup = createDeferred<typeof defaultStep>();
     taskStepRepositoryMock.findById.mockReturnValueOnce(stepLookup.promise);

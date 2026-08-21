@@ -374,10 +374,13 @@ import {
   reconcilePrWorkspaceState,
   runCommandWithPrReviewLifecycle,
   runTaskDestructiveWithPrReviewLifecycle,
-  sendMessageWithPrReviewLifecycle,
   startAgentWithPrReviewLifecycle,
   startPrCommand,
 } from '../services/pr-review-task-service';
+import {
+  createSendMessageForStep,
+  RENDERER_SEND_MESSAGE_OPTIONS,
+} from './send-message-for-step';
 import {
   cleanupTaskForDeletion,
   cleanupTaskWorktree,
@@ -763,21 +766,12 @@ function startAgentForStep(stepId: string): Promise<void> {
   );
 }
 
-function sendMessageForStep(
-  stepId: string,
-  parts: PromptPart[],
-  capture?: AgentMemoryFollowUpCapture,
-): Promise<void> {
-  return sendMessageWithPrReviewLifecycle(
-    stepId,
-    (authoritativeStepId) =>
-      agentService.beginSendMessage(authoritativeStepId, parts, capture),
-    {
-      findStepById: TaskStepRepository.findById,
-      findTaskById: TaskRepository.findById,
-    },
-  );
-}
+const sendMessageForStep = createSendMessageForStep({
+  beginSendMessage: (stepId, parts, capture) =>
+    agentService.beginSendMessage(stepId, parts, capture),
+  findStepById: TaskStepRepository.findById,
+  findTaskById: TaskRepository.findById,
+});
 
 async function updateStepAndEmit(
   stepId: string,
@@ -4641,7 +4635,12 @@ export function registerIpcHandlers() {
         prompt: buildPromptActivityText(parts),
         occurredAt: new Date().toISOString(),
       });
-      return sendMessageForStep(stepId, parts, capture);
+      return sendMessageForStep(
+        stepId,
+        parts,
+        capture,
+        RENDERER_SEND_MESSAGE_OPTIONS,
+      );
     },
   );
 

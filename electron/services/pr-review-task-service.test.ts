@@ -30,6 +30,7 @@ import {
   reconcilePrWorkspaceState,
   runCommandWithPrReviewLifecycle,
   runTaskDestructiveWithPrReviewLifecycle,
+  sendMessageWithPrReviewLifecycle,
   startAgentWithPrReviewLifecycle,
   startPrCommand,
 } from './pr-review-task-service';
@@ -1381,6 +1382,76 @@ describe('listPendingPrWorkspaceDecisions', () => {
       { projectId: 'old', pullRequestId: 2, taskIds: ['old-b', 'old-a'] },
       { projectId: 'new', pullRequestId: 1, taskIds: ['new'] },
     ]);
+  });
+});
+
+describe('sendMessageWithPrReviewLifecycle', () => {
+  function setup(task = makeTask()) {
+    let resolveCompletion!: () => void;
+    let rejectCompletion!: (error: Error) => void;
+    const completion = new Promise<void>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    const beginFollowUp = vi.fn().mockResolvedValue({
+      started: Promise.resolve(),
+      completion,
+    });
+    const deps = {
+      findStepById: vi
+        .fn()
+        .mockResolvedValue({ id: 'step-1', taskId: task.id }),
+      findTaskById: vi.fn().mockResolvedValue(task),
+    };
+    return { beginFollowUp, deps, resolveCompletion, rejectCompletion };
+  }
+
+  it('resolves on acceptance, not on turn completion, when waitForCompletion is false', async () => {
+    const { beginFollowUp, deps, resolveCompletion } = setup();
+
+    // Would hang forever if it awaited `completion`: nothing resolves it here.
+    await expect(
+      sendMessageWithPrReviewLifecycle('step-1', beginFollowUp, {
+        ...deps,
+        waitForCompletion: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(beginFollowUp).toHaveBeenCalledWith('step-1');
+    resolveCompletion();
+  });
+
+  it('does not surface a turn failure as an unhandled rejection', async () => {
+    const { beginFollowUp, deps, rejectCompletion } = setup();
+
+    await sendMessageWithPrReviewLifecycle('step-1', beginFollowUp, {
+      ...deps,
+      waitForCompletion: false,
+    });
+
+    rejectCompletion(new Error('turn aborted'));
+    // Flush microtasks: an unobserved rejection would trip vitest here.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('still awaits the whole turn by default', async () => {
+    const { beginFollowUp, deps, resolveCompletion } = setup();
+    let settled = false;
+
+    const pending = sendMessageWithPrReviewLifecycle(
+      'step-1',
+      beginFollowUp,
+      deps,
+    ).then(() => {
+      settled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    resolveCompletion();
+    await pending;
+    expect(settled).toBe(true);
   });
 });
 
