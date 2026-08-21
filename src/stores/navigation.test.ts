@@ -42,6 +42,50 @@ describe('navigation store', () => {
     });
   });
 
+  it('leaves the workspace overview when a step is explicitly selected', async () => {
+    const { useNavigationStore } = await import('./navigation');
+
+    useNavigationStore.getState().setShowWorkspaceOverview('task-1', true);
+    expect(
+      useNavigationStore.getState().taskState['task-1']?.showWorkspaceOverview,
+    ).toBe(true);
+
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+
+    expect(
+      useNavigationStore.getState().taskState['task-1']?.showWorkspaceOverview,
+    ).toBe(false);
+    expect(useNavigationStore.getState().taskState['task-1']?.activeStepId).toBe(
+      'step-1',
+    );
+  });
+
+  it('keeps the overview open when a dangling selection is repaired', async () => {
+    const { useNavigationStore } = await import('./navigation');
+
+    useNavigationStore.getState().setShowWorkspaceOverview('task-1', true);
+    useNavigationStore
+      .getState()
+      .setActiveStepId('task-1', 'step-2', { keepWorkspaceOverview: true });
+
+    expect(
+      useNavigationStore.getState().taskState['task-1']?.showWorkspaceOverview,
+    ).toBe(true);
+    expect(useNavigationStore.getState().taskState['task-1']?.activeStepId).toBe(
+      'step-2',
+    );
+  });
+
+  it('does not persist the workspace overview flag', async () => {
+    const { useNavigationStore } = await import('./navigation');
+
+    useNavigationStore.getState().setShowWorkspaceOverview('task-1', true);
+
+    expect(localStorage.getItem('navigation')).not.toContain(
+      'showWorkspaceOverview',
+    );
+  });
+
   it('defaults gesture feedback on and persists toggle changes', async () => {
     const { useNavigationStore } = await import('./navigation');
 

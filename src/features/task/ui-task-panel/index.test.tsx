@@ -18,6 +18,7 @@ import { TaskPanel } from '.';
   .IS_REACT_ACT_ENVIRONMENT = true;
 
 const mocks = vi.hoisted(() => ({
+  agentStreamStepIds: [] as Array<string | null>,
   commands: [] as Array<{ label: string; handler: () => void }>,
   createStep: vi.fn(),
   deleteTask: vi.fn(),
@@ -108,6 +109,13 @@ vi.mock('@/hooks/use-steps', () => ({
   useUpdateStep: mutation,
 }));
 
+// Fetches the PR via react-query; the panel tests render without a provider.
+vi.mock('@/features/task/ui-pr-workspace-summary', () => ({
+  PrWorkspaceSummary: ({ pullRequestId }: { pullRequestId: string }) => (
+    <div data-testid="pr-workspace-summary">summary:{pullRequestId}</div>
+  ),
+}));
+
 vi.mock('@/hooks/use-settings', () => ({
   getEditorLabel: () => 'Editor',
   useBackendDefaultModelsSetting: () => ({ data: { models: {} } }),
@@ -143,11 +151,14 @@ vi.mock('@/hooks/use-agent', () => ({
     isStarting: false,
     isStopping: false,
   }),
-  useAgentStream: ({ stepId }: { stepId: string | null }) => ({
-    messages: stepId ? [{ id: 'message-1', type: 'assistant-message', value: 'Ready' }] : [],
-    queuedPrompts: [],
-    isLoading: false,
-  }),
+  useAgentStream: ({ stepId }: { stepId: string | null }) => {
+    mocks.agentStreamStepIds.push(stepId);
+    return {
+      messages: stepId ? [{ id: 'message-1', type: 'assistant-message', value: 'Ready' }] : [],
+      queuedPrompts: [],
+      isLoading: false,
+    };
+  },
 }));
 
 vi.mock('@/hooks/use-project-commands', () => ({
@@ -418,6 +429,7 @@ describe('TaskPanel zero-step PR workspace', () => {
     container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
+    mocks.agentStreamStepIds = [];
     mocks.commands = [];
     mocks.steps = [];
     mocks.taskStatus = 'waiting';
@@ -532,6 +544,53 @@ describe('TaskPanel zero-step PR workspace', () => {
     expect(addStepCommand).toBeDefined();
     await act(async () => addStepCommand!.handler());
     expect(container.textContent).toContain('Continue preset');
+  });
+
+  it('reopens the workspace overview once steps exist and toggles back', async () => {
+    mocks.steps = [createStep()];
+    useNavigationStore.getState().setActiveStepId('task-1', 'step-1');
+    await renderPanel();
+
+    expect(container.textContent).toContain('Normal message UI');
+
+    mocks.agentStreamStepIds = [];
+    // useCommands accumulates across renders — reset so the assertions below
+    // describe the latest registration only.
+    mocks.commands = [];
+    await act(async () => findButton('Workspace')!.click());
+
+    expect(container.textContent).toContain('Workspace overview');
+    expect(container.textContent).not.toContain('Normal message UI');
+    // The message section unmounts here, so the standalone stream sync must
+    // pick the subscription up — otherwise the running step stops streaming.
+    expect(mocks.agentStreamStepIds).toContain('step-1');
+    // Step-scoped chrome and commands belong to the step, not the overview.
+    expect(
+      mocks.commands.some(
+        (command) => command.label === 'Open PR Workspace Overview',
+      ),
+    ).toBe(false);
+    expect(mocks.commands.some((c) => c.label === 'Copy Session ID')).toBe(
+      false,
+    );
+    // Selection is kept so the toggle can return to it.
+    expect(
+      useNavigationStore.getState().taskState['task-1']?.activeStepId,
+    ).toBe('step-1');
+
+    // With steps present, continuing a session must stay available.
+    await act(async () => findButton('Add Step')!.click());
+    expect(container.textContent).toContain('Continue preset');
+
+    mocks.commands = [];
+    await act(async () => findButton('Workspace')!.click());
+    expect(container.textContent).toContain('Normal message UI');
+    expect(container.textContent).not.toContain('Workspace overview');
+    expect(
+      mocks.commands.some(
+        (command) => command.label === 'Open PR Workspace Overview',
+      ),
+    ).toBe(true);
   });
 
   it('preserves real generic task deletion flow without calling PR deletion', async () => {

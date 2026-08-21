@@ -119,6 +119,9 @@ interface TaskState {
   diffView: DiffViewState;
   fileExplorer?: FileExplorerState;
   activeStepId: string | null;
+  // PR workspaces keep an overview page that stays reachable after steps exist.
+  // Selecting a step clears this flag; opening the overview sets it.
+  showWorkspaceOverview?: boolean;
   prDraft?: PrDraft;
 }
 
@@ -334,7 +337,12 @@ interface NavigationState {
     taskId: string,
     hideUnchanged: boolean,
   ) => void;
-  setActiveStepId: (taskId: string, stepId: string | null) => void;
+  setActiveStepId: (
+    taskId: string,
+    stepId: string | null,
+    options?: { keepWorkspaceOverview?: boolean },
+  ) => void;
+  setShowWorkspaceOverview: (taskId: string, show: boolean) => void;
   setPrDraft: (taskId: string, draft: PrDraft) => void;
   setAddStepDraft: (taskId: string, draft: Partial<AddStepDialogDraft>) => void;
   clearAddStepDraft: (taskId: string) => void;
@@ -682,7 +690,7 @@ const useStore = create<NavigationState>()(
           },
         })),
 
-      setActiveStepId: (taskId, stepId) =>
+      setActiveStepId: (taskId, stepId, options) =>
         set((state) => ({
           taskState: {
             ...state.taskState,
@@ -690,6 +698,23 @@ const useStore = create<NavigationState>()(
               ...defaultTaskState,
               ...state.taskState[taskId],
               activeStepId: stepId,
+              // Picking a step leaves the workspace overview, unless this is a
+              // background repair of a dangling selection.
+              showWorkspaceOverview: options?.keepWorkspaceOverview
+                ? (state.taskState[taskId]?.showWorkspaceOverview ?? false)
+                : false,
+            },
+          },
+        })),
+
+      setShowWorkspaceOverview: (taskId, show) =>
+        set((state) => ({
+          taskState: {
+            ...state.taskState,
+            [taskId]: {
+              ...defaultTaskState,
+              ...state.taskState[taskId],
+              showWorkspaceOverview: show,
             },
           },
         })),
@@ -1159,6 +1184,9 @@ export function useTaskState(taskId: string) {
   );
   const setTaskRightPaneAction = useStore((state) => state.setTaskRightPane);
   const setActiveStepIdAction = useStore((state) => state.setActiveStepId);
+  const setShowWorkspaceOverviewAction = useStore(
+    (state) => state.setShowWorkspaceOverview,
+  );
 
   const setRightPane = useCallback(
     (pane: RightPane | null) => setTaskRightPaneAction(taskId, pane),
@@ -1249,14 +1277,22 @@ export function useTaskState(taskId: string) {
   }, [taskState.rightPane, closeRightPane, openSettings]);
 
   const setActiveStepId = useCallback(
-    (stepId: string | null) => setActiveStepIdAction(taskId, stepId),
+    (stepId: string | null, options?: { keepWorkspaceOverview?: boolean }) =>
+      setActiveStepIdAction(taskId, stepId, options),
     [taskId, setActiveStepIdAction],
+  );
+
+  const setShowWorkspaceOverview = useCallback(
+    (show: boolean) => setShowWorkspaceOverviewAction(taskId, show),
+    [taskId, setShowWorkspaceOverviewAction],
   );
 
   return {
     taskState,
     rightPane: taskState.rightPane,
     activeStepId: taskState.activeStepId,
+    showWorkspaceOverview: taskState.showWorkspaceOverview ?? false,
+    setShowWorkspaceOverview,
     setRightPane,
     setActiveStepId,
     openFilePreview,

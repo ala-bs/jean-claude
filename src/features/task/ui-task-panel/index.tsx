@@ -1169,6 +1169,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     rightPane,
     activeStepId,
     setActiveStepId,
+    showWorkspaceOverview,
+    setShowWorkspaceOverview,
     openFilePreview,
     openToolDiffPreview,
     openCommandLogs,
@@ -1180,24 +1182,28 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   } = useTaskState(taskId);
   // Steps data for auto-selection
   const { data: steps } = useSteps(taskId);
-  const isZeroStepPrWorkspace = shouldShowPrWorkspaceEmptyState({
+  const hasNoSteps = (steps?.length ?? 0) === 0;
+  // True whenever the PR workspace overview page is the visible main content —
+  // either because no step exists yet, or the user reopened it explicitly.
+  const isPrWorkspaceOverview = shouldShowPrWorkspaceEmptyState({
     taskType: task?.type ?? '',
     steps,
+    showWorkspaceOverview,
   });
   const visibleRightPane =
-    isZeroStepPrWorkspace &&
+    isPrWorkspaceOverview &&
     (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
       ? null
       : rightPane;
 
   useEffect(() => {
     if (
-      isZeroStepPrWorkspace &&
+      isPrWorkspaceOverview &&
       (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
     ) {
       closeRightPane();
     }
-  }, [closeRightPane, isZeroStepPrWorkspace, rightPane?.type]);
+  }, [closeRightPane, isPrWorkspaceOverview, rightPane?.type]);
   const { data: activeStep } = useStep(activeStepId ?? '');
   const handleAddBashToPermissions = useCallback(
     (command: string) => {
@@ -1283,6 +1289,23 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     togglePrView,
     closePrView,
   } = usePrViewState(taskId);
+
+  // The PR/diff views render ahead of the overview in the main content, so both
+  // must close or opening the overview would be a silent no-op.
+  const openWorkspaceOverview = useCallback(() => {
+    closePrView();
+    closeDiffView();
+    setShowWorkspaceOverview(true);
+  }, [closeDiffView, closePrView, setShowWorkspaceOverview]);
+
+  // Toggling off returns to the step the user came from.
+  const toggleWorkspaceOverview = useCallback(() => {
+    if (showWorkspaceOverview && activeStepId) {
+      setActiveStepId(activeStepId);
+      return;
+    }
+    openWorkspaceOverview();
+  }, [activeStepId, openWorkspaceOverview, setActiveStepId, showWorkspaceOverview]);
   // File explorer state for review view
   const { rootPath: taskRootPathForExplorer } = useTaskRootPath(taskId);
   const {
@@ -1494,16 +1517,22 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     // If the currently selected step still exists, keep it
     if (activeStepId && steps.some((s) => s.id === activeStepId)) return;
 
+    // This effect also repairs a dangling selection (deleted step), so it must
+    // still run while the PR workspace overview is open — but selecting here is
+    // implicit, so it must not navigate the user away from that overview.
+    const select = (stepId: string) =>
+      setActiveStepId(stepId, { keepWorkspaceOverview: true });
+
     // Priority: first running → first ready → last terminal → first step
     const activeSteps = steps.filter((step) => !step.archivedAt);
     const running = activeSteps.find((s) => s.status === 'running');
     if (running) {
-      setActiveStepId(running.id);
+      select(running.id);
       return;
     }
     const ready = activeSteps.find((s) => s.status === 'ready');
     if (ready) {
-      setActiveStepId(ready.id);
+      select(ready.id);
       return;
     }
     const terminalSteps = activeSteps.filter(
@@ -1513,10 +1542,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         s.status === 'errored',
     );
     if (terminalSteps.length > 0) {
-      setActiveStepId(terminalSteps[terminalSteps.length - 1]!.id);
+      select(terminalSteps[terminalSteps.length - 1]!.id);
       return;
     }
-    setActiveStepId(activeSteps[0]?.id ?? steps[0]!.id);
+    select(activeSteps[0]?.id ?? steps[0]!.id);
   }, [steps, activeStepId, setActiveStepId]);
 
   const handleCopySessionId = useCallback(async () => {
@@ -2279,14 +2308,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         setReviewMode(next);
       },
     },
-    !isZeroStepPrWorkspace && {
+    !isPrWorkspaceOverview && {
       label: 'Toggle Task Settings',
       section: 'Task',
       handler: () => {
         toggleRightPane();
       },
     },
-    !isZeroStepPrWorkspace && {
+    !isPrWorkspaceOverview && {
       label:
         rightPane?.type === 'debugMessages'
           ? 'Close Raw Message Pane'
@@ -2357,7 +2386,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         }
       },
     },
-    !isZeroStepPrWorkspace && {
+    isPrWorkspaceTask &&
+      !isPrWorkspaceOverview && {
+        label: 'Open PR Workspace Overview',
+        section: 'Task',
+        keywords: ['pr', 'workspace', 'overview', 'main'],
+        handler: () => {
+          openWorkspaceOverview();
+        },
+      },
+    !isPrWorkspaceOverview && {
       label: 'Copy Session ID',
       section: 'Task',
       handler: () => {
@@ -2539,9 +2577,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const isTaskMobilePreviewOpen =
     isMobilePreviewWorkspaceOpen &&
     selectedMobilePreviewRuntimeKey === mobilePreviewRuntimeKey;
+  // Anything that suppresses the message section must be listed here, or the
+  // step's agent stream ends up subscribed by neither branch.
   const shouldRenderMessageSection =
     !isPrViewOpen &&
     !isDiffViewOpen &&
+    !isPrWorkspaceOverview &&
     activeStep?.type !== 'pr-review';
   const backendLabel =
     AVAILABLE_BACKENDS.find(
@@ -2565,7 +2606,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         openCommandLogs(runCommandIds[0] ?? null);
       }}
       isLogsPaneOpen={rightPane?.type === 'commandLogs'}
-      showAvailabilityState={!isZeroStepPrWorkspace}
+      showAvailabilityState={!isPrWorkspaceOverview}
     />
   );
   const openMatchingPullRequest = task.pullRequestId
@@ -2624,7 +2665,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
             {/* Center: Branch, PR badge, Work items */}
             <div className="flex min-w-0 shrink items-center gap-2">
-              {activeStepId && (
+              {activeStepId && !isPrWorkspaceOverview && (
                 <AgentResourcePill
                   stepId={activeStepId}
                   isRunning={activeStep?.status === 'running'}
@@ -2633,7 +2674,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               )}
 
               {/* Backend chip */}
-              {!isZeroStepPrWorkspace && (
+              {!isPrWorkspaceOverview && (
                 <Chip size="sm" className="max-w-40">
                   {backendLabel}
                 </Chip>
@@ -2743,7 +2784,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   }
                 />
               )}
-              {!isZeroStepPrWorkspace && runButton}
+              {!isPrWorkspaceOverview && runButton}
 
               {/* Overflow menu */}
               <Dropdown
@@ -2847,7 +2888,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Sub Task
                   </DropdownItem>
                 )}
-                {!isZeroStepPrWorkspace && (
+                {!isPrWorkspaceOverview && (
                   <DropdownItem
                     icon={<Settings />}
                     onClick={handleToggleSettingsPane}
@@ -2856,7 +2897,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Task Settings
                   </DropdownItem>
                 )}
-                {!isZeroStepPrWorkspace && (
+                {!isPrWorkspaceOverview && (
                   <DropdownItem
                     icon={<Bug />}
                     onClick={handleToggleDebugMessagesPane}
@@ -2943,6 +2984,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     setIsAddStepDialogOpen(true);
                   }
             }
+            onOpenWorkspaceOverview={
+              isPrWorkspaceTask ? toggleWorkspaceOverview : undefined
+            }
+            // At zero steps the overview is the only view, so the pill must not
+            // offer a "back to step" toggle it cannot honor.
+            isWorkspaceOverviewActive={showWorkspaceOverview && !hasNoSteps}
           />
           <Separator />
 
@@ -2993,9 +3040,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   showWorktreeActions={!!task.worktreePath}
                   gitReviewEnabled={hasGitReviewModes}
                 />
-              ) : isZeroStepPrWorkspace ? (
+              ) : isPrWorkspaceOverview ? (
                 <PrWorkspaceEmptyState
+                  hasSteps={(steps?.length ?? 0) > 0}
                   pullRequestId={task.pullRequestId}
+                  projectId={project.id}
+                  repoProviderId={project.repoProviderId ?? undefined}
                   projectName={project.name}
                   commandAvailability={projectCommandAvailability}
                   onAddStep={() => {
@@ -3091,7 +3141,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           </div>
 
           {/* Message input — floats above content so messages scroll underneath */}
-          {!isZeroStepPrWorkspace &&
+          {!isPrWorkspaceOverview &&
             (canSendMessage || isWaiting || hasMessages) && (
             <div
               ref={footerRef}
@@ -3153,7 +3203,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         )}
 
         {/* Task settings pane */}
-        {!isZeroStepPrWorkspace && rightPane?.type === 'settings' && (
+        {!isPrWorkspaceOverview && rightPane?.type === 'settings' && (
           <TaskSettingsPane
             activeStep={activeStep ?? null}
             sourceBranch={task.sourceBranch}
@@ -3176,7 +3226,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         )}
 
         {/* Debug messages pane */}
-        {!isZeroStepPrWorkspace && rightPane?.type === 'debugMessages' && (
+        {!isPrWorkspaceOverview && rightPane?.type === 'debugMessages' && (
           <DebugMessagesPane
             taskId={taskId}
             stepId={activeStepId}
@@ -3213,7 +3263,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           activeStepId={activeStepId ?? undefined}
           projectRoot={taskRootPath}
           projectId={project.id}
-          canContinue={isZeroStepPrWorkspace ? false : undefined}
+          // Only a genuinely empty PR workspace has no session to continue —
+          // viewing the overview with steps present must keep the preset.
+          canContinue={isPrWorkspaceTask && hasNoSteps ? false : undefined}
         />
 
         {/* Change worktree path dialog */}
