@@ -462,9 +462,10 @@ function expandSubpathPlaceholders(
 /**
  * Match a bash command against a glob-like pattern.
  *
- * Unlike file-path matching, `*` matches ANY character (including `/`)
- * so that patterns like `pnpm *` match commands whose arguments contain
- * paths (e.g. `pnpm install /path/to/pkg`).
+ * Unlike file-path matching, `*` matches ANY character (including `/` and
+ * newlines) so that patterns like `pnpm *` match commands whose arguments
+ * contain paths (e.g. `pnpm install /path/to/pkg`), and `cat*` still matches a
+ * command whose heredoc body spans several lines.
  */
 function matchBashPattern(pattern: string, value: string): boolean {
   let regexStr = '';
@@ -480,7 +481,9 @@ function matchBashPattern(pattern: string, value: string): boolean {
       regexStr += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
-  return new RegExp(`^${regexStr}$`).test(value);
+  // `s` so `*` spans newlines; the lookahead anchors the end exactly, since a
+  // bare `$` would also match just before a trailing newline.
+  return new RegExp(`^${regexStr}(?![\\s\\S])`, 's').test(value);
 }
 
 function escapeExactBashPattern(value: string): string {
@@ -568,6 +571,17 @@ function evaluateBasePermission(
     const subCommands = parseCompoundCommand(matchValue);
     if (subCommands.length > 1) {
       return evaluateCompoundPermission(rules, subCommands);
+    }
+
+    // A single sub-command may only span lines because it carries a heredoc
+    // body. Anything else means the split failed to separate the lines, and
+    // `*` matches across newlines — so a wildcard rule would allow the whole
+    // blob, hiding whatever the split missed. Fail closed instead.
+    if (matchValue.includes('\n') && !subCommands[0]?.includes('<<')) {
+      const details = evaluateSinglePermission(rules, toolKey, matchValue);
+      return details.action === 'allow'
+        ? { ...details, action: 'ask', matchedRule: undefined }
+        : details;
     }
   }
 

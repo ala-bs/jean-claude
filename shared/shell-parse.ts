@@ -31,6 +31,54 @@ const HEREDOC_OP = /<<-?(?!<)/y;
  */
 const HEREDOC_DELIM = /\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;|&<>()"'])+)/y;
 
+/**
+ * A heredoc (`<<EOF` plus its body) belongs to the command that opened it, so
+ * it must survive splitting and tokenizing as a single opaque word: its body is
+ * free text and would otherwise be cut apart by `;`, `|`, `&&` or whitespace,
+ * and its `$( )` would be mistaken for a command the caller must approve.
+ *
+ * The chunk is therefore encoded into one `\0…\0` word made only of characters
+ * with no shell meaning, carried through the pipeline untouched, and decoded
+ * back into the final command strings.
+ */
+const HEREDOC_MARK = '\u0000';
+
+const ENCODED_HEREDOC = new RegExp(
+  `${HEREDOC_MARK}([A-Za-z0-9_]*)${HEREDOC_MARK}`,
+  'g',
+);
+
+function encodeHeredoc(text: string): string {
+  return `${HEREDOC_MARK}${text.replace(
+    /[^A-Za-z0-9]/g,
+    (char) => `_${char.charCodeAt(0).toString(16)}_`,
+  )}${HEREDOC_MARK}`;
+}
+
+/**
+ * Remove any heredoc marker the caller supplied. The marker has to be
+ * unforgeable: the split treats it as a structural boundary, so one present in
+ * the command itself could fuse a command into its neighbour and hide it from
+ * the permission engine. Only the public entry points sanitize — internal
+ * recursion runs on text that already carries encoded chunks. No shell can
+ * receive a NUL in argv anyway.
+ */
+function sanitizeMarks(command: string): string {
+  return command.includes(HEREDOC_MARK)
+    ? command.split(HEREDOC_MARK).join('')
+    : command;
+}
+
+/** Restore every encoded heredoc chunk in `text` to its original source. */
+function decodeHeredocs(text: string): string {
+  if (!text.includes(HEREDOC_MARK)) return text;
+  return text.replace(ENCODED_HEREDOC, (_match, encoded: string) =>
+    encoded.replace(/_([0-9a-f]+)_/g, (__, hex: string) =>
+      String.fromCharCode(parseInt(hex, 16)),
+    ),
+  );
+}
+
 /** Resolve a raw delimiter word to the literal text bash matches lines against. */
 function unquoteDelimiter(raw: string): string {
   let out = '';
@@ -69,7 +117,7 @@ function skipHeredocBody(
   index: number,
   delimiter: string,
   allowIndent: boolean,
-): { end: number; body: string } {
+): { end: number; body: string; terminated: boolean } {
   let i = index;
   while (i <= command.length) {
     const lineEnd = command.indexOf('\n', i);
@@ -80,12 +128,17 @@ function skipHeredocBody(
       return {
         end: lineEnd === -1 ? command.length : lineEnd + 1,
         body: command.slice(index, i),
+        terminated: true,
       };
     }
     if (lineEnd === -1) break;
     i = lineEnd + 1;
   }
-  return { end: command.length, body: command.slice(index) };
+  return {
+    end: command.length,
+    body: command.slice(index),
+    terminated: false,
+  };
 }
 
 /**
@@ -184,7 +237,7 @@ function skipRedirectTarget(command: string, index: number): number {
  * or backticks (e.g. a perl regex containing `<<<<<<<`) is left untouched.
  */
 export function stripRedirections(command: string): string {
-  return stripRedirectionsInternal(command).text;
+  return decodeHeredocs(stripRedirectionsInternal(sanitizeMarks(command)).text);
 }
 
 /**
@@ -196,8 +249,8 @@ export function stripRedirections(command: string): string {
  * backslash would otherwise escape the `;` and merge the next command into it.
  */
 export function stripRedirectionsWithNested(command: string): string {
-  const { text, harvested } = stripRedirectionsInternal(command);
-  return [text, ...harvested.map(sanitizeAppended)].join('; ');
+  const { text, harvested } = stripRedirectionsInternal(sanitizeMarks(command));
+  return [decodeHeredocs(text), ...harvested.map(sanitizeAppended)].join('; ');
 }
 
 function sanitizeAppended(value: string): string {
@@ -224,17 +277,28 @@ function stripRedirectionsInternal(command: string): {
   let inSingleQuote = false;
   let inDoubleQuote = false;
   let inBacktick = false;
-  /** Heredocs opened on the current line, bodies start after next newline. */
-  const pendingHeredocs: {
-    delimiter: string;
-    allowIndent: boolean;
-    expands: boolean;
-  }[] = [];
+  /**
+   * Source ranges already consumed as heredoc bodies. They are read eagerly at
+   * the `<<DELIM` operator so the body stays glued to its command, and skipped
+   * again when the main scan reaches them.
+   */
+  const heredocBodies: { start: number; end: number }[] = [];
+  /** End of the last heredoc body read, where a stacked `<<B` body begins. */
+  let heredocCursor = -1;
+  /** Length of `out` right after a heredoc chunk and its newline separator. */
+  let heredocEmitted = -1;
   /** Depth of open `${...}` parameter expansions. */
   let braceDepth = 0;
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command[i];
+
+    // Body text already captured by the heredoc that opened it.
+    const consumed = heredocBodies.find((range) => range.start === i);
+    if (consumed && consumed.end > i) {
+      i = consumed.end - 1;
+      continue;
+    }
 
     // Preserve escapes verbatim (and whatever they escape), except line
     // continuations, which are not part of the command text.
@@ -331,22 +395,59 @@ function stripRedirectionsInternal(command: string): {
       continue;
     }
 
-    // Heredoc: strip `<<DELIM` and remember to skip its body at next newline.
+    // Heredoc: `<<DELIM` and its body are one word of the command that opened
+    // them, so the body is pulled up from below and encoded in place. That
+    // keeps `cat <<EOF ... EOF && ls` splitting into `cat <<EOF ... EOF` and
+    // `ls` instead of cutting the command off at the operator.
     HEREDOC_OP.lastIndex = i;
     const heredoc = HEREDOC_OP.exec(command);
     if (heredoc) {
       HEREDOC_DELIM.lastIndex = i + heredoc[0].length;
       const delim = HEREDOC_DELIM.exec(command);
       if (delim) {
-        const delimiter = unquoteDelimiter(delim[1]);
-        pendingHeredocs.push({
-          delimiter,
-          allowIndent: heredoc[0].endsWith('-'),
-          // An unquoted delimiter (`<<EOF`) leaves the body expanded, so any
-          // `$( )` or backticks in it really execute.
-          expands: !/['"\\]/.test(delim[1]),
-        });
-        i = HEREDOC_DELIM.lastIndex - 1;
+        const delimEnd = HEREDOC_DELIM.lastIndex;
+        const nextLine = command.indexOf('\n', delimEnd);
+        // Stacked heredocs (`cat <<A <<B`) queue their bodies back to back.
+        const bodyStart =
+          heredocCursor > delimEnd
+            ? heredocCursor
+            : nextLine === -1
+              ? command.length
+              : nextLine + 1;
+        const { end, body, terminated } = skipHeredocBody(
+          command,
+          bodyStart,
+          unquoteDelimiter(delim[1]),
+          heredoc[0].endsWith('-'),
+        );
+        heredocCursor = end;
+        if (end > bodyStart) heredocBodies.push({ start: bodyStart, end });
+        if (terminated) {
+          out += encodeHeredoc(
+            `${command.slice(i, delimEnd)}\n${command
+              .slice(bodyStart, end)
+              .replace(/\n$/, '')}`,
+          );
+          // The chunk ends with its terminator line, so a newline must follow
+          // it: callers re-parse this text (permission matching strips first,
+          // then splits), and anything sharing the terminator's line would
+          // stop that second pass from recognising the terminator and let it
+          // swallow every command below as body text.
+          out += '\n';
+          heredocEmitted = out.length;
+        }
+        // An unterminated heredoc has no terminator line to re-parse against,
+        // so attaching its body would produce exactly that unrecognisable
+        // text. Drop it instead: the operator is stripped and the body stays
+        // out of the command, which is fail-closed — every command after it
+        // keeps being split off and evaluated on its own.
+        // An unquoted delimiter (`<<EOF`) leaves the body expanded, so any
+        // `$( )` or backticks in it really execute: those must still surface as
+        // commands even though the body itself is inert data.
+        if (!/['"\\]/.test(delim[1])) {
+          harvested.push(...extractSubstitutionCommands(body, { prose: true }));
+        }
+        i = delimEnd - 1;
         continue;
       }
     }
@@ -372,23 +473,14 @@ function stripRedirectionsInternal(command: string): {
 
     // An unquoted newline separates commands just like `;` does.
     if (char === '\n') {
-      // Heredoc bodies opened on this line are data, not commands: skip them,
-      // but keep any substitution the shell will expand inside them.
-      while (pendingHeredocs.length > 0) {
-        const doc = pendingHeredocs.shift();
-        if (!doc) break;
-        const { end, body } = skipHeredocBody(
-          command,
-          i + 1,
-          doc.delimiter,
-          doc.allowIndent,
-        );
-        i = end - 1;
-        if (doc.expands) {
-          harvested.push(...extractSubstitutionCommands(body, { prose: true }));
-        }
-      }
-      out = out.trimEnd();
+      // A heredoc chunk already emitted its own newline separator; adding `;`
+      // here would both duplicate it and corrupt a still-open substitution
+      // (`$(cat <<EOF\n...\nEOF\n)` must not become `$(cat;)`).
+      if (out.length === heredocEmitted) continue;
+      // Trim only what was written after the last heredoc chunk, so its
+      // mandatory newline separator survives.
+      out =
+        out.slice(0, heredocEmitted) + out.slice(heredocEmitted).trimEnd();
       // An escaped `\;` (e.g. `find -exec ... \;`) is an argument, not a
       // separator, so it still needs one appended.
       const endsWithSeparator =
@@ -397,8 +489,12 @@ function stripRedirectionsInternal(command: string): {
       continue;
     }
 
-    // Collapse runs of unquoted whitespace to a single space.
+    // Collapse runs of unquoted whitespace to a single space. Right after a
+    // heredoc chunk there is nothing to collapse: its newline separator is
+    // already the delimiter, and a space there would hide the next stacked
+    // heredoc from the split.
     if (/\s/.test(char)) {
+      if (out.length === heredocEmitted) continue;
       if (out.length > 0 && !out.endsWith(' ')) out += ' ';
       continue;
     }
@@ -425,6 +521,15 @@ function isEscaped(command: string, index: number): boolean {
  * of current command so exact permission patterns still match original text.
  */
 export function parseCompoundCommand(command: string): string[] {
+  return parseCompoundCommandInternal(sanitizeMarks(command));
+}
+
+/**
+ * `parseCompoundCommand` for text that is already sanitized, i.e. the recursive
+ * calls made while unwrapping substitutions. Those run on text that legitimately
+ * carries encoded heredoc chunks, which sanitizing would destroy.
+ */
+function parseCompoundCommandInternal(command: string): string[] {
   const { text: cleaned, harvested } = stripRedirectionsInternal(command);
   const commands: string[] = [];
   let segmentStart = 0;
@@ -531,6 +636,21 @@ export function parseCompoundCommand(command: string): string[] {
       if (char === ';' || char === '|') {
         pushSegment(i);
         segmentStart = i + 1;
+        continue;
+      }
+
+      // The newline `stripRedirections` writes after a heredoc chunk is a
+      // command separator too. It has to be a newline rather than `;` to keep
+      // the text re-parseable, so the split has to recognise it here — except
+      // between the stacked heredocs of one command (`cat <<A <<B`), which
+      // that newline only separates for re-parsing purposes.
+      if (
+        char === '\n' &&
+        cleaned[i - 1] === HEREDOC_MARK &&
+        cleaned[i + 1] !== HEREDOC_MARK
+      ) {
+        pushSegment(i);
+        segmentStart = i + 1;
       }
     }
   }
@@ -546,7 +666,16 @@ export function parseCompoundCommand(command: string): string[] {
   const parsed = refined.length > 0 ? refined : rawSegments;
   // Harvested commands come last so the outer command stays first for display
   // and rule attribution.
-  return [...parsed, ...harvested].filter((part) => part.trim().length > 0);
+  // Deduplicated: a harvested command is appended to the text `stripRedirections`
+  // returns, so re-parsing that text (the permission path strips, then splits)
+  // would otherwise list the same command twice.
+  return [
+    ...new Set(
+      [...parsed, ...harvested]
+        .map(decodeHeredocs)
+        .filter((part) => part.trim().length > 0),
+    ),
+  ];
 }
 
 /**
@@ -692,7 +821,7 @@ function extractSubstitutionCommands(
   }
 
   return found
-    .flatMap((inner) => parseCompoundCommand(inner))
+    .flatMap((inner) => parseCompoundCommandInternal(inner))
     .map((inner) => inner.trim())
     .filter((inner) => inner.length > 0);
 }
