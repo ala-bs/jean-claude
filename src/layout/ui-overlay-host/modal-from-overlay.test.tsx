@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
 import { ModalProvider, useModal } from '@/common/context/modal';
-import { ClosedPrWorkspaceModal } from '@/features/pull-request/ui-closed-pr-workspace-modal';
+import { Modal } from '@/common/ui/modal';
 import { ModalArbitrationProvider } from '@/common/context/modal-arbitration';
 import { OverlayHost } from '@/layout/ui-overlay-host';
 import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
@@ -15,27 +15,22 @@ import { useOverlaysStore } from '@/stores/overlays';
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@/hooks/use-pr-workspace-decisions', () => ({
-  usePrWorkspaceDecisions: () => ({
-    data: [
-      {
-        key: 'project-1:41',
-        projectId: 'project-1',
-        pullRequestId: 41,
-        taskIds: ['task-1'],
-      },
-    ],
-    error: null,
-    isFetching: false,
-    refetch: vi.fn(),
-  }),
-  useResolvePrWorkspaceDecision: () => ({
-    error: null,
-    isPending: false,
-    mutateAsync: vi.fn(),
-    variables: undefined,
-  }),
-}));
+// Stands in for an always-mounted, lowest-priority global modal.
+function GlobalBackgroundModal() {
+  return (
+    <Modal
+      isOpen
+      onClose={() => {}}
+      closeOnClickOutside={false}
+      closeOnEscape={false}
+      showHeader={false}
+      arbitrationPriority={0}
+      ariaLabel="Global background modal"
+    >
+      <p>Global background modal</p>
+    </Modal>
+  );
+}
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
@@ -93,7 +88,7 @@ describe('queued modals opened from an overlay', () => {
         <RootKeyboardBindings>
           <ModalArbitrationProvider>
             <ModalProvider>
-              <ClosedPrWorkspaceModal />
+              <GlobalBackgroundModal />
               <OverlayHost />
             </ModalProvider>
           </ModalArbitrationProvider>
@@ -128,7 +123,7 @@ describe('queued modals opened from an overlay', () => {
 
   it('hides the always-mounted global modal instead of stacking on it', async () => {
     await vi.waitFor(() => {
-      expect(document.body.textContent).toContain('Pull request #41 is closed');
+      expect(document.body.textContent).toContain('Global background modal');
     });
 
     act(() => useOverlaysStore.getState().open('backlog'));
@@ -140,7 +135,7 @@ describe('queued modals opened from an overlay', () => {
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain('Delete backlog item?');
       expect(document.body.textContent).not.toContain(
-        'Pull request #41 is closed',
+        'Global background modal',
       );
     });
 

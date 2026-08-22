@@ -18,7 +18,6 @@ import {
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
-import { ClosedPrWorkspaceModal } from '@/features/pull-request/ui-closed-pr-workspace-modal';
 import { createInterruptAllTasksCommand } from '@/lib/interrupt-all-tasks-command';
 import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-modal';
 import { Header } from '@/layout/ui-header';
@@ -521,7 +520,6 @@ function RootLayout() {
       <TaskMessageManager />
       <AppearanceBridge />
       <GlobalPromptFromBackModal />
-      <ClosedPrWorkspaceModal />
       <WorkItemModal />
       <OnboardingBootstrap />
       {!isOnboardingFlowRoute && <GlobalCommands />}

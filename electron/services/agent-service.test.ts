@@ -2743,7 +2743,6 @@ describe('agentService provider runtime', () => {
         closeEditorWindowsForTaskWorktree: vi.fn(),
           cleanupPrWorkspaceGit: gitCleanup,
         deleteTasks: vi.fn(),
-        keepPrWorkspaces: vi.fn(),
         emitTaskUpsert: vi.fn(),
         emitTaskDelete: vi.fn(),
       },

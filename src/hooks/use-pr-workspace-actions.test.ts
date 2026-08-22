@@ -75,14 +75,6 @@ describe('usePrWorkspaceActions', () => {
     queryClient.setQueryData(['tasks', 'review-1'], createTask());
     queryClient.setQueryData(['steps', 'step-1'], createStep());
     queryClient.setQueryData(['steps', { taskId: 'review-1' }], [createStep()]);
-    queryClient.setQueryData(['pr-workspace-decisions'], [
-      {
-        key: 'project-1:42',
-        projectId: 'project-1',
-        pullRequestId: 42,
-        taskIds: ['review-1'],
-      },
-    ]);
     const messages = useTaskMessagesStore.getState();
     messages.loadStep('step-1', 'review-1', [], 'running');
     messages.setPermission('step-1', {
@@ -173,9 +165,6 @@ describe('usePrWorkspaceActions', () => {
       runningCommandTarget: null,
     });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['tasks'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ['pr-workspace-decisions'],
-    });
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: ['feed', 'tasks'],
     });

@@ -26,7 +26,6 @@ import {
   cleanPrReviewWorkspace,
   createOrGetPrReviewTask,
   fetchPrReviewSourceBranch,
-  listPendingPrWorkspaceDecisions,
   reconcilePrWorkspaceState,
   runCommandWithPrReviewLifecycle,
   runTaskDestructiveWithPrReviewLifecycle,
@@ -1116,16 +1115,14 @@ describe('reconcilePrWorkspaceState', () => {
     return {
       findPrReviewTasksByPullRequest: vi.fn().mockResolvedValue(tasks),
       revalidatePullRequestStatus: vi.fn().mockResolvedValue(status),
-      markPrWorkspacesCleanupPending: vi.fn(
-        async ({ taskIds }: { taskIds: string[] }) => {
-          return taskIds.map((id) =>
-            makeTask({
-              ...tasks.find((task) => task.id === id),
-              id,
-              prWorkspaceState: 'cleanup-pending',
-            }),
-          );
-        },
+      markPrWorkspacesKept: vi.fn(async ({ taskIds }: { taskIds: string[] }) =>
+        taskIds.map((id) =>
+          makeTask({
+            ...tasks.find((task) => task.id === id),
+            id,
+            prWorkspaceState: 'kept',
+          }),
+        ),
       ),
       reactivatePrWorkspaces: vi.fn(async (taskIds: string[]) =>
         taskIds.map((id) => {
@@ -1152,7 +1149,7 @@ describe('reconcilePrWorkspaceState', () => {
         deps,
       ),
     ).resolves.toEqual([]);
-    expect(deps.markPrWorkspacesCleanupPending).not.toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).not.toHaveBeenCalled();
     expect(deps.reactivatePrWorkspaces).not.toHaveBeenCalled();
     expect(deps.emitTaskUpsert).not.toHaveBeenCalled();
   });
@@ -1170,12 +1167,12 @@ describe('reconcilePrWorkspaceState', () => {
       ),
     ).resolves.toEqual([]);
     expect(deps.findPrReviewTasksByPullRequest).not.toHaveBeenCalled();
-    expect(deps.markPrWorkspacesCleanupPending).not.toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).not.toHaveBeenCalled();
     expect(deps.reactivatePrWorkspaces).not.toHaveBeenCalled();
   });
 
   it.each(['completed', 'abandoned'] as const)(
-    'marks every active workspace pending when PR is %s without destructive work',
+    'marks every active workspace kept when PR is %s without destructive work',
     async (status) => {
       const tasks = [
         makeTask({ id: 'first' }),
@@ -1199,8 +1196,8 @@ describe('reconcilePrWorkspaceState', () => {
       );
 
       expect(changed.map((task) => task.id)).toEqual(['first', 'second']);
-      expect(deps.markPrWorkspacesCleanupPending).toHaveBeenCalledOnce();
-      expect(deps.markPrWorkspacesCleanupPending).toHaveBeenCalledWith({
+      expect(deps.markPrWorkspacesKept).toHaveBeenCalledOnce();
+      expect(deps.markPrWorkspacesKept).toHaveBeenCalledWith({
         projectId: 'project-1',
         pullRequestId: '12',
         taskIds: ['first', 'second'],
@@ -1220,16 +1217,16 @@ describe('reconcilePrWorkspaceState', () => {
           deps,
         ),
       ).resolves.toEqual([]);
-      expect(deps.markPrWorkspacesCleanupPending).toHaveBeenCalledOnce();
+      expect(deps.markPrWorkspacesKept).toHaveBeenCalledOnce();
       expect(deps.emitTaskUpsert).toHaveBeenCalledTimes(2);
     },
   );
 
-  it('emits nothing when grouped pending transition fails', async () => {
+  it('emits nothing when the grouped kept transition fails', async () => {
     const deps = makeReconcileDeps({
       tasks: [makeTask({ id: 'first' }), makeTask({ id: 'second' })],
     });
-    vi.mocked(deps.markPrWorkspacesCleanupPending).mockRejectedValue(
+    vi.mocked(deps.markPrWorkspacesKept).mockRejectedValue(
       new Error('transaction rolled back'),
     );
 
@@ -1242,7 +1239,7 @@ describe('reconcilePrWorkspaceState', () => {
     expect(deps.emitTaskUpsert).not.toHaveBeenCalled();
   });
 
-  it('leaves kept and already-pending workspaces unchanged on repeated closure', async () => {
+  it('leaves kept and legacy pending workspaces unchanged on repeated closure', async () => {
     const deps = makeReconcileDeps({
       tasks: [
         makeTask({ id: 'kept', prWorkspaceState: 'kept' }),
@@ -1256,7 +1253,7 @@ describe('reconcilePrWorkspaceState', () => {
         deps,
       ),
     ).resolves.toEqual([]);
-    expect(deps.markPrWorkspacesCleanupPending).not.toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).not.toHaveBeenCalled();
   });
 
   it('reactivates pending and kept workspaces when PR reopens', async () => {
@@ -1299,7 +1296,7 @@ describe('reconcilePrWorkspaceState', () => {
       'kept',
       'waiting',
     ]);
-    expect(deps.markPrWorkspacesCleanupPending).not.toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).not.toHaveBeenCalled();
     expect(deps.emitTaskUpsert).toHaveBeenCalledTimes(3);
 
     const restored = changed[0];
@@ -1333,7 +1330,7 @@ describe('reconcilePrWorkspaceState', () => {
       ),
     ).resolves.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ prWorkspaceState: 'cleanup-pending' }),
+        expect.objectContaining({ prWorkspaceState: 'kept' }),
       ]),
     );
   });
@@ -1363,26 +1360,7 @@ describe('reconcilePrWorkspaceState', () => {
     await expect(Promise.all([start, reconciliation])).resolves.toBeDefined();
     expect(deps.revalidatePullRequestStatus).toHaveBeenCalled();
     expect(deps.findPrReviewTasksByPullRequest).toHaveBeenCalled();
-    expect(deps.markPrWorkspacesCleanupPending).toHaveBeenCalled();
-  });
-});
-
-describe('listPendingPrWorkspaceDecisions', () => {
-  it('groups ordered pending tasks into one deterministic decision per project and PR', async () => {
-    const tasks = [
-      makeTask({ id: 'old-b', projectId: 'old', pullRequestId: '2' }),
-      makeTask({ id: 'old-a', projectId: 'old', pullRequestId: '2' }),
-      makeTask({ id: 'new', projectId: 'new', pullRequestId: '1' }),
-    ];
-
-    await expect(
-      listPendingPrWorkspaceDecisions({
-        findPendingPrWorkspaceTasks: vi.fn().mockResolvedValue(tasks),
-      }),
-    ).resolves.toEqual([
-      { projectId: 'old', pullRequestId: 2, taskIds: ['old-b', 'old-a'] },
-      { projectId: 'new', pullRequestId: 1, taskIds: ['new'] },
-    ]);
+    expect(deps.markPrWorkspacesKept).toHaveBeenCalled();
   });
 });
 

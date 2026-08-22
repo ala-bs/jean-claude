@@ -217,8 +217,6 @@ contextBridge.exposeInMainWorld('api', {
   tasks: {
     focused: (taskId: string) => ipcRenderer.send('tasks:focused', taskId),
     findAll: () => ipcRenderer.invoke('tasks:findAll'),
-    listPendingPrWorkspaceDecisions: () =>
-      ipcRenderer.invoke('tasks:listPendingPrWorkspaceDecisions'),
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('tasks:findByProjectId', projectId),
     findAllActive: () => ipcRenderer.invoke('tasks:findAllActive'),
@@ -244,11 +242,6 @@ contextBridge.exposeInMainWorld('api', {
       projectId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('tasks:deleteAllPrWorkspaces', params),
-    resolveClosedPrWorkspace: (params: {
-      projectId: string;
-      pullRequestId: number;
-      action: 'keep' | 'delete';
-    }) => ipcRenderer.invoke('tasks:resolveClosedPrWorkspace', params),
     toggleUserCompleted: (id: string) =>
       ipcRenderer.invoke('tasks:toggleUserCompleted', id),
     complete: (id: string, options: { cleanupWorktree?: boolean }) =>

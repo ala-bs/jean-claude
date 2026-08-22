@@ -172,9 +172,6 @@ describe('PrDetail PR workspace deletion', () => {
     expect(document.body.textContent).toContain('PR detail content');
     expect(findOptionalButton('Delete PR Workspaces')).toBeUndefined();
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['tasks'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ['pr-workspace-decisions'],
-    });
   });
 
   it('keeps detail and dialog open after failure and retries', async () => {

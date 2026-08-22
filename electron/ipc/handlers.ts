@@ -387,7 +387,6 @@ import {
   cleanPrReviewWorkspaceUnlocked,
   createOrGetPrReviewTask,
   fetchPrReviewSourceBranch,
-  listPendingPrWorkspaceDecisions,
   reconcilePrWorkspaceState,
   runCommandWithPrReviewLifecycle,
   runTaskDestructiveWithPrReviewLifecycle,
@@ -413,7 +412,6 @@ import {
 import {
   deleteAllPrWorkspaces,
   deletePrWorkspaceTask,
-  resolveClosedPrWorkspace,
   routeTaskDeletion,
 } from '../services/pr-workspace-deletion-service';
 import {
@@ -1162,7 +1160,6 @@ export function registerIpcHandlers() {
     getPullRequest,
     findProjects: ProjectRepository.findAll,
     reconcilePrWorkspaceState,
-    listPendingPrWorkspaceDecisions,
     createPrReviewTask: async ({ projectId, pullRequestId }) => {
       dbg.ipc(
         'tasks:createPrReviewTask projectId=%s prId=%d',
@@ -1190,7 +1187,6 @@ export function registerIpcHandlers() {
     },
     deletePrWorkspaceTask,
     deleteAllPrWorkspaces,
-    resolveClosedPrWorkspace,
   });
 
   ipcMain.handle(

@@ -656,9 +656,6 @@ export interface Api {
   tasks: {
     focused: (taskId: string) => void;
     findAll: () => Promise<Task[]>;
-    listPendingPrWorkspaceDecisions: () => Promise<
-      Array<{ projectId: string; pullRequestId: number; taskIds: string[] }>
-    >;
     findByProjectId: (projectId: string) => Promise<Task[]>;
     findAllActive: () => Promise<TaskWithProject[]>;
     findAllCompleted: (params: {
@@ -711,11 +708,6 @@ export interface Api {
     deleteAllPrWorkspaces: (params: {
       projectId: string;
       pullRequestId: number;
-    }) => Promise<PrWorkspaceResolutionResult>;
-    resolveClosedPrWorkspace: (params: {
-      projectId: string;
-      pullRequestId: number;
-      action: 'keep' | 'delete';
     }) => Promise<PrWorkspaceResolutionResult>;
     toggleUserCompleted: (id: string) => Promise<Task>;
     complete: (
@@ -2280,7 +2272,6 @@ export const api: Api = hasWindowApi
       tasks: {
         focused: () => {},
         findAll: async () => [],
-        listPendingPrWorkspaceDecisions: async () => [],
         findByProjectId: async () => [],
         findAllActive: async () => [],
         findAllCompleted: async () => ({ tasks: [], total: 0 }),
@@ -2310,10 +2301,6 @@ export const api: Api = hasWindowApi
         }),
         deleteAllPrWorkspaces: async () => ({
           action: 'deleted',
-          taskIds: [],
-        }),
-        resolveClosedPrWorkspace: async ({ action }) => ({
-          action: action === 'delete' ? 'deleted' : 'kept',
           taskIds: [],
         }),
         toggleUserCompleted: async () => {

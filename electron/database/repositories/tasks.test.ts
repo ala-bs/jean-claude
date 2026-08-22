@@ -318,44 +318,6 @@ describe('TaskRepository PR workspace state persistence', () => {
     vi.useRealTimers();
   });
 
-  it('keeps all requested workspaces in one transaction', async () => {
-    execute.mockResolvedValue([
-      { ...returnedRow, id: 'task-1', prWorkspaceState: 'kept' },
-      { ...returnedRow, id: 'task-2', prWorkspaceState: 'kept' },
-    ]);
-
-    await expect(
-      TaskRepository.keepPrWorkspaces(['task-1', 'task-2']),
-    ).resolves.toEqual([
-      expect.objectContaining({ id: 'task-1', prWorkspaceState: 'kept' }),
-      expect.objectContaining({ id: 'task-2', prWorkspaceState: 'kept' }),
-    ]);
-
-    expect(mocks.dbMock.transaction).toHaveBeenCalledOnce();
-    expect(mocks.updateWhere).toHaveBeenCalledWith('id', 'in', [
-      'task-1',
-      'task-2',
-    ]);
-    expect(mocks.updateWhere).toHaveBeenCalledWith('type', '=', 'pr-review');
-    expect(mocks.updateWhere).toHaveBeenCalledWith(
-      'prWorkspaceState',
-      '=',
-      'cleanup-pending',
-    );
-    expect(set).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prWorkspaceState: 'kept',
-        userCompleted: 0,
-      }),
-    );
-    const keepStatus = getSetValues(0).status as {
-      toOperationNode: () => unknown;
-    };
-    expect(JSON.stringify(keepStatus.toOperationNode())).toContain(
-      "CASE WHEN status = 'completed' THEN 'waiting' ELSE status END",
-    );
-  });
-
   it('reactivates requested workspaces atomically with a current-status CASE', async () => {
     execute.mockResolvedValue([
       { ...returnedRow, id: 'running', status: 'running' },
@@ -396,33 +358,9 @@ describe('TaskRepository PR workspace state persistence', () => {
     ]);
 
     await expect(
-      TaskRepository.keepPrWorkspaces(['task-1', 'task-2']),
+      TaskRepository.reactivatePrWorkspaces(['task-1', 'task-2']),
     ).rejects.toThrow('state changed');
     expect(mocks.transactionExecute).toHaveBeenCalledOnce();
-  });
-});
-
-describe('TaskRepository.findPendingPrWorkspaceTasks', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('orders pending decisions by durable detection time, then stable tie breakers', async () => {
-    execute.mockResolvedValue([]);
-
-    await expect(TaskRepository.findPendingPrWorkspaceTasks()).resolves.toEqual([]);
-
-    expect(where).toHaveBeenCalledWith(
-      'prWorkspaceState',
-      '=',
-      'cleanup-pending',
-    );
-    expect(where).toHaveBeenCalledWith('type', '=', 'pr-review');
-    expect(mocks.orderBy.mock.calls).toEqual([
-      ['prWorkspacePendingAt', 'asc'],
-      ['createdAt', 'asc'],
-      ['id', 'asc'],
-    ]);
   });
 });
 

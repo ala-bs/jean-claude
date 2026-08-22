@@ -153,7 +153,7 @@ type ReconcilePrWorkspaceStateDeps = {
     projectId: string;
     pullRequestId: number;
   }) => Promise<'active' | 'completed' | 'abandoned'>;
-  markPrWorkspacesCleanupPending: (params: {
+  markPrWorkspacesKept: (params: {
     projectId: string;
     pullRequestId: string;
     taskIds: string[];
@@ -282,8 +282,7 @@ async function getDefaultReconcilePrWorkspaceStateDeps(): Promise<ReconcilePrWor
       });
       return pullRequest.status;
     },
-    markPrWorkspacesCleanupPending:
-      TaskRepository.markPrWorkspacesCleanupPending,
+    markPrWorkspacesKept: TaskRepository.markPrWorkspacesKept,
     reactivatePrWorkspaces: TaskRepository.reactivatePrWorkspaces,
     emitTaskUpsert,
   };
@@ -1059,45 +1058,14 @@ export async function reconcilePrWorkspaceState(
       )
       .map((task) => task.id);
     if (taskIds.length === 0) return [];
-    const pendingTasks = await resolvedDeps.markPrWorkspacesCleanupPending({
+    const keptTasks = await resolvedDeps.markPrWorkspacesKept({
       projectId: params.projectId,
       pullRequestId,
       taskIds,
     });
-    for (const task of pendingTasks) {
+    for (const task of keptTasks) {
       resolvedDeps.emitTaskUpsert(task);
     }
-    return pendingTasks;
+    return keptTasks;
   });
-}
-
-export async function listPendingPrWorkspaceDecisions(deps?: {
-  findPendingPrWorkspaceTasks: () => Promise<Task[]>;
-}): Promise<Array<{ projectId: string; pullRequestId: number; taskIds: string[] }>> {
-  const findPendingPrWorkspaceTasks =
-    deps?.findPendingPrWorkspaceTasks ??
-    (await import('../database/repositories')).TaskRepository
-      .findPendingPrWorkspaceTasks;
-  const decisions = new Map<
-    string,
-    { projectId: string; pullRequestId: number; taskIds: string[] }
-  >();
-
-  // Repository order defines decision age: pending detection time, creation, then ID.
-  for (const task of await findPendingPrWorkspaceTasks()) {
-    if (!task.pullRequestId) continue;
-    const key = `${task.projectId}:${task.pullRequestId}`;
-    const decision = decisions.get(key);
-    if (decision) {
-      decision.taskIds.push(task.id);
-    } else {
-      decisions.set(key, {
-        projectId: task.projectId,
-        pullRequestId: Number(task.pullRequestId),
-        taskIds: [task.id],
-      });
-    }
-  }
-
-  return [...decisions.values()];
 }

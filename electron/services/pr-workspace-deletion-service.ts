@@ -28,7 +28,6 @@ export type PrWorkspaceDeletionDeps = {
     projectPath: string;
   }) => Promise<{ task: Task; changed: boolean }>;
   deleteTasks: (taskIds: string[]) => Promise<unknown>;
-  keepPrWorkspaces: (taskIds: string[]) => Promise<Task[]>;
   emitTaskUpsert: (task: Task) => void;
   emitTaskDelete: (params: {
     taskId: string;
@@ -79,7 +78,6 @@ async function getDefaultDeps(): Promise<PrWorkspaceDeletionDeps> {
         clearCleanupIdentity: TaskRepository.clearCleanupIdentity,
       }),
     deleteTasks: TaskRepository.deleteMany,
-    keepPrWorkspaces: TaskRepository.keepPrWorkspaces,
     emitTaskUpsert,
     emitTaskDelete,
   };
@@ -239,59 +237,6 @@ export async function deleteAllPrWorkspaces(
       action: 'deleted' as const,
       taskIds: tasks.map((task) => task.id),
     };
-  });
-}
-
-export async function resolveClosedPrWorkspace(
-  params: {
-    projectId: string;
-    pullRequestId: number;
-    action: 'keep' | 'delete';
-  },
-  deps?: PrWorkspaceDeletionDeps,
-): Promise<PrWorkspaceResolutionResult> {
-  validatePullRequestId(params.pullRequestId);
-  if (params.action === 'delete') {
-    return deleteAllPrWorkspaces(params, deps);
-  }
-
-  const resolvedDeps = deps ?? (await getDefaultDeps());
-  const pullRequestId = String(params.pullRequestId);
-  return withPrLifecycleLock(params.projectId, pullRequestId, async () => {
-    const project = await resolvedDeps.findProjectById(params.projectId);
-    if (!project) throw new Error(`Project ${params.projectId} not found`);
-    const tasks = await resolvedDeps.findPrReviewTasksByPullRequest({
-      projectId: params.projectId,
-      pullRequestId,
-    });
-    validateTasks(tasks, { projectId: params.projectId, pullRequestId });
-    if (tasks.length === 0) return { action: 'kept' as const, taskIds: [] };
-    if (
-      tasks.some(
-        (task) =>
-          task.prWorkspaceState !== 'cleanup-pending' &&
-          task.prWorkspaceState !== 'kept',
-      )
-    ) {
-      throw new Error('PR workspace state is not safe to keep');
-    }
-    const pendingTaskIds = tasks
-      .filter((task) => task.prWorkspaceState === 'cleanup-pending')
-      .map((task) => task.id);
-    if (pendingTaskIds.length === 0) {
-      return { action: 'kept' as const, taskIds: tasks.map((task) => task.id) };
-    }
-    const updatedTasks = await resolvedDeps.keepPrWorkspaces(
-      pendingTaskIds,
-    );
-    for (const task of updatedTasks) {
-      emitSafely(
-        () => resolvedDeps.emitTaskUpsert(task),
-        'task.upsert',
-        task.id,
-      );
-    }
-    return { action: 'kept' as const, taskIds: tasks.map((task) => task.id) };
   });
 }
 
