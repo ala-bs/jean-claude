@@ -1,6 +1,7 @@
 import {
   ArrowDownToLine,
   ArrowUpRight,
+  FileDiff,
   FileText,
   GitPullRequest,
   Loader2,
@@ -36,6 +37,7 @@ export function PrWorkspaceEmptyState({
   onOpenLogs,
   onOpenProjectSettings,
   onOpenPullRequest,
+  onViewDiff,
   onPull,
   isPulling = false,
   projectName,
@@ -55,6 +57,8 @@ export function PrWorkspaceEmptyState({
   onOpenLogs: () => void;
   onOpenProjectSettings: () => void;
   onOpenPullRequest?: () => void;
+  // Omitted when the workspace has no git worktree to diff against.
+  onViewDiff?: () => void;
   onPull?: () => void;
   isPulling?: boolean;
   projectName: string;
@@ -122,6 +126,17 @@ export function PrWorkspaceEmptyState({
             >
               Add Step
             </Button>
+            {onViewDiff ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={<FileDiff />}
+                onClick={onViewDiff}
+              >
+                View Diff
+              </Button>
+            ) : null}
             {onPull ? (
               <Button
                 type="button"

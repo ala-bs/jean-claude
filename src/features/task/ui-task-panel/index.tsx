@@ -1282,6 +1282,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     openDiffView();
   }, [closeDiffView, isDiffViewOpen, openDiffView, reviewMode, setReviewMode]);
 
+  // The workspace overview renders after the diff view in the main content
+  // if-chain, so it must be dismissed or opening the diff would be a no-op.
+  const openWorkspaceDiff = useCallback(() => {
+    setShowWorkspaceOverview(false);
+    setReviewMode(hasGitReviewModes ? 'changes' : 'files');
+    openDiffView();
+  }, [hasGitReviewModes, openDiffView, setReviewMode, setShowWorkspaceOverview]);
+
   // PR view state
   const {
     isOpen: isPrViewOpen,
@@ -3056,6 +3064,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   }}
                   onDelete={openDeleteDialog}
                   onOpenPullRequest={openMatchingPullRequest}
+                  onViewDiff={task.worktreePath ? openWorkspaceDiff : undefined}
                   onPull={handlePullPrWorkspace}
                   isPulling={pullBranchMutation.isPending}
                   onOpenLogs={() => openCommandLogs()}
