@@ -139,6 +139,7 @@ export function partitionFeedItems({
   }
 
   let dCount = 0;
+  const prWorkspace: FeedItem[] = [];
   const actionNeeded: FeedItem[] = [];
   const prReviews: FeedItem[] = [];
   const activeTasks: FeedItem[] = [];
@@ -160,7 +161,9 @@ export function partitionFeedItems({
       dCount++;
       continue;
     }
-    if (ACTION_NEEDED_ATTENTIONS.has(item.attention)) {
+    if (item.source === 'task' && item.taskType === 'pr-review') {
+      prWorkspace.push(item);
+    } else if (ACTION_NEEDED_ATTENTIONS.has(item.attention)) {
       actionNeeded.push(item);
     } else if (
       item.source === 'task' &&
@@ -187,6 +190,7 @@ export function partitionFeedItems({
     }
   }
 
+  prWorkspace.sort(bySourceThenTimestamp);
   actionNeeded.sort(bySourceThenTimestamp);
   prReviews.sort(
     byManualLowPriorityThenProjectPriority({
@@ -204,6 +208,7 @@ export function partitionFeedItems({
 
   return {
     pinnedItems: pinnedResult,
+    prWorkspaceItems: prWorkspace,
     actionNeededItems: actionNeeded,
     prReviewItems: prReviews,
     activeTaskItems: activeTasks,

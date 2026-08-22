@@ -1106,6 +1106,7 @@ export function FeedList() {
 
   const {
     pinnedItems,
+    prWorkspaceItems,
     actionNeededItems,
     prReviewItems,
     activeTaskItems,
@@ -1154,6 +1155,7 @@ export function FeedList() {
     [pinned],
   );
   const hasUnpinnedItems =
+    prWorkspaceItems.length > 0 ||
     actionNeededItems.length > 0 ||
     prReviewItems.length > 0 ||
     activeTaskItems.length > 0 ||
@@ -1492,6 +1494,7 @@ export function FeedList() {
 
   const totalCount =
     pinnedItems.length +
+    prWorkspaceItems.length +
     prReviewItems.length +
     actionNeededItems.length +
     highPriorityItems.length +
@@ -1724,6 +1727,20 @@ export function FeedList() {
           onOpen={navigateToFeedItem}
           onMarkLowPriority={handleMarkPrLowPriority}
         />
+      )}
+
+      {/* PR workspace zone - kept at the top of the vertical feed */}
+      {prWorkspaceItems.length > 0 && (
+        <div className="flex flex-col">
+          {prWorkspaceItems.map((item) => (
+            <MemoFeedCard
+              key={item.id}
+              item={item}
+              selection={selection}
+              isSelected={isFeedItemSelected(item, selection)}
+            />
+          ))}
+        </div>
       )}
 
       {runningTaskCreationCount > 0 && (
