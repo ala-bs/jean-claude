@@ -1,6 +1,6 @@
-import type { PromptPart } from '@shared/agent-backend-types';
-import type { AgentMemoryFollowUpCapture } from '@shared/agent-memory-types';
 import type { Task, TaskStep } from '@shared/types';
+import type { AgentMemoryFollowUpCapture } from '@shared/agent-memory-types';
+import type { PromptPart } from '@shared/agent-backend-types';
 
 import { sendMessageWithPrReviewLifecycle } from '../services/pr-review-task-service';
 

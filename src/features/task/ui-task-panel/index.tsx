@@ -52,7 +52,6 @@ import {
   getModelsForBackend,
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
-import { ComposerCollapsedBar } from '@/features/agent/ui-composer-collapsed-bar';
 import { DiffViewMode, useUIStore } from '@/stores/ui';
 import {
   Dropdown,
@@ -61,6 +60,7 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import { formatModelName, getModelFromEntry } from '@/hooks/use-model';
+import { ComposerCollapsedBar } from '@/features/agent/ui-composer-collapsed-bar';
 
 import {
   getDefaultInteractionModeForBackend,
@@ -86,6 +86,10 @@ import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
+import {
+  reconcileTaskPromptFiles,
+  useTaskPrompt,
+} from '@/stores/task-prompts';
 import {
   type ReviewCommentParams,
   ReviewProvider,
@@ -156,6 +160,7 @@ import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import { PermissionBar } from '@/features/agent/ui-permission-bar';
 import { PrBadge } from '@/features/agent/ui-pr-badge';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 import { PrReviewValidation } from '@/features/task/ui-pr-review-validation';
 import { PrWorkspaceEmptyState } from '@/features/task/ui-pr-workspace-empty-state';
 import { QuestionOptions } from '@/features/agent/ui-question-options';
@@ -178,29 +183,23 @@ import { useModal } from '@/common/context/modal';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
-import { usePullBranch } from '@/hooks/use-worktree-diff';
 import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
+import { usePullBranch } from '@/hooks/use-worktree-diff';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useSkills } from '@/hooks/use-skills';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import {
-  reconcileTaskPromptFiles,
-  useTaskPrompt,
-} from '@/stores/task-prompts';
-import type { PromptFilePart } from '@shared/agent-backend-types';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 import { useToastStore } from '@/stores/toasts';
 import { useWorkItemById } from '@/hooks/use-work-items';
+import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
-import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
 
 import {
   createPermissionModalState,
   type PermissionModalState,
 } from './permission-modal-state';
-import { runPromptSubmission } from './utils-prompt-submit-error';
 import { getTaskTitle, TaskNameEditor } from './task-name-editor';
 import { AddStepDialog } from './add-step-dialog';
 import { ChangeWorktreePathDialog } from './change-worktree-path-dialog';
@@ -208,6 +207,7 @@ import { CommandLogsPane } from './command-logs-pane';
 import { CompleteTaskDialog } from './complete-task-dialog';
 import { DebugMessagesPane } from './debug-messages-pane';
 import { DeleteTaskDialog } from './delete-task-dialog';
+import { runPromptSubmission } from './utils-prompt-submit-error';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from './constants';
 import { TaskPendingNoteInput } from './task-pending-note-input';
 import { TaskSettingsPane } from './task-settings-pane';

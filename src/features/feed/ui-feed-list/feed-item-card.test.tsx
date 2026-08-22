@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
-import type { FeedItem } from '@shared/feed-types';
 import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
+import type { FeedItem } from '@shared/feed-types';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@/common/ui/dropdown', () => ({

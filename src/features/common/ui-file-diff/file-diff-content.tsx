@@ -21,13 +21,13 @@ import type { FileAnnotation } from '@/lib/api';
 import { getSelectedTextForRange } from '@/stores/utils-comment-prompt';
 import { isSpreadsheetPath } from '@shared/spreadsheet-types';
 import { isSvgPath } from '@shared/image-types';
-import { SpreadsheetViewer } from '@/features/common/ui-spreadsheet-viewer';
 import type { LineRangeSelectionPosition } from '@/features/agent/ui-diff-view/use-line-range-selection';
 import { MarkdownContent } from '@/features/agent/ui-markdown-content';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import type { PromptImageUploadCache } from '@/lib/prompt-image-upload-cache';
 import { ReviewCommentComposer } from '@/features/agent/ui-review-comments/review-comment-composer';
 import { ReviewCommentThread } from '@/features/agent/ui-review-comments/review-comment-thread';
+import { SpreadsheetViewer } from '@/features/common/ui-spreadsheet-viewer';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 
 

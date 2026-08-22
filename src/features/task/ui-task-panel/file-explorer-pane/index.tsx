@@ -10,8 +10,6 @@ import type {
   DiffFileStatus,
 } from '@/features/common/ui-file-diff/types';
 import { isImagePath, isSvgPath } from '@shared/image-types';
-import { SpreadsheetViewer } from '@/features/common/ui-spreadsheet-viewer';
-import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 import {
   useFileExplorerPaneWidth,
   useFileExplorerTreeWidth,
@@ -26,8 +24,10 @@ import { FileDiffContent } from '@/features/common/ui-file-diff';
 import { IconButton } from '@/common/ui/icon-button';
 import { normalizeWorktreeStatus } from '@/features/common/ui-file-diff/types';
 import { Separator } from '@/common/ui/separator';
+import { SpreadsheetViewer } from '@/features/common/ui-spreadsheet-viewer';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useInvalidateDirectoryListings } from '@/hooks/use-directory-listing';
+import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 
 

@@ -54,8 +54,8 @@ import { useToastStore } from '@/stores/toasts';
 
 
 
-import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 
 const EMPTY_IMAGES: PromptImagePart[] = [];
 

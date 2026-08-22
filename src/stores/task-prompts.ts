@@ -2,11 +2,11 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useCallback } from 'react';
 
-import type { PromptFilePart } from '@shared/agent-backend-types';
 import {
   deleteAttachmentFiles,
   findMissingAttachmentPaths,
 } from '@/lib/prompt-attachment-cleanup';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 
 const MAX_TASKS = 100;
 

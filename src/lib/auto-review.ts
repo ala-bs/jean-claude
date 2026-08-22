@@ -1,5 +1,5 @@
-import picomatch from 'picomatch';
 import type { AutoReviewRule } from '@shared/types';
+import picomatch from 'picomatch';
 
 /**
  * `dot: true` so patterns like `**\/*.json` still match files under dot

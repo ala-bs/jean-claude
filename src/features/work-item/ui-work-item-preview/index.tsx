@@ -10,7 +10,6 @@ import {
   MessagesSquare,
   RefreshCw,
 } from 'lucide-react';
-import { useQueryClient } from '@tanstack/react-query';
 import {
   type ReactNode,
   startTransition,
@@ -20,13 +19,14 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { WorkItemTitleParserSetting } from '@shared/work-item-title-parser-types';
 
 
 import type { AzureDevOpsBoardColumn, AzureDevOpsWorkItem } from '@/lib/api';
 import { Dropdown, DropdownItem } from '@/common/ui/dropdown';
-import { getOwnerColor } from '@/features/work-item/utils-owner-color';
 import { getAssigneeDropdownOptions } from '@/lib/work-item-assignee-options';
+import { getOwnerColor } from '@/features/work-item/utils-owner-color';
 
 const EMPTY_STRING_ARRAY: string[] = [];
 import {

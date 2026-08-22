@@ -1,9 +1,9 @@
 import { useCallback, useMemo } from 'react';
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type { AutoReviewRule } from '@shared/types';
-import { useSetting } from '@/hooks/use-settings';
+import { create } from 'zustand';
 import { matchAutoReviewRules } from '@/lib/auto-review';
+import { persist } from 'zustand/middleware';
+import { useSetting } from '@/hooks/use-settings';
 
 /** How reviewed files are rendered in the diff file tree. */
 export type ReviewedTreatment = 'dim' | 'hide' | 'bottom';

@@ -8,21 +8,6 @@ import {
   type WheelEvent,
 } from 'react';
 
-import type {
-  MobilePlatform,
-  MobilePreviewSession,
-  MobileRotationDirection,
-} from '@shared/mobile-simulator-types';
-import type { MobilePreviewInputEvent } from '@shared/mobile-simulator-types';
-import type { GestureFeedbackStore } from './gesture-feedback-store';
-import { GESTURE_FEEDBACK_FADE_MS } from './gesture-feedback-store';
-import { clamp, getSurfaceIntrinsicSize } from './utils-surface';
-import { resolveDeviceSize } from './utils-device-setup';
-import { formatError } from './utils-preview-error';
-import {
-  mapRotatedSurfacePoint,
-  normalizeRotationDegrees,
-} from './utils-rotation';
 import {
   canStartPointerInteraction,
   createWheelGestureFeedback,
@@ -34,6 +19,21 @@ import {
   matchesActivePointer,
   restartGestureFeedbackTimer,
 } from './utils-input';
+import { clamp, getSurfaceIntrinsicSize } from './utils-surface';
+import {
+  mapRotatedSurfacePoint,
+  normalizeRotationDegrees,
+} from './utils-rotation';
+import type {
+  MobilePlatform,
+  MobilePreviewSession,
+  MobileRotationDirection,
+} from '@shared/mobile-simulator-types';
+import { formatError } from './utils-preview-error';
+import { GESTURE_FEEDBACK_FADE_MS } from './gesture-feedback-store';
+import type { GestureFeedbackStore } from './gesture-feedback-store';
+import type { MobilePreviewInputEvent } from '@shared/mobile-simulator-types';
+import { resolveDeviceSize } from './utils-device-setup';
 
 const SWIPE_THRESHOLD_PX = 8;
 const LONG_PRESS_THRESHOLD_MS = 500;

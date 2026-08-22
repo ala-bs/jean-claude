@@ -2,8 +2,8 @@
 
 import { act, useCallback } from 'react';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createRoot } from 'react-dom/client';
 
 import type { PromptFilePart, PromptPart } from '@shared/agent-backend-types';
 import { useTaskPrompt, useTaskPromptsStore } from '@/stores/task-prompts';

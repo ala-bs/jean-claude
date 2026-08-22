@@ -6,13 +6,13 @@ import type {
   AiUsageFeature,
   AiUsagePricingStatus,
 } from '@shared/ai-usage-types';
-import type { MobilePlatform } from '@shared/mobile-simulator-types';
 import type {
   ProjectType,
   ProviderType,
   PrWorkspaceState,
   TaskStatus,
 } from '@shared/types';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
 
 // Re-export shared types for convenience
 export type {

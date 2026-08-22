@@ -11,6 +11,10 @@ import { useEffect, useRef } from 'react';
 import clsx from 'clsx';
 import { useNavigationStore } from '@/stores/navigation';
 
+import {
+  pruneOrphanedDiffReviewState,
+  pruneStalePrReviewState,
+} from '@/stores/diff-review';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { ChangelogModal } from '@/features/changelog/ui-changelog-modal';
@@ -20,10 +24,6 @@ import { GlobalPromptFromBackModal } from '@/common/ui/global-prompt-from-back-m
 import { Header } from '@/layout/ui-header';
 import { MainSidebar } from '@/layout/ui-main-sidebar';
 import { OverlayHost } from '@/layout/ui-overlay-host';
-import {
-  pruneOrphanedDiffReviewState,
-  pruneStalePrReviewState,
-} from '@/stores/diff-review';
 import { pruneOrphanedReviewComments } from '@/stores/review-comments';
 import { pruneOrphanedTaskPrompts } from '@/stores/task-prompts';
 import { pruneOrphanedTaskReviewDrafts } from '@/stores/task-review-comment-drafts';

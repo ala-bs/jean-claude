@@ -24,6 +24,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { Select, type SelectRef } from '@/common/ui/select';
 import {
   useCreateProjectTodo,
   useDeleteProjectTodo,
@@ -40,7 +41,6 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { Kbd } from '@/common/ui/kbd';
 import type { ProjectTodo } from '@shared/types';
-import { Select, type SelectRef } from '@/common/ui/select';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useBackgroundNewTaskJobForBacklogItem } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';

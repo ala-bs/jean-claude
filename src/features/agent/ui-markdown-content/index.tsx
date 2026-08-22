@@ -1,3 +1,4 @@
+import { Check, Columns3, Copy, Maximize2, MoveHorizontal } from 'lucide-react';
 import React, {
   type ReactNode,
   startTransition,
@@ -8,13 +9,16 @@ import React, {
   useState,
 } from 'react';
 import clsx from 'clsx';
-import { Check, Columns3, Copy, Maximize2, MoveHorizontal } from 'lucide-react';
 import { codeToHtml } from 'shiki';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 
 
+import {
+  COMMENTABLE_CONTENT_ATTRIBUTE,
+  useCommentableTarget,
+} from '@/common/context/commentable-target';
 import {
   decodeAzureProxyParts,
   sanitizeMarkdownUrl,
@@ -24,16 +28,12 @@ import {
   extractImagesFromMarkdown,
 } from '@/lib/markdown-images';
 import { getImageDisplayWidth } from '@/lib/markdown-image-size';
+import { getNodeCharOffset } from '@/lib/text-offsets';
+import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
 import { isGifBlobPreviewUrl } from '@/lib/blob-preview-url';
 import { MermaidDiagram } from '@/features/common/ui-mermaid-diagram';
-import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
 import { Modal } from '@/common/ui/modal';
 import { ModalArbitrationScope } from '@/common/context/modal-arbitration';
-import {
-  COMMENTABLE_CONTENT_ATTRIBUTE,
-  useCommentableTarget,
-} from '@/common/context/commentable-target';
-import { getNodeCharOffset } from '@/lib/text-offsets';
 
 import {
   createGifFrameCache,

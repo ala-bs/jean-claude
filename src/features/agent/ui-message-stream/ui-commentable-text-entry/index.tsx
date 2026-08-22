@@ -16,16 +16,16 @@ import {
   InlineCommentComposer,
 } from '@/features/common/ui-inline-comments';
 import {
+  COMMENTABLE_CONTENT_ATTRIBUTE,
+  CommentableTargetProvider,
+  type CommentableTargetValue,
+} from '@/common/context/commentable-target';
+import {
   useReviewComments,
   useReviewCommentsStore,
 } from '@/stores/review-comments';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import { useReviewContext } from '@/common/context/review-context';
-import {
-  COMMENTABLE_CONTENT_ATTRIBUTE,
-  CommentableTargetProvider,
-  type CommentableTargetValue,
-} from '@/common/context/commentable-target';
 
 
 

@@ -6,8 +6,8 @@ import type {
   MobilePreviewIosDeviceType,
   MobilePreviewIosRuntime,
 } from '@shared/mobile-simulator-types';
-import type { MobilePreviewProjectConfig } from '@shared/types';
 import { canAutoStartMobilePreviewDevice } from '@/features/mobile-preview/utils-mobile-preview-auto-launch';
+import type { MobilePreviewProjectConfig } from '@shared/types';
 
 export function getDefaultAndroidProjectPath({
   appPath,

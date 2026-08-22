@@ -74,6 +74,10 @@ import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
+import {
+  START_PR_COMMAND_CHANNEL,
+  type StartPrCommandParams,
+} from '@shared/run-command-types';
 import type {
   TimesheetAction,
   TimesheetAxisLookupRequest,
@@ -84,10 +88,6 @@ import type {
   TimesheetRowUpdate,
   TimesheetSyncParams,
 } from '@shared/timesheet-types';
-import {
-  START_PR_COMMAND_CHANNEL,
-  type StartPrCommandParams,
-} from '@shared/run-command-types';
 import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';

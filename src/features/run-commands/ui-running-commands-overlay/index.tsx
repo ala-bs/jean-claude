@@ -18,6 +18,7 @@ import {
   type CommandRunStatus,
   getRunCommandDisplayName,
 } from '@shared/run-command-types';
+import { useTask, useTasks } from '@/hooks/use-tasks';
 import { api } from '@/lib/api';
 import { IconButton } from '@/common/ui/icon-button';
 import { InteractiveLog } from '@/features/common/interactive-log';
@@ -27,7 +28,6 @@ import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjects } from '@/hooks/use-projects';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import { useTask, useTasks } from '@/hooks/use-tasks';
 import { useToastStore } from '@/stores/toasts';
 
 

@@ -1,13 +1,13 @@
 /**
  * @vitest-environment happy-dom
  */
+import { act, createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import { act, createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { api } from '@/lib/api';
+import type { AzureDevOpsWorkItem } from '@/lib/api';
 
 import { PrWorkItems } from '.';
 

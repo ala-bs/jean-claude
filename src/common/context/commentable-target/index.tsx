@@ -1,5 +1,5 @@
-import { createContext, useContext } from 'react';
 import type { ComponentType, ReactNode } from 'react';
+import { createContext, useContext } from 'react';
 
 /**
  * Marks the commentable content element. Portal-rendered fragments use it to

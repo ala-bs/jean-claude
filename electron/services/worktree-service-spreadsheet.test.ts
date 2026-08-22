@@ -3,8 +3,8 @@ import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('fs/promises', async () =>
   vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'),

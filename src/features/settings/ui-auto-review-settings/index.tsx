@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { GripVertical, Plus, Trash2 } from 'lucide-react';
-import { nanoid } from 'nanoid';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
+import { nanoid } from 'nanoid';
 
-import type { AutoReviewRule } from '@shared/types';
 import { useSetting, useUpdateSetting } from '@/hooks/use-settings';
+import type { AutoReviewRule } from '@shared/types';
 import { PROJECT_COLORS } from '@/lib/colors';
 
 /**

@@ -20,16 +20,16 @@ import {
   useProviderDetails,
   useUpdateProvider,
 } from '@/hooks/use-providers';
-import { Select } from '@/common/ui/select';
-import { cleanIpcError } from '@/lib/ipc-error';
-import { useTokensByProviderType } from '@/hooks/use-tokens';
 import { Button } from '@/common/ui/button';
+import { cleanIpcError } from '@/lib/ipc-error';
 import { getRandomColor } from '@/lib/colors';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
 import type { Provider } from '@shared/types';
+import { Select } from '@/common/ui/select';
 import { useCreateProject } from '@/hooks/use-projects';
 import { useModal } from '@/common/context/modal';
+import { useTokensByProviderType } from '@/hooks/use-tokens';
 
 
 

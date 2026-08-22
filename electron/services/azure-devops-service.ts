@@ -32,8 +32,8 @@ import {
   validateYamlFilename,
 } from './yaml-pipeline-parser';
 
-import { azureHtmlToMarkdown } from './azure-html-to-markdown';
 import { createDebug, dbg } from '../lib/debug';
+import { azureHtmlToMarkdown } from './azure-html-to-markdown';
 import { ProviderRepository } from '../database/repositories/providers';
 import { sendGlobalPromptToWindow } from './global-prompt-service';
 import { TokenRepository } from '../database/repositories/tokens';

@@ -20,9 +20,9 @@ import {
   PromptTextareaRef,
 } from '@/features/common/ui-prompt-textarea';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
-import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 import { Button } from '@/common/ui/button';
 import type { ComponentSize } from '@/common/ui/styles';
+import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { formatKeyForDisplay } from '@/common/context/keyboard-bindings/utils';
 import { IconButton } from '@/common/ui/icon-button';

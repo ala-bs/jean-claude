@@ -11,11 +11,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 import type { DiffFile, DiffFileStatus } from './types';
+import type { AutoReviewRule } from '@shared/types';
 import { getStatusIndicator } from './status-badge';
+import { hexToRgba } from '@/lib/colors';
 import { ReviewCheck } from './review-check';
 import type { ReviewedTreatment } from '@/stores/diff-review';
-import type { AutoReviewRule } from '@shared/types';
-import { hexToRgba } from '@/lib/colors';
 import { selectionAfterClick } from './utils-selection';
 
 type TreeNode = {

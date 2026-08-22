@@ -1,16 +1,16 @@
-import { type MouseEvent, useMemo, useState } from 'react';
 import { CircleAlert, FolderGit2, Search, Trash2 } from 'lucide-react';
+import { type MouseEvent, useMemo, useState } from 'react';
 
-import type { UnusedWorktreeInfo } from '@/lib/api';
 import {
   useCleanupUnusedWorktrees,
   useScanUnusedWorktrees,
 } from '@/hooks/use-unused-worktrees';
-import { formatRelativeTime } from '@/lib/time';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { Chip } from '@/common/ui/chip';
+import { formatRelativeTime } from '@/lib/time';
 import { Modal } from '@/common/ui/modal';
+import type { UnusedWorktreeInfo } from '@/lib/api';
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '—';

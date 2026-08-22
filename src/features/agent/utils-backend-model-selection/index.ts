@@ -1,6 +1,6 @@
-import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import type { AgentBackendType } from '@shared/agent-backend-types';
 import type { BackendModelPreset, ModelPreference } from '@shared/types';
+import type { AgentBackendType } from '@shared/agent-backend-types';
+import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
 
 /**
  * A preset only counts as selected when the picker would also show it as

@@ -6,26 +6,30 @@ import {
   useMemo,
   useState,
 } from 'react';
-import clsx from 'clsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
 
 
 
 import {
-  DiffFileTree,
-  normalizeAzureChangeType,
-  ReviewProgress,
-} from '@/features/common/ui-file-diff';
+  containsAzureDevOpsMention,
+  type MentionDisplayNames,
+  normalizeMentionId,
+} from '@/lib/azure-devops-mentions';
 import {
   diffFileSignature,
   prReviewScopeId,
   useDiffReview,
 } from '@/stores/diff-review';
 import {
-  containsAzureDevOpsMention,
-  type MentionDisplayNames,
-  normalizeMentionId,
-} from '@/lib/azure-devops-mentions';
+  DiffFileTree,
+  normalizeAzureChangeType,
+  ReviewProgress,
+} from '@/features/common/ui-file-diff';
+import {
+  getAttachmentFileName,
+  getAzureAttachmentPayload,
+} from '@/lib/image-utils';
 import {
   type PullRequestRepoInfo,
   updateFeedPullRequest,
@@ -56,10 +60,6 @@ import {
   useTaskReviewFileDrafts,
 } from '@/stores/task-review-comment-drafts';
 import { api } from '@/lib/api';
-import {
-  getAttachmentFileName,
-  getAzureAttachmentPayload,
-} from '@/lib/image-utils';
 import type { DiffFile } from '@/features/common/ui-file-diff';
 import { isPrReviewChatStepMeta } from '@shared/types';
 import type { MentionOption } from '@/common/ui/mention-textarea';

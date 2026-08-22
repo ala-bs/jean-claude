@@ -9,13 +9,13 @@ import {
   isResourceLoading,
   shouldLoadChangedResource,
 } from './use-cache-resource';
-import type { ResourceMeta } from './cache-types';
 import {
   isResourceFresh,
   markResourceChanged,
   markResourceDeleted,
   markResourceStale,
 } from './cache-actions';
+import type { ResourceMeta } from './cache-types';
 
 
 describe('ensureResource', () => {

@@ -10,8 +10,8 @@ import type {
 } from '@shared/worktree-cleanup-types';
 import type { Task } from '@shared/types';
 
-import { pathExists } from '../lib/fs';
 import { dbg } from '../lib/debug';
+import { pathExists } from '../lib/fs';
 import { ProjectRepository } from '../database/repositories/projects';
 import { TaskRepository } from '../database/repositories/tasks';
 

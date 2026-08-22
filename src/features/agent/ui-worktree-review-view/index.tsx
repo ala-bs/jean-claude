@@ -31,7 +31,6 @@ import {
   ReviewProgress,
 } from '@/features/common/ui-file-diff';
 import { isImagePath, isSvgPath } from '@shared/image-types';
-import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 import { type ReviewMode, useDiffFileTreeWidth } from '@/stores/navigation';
 import {
   type ReviewPresetId,
@@ -62,6 +61,7 @@ import { TaskTodoDropdown } from '@/features/task/ui-task-todo-dropdown';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
+import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 import { useTaskSummary } from '@/hooks/use-task-summary';
 import { WorktreeActions } from '@/features/agent/ui-worktree-actions';
 

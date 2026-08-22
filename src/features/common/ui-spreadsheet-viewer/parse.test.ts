@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
+import { describe, expect, it } from 'vitest';
 
 import {
   buildSheetCells,

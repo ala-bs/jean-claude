@@ -6,10 +6,6 @@ import type {
 } from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
-  CleanupUnusedWorktreesResult,
-  UnusedWorktreeScanResult,
-} from '@shared/worktree-cleanup-types';
-import type {
   AgentMemoryCaptureWarning,
   AgentMemoryDashboard,
   AgentMemoryExtractionRun,
@@ -87,6 +83,10 @@ import type {
   AzureDevOpsPullRequestTag,
 } from '@shared/azure-devops-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
+import type {
+  CleanupUnusedWorktreesResult,
+  UnusedWorktreeScanResult,
+} from '@shared/worktree-cleanup-types';
 import type {
   DiscoveredMcpVariant,
   GlobalMcpDiscoveryResult,

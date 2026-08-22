@@ -42,8 +42,6 @@ import {
   UsageDisplaySettings,
   WorkActivitySettings,
 } from '@/features/settings/ui-general-settings';
-import { AutoReviewSettings } from '@/features/settings/ui-auto-review-settings';
-import { SettingsErrorBoundary } from '@/features/settings/ui-settings-error-boundary';
 import {
   BackendConfigSettings,
   OpenCodeProcessModeSettings,
@@ -62,6 +60,7 @@ import { AgentsSettings } from '@/features/settings/ui-agents-settings';
 import { AiGenerationSettings } from '@/features/settings/ui-ai-generation-settings';
 import { api } from '@/lib/api';
 import { AutocompleteSettings } from '@/features/settings/ui-autocomplete-settings';
+import { AutoReviewSettings } from '@/features/settings/ui-auto-review-settings';
 import { AzureDevOpsTab } from '@/features/settings/ui-azure-devops-tab';
 import { DebugDatabase } from '@/features/settings/ui-debug-database';
 import { getAgentBackendBadge } from '@shared/agent-backend-metadata';
@@ -72,6 +71,7 @@ import { McpServersSettings } from '@/features/settings/ui-mcp-servers-settings'
 import { ModelPresetsSettings } from '@/features/settings/ui-model-presets-settings';
 import { PromptSnippetsSettings } from '@/features/settings/ui-prompt-snippets-settings';
 import { RateLimitSwapSettings } from '@/features/settings/ui-rate-limit-swap-settings';
+import { SettingsErrorBoundary } from '@/features/settings/ui-settings-error-boundary';
 import { SkillsSettings } from '@/features/settings/ui-skills-settings';
 import { SourcesSettings } from '@/features/settings/ui-sources-settings';
 import { TokensTab } from '@/features/settings/ui-tokens-tab';

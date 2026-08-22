@@ -63,16 +63,16 @@ import {
   type ThinkingEffort,
 } from '@shared/types';
 import type {
-  NormalizedEntry,
-} from '@shared/normalized-message-v2';
-import type {
   PermissionsChangedEvent,
   PermissionScope,
   ResolvedPermissionRule,
 } from '@shared/permission-types';
-import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { AiUsageFeature } from '@shared/ai-usage-types';
+import type {
+  NormalizedEntry,
+} from '@shared/normalized-message-v2';
+import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 
 import {
   AgentMessageRepository,

@@ -7,6 +7,10 @@ import { nanoid } from 'nanoid';
 
 
 import {
+  getModelsForBackend,
+  getModelThinkingCapabilities,
+} from '@/features/agent/ui-backend-selector';
+import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
@@ -39,16 +43,12 @@ import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { findMatchingBackendModelPresetId } from '@/features/agent/ui-backend-preset-selector';
-import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { getDefaultModelForBackend } from '@/lib/default-models';
-import {
-  getModelsForBackend,
-  getModelThinkingCapabilities,
-} from '@/features/agent/ui-backend-selector';
 import { getOriginalTaskAgentMemoryPrompt } from '@/lib/agent-memory-prompt-input';
 import { Input } from '@/common/ui/input';
 import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import { PromptTextarea } from '@/features/common/ui-prompt-textarea';
+import { resolveBackendModelSelection } from '@/features/agent/utils-backend-model-selection';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useCreateTaskWithWorktree } from '@/hooks/use-tasks';

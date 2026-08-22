@@ -1,8 +1,8 @@
 import { join } from 'path';
 
-import type { MenuItemConstructorOptions } from 'electron';
 import { app, BrowserWindow, Menu, protocol, shell } from 'electron';
 import fixPath from 'fix-path';
+import type { MenuItemConstructorOptions } from 'electron';
 
 import {
   closeIdleOpenCodeSharedServerNow,
@@ -16,18 +16,18 @@ import {
   fetchLocalImage,
   LOCAL_IMAGE_PROTOCOL,
 } from './services/local-image-protocol-service';
+import {
+  runBeforeQuitCleanups,
+  stopVetoingQuit,
+} from './services/mobile-preview-lifecycle';
 import { agentMemorySchedulerService } from './services/agent-memory-scheduler-service';
 import { agentService } from './services/agent-service';
 import { cleanupOrphanedWorkspaces } from './services/system-project-service';
 import { createReloadPreviewReadinessRegistrar } from './services/reload-preview-service';
 import { dbg } from './lib/debug';
+import { killOrphanedCoreSimulatorHelpers } from './services/mobile-preview-ios-idb-adapter';
 import { migrateDatabase } from './database';
 import { mobilePreviewNetworkProxyService } from './services/mobile-preview-network-proxy-service';
-import { killOrphanedCoreSimulatorHelpers } from './services/mobile-preview-ios-idb-adapter';
-import {
-  runBeforeQuitCleanups,
-  stopVetoingQuit,
-} from './services/mobile-preview-lifecycle';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { registerIpcHandlers } from './ipc/handlers';

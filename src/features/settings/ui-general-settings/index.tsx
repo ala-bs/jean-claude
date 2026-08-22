@@ -39,7 +39,6 @@ import {
   type DesktopNotificationStatus,
   type NonExistentClaudeProject,
 } from '@/lib/api';
-import { UnusedWorktreesCleanup } from '@/features/settings/ui-unused-worktrees-cleanup';
 import {
   AVAILABLE_BACKENDS,
   getModelsForBackend,
@@ -112,6 +111,7 @@ import { PromptPrefaceList } from '@/features/settings/ui-prompt-preface-list';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
+import { UnusedWorktreesCleanup } from '@/features/settings/ui-unused-worktrees-cleanup';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useDeleteWorkActivity } from '@/hooks/use-work-activity';
 import { useMobilePreviewAutoStartProxy } from '@/stores/navigation';

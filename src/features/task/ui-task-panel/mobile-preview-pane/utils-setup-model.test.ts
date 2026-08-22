@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import { baseDerived, baseFacts } from './utils-preview-fixtures';
 import {
   getSetupModel,
   type PreviewDerived,
   type PreviewFacts,
   type PreviewStepKey,
 } from './utils-setup-model';
-import { baseDerived, baseFacts } from './utils-preview-fixtures';
 
 function model(
   facts: Partial<PreviewFacts> = {},

@@ -30,7 +30,6 @@ import {
   QuestionResponse,
 } from '@shared/agent-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
-import { isDefaultAppFile } from '@shared/default-app-extensions';
 import type {
   AgentMemoryFollowUpCapture,
   AgentMemoryPromptCapture,
@@ -66,6 +65,10 @@ import type {
   GetYamlParametersIpcParams,
   QueueBuildIpcParams,
 } from '@shared/pipeline-types';
+import {
+  isSpreadsheetPath,
+  MAX_SPREADSHEET_BYTES,
+} from '@shared/spreadsheet-types';
 import type {
   MobileColorScheme,
   MobilePlatform,
@@ -122,11 +125,8 @@ import type {
 } from '@shared/work-activity-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import { getImageMimeType } from '@shared/image-types';
-import {
-  isSpreadsheetPath,
-  MAX_SPREADSHEET_BYTES,
-} from '@shared/spreadsheet-types';
 import type { GlobalPromptResponse } from '@shared/global-prompt-types';
+import { isDefaultAppFile } from '@shared/default-app-extensions';
 import { isValidTeamsJoinUrl } from '@shared/teams-url';
 import { parseAzureRemoteUrl } from '@shared/azure-remote-utils';
 import type { TimesheetProviderType } from '@shared/timesheet-types';
@@ -317,10 +317,6 @@ import {
   updateProjectCommitIgnore,
 } from '../services/worktree-service';
 import {
-  cleanupUnusedWorktrees,
-  scanUnusedWorktrees,
-} from '../services/unused-worktree-service';
-import {
   cleanupProjectLogoPath,
   cleanupProjectLogos,
   deleteGeneratedProjectLogo,
@@ -330,6 +326,17 @@ import {
   selectGeneratedProjectLogo,
   uploadProjectLogo,
 } from '../services/project-logo-service';
+import {
+  cleanupTaskForDeletion,
+  cleanupTaskWorktree,
+  completeTaskWithWorktreeCleanup,
+  ensureTaskCommandsStopped,
+  shouldUsePrReviewWorkspaceCleanup,
+} from '../services/task-worktree-cleanup-service';
+import {
+  cleanupUnusedWorktrees,
+  scanUnusedWorktrees,
+} from '../services/unused-worktree-service';
 import {
   complete as completeText,
   getDailyUsage as getCompletionDailyUsage,
@@ -385,13 +392,6 @@ import {
   createSendMessageForStep,
   RENDERER_SEND_MESSAGE_OPTIONS,
 } from './send-message-for-step';
-import {
-  cleanupTaskForDeletion,
-  cleanupTaskWorktree,
-  completeTaskWithWorktreeCleanup,
-  ensureTaskCommandsStopped,
-  shouldUsePrReviewWorkspaceCleanup,
-} from '../services/task-worktree-cleanup-service';
 import {
   createSkill,
   deleteSkill,
@@ -510,15 +510,6 @@ import {
   redactUsageDisplaySetting,
 } from './usage-display-settings';
 import {
-  validateAxisLookupRequest,
-  validateDraftParams,
-  validateDryRunRequest,
-  validateSaveRequest,
-  validateSheetRequest,
-  validateSyncParams,
-  validateTimesheetProvider,
-} from './timesheet-validation';
-import {
   registerStartPrCommandHandler,
   resetRunCommandLogs,
   resolveRunCommandStart,
@@ -531,6 +522,15 @@ import {
   validateRendererStepUpdate,
   validateRendererTaskUpdate,
 } from './task-update-validation';
+import {
+  validateAxisLookupRequest,
+  validateDraftParams,
+  validateDryRunRequest,
+  validateSaveRequest,
+  validateSheetRequest,
+  validateSyncParams,
+  validateTimesheetProvider,
+} from './timesheet-validation';
 import {
   validateTaskBranchRename,
   validateTaskSourceBranchChange,
