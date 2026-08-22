@@ -1,11 +1,14 @@
 import React, {
+  type ReactNode,
   startTransition,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
 import clsx from 'clsx';
+import { Check, Columns3, Copy, Maximize2, MoveHorizontal } from 'lucide-react';
 import { codeToHtml } from 'shiki';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -24,6 +27,13 @@ import { getImageDisplayWidth } from '@/lib/markdown-image-size';
 import { isGifBlobPreviewUrl } from '@/lib/blob-preview-url';
 import { MermaidDiagram } from '@/features/common/ui-mermaid-diagram';
 import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
+import { Modal } from '@/common/ui/modal';
+import { ModalArbitrationScope } from '@/common/context/modal-arbitration';
+import {
+  COMMENTABLE_CONTENT_ATTRIBUTE,
+  useCommentableTarget,
+} from '@/common/context/commentable-target';
+import { getNodeCharOffset } from '@/lib/text-offsets';
 
 import {
   createGifFrameCache,
@@ -1163,6 +1173,228 @@ export function GifFrameScrubber({
   );
 }
 
+/**
+ * The markdown source of the segment currently being rendered, so the stable
+ * table renderer can slice its own original text out of it for "copy as
+ * markdown" without being re-created per render.
+ */
+const MarkdownSourceContext = React.createContext<string>('');
+
+/** Stable `components.table` renderer — see the note at its use site. */
+function MarkdownTableRenderer({
+  children,
+  node,
+}: {
+  children?: ReactNode;
+  node?: { position?: { start: { offset?: number }; end: { offset?: number } } };
+}) {
+  const source = React.useContext(MarkdownSourceContext);
+  const start = node?.position?.start.offset;
+  const end = node?.position?.end.offset;
+  const markdown =
+    typeof start === 'number' && typeof end === 'number'
+      ? source.slice(start, end)
+      : null;
+
+  return <MarkdownTableBlock markdown={markdown}>{children}</MarkdownTableBlock>;
+}
+
+const TOOLBAR_BUTTON_CLASS =
+  'border-line bg-bg-2 text-ink-2 hover:text-ink-0 hover:bg-bg-1 flex h-6 w-6 items-center justify-center rounded border transition-colors';
+
+/**
+ * Renders a markdown table with a hover toolbar (toggle column layout, copy as
+ * raw markdown, expand into a full-width modal). `markdown` is the original
+ * source slice for this table, or null when position info is unavailable.
+ *
+ * Layouts (both use CSS auto layout, so columns are always content-proportional
+ * — they differ in how much room the table is allowed to claim):
+ * - `fit` (default): `w-full`, so the table is capped at the container and
+ *   columns divide it in proportion to content. A small 6rem floor per cell
+ *   stops a short column from collapsing into a one-word ribbon.
+ * - `wide`: `w-max`, so columns take the width their content wants (capped at
+ *   26rem each) and the wrapper scrolls horizontally.
+ *
+ * Neither wrapper scrolls vertically — a nested vertical scroll container
+ * would swallow the message stream's scroll whenever the pointer is over a
+ * table. Tables grow to their full height and the page scrolls instead.
+ */
+function MarkdownTableBlock({
+  children,
+  markdown,
+}: {
+  children: ReactNode;
+  markdown: string | null;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [layout, setLayout] = useState<'fit' | 'wide'>('fit');
+  const commentableTarget = useCommentableTarget();
+  const CommentableFragment = commentableTarget?.CommentableFragment;
+  const inlineRef = useRef<HTMLDivElement>(null);
+
+  // The modal renders the same cells as the inline table, so their text is
+  // identical — offsets measured in the modal only need shifting by where the
+  // inline table starts within the message for comments to line up in both.
+  // Must stay referentially stable: it feeds the wrapper's effect deps.
+  const getCharOffsetBase = useCallback(() => {
+    const inlineTable = inlineRef.current;
+    const outerContent = inlineTable?.closest(
+      `[${COMMENTABLE_CONTENT_ATTRIBUTE}]`,
+    );
+    if (!outerContent || !inlineTable) return 0;
+    const offset = getNodeCharOffset(outerContent, inlineTable);
+    return offset >= 0 ? offset : 0;
+  }, []);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timeout = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [copied]);
+
+  const handleCopy = useCallback(() => {
+    if (!markdown) return;
+    void navigator.clipboard
+      .writeText(markdown)
+      .then(() => setCopied(true))
+      .catch((error) => {
+        // Denied permission or an unfocused document — leave the icon alone
+        // rather than falsely confirming a copy that never happened.
+        console.error('[MarkdownTable] Failed to copy table markdown', error);
+      });
+  }, [markdown]);
+
+  const renderTable = () => (
+    <div
+      className={clsx(
+        // Horizontal scroll only — a vertical scroll container here would trap
+        // the message stream's scroll when the pointer is over a table.
+        'border-line overflow-x-auto rounded-lg border',
+        // Fit mode relaxes the cell width band: the max cap would force
+        // overflow, and a 10rem floor is too wide to divide a narrow pane
+        // between 5+ columns. 6rem is still enough for ~2 words per line.
+        layout === 'fit' &&
+          '[&_td]:max-w-none [&_td]:min-w-[6rem] [&_th]:max-w-none [&_th]:min-w-[6rem]',
+      )}
+    >
+      <table
+        className={clsx(
+          'border-collapse text-left',
+          // Auto layout in both modes — only the available width differs.
+          layout === 'fit' ? 'w-full' : 'w-max min-w-full',
+        )}
+      >
+        {children}
+      </table>
+    </div>
+  );
+
+  const renderToolbar = ({ includeExpand }: { includeExpand: boolean }) => (
+    <>
+      <button
+        type="button"
+        onClick={() =>
+          setLayout((current) => (current === 'fit' ? 'wide' : 'fit'))
+        }
+        title={
+          layout === 'fit'
+            ? 'Widen columns to fit content'
+            : 'Shrink table to fit the width'
+        }
+        aria-label="Toggle table column width"
+        aria-pressed={layout === 'wide'}
+        className={TOOLBAR_BUTTON_CLASS}
+      >
+        {layout === 'fit' ? (
+          <MoveHorizontal className="h-3 w-3" />
+        ) : (
+          <Columns3 className="h-3 w-3" />
+        )}
+      </button>
+      {markdown && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          title="Copy table as markdown"
+          aria-label="Copy table as markdown"
+          className={TOOLBAR_BUTTON_CLASS}
+        >
+          {copied ? (
+            <Check className="h-3 w-3 text-green-500" />
+          ) : (
+            <Copy className="h-3 w-3" />
+          )}
+        </button>
+      )}
+      {includeExpand && (
+        <button
+          type="button"
+          onClick={() => setIsExpanded(true)}
+          title="Expand table"
+          aria-label="Expand table"
+          className={TOOLBAR_BUTTON_CLASS}
+        >
+          <Maximize2 className="h-3 w-3" />
+        </button>
+      )}
+    </>
+  );
+
+  const modalBody = (
+    <div
+      className={clsx(
+        'jc-markdown text-ink-1 text-[12.5px] leading-[1.66]',
+        // Extra horizontal room in the modal, but only in wide mode — fit
+        // mode relies on the cells having no width cap at all.
+        layout === 'wide' && '[&_td]:max-w-[44rem] [&_th]:max-w-[44rem]',
+      )}
+    >
+      <div className="mb-2 flex justify-end gap-1">
+        {renderToolbar({ includeExpand: false })}
+      </div>
+      {renderTable()}
+    </div>
+  );
+
+  return (
+    <>
+      <div className="group/table relative mb-3" ref={inlineRef}>
+        <div className="pointer-events-none absolute top-1 right-1 z-20 flex gap-1 opacity-0 transition-opacity group-hover/table:pointer-events-auto group-hover/table:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
+          {renderToolbar({ includeExpand: true })}
+        </div>
+        {renderTable()}
+      </div>
+
+      {/* Scoped so this modal never enters global arbitration: MarkdownContent
+          also renders inside other modals (e.g. the prompt-group diff modal),
+          and registering at the default priority would steal ownership and
+          unmount the parent — which unmounts this modal along with it. */}
+      <ModalArbitrationScope>
+      <Modal
+        isOpen={isExpanded}
+        onClose={() => setIsExpanded(false)}
+        size="xl"
+        title="Table"
+        contentClassName="min-h-0 overflow-auto p-4"
+        panelClassName="w-[95vw] max-w-[95vw]! h-[85vh]"
+      >
+        {/* Inside a portal the stream's selection listeners can't see us
+            (they're DOM-`contains` scoped), so mount a commentable layer of
+            our own against the same message entry. */}
+        {CommentableFragment ? (
+          <CommentableFragment charOffsetBase={getCharOffsetBase}>
+            {modalBody}
+          </CommentableFragment>
+        ) : (
+          modalBody
+        )}
+      </Modal>
+      </ModalArbitrationScope>
+    </>
+  );
+}
+
 export function MarkdownContent({
   content,
   onFilePathClick,
@@ -1253,8 +1485,11 @@ export function MarkdownContent({
               onFilePathClick={onFilePathClick}
             />
           ) : (
-            <ReactMarkdown
+            <MarkdownSourceContext.Provider
               key={segmentIndex}
+              value={segment.content}
+            >
+            <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               urlTransform={(url, key, node) =>
                 customUrlTransform(url, key, node, allowBlobImages)
@@ -1434,20 +1669,26 @@ export function MarkdownContent({
                     </blockquote>
                   );
                 },
-                table: ({ children }) => (
-                  <div className="border-line mb-3 overflow-x-auto rounded-lg border">
-                    <table className="min-w-full border-collapse text-left">
-                      {children}
-                    </table>
-                  </div>
-                ),
+                // Must be a stable module-level reference: react-markdown uses
+                // these as element types, so an inline arrow would get a new
+                // identity every render and remount the table — wiping the
+                // layout toggle and closing the modal mid-stream.
+                table: MarkdownTableRenderer,
                 th: ({ children }) => (
-                  <th className="border-line-soft bg-bg-2 text-ink-0 border px-3 py-2 text-left font-semibold">
+                  // No `sticky top-0`: `overflow-x-auto` computes overflow-y to
+                  // `auto` too, making the wrapper a scrollport with zero
+                  // vertical travel, so a sticky header would never move.
+                  <th className="border-line-soft bg-bg-2 text-ink-0 min-w-[10rem] max-w-[26rem] border px-3 py-2 text-left align-bottom font-semibold">
                     {children}
                   </th>
                 ),
+                tr: ({ children }) => (
+                  <tr className="even:bg-bg-1/40 hover:bg-bg-2/60 transition-colors">
+                    {children}
+                  </tr>
+                ),
                 td: ({ children }) => (
-                  <td className="border-line-soft border px-3 py-2">
+                  <td className="border-line-soft min-w-[10rem] max-w-[26rem] border px-3 py-2 align-top leading-[1.6] break-words [&_code]:break-all [&_code]:whitespace-pre-wrap">
                     {children}
                   </td>
                 ),
@@ -1503,6 +1744,7 @@ export function MarkdownContent({
             >
               {segment.content}
             </ReactMarkdown>
+            </MarkdownSourceContext.Provider>
           ),
         )}
       </div>

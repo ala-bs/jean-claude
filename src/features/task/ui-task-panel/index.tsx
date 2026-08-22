@@ -2447,6 +2447,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             lineEnd: params.lineEnd,
             selectedText: params.selectedText,
             charOffset: params.charOffset,
+            charLength: params.charLength,
           },
           body: params.body,
           images: params.images,
