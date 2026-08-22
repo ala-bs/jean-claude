@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { CacheListener } from './cache/cache-listener';
 import { DetectKeyboardLayout } from './common/context/keyboard-layout';
+import { LocalStorageBootGuardBridge } from './lib/ui-local-storage-boot-guard-bridge';
 import { ModalArbitrationProvider } from './common/context/modal-arbitration';
 import { ModalProvider } from './common/context/modal';
 import { RootKeyboardBindings } from './common/context/keyboard-bindings';
@@ -45,6 +46,9 @@ export default function App() {
           <ModalArbitrationProvider>
             <QueryClientProvider client={queryClient}>
               <CacheListener />
+              {/* Outside the router: inside it, RootErrorBoundary would unmount
+                  this and leave the boot guard withholding writes forever. */}
+              <LocalStorageBootGuardBridge />
               <ModalProvider>
                 <RouterProvider router={router} />
               </ModalProvider>

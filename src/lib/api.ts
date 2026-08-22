@@ -2131,6 +2131,11 @@ export interface Api {
   app: {
     isDevMode: boolean;
     devBadgeLabel?: string;
+    /**
+     * False only on a genuine first run for this Chromium profile, where an
+     * empty localStorage is expected rather than evidence of a failed read.
+     */
+    hasExistingLocalStorageBucket: boolean;
     getIsPreviewMode: () => Promise<boolean>;
     getReloadUpdateInfo: (params: {
       builtCommitHash: string;
@@ -3275,6 +3280,7 @@ export const api: Api = hasWindowApi
       app: {
         isDevMode: false,
         devBadgeLabel: undefined,
+        hasExistingLocalStorageBucket: true,
         getIsPreviewMode: async () => false,
         getReloadUpdateInfo: async () => ({
           commitCount: 0,

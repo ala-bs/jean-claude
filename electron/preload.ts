@@ -96,6 +96,20 @@ import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
 
+/**
+ * Whether this Chromium profile already had a localStorage bucket before this
+ * launch, sampled by the main process (see `hasExistingLocalStorageBucket`) and
+ * passed via `webPreferences.additionalArguments`.
+ *
+ * `false` means a genuine first run for this profile, so an empty localStorage
+ * is expected rather than a failed read. Defaults to `true` when the argument is
+ * missing: assuming "the bucket existed" makes the renderer's boot guard treat
+ * an empty read as suspicious, which is the safe direction to be wrong in.
+ */
+const hasExistingLocalStorageBucket = !process.argv.includes(
+  '--jc-local-storage-bucket=absent',
+);
+
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
   windowState: {
@@ -1860,6 +1874,7 @@ contextBridge.exposeInMainWorld('api', {
   app: {
     isDevMode: !!process.env.ELECTRON_RENDERER_URL,
     devBadgeLabel,
+    hasExistingLocalStorageBucket,
     getIsPreviewMode: () =>
       ipcRenderer.invoke('app:getIsPreviewMode') as Promise<boolean>,
     getReloadUpdateInfo: (params: { builtCommitHash: string }) =>
