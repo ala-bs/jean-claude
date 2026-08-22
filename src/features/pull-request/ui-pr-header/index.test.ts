@@ -11,20 +11,37 @@ import type { AzureDevOpsPullRequestDetails } from '@/lib/api';
 import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { RootOverlay } from '@/common/context/overlay';
 
-const { addToast, markDraft, updateTitle } = vi.hoisted(() => ({
+const {
+  addToast,
+  markDraft,
+  updateTitle,
+  navigate,
+  createPrReviewTask,
+  routerPathname,
+} = vi.hoisted(() => ({
   addToast: vi.fn(),
   markDraft: vi.fn(),
   updateTitle: vi.fn(),
+  navigate: vi.fn(),
+  createPrReviewTask: vi.fn(),
+  routerPathname: { current: '/projects/project-1/prs/17' },
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => navigate,
+  useRouterState: ({
+    select,
+  }: {
+    select: (state: { location: { pathname: string } }) => unknown;
+  }) => select({ location: { pathname: routerPathname.current } }),
+}));
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 vi.mock('@/lib/api', () => ({
   api: {
     shell: { openInEditor: vi.fn() },
-    tasks: { createPrReviewTask: vi.fn() },
+    tasks: { createPrReviewTask },
   },
 }));
 vi.mock('@/hooks/use-pull-requests', () => ({
@@ -102,6 +119,10 @@ describe('PrHeader', () => {
     addToast.mockReset();
     markDraft.mockReset();
     updateTitle.mockReset();
+    navigate.mockReset();
+    createPrReviewTask.mockReset();
+    createPrReviewTask.mockResolvedValue({ id: 'task-9' });
+    routerPathname.current = '/projects/project-1/prs/17';
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -259,6 +280,40 @@ describe('PrHeader', () => {
     );
     deleteButton?.click();
     expect(onDeletePrWorkspaces).toHaveBeenCalledOnce();
+  });
+
+  it('focuses the new review workspace inside the feed when opened from the feed', async () => {
+    routerPathname.current = '/all/prs/project-1/17';
+    flushSync(() => {
+      root.render(
+        withProviders(createElement(PrHeader, { pr, projectId: 'project-1' })),
+      );
+    });
+
+    const reviewButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Create Review Workspace',
+    );
+    expect(reviewButton).toBeDefined();
+    reviewButton?.click();
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalled());
+
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/all/$taskId',
+      params: { taskId: 'task-9' },
+    });
+  });
+
+  it('focuses the new review workspace in the project when opened from a project', async () => {
+    const reviewButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Create Review Workspace',
+    );
+    reviewButton?.click();
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalled());
+
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/projects/$projectId/tasks/$taskId',
+      params: { projectId: 'project-1', taskId: 'task-9' },
+    });
   });
 
   it('uses wrapping, dynamic-height toolbar contracts at narrow widths', () => {

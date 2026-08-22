@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
 import { startTransition, useCallback, useEffect, useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
 
@@ -122,6 +122,9 @@ export function PrHeader({
   onDeletePrWorkspaces?: () => void;
 }) {
   const navigate = useNavigate();
+  // The app uses hash history, so `window.location.pathname` never holds the
+  // route. Read it from the router instead.
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const queryClient = useQueryClient();
   const { data: project } = useProject(projectId);
   const addRunningJob = useBackgroundJobsStore((s) => s.addRunningJob);
@@ -176,7 +179,15 @@ export function PrHeader({
         queryClient.invalidateQueries({ queryKey: ['tasks', { projectId }] });
         setIsCreating(false);
 
-        if (!window.location.pathname.startsWith('/all')) {
+        // From the feed, stay in the feed and focus the new review workspace
+        // there. Navigating to the project route would yank the user out of
+        // the feed context they started from.
+        if (pathname.startsWith('/all')) {
+          void navigate({
+            to: '/all/$taskId',
+            params: { taskId: task.id },
+          });
+        } else {
           void navigate({
             to: '/projects/$projectId/tasks/$taskId',
             params: { projectId, taskId: task.id },
@@ -195,6 +206,7 @@ export function PrHeader({
     [
       pr.id,
       projectId,
+      pathname,
       navigate,
       queryClient,
       addRunningJob,
