@@ -120,6 +120,7 @@ export const dbg = {
 
   // Other services
   worktree: createLogger('worktree'),
+  ssh: createLogger('ssh'),
   notification: createLogger('notification'),
   azure: createLogger('azure'),
   azureImageProxy: createLogger('azure:image-proxy'),

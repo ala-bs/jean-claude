@@ -1526,6 +1526,11 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('globalPrompt:show', handler);
       return () => ipcRenderer.removeListener('globalPrompt:show', handler);
     },
+    onDismiss: (callback: (promptId: string) => void) => {
+      const handler = (_: unknown, promptId: string) => callback(promptId);
+      ipcRenderer.on('globalPrompt:dismiss', handler);
+      return () => ipcRenderer.removeListener('globalPrompt:dismiss', handler);
+    },
     respond: (response: GlobalPromptResponse) =>
       ipcRenderer.invoke('globalPrompt:respond', response),
   },

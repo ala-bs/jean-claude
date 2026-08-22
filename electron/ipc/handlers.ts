@@ -320,6 +320,7 @@ import {
   pushBranch,
   renameWorktreeBranch,
   resolveSourceBranchMergeBase,
+  runGitWithSshPrompt,
   updateProjectCommitIgnore,
 } from '../services/worktree-service';
 import {
@@ -575,6 +576,13 @@ function resetRunCommandLogsAndBroadcast(params: {
   });
 }
 
+/**
+ * Budget for the source-branch fetch/pull during task creation. Long enough to
+ * survive a credential dialog, short enough that a dead remote does not hold
+ * task creation for the full push timeout.
+ */
+const SOURCE_BRANCH_FETCH_TIMEOUT_MS = 6 * 60 * 1000;
+
 async function pullSourceBranch({
   repoPath,
   sourceBranch,
@@ -585,7 +593,28 @@ async function pullSourceBranch({
   return resolveSourceBranchStartPoint({
     repoPath,
     sourceBranch,
-    runGit: (args, cwd) => runGit(args, cwd),
+    // `fetch` and `pull` are the only steps that talk to the remote, so they
+    // are the only ones that can hit a passphrase prompt. Routing them through
+    // the askpass path keeps task creation working for users whose key is not
+    // in ssh-agent; the local ref lookups stay on the fast non-interactive
+    // runner. Neither network call's stdout is used, hence the empty string.
+    runGit: async (args, cwd) => {
+      const subcommand = args[0];
+      if (subcommand === 'fetch' || subcommand === 'pull') {
+        await runGitWithSshPrompt({
+          args,
+          cwd,
+          label: `git ${subcommand}`,
+          // Mid-flow: task creation continues straight after this.
+          offerKeyUnlock: false,
+          // Task creation should fail fast on a stalled network rather than
+          // sit for the full push-sized budget with no cancel affordance.
+          timeoutMs: SOURCE_BRANCH_FETCH_TIMEOUT_MS,
+        });
+        return '';
+      }
+      return runGit(args, cwd);
+    },
     debug: (message, ...args) => dbg.ipc(message, ...args),
   });
 }
@@ -790,6 +819,21 @@ async function updateStepAndEmit(
   return step;
 }
 
+/**
+ * Adds `-o BatchMode=yes` to an ssh command line.
+ *
+ * Inserted right after the program name rather than appended: ssh honours the
+ * *first* occurrence of a repeated option, so a user whose GIT_SSH_COMMAND
+ * already contains `-o BatchMode=no` would otherwise keep their value and the
+ * command could still block on a prompt.
+ */
+function withBatchMode(sshCommand: string | undefined): string {
+  const command = sshCommand?.trim() || 'ssh';
+  const firstSpace = command.indexOf(' ');
+  if (firstSpace === -1) return `${command} -o BatchMode=yes`;
+  return `${command.slice(0, firstSpace)} -o BatchMode=yes${command.slice(firstSpace)}`;
+}
+
 async function runGit(
   args: string[],
   cwd: string,
@@ -800,6 +844,19 @@ async function runGit(
     const child = spawn('git', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
+      // This helper has no way to answer a credential prompt, so make git and
+      // ssh fail immediately instead of blocking until the timeout fires.
+      // SSH_ASKPASS_REQUIRE alone is not enough: it only disables the askpass
+      // helper, and ssh will still open /dev/tty directly — which succeeds
+      // when the app was launched from a terminal (pnpm dev), leaving the
+      // command blocked on an invisible prompt. BatchMode is the actual
+      // fail-fast switch. Callers that need to prompt use the askpass broker.
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        SSH_ASKPASS_REQUIRE: 'never',
+        GIT_SSH_COMMAND: withBatchMode(process.env.GIT_SSH_COMMAND),
+      },
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -4315,6 +4372,9 @@ export function registerIpcHandlers() {
       await pushBranch({
         worktreePath: task.worktreePath,
         branchName: task.branchName,
+        // Steps 4-6 follow immediately; a "remember this key?" dialog would
+        // surface after the UI has already navigated to the new PR.
+        offerKeyUnlock: false,
       });
 
       // Step 4: Create PR via Azure DevOps

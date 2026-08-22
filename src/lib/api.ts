@@ -1787,6 +1787,7 @@ export interface Api {
   };
   globalPrompt: {
     onShow: (callback: (prompt: GlobalPrompt) => void) => () => void;
+    onDismiss: (callback: (promptId: string) => void) => () => void;
     respond: (response: GlobalPromptResponse) => Promise<void>;
   };
   mcpTemplates: {
@@ -2969,6 +2970,7 @@ export const api: Api = hasWindowApi
       },
       globalPrompt: {
         onShow: () => () => {},
+        onDismiss: () => () => {},
         respond: async () => {},
       },
       mcpTemplates: {

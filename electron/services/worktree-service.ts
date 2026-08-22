@@ -1,6 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { exec, execFile, type ExecOptions, spawn } from 'child_process';
+import { exec, execFile, type ExecOptions } from 'child_process';
 import { promisify } from 'util';
 
 
@@ -26,6 +26,13 @@ import { ProjectRepository } from '../database/repositories/projects';
 
 
 
+import {
+  addKeyToAgent,
+  getSshAgentStatus,
+  isKeyLoadedInAgent,
+  runWithSshAskpass,
+  type SshPromptRequest,
+} from './ssh-askpass-broker';
 import {
   buildWorktreeSettings,
   readSettings,
@@ -2261,19 +2268,17 @@ export async function checkMergeConflicts(
   }
 }
 
-const SSH_PASSPHRASE_PATTERN = /Enter passphrase for key/i;
-// Matches "user@host's password:" but not error messages like "Permission denied (password)"
-const SSH_PASSWORD_PATTERN = /\S+@\S+'s password:/i;
-
 /**
  * Pushes the current branch to a remote.
- * Detects SSH passphrase/password prompts and shows a global prompt dialog
- * so users can enter their credentials interactively.
+ * SSH passphrase/password prompts are routed through the askpass broker and
+ * surfaced as a dialog so users can authenticate interactively.
  */
 export async function pushBranch(params: {
   worktreePath: string;
   branchName: string;
   remote?: string;
+  /** See runGitWithSshPrompt. Pass false when the push is a mid-flow step. */
+  offerKeyUnlock?: boolean;
 }): Promise<void> {
   const remote = params.remote ?? 'origin';
   dbg.worktree('pushBranch: %s to %s', params.branchName, remote);
@@ -2282,8 +2287,23 @@ export async function pushBranch(params: {
     args: ['push', '-u', remote, params.branchName],
     cwd: params.worktreePath,
     label: 'git push',
+    offerKeyUnlock: params.offerKeyUnlock,
   });
 }
+
+/**
+ * Ceiling for git operations that talk to a remote. Generous enough for a
+ * large push, short enough that a blackholed connection cannot pin the askpass
+ * socket and child process for the lifetime of the app.
+ */
+const GIT_NETWORK_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * How long a credential dialog stays up before it is withdrawn. Shorter than
+ * GIT_NETWORK_TIMEOUT_MS so the user gets a real error rather than the command
+ * dying under an open dialog.
+ */
+const SSH_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Renames the local branch a worktree is checked out on and returns the branch
@@ -2460,97 +2480,223 @@ function explainPullFailure(params: {
   return message;
 }
 
+/** User cancelled the SSH prompt — reported without a raw git stderr dump. */
+class SshAuthCancelledError extends Error {
+  constructor(label: string) {
+    super(`${label} cancelled: SSH authentication was not completed`);
+    this.name = 'SshAuthCancelledError';
+  }
+}
+
 /**
  * Runs a git command that may prompt for SSH credentials, surfacing the prompt
  * to the renderer via the global prompt dialog.
+ *
+ * ssh reads passphrases from /dev/tty, never from stdin, so a GUI process can
+ * only answer through the SSH_ASKPASS protocol — see ssh-askpass-broker.
+ * When the user unlocks a passphrase-protected key we offer to hand it to
+ * ssh-agent so the rest of the session is prompt-free.
  */
-function runGitWithSshPrompt(params: {
+export async function runGitWithSshPrompt(params: {
   args: string[];
   cwd: string;
   label: string;
+  /**
+   * Whether to offer adding an unlocked key to ssh-agent afterwards. Off for
+   * pushes that are one step of a longer flow (PR creation), where the dialog
+   * would land after the UI has already moved on.
+   */
+  offerKeyUnlock?: boolean;
+  /** Overrides the default network timeout. */
+  timeoutMs?: number;
 }): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn('git', params.args, {
-      cwd: params.cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        SSH_ASKPASS: '',
-        GIT_ASKPASS: '',
-        SSH_ASKPASS_REQUIRE: 'never',
-      },
-    });
+  let cancelled = false;
+  let unrecognisedPrompt: string | null = null;
+  /** Held in memory only, to optionally forward to ssh-add. Never persisted. */
+  let unlockedKey: { keyPath: string; passphrase: string } | null = null;
 
-    let stderrOutput = '';
-    let promptHandled = false;
+  const handlePrompt = async (
+    request: SshPromptRequest,
+  ): Promise<string | null> => {
+    {
+      // ssh offers each candidate identity in turn and retries a key up to
+      // three times. Without this, clicking Cancel with two encrypted keys
+      // configured pops a fresh dialog for the next key.
+      if (cancelled) return null;
 
-    child.stderr?.on('data', async (data: Buffer) => {
-      const text = data.toString();
-      stderrOutput += text;
-      dbg.worktree('%s stderr: %s', params.label, text.trim());
+      const { sendGlobalPromptToWindow, sendGlobalInputPrompt } = await import(
+        './global-prompt-service'
+      );
 
-      if (promptHandled) return;
+      // An unrecognised prompt must not be answered blindly — we have no idea
+      // what ssh is asking for, and a masked box would invite a secret.
+      if (request.kind === 'unknown') {
+        dbg.ssh('unrecognised prompt, declining: %s', request.prompt.trim());
+        cancelled = true;
+        unrecognisedPrompt = request.prompt.trim();
+        return null;
+      }
 
-      // Test accumulated output to handle patterns split across chunks
-      const isPassphrase = SSH_PASSPHRASE_PATTERN.test(stderrOutput);
-      const isPassword = SSH_PASSWORD_PATTERN.test(stderrOutput);
-
-      if (isPassphrase || isPassword) {
-        promptHandled = true;
-        dbg.worktree('SSH authentication prompt detected');
-
-        try {
-          const { sendGlobalPromptToWindow } =
-            await import('./global-prompt-service');
-          const prompt = {
-            title: 'SSH Authentication Required',
-            message: stderrOutput.trim(),
-            inputType: 'password' as const,
-            acceptLabel: 'Submit',
+      if (request.kind === 'confirm') {
+        const accepted = await sendGlobalPromptToWindow(
+          {
+            title: 'Unknown SSH Host',
+            message:
+              'The server’s identity cannot be verified. Only continue if you recognise this host.',
+            details: request.prompt.trim(),
+            acceptLabel: 'Continue',
             rejectLabel: 'Cancel',
-          };
-          // Cast needed: dynamic imports lose overload resolution.
-          // When inputType is set, the function returns { accepted, inputValue }.
-          const result = (await sendGlobalPromptToWindow(
-            prompt,
-          )) as unknown as {
-            accepted: boolean;
-            inputValue?: string;
-          };
-
-          if (result.accepted && result.inputValue != null) {
-            child.stdin?.write(result.inputValue + '\n');
-          } else {
-            dbg.worktree('SSH authentication cancelled by user');
-            child.kill();
-          }
-        } catch (err) {
-          dbg.worktree('Failed to show SSH prompt: %O', err);
-          child.kill();
-        }
+          },
+          { timeoutMs: SSH_PROMPT_TIMEOUT_MS, signal: request.signal },
+        );
+        if (!accepted) cancelled = true;
+        return accepted ? 'yes' : null;
       }
-    });
 
-    let stdoutOutput = '';
-    child.stdout?.on('data', (data: Buffer) => {
-      stdoutOutput += data.toString();
-    });
+      const keyName = request.keyPath ? path.basename(request.keyPath) : null;
+      // A retry only makes sense for a value we asked the user to type; a
+      // username is not "incorrect" on the second identity.
+      const retry = request.attempt > 1 && request.kind === 'passphrase';
 
-    child.on('error', (err) => {
-      reject(new Error(`Failed to spawn ${params.label}: ${err.message}`));
-    });
+      const response = await sendGlobalInputPrompt({
+        title: retry
+          ? 'Incorrect passphrase — try again'
+          : request.kind === 'passphrase'
+            ? `Unlock SSH key${keyName ? ` ${keyName}` : ''}`
+            : request.kind === 'username'
+              ? 'Sign in to the remote'
+              : 'SSH Authentication Required',
+        message:
+          request.kind === 'passphrase'
+            ? `Enter the passphrase for ${request.keyPath ?? 'your SSH key'} to ${params.label === 'git push' ? 'push' : 'continue'}.`
+            : request.kind === 'username'
+              ? 'Enter your username for the remote repository.'
+              : 'Enter your password to continue.',
+        details: request.prompt.trim(),
+        // A username is not a secret and must stay readable.
+        inputType: request.kind === 'username' ? 'text' : 'password',
+        inputPlaceholder:
+          request.kind === 'passphrase'
+            ? 'Key passphrase'
+            : request.kind === 'username'
+              ? 'Username'
+              : 'Password',
+        acceptLabel: request.kind === 'passphrase' ? 'Unlock' : 'Continue',
+        rejectLabel: 'Cancel',
+      }, { timeoutMs: SSH_PROMPT_TIMEOUT_MS, signal: request.signal });
 
-    child.on('close', (code) => {
-      if (code === 0) {
-        dbg.worktree('%s successful', params.label);
-        resolve();
-      } else {
-        const errorMessage =
-          stderrOutput.trim() || stdoutOutput.trim() || `Exit code ${code}`;
-        reject(new Error(`${params.label} failed: ${errorMessage}`));
+      if (!response.accepted || response.inputValue == null) {
+        cancelled = true;
+        return null;
       }
-    });
+
+      if (request.kind === 'passphrase' && request.keyPath) {
+        unlockedKey = {
+          keyPath: request.keyPath,
+          passphrase: response.inputValue,
+        };
+      }
+
+      return response.inputValue;
+    }
+  };
+
+  const result = await runWithSshAskpass({
+    command: 'git',
+    args: params.args,
+    cwd: params.cwd,
+    // A push can legitimately take a while on a large repo, but must not pin
+    // the broker socket and child process forever if the network blackholes.
+    timeoutMs: params.timeoutMs ?? GIT_NETWORK_TIMEOUT_MS,
+    handler: async (request) => {
+      // A prompt that failed (timed out, window gone, renderer reloaded) was
+      // not authorised by anyone, so treat it as a refusal. Without this,
+      // `cancelled` stays false and ssh walks on to the next identity, opening
+      // a fresh dialog for every remaining key.
+      try {
+        return await handlePrompt(request);
+      } catch (error) {
+        dbg.ssh('prompt failed, treating as cancelled: %O', error);
+        cancelled = true;
+        return null;
+      }
+    },
   });
+
+  if (result.code === 0) {
+    dbg.worktree('%s successful', params.label);
+    if (params.offerKeyUnlock !== false) void offerToAddKeyToAgent(unlockedKey);
+    return;
+  }
+
+  if (unrecognisedPrompt) {
+    // Distinct from a user cancellation: we declined, and the prompt text is
+    // the only clue to what ssh actually wanted.
+    throw new Error(
+      `${params.label} failed: Jean-Claude did not recognise an SSH prompt and declined to answer it.\n\nPrompt: ${unrecognisedPrompt}\n\n${result.stderr.trim()}`,
+    );
+  }
+
+  if (cancelled) throw new SshAuthCancelledError(params.label);
+
+  const errorMessage =
+    result.stderr.trim() || result.stdout.trim() || `Exit code ${result.code}`;
+  throw new Error(`${params.label} failed: ${explainSshFailure(errorMessage)}`);
+}
+
+/**
+ * After a successful authentication, offers to load the key into ssh-agent so
+ * the user is not asked again for the rest of the session.
+ *
+ * Fire-and-forget: the push already succeeded, and failing to cache the key
+ * must never turn a successful push into an error.
+ */
+async function offerToAddKeyToAgent(
+  unlocked: { keyPath: string; passphrase: string } | null,
+): Promise<void> {
+  if (!unlocked) return;
+
+  try {
+    const status = await getSshAgentStatus();
+    if (status.state === 'unavailable') {
+      dbg.ssh('skipping ssh-add offer: no ssh-agent available');
+      return;
+    }
+    if (await isKeyLoadedInAgent(unlocked.keyPath)) return;
+
+    const { sendGlobalPromptToWindow } = await import(
+      './global-prompt-service'
+    );
+    const accepted = await sendGlobalPromptToWindow({
+      title: 'Remember this SSH key?',
+      message: `Add ${path.basename(unlocked.keyPath)} to your ssh-agent so you are not asked for the passphrase again during this session. The passphrase is handed to ssh-agent and never stored by Jean-Claude.`,
+      details: unlocked.keyPath,
+      acceptLabel: 'Add to ssh-agent',
+      rejectLabel: 'Not now',
+    });
+    if (!accepted) return;
+
+    const outcome = await addKeyToAgent(unlocked);
+    if (!outcome.added) {
+      dbg.ssh('ssh-add declined by agent: %s', outcome.error);
+    }
+  } catch (error) {
+    dbg.ssh('ssh-add offer failed: %O', error);
+  }
+}
+
+/** Turns common SSH failures into guidance instead of raw git noise. */
+function explainSshFailure(message: string): string {
+  if (/Permission denied \(publickey/i.test(message)) {
+    return `${message}\n\nNo usable SSH key was offered. Check that your key is added to the remote and, if it has a passphrase, that you unlocked it.`;
+  }
+  if (/Host key verification failed/i.test(message)) {
+    return `${message}\n\nThe host was not trusted, so the connection was refused.`;
+  }
+  if (/Could not open a connection to your authentication agent/i.test(message)) {
+    return `${message}\n\nNo ssh-agent is running.`;
+  }
+  return message;
 }
 
 /**
