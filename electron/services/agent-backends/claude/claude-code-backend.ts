@@ -413,9 +413,13 @@ export class ClaudeCodeBackend implements AgentBackend {
       abortController: session.abortController,
     };
 
-    const additionalDirectories = getAllowedDirectories(
-      flattenScope(config.persistedSessionRules ?? {}),
-    );
+    // `permissionRules` already carries global + project + worktree + session
+    // rules in last-match-wins order; the persisted session scope is appended
+    // as a fallback for callers that only supply that one.
+    const additionalDirectories = getAllowedDirectories([
+      ...(config.permissionRules ?? []),
+      ...flattenScope(config.persistedSessionRules ?? {}),
+    ]);
     if (additionalDirectories.length > 0) {
       queryOptions.additionalDirectories = additionalDirectories;
     }
