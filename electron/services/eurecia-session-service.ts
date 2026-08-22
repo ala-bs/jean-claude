@@ -1,16 +1,16 @@
 import { BrowserWindow, session } from 'electron';
 
-import { TIMESHEET_SIGN_IN_CANCELLED_MESSAGE } from '@shared/timesheet-types';
-import type {
-  TimesheetAction,
-  TimesheetAuthStatus,
-  TimesheetAxisLookupRequest,
-  TimesheetAxisLookupResult,
-  TimesheetAxisOption,
-  TimesheetEntryInput,
-  TimesheetRowDeletion,
-  TimesheetRowUpdate,
-  TimesheetSheetSummary,
+import {
+  TIMESHEET_SIGN_IN_CANCELLED_MESSAGE,
+  type TimesheetAction,
+  type TimesheetAuthStatus,
+  type TimesheetAxisLookupRequest,
+  type TimesheetAxisLookupResult,
+  type TimesheetAxisOption,
+  type TimesheetEntryInput,
+  type TimesheetRowDeletion,
+  type TimesheetRowUpdate,
+  type TimesheetSheetSummary,
 } from '@shared/timesheet-types';
 import type { EureciaSetting } from '@shared/types';
 

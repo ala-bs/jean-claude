@@ -15,6 +15,23 @@ export function useProjectCommands(projectId: string) {
   });
 }
 
+/** Favorites across all projects, runnable from the project root. */
+export function useFavoriteProjectCommands() {
+  return useQuery({
+    queryKey: ['projectCommands', 'favorites'],
+    queryFn: () => api.projectCommands.findFavorites(),
+  });
+}
+
+/** Every project command, used by the favorites picker. */
+export function useAllProjectCommands({ enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: ['projectCommands', 'all'],
+    queryFn: () => api.projectCommands.findAll(),
+    enabled,
+  });
+}
+
 export function useCreateProjectCommand() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -23,6 +40,7 @@ export function useCreateProjectCommand() {
       queryClient.invalidateQueries({
         queryKey: ['projectCommands', variables.projectId],
       });
+      queryClient.invalidateQueries({ queryKey: ['projectCommands', 'all'] });
     },
   });
 }

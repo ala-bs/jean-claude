@@ -52,6 +52,8 @@ export default defineConfig({
       'src/common/ui/handlebars-editor/**/*.test.ts',
       'src/features/work-activity/**/*.test.ts',
       'src/features/work-activity/**/*.test.tsx',
+      'src/features/run-commands/**/*.test.ts',
+      'src/features/run-commands/**/*.test.tsx',
       'src/features/pull-request/**/*.test.ts',
       'src/features/pull-request/**/*.test.tsx',
       'src/features/task/**/*.test.ts',

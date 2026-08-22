@@ -13,18 +13,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useQueryClient } from '@tanstack/react-query';
 
-import type {
-  TimesheetAction,
-  TimesheetAxisIndex,
-  TimesheetAxisLookupResult,
-  TimesheetAxisOption,
-  TimesheetAxisSelection,
-  TimesheetEntryInput,
-  TimesheetRemoteRow,
-  TimesheetRowDeletion,
-  TimesheetSheetSummary,
+import {
+  TIMESHEET_SIGN_IN_CANCELLED_MESSAGE,
+  type TimesheetAction,
+  type TimesheetAxisIndex,
+  type TimesheetAxisLookupResult,
+  type TimesheetAxisOption,
+  type TimesheetAxisSelection,
+  type TimesheetEntryInput,
+  type TimesheetRemoteRow,
+  type TimesheetRowDeletion,
+  type TimesheetSheetSummary,
 } from '@shared/timesheet-types';
-import { TIMESHEET_SIGN_IN_CANCELLED_MESSAGE } from '@shared/timesheet-types';
 import { isTimesheetRemoteRowOccupied } from '@shared/timesheet-utils';
 
 import {

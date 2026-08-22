@@ -1,4 +1,14 @@
-import { Loader2, Square, Terminal, X } from 'lucide-react';
+import {
+  ChevronRight,
+  Loader2,
+  Play,
+  Plus,
+  RotateCw,
+  Square,
+  Star,
+  Terminal,
+  X,
+} from 'lucide-react';
 import {
   startTransition,
   useCallback,
@@ -16,13 +26,25 @@ import FocusLock from 'react-focus-lock';
 
 import {
   type CommandRunStatus,
+  getProjectRootRunId,
   getRunCommandDisplayName,
+  isPortsInUseError,
+  parseProjectRootRunId,
+  type PortsInUseErrorData,
+  type ProjectCommand,
 } from '@shared/run-command-types';
+import {
+  useAllProjectCommands,
+  useFavoriteProjectCommands,
+  useUpdateProjectCommand,
+} from '@/hooks/use-project-commands';
 import { useTask, useTasks } from '@/hooks/use-tasks';
 import { api } from '@/lib/api';
+import { ConfirmRunModal } from '@/features/agent/ui-run-button/confirm-run-modal';
 import { IconButton } from '@/common/ui/icon-button';
 import { InteractiveLog } from '@/features/common/interactive-log';
 import { Kbd } from '@/common/ui/kbd';
+import { KillPortsModal } from '@/features/agent/ui-run-button/kill-ports-modal';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 import { useOverlaysStore } from '@/stores/overlays';
@@ -79,8 +101,13 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
     const projectMap = new Map(projects?.map((p) => [p.id, p]));
 
     for (const [taskId, status] of Object.entries(runCommandRunning)) {
+      const rootProjectId = parseProjectRootRunId(taskId);
       const task = taskMap.get(taskId);
-      const project = task ? projectMap.get(task.projectId) : undefined;
+      const project = rootProjectId
+        ? projectMap.get(rootProjectId)
+        : task
+          ? projectMap.get(task.projectId)
+          : undefined;
 
       for (const cmd of status.commands) {
         const isTarget =
@@ -88,8 +115,11 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         if (cmd.status !== 'running' && !isTarget) continue;
         result.push({
           taskId,
-          taskName:
-            task?.name ?? task?.prompt.split('\n')[0].slice(0, 30) ?? taskId,
+          taskName: rootProjectId
+            ? 'Project root'
+            : (task?.name ??
+              task?.prompt.split('\n')[0].slice(0, 30) ??
+              taskId),
           projectName: project?.name ?? 'Unknown Project',
           commandStatus: cmd,
         });
@@ -126,6 +156,188 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
   const runningCount = runningCommands.filter(
     (command) => command.commandStatus.status === 'running',
   ).length;
+
+
+  const [startingFavoriteIds, setStartingFavoriteIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [portConflict, setPortConflict] = useState<{
+    error: PortsInUseErrorData;
+    command: ProjectCommand;
+    runTaskId: string;
+  } | null>(null);
+  const [isKillingPorts, setIsKillingPorts] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    command: ProjectCommand;
+    runTaskId: string;
+  } | null>(null);
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [togglingFavoriteIds, setTogglingFavoriteIds] = useState<Set<string>>(
+    new Set(),
+  );
+
+  // Both lists go through React Query so project settings and this overlay
+  // stay in sync — the update mutation invalidates the shared key.
+  const { data: favoriteCommands } = useFavoriteProjectCommands();
+  const { data: pickerCommands, isPending: isPickerPending } =
+    useAllProjectCommands({ enabled: isPickerOpen });
+  const updateProjectCommand = useUpdateProjectCommand();
+  const updateProjectCommandAsync = updateProjectCommand.mutateAsync;
+
+  const favoriteIds = useMemo(
+    () => new Set((favoriteCommands ?? []).map((command) => command.id)),
+    [favoriteCommands],
+  );
+
+  const handleToggleFavorite = useCallback(
+    async (command: ProjectCommand) => {
+      const nextIsFavorite = !favoriteIds.has(command.id);
+      setTogglingFavoriteIds((prev) => new Set(prev).add(command.id));
+      try {
+        await updateProjectCommandAsync({
+          id: command.id,
+          data: { isFavorite: nextIsFavorite },
+        });
+      } catch (error) {
+        addToast({
+          type: 'error',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Failed to update favorites',
+        });
+      } finally {
+        setTogglingFavoriteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(command.id);
+          return next;
+        });
+      }
+    },
+    [addToast, favoriteIds, updateProjectCommandAsync],
+  );
+
+  const pickerItems = useMemo(() => {
+    const projectMap = new Map(projects?.map((p) => [p.id, p]));
+    return (pickerCommands ?? []).map((command) => ({
+      command,
+      projectName: projectMap.get(command.projectId)?.name ?? 'Unknown Project',
+      isFavorite: favoriteIds.has(command.id),
+    }));
+  }, [favoriteIds, pickerCommands, projects]);
+
+  const favorites = useMemo(() => {
+    const projectMap = new Map(projects?.map((p) => [p.id, p]));
+    return (favoriteCommands ?? []).map((command) => {
+      const runTaskId = getProjectRootRunId(command.projectId);
+      const status = runCommandRunning[runTaskId]?.commands.find(
+        (c) => c.id === command.id,
+      );
+      return {
+        command,
+        runTaskId,
+        projectName: projectMap.get(command.projectId)?.name ?? 'Unknown Project',
+        isRunning: status?.status === 'running',
+      };
+    });
+  }, [favoriteCommands, projects, runCommandRunning]);
+
+  // A running favorite already has a row (with its own stop/restart controls)
+  // in the Favorites section — don't list it twice.
+  const otherRunningCommands = useMemo(() => {
+    const favoriteKeys = new Set(
+      favorites.map((favorite) =>
+        makeKey(favorite.runTaskId, favorite.command.id),
+      ),
+    );
+    return runningCommands.filter(
+      (command) =>
+        !favoriteKeys.has(makeKey(command.taskId, command.commandStatus.id)),
+    );
+  }, [favorites, runningCommands]);
+
+  const handleRunFavorite = useCallback(
+    async (favorite: { command: ProjectCommand; runTaskId: string }) => {
+      const { command, runTaskId } = favorite;
+      setStartingFavoriteIds((prev) => new Set(prev).add(command.id));
+      try {
+        // Restart semantics: clear the previous logs first. The service stops
+        // any previous run of this command itself.
+        const generation = resetRunCommandLogs(runTaskId, command.id);
+        await api.runCommands.resetLogs({
+          taskId: runTaskId,
+          runCommandId: command.id,
+          generation,
+        });
+
+        const result = await api.runCommands.startFavorite({
+          projectId: command.projectId,
+          runCommandId: command.id,
+        });
+        if (isPortsInUseError(result)) {
+          setPortConflict({ error: result, command, runTaskId });
+          return;
+        }
+        setPortConflict((current) =>
+          current?.command.id === command.id ? null : current,
+        );
+        setSelectedKey(makeKey(runTaskId, command.id));
+      } catch (error) {
+        addToast({
+          type: 'error',
+          message:
+            error instanceof Error ? error.message : 'Failed to start command',
+        });
+      } finally {
+        setStartingFavoriteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(command.id);
+          return next;
+        });
+      }
+    },
+    [addToast, resetRunCommandLogs],
+  );
+
+  // Commands flagged `confirmBeforeRun` must be confirmed here too — favorites
+  // run against the real project checkout, not a disposable worktree.
+  const requestRunFavorite = useCallback(
+    (favorite: { command: ProjectCommand; runTaskId: string }) => {
+      if (favorite.command.confirmBeforeRun) {
+        setPendingConfirm(favorite);
+        return;
+      }
+      void handleRunFavorite(favorite);
+    },
+    [handleRunFavorite],
+  );
+
+  const handleConfirmKillPorts = useCallback(async () => {
+    const conflict = portConflict;
+    if (!conflict) return;
+    setIsKillingPorts(true);
+    try {
+      const commandIds = [
+        ...new Set(conflict.error.portsInUse.map((port) => port.commandId)),
+      ];
+      for (const commandId of commandIds) {
+        await api.runCommands.killPortsForCommand(
+          conflict.command.projectId,
+          commandId,
+        );
+      }
+      setPortConflict(null);
+      await handleRunFavorite(conflict);
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Failed to free the ports',
+      });
+    } finally {
+      setIsKillingPorts(false);
+    }
+  }, [addToast, handleRunFavorite, portConflict]);
 
   useEffect(() => {
     if (target) {
@@ -242,7 +454,14 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
       {
         label: 'Close Running Commands Overlay',
         shortcut: 'escape',
-        handler: () => onClose(),
+        handler: () => {
+          // Escape backs out of the favorite picker before closing the overlay.
+          if (isPickerOpen) {
+            setIsPickerOpen(false);
+            return;
+          }
+          onClose();
+        },
         hideInCommandPalette: true,
       },
       {
@@ -262,12 +481,15 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
         shortcut: 'up',
         handler: () => handleArrowNavigation('up'),
         hideInCommandPalette: true,
+        // Don't hijack arrows/clear while typing in the favorite filter.
+        ignoreIfInput: true,
       },
       {
         label: 'Select Next Command',
         shortcut: 'down',
         handler: () => handleArrowNavigation('down'),
         hideInCommandPalette: true,
+        ignoreIfInput: true,
       },
     ],
     { layer },
@@ -311,18 +533,149 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* Content */}
-          {runningCommands.length === 0 ? (
-            <div className="px-4 py-12 text-center">
-              <Terminal className="text-ink-4 mx-auto mb-3 h-8 w-8" />
-              <p className="text-ink-3 text-sm">
-                No commands are currently running.
-              </p>
-            </div>
-          ) : (
-            <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1">
               {/* Left: command list */}
               <div className="w-64 shrink-0 overflow-y-auto border-r border-white/10 p-2">
-                {runningCommands.map((cmd) => {
+                <div className="mb-2">
+                    <div className="text-ink-4 flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold tracking-wider uppercase">
+                      <Star className="h-3 w-3" />
+                      <span className="flex-1">Favorites</span>
+                      <button
+                        type="button"
+                        aria-label={
+                          isPickerOpen
+                            ? 'Close favorite picker'
+                            : 'Add a favorite command'
+                        }
+                        aria-expanded={isPickerOpen}
+                        onClick={() => setIsPickerOpen((open) => !open)}
+                        className={clsx(
+                          'cursor-pointer rounded p-0.5 transition-colors hover:bg-white/10',
+                          isPickerOpen ? 'text-ink-1' : 'text-ink-4',
+                        )}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    {isPickerOpen && (
+                      <FavoritePicker
+                        items={pickerItems}
+                        isLoading={isPickerPending}
+                        togglingIds={togglingFavoriteIds}
+                        onToggle={(command) =>
+                          void handleToggleFavorite(command)
+                        }
+                      />
+                    )}
+                    {favorites.length === 0 && !isPickerOpen && (
+                      <p className="text-ink-4 px-3 py-1 text-[11px]">
+                        No favorites yet — add one with +
+                      </p>
+                    )}
+                    {favorites.map((favorite) => {
+                      const isStarting = startingFavoriteIds.has(
+                        favorite.command.id,
+                      );
+                      return (
+                        <div
+                          key={favorite.command.id}
+                          className="group text-ink-2 hover:text-ink-1 flex w-full items-start rounded-lg transition-colors hover:bg-white/5"
+                        >
+                          <button
+                            type="button"
+                            disabled={isStarting}
+                            onClick={() => {
+                              if (favorite.isRunning) {
+                                setSelectedKey(
+                                  makeKey(
+                                    favorite.runTaskId,
+                                    favorite.command.id,
+                                  ),
+                                );
+                                return;
+                              }
+                              requestRunFavorite(favorite);
+                            }}
+                            className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2 text-left disabled:opacity-60"
+                          >
+                            {isStarting ? (
+                              <Loader2 className="text-ink-4 mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+                            ) : (
+                              <Play
+                                className={clsx(
+                                  'mt-0.5 h-3.5 w-3.5 shrink-0',
+                                  favorite.isRunning
+                                    ? 'text-status-done'
+                                    : 'text-ink-4',
+                                )}
+                              />
+                            )}
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-medium">
+                                {getRunCommandDisplayName(favorite.command)}
+                              </span>
+                              <span className="text-ink-4 block truncate text-[11px]">
+                                {favorite.projectName} · project root
+                              </span>
+                            </span>
+                          </button>
+                          {favorite.isRunning && (
+                            <button
+                              type="button"
+                              aria-label={`Stop ${getRunCommandDisplayName(favorite.command)}`}
+                              disabled={stoppingKeys.has(
+                                makeKey(favorite.runTaskId, favorite.command.id),
+                              )}
+                              className="text-ink-4 hover:bg-status-fail/20 hover:text-status-fail mt-2 shrink-0 cursor-pointer rounded p-1 transition-colors disabled:cursor-not-allowed"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleStop(
+                                  favorite.runTaskId,
+                                  favorite.command.id,
+                                );
+                              }}
+                            >
+                              <Square className="h-3 w-3" />
+                            </button>
+                          )}
+                          {favorite.isRunning && (
+                            <button
+                              type="button"
+                              aria-label={`Restart ${getRunCommandDisplayName(favorite.command)}`}
+                              disabled={isStarting}
+                              className="text-ink-4 hover:text-ink-1 mt-2 mr-2 shrink-0 cursor-pointer rounded p-1 transition-colors hover:bg-white/10 disabled:cursor-not-allowed"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                requestRunFavorite(favorite);
+                              }}
+                            >
+                              <RotateCw className="h-3 w-3" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            aria-label={`Remove ${getRunCommandDisplayName(favorite.command)} from favorites`}
+                            disabled={togglingFavoriteIds.has(
+                              favorite.command.id,
+                            )}
+                            className="text-ink-4 hover:text-ink-1 mt-2 mr-2 shrink-0 cursor-pointer rounded p-1 opacity-0 transition-colors group-hover:opacity-100 hover:bg-white/10 focus-visible:opacity-100 disabled:cursor-not-allowed"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleToggleFavorite(favorite.command);
+                            }}
+                          >
+                            <Star className="h-3 w-3" fill="currentColor" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                </div>
+                {otherRunningCommands.length > 0 && favorites.length > 0 && (
+                  <div className="text-ink-4 px-3 py-1 text-[10px] font-semibold tracking-wider uppercase">
+                    Running
+                  </div>
+                )}
+                {otherRunningCommands.map((cmd) => {
                   const key = makeKey(cmd.taskId, cmd.commandStatus.id);
                   const isSelected = selectedKey === key;
                   const isStopping = stoppingKeys.has(key);
@@ -409,13 +762,19 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                     }
                   />
                 ) : (
-                  <div className="text-ink-4 flex flex-1 items-center justify-center text-sm">
-                    Select a command to view logs
+                  <div className="text-ink-4 flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-sm">
+                    <Terminal className="text-ink-4 h-8 w-8" />
+                    {runningCommands.length === 0 && favorites.length === 0
+                      ? 'No commands are currently running.'
+                      : 'Select a command to view logs'}
+                    <span className="text-ink-4 text-xs">
+                      Use + to favorite a project command and run it from the
+                      project root.
+                    </span>
                   </div>
                 )}
               </div>
-            </div>
-          )}
+          </div>
 
           {/* Footer with shortcut hints */}
           <div
@@ -444,8 +803,199 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </div>
+      {pendingConfirm && (
+        <ConfirmRunModal
+          commandName={getRunCommandDisplayName(pendingConfirm.command)}
+          message={pendingConfirm.command.confirmMessage}
+          onCancel={() => setPendingConfirm(null)}
+          onConfirm={() => {
+            const favorite = pendingConfirm;
+            setPendingConfirm(null);
+            void handleRunFavorite(favorite);
+          }}
+        />
+      )}
+      {portConflict && (
+        <KillPortsModal
+          error={portConflict.error}
+          isLoading={isKillingPorts}
+          onConfirm={() => void handleConfirmKillPorts()}
+          onCancel={() => {
+            if (isKillingPorts) return;
+            setPortConflict(null);
+          }}
+        />
+      )}
     </FocusLock>,
     document.body,
+  );
+}
+
+/** Inline picker listing every project command so favorites can be toggled. */
+function FavoritePicker({
+  items,
+  isLoading,
+  togglingIds,
+  onToggle,
+}: {
+  items: Array<{
+    command: ProjectCommand;
+    projectName: string;
+    isFavorite: boolean;
+  }>;
+  isLoading: boolean;
+  togglingIds: Set<string>;
+  onToggle: (command: ProjectCommand) => void;
+}) {
+  const [query, setQuery] = useState('');
+
+  // `null` = untouched, so the default below applies.
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<
+    string
+  > | null>(null);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return items;
+    return items.filter(
+      (item) =>
+        getRunCommandDisplayName(item.command)
+          .toLowerCase()
+          .includes(needle) ||
+        item.command.command.toLowerCase().includes(needle) ||
+        item.projectName.toLowerCase().includes(needle),
+    );
+  }, [items, query]);
+
+  // One group per project, ordered by project name.
+  const groups = useMemo(() => {
+    const byProject = new Map<
+      string,
+      { projectId: string; projectName: string; items: typeof filtered }
+    >();
+    for (const item of filtered) {
+      const existing = byProject.get(item.command.projectId);
+      if (existing) {
+        existing.items.push(item);
+      } else {
+        byProject.set(item.command.projectId, {
+          projectId: item.command.projectId,
+          projectName: item.projectName,
+          items: [item],
+        });
+      }
+    }
+    return [...byProject.values()].sort((a, b) =>
+      a.projectName.localeCompare(b.projectName),
+    );
+  }, [filtered]);
+
+  const isSearching = query.trim().length > 0;
+  // A single project has no ambiguity to resolve, so it starts open; with
+  // several projects everything starts collapsed. Once the user clicks, their
+  // explicit set wins — expansion is stored as ids, never as an inverted flag.
+  const effectiveExpandedIds =
+    expandedProjectIds ??
+    new Set(groups.length === 1 ? [groups[0].projectId] : []);
+
+  return (
+    <div className="mb-2 rounded-lg border border-white/10 bg-white/5 p-1.5">
+      <input
+        type="text"
+        value={query}
+        autoFocus
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Filter commands…"
+        aria-label="Filter project commands"
+        className="text-ink-1 placeholder:text-ink-4 mb-1 w-full rounded-md bg-black/20 px-2 py-1 text-xs outline-none"
+      />
+      <div className="max-h-56 overflow-y-auto">
+        {isLoading ? (
+          <p className="text-ink-4 px-2 py-1.5 text-[11px]">Loading commands…</p>
+        ) : groups.length === 0 ? (
+          <p className="text-ink-4 px-2 py-1.5 text-[11px]">
+            No project commands match.
+          </p>
+        ) : (
+          groups.map((group) => {
+            // While filtering, every matching project stays open.
+            const isExpanded =
+              isSearching || effectiveExpandedIds.has(group.projectId);
+            const favoriteCount = group.items.filter(
+              (item) => item.isFavorite,
+            ).length;
+            return (
+              <div key={group.projectId}>
+                <button
+                  type="button"
+                  aria-expanded={isExpanded}
+                  aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${group.projectName} commands`}
+                  onClick={() =>
+                    setExpandedProjectIds(() => {
+                      const next = new Set(effectiveExpandedIds);
+                      if (next.has(group.projectId)) {
+                        next.delete(group.projectId);
+                      } else {
+                        next.add(group.projectId);
+                      }
+                      return next;
+                    })
+                  }
+                  className="text-ink-2 hover:text-ink-1 flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left hover:bg-white/10"
+                >
+                  <ChevronRight
+                    className={clsx(
+                      'h-3 w-3 shrink-0 transition-transform',
+                      isExpanded && 'rotate-90',
+                    )}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[11px] font-medium">
+                    {group.projectName}
+                  </span>
+                  <span className="text-ink-4 shrink-0 font-mono text-[10px]">
+                    {favoriteCount > 0
+                      ? `${favoriteCount}/${group.items.length}`
+                      : group.items.length}
+                  </span>
+                </button>
+                {isExpanded && (
+                  <div className="ml-2 border-l border-white/10 pl-1.5">
+                    {group.items.map((item) => (
+                      <button
+                        key={item.command.id}
+                        type="button"
+                        disabled={togglingIds.has(item.command.id)}
+                        aria-pressed={item.isFavorite}
+                        onClick={() => onToggle(item.command)}
+                        className="text-ink-2 hover:text-ink-1 flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-white/10 disabled:opacity-60"
+                      >
+                        <Star
+                          className={clsx(
+                            'h-3 w-3 shrink-0',
+                            item.isFavorite ? 'text-status-warn' : 'text-ink-4',
+                          )}
+                          fill={item.isFavorite ? 'currentColor' : 'none'}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[11px] font-medium">
+                            {getRunCommandDisplayName(item.command)}
+                          </span>
+                          {item.command.name?.trim() ? (
+                            <span className="text-ink-4 block truncate font-mono text-[10px]">
+                              {item.command.command}
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
   );
 }
 

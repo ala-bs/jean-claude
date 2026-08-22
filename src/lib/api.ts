@@ -1701,6 +1701,8 @@ export interface Api {
   };
   projectCommands: {
     findByProjectId: (projectId: string) => Promise<ProjectCommand[]>;
+    findAll: () => Promise<ProjectCommand[]>;
+    findFavorites: () => Promise<ProjectCommand[]>;
     create: (data: NewProjectCommand) => Promise<ProjectCommand>;
     update: (id: string, data: UpdateProjectCommand) => Promise<ProjectCommand>;
     delete: (id: string) => Promise<void>;
@@ -1730,6 +1732,11 @@ export interface Api {
     startAdHocCommand: (
       params: StartAdHocRunCommandParams,
     ) => Promise<RunStatus | PortsInUseErrorData>;
+    /** Runs a favorite command in the project root folder (no task worktree). */
+    startFavorite: (params: {
+      projectId: string;
+      runCommandId: string;
+    }) => Promise<RunStatus | PortsInUseErrorData>;
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
@@ -2903,6 +2910,8 @@ export const api: Api = hasWindowApi
       },
       projectCommands: {
         findByProjectId: async () => [],
+        findAll: async () => [],
+        findFavorites: async () => [],
         create: async () => {
           throw new Error('API not available');
         },
@@ -2932,6 +2941,10 @@ export const api: Api = hasWindowApi
           commands: [],
         }),
         startAdHocCommand: async () => ({
+          isRunning: false,
+          commands: [],
+        }),
+        startFavorite: async () => ({
           isRunning: false,
           commands: [],
         }),

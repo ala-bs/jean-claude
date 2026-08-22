@@ -1373,6 +1373,8 @@ contextBridge.exposeInMainWorld('api', {
   projectCommands: {
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('project:commands:findByProjectId', projectId),
+    findAll: () => ipcRenderer.invoke('project:commands:findAll'),
+    findFavorites: () => ipcRenderer.invoke('project:commands:findFavorites'),
     create: (data: unknown) =>
       ipcRenderer.invoke('project:commands:create', data),
     update: (id: string, data: unknown) =>
@@ -1411,6 +1413,8 @@ contextBridge.exposeInMainWorld('api', {
       }),
     startAdHocCommand: (params: StartAdHocRunCommandParams) =>
       ipcRenderer.invoke('project:commands:run:startAdHocCommand', params),
+    startFavorite: (params: { projectId: string; runCommandId: string }) =>
+      ipcRenderer.invoke('project:commands:run:startFavorite', params),
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];

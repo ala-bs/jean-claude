@@ -267,6 +267,7 @@ export interface ProjectCommandTable {
   envVars: string; // JSON array stored as text
   confirmBeforeRun: Generated<number>; // 0 or 1
   confirmMessage: string | null;
+  isFavorite: Generated<number>; // 0 or 1
   sortOrder: Generated<number>;
   createdAt: Generated<string>;
 }

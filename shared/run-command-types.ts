@@ -53,14 +53,16 @@ export interface ProjectCommand {
   envVars: RunCommandEnvVar[];
   confirmBeforeRun: boolean;
   confirmMessage: string | null;
+  /** Favorites can be run from the project root folder, without a task. */
+  isFavorite: boolean;
   sortOrder: number;
   createdAt: string;
 }
 
 export type NewProjectCommand = Omit<
   ProjectCommand,
-  'id' | 'createdAt' | 'sortOrder'
->;
+  'id' | 'createdAt' | 'sortOrder' | 'isFavorite'
+> & { isFavorite?: boolean };
 export type UpdateProjectCommand = Partial<
   Pick<
     ProjectCommand,
@@ -74,6 +76,7 @@ export type UpdateProjectCommand = Partial<
     | 'envVars'
     | 'confirmBeforeRun'
     | 'confirmMessage'
+    | 'isFavorite'
   >
 >;
 
@@ -215,6 +218,23 @@ export interface PackageScriptsResult {
   packageManager: 'pnpm' | 'npm' | 'yarn' | 'bun' | null;
   isWorkspace: boolean;
   workspacePackages: WorkspacePackage[];
+}
+
+/**
+ * Favorite commands run in the project root instead of a task worktree.
+ * The run-command service is keyed by task id, so project-root runs use a
+ * synthetic id derived from the project id.
+ */
+const PROJECT_ROOT_RUN_PREFIX = 'project-root:';
+
+export function getProjectRootRunId(projectId: string): string {
+  return `${PROJECT_ROOT_RUN_PREFIX}${projectId}`;
+}
+
+export function parseProjectRootRunId(taskId: string): string | null {
+  return taskId.startsWith(PROJECT_ROOT_RUN_PREFIX)
+    ? taskId.slice(PROJECT_ROOT_RUN_PREFIX.length)
+    : null;
 }
 
 export function getRunCommandDisplayName(command: {

@@ -110,15 +110,21 @@ import type {
   NewProjectMcpOverride,
   UpdateMcpServerTemplate,
 } from '@shared/mcp-types';
-import type {
-  NewProjectCommand,
-  NewProjectCommandGroup,
-  ProjectSuggestions,
-  RunCommandConfigItem,
-  StartAdHocRunCommandParams,
-  UpdateProjectCommand,
-  UpdateProjectCommandGroup,
+
+// Separated group: this module needs both value and type imports, which cannot
+// be ordered alphabetically alongside the type-only blocks above.
+import {
+  getProjectRootRunId,
+  type NewProjectCommand,
+  type NewProjectCommandGroup,
+  parseProjectRootRunId,
+  type ProjectSuggestions,
+  type RunCommandConfigItem,
+  type StartAdHocRunCommandParams,
+  type UpdateProjectCommand,
+  type UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
+
 import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
@@ -1536,6 +1542,8 @@ export function registerIpcHandlers() {
   });
   ipcMain.handle('projects:delete', async (_, id: string) => {
     dbg.ipc('projects:delete %s', id);
+    // Favorites run outside any task, so task cleanup never reaches them.
+    await runCommandService.stopCommandsForTask(getProjectRootRunId(id));
     const project = await ProjectRepository.findById(id);
     const result = await deleteProjectRetainingMemory(id);
     if (project) {
@@ -5303,6 +5311,12 @@ export function registerIpcHandlers() {
   ipcMain.handle('project:commands:findByProjectId', (_, projectId: string) =>
     ProjectCommandRepository.findByProjectId(projectId),
   );
+  ipcMain.handle('project:commands:findAll', () =>
+    ProjectCommandRepository.findAll(),
+  );
+  ipcMain.handle('project:commands:findFavorites', () =>
+    ProjectCommandRepository.findFavorites(),
+  );
   ipcMain.handle('project:commands:create', (_, data: NewProjectCommand) =>
     ProjectCommandRepository.create(data),
   );
@@ -5311,9 +5325,17 @@ export function registerIpcHandlers() {
     (_, { id, data }: { id: string; data: UpdateProjectCommand }) =>
       ProjectCommandRepository.update(id, data),
   );
-  ipcMain.handle('project:commands:delete', (_, id: string) =>
-    ProjectCommandRepository.delete(id),
-  );
+  ipcMain.handle('project:commands:delete', async (_, id: string) => {
+    // A project-root run of this command has no task lifecycle to clean it up.
+    const command = await ProjectCommandRepository.findById(id);
+    if (command) {
+      await runCommandService.stopCommand({
+        taskId: getProjectRootRunId(command.projectId),
+        runCommandId: id,
+      });
+    }
+    return ProjectCommandRepository.delete(id);
+  });
   ipcMain.handle(
     'project:commands:reorder',
     (
@@ -5377,6 +5399,28 @@ export function registerIpcHandlers() {
         { findTaskById: TaskRepository.findById },
       )
       );
+    },
+  );
+  // Favorites run in the project root folder, outside of any task worktree.
+  ipcMain.handle(
+    'project:commands:run:startFavorite',
+    async (_, params: { projectId: string; runCommandId: string }) => {
+      const project = await ProjectRepository.findById(params.projectId);
+      if (!project) throw new Error(`Project ${params.projectId} not found`);
+      const command = await ProjectCommandRepository.findById(
+        params.runCommandId,
+      );
+      if (!command || command.projectId !== params.projectId) {
+        throw new Error(
+          `Command ${params.runCommandId} not found for project ${params.projectId}`,
+        );
+      }
+      return runCommandService.startCommand({
+        taskId: getProjectRootRunId(params.projectId),
+        projectId: params.projectId,
+        workingDir: project.path,
+        runCommandId: params.runCommandId,
+      });
     },
   );
   ipcMain.handle(
@@ -5815,7 +5859,16 @@ export function registerIpcHandlers() {
         continue;
       }
 
-      void TaskRepository.findById(taskId).then((task) => {
+      const rootProjectId = parseProjectRootRunId(taskId);
+      void (
+        rootProjectId
+          ? ProjectRepository.findById(rootProjectId).then((project) => ({
+              label: `${project?.name ?? 'Project'} (project root)`,
+            }))
+          : TaskRepository.findById(taskId).then((task) => ({
+              label: `Task "${task?.name || 'Unknown'}"`,
+            }))
+      ).then(({ label }) => {
         const mainWindow = BrowserWindow.getAllWindows()[0] ?? null;
         notificationService.notify({
           id: `${taskId}:run-command:${commandStatus.id}`,
@@ -5823,7 +5876,7 @@ export function registerIpcHandlers() {
             commandStatus.status === 'stopped'
               ? 'Run Command Finished'
               : 'Run Command Failed',
-          body: `Task "${task?.name || 'Unknown'}": ${commandStatus.command}`,
+          body: `${label}: ${commandStatus.command}`,
           onClick: () => {
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
           },

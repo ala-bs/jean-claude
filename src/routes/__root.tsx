@@ -371,7 +371,7 @@ function RunningCommandsContainer() {
     'running-commands-trigger',
     [
       {
-        shortcut: 'cmd+shift+r',
+        shortcut: 'cmd+shift+t',
         label: 'Open Running Commands',
         section: 'General',
         handler: () => {
