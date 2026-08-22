@@ -211,6 +211,14 @@ export type TimesheetSyncResult = {
   message: string;
 };
 
+/**
+ * Rejection message when the user closes the sign-in window without signing in.
+ * Errors lose custom properties across Electron IPC, so the renderer matches on
+ * this message: both sides must share the constant or the match silently breaks.
+ */
+export const TIMESHEET_SIGN_IN_CANCELLED_MESSAGE =
+  'Eurecia sign-in was cancelled.';
+
 export type TimesheetBuildDraftInput = {
   params: TimesheetDraftParams;
   events: WorkActivityEvent[];

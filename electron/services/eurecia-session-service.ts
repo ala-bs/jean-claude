@@ -1,5 +1,6 @@
 import { BrowserWindow, session } from 'electron';
 
+import { TIMESHEET_SIGN_IN_CANCELLED_MESSAGE } from '@shared/timesheet-types';
 import type {
   TimesheetAction,
   TimesheetAuthStatus,
@@ -699,6 +700,18 @@ export function createEureciaSessionService({
     if (!window.isDestroyed()) window.destroy();
   }
 
+  /**
+   * A concurrent logout, setting change, or blocked navigation can destroy a
+   * lookup window across an await. Reading `webContents` on it would throw a raw
+   * "Object has been destroyed"; surface the domain error callers expect instead.
+   */
+  function requireLookupWebContents(window: EureciaWindow) {
+    if (window.isDestroyed()) {
+      throw new Error('Eurecia lookup page binding changed.');
+    }
+    return window.webContents;
+  }
+
   async function requireLookupBinding(
     navigationUrl: string,
     window: EureciaWindow,
@@ -958,9 +971,15 @@ export function createEureciaSessionService({
   async function login() {
     const { baseUrl } = await context();
     const existing = loginWindows.get(baseUrl);
+    const existingPromise = loginPromises.get(baseUrl);
     if (existing && !existing.isDestroyed()) {
-      existing.focus();
-      return loginPromises.get(baseUrl)!;
+      if (existingPromise) {
+        existing.focus();
+        return existingPromise;
+      }
+      // No promise to await: creating a window below would overwrite the map
+      // entry and orphan this one beyond the reach of logout teardown.
+      existing.destroy();
     }
 
     const loginStartedAt = Date.now();
@@ -982,7 +1001,18 @@ export function createEureciaSessionService({
       Date.now() - loginStartedAt,
     );
     loginWindows.set(baseUrl, loginWindow);
-    loginWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // Hold the webContents reference: reading `loginWindow.webContents` after the
+    // window is destroyed throws, and cleanup runs from the 'closed' handler.
+    const loginWebContents = loginWindow.webContents;
+    loginWebContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // Reading the URL of a destroyed window throws; treat it as "no URL".
+    const currentLoginUrl = () => {
+      try {
+        return loginWindow.isDestroyed() ? '' : loginWebContents.getURL();
+      } catch {
+        return '';
+      }
+    };
 
     let failLoad = (_error: unknown) => {};
     const loginController = new AbortController();
@@ -1007,12 +1037,25 @@ export function createEureciaSessionService({
         if (loginPromises.get(baseUrl) === promise) {
           loginPromises.delete(baseUrl);
         }
-        loginWindow.webContents.removeListener('will-navigate', onWillNavigate);
-        loginWindow.webContents.removeListener('will-redirect', onWillNavigate);
-        loginWindow.webContents.removeListener('page-title-updated', onPageTitleUpdated);
-        loginWindow.webContents.removeListener('did-finish-load', onLoad);
-        loginWindow.webContents.removeListener('did-fail-load', onDidFailLoad);
+        // The window wrapper outlives destruction, so detach its listener first
+        // and unconditionally: it is the one that would otherwise leak.
         loginWindow.removeListener('closed', onClosed);
+        // webContents listeners die with the window, but removal could still
+        // throw on a destroyed one. Isolate each so a throw can neither skip a
+        // sibling nor escape cleanup and leave the login promise unsettled.
+        for (const [event, listener] of [
+          ['will-navigate', onWillNavigate],
+          ['will-redirect', onWillNavigate],
+          ['page-title-updated', onPageTitleUpdated],
+          ['did-finish-load', onLoad],
+          ['did-fail-load', onDidFailLoad],
+        ] as const) {
+          try {
+            loginWebContents.removeListener(event, listener);
+          } catch {
+            // Listener died with the webContents.
+          }
+        }
         dbg.timesheet(
           'login cleanup outcome=%s elapsedMs=%d',
           outcome,
@@ -1036,7 +1079,7 @@ export function createEureciaSessionService({
         probing = true;
         const probeStartedAt = Date.now();
         const navigation = safeNavigation(
-          loginWindow.webContents.getURL() || `${baseUrl}/eurecia/`,
+          currentLoginUrl() || `${baseUrl}/eurecia/`,
           baseUrl,
         );
         dbg.timesheet(
@@ -1114,7 +1157,7 @@ export function createEureciaSessionService({
       };
       const onPageTitleUpdated = (event: { preventDefault: () => void }) => {
         event.preventDefault();
-        const current = getAllowedLoginUrl(loginWindow.webContents.getURL(), baseUrl);
+        const current = getAllowedLoginUrl(currentLoginUrl(), baseUrl);
         loginWindow.setTitle(
           `Sign in to Eurecia (${current?.hostname ?? new URL(baseUrl).hostname})`,
         );
@@ -1124,7 +1167,7 @@ export function createEureciaSessionService({
         settled = true;
         dbg.timesheet('login cancelled elapsedMs=%d', Date.now() - loginStartedAt);
         cleanup('cancelled');
-        reject(new Error('Eurecia sign-in was cancelled.'));
+        reject(new Error(TIMESHEET_SIGN_IN_CANCELLED_MESSAGE));
       };
       failLoad = () => {
         if (settled) return;
@@ -1137,11 +1180,11 @@ export function createEureciaSessionService({
         reject(new Error('Eurecia sign-in page failed to load.'));
         if (!loginWindow.isDestroyed()) loginWindow.destroy();
       };
-      loginWindow.webContents.on('will-navigate', onWillNavigate);
-      loginWindow.webContents.on('will-redirect', onWillNavigate);
-      loginWindow.webContents.on('page-title-updated', onPageTitleUpdated);
-      loginWindow.webContents.on('did-finish-load', onLoad);
-      loginWindow.webContents.on('did-fail-load', onDidFailLoad);
+      loginWebContents.on('will-navigate', onWillNavigate);
+      loginWebContents.on('will-redirect', onWillNavigate);
+      loginWebContents.on('page-title-updated', onPageTitleUpdated);
+      loginWebContents.on('did-finish-load', onLoad);
+      loginWebContents.on('did-fail-load', onDidFailLoad);
       loginWindow.on('closed', onClosed);
       pollInterval = setInterval(() => void runProbe('interval'), 1_000);
       void runProbe('immediate');
@@ -1313,7 +1356,9 @@ export function createEureciaSessionService({
         );
         const value = await awaitCurrent(
           raceWithAbort(
-            lookupWindow.webContents.executeJavaScript(READ_EDITOR_HTML_SCRIPT),
+            requireLookupWebContents(lookupWindow).executeJavaScript(
+              READ_EDITOR_HTML_SCRIPT,
+            ),
             operation.controller.signal,
           ),
           operation.epoch,
@@ -1406,7 +1451,7 @@ export function createEureciaSessionService({
         );
         const rawResult = await awaitCurrent(
           raceWithAbort(
-            lookupWindow.webContents.executeJavaScript(
+            requireLookupWebContents(lookupWindow).executeJavaScript(
               buildAxisLookupScript({
                 axis: request.axis,
                 rowIndex: request.rowIndex,

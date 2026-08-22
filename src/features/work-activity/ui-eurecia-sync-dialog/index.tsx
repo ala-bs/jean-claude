@@ -24,6 +24,7 @@ import type {
   TimesheetRowDeletion,
   TimesheetSheetSummary,
 } from '@shared/timesheet-types';
+import { TIMESHEET_SIGN_IN_CANCELLED_MESSAGE } from '@shared/timesheet-types';
 import { isTimesheetRemoteRowOccupied } from '@shared/timesheet-utils';
 
 import {
@@ -103,6 +104,19 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Unexpected Eurecia error.';
 }
 
+/**
+ * Closing the Eurecia window without signing in is a deliberate user action, not
+ * a failure: fall back to the sign-in screen without an alarming error banner.
+ */
+function isSignInCancellation(error: unknown) {
+  // IPC wraps the message ("Error invoking remote method '...': Error: ..."),
+  // so match on the shared constant as a substring rather than by equality.
+  return (
+    error instanceof Error &&
+    error.message.includes(TIMESHEET_SIGN_IN_CANCELLED_MESSAGE)
+  );
+}
+
 function overlapsRange(
   sheet: TimesheetSheetSummary,
   range: { start: string; end: string },
@@ -148,6 +162,7 @@ export function EureciaSyncDialog({
   const auth = useTimesheetAuthStatus('eurecia', isOpen);
   const queryClient = useQueryClient();
   const login = useLoginTimesheet();
+  const signInCancelled = login.isError && isSignInCancellation(login.error);
   const sheets = useTimesheetSheets(
     'eurecia',
     isOpen && auth.data?.authenticated === true,
@@ -1596,7 +1611,8 @@ export function EureciaSyncDialog({
             <div className="text-status-azure mb-3 font-mono text-xs tracking-widest uppercase">Secure browser session</div>
             <h3 className="text-ink-0 text-xl font-semibold">Sign in to inspect timesheets.</h3>
             <p className="text-ink-3 mt-2 text-sm">Credentials stay inside Eurecia login window and never enter this draft.</p>
-            {login.isError ? <div className="mt-4"><StatusMessage tone="error" announce>{getErrorMessage(login.error)}</StatusMessage></div> : null}
+            {signInCancelled ? <div className="mt-4"><StatusMessage announce>You closed the sign-in window before signing in.</StatusMessage></div> : null}
+            {login.isError && !signInCancelled ? <div className="mt-4"><StatusMessage tone="error" announce>{getErrorMessage(login.error)}</StatusMessage></div> : null}
             <button
               type="button"
               disabled={login.isPending}
@@ -1606,7 +1622,7 @@ export function EureciaSyncDialog({
               {login.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
               {login.isPending
                 ? 'Signing in...'
-                : login.isError
+                : login.isError && !signInCancelled
                   ? 'Retry sign in'
                   : 'Sign in to Eurecia'}
             </button>
