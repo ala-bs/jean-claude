@@ -270,6 +270,9 @@ describe('PrHeader', () => {
 
     const text = container.textContent ?? '';
     expect(text).toContain('Delete PR Workspaces');
+    // Deleting the associated tasks is the only cleanup path; the old
+    // keep-the-task "Clean review workspace" action must not come back.
+    expect(text).not.toContain('Clean review workspace');
     expect(text.indexOf('New Task')).toBeLessThan(text.indexOf('Start project'));
     expect(text.indexOf('Start project')).toBeLessThan(
       text.indexOf('Create Review Workspace'),

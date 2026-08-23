@@ -105,8 +105,6 @@ export function PrHeader({
   onRefresh,
   isRefreshing = false,
   associatedPrReviewTask,
-  onCleanReviewWorkspace,
-  isCleaningReviewWorkspace = false,
   onDeletePrWorkspaces,
 }: {
   pr: AzureDevOpsPullRequestDetails;
@@ -117,8 +115,6 @@ export function PrHeader({
   onRefresh?: () => void;
   isRefreshing?: boolean;
   associatedPrReviewTask?: Task | null;
-  onCleanReviewWorkspace?: () => void;
-  isCleaningReviewWorkspace?: boolean;
   onDeletePrWorkspaces?: () => void;
 }) {
   const navigate = useNavigate();
@@ -311,21 +307,6 @@ export function PrHeader({
                 />
               }
             />
-          )}
-          {onCleanReviewWorkspace && (
-            <button
-              type="button"
-              onClick={onCleanReviewWorkspace}
-              disabled={isCleaningReviewWorkspace}
-              className="border-glass-border bg-bg-1 hover:bg-bg-2 flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
-            >
-              {isCleaningReviewWorkspace ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
-              Clean review workspace
-            </button>
           )}
           {onDeletePrWorkspaces && (
             <button
