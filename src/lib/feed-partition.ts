@@ -86,6 +86,17 @@ const ACTION_NEEDED_ATTENTIONS: Set<FeedItemAttention> = new Set([
 
 const STACKED_TASK_ATTENTIONS: Set<FeedItemAttention> = new Set(['running']);
 
+function hasCompletedPullRequest(item: FeedItem): boolean {
+  if (item.source !== 'task' || item.taskType === 'pr-review') return false;
+  if (item.workItemPrStatus === 'completed') return true;
+  return (
+    item.children?.some(
+      (child) =>
+        child.source === 'task' && child.workItemPrStatus === 'completed',
+    ) ?? false
+  );
+}
+
 const PR_REVIEW_ATTENTIONS: Set<FeedItemAttention> = new Set([
   'review-requested',
   'pr-comments',
@@ -140,6 +151,7 @@ export function partitionFeedItems({
 
   let dCount = 0;
   const prWorkspace: FeedItem[] = [];
+  const completedPr: FeedItem[] = [];
   const actionNeeded: FeedItem[] = [];
   const prReviews: FeedItem[] = [];
   const activeTasks: FeedItem[] = [];
@@ -164,7 +176,11 @@ export function partitionFeedItems({
     if (item.source === 'task' && item.taskType === 'pr-review') {
       prWorkspace.push(item);
     } else if (ACTION_NEEDED_ATTENTIONS.has(item.attention)) {
+      // Action-needed keeps precedence: a blocked task must stay in the
+      // sticky zone even when its PR is already merged.
       actionNeeded.push(item);
+    } else if (hasCompletedPullRequest(item)) {
+      completedPr.push(item);
     } else if (
       item.source === 'task' &&
       STACKED_TASK_ATTENTIONS.has(item.attention)
@@ -191,6 +207,7 @@ export function partitionFeedItems({
   }
 
   prWorkspace.sort(bySourceThenTimestamp);
+  completedPr.sort(bySourceThenTimestamp);
   actionNeeded.sort(bySourceThenTimestamp);
   prReviews.sort(
     byManualLowPriorityThenProjectPriority({
@@ -209,6 +226,7 @@ export function partitionFeedItems({
   return {
     pinnedItems: pinnedResult,
     prWorkspaceItems: prWorkspace,
+    completedPrItems: completedPr,
     actionNeededItems: actionNeeded,
     prReviewItems: prReviews,
     activeTaskItems: activeTasks,

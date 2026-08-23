@@ -572,7 +572,14 @@ async function enrichTaskFeedItemsWithPrStatus({
     providerId: string;
   }[] = [];
 
-  for (const item of feedItems) {
+  // Include child subtasks: they own their own PRs and the feed surfaces
+  // their PR status on the parent's rail.
+  const taskItemsWithChildren = feedItems.flatMap((item) => [
+    item,
+    ...(item.children ?? []),
+  ]);
+
+  for (const item of taskItemsWithChildren) {
     if (item.source !== 'task') continue;
 
     // Case 1: task has pullRequestId directly — check if we know the status

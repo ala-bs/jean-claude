@@ -411,6 +411,7 @@ export function useFeed() {
   const {
     pinnedItems,
     prWorkspaceItems,
+    completedPrItems,
     actionNeededItems,
     prReviewItems,
     activeTaskItems,
@@ -447,6 +448,7 @@ export function useFeed() {
       ...pinnedItems,
       ...prReviewItems,
       ...prWorkspaceItems,
+      ...completedPrItems,
       ...actionNeededItems,
       ...activeTaskItems,
       ...highPriorityItems,
@@ -455,6 +457,7 @@ export function useFeed() {
     [
       pinnedItems,
       prWorkspaceItems,
+      completedPrItems,
       prReviewItems,
       actionNeededItems,
       activeTaskItems,
@@ -478,6 +481,7 @@ export function useFeed() {
     },
     pinnedItems,
     prWorkspaceItems,
+    completedPrItems,
     actionNeededItems,
     prReviewItems,
     activeTaskItems,
