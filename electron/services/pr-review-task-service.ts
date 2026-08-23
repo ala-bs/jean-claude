@@ -29,6 +29,8 @@ type CreateTaskInput = {
   pullRequestId: string;
   pullRequestUrl: string | null;
   prWorkspaceState: 'active';
+  workItemIds: string[] | null;
+  workItemUrls: string[] | null;
   updatedAt: string;
 };
 
@@ -98,6 +100,13 @@ export type PrReviewTaskDeps = {
     startCommitHash: string;
     branchName: string;
   }>;
+  /** Work items linked to the PR on the provider side. */
+  getPullRequestWorkItems: (params: {
+    providerId: string;
+    projectId: string;
+    repoId: string;
+    pullRequestId: number;
+  }) => Promise<Array<{ id: number | string; url?: string | null }>>;
   createTask: (data: CreateTaskInput) => Promise<Task>;
   updateTask: (taskId: string, data: RestoreTaskWorktreeInput) => Promise<Task>;
   setPrWorkspaceState: (
@@ -382,6 +391,54 @@ async function resolveDiffBaseCommit({
   return fallbackCommitHash;
 }
 
+/**
+ * Resolves the work items linked to a PR so the review workspace task carries
+ * the same work item links as the PR itself. Best-effort: a provider failure
+ * must never block workspace creation.
+ *
+ * Unlike normal task creation, PR review tasks deliberately do NOT activate the
+ * linked work items in Azure — reviewing someone else's PR must not transition
+ * their work item state.
+ */
+async function resolvePrWorkItems({
+  deps,
+  providerId,
+  repoProjectId,
+  repoId,
+  pullRequestId,
+}: {
+  deps: Pick<PrReviewTaskDeps, 'getPullRequestWorkItems'>;
+  providerId: string;
+  repoProjectId: string;
+  repoId: string;
+  pullRequestId: number;
+}): Promise<{ workItemIds: string[] | null; workItemUrls: string[] | null }> {
+  try {
+    const workItems = await deps.getPullRequestWorkItems({
+      providerId,
+      projectId: repoProjectId,
+      repoId,
+      pullRequestId,
+    });
+    if (workItems.length === 0) {
+      return { workItemIds: null, workItemUrls: null };
+    }
+    // Consumers zip the two arrays by index (task panel, feed card), so keep
+    // them positionally aligned rather than dropping empty URLs.
+    return {
+      workItemIds: workItems.map((workItem) => String(workItem.id)),
+      workItemUrls: workItems.map((workItem) => workItem.url ?? ''),
+    };
+  } catch (workItemsError) {
+    dbg.ipc(
+      'Failed to resolve work items for PR #%d; creating workspace without links: %O',
+      pullRequestId,
+      workItemsError,
+    );
+    return { workItemIds: null, workItemUrls: null };
+  }
+}
+
 async function createOrGetPrReviewTaskUnlocked(
   params: {
     projectId: string;
@@ -425,6 +482,11 @@ async function createOrGetPrReviewTaskUnlocked(
   if (!project.repoProviderId || !project.repoProjectId || !project.repoId) {
     throw new Error('Project has no linked repository');
   }
+  const repo = {
+    providerId: project.repoProviderId,
+    projectId: project.repoProjectId,
+    repoId: project.repoId,
+  };
 
   const pr = await deps.getPullRequest({
     providerId: project.repoProviderId,
@@ -450,6 +512,8 @@ async function createOrGetPrReviewTaskUnlocked(
       ? `origin/${project.defaultBranch}`
       : null;
 
+  // Existing workspaces keep whatever work item links they already have —
+  // linking is a creation-time concern only.
   if (existingTask?.worktreePath) {
     if (existingTask.prWorkspaceState === 'active') {
       return { task: existingTask, created: false };
@@ -528,6 +592,16 @@ async function createOrGetPrReviewTaskUnlocked(
     diffBaseBranch,
     fallbackCommitHash: worktreeResult.startCommitHash,
   });
+  // Only fetched for brand new tasks: an existing task keeps its own links.
+  const prWorkItems = existingTask
+    ? { workItemIds: null, workItemUrls: null }
+    : await resolvePrWorkItems({
+        deps,
+        providerId: repo.providerId,
+        repoProjectId: repo.projectId,
+        repoId: repo.repoId,
+        pullRequestId,
+      });
   let persistedResult: { task: Task; created: boolean };
   try {
     if (existingTask) {
@@ -555,6 +629,8 @@ async function createOrGetPrReviewTaskUnlocked(
         pullRequestId: String(pullRequestId),
         pullRequestUrl: pr.url ?? null,
         prWorkspaceState: 'active',
+        workItemIds: prWorkItems.workItemIds,
+        workItemUrls: prWorkItems.workItemUrls,
         updatedAt: new Date().toISOString(),
       });
       persistedResult = { task, created: true };

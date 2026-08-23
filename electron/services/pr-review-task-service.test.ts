@@ -111,6 +111,7 @@ function makeDeps(overrides: Partial<Parameters<typeof createOrGetPrReviewTask>[
       branchName: 'review-pr-12',
     }),
     cleanupWorktree: vi.fn(),
+    getPullRequestWorkItems: vi.fn().mockResolvedValue([]),
     createTask: vi.fn(async (data) => makeTask(data)),
     updateTask: vi.fn(async (id, data) => makeTask({ id, ...data })),
     setPrWorkspaceState: vi.fn(async (id) =>
@@ -224,6 +225,71 @@ describe('createOrGetPrReviewTask', () => {
         startCommitHash: 'base999',
       }),
     );
+  });
+
+  it('links the PR work items onto the created task', async () => {
+    const deps = makeDeps({
+      getPullRequestWorkItems: vi.fn().mockResolvedValue([
+        { id: 101, url: 'https://example.test/wi/101' },
+        { id: '102', url: null },
+      ]),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.getPullRequestWorkItems).toHaveBeenCalledWith({
+      providerId: 'provider-1',
+      projectId: 'repo-project-1',
+      repoId: 'repo-1',
+      pullRequestId: 12,
+    });
+    expect(deps.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workItemIds: ['101', '102'],
+        // Positionally aligned with ids, so consumers can zip by index.
+        workItemUrls: ['https://example.test/wi/101', ''],
+      }),
+    );
+  });
+
+  it('creates the workspace unlinked when fetching PR work items fails', async () => {
+    const deps = makeDeps({
+      getPullRequestWorkItems: vi
+        .fn()
+        .mockRejectedValue(new Error('azure exploded')),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ workItemIds: null, workItemUrls: null }),
+    );
+  });
+
+  it('leaves work items untouched when reusing an existing workspace', async () => {
+    const existing = makeTask({
+      id: 'task-existing',
+      worktreePath: '/repo/.worktrees/review-pr-12',
+      prWorkspaceState: 'active',
+      workItemIds: null,
+    });
+    const deps = makeDeps({
+      findActivePrReviewTask: vi.fn().mockResolvedValue(existing),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.getPullRequestWorkItems).not.toHaveBeenCalled();
+    expect(deps.updateTask).not.toHaveBeenCalled();
   });
 
   it('falls back to the project default branch when the PR has no target branch', async () => {
