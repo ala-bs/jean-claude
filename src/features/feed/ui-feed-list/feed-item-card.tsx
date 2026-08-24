@@ -1000,10 +1000,25 @@ export function FeedItemCard({
                 {/* PR thread count */}
                 {item.source === 'pull-request' &&
                   (item.activeThreadCount ?? 0) > 0 && (
-                    <span className="text-status-pr flex items-center gap-0.5">
+                    <span
+                      className="text-status-pr flex items-center gap-0.5"
+                      title={`${item.activeThreadCount} active comment thread(s)`}
+                    >
                       <MessageSquare className="h-3 w-3" />
                       <span className="text-[10px]">
                         {item.activeThreadCount}
+                      </span>
+                    </span>
+                  )}
+                {item.source === 'pull-request' &&
+                  (item.resolvedThreadCount ?? 0) > 0 && (
+                    <span
+                      className="text-status-done flex items-center gap-0.5"
+                      title={`${item.resolvedThreadCount} resolved comment thread(s)`}
+                    >
+                      <CheckCircle2 className="h-3 w-3" />
+                      <span className="text-[10px]">
+                        {item.resolvedThreadCount}
                       </span>
                     </span>
                   )}
@@ -1187,10 +1202,24 @@ export function FeedItemCard({
                     </span>
                   )}
                   {(item.activeThreadCount ?? 0) > 0 && (
-                    <span className="text-status-pr flex items-center gap-0.5">
+                    <span
+                      className="text-status-pr flex items-center gap-0.5"
+                      title={`${item.activeThreadCount} active comment thread(s)`}
+                    >
                       <MessageSquare className="h-2.5 w-2.5" />
                       <span className="text-[9.5px]">
                         {item.activeThreadCount}
+                      </span>
+                    </span>
+                  )}
+                  {(item.resolvedThreadCount ?? 0) > 0 && (
+                    <span
+                      className="text-status-done flex items-center gap-0.5"
+                      title={`${item.resolvedThreadCount} resolved comment thread(s)`}
+                    >
+                      <CheckCircle2 className="h-2.5 w-2.5" />
+                      <span className="text-[9.5px]">
+                        {item.resolvedThreadCount}
                       </span>
                     </span>
                   )}

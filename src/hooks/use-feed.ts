@@ -91,14 +91,22 @@ export function mergeTaskPrInfo(taskItems: FeedItem[], prItems: FeedItem[]) {
       withChildren.activeThreadCount ?? pr.activeThreadCount;
     const unresolvedCommentCount =
       withChildren.unresolvedCommentCount ?? pr.unresolvedCommentCount;
+    const resolvedThreadCount =
+      withChildren.resolvedThreadCount ?? pr.resolvedThreadCount;
     if (
       activeThreadCount === withChildren.activeThreadCount &&
-      unresolvedCommentCount === withChildren.unresolvedCommentCount
+      unresolvedCommentCount === withChildren.unresolvedCommentCount &&
+      resolvedThreadCount === withChildren.resolvedThreadCount
     ) {
       return withChildren;
     }
 
-    return { ...withChildren, activeThreadCount, unresolvedCommentCount };
+    return {
+      ...withChildren,
+      activeThreadCount,
+      unresolvedCommentCount,
+      resolvedThreadCount,
+    };
   };
 
   return taskItems.map(mergeItem);

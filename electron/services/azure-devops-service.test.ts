@@ -1865,6 +1865,7 @@ describe('getPullRequestStatuses', () => {
     expect(statuses.get('project:repo:123')).toMatchObject({
       status: 'active',
       activeThreadCount: 1,
+      resolvedThreadCount: 1,
       isWaitingForAuthor: true,
     });
   });

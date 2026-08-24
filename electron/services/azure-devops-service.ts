@@ -602,6 +602,7 @@ type PullRequestStatusMetadata = {
   url: string;
   isDraft: boolean;
   activeThreadCount?: number;
+  resolvedThreadCount?: number;
   mergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   approvedBy: Array<{
     displayName: string;
@@ -657,6 +658,7 @@ export async function getPullRequestStatuses(params: {
               : '';
           const mappedStatus = mapPrStatus(pr.status);
           let activeThreadCount: number | undefined;
+          let resolvedThreadCount: number | undefined;
           if (mappedStatus === 'active' && params.includeActiveThreadCount) {
             try {
               const threads = await getPullRequestThreads({
@@ -665,7 +667,9 @@ export async function getPullRequestStatuses(params: {
                 repoId: linkedPr.repoId,
                 pullRequestId: linkedPr.prId,
               });
-              activeThreadCount = getPullRequestThreadCounts(threads).active;
+              const counts = getPullRequestThreadCounts(threads);
+              activeThreadCount = counts.active;
+              resolvedThreadCount = counts.resolved;
             } catch (err) {
               dbg.azure(
                 'getPullRequestStatuses: failed threads for PR#%d: %O',
@@ -681,6 +685,7 @@ export async function getPullRequestStatuses(params: {
               url,
               isDraft: !!pr.isDraft,
               activeThreadCount,
+              resolvedThreadCount,
               mergeStatus:
                 pr.mergeStatus as PullRequestStatusMetadata['mergeStatus'],
               approvedBy: (pr.reviewers ?? [])

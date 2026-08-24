@@ -242,6 +242,7 @@ describe('pull request feed identity', () => {
           pullRequestRepoId: 'repo-a',
           pullRequestId: 42,
           activeThreadCount: 2,
+          resolvedThreadCount: 7,
           pullRequestUrl: 'https://example.com/repo-a/pull/42',
         }),
         createFeedItem({
@@ -256,6 +257,8 @@ describe('pull request feed identity', () => {
     );
 
     expect(merged.activeThreadCount).toBe(4);
+    // Back-filled from the identity-matched PR item, since the task item has none.
+    expect(merged.resolvedThreadCount).toBe(7);
     expect(merged.workItemPrStatus).toBe('abandoned');
     expect(merged.workItemPrUrl).toBeUndefined();
   });

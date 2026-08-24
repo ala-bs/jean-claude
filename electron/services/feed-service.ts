@@ -595,6 +595,7 @@ async function enrichTaskFeedItemsWithPrStatus({
         item.isWaitingForAuthor = activePrInfo.isWaitingForAuthor;
         item.activeThreadCount = activePrInfo.activeThreadCount;
         item.unresolvedCommentCount = activePrInfo.unresolvedCommentCount;
+        item.resolvedThreadCount = activePrInfo.resolvedThreadCount;
         await reconcileObservedPr(item, item.pullRequestId);
       }
 
@@ -660,6 +661,9 @@ async function enrichTaskFeedItemsWithPrStatus({
             entry.item.isWaitingForAuthor = !!status.isWaitingForAuthor;
             if (status.activeThreadCount !== undefined) {
               entry.item.activeThreadCount = status.activeThreadCount;
+            }
+            if (status.resolvedThreadCount !== undefined) {
+              entry.item.resolvedThreadCount = status.resolvedThreadCount;
             }
             await reconcileObservedPr(entry.item, entry.linkedPr.prId);
             if (status.url) {
