@@ -2608,11 +2608,17 @@ interface ChangeResponse {
     originalObjectId?: string;
     path: string;
     url?: string;
+    isFolder?: boolean;
   };
   originalPath?: string;
   sourceServerItem?: string;
   url?: string;
 }
+
+// Paging for PR iteration changes. Azure caps $top server-side; the loop below
+// follows `nextSkip` until the last page.
+const CHANGES_PAGE_SIZE = 1000;
+const CHANGES_MAX_PAGES = 20;
 
 // GitPullRequestIterationChanges from Azure DevOps API
 interface ChangesListResponse {
@@ -2771,7 +2777,7 @@ function mapChangeType(
   changeType: string,
 ): 'add' | 'edit' | 'delete' | 'rename' {
   // changeType can be a single value or combined (e.g., "edit, rename")
-  const lowerType = changeType.toLowerCase();
+  const lowerType = String(changeType ?? '').toLowerCase();
 
   // Check for specific types - order matters for combined types
   if (lowerType.includes('delete')) {
@@ -3800,27 +3806,42 @@ export async function getPullRequestChanges(params: {
     return [];
   }
 
-  // Get changes from the latest iteration
+  // Get changes from the latest iteration.
+  // The endpoint pages (default $top is small), and it does NOT sort deletes
+  // last — but any file past the first page is silently dropped if we don't
+  // follow `nextSkip`, which is how deleted files went missing from the tree.
   const latestIterationId = latestIteration.id;
-  const changesUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations/${latestIterationId}/changes?api-version=7.0`;
+  const entries: ChangeResponse[] = [];
+  let skip = 0;
 
-  const changesResponse = await fetch(changesUrl, {
-    headers: { Authorization: authHeader },
-  });
+  // Bounded so a provider that keeps echoing `nextSkip` can't spin forever.
+  for (let page = 0; page < CHANGES_MAX_PAGES; page++) {
+    const changesUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations/${latestIterationId}/changes?api-version=7.0&$top=${CHANGES_PAGE_SIZE}&$skip=${skip}`;
 
-  if (!changesResponse.ok) {
-    const error = await changesResponse.text();
-    throw new Error(`Failed to get pull request changes: ${error}`);
+    const changesResponse = await fetch(changesUrl, {
+      headers: { Authorization: authHeader },
+    });
+
+    if (!changesResponse.ok) {
+      const error = await changesResponse.text();
+      throw new Error(`Failed to get pull request changes: ${error}`);
+    }
+
+    const data: ChangesListResponse = await changesResponse.json();
+    entries.push(...(data.changeEntries ?? []));
+
+    // Azure omits nextSkip on the last page; guard against a non-advancing
+    // cursor so a malformed response ends the loop instead of repeating it.
+    if (data.nextSkip == null || data.nextSkip <= skip) break;
+    skip = data.nextSkip;
   }
 
-  const data: ChangesListResponse = await changesResponse.json();
-
-  return data.changeEntries
-    .filter((change) => change.item?.path) // Filter out entries without paths
+  return entries
+    .filter((change) => change.item?.path && !change.item.isFolder)
     .map((change) => ({
       path: change.item!.path,
       changeType: mapChangeType(change.changeType),
-      originalPath: change.originalPath,
+      originalPath: change.originalPath ?? change.sourceServerItem,
     }));
 }
 

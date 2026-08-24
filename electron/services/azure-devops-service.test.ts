@@ -27,6 +27,7 @@ import {
   getWorkItemById,
   getWorkItemsByIds,
   getWorkItemComments,
+  getPullRequestChanges,
   getPullRequestFileContent,
   getPullRequestStatuses,
   getPullRequestThreads,
@@ -776,6 +777,98 @@ describe('board column configuration and updates', () => {
         value: false,
       },
     ]);
+  });
+});
+
+describe('getPullRequestChanges', () => {
+  beforeEach(() => {
+    findProviderByIdMock.mockResolvedValue({
+      tokenId: 'token-1',
+      baseUrl: 'https://dev.azure.com/org',
+    });
+    getDecryptedTokenMock.mockResolvedValue('pat');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('follows nextSkip so deleted files on later pages are not dropped', async () => {
+    const fetchMock = vi
+      .fn()
+      // iterations
+      .mockResolvedValueOnce(
+        jsonResponse({ count: 1, value: [{ id: 3 }] }, { ok: true }),
+      )
+      // changes page 1 — more to come
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            changeEntries: [
+              { changeType: 'edit', item: { path: '/src/kept.ts' } },
+            ],
+            nextSkip: 1,
+          },
+          { ok: true },
+        ),
+      )
+      // changes page 2 — holds the delete, and a folder entry to ignore
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            changeEntries: [
+              { changeType: 'delete', item: { path: '/src/gone.ts' } },
+              { changeType: 'delete', item: { path: '/src', isFolder: true } },
+            ],
+          },
+          { ok: true },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const changes = await getPullRequestChanges({
+      providerId: 'provider-1',
+      projectId: 'proj',
+      repoId: 'repo',
+      pullRequestId: 7,
+    });
+
+    expect(changes).toEqual([
+      { path: '/src/kept.ts', changeType: 'edit', originalPath: undefined },
+      { path: '/src/gone.ts', changeType: 'delete', originalPath: undefined },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[2][0])).toContain('$skip=1');
+  });
+
+  it('stops paging when nextSkip does not advance', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ count: 1, value: [{ id: 1 }] }, { ok: true }),
+      )
+      .mockResolvedValue(
+        jsonResponse(
+          {
+            changeEntries: [
+              { changeType: 'delete', item: { path: '/a.ts' } },
+            ],
+            nextSkip: 0,
+          },
+          { ok: true },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const changes = await getPullRequestChanges({
+      providerId: 'provider-1',
+      projectId: 'proj',
+      repoId: 'repo',
+      pullRequestId: 7,
+    });
+
+    expect(changes).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
