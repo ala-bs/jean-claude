@@ -1542,9 +1542,11 @@ describe('runCommandWithPrReviewLifecycle', () => {
     expect(operation).toHaveBeenCalledWith(params);
   });
 
-  it('rejects starts for completed PR review tasks', async () => {
+  // status 'completed' only means the last agent step finished; the worktree is
+  // still live, so run commands must keep working.
+  it('allows starts for PR review tasks whose last step finished', async () => {
     const task = makeTask({ status: 'completed' });
-    const operation = vi.fn();
+    const operation = vi.fn().mockResolvedValue('started');
 
     await expect(
       runCommandWithPrReviewLifecycle(
@@ -1557,8 +1559,73 @@ describe('runCommandWithPrReviewLifecycle', () => {
         operation,
         { findTaskById: vi.fn().mockResolvedValue(task) },
       ),
-    ).rejects.toThrow('active worktree');
-    expect(operation).not.toHaveBeenCalled();
+    ).resolves.toBe('started');
+    expect(operation).toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'user-completed',
+      { status: 'completed' as const, userCompleted: true },
+      'was archived',
+    ],
+    [
+      'cleanup-pending',
+      { prWorkspaceState: 'cleanup-pending' as const },
+      'is being cleaned up',
+    ],
+    ['worktree-less', { worktreePath: null }, 'has no active worktree'],
+  ])(
+    'rejects starts for %s PR review tasks',
+    async (_label, overrides, expectedMessage) => {
+      const task = makeTask(overrides);
+      const operation = vi.fn();
+
+      await expect(
+        runCommandWithPrReviewLifecycle(
+          {
+            taskId: task.id,
+            projectId: task.projectId,
+            workingDir: '/repo/.worktrees/review-pr-12',
+            runCommandId: 'web',
+          },
+          operation,
+          { findTaskById: vi.fn().mockResolvedValue(task) },
+        ),
+      ).rejects.toThrow(expectedMessage);
+      expect(operation).not.toHaveBeenCalled();
+    },
+  );
+
+  // Same invariant on the agent side: finishing a step must not prevent the
+  // workspace from starting another one.
+  it('allows agent starts for PR review tasks whose last step finished', async () => {
+    const task = makeTask({ status: 'completed' });
+    const agent = vi.fn().mockResolvedValue(undefined);
+
+    await startAgentWithPrReviewLifecycle('step-2', agent, {
+      findStepById: vi
+        .fn()
+        .mockResolvedValue({ id: 'step-2', taskId: task.id }),
+      findTaskById: vi.fn().mockResolvedValue(task),
+    });
+
+    expect(agent).toHaveBeenCalledWith('step-2');
+  });
+
+  it('rejects agent starts for archived PR review tasks', async () => {
+    const task = makeTask({ status: 'completed', userCompleted: true });
+    const agent = vi.fn();
+
+    await expect(
+      startAgentWithPrReviewLifecycle('step-2', agent, {
+        findStepById: vi
+          .fn()
+          .mockResolvedValue({ id: 'step-2', taskId: task.id }),
+        findTaskById: vi.fn().mockResolvedValue(task),
+      }),
+    ).rejects.toThrow('was archived');
+    expect(agent).not.toHaveBeenCalled();
   });
 
   it('holds cleanup until an in-flight generic PR command start finishes', async () => {
@@ -1845,7 +1912,7 @@ describe('runTaskDestructiveWithPrReviewLifecycle', () => {
 
     toggleGate.resolve();
     await toggled;
-    await expect(start).rejects.toThrow('active worktree');
+    await expect(start).rejects.toThrow('was archived');
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -1947,7 +2014,7 @@ describe('runTaskDestructiveWithPrReviewLifecycle', () => {
 
     cleanupGate.resolve();
     await completion;
-    await expect(start).rejects.toThrow('active worktree');
+    await expect(start).rejects.toThrow('was archived');
     expect(spawn).not.toHaveBeenCalled();
     expect(currentTask.worktreePath).toBeNull();
   });

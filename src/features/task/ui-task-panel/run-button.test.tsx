@@ -8,6 +8,7 @@ import { RootKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { RootOverlay } from '@/common/context/overlay';
 import { RunButton } from '@/features/agent/ui-run-button';
 import { useTaskMessagesStore } from '@/stores/task-messages';
+import { useToastStore } from '@/stores/toasts';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -15,6 +16,7 @@ import { useTaskMessagesStore } from '@/stores/task-messages';
 const mocks = vi.hoisted(() => ({
   commands: [] as Array<Record<string, unknown>>,
   groups: [] as Array<Record<string, unknown>>,
+  startCommand: vi.fn(),
 }));
 
 vi.mock('@/hooks/use-project-commands', () => ({
@@ -42,7 +44,7 @@ vi.mock('@/hooks/use-run-commands', () => ({
     isCommandStarting: () => false,
     isCommandStopping: () => false,
     isStartingAnyCommand: false,
-    startCommand: vi.fn(),
+    startCommand: mocks.startCommand,
     startGroup: vi.fn(),
     stopCommand: vi.fn(),
     stopGroup: vi.fn(),
@@ -98,6 +100,8 @@ describe('RunButton command availability', () => {
     root = createRoot(container);
     mocks.commands = [];
     mocks.groups = [];
+    mocks.startCommand = vi.fn().mockResolvedValue(undefined);
+    useToastStore.setState({ toasts: [] });
     useTaskMessagesStore.setState({ runCommandLogs: {}, runCommandRunning: {} });
   });
 
@@ -142,5 +146,33 @@ describe('RunButton command availability', () => {
     expect(runButton).not.toBeNull();
     await act(async () => runButton!.click());
     expect(document.body.textContent).toContain('Workspace');
+  });
+
+  // A rejected start used to be dropped on the floor (`void startCommand(...)`),
+  // so a PR workspace refusing the launch looked like a dead button.
+  it('surfaces a failed start as an error toast', async () => {
+    mocks.commands = [command];
+    mocks.startCommand = vi
+      .fn()
+      .mockRejectedValue(new Error('PR review task task-1 was archived'));
+
+    await renderButton();
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Run command"]')!
+        .click(),
+    );
+    const runItem = [
+      ...document.body.querySelectorAll<HTMLElement>('button'),
+    ].find((element) => element.textContent?.includes('Dev'));
+    await act(async () => runItem!.click());
+
+    expect(mocks.startCommand).toHaveBeenCalledWith('command-1');
+    expect(useToastStore.getState().toasts).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        message: 'PR review task task-1 was archived',
+      }),
+    ]);
   });
 });

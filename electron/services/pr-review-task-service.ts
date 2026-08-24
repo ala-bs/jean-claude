@@ -768,6 +768,30 @@ export function startPrCommand(
   );
 }
 
+/**
+ * Why a PR workspace can no longer be acted on, or null when it is still live.
+ *
+ * Deliberately does NOT treat `status === 'completed'` as terminal: that only
+ * means the workspace's last agent step finished, while the worktree stays
+ * alive and run commands must keep working. See the invariant documented in
+ * StepService.syncTaskStatus.
+ *
+ * These messages reach the user verbatim (the run button and prompt composer
+ * surface the rejection), so each branch explains what actually happened.
+ */
+function getPrWorkspaceTerminalReason(task: Task): string | null {
+  if (task.userCompleted) {
+    return `PR review task ${task.id} was archived`;
+  }
+  if (task.prWorkspaceState === 'cleanup-pending') {
+    return `PR review task ${task.id} is being cleaned up`;
+  }
+  if (!task.worktreePath) {
+    return `PR review task ${task.id} has no active worktree`;
+  }
+  return null;
+}
+
 export async function runCommandWithPrReviewLifecycle<
   Params extends {
     taskId: string;
@@ -802,14 +826,8 @@ export async function runCommandWithPrReviewLifecycle<
     async () => {
       const task = await findTaskById(params.taskId);
       validatePrReviewTask(task, identity);
-      if (
-        task.status === 'completed' ||
-        task.userCompleted ||
-        task.prWorkspaceState === 'cleanup-pending' ||
-        !task.worktreePath
-      ) {
-        throw new Error(`PR review task ${task.id} has no active worktree`);
-      }
+      const terminalReason = getPrWorkspaceTerminalReason(task);
+      if (terminalReason) throw new Error(terminalReason);
 
       return operation({
         ...params,
@@ -868,14 +886,9 @@ export async function startAgentWithPrReviewLifecycle(
       }
       const task = await repositories.findTaskById(identity.taskId);
       validatePrReviewTask(task, identity);
-      if (
-        task.status === 'completed' ||
-        task.userCompleted ||
-        task.prWorkspaceState === 'cleanup-pending' ||
-        !task.worktreePath
-      ) {
-        throw new Error(`PR review task ${task.id} has no active worktree`);
-      }
+      // A finished agent run must not block starting another step.
+      const terminalReason = getPrWorkspaceTerminalReason(task);
+      if (terminalReason) throw new Error(terminalReason);
       dbg.agent('pr-review lifecycle: lock acquired for step=%s', step.id);
       await operation(step.id);
     },

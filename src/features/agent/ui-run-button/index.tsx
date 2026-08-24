@@ -21,6 +21,7 @@ import { Chip } from '@/common/ui/chip';
 import { Kbd } from '@/common/ui/kbd';
 import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
 import { useRunCommands } from '@/hooks/use-run-commands';
+import { useToastStore } from '@/stores/toasts';
 
 import { ConfirmRunModal } from './confirm-run-modal';
 import { KillPortsModal } from './kill-ports-modal';
@@ -60,6 +61,7 @@ export function RunButton({
     confirmKillPorts,
     dismissPortsError,
   } = useRunCommands({ taskId, projectId, workingDir });
+  const addToast = useToastStore((state) => state.addToast);
 
   const [pendingConfirm, setPendingConfirm] = useState<{
     commandIds: string[];
@@ -153,15 +155,24 @@ export function RunButton({
     ),
   );
 
+  // Start/stop failures reject out of useRunCommands. Without this the promise
+  // is discarded and a rejected launch looks like the button did nothing.
+  const reportFailure = (action: string) => (error: unknown) => {
+    addToast({
+      type: 'error',
+      message: error instanceof Error ? error.message : `Failed to ${action}`,
+    });
+  };
+
   const executeCommand = (runCommandId: string) => {
     onRunCommand([runCommandId]);
-    void startCommand(runCommandId);
+    void startCommand(runCommandId).catch(reportFailure('start command'));
   };
 
   const executeGroup = (runCommandIds: string[]) => {
     if (runCommandIds.length === 0) return;
     onRunCommand(runCommandIds);
-    void startGroup(runCommandIds);
+    void startGroup(runCommandIds).catch(reportFailure('start commands'));
   };
 
   const handleCommandAction = (runCommandId: string) => {
@@ -179,7 +190,7 @@ export function RunButton({
       runningCommandIds,
     });
     if (action.type === 'stop') {
-      void stopCommand(action.commandIds[0]);
+      void stopCommand(action.commandIds[0]).catch(reportFailure('stop command'));
       return;
     }
 
@@ -200,7 +211,7 @@ export function RunButton({
 
   const handleRunningAdHocAction = (command: CommandRunStatus) => {
     if (isCommandStopping(command.id)) return;
-    void stopCommand(command.id);
+    void stopCommand(command.id).catch(reportFailure('stop command'));
   };
 
   const handleGroupAction = (groupId: string) => {
@@ -229,7 +240,7 @@ export function RunButton({
     }
 
     if (action.type === 'stop') {
-      void stopGroup(action.commandIds);
+      void stopGroup(action.commandIds).catch(reportFailure('stop commands'));
       return;
     }
 
@@ -400,7 +411,9 @@ export function RunButton({
       {portsInUseError && (
         <KillPortsModal
           error={portsInUseError}
-          onConfirm={confirmKillPorts}
+          onConfirm={() => {
+            void confirmKillPorts().catch(reportFailure('start commands'));
+          }}
           onCancel={dismissPortsError}
           isLoading={isStartingAnyCommand}
         />
