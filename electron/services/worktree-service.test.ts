@@ -183,6 +183,30 @@ describe('worktree cleanup branch safety', () => {
     expect(stdout).toContain('persisted-wrong');
   });
 
+  it('surfaces git output when branch verification fails, and preserves the branch', async () => {
+    const worktreePath = path.join(testDir, 'broken-worktree');
+    await git(['branch', 'feature-work']);
+    await git(['worktree', 'add', worktreePath, 'feature-work']);
+    // Point the worktree's .git file at a missing admin dir so `git rev-parse` fails.
+    await fs.writeFile(
+      path.join(worktreePath, '.git'),
+      'gitdir: /nonexistent/jc-worktree-admin\n',
+    );
+
+    await expect(
+      cleanupWorktree({
+        worktreePath,
+        projectPath: testDir,
+        branchName: 'feature-work',
+        branchCleanup: 'delete',
+        force: true,
+      }),
+    ).rejects.toThrow(/Failed to verify worktree branch before delete.*broken-worktree/s);
+
+    const { stdout } = await git(['branch', '--list', 'feature-work']);
+    expect(stdout).toContain('feature-work');
+  });
+
   it('does not delete arbitrary branch for missing registered worktree mismatch', async () => {
     const worktreePath = path.join(testDir, 'missing-review-worktree');
     await git(['branch', 'actual-review']);

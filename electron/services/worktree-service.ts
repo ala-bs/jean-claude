@@ -1827,14 +1827,23 @@ export async function cleanupWorktree(
   }
 
   if (skipIfChanges) {
-    const { stdout } = await execAsync(
-      'git status --porcelain --untracked-files=all',
-      {
-        cwd: worktreePath,
-        encoding: 'utf-8',
-      },
-    );
-    if (stdout.trim().length > 0) {
+    let statusOutput: string;
+    try {
+      const { stdout } = await execAsync(
+        'git status --porcelain --untracked-files=all',
+        {
+          cwd: worktreePath,
+          encoding: 'utf-8',
+        },
+      );
+      statusOutput = stdout;
+    } catch (error) {
+      throw new Error(
+        `Failed to check worktree for uncommitted changes (worktree: ${worktreePath}): ${getExecErrorMessage(error)}`,
+        { cause: error },
+      );
+    }
+    if (statusOutput.trim().length > 0) {
       return;
     }
   }
@@ -1848,9 +1857,12 @@ export async function cleanupWorktree(
     worktreeBranch = stdout.trim();
   } catch (error) {
     if (branchCleanup === 'delete') {
-      throw new Error('Failed to verify worktree branch before delete', {
-        cause: error,
-      });
+      // Error `cause` is dropped by Electron IPC serialization, so the git
+      // output has to be inlined in the message to reach the renderer.
+      throw new Error(
+        `Failed to verify worktree branch before delete (worktree: ${worktreePath}): ${getExecErrorMessage(error)}`,
+        { cause: error },
+      );
     }
   }
   const persistedBranch = branchName?.trim() || null;
