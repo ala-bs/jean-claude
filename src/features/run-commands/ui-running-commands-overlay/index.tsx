@@ -256,6 +256,25 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
     );
   }, [favorites, runningCommands]);
 
+  // Keyboard navigation must follow what the user sees: Favorites first (only
+  // the ones that actually have a row in `runningCommands`), then Running.
+  // `runningCommands` itself is in `runCommandRunning` insertion order, which
+  // has no relation to render order.
+  const navigableCommands = useMemo(() => {
+    const byKey = new Map(
+      runningCommands.map((command) => [
+        makeKey(command.taskId, command.commandStatus.id),
+        command,
+      ]),
+    );
+    const favoriteRows = favorites
+      .map((favorite) =>
+        byKey.get(makeKey(favorite.runTaskId, favorite.command.id)),
+      )
+      .filter((command): command is RunningCommand => command !== undefined);
+    return [...favoriteRows, ...otherRunningCommands];
+  }, [favorites, otherRunningCommands, runningCommands]);
+
   const handleRunFavorite = useCallback(
     async (favorite: { command: ProjectCommand; runTaskId: string }) => {
       const { command, runTaskId } = favorite;
@@ -372,6 +391,13 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
     }
   }, [runningCommands, selectedKey, target]);
 
+  // Keep the highlighted row visible — the sidebar scrolls, and arrow nav can
+  // otherwise move the selection off-screen with no visible feedback.
+  const selectedRowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    selectedRowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [selectedKey]);
+
   const selectedCommand = useMemo(
     () =>
       runningCommands.find(
@@ -430,22 +456,22 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
 
   const handleArrowNavigation = useCallback(
     (direction: 'up' | 'down') => {
-      if (runningCommands.length === 0) return;
-      const currentIndex = runningCommands.findIndex(
+      if (navigableCommands.length === 0) return;
+      const currentIndex = navigableCommands.findIndex(
         (c) => makeKey(c.taskId, c.commandStatus.id) === selectedKey,
       );
       let nextIndex: number;
       if (direction === 'up') {
         nextIndex =
-          currentIndex <= 0 ? runningCommands.length - 1 : currentIndex - 1;
+          currentIndex <= 0 ? navigableCommands.length - 1 : currentIndex - 1;
       } else {
         nextIndex =
-          currentIndex >= runningCommands.length - 1 ? 0 : currentIndex + 1;
+          currentIndex >= navigableCommands.length - 1 ? 0 : currentIndex + 1;
       }
-      const next = runningCommands[nextIndex];
+      const next = navigableCommands[nextIndex];
       setSelectedKey(makeKey(next.taskId, next.commandStatus.id));
     },
-    [runningCommands, selectedKey],
+    [navigableCommands, selectedKey],
   );
 
   useCommands(
@@ -576,13 +602,25 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                       const isStarting = startingFavoriteIds.has(
                         favorite.command.id,
                       );
+                      const favoriteKey = makeKey(
+                        favorite.runTaskId,
+                        favorite.command.id,
+                      );
+                      const isSelected = selectedKey === favoriteKey;
                       return (
                         <div
                           key={favorite.command.id}
-                          className="group text-ink-2 hover:text-ink-1 flex w-full items-start rounded-lg transition-colors hover:bg-white/5"
+                          ref={isSelected ? selectedRowRef : undefined}
+                          className={clsx(
+                            'group flex w-full items-start rounded-lg transition-colors',
+                            isSelected
+                              ? 'text-ink-0 bg-white/10'
+                              : 'text-ink-2 hover:text-ink-1 hover:bg-white/5',
+                          )}
                         >
                           <button
                             type="button"
+                            aria-pressed={isSelected}
                             disabled={isStarting}
                             onClick={() => {
                               if (favorite.isRunning) {
@@ -615,7 +653,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                                 {getRunCommandDisplayName(favorite.command)}
                               </span>
                               <span className="text-ink-4 block truncate text-[11px]">
-                                {favorite.projectName} · project root
+                                {favorite.projectName} · Project root
                               </span>
                             </span>
                           </button>
@@ -682,6 +720,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                   return (
                     <div
                       key={key}
+                      ref={isSelected ? selectedRowRef : undefined}
                       className={clsx(
                         'group flex w-full items-start rounded-lg transition-colors',
                         isSelected
@@ -744,6 +783,7 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                     command={getRunCommandDisplayName(
                       selectedCommand.commandStatus,
                     )}
+                    subtitle={`${selectedCommand.projectName} · ${selectedCommand.taskName}`}
                     isRunning={selectedCommand.commandStatus.status === 'running'}
                     isStopping={stoppingKeys.has(
                       makeKey(
@@ -1003,6 +1043,7 @@ function LogViewer({
   taskId,
   runCommandId,
   command,
+  subtitle,
   isRunning,
   isStopping,
   onStop,
@@ -1010,6 +1051,7 @@ function LogViewer({
   taskId: string;
   runCommandId: string;
   command: string;
+  subtitle?: string;
   isRunning: boolean;
   isStopping: boolean;
   onStop?: () => void;
@@ -1023,10 +1065,15 @@ function LogViewer({
     <div className="flex h-full flex-col">
       {/* Log header */}
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="text-ink-1 font-mono text-xs">{command}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-ink-1 truncate font-mono text-xs">
+            {command}
+          </span>
+          {subtitle && (
+            <span className="text-ink-4 truncate text-[11px]">{subtitle}</span>
+          )}
           <span className={clsx(
-            'flex items-center gap-1 text-[11px]',
+            'flex shrink-0 items-center gap-1 text-[11px]',
             isRunning ? 'text-status-done' : 'text-ink-3',
           )}>
             {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -1035,7 +1082,7 @@ function LogViewer({
         </div>
         {onStop && <button
           className={clsx(
-            'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+            'flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
             isStopping
               ? 'text-ink-4 bg-bg-1 cursor-not-allowed'
               : 'bg-status-fail/15 text-status-fail hover:bg-status-fail/25',
