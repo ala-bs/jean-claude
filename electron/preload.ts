@@ -1273,6 +1273,8 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
   debug: {
+    log: (params: { scope: string; message: string; data?: unknown }) =>
+      ipcRenderer.invoke('debug:log', params),
     getTableNames: () => ipcRenderer.invoke('debug:getTableNames'),
     getDatabaseSize: () => ipcRenderer.invoke('debug:getDatabaseSize'),
     countOldCompletedTasks: () =>

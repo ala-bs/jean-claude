@@ -3054,6 +3054,14 @@ export async function updatePullRequestDescription(params: {
 
   const url = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}?api-version=7.0`;
 
+  dbg.azure('pr-description:update', {
+    pullRequestId: params.pullRequestId,
+    length: params.description.length,
+    imageMarkdownCount: (params.description.match(/!\[[^\]]*\]\(/g) ?? [])
+      .length,
+    hasPlaceholders: params.description.includes('jc-image://'),
+  });
+
   const response = await fetch(url, {
     method: 'PATCH',
     headers: {
@@ -3065,6 +3073,11 @@ export async function updatePullRequestDescription(params: {
 
   if (!response.ok) {
     const error = await response.text();
+    dbg.azure('pr-description:update-failed', {
+      pullRequestId: params.pullRequestId,
+      status: response.status,
+      error: error.slice(0, 500),
+    });
     throw new Error(`Failed to update pull request description: ${error}`);
   }
 

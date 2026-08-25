@@ -29,6 +29,32 @@ export function replaceMarkdownImageUrl(
   );
 }
 
+/** Matches any unresolved local image placeholder, regardless of token. */
+const UNRESOLVED_PLACEHOLDER_RE = /!\[[^\]]*\]\(jc-image:\/\/[^)]*\)/g;
+
+/**
+ * Remove image placeholders that were never swapped for a real attachment URL.
+ *
+ * Posting a `jc-image://` link to a remote host renders as a broken image, so
+ * callers strip these before publishing and report how many were dropped.
+ */
+export function stripUnresolvedImagePlaceholders(markdown: string): {
+  text: string;
+  removed: number;
+} {
+  const removed = markdown.match(UNRESOLVED_PLACEHOLDER_RE)?.length ?? 0;
+  if (removed === 0) return { text: markdown, removed: 0 };
+
+  const text = markdown
+    .replace(UNRESOLVED_PLACEHOLDER_RE, '')
+    // Removing a placeholder that sat on its own line leaves a run of blank
+    // lines behind; collapse it back to a single paragraph break.
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return { text, removed };
+}
+
 export function markdownImagePlaceholderPattern(placeholderMarkdown: string) {
   const token = placeholderMarkdown.match(/jc-image:\/\/([^\s)]+)/)?.[1];
   return token
