@@ -6,6 +6,7 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 import { deleteAttachmentFile } from './attachment-file-deletion';
+import { resolveSourceBranchStartPoint } from './pull-source-branch';
 
 
 import {
@@ -14,6 +15,7 @@ import {
   dialog,
   ipcMain,
   Notification,
+  session,
   shell,
 } from 'electron';
 
@@ -28,7 +30,6 @@ import {
   QuestionResponse,
 } from '@shared/agent-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
-import { isDefaultAppFile } from '@shared/default-app-extensions';
 import type {
   AgentMemoryFollowUpCapture,
   AgentMemoryPromptCapture,
@@ -64,6 +65,10 @@ import type {
   GetYamlParametersIpcParams,
   QueueBuildIpcParams,
 } from '@shared/pipeline-types';
+import {
+  isSpreadsheetPath,
+  MAX_SPREADSHEET_BYTES,
+} from '@shared/spreadsheet-types';
 import type {
   MobileColorScheme,
   MobilePlatform,
@@ -105,15 +110,21 @@ import type {
   NewProjectMcpOverride,
   UpdateMcpServerTemplate,
 } from '@shared/mcp-types';
-import type {
-  NewProjectCommand,
-  NewProjectCommandGroup,
-  ProjectSuggestions,
-  RunCommandConfigItem,
-  StartAdHocRunCommandParams,
-  UpdateProjectCommand,
-  UpdateProjectCommandGroup,
+
+// Separated group: this module needs both value and type imports, which cannot
+// be ordered alphabetically alongside the type-only blocks above.
+import {
+  getProjectRootRunId,
+  type NewProjectCommand,
+  type NewProjectCommandGroup,
+  parseProjectRootRunId,
+  type ProjectSuggestions,
+  type RunCommandConfigItem,
+  type StartAdHocRunCommandParams,
+  type UpdateProjectCommand,
+  type UpdateProjectCommandGroup,
 } from '@shared/run-command-types';
+
 import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
@@ -121,6 +132,7 @@ import type {
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
 import { getImageMimeType } from '@shared/image-types';
 import type { GlobalPromptResponse } from '@shared/global-prompt-types';
+import { isDefaultAppFile } from '@shared/default-app-extensions';
 import { isValidTeamsJoinUrl } from '@shared/teams-url';
 import { parseAzureRemoteUrl } from '@shared/azure-remote-utils';
 import type { TimesheetProviderType } from '@shared/timesheet-types';
@@ -306,7 +318,9 @@ import {
   mergeWorktree,
   pullBranch,
   pushBranch,
+  renameWorktreeBranch,
   resolveSourceBranchMergeBase,
+  runGitWithSshPrompt,
   updateProjectCommitIgnore,
 } from '../services/worktree-service';
 import {
@@ -319,6 +333,17 @@ import {
   selectGeneratedProjectLogo,
   uploadProjectLogo,
 } from '../services/project-logo-service';
+import {
+  cleanupTaskForDeletion,
+  cleanupTaskWorktree,
+  completeTaskWithWorktreeCleanup,
+  ensureTaskCommandsStopped,
+  shouldUsePrReviewWorkspaceCleanup,
+} from '../services/task-worktree-cleanup-service';
+import {
+  cleanupUnusedWorktrees,
+  scanUnusedWorktrees,
+} from '../services/unused-worktree-service';
 import {
   complete as completeText,
   getDailyUsage as getCompletionDailyUsage,
@@ -363,21 +388,16 @@ import {
   cleanPrReviewWorkspaceUnlocked,
   createOrGetPrReviewTask,
   fetchPrReviewSourceBranch,
-  listPendingPrWorkspaceDecisions,
   reconcilePrWorkspaceState,
   runCommandWithPrReviewLifecycle,
   runTaskDestructiveWithPrReviewLifecycle,
-  sendMessageWithPrReviewLifecycle,
   startAgentWithPrReviewLifecycle,
   startPrCommand,
 } from '../services/pr-review-task-service';
 import {
-  cleanupTaskForDeletion,
-  cleanupTaskWorktree,
-  completeTaskWithWorktreeCleanup,
-  ensureTaskCommandsStopped,
-  shouldUsePrReviewWorkspaceCleanup,
-} from '../services/task-worktree-cleanup-service';
+  createSendMessageForStep,
+  RENDERER_SEND_MESSAGE_OPTIONS,
+} from './send-message-for-step';
 import {
   createSkill,
   deleteSkill,
@@ -393,7 +413,6 @@ import {
 import {
   deleteAllPrWorkspaces,
   deletePrWorkspaceTask,
-  resolveClosedPrWorkspace,
   routeTaskDeletion,
 } from '../services/pr-workspace-deletion-service';
 import {
@@ -496,15 +515,6 @@ import {
   redactUsageDisplaySetting,
 } from './usage-display-settings';
 import {
-  validateAxisLookupRequest,
-  validateDraftParams,
-  validateDryRunRequest,
-  validateSaveRequest,
-  validateSheetRequest,
-  validateSyncParams,
-  validateTimesheetProvider,
-} from './timesheet-validation';
-import {
   registerStartPrCommandHandler,
   resetRunCommandLogs,
   resolveRunCommandStart,
@@ -517,8 +527,20 @@ import {
   validateRendererStepUpdate,
   validateRendererTaskUpdate,
 } from './task-update-validation';
+import {
+  validateAxisLookupRequest,
+  validateDraftParams,
+  validateDryRunRequest,
+  validateSaveRequest,
+  validateSheetRequest,
+  validateSyncParams,
+  validateTimesheetProvider,
+} from './timesheet-validation';
+import {
+  validateTaskBranchRename,
+  validateTaskSourceBranchChange,
+} from './task-source-branch-validation';
 import { registerPrWorkspaceIpcHandlers } from './pr-workspace-ipc';
-import { validateTaskSourceBranchChange } from './task-source-branch-validation';
 
 function redactAiGenerationSetting(
   setting: AiGenerationSetting,
@@ -554,6 +576,13 @@ function resetRunCommandLogsAndBroadcast(params: {
   });
 }
 
+/**
+ * Budget for the source-branch fetch/pull during task creation. Long enough to
+ * survive a credential dialog, short enough that a dead remote does not hold
+ * task creation for the full push timeout.
+ */
+const SOURCE_BRANCH_FETCH_TIMEOUT_MS = 6 * 60 * 1000;
+
 async function pullSourceBranch({
   repoPath,
   sourceBranch,
@@ -561,29 +590,33 @@ async function pullSourceBranch({
   repoPath: string;
   sourceBranch: string;
 }): Promise<string> {
-  const remoteBranch = sourceBranch.startsWith('origin/')
-    ? sourceBranch.slice('origin/'.length)
-    : sourceBranch;
-  await runGit(
-    [
-      'fetch',
-      'origin',
-      `+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}`,
-    ],
+  return resolveSourceBranchStartPoint({
     repoPath,
-  );
-
-  const currentBranch = await runGit(
-    ['rev-parse', '--abbrev-ref', 'HEAD'],
-    repoPath,
-  );
-
-  if (currentBranch === sourceBranch) {
-    await runGit(['pull', '--ff-only', 'origin', remoteBranch], repoPath);
-    return sourceBranch;
-  }
-
-  return `origin/${remoteBranch}`;
+    sourceBranch,
+    // `fetch` and `pull` are the only steps that talk to the remote, so they
+    // are the only ones that can hit a passphrase prompt. Routing them through
+    // the askpass path keeps task creation working for users whose key is not
+    // in ssh-agent; the local ref lookups stay on the fast non-interactive
+    // runner. Neither network call's stdout is used, hence the empty string.
+    runGit: async (args, cwd) => {
+      const subcommand = args[0];
+      if (subcommand === 'fetch' || subcommand === 'pull') {
+        await runGitWithSshPrompt({
+          args,
+          cwd,
+          label: `git ${subcommand}`,
+          // Mid-flow: task creation continues straight after this.
+          offerKeyUnlock: false,
+          // Task creation should fail fast on a stalled network rather than
+          // sit for the full push-sized budget with no cancel affordance.
+          timeoutMs: SOURCE_BRANCH_FETCH_TIMEOUT_MS,
+        });
+        return '';
+      }
+      return runGit(args, cwd);
+    },
+    debug: (message, ...args) => dbg.ipc(message, ...args),
+  });
 }
 
 const VALID_BACKENDS = new Set<string>([
@@ -770,21 +803,12 @@ function startAgentForStep(stepId: string): Promise<void> {
   );
 }
 
-function sendMessageForStep(
-  stepId: string,
-  parts: PromptPart[],
-  capture?: AgentMemoryFollowUpCapture,
-): Promise<void> {
-  return sendMessageWithPrReviewLifecycle(
-    stepId,
-    (authoritativeStepId) =>
-      agentService.beginSendMessage(authoritativeStepId, parts, capture),
-    {
-      findStepById: TaskStepRepository.findById,
-      findTaskById: TaskRepository.findById,
-    },
-  );
-}
+const sendMessageForStep = createSendMessageForStep({
+  beginSendMessage: (stepId, parts, capture) =>
+    agentService.beginSendMessage(stepId, parts, capture),
+  findStepById: TaskStepRepository.findById,
+  findTaskById: TaskRepository.findById,
+});
 
 async function updateStepAndEmit(
   stepId: string,
@@ -793,6 +817,21 @@ async function updateStepAndEmit(
   const step = await TaskStepRepository.update(stepId, data);
   emitStepUpsert(step);
   return step;
+}
+
+/**
+ * Adds `-o BatchMode=yes` to an ssh command line.
+ *
+ * Inserted right after the program name rather than appended: ssh honours the
+ * *first* occurrence of a repeated option, so a user whose GIT_SSH_COMMAND
+ * already contains `-o BatchMode=no` would otherwise keep their value and the
+ * command could still block on a prompt.
+ */
+function withBatchMode(sshCommand: string | undefined): string {
+  const command = sshCommand?.trim() || 'ssh';
+  const firstSpace = command.indexOf(' ');
+  if (firstSpace === -1) return `${command} -o BatchMode=yes`;
+  return `${command.slice(0, firstSpace)} -o BatchMode=yes${command.slice(firstSpace)}`;
 }
 
 async function runGit(
@@ -805,6 +844,19 @@ async function runGit(
     const child = spawn('git', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
+      // This helper has no way to answer a credential prompt, so make git and
+      // ssh fail immediately instead of blocking until the timeout fires.
+      // SSH_ASKPASS_REQUIRE alone is not enough: it only disables the askpass
+      // helper, and ssh will still open /dev/tty directly — which succeeds
+      // when the app was launched from a terminal (pnpm dev), leaving the
+      // command blocked on an invisible prompt. BatchMode is the actual
+      // fail-fast switch. Callers that need to prompt use the askpass broker.
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        SSH_ASKPASS_REQUIRE: 'never',
+        GIT_SSH_COMMAND: withBatchMode(process.env.GIT_SSH_COMMAND),
+      },
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -1165,7 +1217,6 @@ export function registerIpcHandlers() {
     getPullRequest,
     findProjects: ProjectRepository.findAll,
     reconcilePrWorkspaceState,
-    listPendingPrWorkspaceDecisions,
     createPrReviewTask: async ({ projectId, pullRequestId }) => {
       dbg.ipc(
         'tasks:createPrReviewTask projectId=%s prId=%d',
@@ -1183,6 +1234,7 @@ export function registerIpcHandlers() {
             resolveSourceBranchMergeBase(worktreePath, sourceBranch),
           createWorktree,
           cleanupWorktree,
+          getPullRequestWorkItems,
           createTask: TaskRepository.create,
           updateTask: TaskRepository.update,
           setPrWorkspaceState: TaskRepository.setPrWorkspaceState,
@@ -1193,7 +1245,6 @@ export function registerIpcHandlers() {
     },
     deletePrWorkspaceTask,
     deleteAllPrWorkspaces,
-    resolveClosedPrWorkspace,
   });
 
   ipcMain.handle(
@@ -1545,6 +1596,8 @@ export function registerIpcHandlers() {
   });
   ipcMain.handle('projects:delete', async (_, id: string) => {
     dbg.ipc('projects:delete %s', id);
+    // Favorites run outside any task, so task cleanup never reaches them.
+    await runCommandService.stopCommandsForTask(getProjectRootRunId(id));
     const project = await ProjectRepository.findById(id);
     const result = await deleteProjectRetainingMemory(id);
     if (project) {
@@ -2028,6 +2081,7 @@ export function registerIpcHandlers() {
         resolveSourceBranchMergeBase(worktreePath, sourceBranch),
       createWorktree,
       cleanupWorktree,
+      getPullRequestWorkItems,
       createTask: TaskRepository.create,
       updateTask: TaskRepository.update,
       setPrWorkspaceState: TaskRepository.setPrWorkspaceState,
@@ -2087,6 +2141,37 @@ export function registerIpcHandlers() {
         );
       }
       return updateTaskAndEmit(taskId, { sourceBranch });
+    },
+  );
+  ipcMain.handle(
+    'tasks:setBranchName',
+    async (_, params: { taskId: string; branchName: string }) => {
+      const { taskId } = params;
+      const branchName = params.branchName.trim();
+      const task = await TaskRepository.findById(taskId);
+      if (!task) throw new Error(`Task ${taskId} not found`);
+      const project = await ProjectRepository.findById(task.projectId);
+      if (!project) throw new Error(`Project ${task.projectId} not found`);
+      const branches = await getProjectBranches(project.path);
+      validateTaskBranchRename({ task, newBranch: branchName, branches });
+      const worktreePath = task.worktreePath;
+      if (!worktreePath) throw new Error('Only worktree tasks have a branch');
+
+      const { previousBranch } = await renameWorktreeBranch({
+        worktreePath,
+        newBranch: branchName,
+      });
+      try {
+        return await updateTaskAndEmit(taskId, { branchName });
+      } catch (error) {
+        // Keep git and the database in agreement: a stale branchName breaks
+        // every later push/merge/cleanup path.
+        await renameWorktreeBranch({
+          worktreePath,
+          newBranch: previousBranch,
+        }).catch(() => undefined);
+        throw error;
+      }
     },
   );
   ipcMain.handle(
@@ -2842,6 +2927,7 @@ export function registerIpcHandlers() {
       taskId: string,
       filePath: string,
       status: 'added' | 'modified' | 'deleted',
+      originalPath?: string,
     ) => {
       const task = await TaskRepository.findById(taskId);
       if (!task) {
@@ -2864,6 +2950,7 @@ export function registerIpcHandlers() {
         filePath,
         status,
         task.worktreePath ? task.sourceBranch : null,
+        originalPath,
       );
     },
   );
@@ -4287,6 +4374,9 @@ export function registerIpcHandlers() {
       await pushBranch({
         worktreePath: task.worktreePath,
         branchName: task.branchName,
+        // Steps 4-6 follow immediately; a "remember this key?" dialog would
+        // surface after the UI has already navigated to the new PR.
+        offerKeyUnlock: false,
       });
 
       // Step 4: Create PR via Azure DevOps
@@ -4481,6 +4571,18 @@ export function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle('fs:readSpreadsheetAsBase64', async (_, filePath: string) => {
+    try {
+      if (!isSpreadsheetPath(filePath)) return null;
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile() || stat.size > MAX_SPREADSHEET_BYTES) return null;
+      const buffer = await fs.readFile(filePath);
+      return buffer.toString('base64');
+    } catch {
+      return null;
+    }
+  });
+
   ipcMain.handle('fs:getImageUrl', async (_, filePath: string) => {
     try {
       const imageUrl = encodeLocalImageUrl(filePath);
@@ -4617,7 +4719,12 @@ export function registerIpcHandlers() {
         prompt: buildPromptActivityText(parts),
         occurredAt: new Date().toISOString(),
       });
-      return sendMessageForStep(stepId, parts, capture);
+      return sendMessageForStep(
+        stepId,
+        parts,
+        capture,
+        RENDERER_SEND_MESSAGE_OPTIONS,
+      );
     },
   );
 
@@ -4859,10 +4966,9 @@ export function registerIpcHandlers() {
       return writeBackendUserConfig({ backend, content });
     },
   );
-  ipcMain.handle('projectPromptPreface:get', async (_, projectPath: string) => {
-    const globalEntries = await SettingsRepository.get('promptPreface');
-    return readProjectPromptPreface(projectPath, globalEntries);
-  });
+  ipcMain.handle('projectPromptPreface:get', async (_, projectPath: string) =>
+    readProjectPromptPreface(projectPath),
+  );
   ipcMain.handle(
     'projectPromptPreface:set',
     async (
@@ -5263,6 +5369,12 @@ export function registerIpcHandlers() {
   ipcMain.handle('project:commands:findByProjectId', (_, projectId: string) =>
     ProjectCommandRepository.findByProjectId(projectId),
   );
+  ipcMain.handle('project:commands:findAll', () =>
+    ProjectCommandRepository.findAll(),
+  );
+  ipcMain.handle('project:commands:findFavorites', () =>
+    ProjectCommandRepository.findFavorites(),
+  );
   ipcMain.handle('project:commands:create', (_, data: NewProjectCommand) =>
     ProjectCommandRepository.create(data),
   );
@@ -5271,9 +5383,17 @@ export function registerIpcHandlers() {
     (_, { id, data }: { id: string; data: UpdateProjectCommand }) =>
       ProjectCommandRepository.update(id, data),
   );
-  ipcMain.handle('project:commands:delete', (_, id: string) =>
-    ProjectCommandRepository.delete(id),
-  );
+  ipcMain.handle('project:commands:delete', async (_, id: string) => {
+    // A project-root run of this command has no task lifecycle to clean it up.
+    const command = await ProjectCommandRepository.findById(id);
+    if (command) {
+      await runCommandService.stopCommand({
+        taskId: getProjectRootRunId(command.projectId),
+        runCommandId: id,
+      });
+    }
+    return ProjectCommandRepository.delete(id);
+  });
   ipcMain.handle(
     'project:commands:reorder',
     (
@@ -5337,6 +5457,28 @@ export function registerIpcHandlers() {
         { findTaskById: TaskRepository.findById },
       )
       );
+    },
+  );
+  // Favorites run in the project root folder, outside of any task worktree.
+  ipcMain.handle(
+    'project:commands:run:startFavorite',
+    async (_, params: { projectId: string; runCommandId: string }) => {
+      const project = await ProjectRepository.findById(params.projectId);
+      if (!project) throw new Error(`Project ${params.projectId} not found`);
+      const command = await ProjectCommandRepository.findById(
+        params.runCommandId,
+      );
+      if (!command || command.projectId !== params.projectId) {
+        throw new Error(
+          `Command ${params.runCommandId} not found for project ${params.projectId}`,
+        );
+      }
+      return runCommandService.startCommand({
+        taskId: getProjectRootRunId(params.projectId),
+        projectId: params.projectId,
+        workingDir: project.path,
+        runCommandId: params.runCommandId,
+      });
     },
   );
   ipcMain.handle(
@@ -5775,7 +5917,16 @@ export function registerIpcHandlers() {
         continue;
       }
 
-      void TaskRepository.findById(taskId).then((task) => {
+      const rootProjectId = parseProjectRootRunId(taskId);
+      void (
+        rootProjectId
+          ? ProjectRepository.findById(rootProjectId).then((project) => ({
+              label: `${project?.name ?? 'Project'} (project root)`,
+            }))
+          : TaskRepository.findById(taskId).then((task) => ({
+              label: `Task "${task?.name || 'Unknown'}"`,
+            }))
+      ).then(({ label }) => {
         const mainWindow = BrowserWindow.getAllWindows()[0] ?? null;
         notificationService.notify({
           id: `${taskId}:run-command:${commandStatus.id}`,
@@ -5783,7 +5934,7 @@ export function registerIpcHandlers() {
             commandStatus.status === 'stopped'
               ? 'Run Command Finished'
               : 'Run Command Failed',
-          body: `Task "${task?.name || 'Unknown'}": ${commandStatus.command}`,
+          body: `${label}: ${commandStatus.command}`,
           onClick: () => {
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
           },
@@ -6212,6 +6363,39 @@ export function registerIpcHandlers() {
 
       dbg.ipc('claudeProjects:cleanup removed %d projects', removedCount);
       return { success: true, removedCount };
+    },
+  );
+
+  // Unused worktrees maintenance
+  ipcMain.handle('unusedWorktrees:scan', async () => {
+    dbg.ipc('unusedWorktrees:scan');
+    const result = await scanUnusedWorktrees();
+    dbg.ipc(
+      'unusedWorktrees:scan found %d unused of %d worktrees',
+      result.worktrees.length,
+      result.totalWorktrees,
+    );
+    return result;
+  });
+
+  ipcMain.handle(
+    'unusedWorktrees:cleanup',
+    async (_, params: { paths: string[] }) => {
+      dbg.ipc('unusedWorktrees:cleanup paths=%o', params.paths);
+      const { updatedTasks, ...result } = await cleanupUnusedWorktrees(
+        params.paths,
+      );
+      // Cleanup clears worktreePath/branchName on completed tasks; without an
+      // emit the renderer keeps serving a task row pointing at a deleted
+      // directory until the app restarts.
+      for (const task of updatedTasks) emitTaskUpsert(task);
+      dbg.ipc(
+        'unusedWorktrees:cleanup removed=%d failed=%d skipped=%d',
+        result.removed.length,
+        result.failed.length,
+        result.skipped.length,
+      );
+      return result;
     },
   );
 
@@ -7356,6 +7540,16 @@ export function registerIpcHandlers() {
         timeoutMs: 30_000,
         releaseSingleInstanceLock: () => app.releaseSingleInstanceLock(),
         reacquireSingleInstanceLock: () => app.requestSingleInstanceLock(),
+        // Commit buffered localStorage (every persisted zustand store) before
+        // the replacement boots and reads it. Best-effort: see the ordering
+        // note on orchestrateReloadedPreview.
+        flushStorage: () => session.defaultSession.flushStorageData(),
+        onFlushError: (error) => {
+          dbg.ipc(
+            'app:reloadPreview — failed to flush storage before handoff: %s',
+            error instanceof Error ? error.message : String(error),
+          );
+        },
         exitCurrentApp: () => {
           exitCurrentPreviewAfterReload({
             notifyRestarting: () => {

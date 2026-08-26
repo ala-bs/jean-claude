@@ -9,9 +9,9 @@ import {
   type StreamListStore,
   useStreamListStore,
 } from '@/hooks/utils-stream-list-store';
-import type { PreviewFpsStore } from '../preview-fps-store';
-import { getNetworkStats } from '../utils-network';
 import { EmptyState } from '../ui-common';
+import { getNetworkStats } from '../utils-network';
+import type { PreviewFpsStore } from '../preview-fps-store';
 
 // Subscribes to the device-log buffer so streaming logs re-render this list
 // only, never the preview surface or the other tabs.

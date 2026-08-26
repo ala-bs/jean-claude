@@ -1,10 +1,10 @@
-import type { MobilePlatform } from '@shared/mobile-simulator-types';
-import type { MobilePreviewNativeLogEvent } from '@shared/mobile-simulator-types';
-import type { StreamListStore } from '@/hooks/utils-stream-list-store';
 import { Button } from '@/common/ui/button';
 import { EmptyState } from '../ui-common';
-import { NativeLogsList } from '../ui-stream-readouts';
 import { formatError } from '../utils-preview-error';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
+import type { MobilePreviewNativeLogEvent } from '@shared/mobile-simulator-types';
+import { NativeLogsList } from '../ui-stream-readouts';
+import type { StreamListStore } from '@/hooks/utils-stream-list-store';
 
 export function LogsTab({
   platform,

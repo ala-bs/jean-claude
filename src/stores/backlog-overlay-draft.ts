@@ -3,12 +3,16 @@ import { persist } from 'zustand/middleware';
 import { useCallback } from 'react';
 
 
+const EMPTY_FAVORITES: string[] = [];
+
 interface BacklogOverlayDraftState {
   selectedProjectId?: string;
   drafts: Record<string, string>;
+  favoriteProjectIds: string[];
   setSelectedProjectId: (projectId: string) => void;
   setDraft: (projectId: string, value: string) => void;
   clearDraft: (projectId: string) => void;
+  toggleFavoriteProject: (projectId: string) => void;
 }
 
 const useStore = create<BacklogOverlayDraftState>()(
@@ -16,9 +20,22 @@ const useStore = create<BacklogOverlayDraftState>()(
     (set) => ({
       selectedProjectId: undefined,
       drafts: {},
+      favoriteProjectIds: EMPTY_FAVORITES,
 
       setSelectedProjectId: (projectId) => {
         set({ selectedProjectId: projectId });
+      },
+
+      toggleFavoriteProject: (projectId) => {
+        if (!projectId) return;
+        set((state) => {
+          const current = state.favoriteProjectIds ?? EMPTY_FAVORITES;
+          return {
+            favoriteProjectIds: current.includes(projectId)
+              ? current.filter((id) => id !== projectId)
+              : [...current, projectId],
+          };
+        });
       },
 
       setDraft: (projectId, value) => {
@@ -47,7 +64,13 @@ export const useBacklogSelectedProjectId = () =>
 export const useSetBacklogSelectedProjectId = () =>
   useStore((state) => state.setSelectedProjectId);
 
-export const getBacklogOverlayDraft = (projectId: string) =>
+export const useBacklogFavoriteProjectIds = () =>
+  useStore((state) => state.favoriteProjectIds ?? EMPTY_FAVORITES);
+
+export const useToggleBacklogFavoriteProject = () =>
+  useStore((state) => state.toggleFavoriteProject);
+
+export const getBacklogOverlayDraft =(projectId: string) =>
   useStore.getState().drafts[projectId] ?? '';
 
 export const clearBacklogOverlayDraft = (projectId: string) => {

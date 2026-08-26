@@ -2,6 +2,7 @@ import { MessageSquare, MessageSquarePlus } from 'lucide-react';
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -14,6 +15,11 @@ import {
   COMMENT_ACCENT,
   InlineCommentComposer,
 } from '@/features/common/ui-inline-comments';
+import {
+  COMMENTABLE_CONTENT_ATTRIBUTE,
+  CommentableTargetProvider,
+  type CommentableTargetValue,
+} from '@/common/context/commentable-target';
 import {
   useReviewComments,
   useReviewCommentsStore,
@@ -50,6 +56,35 @@ function buildTextNodeMap(container: Node): {
     nodeMap.push({ node, start, end: combined.length });
   }
   return { combined, nodeMap };
+}
+
+/**
+ * Length of a Range within the container's combined text.
+ *
+ * NOT the same as `Selection.toString().length`: the browser inserts separators
+ * (tabs between table cells, newlines between blocks) into a Selection's string
+ * that do not exist in the concatenated text nodes. Using the string length to
+ * size a highlight makes it overshoot by one character per crossed boundary.
+ */
+function getRangeCharLength(container: Node, range: Range): number {
+  const { nodeMap } = buildTextNodeMap(container);
+  let length = 0;
+  for (const nm of nodeMap) {
+    const nodeRange = document.createRange();
+    nodeRange.selectNodeContents(nm.node);
+    // Overlap of this text node with the selection.
+    const startsAfter =
+      range.compareBoundaryPoints(Range.END_TO_START, nodeRange) >= 0;
+    const endsBefore =
+      range.compareBoundaryPoints(Range.START_TO_END, nodeRange) <= 0;
+    if (startsAfter || endsBefore) continue;
+
+    const nodeLength = nm.end - nm.start;
+    const from = nm.node === range.startContainer ? range.startOffset : 0;
+    const to = nm.node === range.endContainer ? range.endOffset : nodeLength;
+    length += Math.max(0, to - from);
+  }
+  return length;
 }
 
 /** Compute the character offset of a Range's start within a container's text. */
@@ -99,6 +134,15 @@ function createRangeFromOffset(
   return foundStart && foundEnd ? range : null;
 }
 
+/**
+ * Compare DOM text against a stored selection ignoring whitespace, since
+ * `Range.toString()` concatenates raw text nodes while the stored string came
+ * from `Selection.toString()`, which adds cell/block separators.
+ */
+function textMatchesLoosely(a: string, b: string): boolean {
+  return a.replace(/\s+/g, '') === b.replace(/\s+/g, '');
+}
+
 // Register the CSS highlight style once
 const HIGHLIGHT_NAME = 'commentable-highlight';
 let styleInjected = false;
@@ -108,6 +152,30 @@ function ensureHighlightStyle() {
   style.textContent = `::highlight(${HIGHLIGHT_NAME}) { background-color: oklch(0.78 0.18 295 / 0.3); border-radius: 2px; }`;
   document.head.appendChild(style);
   styleInjected = true;
+}
+
+/**
+ * `CSS.highlights` is a global registry keyed by name, so several mounted
+ * wrappers (a message in the stream plus the same content re-rendered in a
+ * modal) would otherwise overwrite — and on unmount delete — each other's
+ * ranges. Each instance publishes under its own id and the union is set.
+ */
+const highlightRanges = new Map<string, Range[]>();
+function publishHighlightRanges(instanceId: string, ranges: Range[]) {
+  if (ranges.length > 0) {
+    highlightRanges.set(instanceId, ranges);
+  } else {
+    highlightRanges.delete(instanceId);
+  }
+
+  if (!CSS.highlights) return;
+
+  const all = Array.from(highlightRanges.values()).flat();
+  if (all.length > 0) {
+    CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...all));
+  } else {
+    CSS.highlights.delete(HIGHLIGHT_NAME);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -127,17 +195,25 @@ export function CommentableWrapper({
   entryId,
   taskId,
   children,
+  charOffsetBase,
 }: {
   entryId: string;
   taskId: string;
   children: ReactNode;
+  /**
+   * Offset of this container's text within the full message, for wrappers that
+   * only cover a fragment of it (see `CommentableTargetValue`). Defaults to 0.
+   */
+  charOffsetBase?: () => number;
 }) {
   const reviewContext = useReviewContext();
+  const instanceId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const [selectedCharOffset, setSelectedCharOffset] = useState<number>(-1);
+  const [selectedCharLength, setSelectedCharLength] = useState<number>(-1);
   const [floatingPos, setFloatingPos] = useState<{
     top: number;
     left: number;
@@ -145,6 +221,7 @@ export function CommentableWrapper({
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerSelectedText, setComposerSelectedText] = useState('');
   const [composerCharOffset, setComposerCharOffset] = useState(-1);
+  const [composerCharLength, setComposerCharLength] = useState(-1);
   const [composerPos, setComposerPos] = useState<{ top: number } | null>(null);
   const [composerIsEmpty, setComposerIsEmpty] = useState(true);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
@@ -173,43 +250,51 @@ export function CommentableWrapper({
         )
         .map((c) => ({
           offset: c.anchor.charOffset!,
-          length: c.anchor.selectedText!.length,
+          // charLength is the DOM-accurate span; older comments only have the
+          // selection string, which overshoots across cell/block boundaries.
+          length: c.anchor.charLength ?? c.anchor.selectedText!.length,
+          text: c.anchor.selectedText!,
         })),
     [messageComments],
   );
 
+  const isFragment = charOffsetBase != null;
+  const resolveOffsetBase = useCallback(
+    () => charOffsetBase?.() ?? 0,
+    [charOffsetBase],
+  );
+
   useEffect(() => {
     if (!contentRef.current || highlightSpans.length === 0) {
-      if (CSS.highlights) {
-        CSS.highlights.delete(HIGHLIGHT_NAME);
-      }
+      publishHighlightRanges(instanceId, []);
       return;
     }
 
     ensureHighlightStyle();
 
+    const base = resolveOffsetBase();
     const ranges: Range[] = [];
     for (const span of highlightSpans) {
+      // Stored offsets are message-relative; this container may only cover a
+      // fragment of it. Offsets outside the fragment simply yield no range.
       const range = createRangeFromOffset(
         contentRef.current,
-        span.offset,
+        span.offset - base,
         span.length,
       );
-      if (range) ranges.push(range);
-    }
-
-    if (ranges.length > 0 && CSS.highlights) {
-      CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...ranges));
-    } else if (CSS.highlights) {
-      CSS.highlights.delete(HIGHLIGHT_NAME);
-    }
-
-    return () => {
-      if (CSS.highlights) {
-        CSS.highlights.delete(HIGHLIGHT_NAME);
+      if (!range) continue;
+      // See updateCommentPositions: rebasing can make a foreign anchor land
+      // inside the fragment, so verify the text before highlighting it.
+      if (isFragment && !textMatchesLoosely(range.toString(), span.text)) {
+        continue;
       }
-    };
-  }, [highlightSpans]);
+      ranges.push(range);
+    }
+
+    publishHighlightRanges(instanceId, ranges);
+
+    return () => publishHighlightRanges(instanceId, []);
+  }, [highlightSpans, instanceId, isFragment, resolveOffsetBase]);
 
   const updateCommentPositions = useCallback(() => {
     if (!contentRef.current || !containerRef.current) {
@@ -220,11 +305,19 @@ export function CommentableWrapper({
     const containerRect = containerRef.current.getBoundingClientRect();
     const positions: Record<string, { top: number; left: number }> = {};
     const contentRect = contentRef.current.getBoundingClientRect();
+    const base = resolveOffsetBase();
 
     for (const comment of messageComments) {
-      const charOffset = comment.anchor.charOffset;
+      const charOffset =
+        comment.anchor.charOffset == null
+          ? comment.anchor.charOffset
+          : comment.anchor.charOffset - base;
       const selectedText = comment.anchor.selectedText;
       if (charOffset == null || charOffset < 0 || !selectedText) {
+        // A fragment wrapper only covers part of the message, so an unresolved
+        // anchor means "not mine" — pinning it to the corner would duplicate
+        // pills that the full-message wrapper already renders.
+        if (isFragment) continue;
         positions[comment.id] = {
           top: contentRect.top - containerRect.top,
           left: contentRect.right - containerRect.left + 6,
@@ -235,9 +328,15 @@ export function CommentableWrapper({
       const range = createRangeFromOffset(
         contentRef.current,
         charOffset,
-        selectedText.length,
+        comment.anchor.charLength ?? selectedText.length,
       );
+      // In fragment mode a resolvable offset is not proof of ownership: an
+      // anchor past the fragment can still land inside it after rebasing, so
+      // confirm the text matches (ignoring the separators Selection adds).
       if (!range) continue;
+      if (isFragment && !textMatchesLoosely(range.toString(), selectedText)) {
+        continue;
+      }
 
       const rects = Array.from(range.getClientRects());
       const rect = rects.at(-1) ?? range.getBoundingClientRect();
@@ -248,7 +347,7 @@ export function CommentableWrapper({
     }
 
     setCommentPositions(positions);
-  }, [messageComments]);
+  }, [messageComments, isFragment, resolveOffsetBase]);
 
   useLayoutEffect(() => {
     updateCommentPositions();
@@ -290,17 +389,25 @@ export function CommentableWrapper({
       ? getRangeCharOffset(contentRef.current, range)
       : -1;
     const leadingWs = rawText.length - rawText.trimStart().length;
-    const charOffset = rawOffset >= 0 ? rawOffset + leadingWs : -1;
+    const charOffset =
+      rawOffset >= 0 ? rawOffset + leadingWs + resolveOffsetBase() : -1;
+    const trailingWs = rawText.length - rawText.trimEnd().length;
+    const rawLength = contentRef.current
+      ? getRangeCharLength(contentRef.current, range)
+      : -1;
+    const charLength =
+      rawLength >= 0 ? Math.max(0, rawLength - leadingWs - trailingWs) : -1;
 
     const rect = range.getBoundingClientRect();
     const containerRect = containerRef.current.getBoundingClientRect();
     setSelectedText(text);
     setSelectedCharOffset(charOffset);
+    setSelectedCharLength(charLength);
     setFloatingPos({
       top: rect.bottom - containerRect.top + 4,
       left: rect.right - containerRect.left,
     });
-  }, [composerOpen]);
+  }, [composerOpen, resolveOffsetBase]);
 
   // Clear floating button when selection collapses or moves outside
   // but NOT when composer is open (we want to keep the highlight)
@@ -327,12 +434,13 @@ export function CommentableWrapper({
     if (!selectedText || !floatingPos) return;
     setComposerSelectedText(selectedText);
     setComposerCharOffset(selectedCharOffset);
+    setComposerCharLength(selectedCharLength);
     setComposerPos({ top: floatingPos.top });
     setComposerIsEmpty(true);
     setComposerOpen(true);
     setSelectedText(null);
     setFloatingPos(null);
-  }, [selectedText, selectedCharOffset, floatingPos]);
+  }, [selectedText, selectedCharOffset, selectedCharLength, floatingPos]);
 
   const handleComposerSubmit = useCallback(
     (body: string, images: PromptImagePart[]) => {
@@ -344,6 +452,7 @@ export function CommentableWrapper({
         anchorLabel: 'msg',
         selectedText: composerSelectedText || undefined,
         charOffset: composerCharOffset >= 0 ? composerCharOffset : undefined,
+        charLength: composerCharLength > 0 ? composerCharLength : undefined,
         body,
         presets: [],
         images: images.length > 0 ? images : undefined,
@@ -351,18 +460,26 @@ export function CommentableWrapper({
       setComposerOpen(false);
       setComposerSelectedText('');
       setComposerCharOffset(-1);
+    setComposerCharLength(-1);
       setComposerPos(null);
       setComposerIsEmpty(true);
       setActiveCommentId(null);
       window.getSelection()?.removeAllRanges();
     },
-    [reviewContext, entryId, composerSelectedText, composerCharOffset],
+    [
+      reviewContext,
+      entryId,
+      composerSelectedText,
+      composerCharOffset,
+      composerCharLength,
+    ],
   );
 
   const handleComposerCancel = useCallback(() => {
     setComposerOpen(false);
     setComposerSelectedText('');
     setComposerCharOffset(-1);
+    setComposerCharLength(-1);
     setComposerPos(null);
     setComposerIsEmpty(true);
     setActiveCommentId(null);
@@ -383,6 +500,25 @@ export function CommentableWrapper({
       document.removeEventListener('pointerdown', handlePointerDown, true);
   }, [composerOpen, composerIsEmpty, handleComposerCancel]);
 
+  // Escape should dismiss the composer, not whatever is behind it. When the
+  // wrapper lives inside a Modal (the expanded table), the Modal's own
+  // document-capture Escape handler would otherwise close the modal and take
+  // the in-progress draft with it. Capturing on `window` runs one step earlier
+  // in the capture path, so stopPropagation here keeps the event off document.
+  useEffect(() => {
+    if (!composerOpen) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      handleComposerCancel();
+    };
+
+    window.addEventListener('keydown', handleEscape, true);
+    return () => window.removeEventListener('keydown', handleEscape, true);
+  }, [composerOpen, handleComposerCancel]);
+
   const handleEditComment = useCallback(
     (commentId: string, body: string, images: PromptImagePart[]) => {
       updateComment(taskId, commentId, {
@@ -391,6 +527,26 @@ export function CommentableWrapper({
       });
     },
     [taskId, updateComment],
+  );
+
+  // Lets message fragments re-rendered in a portal (e.g. the table modal) mount
+  // their own commentable layer against this same entry. Nested wrappers get a
+  // rebased offset so their comments stay message-relative.
+  const targetValue = useMemo<CommentableTargetValue>(
+    () => ({
+      entryId,
+      taskId,
+      CommentableFragment: ({ children: fragment, charOffsetBase: base }) => (
+        <CommentableWrapper
+          entryId={entryId}
+          taskId={taskId}
+          charOffsetBase={base}
+        >
+          {fragment}
+        </CommentableWrapper>
+      ),
+    }),
+    [entryId, taskId],
   );
 
   const handleRemoveComment = useCallback(
@@ -409,8 +565,14 @@ export function CommentableWrapper({
   return (
     <div className="relative" ref={containerRef}>
       {/* Children with mouse-up listener for selection detection */}
-      <div ref={contentRef} onMouseUp={handleMouseUp}>
-        {children}
+      <div
+        ref={contentRef}
+        onMouseUp={handleMouseUp}
+        {...{ [COMMENTABLE_CONTENT_ATTRIBUTE]: '' }}
+      >
+        <CommentableTargetProvider value={targetValue}>
+          {children}
+        </CommentableTargetProvider>
       </div>
 
       {/* Floating comment button on text selection */}

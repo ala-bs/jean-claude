@@ -84,6 +84,10 @@ import type {
 } from '@shared/azure-devops-types';
 import type { CacheEvent, CacheSubscriptionUpdate } from '@shared/cache-events';
 import type {
+  CleanupUnusedWorktreesResult,
+  UnusedWorktreeScanResult,
+} from '@shared/worktree-cleanup-types';
+import type {
   DiscoveredMcpVariant,
   GlobalMcpDiscoveryResult,
   GlobalMcpServer,
@@ -278,6 +282,10 @@ export interface WorktreeFileContent {
   isBinary: boolean;
   oldImageDataUrl?: string | null;
   newImageDataUrl?: string | null;
+  /** Raw base64 bytes of a spreadsheet file, parsed client-side. */
+  oldSpreadsheetBase64?: string | null;
+  newSpreadsheetBase64?: string | null;
+  spreadsheetTooLarge?: boolean;
 }
 
 export interface DetectedProject {
@@ -324,6 +332,12 @@ export interface ClaudeProjectsCleanupResult {
   removedCount: number;
   error?: string;
 }
+
+export type {
+  CleanupUnusedWorktreesResult,
+  UnusedWorktreeInfo,
+  UnusedWorktreeScanResult,
+} from '@shared/worktree-cleanup-types';
 
 export interface AzureDevOpsOrganization {
   id: string;
@@ -642,9 +656,6 @@ export interface Api {
   tasks: {
     focused: (taskId: string) => void;
     findAll: () => Promise<Task[]>;
-    listPendingPrWorkspaceDecisions: () => Promise<
-      Array<{ projectId: string; pullRequestId: number; taskIds: string[] }>
-    >;
     findByProjectId: (projectId: string) => Promise<Task[]>;
     findAllActive: () => Promise<TaskWithProject[]>;
     findAllCompleted: (params: {
@@ -683,6 +694,10 @@ export interface Api {
       taskId: string;
       sourceBranch: string;
     }) => Promise<Task>;
+    setBranchName: (params: {
+      taskId: string;
+      branchName: string;
+    }) => Promise<Task>;
     delete: (
       id: string,
       options?: { deleteWorktree?: boolean },
@@ -693,11 +708,6 @@ export interface Api {
     deleteAllPrWorkspaces: (params: {
       projectId: string;
       pullRequestId: number;
-    }) => Promise<PrWorkspaceResolutionResult>;
-    resolveClosedPrWorkspace: (params: {
-      projectId: string;
-      pullRequestId: number;
-      action: 'keep' | 'delete';
     }) => Promise<PrWorkspaceResolutionResult>;
     toggleUserCompleted: (id: string) => Promise<Task>;
     complete: (
@@ -730,6 +740,7 @@ export interface Api {
         taskId: string,
         filePath: string,
         status: 'added' | 'modified' | 'deleted',
+        originalPath?: string,
       ) => Promise<WorktreeFileContent>;
       getLocalFileContent: (
         taskId: string,
@@ -1255,6 +1266,7 @@ export interface Api {
     ) => Promise<{ content: string; language: string } | null>;
     getFileSize: (filePath: string) => Promise<number | null>;
     readImageAsDataUrl: (filePath: string) => Promise<string | null>;
+    readSpreadsheetAsBase64: (filePath: string) => Promise<string | null>;
     getImageUrl: (filePath: string) => Promise<string | null>;
     listDirectory: (
       dirPath: string,
@@ -1681,6 +1693,8 @@ export interface Api {
   };
   projectCommands: {
     findByProjectId: (projectId: string) => Promise<ProjectCommand[]>;
+    findAll: () => Promise<ProjectCommand[]>;
+    findFavorites: () => Promise<ProjectCommand[]>;
     create: (data: NewProjectCommand) => Promise<ProjectCommand>;
     update: (id: string, data: UpdateProjectCommand) => Promise<ProjectCommand>;
     delete: (id: string) => Promise<void>;
@@ -1710,6 +1724,11 @@ export interface Api {
     startAdHocCommand: (
       params: StartAdHocRunCommandParams,
     ) => Promise<RunStatus | PortsInUseErrorData>;
+    /** Runs a favorite command in the project root folder (no task worktree). */
+    startFavorite: (params: {
+      projectId: string;
+      runCommandId: string;
+    }) => Promise<RunStatus | PortsInUseErrorData>;
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
@@ -1768,6 +1787,7 @@ export interface Api {
   };
   globalPrompt: {
     onShow: (callback: (prompt: GlobalPrompt) => void) => () => void;
+    onDismiss: (callback: (promptId: string) => void) => () => void;
     respond: (response: GlobalPromptResponse) => Promise<void>;
   };
   mcpTemplates: {
@@ -1838,6 +1858,12 @@ export interface Api {
       paths: string[];
       contentHash: string;
     }) => Promise<ClaudeProjectsCleanupResult>;
+  };
+  unusedWorktrees: {
+    scan: () => Promise<UnusedWorktreeScanResult>;
+    cleanup: (params: {
+      paths: string[];
+    }) => Promise<CleanupUnusedWorktreesResult>;
   };
   completion: {
     complete: (params: {
@@ -2098,6 +2124,11 @@ export interface Api {
   app: {
     isDevMode: boolean;
     devBadgeLabel?: string;
+    /**
+     * False only on a genuine first run for this Chromium profile, where an
+     * empty localStorage is expected rather than evidence of a failed read.
+     */
+    hasExistingLocalStorageBucket: boolean;
     getIsPreviewMode: () => Promise<boolean>;
     getReloadUpdateInfo: (params: {
       builtCommitHash: string;
@@ -2242,7 +2273,6 @@ export const api: Api = hasWindowApi
       tasks: {
         focused: () => {},
         findAll: async () => [],
-        listPendingPrWorkspaceDecisions: async () => [],
         findByProjectId: async () => [],
         findAllActive: async () => [],
         findAllCompleted: async () => ({ tasks: [], total: 0 }),
@@ -2262,6 +2292,9 @@ export const api: Api = hasWindowApi
         setSourceBranch: async () => {
           throw new Error('API not available');
         },
+        setBranchName: async () => {
+          throw new Error('API not available');
+        },
         delete: async () => {},
         deletePrWorkspaceTask: async ({ taskId }) => ({
           action: 'deleted',
@@ -2269,10 +2302,6 @@ export const api: Api = hasWindowApi
         }),
         deleteAllPrWorkspaces: async () => ({
           action: 'deleted',
-          taskIds: [],
-        }),
-        resolveClosedPrWorkspace: async ({ action }) => ({
-          action: action === 'delete' ? 'deleted' : 'kept',
           taskIds: [],
         }),
         toggleUserCompleted: async () => {
@@ -2550,6 +2579,7 @@ export const api: Api = hasWindowApi
         readFile: async () => null,
         getFileSize: async () => null,
         readImageAsDataUrl: async () => null,
+        readSpreadsheetAsBase64: async () => null,
         getImageUrl: async () => null,
         listDirectory: async () => null,
         listProjectFiles: async () => [],
@@ -2873,6 +2903,8 @@ export const api: Api = hasWindowApi
       },
       projectCommands: {
         findByProjectId: async () => [],
+        findAll: async () => [],
+        findFavorites: async () => [],
         create: async () => {
           throw new Error('API not available');
         },
@@ -2905,6 +2937,10 @@ export const api: Api = hasWindowApi
           isRunning: false,
           commands: [],
         }),
+        startFavorite: async () => ({
+          isRunning: false,
+          commands: [],
+        }),
         startGroup: async () => ({
           isRunning: false,
           commands: [],
@@ -2934,6 +2970,7 @@ export const api: Api = hasWindowApi
       },
       globalPrompt: {
         onShow: () => () => {},
+        onDismiss: () => () => {},
         respond: async () => {},
       },
       mcpTemplates: {
@@ -2989,6 +3026,21 @@ export const api: Api = hasWindowApi
           success: false,
           removedCount: 0,
           error: 'API not available',
+        }),
+      },
+      unusedWorktrees: {
+        scan: async () => ({
+          worktrees: [],
+          scannedProjects: 0,
+          totalWorktrees: 0,
+          activeWorktrees: 0,
+          errors: [],
+        }),
+        cleanup: async () => ({
+          removed: [],
+          skipped: [],
+          failed: [],
+          freedBytes: 0,
         }),
       },
       completion: {
@@ -3217,6 +3269,7 @@ export const api: Api = hasWindowApi
       app: {
         isDevMode: false,
         devBadgeLabel: undefined,
+        hasExistingLocalStorageBucket: true,
         getIsPreviewMode: async () => false,
         getReloadUpdateInfo: async () => ({
           commitCount: 0,

@@ -24,15 +24,15 @@ import {
   pendingHidHelpersByDeviceId,
   setIosKeyboardInputQueue,
 } from './mobile-preview-ios-shared-state';
-import { runCommand, spawnManaged } from './mobile-preview-process';
-import { access } from 'node:fs/promises';
-import { assertDeviceId } from './mobile-preview-ios-simctl';
-import { constants as fsConstants } from 'node:fs';
 import {
   getHostIosHidKeymap,
   type IosHidKeymap,
   type IosHidKeyStroke,
 } from './mobile-preview-ios-keyboard-layout';
+import { runCommand, spawnManaged } from './mobile-preview-process';
+import { access } from 'node:fs/promises';
+import { assertDeviceId } from './mobile-preview-ios-simctl';
+import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 
 const IOS_HID_HELPER_SOURCE = 'mobile-preview-ios-hid-helper.py';

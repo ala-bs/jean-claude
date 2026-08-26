@@ -8,12 +8,9 @@ import {
   useRef,
   useState,
 } from 'react';
-import { createPortal } from 'react-dom';
 import clsx from 'clsx';
+import { createPortal } from 'react-dom';
 
-import type { MobilePreviewNetworkRequest } from '@shared/mobile-simulator-types';
-import { IconButton } from '@/common/ui/icon-button';
-import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import {
   buildNetworkFilterSuggestions,
   formatCurlCommand,
@@ -29,6 +26,9 @@ import {
   type NetworkFilterToken,
   parseNetworkFilterToken,
 } from '../utils-network';
+import { IconButton } from '@/common/ui/icon-button';
+import type { MobilePreviewNetworkRequest } from '@shared/mobile-simulator-types';
+import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 
 export function NetworkFacetButton({
   label,

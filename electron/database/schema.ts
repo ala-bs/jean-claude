@@ -6,13 +6,13 @@ import type {
   AiUsageFeature,
   AiUsagePricingStatus,
 } from '@shared/ai-usage-types';
-import type { MobilePlatform } from '@shared/mobile-simulator-types';
 import type {
   ProjectType,
   ProviderType,
   PrWorkspaceState,
   TaskStatus,
 } from '@shared/types';
+import type { MobilePlatform } from '@shared/mobile-simulator-types';
 
 // Re-export shared types for convenience
 export type {
@@ -267,6 +267,7 @@ export interface ProjectCommandTable {
   envVars: string; // JSON array stored as text
   confirmBeforeRun: Generated<number>; // 0 or 1
   confirmMessage: string | null;
+  isFavorite: Generated<number>; // 0 or 1
   sortOrder: Generated<number>;
   createdAt: Generated<string>;
 }

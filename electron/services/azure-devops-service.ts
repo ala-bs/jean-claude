@@ -32,8 +32,8 @@ import {
   validateYamlFilename,
 } from './yaml-pipeline-parser';
 
-import { azureHtmlToMarkdown } from './azure-html-to-markdown';
 import { createDebug, dbg } from '../lib/debug';
+import { azureHtmlToMarkdown } from './azure-html-to-markdown';
 import { ProviderRepository } from '../database/repositories/providers';
 import { sendGlobalPromptToWindow } from './global-prompt-service';
 import { TokenRepository } from '../database/repositories/tokens';
@@ -602,6 +602,7 @@ type PullRequestStatusMetadata = {
   url: string;
   isDraft: boolean;
   activeThreadCount?: number;
+  resolvedThreadCount?: number;
   mergeStatus?: 'succeeded' | 'conflicts' | 'failure' | 'notSet';
   approvedBy: Array<{
     displayName: string;
@@ -657,6 +658,7 @@ export async function getPullRequestStatuses(params: {
               : '';
           const mappedStatus = mapPrStatus(pr.status);
           let activeThreadCount: number | undefined;
+          let resolvedThreadCount: number | undefined;
           if (mappedStatus === 'active' && params.includeActiveThreadCount) {
             try {
               const threads = await getPullRequestThreads({
@@ -665,7 +667,9 @@ export async function getPullRequestStatuses(params: {
                 repoId: linkedPr.repoId,
                 pullRequestId: linkedPr.prId,
               });
-              activeThreadCount = getPullRequestThreadCounts(threads).active;
+              const counts = getPullRequestThreadCounts(threads);
+              activeThreadCount = counts.active;
+              resolvedThreadCount = counts.resolved;
             } catch (err) {
               dbg.azure(
                 'getPullRequestStatuses: failed threads for PR#%d: %O',
@@ -681,6 +685,7 @@ export async function getPullRequestStatuses(params: {
               url,
               isDraft: !!pr.isDraft,
               activeThreadCount,
+              resolvedThreadCount,
               mergeStatus:
                 pr.mergeStatus as PullRequestStatusMetadata['mergeStatus'],
               approvedBy: (pr.reviewers ?? [])
@@ -2608,11 +2613,17 @@ interface ChangeResponse {
     originalObjectId?: string;
     path: string;
     url?: string;
+    isFolder?: boolean;
   };
   originalPath?: string;
   sourceServerItem?: string;
   url?: string;
 }
+
+// Paging for PR iteration changes. Azure caps $top server-side; the loop below
+// follows `nextSkip` until the last page.
+const CHANGES_PAGE_SIZE = 1000;
+const CHANGES_MAX_PAGES = 20;
 
 // GitPullRequestIterationChanges from Azure DevOps API
 interface ChangesListResponse {
@@ -2771,7 +2782,7 @@ function mapChangeType(
   changeType: string,
 ): 'add' | 'edit' | 'delete' | 'rename' {
   // changeType can be a single value or combined (e.g., "edit, rename")
-  const lowerType = changeType.toLowerCase();
+  const lowerType = String(changeType ?? '').toLowerCase();
 
   // Check for specific types - order matters for combined types
   if (lowerType.includes('delete')) {
@@ -3158,8 +3169,9 @@ export async function uploadPullRequestAttachment(params: {
   mimeType: string;
   dataBase64: string;
 }): Promise<{ url: string }> {
-  await assertCurrentUserOwnsPullRequest(params);
-
+  // No ownership check here: attachments back both description edits (owner
+  // only, enforced in updatePullRequestDescription) and comments, which any
+  // user with repo access may post on someone else's pull request.
   const { authHeader, orgName } = await getProviderAuth(params.providerId);
   const data = Buffer.from(params.dataBase64, 'base64');
   const hashSuffix = createHash('sha256')
@@ -3799,27 +3811,42 @@ export async function getPullRequestChanges(params: {
     return [];
   }
 
-  // Get changes from the latest iteration
+  // Get changes from the latest iteration.
+  // The endpoint pages (default $top is small), and it does NOT sort deletes
+  // last — but any file past the first page is silently dropped if we don't
+  // follow `nextSkip`, which is how deleted files went missing from the tree.
   const latestIterationId = latestIteration.id;
-  const changesUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations/${latestIterationId}/changes?api-version=7.0`;
+  const entries: ChangeResponse[] = [];
+  let skip = 0;
 
-  const changesResponse = await fetch(changesUrl, {
-    headers: { Authorization: authHeader },
-  });
+  // Bounded so a provider that keeps echoing `nextSkip` can't spin forever.
+  for (let page = 0; page < CHANGES_MAX_PAGES; page++) {
+    const changesUrl = `https://dev.azure.com/${orgName}/${params.projectId}/_apis/git/repositories/${params.repoId}/pullrequests/${params.pullRequestId}/iterations/${latestIterationId}/changes?api-version=7.0&$top=${CHANGES_PAGE_SIZE}&$skip=${skip}`;
 
-  if (!changesResponse.ok) {
-    const error = await changesResponse.text();
-    throw new Error(`Failed to get pull request changes: ${error}`);
+    const changesResponse = await fetch(changesUrl, {
+      headers: { Authorization: authHeader },
+    });
+
+    if (!changesResponse.ok) {
+      const error = await changesResponse.text();
+      throw new Error(`Failed to get pull request changes: ${error}`);
+    }
+
+    const data: ChangesListResponse = await changesResponse.json();
+    entries.push(...(data.changeEntries ?? []));
+
+    // Azure omits nextSkip on the last page; guard against a non-advancing
+    // cursor so a malformed response ends the loop instead of repeating it.
+    if (data.nextSkip == null || data.nextSkip <= skip) break;
+    skip = data.nextSkip;
   }
 
-  const data: ChangesListResponse = await changesResponse.json();
-
-  return data.changeEntries
-    .filter((change) => change.item?.path) // Filter out entries without paths
+  return entries
+    .filter((change) => change.item?.path && !change.item.isFolder)
     .map((change) => ({
       path: change.item!.path,
       changeType: mapChangeType(change.changeType),
-      originalPath: change.originalPath,
+      originalPath: change.originalPath ?? change.sourceServerItem,
     }));
 }
 

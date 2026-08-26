@@ -16,9 +16,18 @@ export function expandRelativeAzureAttachmentUrls({
   );
 }
 
+/**
+ * Turndown escapes the `[`/`]` of markdown image syntax that survives inside
+ * Azure DevOps HTML, producing `!\[image.png\](azure-image-proxy://...)`.
+ * Unescape it so the image renders.
+ *
+ * The URL may carry Azure's image-size extension (` =WIDTH x HEIGHT`, e.g.
+ * `=640x` or `=640x480`). It is preserved verbatim — MarkdownContent
+ * understands it and applies the requested display width.
+ */
 export function restoreEscapedMarkdownLinks(value: string) {
   return value.replace(
-    /!\\\[([^\]\n]+)\\\]\((azure-image-proxy:\/\/[^)\s]+)\)/g,
+    /!\\\[([^\]\n]+)\\\]\((azure-image-proxy:\/\/[^)\s]+(?:[ \t]+=\d+x\d*)?)\)/g,
     (_match, label: string, url: string) => `![${label}](${url})`,
   );
 }

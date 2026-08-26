@@ -422,6 +422,31 @@ describe('normalizeToolRequest', () => {
       'ask',
     );
 
+    // A command below a heredoc must still be evaluated on its own: the match
+    // value is the stripped text, which gets parsed a second time, and a
+    // heredoc that stopped being re-parseable there would swallow it.
+    for (const command of [
+      'cat <<EOF\nhello\nEOF\nsudo rm -rf /',
+      // Unterminated: no terminator line for the second parse to anchor on.
+      'cat <<A; sudo rm -rf /',
+      'cat <<A && sudo rm -rf /',
+    ]) {
+      const below = normalizeToolRequest('Bash', { command });
+      expect(evaluatePermission(allowCat, below.tool, below.matchValue)).toBe(
+        'ask',
+      );
+      expect(
+        evaluatePermission(
+          [
+            ...allowCat,
+            { tool: 'bash', pattern: 'sudo*', action: 'deny' as const },
+          ],
+          below.tool,
+          below.matchValue,
+        ),
+      ).toBe('deny');
+    }
+
     // A quoted delimiter keeps the body inert, so the command stays allowed.
     const inert = normalizeToolRequest('Bash', {
       command: "cat <<'EOF'\n$(rm -rf /)\nEOF",

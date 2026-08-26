@@ -16,7 +16,7 @@ import {
 } from '../schema';
 import { db } from '../index';
 import { dbg } from '../../lib/debug';
-import { transitionActivePrWorkspacesToPending } from './pr-workspace-transitions';
+import { transitionActivePrWorkspacesToKept } from './pr-workspace-transitions';
 
 
 
@@ -487,19 +487,6 @@ export const TaskRepository = {
     return rows.map(toTask);
   },
 
-  findPendingPrWorkspaceTasks: async () => {
-    const rows = await db
-      .selectFrom('tasks')
-      .selectAll()
-      .where('prWorkspaceState', '=', 'cleanup-pending')
-      .where('type', '=', 'pr-review')
-      .orderBy('prWorkspacePendingAt', 'asc')
-      .orderBy('createdAt', 'asc')
-      .orderBy('id', 'asc')
-      .execute();
-    return rows.map(toTask);
-  },
-
   setPrWorkspaceState: async (
     id: string,
     prWorkspaceState: 'active' | 'cleanup-pending' | 'kept',
@@ -524,36 +511,12 @@ export const TaskRepository = {
     return toTask(row);
   },
 
-  markPrWorkspacesCleanupPending: async (params: {
+  markPrWorkspacesKept: async (params: {
     projectId: string;
     pullRequestId: string;
     taskIds: string[];
   }): Promise<Task[]> =>
-    (await transitionActivePrWorkspacesToPending(db, params)).map(toTask),
-
-  keepPrWorkspaces: async (ids: string[]): Promise<Task[]> => {
-    if (ids.length === 0) return [];
-    return db.transaction().execute(async (trx) => {
-      const rows = await trx
-        .updateTable('tasks')
-        .set({
-          prWorkspaceState: 'kept',
-          prWorkspacePendingAt: null,
-          status: sql<TaskStatus>`CASE WHEN status = 'completed' THEN 'waiting' ELSE status END`,
-          userCompleted: 0,
-          updatedAt: new Date().toISOString(),
-        })
-        .where('id', 'in', ids)
-        .where('type', '=', 'pr-review')
-        .where('prWorkspaceState', '=', 'cleanup-pending')
-        .returningAll()
-        .execute();
-      if (rows.length !== ids.length) {
-        throw new Error('PR workspace state changed during keep resolution');
-      }
-      return rows.map(toTask);
-    });
-  },
+    (await transitionActivePrWorkspacesToKept(db, params)).map(toTask),
 
   reactivatePrWorkspaces: async (ids: string[]): Promise<Task[]> => {
     if (ids.length === 0) return [];

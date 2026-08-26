@@ -213,7 +213,9 @@ export function useAgentControls({
 
   const sendMessage = useCallback(
     async (parts: PromptPart[], capture?: AgentMemoryFollowUpCapture) => {
-      if (!stepId) return;
+      // Resolving silently here would clear the composer and drop the prompt
+      // with no feedback — the exact failure mode this guard used to cause.
+      if (!stepId) throw new Error('No active step to send a message to');
       await api.agent.sendMessage(stepId, parts, capture);
     },
     [stepId],
@@ -221,7 +223,7 @@ export function useAgentControls({
 
   const queuePrompt = useCallback(
     async (parts: PromptPart[], capture?: AgentMemoryQueuedPromptCapture) => {
-      if (!stepId) return { promptId: '' };
+      if (!stepId) throw new Error('No active step to queue a prompt for');
       return api.agent.queuePrompt(stepId, parts, capture);
     },
     [stepId],

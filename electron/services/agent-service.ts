@@ -63,16 +63,16 @@ import {
   type ThinkingEffort,
 } from '@shared/types';
 import type {
-  NormalizedEntry,
-} from '@shared/normalized-message-v2';
-import type {
   PermissionsChangedEvent,
   PermissionScope,
   ResolvedPermissionRule,
 } from '@shared/permission-types';
-import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 import type { AgentUIEventPayload } from '@shared/agent-ui-events';
 import type { AiUsageFeature } from '@shared/ai-usage-types';
+import type {
+  NormalizedEntry,
+} from '@shared/normalized-message-v2';
+import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 
 import {
   AgentMessageRepository,
@@ -3206,11 +3206,23 @@ class AgentService {
       }
 
       let markStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
+      let markStartFailed!: (error: unknown) => void;
+      const started = new Promise<void>((resolve, reject) => {
         markStarted = resolve;
+        markStartFailed = reject;
       });
       this.startingSteps.add(stepId);
-      this.stepStartPromises.set(stepId, started);
+      // Internal waiters (see `stop`) only care that the start settled, never
+      // how. Store a neutralized view so a rejected start can't make `stop`
+      // throw.
+      //
+      // Attaching this synchronously ALSO makes it the universal rejection
+      // handler for `started`: callers are free to ignore the returned
+      // `started` (see `sendMessage` below) without producing an unhandled
+      // rejection in the main process. Keep the `.catch` here if you ever
+      // change what goes into `stepStartPromises`.
+      const startSettled = started.catch(() => undefined);
+      this.stepStartPromises.set(stepId, startSettled);
       await this.waitForPreviousBackendRun(stepId);
       const completion = this.trackBackendRun(stepId, () =>
         this.performSendMessage(
@@ -3219,14 +3231,25 @@ class AgentService {
           markStarted,
           completeRegistration,
           captureContext,
-        ).finally(() => {
-          completeRegistration();
-          markStarted();
-          if (this.stepStartPromises.get(stepId) === started) {
-            this.startingSteps.delete(stepId);
-            this.stepStartPromises.delete(stepId);
-          }
-        }),
+        )
+          .catch((error) => {
+            // performSendMessage only rethrows when it never got a session, in
+            // which case it has surfaced NOTHING to the user - no timeline
+            // entry, no errored status, no notification. Reporting through
+            // `started` is the only way the caller learns the prompt died, so
+            // the composer can keep the text instead of silently dropping it.
+            markStartFailed(error);
+            throw error;
+          })
+          .finally(() => {
+            completeRegistration();
+            // No-op if the start already settled as a failure above.
+            markStarted();
+            if (this.stepStartPromises.get(stepId) === startSettled) {
+              this.startingSteps.delete(stepId);
+              this.stepStartPromises.delete(stepId);
+            }
+          }),
       );
       return { started, completion };
     } catch (error) {

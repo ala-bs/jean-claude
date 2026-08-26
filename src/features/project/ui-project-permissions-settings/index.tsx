@@ -21,6 +21,7 @@ import {
   useEditGlobalPermissionRule,
   useGlobalPermissions,
 } from '@/hooks/use-global-permissions';
+import { ProjectExternalDirectories } from '@/features/project/ui-project-external-directories';
 import { useToastStore } from '@/stores/toasts';
 
 export function ProjectPermissionsSettings({
@@ -184,6 +185,7 @@ export function ProjectPermissionsSettings({
         disabled={isBusy || isLoading || isGlobalLoading}
         scopeLabel="Applies to this project and its worktrees (worktrees extend project rules)"
       />
+      <ProjectExternalDirectories projectPath={projectPath} />
       <PermissionsEditor
         permissions={permissions}
         isLoading={isLoading}

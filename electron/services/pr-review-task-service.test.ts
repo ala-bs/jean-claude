@@ -26,10 +26,10 @@ import {
   cleanPrReviewWorkspace,
   createOrGetPrReviewTask,
   fetchPrReviewSourceBranch,
-  listPendingPrWorkspaceDecisions,
   reconcilePrWorkspaceState,
   runCommandWithPrReviewLifecycle,
   runTaskDestructiveWithPrReviewLifecycle,
+  sendMessageWithPrReviewLifecycle,
   startAgentWithPrReviewLifecycle,
   startPrCommand,
 } from './pr-review-task-service';
@@ -111,6 +111,7 @@ function makeDeps(overrides: Partial<Parameters<typeof createOrGetPrReviewTask>[
       branchName: 'review-pr-12',
     }),
     cleanupWorktree: vi.fn(),
+    getPullRequestWorkItems: vi.fn().mockResolvedValue([]),
     createTask: vi.fn(async (data) => makeTask(data)),
     updateTask: vi.fn(async (id, data) => makeTask({ id, ...data })),
     setPrWorkspaceState: vi.fn(async (id) =>
@@ -137,6 +138,7 @@ function makeCommand(
     envVars: [],
     confirmBeforeRun: false,
     confirmMessage: null,
+    isFavorite: false,
     sortOrder: 0,
     createdAt: '2026-07-05T00:00:00.000Z',
     ...overrides,
@@ -223,6 +225,71 @@ describe('createOrGetPrReviewTask', () => {
         startCommitHash: 'base999',
       }),
     );
+  });
+
+  it('links the PR work items onto the created task', async () => {
+    const deps = makeDeps({
+      getPullRequestWorkItems: vi.fn().mockResolvedValue([
+        { id: 101, url: 'https://example.test/wi/101' },
+        { id: '102', url: null },
+      ]),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.getPullRequestWorkItems).toHaveBeenCalledWith({
+      providerId: 'provider-1',
+      projectId: 'repo-project-1',
+      repoId: 'repo-1',
+      pullRequestId: 12,
+    });
+    expect(deps.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workItemIds: ['101', '102'],
+        // Positionally aligned with ids, so consumers can zip by index.
+        workItemUrls: ['https://example.test/wi/101', ''],
+      }),
+    );
+  });
+
+  it('creates the workspace unlinked when fetching PR work items fails', async () => {
+    const deps = makeDeps({
+      getPullRequestWorkItems: vi
+        .fn()
+        .mockRejectedValue(new Error('azure exploded')),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ workItemIds: null, workItemUrls: null }),
+    );
+  });
+
+  it('leaves work items untouched when reusing an existing workspace', async () => {
+    const existing = makeTask({
+      id: 'task-existing',
+      worktreePath: '/repo/.worktrees/review-pr-12',
+      prWorkspaceState: 'active',
+      workItemIds: null,
+    });
+    const deps = makeDeps({
+      findActivePrReviewTask: vi.fn().mockResolvedValue(existing),
+    });
+
+    await createOrGetPrReviewTask(
+      { projectId: 'project-1', pullRequestId: 12 },
+      deps,
+    );
+
+    expect(deps.getPullRequestWorkItems).not.toHaveBeenCalled();
+    expect(deps.updateTask).not.toHaveBeenCalled();
   });
 
   it('falls back to the project default branch when the PR has no target branch', async () => {
@@ -1114,16 +1181,14 @@ describe('reconcilePrWorkspaceState', () => {
     return {
       findPrReviewTasksByPullRequest: vi.fn().mockResolvedValue(tasks),
       revalidatePullRequestStatus: vi.fn().mockResolvedValue(status),
-      markPrWorkspacesCleanupPending: vi.fn(
-        async ({ taskIds }: { taskIds: string[] }) => {
-          return taskIds.map((id) =>
-            makeTask({
-              ...tasks.find((task) => task.id === id),
-              id,
-              prWorkspaceState: 'cleanup-pending',
-            }),
-          );
-        },
+      markPrWorkspacesKept: vi.fn(async ({ taskIds }: { taskIds: string[] }) =>
+        taskIds.map((id) =>
+          makeTask({
+            ...tasks.find((task) => task.id === id),
+            id,
+            prWorkspaceState: 'kept',
+          }),
+        ),
       ),
       reactivatePrWorkspaces: vi.fn(async (taskIds: string[]) =>
         taskIds.map((id) => {
@@ -1150,7 +1215,7 @@ describe('reconcilePrWorkspaceState', () => {
         deps,
       ),
     ).resolves.toEqual([]);
-    expect(deps.markPrWorkspacesCleanupPending).not.toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).not.toHaveBeenCalled();
     expect(deps.reactivatePrWorkspaces).not.toHaveBeenCalled();
     expect(deps.emitTaskUpsert).not.toHaveBeenCalled();
   });
@@ -1168,12 +1233,12 @@ describe('reconcilePrWorkspaceState', () => {
       ),
     ).resolves.toEqual([]);
     expect(deps.findPrReviewTasksByPullRequest).not.toHaveBeenCalled();
-    expect(deps.markPrWorkspacesCleanupPending).not.toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).not.toHaveBeenCalled();
     expect(deps.reactivatePrWorkspaces).not.toHaveBeenCalled();
   });
 
   it.each(['completed', 'abandoned'] as const)(
-    'marks every active workspace pending when PR is %s without destructive work',
+    'marks every active workspace kept when PR is %s without destructive work',
     async (status) => {
       const tasks = [
         makeTask({ id: 'first' }),
@@ -1197,8 +1262,8 @@ describe('reconcilePrWorkspaceState', () => {
       );
 
       expect(changed.map((task) => task.id)).toEqual(['first', 'second']);
-      expect(deps.markPrWorkspacesCleanupPending).toHaveBeenCalledOnce();
-      expect(deps.markPrWorkspacesCleanupPending).toHaveBeenCalledWith({
+      expect(deps.markPrWorkspacesKept).toHaveBeenCalledOnce();
+      expect(deps.markPrWorkspacesKept).toHaveBeenCalledWith({
         projectId: 'project-1',
         pullRequestId: '12',
         taskIds: ['first', 'second'],
@@ -1218,16 +1283,16 @@ describe('reconcilePrWorkspaceState', () => {
           deps,
         ),
       ).resolves.toEqual([]);
-      expect(deps.markPrWorkspacesCleanupPending).toHaveBeenCalledOnce();
+      expect(deps.markPrWorkspacesKept).toHaveBeenCalledOnce();
       expect(deps.emitTaskUpsert).toHaveBeenCalledTimes(2);
     },
   );
 
-  it('emits nothing when grouped pending transition fails', async () => {
+  it('emits nothing when the grouped kept transition fails', async () => {
     const deps = makeReconcileDeps({
       tasks: [makeTask({ id: 'first' }), makeTask({ id: 'second' })],
     });
-    vi.mocked(deps.markPrWorkspacesCleanupPending).mockRejectedValue(
+    vi.mocked(deps.markPrWorkspacesKept).mockRejectedValue(
       new Error('transaction rolled back'),
     );
 
@@ -1240,7 +1305,7 @@ describe('reconcilePrWorkspaceState', () => {
     expect(deps.emitTaskUpsert).not.toHaveBeenCalled();
   });
 
-  it('leaves kept and already-pending workspaces unchanged on repeated closure', async () => {
+  it('leaves kept and legacy pending workspaces unchanged on repeated closure', async () => {
     const deps = makeReconcileDeps({
       tasks: [
         makeTask({ id: 'kept', prWorkspaceState: 'kept' }),
@@ -1254,7 +1319,7 @@ describe('reconcilePrWorkspaceState', () => {
         deps,
       ),
     ).resolves.toEqual([]);
-    expect(deps.markPrWorkspacesCleanupPending).not.toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).not.toHaveBeenCalled();
   });
 
   it('reactivates pending and kept workspaces when PR reopens', async () => {
@@ -1297,7 +1362,7 @@ describe('reconcilePrWorkspaceState', () => {
       'kept',
       'waiting',
     ]);
-    expect(deps.markPrWorkspacesCleanupPending).not.toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).not.toHaveBeenCalled();
     expect(deps.emitTaskUpsert).toHaveBeenCalledTimes(3);
 
     const restored = changed[0];
@@ -1331,7 +1396,7 @@ describe('reconcilePrWorkspaceState', () => {
       ),
     ).resolves.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ prWorkspaceState: 'cleanup-pending' }),
+        expect.objectContaining({ prWorkspaceState: 'kept' }),
       ]),
     );
   });
@@ -1361,26 +1426,77 @@ describe('reconcilePrWorkspaceState', () => {
     await expect(Promise.all([start, reconciliation])).resolves.toBeDefined();
     expect(deps.revalidatePullRequestStatus).toHaveBeenCalled();
     expect(deps.findPrReviewTasksByPullRequest).toHaveBeenCalled();
-    expect(deps.markPrWorkspacesCleanupPending).toHaveBeenCalled();
+    expect(deps.markPrWorkspacesKept).toHaveBeenCalled();
   });
 });
 
-describe('listPendingPrWorkspaceDecisions', () => {
-  it('groups ordered pending tasks into one deterministic decision per project and PR', async () => {
-    const tasks = [
-      makeTask({ id: 'old-b', projectId: 'old', pullRequestId: '2' }),
-      makeTask({ id: 'old-a', projectId: 'old', pullRequestId: '2' }),
-      makeTask({ id: 'new', projectId: 'new', pullRequestId: '1' }),
-    ];
+describe('sendMessageWithPrReviewLifecycle', () => {
+  function setup(task = makeTask()) {
+    let resolveCompletion!: () => void;
+    let rejectCompletion!: (error: Error) => void;
+    const completion = new Promise<void>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    const beginFollowUp = vi.fn().mockResolvedValue({
+      started: Promise.resolve(),
+      completion,
+    });
+    const deps = {
+      findStepById: vi
+        .fn()
+        .mockResolvedValue({ id: 'step-1', taskId: task.id }),
+      findTaskById: vi.fn().mockResolvedValue(task),
+    };
+    return { beginFollowUp, deps, resolveCompletion, rejectCompletion };
+  }
 
+  it('resolves on acceptance, not on turn completion, when waitForCompletion is false', async () => {
+    const { beginFollowUp, deps, resolveCompletion } = setup();
+
+    // Would hang forever if it awaited `completion`: nothing resolves it here.
     await expect(
-      listPendingPrWorkspaceDecisions({
-        findPendingPrWorkspaceTasks: vi.fn().mockResolvedValue(tasks),
+      sendMessageWithPrReviewLifecycle('step-1', beginFollowUp, {
+        ...deps,
+        waitForCompletion: false,
       }),
-    ).resolves.toEqual([
-      { projectId: 'old', pullRequestId: 2, taskIds: ['old-b', 'old-a'] },
-      { projectId: 'new', pullRequestId: 1, taskIds: ['new'] },
-    ]);
+    ).resolves.toBeUndefined();
+
+    expect(beginFollowUp).toHaveBeenCalledWith('step-1');
+    resolveCompletion();
+  });
+
+  it('does not surface a turn failure as an unhandled rejection', async () => {
+    const { beginFollowUp, deps, rejectCompletion } = setup();
+
+    await sendMessageWithPrReviewLifecycle('step-1', beginFollowUp, {
+      ...deps,
+      waitForCompletion: false,
+    });
+
+    rejectCompletion(new Error('turn aborted'));
+    // Flush microtasks: an unobserved rejection would trip vitest here.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('still awaits the whole turn by default', async () => {
+    const { beginFollowUp, deps, resolveCompletion } = setup();
+    let settled = false;
+
+    const pending = sendMessageWithPrReviewLifecycle(
+      'step-1',
+      beginFollowUp,
+      deps,
+    ).then(() => {
+      settled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    resolveCompletion();
+    await pending;
+    expect(settled).toBe(true);
   });
 });
 
@@ -1426,9 +1542,11 @@ describe('runCommandWithPrReviewLifecycle', () => {
     expect(operation).toHaveBeenCalledWith(params);
   });
 
-  it('rejects starts for completed PR review tasks', async () => {
+  // status 'completed' only means the last agent step finished; the worktree is
+  // still live, so run commands must keep working.
+  it('allows starts for PR review tasks whose last step finished', async () => {
     const task = makeTask({ status: 'completed' });
-    const operation = vi.fn();
+    const operation = vi.fn().mockResolvedValue('started');
 
     await expect(
       runCommandWithPrReviewLifecycle(
@@ -1441,8 +1559,73 @@ describe('runCommandWithPrReviewLifecycle', () => {
         operation,
         { findTaskById: vi.fn().mockResolvedValue(task) },
       ),
-    ).rejects.toThrow('active worktree');
-    expect(operation).not.toHaveBeenCalled();
+    ).resolves.toBe('started');
+    expect(operation).toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'user-completed',
+      { status: 'completed' as const, userCompleted: true },
+      'was archived',
+    ],
+    [
+      'cleanup-pending',
+      { prWorkspaceState: 'cleanup-pending' as const },
+      'is being cleaned up',
+    ],
+    ['worktree-less', { worktreePath: null }, 'has no active worktree'],
+  ])(
+    'rejects starts for %s PR review tasks',
+    async (_label, overrides, expectedMessage) => {
+      const task = makeTask(overrides);
+      const operation = vi.fn();
+
+      await expect(
+        runCommandWithPrReviewLifecycle(
+          {
+            taskId: task.id,
+            projectId: task.projectId,
+            workingDir: '/repo/.worktrees/review-pr-12',
+            runCommandId: 'web',
+          },
+          operation,
+          { findTaskById: vi.fn().mockResolvedValue(task) },
+        ),
+      ).rejects.toThrow(expectedMessage);
+      expect(operation).not.toHaveBeenCalled();
+    },
+  );
+
+  // Same invariant on the agent side: finishing a step must not prevent the
+  // workspace from starting another one.
+  it('allows agent starts for PR review tasks whose last step finished', async () => {
+    const task = makeTask({ status: 'completed' });
+    const agent = vi.fn().mockResolvedValue(undefined);
+
+    await startAgentWithPrReviewLifecycle('step-2', agent, {
+      findStepById: vi
+        .fn()
+        .mockResolvedValue({ id: 'step-2', taskId: task.id }),
+      findTaskById: vi.fn().mockResolvedValue(task),
+    });
+
+    expect(agent).toHaveBeenCalledWith('step-2');
+  });
+
+  it('rejects agent starts for archived PR review tasks', async () => {
+    const task = makeTask({ status: 'completed', userCompleted: true });
+    const agent = vi.fn();
+
+    await expect(
+      startAgentWithPrReviewLifecycle('step-2', agent, {
+        findStepById: vi
+          .fn()
+          .mockResolvedValue({ id: 'step-2', taskId: task.id }),
+        findTaskById: vi.fn().mockResolvedValue(task),
+      }),
+    ).rejects.toThrow('was archived');
+    expect(agent).not.toHaveBeenCalled();
   });
 
   it('holds cleanup until an in-flight generic PR command start finishes', async () => {
@@ -1729,7 +1912,7 @@ describe('runTaskDestructiveWithPrReviewLifecycle', () => {
 
     toggleGate.resolve();
     await toggled;
-    await expect(start).rejects.toThrow('active worktree');
+    await expect(start).rejects.toThrow('was archived');
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -1831,7 +2014,7 @@ describe('runTaskDestructiveWithPrReviewLifecycle', () => {
 
     cleanupGate.resolve();
     await completion;
-    await expect(start).rejects.toThrow('active worktree');
+    await expect(start).rejects.toThrow('was archived');
     expect(spawn).not.toHaveBeenCalled();
     expect(currentTask.worktreePath).toBeNull();
   });

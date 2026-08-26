@@ -76,6 +76,23 @@ describe('project cache domain', () => {
     clearPendingResources();
   });
 
+  // Regression: returning `[]` before the index loaded made a boot with an
+  // in-flight projects load indistinguishable from a genuine first run, so
+  // `resolveSetupState` sent existing users to the onboarding wizard.
+  it('reports an unloaded index as undefined, not an empty list', () => {
+    expect(selectProjects()).toBeUndefined();
+  });
+
+  // Not a regression test — this passed before the fix too. It guards the other
+  // direction: "no projects yet" must stay distinguishable from "still loading",
+  // so an over-correction to `undefined` everywhere would strand a genuine first
+  // run outside the onboarding wizard.
+  it('reports a loaded but genuinely empty index as an empty list', () => {
+    ingestProjects([]);
+
+    expect(selectProjects()).toEqual([]);
+  });
+
   it('ingests a project entity and marks its resource fresh', () => {
     const project = createProject();
 
@@ -104,7 +121,7 @@ describe('project cache domain', () => {
       'project-2',
       'project-1',
     ]);
-    expect(selectProjects().map((project) => project.name)).toEqual([
+    expect(selectProjects()?.map((project) => project.name)).toEqual([
       'Second',
       'First',
     ]);
@@ -162,7 +179,7 @@ describe('project cache domain', () => {
       'project-1',
       'project-2',
     ]);
-    expect(selectProjects().map((project) => project.name)).toEqual([
+    expect(selectProjects()?.map((project) => project.name)).toEqual([
       'First',
       'Second',
     ]);
@@ -189,7 +206,7 @@ describe('project cache domain', () => {
       'project-1',
       'project-2',
     ]);
-    expect(selectProjects().map((project) => project.name)).toEqual([
+    expect(selectProjects()?.map((project) => project.name)).toEqual([
       'Third',
       'First',
       'Second',

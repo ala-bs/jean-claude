@@ -3,7 +3,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { Kysely, SqliteDialect } from 'kysely';
 
 import type { Database } from '../schema';
-import { transitionActivePrWorkspacesToPending } from './pr-workspace-transitions';
+import { transitionActivePrWorkspacesToKept } from './pr-workspace-transitions';
 
 let client: DatabaseSync;
 let db: Kysely<Database>;
@@ -47,10 +47,10 @@ afterEach(async () => {
   await db.destroy();
 });
 
-describe('transitionActivePrWorkspacesToPending', () => {
+describe('transitionActivePrWorkspacesToKept', () => {
   it('rolls back a second-row failure, then retries with one durable timestamp', async () => {
     client.exec(`
-      CREATE TRIGGER fail_second_pending_transition
+      CREATE TRIGGER fail_second_kept_transition
       BEFORE UPDATE ON tasks
       WHEN OLD.id = 'second'
       BEGIN
@@ -61,11 +61,11 @@ describe('transitionActivePrWorkspacesToPending', () => {
       projectId: 'project-1',
       pullRequestId: '12',
       taskIds: ['first', 'second'],
-      pendingAt: '2026-07-15T00:00:00.000Z',
+      keptAt: '2026-07-15T00:00:00.000Z',
     };
 
     await expect(
-      transitionActivePrWorkspacesToPending(db, params),
+      transitionActivePrWorkspacesToKept(db, params),
     ).rejects.toThrow('injected second update failure');
     expect(
       client
@@ -79,9 +79,9 @@ describe('transitionActivePrWorkspacesToPending', () => {
       { id: 'second', prWorkspaceState: 'active', prWorkspacePendingAt: null, updatedAt: 'old' },
     ]);
 
-    client.exec('DROP TRIGGER fail_second_pending_transition');
+    client.exec('DROP TRIGGER fail_second_kept_transition');
     await expect(
-      transitionActivePrWorkspacesToPending(db, params),
+      transitionActivePrWorkspacesToKept(db, params),
     ).resolves.toHaveLength(2);
     expect(
       client
@@ -90,9 +90,9 @@ describe('transitionActivePrWorkspacesToPending', () => {
         )
         .all(),
     ).toEqual([
-      { id: 'first', prWorkspaceState: 'cleanup-pending', prWorkspacePendingAt: params.pendingAt },
+      { id: 'first', prWorkspaceState: 'kept', prWorkspacePendingAt: null },
       { id: 'kept', prWorkspaceState: 'kept', prWorkspacePendingAt: null },
-      { id: 'second', prWorkspaceState: 'cleanup-pending', prWorkspacePendingAt: params.pendingAt },
+      { id: 'second', prWorkspaceState: 'kept', prWorkspacePendingAt: null },
     ]);
   });
 
@@ -100,7 +100,7 @@ describe('transitionActivePrWorkspacesToPending', () => {
     client.prepare("UPDATE tasks SET prWorkspaceState = 'cleanup-pending' WHERE id = 'second'").run();
 
     await expect(
-      transitionActivePrWorkspacesToPending(db, {
+      transitionActivePrWorkspacesToKept(db, {
         projectId: 'project-1',
         pullRequestId: '12',
         taskIds: ['first', 'second'],

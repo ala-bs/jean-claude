@@ -21,6 +21,22 @@ export const PROJECT_COLORS = [
   '#64748B', // slate
 ] as const;
 
+/**
+ * Translucent version of a swatch, for tinting a row background without
+ * fighting the foreground text for contrast. Falls back to the raw value if it
+ * isn't a `#rrggbb` hex, so a hand-edited settings value can't produce an
+ * invalid `background-color` and blank the row.
+ */
+export function hexToRgba(hex: string, alpha: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!match) return hex;
+  const value = Number.parseInt(match[1], 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
 export function getRandomColor(): string {
   return PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)];
 }

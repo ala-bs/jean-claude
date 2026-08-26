@@ -74,6 +74,10 @@ import type {
   NewWorkActivityEvent,
   WorkActivityWeekParams,
 } from '@shared/work-activity-types';
+import {
+  START_PR_COMMAND_CHANNEL,
+  type StartPrCommandParams,
+} from '@shared/run-command-types';
 import type {
   TimesheetAction,
   TimesheetAxisLookupRequest,
@@ -84,10 +88,6 @@ import type {
   TimesheetRowUpdate,
   TimesheetSyncParams,
 } from '@shared/timesheet-types';
-import {
-  START_PR_COMMAND_CHANNEL,
-  type StartPrCommandParams,
-} from '@shared/run-command-types';
 import { AGENT_CHANNELS } from '@shared/agent-types';
 import type { AiUsageDashboardParams } from '@shared/ai-usage-types';
 import type { CreateWorkItemVerificationNoteParams } from '@shared/work-item-verification-note-types';
@@ -95,6 +95,20 @@ import type { DebugLogEntry } from '@shared/debug-log-types';
 import type { StartAdHocRunCommandParams } from '@shared/run-command-types';
 
 const devBadgeLabel = process.env.JC_DEV_BADGE_LABEL?.trim() || undefined;
+
+/**
+ * Whether this Chromium profile already had a localStorage bucket before this
+ * launch, sampled by the main process (see `hasExistingLocalStorageBucket`) and
+ * passed via `webPreferences.additionalArguments`.
+ *
+ * `false` means a genuine first run for this profile, so an empty localStorage
+ * is expected rather than a failed read. Defaults to `true` when the argument is
+ * missing: assuming "the bucket existed" makes the renderer's boot guard treat
+ * an empty read as suspicious, which is the safe direction to be wrong in.
+ */
+const hasExistingLocalStorageBucket = !process.argv.includes(
+  '--jc-local-storage-bucket=absent',
+);
 
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
@@ -203,8 +217,6 @@ contextBridge.exposeInMainWorld('api', {
   tasks: {
     focused: (taskId: string) => ipcRenderer.send('tasks:focused', taskId),
     findAll: () => ipcRenderer.invoke('tasks:findAll'),
-    listPendingPrWorkspaceDecisions: () =>
-      ipcRenderer.invoke('tasks:listPendingPrWorkspaceDecisions'),
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('tasks:findByProjectId', projectId),
     findAllActive: () => ipcRenderer.invoke('tasks:findAllActive'),
@@ -220,6 +232,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('tasks:updatePendingMessage', id, pendingMessage),
     setSourceBranch: (params: { taskId: string; sourceBranch: string }) =>
       ipcRenderer.invoke('tasks:setSourceBranch', params),
+    setBranchName: (params: { taskId: string; branchName: string }) =>
+      ipcRenderer.invoke('tasks:setBranchName', params),
     delete: (id: string, options?: { deleteWorktree?: boolean }) =>
       ipcRenderer.invoke('tasks:delete', id, options),
     deletePrWorkspaceTask: (params: { taskId: string }) =>
@@ -228,11 +242,6 @@ contextBridge.exposeInMainWorld('api', {
       projectId: string;
       pullRequestId: number;
     }) => ipcRenderer.invoke('tasks:deleteAllPrWorkspaces', params),
-    resolveClosedPrWorkspace: (params: {
-      projectId: string;
-      pullRequestId: number;
-      action: 'keep' | 'delete';
-    }) => ipcRenderer.invoke('tasks:resolveClosedPrWorkspace', params),
     toggleUserCompleted: (id: string) =>
       ipcRenderer.invoke('tasks:toggleUserCompleted', id),
     complete: (id: string, options: { cleanupWorktree?: boolean }) =>
@@ -267,12 +276,14 @@ contextBridge.exposeInMainWorld('api', {
         taskId: string,
         filePath: string,
         status: 'added' | 'modified' | 'deleted',
+        originalPath?: string,
       ) =>
         ipcRenderer.invoke(
           'tasks:worktree:getFileContent',
           taskId,
           filePath,
           status,
+          originalPath,
         ),
       getLocalFileContent: (
         taskId: string,
@@ -926,6 +937,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('fs:getFileSize', filePath),
     readImageAsDataUrl: (filePath: string) =>
       ipcRenderer.invoke('fs:readImageAsDataUrl', filePath),
+    readSpreadsheetAsBase64: (filePath: string) =>
+      ipcRenderer.invoke('fs:readSpreadsheetAsBase64', filePath),
     getImageUrl: (filePath: string) =>
       ipcRenderer.invoke('fs:getImageUrl', filePath),
     listDirectory: (dirPath: string, projectRoot: string) =>
@@ -1367,6 +1380,8 @@ contextBridge.exposeInMainWorld('api', {
   projectCommands: {
     findByProjectId: (projectId: string) =>
       ipcRenderer.invoke('project:commands:findByProjectId', projectId),
+    findAll: () => ipcRenderer.invoke('project:commands:findAll'),
+    findFavorites: () => ipcRenderer.invoke('project:commands:findFavorites'),
     create: (data: unknown) =>
       ipcRenderer.invoke('project:commands:create', data),
     update: (id: string, data: unknown) =>
@@ -1405,6 +1420,8 @@ contextBridge.exposeInMainWorld('api', {
       }),
     startAdHocCommand: (params: StartAdHocRunCommandParams) =>
       ipcRenderer.invoke('project:commands:run:startAdHocCommand', params),
+    startFavorite: (params: { projectId: string; runCommandId: string }) =>
+      ipcRenderer.invoke('project:commands:run:startFavorite', params),
     startGroup: (params: {
       taskId: string;
       runCommandIds: string[];
@@ -1509,6 +1526,11 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('globalPrompt:show', handler);
       return () => ipcRenderer.removeListener('globalPrompt:show', handler);
     },
+    onDismiss: (callback: (promptId: string) => void) => {
+      const handler = (_: unknown, promptId: string) => callback(promptId);
+      ipcRenderer.on('globalPrompt:dismiss', handler);
+      return () => ipcRenderer.removeListener('globalPrompt:dismiss', handler);
+    },
     respond: (response: GlobalPromptResponse) =>
       ipcRenderer.invoke('globalPrompt:respond', response),
   },
@@ -1578,6 +1600,11 @@ contextBridge.exposeInMainWorld('api', {
     findNonExistent: () => ipcRenderer.invoke('claudeProjects:findNonExistent'),
     cleanup: (params: { paths: string[]; contentHash: string }) =>
       ipcRenderer.invoke('claudeProjects:cleanup', params),
+  },
+  unusedWorktrees: {
+    scan: () => ipcRenderer.invoke('unusedWorktrees:scan'),
+    cleanup: (params: { paths: string[] }) =>
+      ipcRenderer.invoke('unusedWorktrees:cleanup', params),
   },
   completion: {
     complete: (params: {
@@ -1845,6 +1872,7 @@ contextBridge.exposeInMainWorld('api', {
   app: {
     isDevMode: !!process.env.ELECTRON_RENDERER_URL,
     devBadgeLabel,
+    hasExistingLocalStorageBucket,
     getIsPreviewMode: () =>
       ipcRenderer.invoke('app:getIsPreviewMode') as Promise<boolean>,
     getReloadUpdateInfo: (params: { builtCommitHash: string }) =>

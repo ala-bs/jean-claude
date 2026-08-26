@@ -20,6 +20,8 @@ import {
   createCodexNormalizationContext,
   normalizeCodexNotification,
 } from './normalize-codex-message-v2';
+import { flattenScope } from '../../permission-settings-service';
+import { getAllowedDirectories } from '../../directory-access';
 import { getOrCreateCodexAppServer } from './codex-app-server';
 
 import type { CodexJsonRpcNotification } from './codex-json-rpc-client';
@@ -496,7 +498,7 @@ function createCodexThreadConfig(config: AgentBackendConfig): {
           config: {
             sandbox_workspace_write: {
               network_access: true,
-              writable_roots: getCodexWritableRoots(config.cwd),
+              writable_roots: getCodexWritableRoots(config),
             },
           },
         }
@@ -504,11 +506,22 @@ function createCodexThreadConfig(config: AgentBackendConfig): {
   };
 }
 
-function getCodexWritableRoots(cwd: string): string[] {
-  return [
-    ...getCodexPackageManagerCacheRoots(),
-    ...getCodexWorktreeGitWritableRoots(cwd),
-  ];
+function getCodexWritableRoots(config: AgentBackendConfig): string[] {
+  // External directories granted in project/global/session permissions have to
+  // be added to the sandbox too — otherwise the grant is accepted by our
+  // evaluator but Codex still refuses to write there.
+  const allowedDirectories = getAllowedDirectories([
+    ...(config.permissionRules ?? []),
+    ...flattenScope(config.persistedSessionRules ?? {}),
+  ]);
+
+  return Array.from(
+    new Set([
+      ...getCodexPackageManagerCacheRoots(),
+      ...getCodexWorktreeGitWritableRoots(config.cwd),
+      ...allowedDirectories,
+    ]),
+  );
 }
 
 function getCodexPackageManagerCacheRoots(): string[] {

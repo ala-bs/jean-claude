@@ -23,9 +23,6 @@ describe('registerPrWorkspaceIpcHandlers', () => {
         },
       ]),
       reconcilePrWorkspaceState: vi.fn(),
-      listPendingPrWorkspaceDecisions: vi.fn().mockResolvedValue([
-        { projectId: 'project-1', pullRequestId: 12, taskIds: ['task-1'] },
-      ]),
       createPrReviewTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
       deletePrWorkspaceTask: vi
         .fn()
@@ -33,9 +30,6 @@ describe('registerPrWorkspaceIpcHandlers', () => {
       deleteAllPrWorkspaces: vi
         .fn()
         .mockResolvedValue({ action: 'deleted', taskIds: ['task-1'] }),
-      resolveClosedPrWorkspace: vi
-        .fn()
-        .mockResolvedValue({ action: 'kept', taskIds: ['task-1'] }),
     };
     registerPrWorkspaceIpcHandlers(deps);
     return { deps, handlers };
@@ -62,17 +56,6 @@ describe('registerPrWorkspaceIpcHandlers', () => {
       });
     },
   );
-
-  it('pending-decision handler returns grouped service data', async () => {
-    const { deps, handlers } = setup();
-
-    await expect(
-      handlers.get('tasks:listPendingPrWorkspaceDecisions')?.({}),
-    ).resolves.toEqual([
-      { projectId: 'project-1', pullRequestId: 12, taskIds: ['task-1'] },
-    ]);
-    expect(deps.listPendingPrWorkspaceDecisions).toHaveBeenCalledOnce();
-  });
 
   it('validates and dispatches workspace creation', async () => {
     const { deps, handlers } = setup();
@@ -111,13 +94,12 @@ describe('registerPrWorkspaceIpcHandlers', () => {
     async (pullRequestId) => {
       const { deps, handlers } = setup();
       await expect(
-        handlers.get('tasks:resolveClosedPrWorkspace')?.({}, {
+        handlers.get('tasks:deleteAllPrWorkspaces')?.({}, {
           projectId: 'project-1',
           pullRequestId,
-          action: 'keep',
         }),
       ).rejects.toThrow('pullRequestId');
-      expect(deps.resolveClosedPrWorkspace).not.toHaveBeenCalled();
+      expect(deps.deleteAllPrWorkspaces).not.toHaveBeenCalled();
     },
   );
 
@@ -129,7 +111,6 @@ describe('registerPrWorkspaceIpcHandlers', () => {
     ['tasks:deleteAllPrWorkspaces', []],
     ['tasks:deleteAllPrWorkspaces', { projectId: '', pullRequestId: 12 }],
     ['tasks:deleteAllPrWorkspaces', { projectId: 'project-1', pullRequestId: Number.MAX_SAFE_INTEGER + 1 }],
-    ['tasks:resolveClosedPrWorkspace', { projectId: 'project-1', pullRequestId: 12, action: 'other' }],
   ])('rejects malformed %s payload before service dispatch', async (channel, params) => {
     const { deps, handlers } = setup();
 
@@ -137,7 +118,6 @@ describe('registerPrWorkspaceIpcHandlers', () => {
     expect(deps.deletePrWorkspaceTask).not.toHaveBeenCalled();
     expect(deps.createPrReviewTask).not.toHaveBeenCalled();
     expect(deps.deleteAllPrWorkspaces).not.toHaveBeenCalled();
-    expect(deps.resolveClosedPrWorkspace).not.toHaveBeenCalled();
   });
 
   it.each([

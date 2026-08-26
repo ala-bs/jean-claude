@@ -111,8 +111,20 @@ export function selectProjectWorkItemPriority(projectId: string) {
   return cache$.projects[projectId].workItemPriority.get();
 }
 
+/**
+ * Returns `undefined` — never `[]` — while the index has not loaded yet.
+ *
+ * This distinction is load-bearing: `useCacheResource` derives both `isLoading`
+ * (`data !== undefined`) and its mid-flight rescue (`hasCachedData`) from it, and
+ * `resolveSetupState` treats `projects === undefined` as "unknown yet" while an
+ * empty array means "this user has no projects — run onboarding". Returning `[]`
+ * eagerly made every boot look like a first run for as long as the projects IPC
+ * was in flight, which bounced existing users into the setup wizard whenever the
+ * backends setting happened to resolve first.
+ */
 export function selectProjects() {
-  const ids = cache$.indexes[PROJECTS_INDEX_KEY].ids.get() ?? [];
+  const ids = cache$.indexes[PROJECTS_INDEX_KEY].ids.get();
+  if (!ids) return undefined;
   return ids.flatMap((id) => {
     const project = cache$.projects[id].get();
     return project ? [project] : [];

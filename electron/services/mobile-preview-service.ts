@@ -33,6 +33,10 @@ import {
 } from '../../shared/mobile-simulator-types';
 
 import {
+  MobilePreviewDeviceUsageRepository,
+  TaskRepository,
+} from '../database/repositories';
+import {
   type MobilePreviewLifecycle,
   registerBeforeQuitCleanup,
 } from './mobile-preview-lifecycle';
@@ -42,10 +46,6 @@ import {
 } from './mobile-preview-dev-menu';
 import { androidAdapter } from './mobile-preview-android-adapter';
 import { iosIdbAdapter } from './mobile-preview-ios-idb-adapter';
-import {
-  MobilePreviewDeviceUsageRepository,
-  TaskRepository,
-} from '../database/repositories';
 
 type MobilePreviewAdapter = {
   dispose?: () => Promise<void>;

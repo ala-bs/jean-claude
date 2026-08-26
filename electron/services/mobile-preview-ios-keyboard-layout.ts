@@ -1,7 +1,7 @@
 import { access, mkdir, readFile, rename, rm } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { debug } from './mobile-preview-ios-shared-state';
+import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 import { runCommand } from './mobile-preview-process';
 import { tmpdir } from 'node:os';

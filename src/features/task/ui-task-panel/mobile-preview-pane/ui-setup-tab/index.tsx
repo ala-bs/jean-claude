@@ -18,11 +18,11 @@ import type {
 } from '@shared/mobile-simulator-types';
 import type { MobilePreviewProjectConfig } from '@shared/types';
 
-import { NetworkRequestCountDetail } from '../ui-stream-readouts';
-import type { MobilePreviewPaneTab } from '../utils-tabs';
-import type { getMobileAppSetupDecision } from '../utils-setup-operation';
 import type { getSetupModel, PreviewStepKey } from '../utils-setup-model';
+import type { getMobileAppSetupDecision } from '../utils-setup-operation';
 import type { getSetupStepAction } from '../utils-setup-step-actions';
+import type { MobilePreviewPaneTab } from '../utils-tabs';
+import { NetworkRequestCountDetail } from '../ui-stream-readouts';
 
 type SetupStepAction = NonNullable<ReturnType<typeof getSetupStepAction>> & {
   onClick: () => void;

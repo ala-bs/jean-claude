@@ -111,6 +111,7 @@ import { PromptPrefaceList } from '@/features/settings/ui-prompt-preface-list';
 import { Select } from '@/common/ui/select';
 import { Switch } from '@/common/ui/switch';
 import { ThinkingSelector } from '@/features/agent/ui-thinking-selector';
+import { UnusedWorktreesCleanup } from '@/features/settings/ui-unused-worktrees-cleanup';
 import { useBackendModels } from '@/hooks/use-backend-models';
 import { useDeleteWorkActivity } from '@/hooks/use-work-activity';
 import { useMobilePreviewAutoStartProxy } from '@/stores/navigation';
@@ -414,6 +415,8 @@ export function MaintenanceSettings() {
   return (
     <div className="space-y-8">
       <RawMessageCleanupSettings />
+      <div className="border-line-soft border-t" />
+      <UnusedWorktreesCleanup />
       <div className="border-line-soft border-t" />
       <ClaudeProjectsCleanup />
       <GlobalGitignoreSetup />

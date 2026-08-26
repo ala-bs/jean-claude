@@ -4,6 +4,7 @@ import {
   Check,
   ChevronsLeftRight,
   Circle,
+  GitPullRequest,
   Loader2,
   Pencil,
   Plus,
@@ -630,10 +631,14 @@ export function StepFlowBar({
   taskId,
   onAddStepAtEnd,
   onAddStepAfter,
+  onOpenWorkspaceOverview,
+  isWorkspaceOverviewActive = false,
 }: {
   taskId: string;
   onAddStepAtEnd?: () => void;
   onAddStepAfter?: (afterStepId: string) => void;
+  onOpenWorkspaceOverview?: () => void;
+  isWorkspaceOverviewActive?: boolean;
 }) {
   const { data: steps } = useSteps(taskId);
   const { activeStepId, setActiveStepId } = useTaskState(taskId);
@@ -746,6 +751,26 @@ export function StepFlowBar({
   return (
     <div className="relative px-4 py-px backdrop-blur-sm">
       <div className="no-scrollbar flex items-center overflow-x-auto px-1 py-0.5">
+        {onOpenWorkspaceOverview && (
+          <Button
+            variant="unstyled"
+            onClick={onOpenWorkspaceOverview}
+            title={
+              isWorkspaceOverviewActive
+                ? 'Back to the selected step'
+                : 'Open PR workspace overview'
+            }
+            className={clsx(
+              'mr-3 flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
+              isWorkspaceOverviewActive
+                ? 'border-acc/40 bg-acc/15 text-acc-ink'
+                : 'border-line bg-bg-1 text-ink-2 hover:border-glass-border-strong hover:text-ink-1',
+            )}
+          >
+            <GitPullRequest className="h-3 w-3" aria-hidden />
+            Workspace
+          </Button>
+        )}
         <div
           className="relative"
           style={{

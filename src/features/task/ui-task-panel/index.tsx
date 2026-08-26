@@ -52,7 +52,6 @@ import {
   getModelsForBackend,
   getModelThinkingCapabilities,
 } from '@/features/agent/ui-backend-selector';
-import { ComposerCollapsedBar } from '@/features/agent/ui-composer-collapsed-bar';
 import { DiffViewMode, useUIStore } from '@/stores/ui';
 import {
   Dropdown,
@@ -61,6 +60,7 @@ import {
   DropdownItem,
 } from '@/common/ui/dropdown';
 import { formatModelName, getModelFromEntry } from '@/hooks/use-model';
+import { ComposerCollapsedBar } from '@/features/agent/ui-composer-collapsed-bar';
 
 import {
   getDefaultInteractionModeForBackend,
@@ -86,6 +86,10 @@ import {
   getThinkingEffortOptions,
   normalizeThinkingEffortForModel,
 } from '@shared/thinking-settings';
+import {
+  reconcileTaskPromptFiles,
+  useTaskPrompt,
+} from '@/stores/task-prompts';
 import {
   type ReviewCommentParams,
   ReviewProvider,
@@ -156,6 +160,7 @@ import { ModeSelector } from '@/features/agent/ui-mode-selector';
 import type { NormalizedEntry } from '@shared/normalized-message-v2';
 import { PermissionBar } from '@/features/agent/ui-permission-bar';
 import { PrBadge } from '@/features/agent/ui-pr-badge';
+import type { PromptFilePart } from '@shared/agent-backend-types';
 import { PrReviewValidation } from '@/features/task/ui-pr-review-validation';
 import { PrWorkspaceEmptyState } from '@/features/task/ui-pr-workspace-empty-state';
 import { QuestionOptions } from '@/features/agent/ui-question-options';
@@ -178,22 +183,17 @@ import { useModal } from '@/common/context/modal';
 import { useNewTaskDraftStore } from '@/stores/new-task-draft';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useProjectCommandAvailability } from '@/hooks/use-project-command-availability';
-import { usePullBranch } from '@/hooks/use-worktree-diff';
 import { usePrWorkspaceActions } from '@/hooks/use-pr-workspace-actions';
+import { usePullBranch } from '@/hooks/use-worktree-diff';
 import { useShrinkToTarget } from '@/common/hooks/use-shrink-to-target';
 import { useSkills } from '@/hooks/use-skills';
 import { useTaskMessagesStore } from '@/stores/task-messages';
-import {
-  reconcileTaskPromptFiles,
-  useTaskPrompt,
-} from '@/stores/task-prompts';
-import type { PromptFilePart } from '@shared/agent-backend-types';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 import { useToastStore } from '@/stores/toasts';
 import { useWorkItemById } from '@/hooks/use-work-items';
+import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorkItemChip } from '@/common/ui/work-item-chip';
 import { WorkItemPicker } from '@/features/work-item/ui-work-item-picker';
-import { useWorkItemPickerIterationFilter } from '@/stores/work-item-picker-filters';
 import { WorktreeReviewView } from '@/features/agent/ui-worktree-review-view';
 
 import {
@@ -207,6 +207,7 @@ import { CommandLogsPane } from './command-logs-pane';
 import { CompleteTaskDialog } from './complete-task-dialog';
 import { DebugMessagesPane } from './debug-messages-pane';
 import { DeleteTaskDialog } from './delete-task-dialog';
+import { runPromptSubmission } from './utils-prompt-submit-error';
 import { TASK_PANEL_HEADER_HEIGHT_CLS } from './constants';
 import { TaskPendingNoteInput } from './task-pending-note-input';
 import { TaskSettingsPane } from './task-settings-pane';
@@ -1168,6 +1169,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     rightPane,
     activeStepId,
     setActiveStepId,
+    showWorkspaceOverview,
+    setShowWorkspaceOverview,
     openFilePreview,
     openToolDiffPreview,
     openCommandLogs,
@@ -1179,24 +1182,28 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   } = useTaskState(taskId);
   // Steps data for auto-selection
   const { data: steps } = useSteps(taskId);
-  const isZeroStepPrWorkspace = shouldShowPrWorkspaceEmptyState({
+  const hasNoSteps = (steps?.length ?? 0) === 0;
+  // True whenever the PR workspace overview page is the visible main content —
+  // either because no step exists yet, or the user reopened it explicitly.
+  const isPrWorkspaceOverview = shouldShowPrWorkspaceEmptyState({
     taskType: task?.type ?? '',
     steps,
+    showWorkspaceOverview,
   });
   const visibleRightPane =
-    isZeroStepPrWorkspace &&
+    isPrWorkspaceOverview &&
     (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
       ? null
       : rightPane;
 
   useEffect(() => {
     if (
-      isZeroStepPrWorkspace &&
+      isPrWorkspaceOverview &&
       (rightPane?.type === 'settings' || rightPane?.type === 'debugMessages')
     ) {
       closeRightPane();
     }
-  }, [closeRightPane, isZeroStepPrWorkspace, rightPane?.type]);
+  }, [closeRightPane, isPrWorkspaceOverview, rightPane?.type]);
   const { data: activeStep } = useStep(activeStepId ?? '');
   const handleAddBashToPermissions = useCallback(
     (command: string) => {
@@ -1275,6 +1282,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     openDiffView();
   }, [closeDiffView, isDiffViewOpen, openDiffView, reviewMode, setReviewMode]);
 
+  // The workspace overview renders after the diff view in the main content
+  // if-chain, so it must be dismissed or opening the diff would be a no-op.
+  const openWorkspaceDiff = useCallback(() => {
+    setShowWorkspaceOverview(false);
+    setReviewMode(hasGitReviewModes ? 'changes' : 'files');
+    openDiffView();
+  }, [hasGitReviewModes, openDiffView, setReviewMode, setShowWorkspaceOverview]);
+
   // PR view state
   const {
     isOpen: isPrViewOpen,
@@ -1282,6 +1297,23 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     togglePrView,
     closePrView,
   } = usePrViewState(taskId);
+
+  // The PR/diff views render ahead of the overview in the main content, so both
+  // must close or opening the overview would be a silent no-op.
+  const openWorkspaceOverview = useCallback(() => {
+    closePrView();
+    closeDiffView();
+    setShowWorkspaceOverview(true);
+  }, [closeDiffView, closePrView, setShowWorkspaceOverview]);
+
+  // Toggling off returns to the step the user came from.
+  const toggleWorkspaceOverview = useCallback(() => {
+    if (showWorkspaceOverview && activeStepId) {
+      setActiveStepId(activeStepId);
+      return;
+    }
+    openWorkspaceOverview();
+  }, [activeStepId, openWorkspaceOverview, setActiveStepId, showWorkspaceOverview]);
   // File explorer state for review view
   const { rootPath: taskRootPathForExplorer } = useTaskRootPath(taskId);
   const {
@@ -1493,16 +1525,22 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     // If the currently selected step still exists, keep it
     if (activeStepId && steps.some((s) => s.id === activeStepId)) return;
 
+    // This effect also repairs a dangling selection (deleted step), so it must
+    // still run while the PR workspace overview is open — but selecting here is
+    // implicit, so it must not navigate the user away from that overview.
+    const select = (stepId: string) =>
+      setActiveStepId(stepId, { keepWorkspaceOverview: true });
+
     // Priority: first running → first ready → last terminal → first step
     const activeSteps = steps.filter((step) => !step.archivedAt);
     const running = activeSteps.find((s) => s.status === 'running');
     if (running) {
-      setActiveStepId(running.id);
+      select(running.id);
       return;
     }
     const ready = activeSteps.find((s) => s.status === 'ready');
     if (ready) {
-      setActiveStepId(ready.id);
+      select(ready.id);
       return;
     }
     const terminalSteps = activeSteps.filter(
@@ -1512,10 +1550,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         s.status === 'errored',
     );
     if (terminalSteps.length > 0) {
-      setActiveStepId(terminalSteps[terminalSteps.length - 1]!.id);
+      select(terminalSteps[terminalSteps.length - 1]!.id);
       return;
     }
-    setActiveStepId(activeSteps[0]?.id ?? steps[0]!.id);
+    select(activeSteps[0]?.id ?? steps[0]!.id);
   }, [steps, activeStepId, setActiveStepId]);
 
   const handleCopySessionId = useCallback(async () => {
@@ -2278,14 +2316,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         setReviewMode(next);
       },
     },
-    !isZeroStepPrWorkspace && {
+    !isPrWorkspaceOverview && {
       label: 'Toggle Task Settings',
       section: 'Task',
       handler: () => {
         toggleRightPane();
       },
     },
-    !isZeroStepPrWorkspace && {
+    !isPrWorkspaceOverview && {
       label:
         rightPane?.type === 'debugMessages'
           ? 'Close Raw Message Pane'
@@ -2356,7 +2394,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         }
       },
     },
-    !isZeroStepPrWorkspace && {
+    isPrWorkspaceTask &&
+      !isPrWorkspaceOverview && {
+        label: 'Open PR Workspace Overview',
+        section: 'Task',
+        keywords: ['pr', 'workspace', 'overview', 'main'],
+        handler: () => {
+          openWorkspaceOverview();
+        },
+      },
+    !isPrWorkspaceOverview && {
       label: 'Copy Session ID',
       section: 'Task',
       handler: () => {
@@ -2408,6 +2455,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             lineEnd: params.lineEnd,
             selectedText: params.selectedText,
             charOffset: params.charOffset,
+            charLength: params.charLength,
           },
           body: params.body,
           images: params.images,
@@ -2538,9 +2586,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const isTaskMobilePreviewOpen =
     isMobilePreviewWorkspaceOpen &&
     selectedMobilePreviewRuntimeKey === mobilePreviewRuntimeKey;
+  // Anything that suppresses the message section must be listed here, or the
+  // step's agent stream ends up subscribed by neither branch.
   const shouldRenderMessageSection =
     !isPrViewOpen &&
     !isDiffViewOpen &&
+    !isPrWorkspaceOverview &&
     activeStep?.type !== 'pr-review';
   const backendLabel =
     AVAILABLE_BACKENDS.find(
@@ -2564,7 +2615,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         openCommandLogs(runCommandIds[0] ?? null);
       }}
       isLogsPaneOpen={rightPane?.type === 'commandLogs'}
-      showAvailabilityState={!isZeroStepPrWorkspace}
+      showAvailabilityState={!isPrWorkspaceOverview}
     />
   );
   const openMatchingPullRequest = task.pullRequestId
@@ -2623,7 +2674,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
             {/* Center: Branch, PR badge, Work items */}
             <div className="flex min-w-0 shrink items-center gap-2">
-              {activeStepId && (
+              {activeStepId && !isPrWorkspaceOverview && (
                 <AgentResourcePill
                   stepId={activeStepId}
                   isRunning={activeStep?.status === 'running'}
@@ -2632,7 +2683,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               )}
 
               {/* Backend chip */}
-              {!isZeroStepPrWorkspace && (
+              {!isPrWorkspaceOverview && (
                 <Chip size="sm" className="max-w-40">
                   {backendLabel}
                 </Chip>
@@ -2742,7 +2793,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   }
                 />
               )}
-              {!isZeroStepPrWorkspace && runButton}
+              {!isPrWorkspaceOverview && runButton}
 
               {/* Overflow menu */}
               <Dropdown
@@ -2846,7 +2897,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Sub Task
                   </DropdownItem>
                 )}
-                {!isZeroStepPrWorkspace && (
+                {!isPrWorkspaceOverview && (
                   <DropdownItem
                     icon={<Settings />}
                     onClick={handleToggleSettingsPane}
@@ -2855,7 +2906,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     Task Settings
                   </DropdownItem>
                 )}
-                {!isZeroStepPrWorkspace && (
+                {!isPrWorkspaceOverview && (
                   <DropdownItem
                     icon={<Bug />}
                     onClick={handleToggleDebugMessagesPane}
@@ -2942,6 +2993,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     setIsAddStepDialogOpen(true);
                   }
             }
+            onOpenWorkspaceOverview={
+              isPrWorkspaceTask ? toggleWorkspaceOverview : undefined
+            }
+            // At zero steps the overview is the only view, so the pill must not
+            // offer a "back to step" toggle it cannot honor.
+            isWorkspaceOverviewActive={showWorkspaceOverview && !hasNoSteps}
           />
           <Separator />
 
@@ -2992,9 +3049,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   showWorktreeActions={!!task.worktreePath}
                   gitReviewEnabled={hasGitReviewModes}
                 />
-              ) : isZeroStepPrWorkspace ? (
+              ) : isPrWorkspaceOverview ? (
                 <PrWorkspaceEmptyState
+                  hasSteps={(steps?.length ?? 0) > 0}
                   pullRequestId={task.pullRequestId}
+                  projectId={project.id}
+                  repoProviderId={project.repoProviderId ?? undefined}
                   projectName={project.name}
                   commandAvailability={projectCommandAvailability}
                   onAddStep={() => {
@@ -3004,6 +3064,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   }}
                   onDelete={openDeleteDialog}
                   onOpenPullRequest={openMatchingPullRequest}
+                  onViewDiff={task.worktreePath ? openWorkspaceDiff : undefined}
                   onPull={handlePullPrWorkspace}
                   isPulling={pullBranchMutation.isPending}
                   onOpenLogs={() => openCommandLogs()}
@@ -3090,7 +3151,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           </div>
 
           {/* Message input — floats above content so messages scroll underneath */}
-          {!isZeroStepPrWorkspace &&
+          {!isPrWorkspaceOverview &&
             (canSendMessage || isWaiting || hasMessages) && (
             <div
               ref={footerRef}
@@ -3152,7 +3213,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         )}
 
         {/* Task settings pane */}
-        {!isZeroStepPrWorkspace && rightPane?.type === 'settings' && (
+        {!isPrWorkspaceOverview && rightPane?.type === 'settings' && (
           <TaskSettingsPane
             activeStep={activeStep ?? null}
             sourceBranch={task.sourceBranch}
@@ -3175,7 +3236,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         )}
 
         {/* Debug messages pane */}
-        {!isZeroStepPrWorkspace && rightPane?.type === 'debugMessages' && (
+        {!isPrWorkspaceOverview && rightPane?.type === 'debugMessages' && (
           <DebugMessagesPane
             taskId={taskId}
             stepId={activeStepId}
@@ -3212,7 +3273,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           activeStepId={activeStepId ?? undefined}
           projectRoot={taskRootPath}
           projectId={project.id}
-          canContinue={isZeroStepPrWorkspace ? false : undefined}
+          // Only a genuinely empty PR workspace has no session to continue —
+          // viewing the overview with steps present must keep the preset.
+          canContinue={isPrWorkspaceTask && hasNoSteps ? false : undefined}
         />
 
         {/* Change worktree path dialog */}
@@ -3590,11 +3653,14 @@ const TaskInputFooter = memo(function TaskInputFooter({
   isRunning: boolean;
   isStopping: boolean;
   canSendMessage: boolean;
-  onSend: (parts: PromptPart[], capture?: AgentMemoryFollowUpCapture) => void;
+  onSend: (
+    parts: PromptPart[],
+    capture?: AgentMemoryFollowUpCapture,
+  ) => void | Promise<void>;
   onQueue: (
     parts: PromptPart[],
     capture?: AgentMemoryQueuedPromptCapture,
-  ) => void;
+  ) => void | Promise<unknown>;
   queuedPrompts: { content: string }[];
   onStop: () => Promise<void>;
   projectRoot: string | null;
@@ -3674,6 +3740,7 @@ const TaskInputFooter = memo(function TaskInputFooter({
   });
   const setStepMode = useSetTaskMode();
   const clearUserCompleted = useClearTaskUserCompleted();
+  const addFooterToast = useToastStore((s) => s.addToast);
 
   const {
     text: promptDraft,
@@ -3844,68 +3911,72 @@ const TaskInputFooter = memo(function TaskInputFooter({
     [activeStepId, mutateStepAsync],
   );
 
-  const handleSendMessage = async (parts: PromptPart[]) => {
-      setIsSubmittingPrompt(true);
-      try {
-        await waitForThinkingUpdate();
-        if (task?.userCompleted) {
-          clearUserCompleted.mutate(taskId);
-        }
-
-        let finalParts = parts;
-        if (openReviewComments.length > 0) {
-          const reviewParts = synthesizeReviewPrompt(openReviewComments);
-          if (reviewParts) {
-            finalParts = [...parts, ...reviewParts];
-          }
-          for (const comment of openReviewComments) {
+  const submitPrompt = async ({
+    parts,
+    submit,
+    fallbackMessage,
+  }: {
+    parts: PromptPart[];
+    submit: (
+      finalParts: PromptPart[],
+      capture: {
+        submissionId: string;
+        userText: string;
+        reviews: ReturnType<typeof reviewCommentToAgentMemoryCapture>[];
+      },
+    ) => void | Promise<unknown>;
+    fallbackMessage: string;
+  }) => {
+    setIsSubmittingPrompt(true);
+    try {
+      await waitForThinkingUpdate();
+      await runPromptSubmission({
+        parts,
+        openReviewComments,
+        synthesizeReviewParts: synthesizeReviewPrompt,
+        submit: async (finalParts, submittedComments) =>
+          submit(finalParts, {
+            submissionId: nanoid(),
+            userText: parts
+              .filter((part) => part.type === 'text')
+              .map((part) => part.text)
+              .join('\n'),
+            reviews: submittedComments.map(reviewCommentToAgentMemoryCapture),
+          }),
+        onSuccess: (submittedComments) => {
+          clearPromptDraft();
+          for (const comment of submittedComments) {
             resolveComment(taskId, comment.id);
           }
-          clearResolvedComments(taskId);
-        }
+          if (submittedComments.length > 0) {
+            clearResolvedComments(taskId);
+          }
+        },
+        onError: (message) => addFooterToast({ type: 'error', message }),
+        fallbackMessage,
+      });
+    } finally {
+      setIsSubmittingPrompt(false);
+    }
+  };
 
-        clearPromptDraft();
-        onSend(finalParts, {
-          submissionId: nanoid(),
-          userText: parts
-            .filter((part) => part.type === 'text')
-            .map((part) => part.text)
-            .join('\n'),
-          reviews: openReviewComments.map(reviewCommentToAgentMemoryCapture),
-        });
-      } finally {
-        setIsSubmittingPrompt(false);
-      }
+  const handleSendMessage = async (parts: PromptPart[]) => {
+    if (task?.userCompleted) {
+      clearUserCompleted.mutate(taskId);
+    }
+    await submitPrompt({
+      parts,
+      submit: onSend,
+      fallbackMessage: 'Failed to send follow-up message',
+    });
   };
 
   const handleQueuePrompt = async (parts: PromptPart[]) => {
-      setIsSubmittingPrompt(true);
-      try {
-        await waitForThinkingUpdate();
-        let finalParts = parts;
-        if (openReviewComments.length > 0) {
-          const reviewParts = synthesizeReviewPrompt(openReviewComments);
-          if (reviewParts) {
-            finalParts = [...parts, ...reviewParts];
-          }
-          for (const comment of openReviewComments) {
-            resolveComment(taskId, comment.id);
-          }
-          clearResolvedComments(taskId);
-        }
-
-        clearPromptDraft();
-        onQueue(finalParts, {
-          submissionId: nanoid(),
-          userText: parts
-            .filter((part) => part.type === 'text')
-            .map((part) => part.text)
-            .join('\n'),
-          reviews: openReviewComments.map(reviewCommentToAgentMemoryCapture),
-        });
-      } finally {
-        setIsSubmittingPrompt(false);
-      }
+    await submitPrompt({
+      parts,
+      submit: onQueue,
+      fallbackMessage: 'Failed to queue follow-up message',
+    });
   };
 
   const handleStop = useCallback(async () => {

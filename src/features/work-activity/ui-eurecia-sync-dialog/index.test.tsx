@@ -10,6 +10,7 @@ import type {
   TimesheetEditorModel,
   TimesheetSheetSummary,
 } from '@shared/timesheet-types';
+import { TIMESHEET_SIGN_IN_CANCELLED_MESSAGE } from '@shared/timesheet-types';
 
 import { api } from '@/lib/api';
 import { RootOverlay } from '@/common/context/overlay';
@@ -221,6 +222,75 @@ describe('EureciaSyncDialog inspection initialization', () => {
     });
     expect(login).toHaveBeenCalledOnce();
     expect(document.body.textContent).toContain('Signing in...');
+  });
+
+  it('falls back to the sign-in screen without an error banner when the window is closed', async () => {
+    const login = vi
+      .spyOn(api.timesheets, 'login')
+      .mockRejectedValue(new Error(TIMESHEET_SIGN_IN_CANCELLED_MESSAGE));
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { staleTime: Number.POSITIVE_INFINITY },
+        mutations: { retry: false },
+      },
+    });
+    queryClient.setQueryData(
+      ['timesheets', 'eurecia', 'auth'],
+      { configured: true, authenticated: false, baseUrl: 'https://tenant.example' },
+      { updatedAt: 100 },
+    );
+
+    await renderDialog(queryClient);
+    await act(async () => {
+      await vi.waitFor(() => expect(login).toHaveBeenCalledWith('eurecia'));
+    });
+
+    // Cancelling is deliberate: no alarming banner, no "Retry" framing, and the
+    // spinner must clear so the sign-in screen is actionable again.
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(document.body.textContent).toContain(
+          'You closed the sign-in window before signing in.',
+        ),
+      );
+    });
+    expect(document.body.textContent).not.toContain('Signing in...');
+    expect(document.body.textContent).not.toContain('Retry sign in');
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>('button'),
+    ].find((element) => element.textContent?.includes('Sign in to Eurecia'));
+    expect(button).toBeDefined();
+    expect(button?.disabled).toBe(false);
+  });
+
+  it('surfaces a real sign-in failure as an error banner', async () => {
+    vi.spyOn(api.timesheets, 'login').mockRejectedValue(
+      new Error('Eurecia sign-in page failed to load.'),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { staleTime: Number.POSITIVE_INFINITY },
+        mutations: { retry: false },
+      },
+    });
+    queryClient.setQueryData(
+      ['timesheets', 'eurecia', 'auth'],
+      { configured: true, authenticated: false, baseUrl: 'https://tenant.example' },
+      { updatedAt: 100 },
+    );
+
+    await renderDialog(queryClient);
+
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(document.body.textContent).toContain(
+          'Eurecia sign-in page failed to load.',
+        ),
+      );
+    });
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+    expect(document.body.textContent).toContain('Retry sign in');
   });
 
   it('does not expose or initialize cached editor data while fresh inspection is pending', async () => {

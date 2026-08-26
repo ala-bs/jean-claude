@@ -1,6 +1,6 @@
-import { X } from 'lucide-react';
-import type { ReactNode } from 'react';
 import clsx from 'clsx';
+import type { ReactNode } from 'react';
+import { X } from 'lucide-react';
 
 export type PreviewNoticeTone = 'error' | 'warn' | 'info';
 

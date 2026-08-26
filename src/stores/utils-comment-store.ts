@@ -16,6 +16,12 @@ export interface FileCommentAnchor {
   /** Character offset of the selection start within the container's combined
    *  text content. Used by message comments for precise highlight placement. */
   charOffset?: number;
+  /** Length of the selection in that same combined text. Differs from
+   *  `selectedText.length` when the selection crosses element boundaries the
+   *  browser renders as whitespace (table cells, list items), since
+   *  `Selection.toString()` inserts separators the DOM text does not have.
+   *  Falls back to `selectedText.length` when absent (legacy comments). */
+  charLength?: number;
 }
 
 // -- Keyed-collection store factory --

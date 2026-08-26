@@ -29,6 +29,24 @@ export function GlobalPromptFromBackModal() {
     return unsubscribe;
   }, []);
 
+  // The main process withdraws a prompt it has stopped waiting for (e.g. a
+  // passphrase request whose git command already timed out), so the dialog
+  // does not linger and collect a secret nobody will read.
+  useEffect(() => {
+    const unsubscribe = api.globalPrompt.onDismiss((promptId) => {
+      setPromptQueue((queue) => {
+        // Only reset the field if the dismissed prompt is the visible one:
+        // a queued prompt timing out must not wipe a passphrase the user is
+        // part-way through typing into the dialog in front of them.
+        if (queue[0]?.id === promptId) setInputValue('');
+        const remaining = queue.filter((p) => p.id !== promptId);
+        if (remaining.length === 0) returnFocusRef.current = null;
+        return remaining;
+      });
+    });
+    return unsubscribe;
+  }, []);
+
   const currentPrompt = promptQueue[0] ?? null;
   // Queued modals bypass arbitration, so yield explicitly to avoid stacking.
   const hasQueuedModal = useHasQueuedModal();
@@ -53,7 +71,9 @@ export function GlobalPromptFromBackModal() {
         api.globalPrompt.respond({
           id: currentPrompt.id,
           accepted,
-          ...(currentPrompt.inputType ? { inputValue } : {}),
+          // Only on accept: a partially typed passphrase should not cross the
+          // IPC boundary when the user cancels.
+          ...(currentPrompt.inputType && accepted ? { inputValue } : {}),
         });
         setInputValue('');
         setPromptQueue((queue) => {
@@ -155,6 +175,13 @@ export function GlobalPromptFromBackModal() {
                 ref={inputRef}
                 autoFocus
                 type={currentPrompt.inputType}
+                // An SSH passphrase must never land in the browser's saved
+                // credentials or a password manager prompt.
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                data-1p-ignore
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 placeholder={currentPrompt.inputPlaceholder}

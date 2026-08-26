@@ -238,6 +238,31 @@ export function useSetTaskSourceBranch() {
   });
 }
 
+export function useSetTaskBranchName() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      taskId,
+      branchName,
+    }: {
+      taskId: string;
+      branchName: string;
+    }) => api.tasks.setBranchName({ taskId, branchName }),
+    onSuccess: (task, { taskId }) => {
+      ingestTask(task);
+      markTaskListsStale(task.projectId);
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', taskId] });
+      queryClient.invalidateQueries({
+        queryKey: ['tasks', { projectId: task.projectId }],
+      });
+      queryClient.invalidateQueries({ queryKey: ['project-branches'] });
+      queryClient.invalidateQueries({ queryKey: ['worktree-status', taskId] });
+      invalidateFeedItems(queryClient);
+    },
+  });
+}
+
 export function useUpdateTaskPendingMessage() {
   const queryClient = useQueryClient();
   return useMutation({

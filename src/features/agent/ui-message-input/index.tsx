@@ -20,9 +20,9 @@ import {
   PromptTextareaRef,
 } from '@/features/common/ui-prompt-textarea';
 import { buildAttachedFilesXml } from '@/lib/file-attachment-utils';
-import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 import { Button } from '@/common/ui/button';
 import type { ComponentSize } from '@/common/ui/styles';
+import { deleteAttachmentFiles } from '@/lib/prompt-attachment-cleanup';
 import { expandFeatureReferencesInPrompt } from '@/lib/prompt-feature-context';
 import { formatKeyForDisplay } from '@/common/context/keyboard-bindings/utils';
 import { IconButton } from '@/common/ui/icon-button';
@@ -68,8 +68,12 @@ export function MessageInput({
   textareaClassName,
   isCompact = false,
 }: {
-  onSend: (parts: PromptPart[]) => void;
-  onQueue?: (parts: PromptPart[]) => void;
+  /**
+   * Awaited on submit. Rejecting keeps the composer's text, images and file
+   * attachments intact, so callers should throw rather than swallow failures.
+   */
+  onSend: (parts: PromptPart[]) => void | Promise<unknown>;
+  onQueue?: (parts: PromptPart[]) => void | Promise<unknown>;
   onStop?: () => void;
   disabled?: boolean;
   /** Disables input even while running, bypassing queue mode. */

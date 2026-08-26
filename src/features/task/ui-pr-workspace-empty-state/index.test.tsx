@@ -101,6 +101,23 @@ describe('PrWorkspaceEmptyState', () => {
     ).toBe(false);
   });
 
+  it('stays reachable with steps when the overview is explicitly opened', () => {
+    expect(
+      shouldShowPrWorkspaceEmptyState({
+        taskType: 'pr-review',
+        steps: [{}],
+        showWorkspaceOverview: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowPrWorkspaceEmptyState({
+        taskType: 'agent',
+        steps: [{}],
+        showWorkspaceOverview: true,
+      }),
+    ).toBe(false);
+  });
+
   it('renders workspace identity and actions without conversation placeholders', async () => {
     const callbacks = await renderState();
 

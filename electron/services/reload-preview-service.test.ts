@@ -9,6 +9,7 @@ import {
   exitCurrentPreviewAfterReload,
   launchReloadedPreview,
   orchestrateReloadedPreview,
+  RELOAD_PREVIEW_FLUSH_SETTLE_MS,
   runReloadPreviewCommand,
   signalReloadPreviewReady,
   startReloadPreviewLogLimiter,
@@ -187,6 +188,115 @@ describe('orchestrateReloadedPreview', () => {
     });
 
     expect(callOrder).toEqual(['release', 'launch-ready', 'exit']);
+  });
+
+  // The replacement reads localStorage while booting, and `launchPreview` only
+  // resolves once it has finished booting. A flush that happens any later than
+  // this is read by the launch *after* next, which is the whole bug.
+  it('flushes and settles storage before the replacement is launched', async () => {
+    const callOrder: string[] = [];
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp: () => callOrder.push('exit'),
+      flushStorage: () => callOrder.push('flush'),
+      waitForFlush: async () => {
+        callOrder.push('settle');
+      },
+      launchPreview: async () => {
+        callOrder.push('launch-ready');
+      },
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: () => callOrder.push('release'),
+      timeoutMs: 30_000,
+    });
+
+    expect(callOrder).toEqual([
+      'flush',
+      'settle',
+      'release',
+      'launch-ready',
+      'exit',
+    ]);
+  });
+
+  it('gives the flush time to reach disk before handing off', async () => {
+    const waitForFlush = vi.fn().mockResolvedValue(undefined);
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp: vi.fn(),
+      flushStorage: vi.fn(),
+      waitForFlush,
+      flushSettleMs: 400,
+      launchPreview: vi.fn().mockResolvedValue(undefined),
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: vi.fn(),
+      timeoutMs: 30_000,
+    });
+
+    expect(waitForFlush).toHaveBeenCalledWith(400);
+  });
+
+  it('settles for the default duration when none is configured', async () => {
+    const waitForFlush = vi.fn().mockResolvedValue(undefined);
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp: vi.fn(),
+      flushStorage: vi.fn(),
+      waitForFlush,
+      launchPreview: vi.fn().mockResolvedValue(undefined),
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: vi.fn(),
+      timeoutMs: 30_000,
+    });
+
+    expect(waitForFlush).toHaveBeenCalledWith(RELOAD_PREVIEW_FLUSH_SETTLE_MS);
+  });
+
+  it('does not stall the handoff when no flush is configured', async () => {
+    const callOrder: string[] = [];
+    const waitForFlush = vi.fn().mockResolvedValue(undefined);
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp: () => callOrder.push('exit'),
+      waitForFlush,
+      launchPreview: async () => {
+        callOrder.push('launch-ready');
+      },
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: () => callOrder.push('release'),
+      timeoutMs: 30_000,
+    });
+
+    expect(waitForFlush).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(['release', 'launch-ready', 'exit']);
+  });
+
+  it('continues the handoff when flushing storage throws', async () => {
+    const flushError = new Error('session destroyed');
+    const onFlushError = vi.fn();
+    const exitCurrentApp = vi.fn();
+    const launchPreview = vi.fn().mockResolvedValue(undefined);
+
+    await orchestrateReloadedPreview({
+      cwd: join('project', 'root'),
+      exitCurrentApp,
+      flushStorage: () => {
+        throw flushError;
+      },
+      onFlushError,
+      launchPreview,
+      reacquireSingleInstanceLock: vi.fn(() => true),
+      releaseSingleInstanceLock: vi.fn(),
+      timeoutMs: 30_000,
+    });
+
+    expect(onFlushError).toHaveBeenCalledWith(flushError);
+    expect(launchPreview).toHaveBeenCalledOnce();
+    expect(exitCurrentApp).toHaveBeenCalledOnce();
   });
 
   it('reacquires the lock and leaves the current app running on failure', async () => {

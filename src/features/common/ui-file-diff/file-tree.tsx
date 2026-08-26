@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  File,
   Folder,
   MessageCircle,
   PenLine,
@@ -12,7 +11,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 
 import type { DiffFile, DiffFileStatus } from './types';
+import type { AutoReviewRule } from '@shared/types';
 import { getStatusIndicator } from './status-badge';
+import { hexToRgba } from '@/lib/colors';
 import { ReviewCheck } from './review-check';
 import type { ReviewedTreatment } from '@/stores/diff-review';
 import { selectionAfterClick } from './utils-selection';
@@ -107,6 +108,7 @@ export function DiffFileTree({
   stalePaths,
   onToggleReviewed,
   reviewedTreatment = 'dim',
+  autoReviewedBy,
 }: {
   files: DiffFile[];
   selectedPath: string | null;
@@ -128,6 +130,11 @@ export function DiffFileTree({
   stalePaths?: Set<string>;
   onToggleReviewed?: (paths: string[], reviewed: boolean) => void;
   reviewedTreatment?: ReviewedTreatment;
+  /**
+   * Paths auto-marked by a review rule, mapped to the rule that claimed them,
+   * so the row can carry that rule's color.
+   */
+  autoReviewedBy?: Map<string, AutoReviewRule>;
 }) {
   const showReview = Boolean(reviewedPaths && onToggleReviewed);
   const hiddenFiles = useMemo(() => {
@@ -322,6 +329,7 @@ export function DiffFileTree({
           stalePaths={stalePaths}
           onToggleReviewed={onToggleReviewed}
           onToggleRowReviewed={handleToggleRowReviewed}
+          autoReviewedBy={autoReviewedBy}
           filePathsUnder={filePathsUnder}
           selectedPaths={selectionSet}
           onRowClick={handleRowClick}
@@ -376,16 +384,19 @@ function ReviewedGroup({
             onClick={() => onSelectFile(file.path)}
             className="text-ink-2 hover:bg-glass-medium/50 flex h-[24px] w-full items-center gap-1.5 pr-2 pl-6 text-left text-xs opacity-60"
           >
-            <ReviewCheck
-              checked
-              size={13}
-              onToggle={(next) => onToggleReviewed?.([file.path], next)}
-            />
             <span className="min-w-0 truncate" title={file.path}>
               <span className="text-ink-4">
                 {file.path.slice(0, file.path.lastIndexOf('/') + 1)}
               </span>
               {getFileName(file.path)}
+            </span>
+            {/* Right-aligned to share a column with the main tree's checks. */}
+            <span className="ml-auto flex shrink-0 items-center pl-1.5">
+              <ReviewCheck
+                checked
+                size={13}
+                onToggle={(next) => onToggleReviewed?.([file.path], next)}
+              />
             </span>
           </button>
         ))}
@@ -411,6 +422,7 @@ function TreeNodeRow({
   stalePaths,
   onToggleReviewed,
   onToggleRowReviewed,
+  autoReviewedBy,
   filePathsUnder,
   selectedPaths,
   onRowClick,
@@ -434,6 +446,7 @@ function TreeNodeRow({
   stalePaths?: Set<string>;
   onToggleReviewed?: (paths: string[], reviewed: boolean) => void;
   onToggleRowReviewed: (path: string, reviewed: boolean) => void;
+  autoReviewedBy?: Map<string, AutoReviewRule>;
   filePathsUnder: (folderPath: string) => string[];
   selectedPaths: Set<string>;
   onRowClick: (path: string, event: React.MouseEvent) => void;
@@ -529,6 +542,7 @@ function TreeNodeRow({
               stalePaths={stalePaths}
               onToggleReviewed={onToggleReviewed}
               onToggleRowReviewed={onToggleRowReviewed}
+              autoReviewedBy={autoReviewedBy}
               filePathsUnder={filePathsUnder}
               selectedPaths={selectedPaths}
               onRowClick={onRowClick}
@@ -551,6 +565,12 @@ function TreeNodeRow({
   const isReviewed = reviewedPaths?.has(node.path) ?? false;
   const isStale = stalePaths?.has(node.path) ?? false;
   const isMultiSelected = selectedPaths.size > 1 && selectedPaths.has(node.path);
+  const autoRule = autoReviewedBy?.get(node.path);
+  // The rule still tints the row once un-checked — that is the point of the
+  // color, to say "this matched a rule" rather than "this is reviewed".
+  const autoRuleLabel = autoRule
+    ? `Auto-reviewed by ${autoRule.label?.trim() || autoRule.pattern}`
+    : undefined;
 
   return (
     <button
@@ -558,35 +578,49 @@ function TreeNodeRow({
       aria-current={isSelected ? 'true' : undefined}
       aria-selected={isMultiSelected || undefined}
       data-file-path={node.path}
+      title={autoRuleLabel}
       className={clsx(
         'relative flex h-[26px] w-full items-center gap-1.5 px-2 text-left text-[13px] transition-colors',
         isSelected
           ? 'text-ink-0 bg-glass-medium shadow-[inset_2px_0_0_var(--acc)]'
           : isMultiSelected
             ? 'bg-acc-soft text-ink-0'
-            : isReviewed && !isStale
-              ? 'text-status-done bg-status-done-soft hover:bg-status-done-soft'
-              : 'text-ink-1 hover:bg-glass-medium/50',
+            : autoRule
+              ? 'text-ink-1'
+              : isReviewed && !isStale
+                ? 'text-status-done bg-status-done-soft hover:bg-status-done-soft'
+                : 'text-ink-1 hover:bg-glass-medium/50',
       )}
-      style={{ paddingLeft: 8 + depth * indent + (showReview ? 6 : 21) }}
+      style={{
+        // The left gutter now always holds the change indicator, so the offset
+        // no longer depends on whether review checkboxes are shown.
+        paddingLeft: 8 + depth * indent + 6,
+        // Selection has to stay legible, so it keeps its own background and the
+        // rule tint sits out those rows.
+        ...(autoRule && !isSelected && !isMultiSelected
+          ? { backgroundColor: hexToRgba(autoRule.color, 0.18) }
+          : undefined),
+      }}
     >
       {guides}
-      {showReview ? (
-        <ReviewCheck
-          checked={isReviewed}
-          stale={isStale}
-          size={14}
-          title={
-            isMultiSelected
-              ? `${isReviewed ? 'Unmark' : 'Mark'} ${selectedPaths.size} selected files`
-              : undefined
-          }
-          onToggle={(next) => onToggleRowReviewed(node.path, next)}
-        />
-      ) : (
-        <File className="text-ink-3 h-[15px] w-[15px] shrink-0" aria-hidden />
-      )}
-      <span className={clsx('min-w-0 truncate', node.status === 'deleted' && 'line-through')}>
+      {/* Change indicator leads the row: it says what happened to the file,
+          which is worth more at a glance than a generic file glyph. Fixed
+          width so names stay aligned whatever the letter. */}
+      <span
+        className={clsx(
+          'w-[14px] shrink-0 text-center font-mono text-[11px] font-semibold',
+          statusIndicator.color,
+        )}
+        aria-hidden={statusIndicator.label ? undefined : true}
+      >
+        {statusIndicator.label}
+      </span>
+      <span
+        className={clsx(
+          'min-w-0 truncate',
+          node.status === 'deleted' && 'line-through',
+        )}
+      >
         {node.name}
       </span>
       {node.status === 'renamed' && node.originalPath && (
@@ -644,9 +678,21 @@ function TreeNodeRow({
           {llmThreadCount}
         </span>
       )}
-      <span className={clsx('ml-auto shrink-0 font-mono text-[13px] font-semibold', statusIndicator.color)}>
-        {statusIndicator.label}
-      </span>
+      {showReview && (
+        <span className="ml-auto flex shrink-0 items-center pl-1.5">
+          <ReviewCheck
+            checked={isReviewed}
+            stale={isStale}
+            size={14}
+            title={
+              isMultiSelected
+                ? `${isReviewed ? 'Unmark' : 'Mark'} ${selectedPaths.size} selected files`
+                : undefined
+            }
+            onToggle={(next) => onToggleRowReviewed(node.path, next)}
+          />
+        </span>
+      )}
     </button>
   );
 }

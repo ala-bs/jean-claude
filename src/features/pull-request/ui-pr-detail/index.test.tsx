@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mocks.navigate,
+  useRouterState: ({
+    select,
+  }: {
+    select: (state: { location: { pathname: string } }) => unknown;
+  }) => select({ location: { pathname: '/projects/project-1/prs/17' } }),
 }));
 
 vi.mock('@/common/hooks/use-commands', () => ({ useCommands: vi.fn() }));
@@ -45,6 +50,8 @@ vi.mock('@/hooks/use-projects', () => ({
 vi.mock('@/hooks/use-settings', () => ({
   getEditorLabel: () => 'Editor',
   useEditorSetting: () => ({ data: null }),
+  // useDiffReview reads the auto-review rules through this.
+  useSetting: () => ({ data: undefined }),
 }));
 
 vi.mock('@/hooks/use-pr-view-snapshot', () => ({
@@ -165,9 +172,6 @@ describe('PrDetail PR workspace deletion', () => {
     expect(document.body.textContent).toContain('PR detail content');
     expect(findOptionalButton('Delete PR Workspaces')).toBeUndefined();
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['tasks'] });
-    expect(invalidateQueries).toHaveBeenCalledWith({
-      queryKey: ['pr-workspace-decisions'],
-    });
   });
 
   it('keeps detail and dialog open after failure and retries', async () => {

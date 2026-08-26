@@ -214,7 +214,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       normalizationCtx: {
         sessionIdEmitted: false,
         pendingToolUses: new Map(),
-        pendingToolPermissionDecisions: [],
+        permissionRules: rules,
       },
       messageIndex: this.taskContext.sessionStartIndex,
       deferredResultEvents: null,
@@ -349,6 +349,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     session.permissionRules = rules;
+    session.normalizationCtx.permissionRules = rules;
   }
 
   /**
@@ -413,9 +414,13 @@ export class ClaudeCodeBackend implements AgentBackend {
       abortController: session.abortController,
     };
 
-    const additionalDirectories = getAllowedDirectories(
-      flattenScope(config.persistedSessionRules ?? {}),
-    );
+    // `permissionRules` already carries global + project + worktree + session
+    // rules in last-match-wins order; the persisted session scope is appended
+    // as a fallback for callers that only supply that one.
+    const additionalDirectories = getAllowedDirectories([
+      ...(config.permissionRules ?? []),
+      ...flattenScope(config.persistedSessionRules ?? {}),
+    ]);
     if (additionalDirectories.length > 0) {
       queryOptions.additionalDirectories = additionalDirectories;
     }
@@ -630,19 +635,10 @@ export class ClaudeCodeBackend implements AgentBackend {
     const action = permissionDecision.action;
     if (action === 'allow' && !options.blockedPath) {
       dbg.agentPermission('Tool %s auto-allowed by permission rules', toolName);
-      (session.normalizationCtx.pendingToolPermissionDecisions ??= []).push(
-        permissionDecision.matchedRule
-          ? {
-              allowedBy: 'system',
-              tool,
-              matchValue,
-              rule: {
-                tool: permissionDecision.matchedRule.tool,
-                pattern: permissionDecision.matchedRule.pattern,
-              },
-            }
-          : { allowedBy: 'system', tool, matchValue },
-      );
+      // No decision is recorded here: the SDK already yielded (and we already
+      // normalized) the assistant tool_use block before this callback runs, so
+      // a decision pushed now would be consumed by the *next* identical tool
+      // call. The normalizer re-evaluates the same rules itself instead.
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
     if (action === 'deny') {
@@ -662,11 +658,8 @@ export class ClaudeCodeBackend implements AgentBackend {
         (matchValue && session.sessionAllowedTools.includes(tool)))
     ) {
       dbg.agentPermission('Tool %s is session-allowed', toolName);
-      (session.normalizationCtx.pendingToolPermissionDecisions ??= []).push({
-        allowedBy: 'agent',
-        tool,
-        matchValue,
-      });
+      // Same ordering caveat as above; session-allowed tools resolve to
+      // "allowed by agent", which is the normalizer's fallback anyway.
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
 

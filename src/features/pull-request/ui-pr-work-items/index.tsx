@@ -8,7 +8,14 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import clsx from 'clsx';
 import type React from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -75,8 +82,12 @@ function WorkItemSearchInput({
     return () => clearTimeout(timer);
   }, [searchText]);
 
-  const isIdSearch = /^\d+$/.test(debouncedSearch.trim());
-  const shouldSearch = debouncedSearch.trim().length >= 2 && !isIdSearch;
+  const trimmedSearch = debouncedSearch.trim();
+  const isIdSearch = /^\d+$/.test(trimmedSearch);
+  // ID searches are meaningful from a single character; text searches need 2+
+  const shouldSearch = isIdSearch
+    ? trimmedSearch.length >= 1
+    : trimmedSearch.length >= 2;
 
   const { data: searchResults = [], isLoading: isSearching } = useQuery<
     AzureDevOpsWorkItem[]
@@ -93,35 +104,71 @@ function WorkItemSearchInput({
         projectId: azureProjectId,
         projectName: azureProjectName,
         filters: {
-          searchText: debouncedSearch.trim(),
-          states: ['New', 'Active', 'In Progress', 'To Do', 'In Design'],
+          searchText: trimmedSearch,
+          // ID lookups should find the item whatever its state
+          ...(isIdSearch
+            ? {}
+            : {
+                states: ['New', 'Active', 'In Progress', 'To Do', 'In Design'],
+              }),
         },
       }),
     enabled: shouldSearch,
     staleTime: 30_000,
   });
 
-  // Filter out already-linked items and limit results
-  const filteredResults = searchResults
-    .filter((wi) => !linkedWorkItemIds.has(wi.id))
-    .slice(0, 8);
+  const parsedId = isIdSearch ? parseInt(trimmedSearch, 10) : null;
 
-  // For ID search, check if the ID is in search results or show prompt
-  const idSearchValue = isIdSearch
-    ? parseInt(debouncedSearch.trim(), 10)
-    : null;
+  // Filter out already-linked items, surface an exact ID match first, limit
+  const filteredResults = useMemo(
+    () =>
+      searchResults
+        .filter((wi) => !linkedWorkItemIds.has(wi.id))
+        .sort((a, b) => {
+          if (a.id === parsedId) return -1;
+          if (b.id === parsedId) return 1;
+          return 0;
+        })
+        .slice(0, 8),
+    [searchResults, linkedWorkItemIds, parsedId],
+  );
+
+  // The searched ID exists but is already on this PR
+  const exactIsLinked =
+    parsedId !== null && linkedWorkItemIds.has(parsedId) && !isSearching;
+
+  // Offer a blind direct link only once the query settled without the exact ID
+  const idSearchValue =
+    parsedId !== null &&
+    !isSearching &&
+    !exactIsLinked &&
+    !searchResults.some((wi) => wi.id === parsedId)
+      ? parsedId
+      : null;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
-      } else if (e.key === 'Enter' && idSearchValue && !isLinking) {
-        if (!linkedWorkItemIds.has(idSearchValue)) {
-          onLink(idSearchValue);
-        }
+        return;
+      }
+      // Ignore Enter while results are still in flight, otherwise the same
+      // keystroke links a different item depending on request timing
+      if (e.key !== 'Enter' || isLinking || isSearching) return;
+      const target = filteredResults[0]?.id ?? idSearchValue;
+      if (target && !linkedWorkItemIds.has(target)) {
+        onLink(target);
       }
     },
-    [onClose, idSearchValue, isLinking, linkedWorkItemIds, onLink],
+    [
+      onClose,
+      filteredResults,
+      idSearchValue,
+      isLinking,
+      isSearching,
+      linkedWorkItemIds,
+      onLink,
+    ],
   );
 
   const handleLinkClick = useCallback(
@@ -158,9 +205,9 @@ function WorkItemSearchInput({
       </div>
 
       {/* Results */}
-      {debouncedSearch.trim().length >= 2 && (
+      {shouldSearch && (
         <div className="border-glass-border-strong max-h-48 overflow-y-auto border-t">
-          {isSearching && !isIdSearch && (
+          {isSearching && (
             <div className="text-ink-3 flex items-center gap-2 px-3 py-2 text-xs">
               <Loader2 className="h-3 w-3 animate-spin" />
               Searching…
@@ -185,17 +232,17 @@ function WorkItemSearchInput({
           )}
 
           {/* Text search results */}
-          {!isIdSearch &&
-            !isSearching &&
+          {!isSearching &&
             filteredResults.length === 0 &&
-            debouncedSearch.trim().length >= 2 && (
+            idSearchValue === null && (
               <div className="text-ink-3 px-3 py-2 text-xs">
-                No matching work items found
+                {exactIsLinked
+                  ? `Work item #${parsedId} is already linked`
+                  : 'No matching work items found'}
               </div>
             )}
 
-          {!isIdSearch &&
-            filteredResults.map((wi) => (
+          {filteredResults.map((wi) => (
               <div
                 key={wi.id}
                 className="hover:bg-bg-2 group flex w-full items-center gap-2 px-3 py-1.5"
@@ -284,7 +331,10 @@ export function PrWorkItems({
     [openPreview],
   );
 
-  const linkedWorkItemIds = new Set(workItems.map((wi) => wi.id));
+  const linkedWorkItemIds = useMemo(
+    () => new Set(workItems.map((wi) => wi.id)),
+    [workItems],
+  );
 
   const canLink = !!providerId && !!azureProjectId && !!azureProjectName && !!onLink;
   const canUnlink = !!onUnlink;

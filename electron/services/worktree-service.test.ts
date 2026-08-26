@@ -29,6 +29,7 @@ const fs =
 const {
   cleanupMissingWorktree,
   cleanupWorktree,
+  getDiffBaseInfo,
   getWorktreeDiff,
   getWorktreeFileContent,
   getWorktreeUnifiedDiff,
@@ -36,6 +37,7 @@ const {
   hasUnpushedWorktreeCommits,
   mergeWorktree,
   pullBranch,
+  renameWorktreeBranch,
 } = await import('./worktree-service');
 
 let testDir: string;
@@ -181,6 +183,30 @@ describe('worktree cleanup branch safety', () => {
     expect(stdout).toContain('persisted-wrong');
   });
 
+  it('surfaces git output when branch verification fails, and preserves the branch', async () => {
+    const worktreePath = path.join(testDir, 'broken-worktree');
+    await git(['branch', 'feature-work']);
+    await git(['worktree', 'add', worktreePath, 'feature-work']);
+    // Point the worktree's .git file at a missing admin dir so `git rev-parse` fails.
+    await fs.writeFile(
+      path.join(worktreePath, '.git'),
+      'gitdir: /nonexistent/jc-worktree-admin\n',
+    );
+
+    await expect(
+      cleanupWorktree({
+        worktreePath,
+        projectPath: testDir,
+        branchName: 'feature-work',
+        branchCleanup: 'delete',
+        force: true,
+      }),
+    ).rejects.toThrow(/Failed to verify worktree branch before delete.*broken-worktree/s);
+
+    const { stdout } = await git(['branch', '--list', 'feature-work']);
+    expect(stdout).toContain('feature-work');
+  });
+
   it('does not delete arbitrary branch for missing registered worktree mismatch', async () => {
     const worktreePath = path.join(testDir, 'missing-review-worktree');
     await git(['branch', 'actual-review']);
@@ -254,6 +280,56 @@ describe('worktree cleanup branch safety', () => {
     await expect(fs.stat(worktreePath)).rejects.toThrow();
     const { stdout } = await git(['branch', '--list', 'feature-merge']);
     expect(stdout).toBe('');
+  });
+});
+
+describe('getDiffBaseInfo', () => {
+  beforeEach(async () => {
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-diff-base-'));
+    await git(['init', '-b', 'main']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test User']);
+    await writeFile('base.txt', 'base\n');
+    await commit('base');
+  });
+
+  afterEach(async () => {
+    if (testDir) await fs.rm(testDir, { force: true, recursive: true });
+  });
+
+  it('reports headIsMergedIntoSource when the branch adds nothing to source', async () => {
+    await git(['switch', '-c', 'task']);
+
+    const info = await getDiffBaseInfo(testDir, 'unused', 'main');
+
+    expect(info.sourceRef).toBe('refs/heads/main');
+    expect(info.baseCommit).toBe(info.headCommit);
+    expect(info.headIsMergedIntoSource).toBe(true);
+  });
+
+  it('reports headIsMergedIntoSource false when the branch has its own commits', async () => {
+    await git(['switch', '-c', 'task']);
+    await writeFile('task.txt', 'task\n');
+    await commit('task work');
+
+    const info = await getDiffBaseInfo(testDir, 'unused', 'main');
+
+    expect(info.baseCommit).not.toBe(info.headCommit);
+    expect(info.headIsMergedIntoSource).toBe(false);
+  });
+
+  it('never claims merged-into-source when no source ref resolves', async () => {
+    const { stdout } = await git(['rev-parse', 'HEAD']);
+    const head = stdout.trim();
+
+    // No sourceBranch → baseCommit falls back to startCommitHash, which here
+    // equals HEAD. That must NOT be reported as "already merged into source".
+    const info = await getDiffBaseInfo(testDir, head, null);
+
+    expect(info.sourceRef).toBeNull();
+    expect(info.baseCommit).toBe(head);
+    expect(info.headCommit).toBe(head);
+    expect(info.headIsMergedIntoSource).toBe(false);
   });
 });
 
@@ -593,6 +669,57 @@ describe('pullBranch', () => {
     expect(content).toBe('remote\n');
   });
 
+  it('pulls via the upstream ref when the local branch name differs', async () => {
+    // Mimics a PR review workspace: local branch tracks origin/main.
+    await git([
+      'checkout',
+      '-b',
+      'jean-claude/review-pr-1',
+      '--track',
+      'origin/main',
+    ]);
+    await pushRemoteCommit();
+
+    await pullBranch({
+      worktreePath: testDir,
+      branchName: 'jean-claude/review-pr-1',
+    });
+
+    const content = await fs.readFile(
+      path.join(testDir, 'tracked.txt'),
+      'utf-8',
+    );
+    expect(content).toBe('remote\n');
+  });
+
+  it('ignores a local-tracking upstream and falls back to the remote', async () => {
+    // branch.<name>.remote='.' — must not be parsed as remote "feature".
+    await git(['branch', 'feature/base', 'main']);
+    await git(['checkout', '-b', 'local-tracker', '--track', 'feature/base']);
+    await git(['branch', '--set-upstream-to=origin/main', 'main']);
+    await git(['checkout', 'main']);
+    await pushRemoteCommit();
+
+    await pullBranch({ worktreePath: testDir, branchName: 'main' });
+
+    const content = await fs.readFile(
+      path.join(testDir, 'tracked.txt'),
+      'utf-8',
+    );
+    expect(content).toBe('remote\n');
+  });
+
+  it('explains a branch that does not exist on the remote yet', async () => {
+    await git(['checkout', '-b', 'jean-claude/never-pushed', '--no-track']);
+
+    await expect(
+      pullBranch({
+        worktreePath: testDir,
+        branchName: 'jean-claude/never-pushed',
+      }),
+    ).rejects.toThrow(/does not exist on the remote yet/i);
+  });
+
   it('explains uncommitted local changes instead of raw git output', async () => {
     await pushRemoteCommit();
     await writeFile('tracked.txt', 'dirty\n');
@@ -610,5 +737,78 @@ describe('pullBranch', () => {
     await expect(
       pullBranch({ worktreePath: testDir, branchName: 'main' }),
     ).rejects.toThrow(/diverged/i);
+  });
+});
+
+describe('renameWorktreeBranch', () => {
+  beforeEach(async () => {
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-branch-rename-'));
+    await git(['init', '-b', 'main']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test User']);
+    await writeFile('a.txt', 'a\n');
+    await commit('initial');
+    await git(['switch', '-c', 'jean-claude/my-task']);
+  });
+
+  afterEach(async () => {
+    if (testDir) await fs.rm(testDir, { force: true, recursive: true });
+  });
+
+  async function branchNames() {
+    const { stdout } = await git([
+      'branch',
+      '--format=%(refname:short)',
+    ]);
+    return stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  }
+
+  it('renames the branch the worktree is actually on', async () => {
+    const { previousBranch } = await renameWorktreeBranch({
+      worktreePath: testDir,
+      newBranch: 'feature/new-name',
+    });
+
+    expect(previousBranch).toBe('jean-claude/my-task');
+    expect(await branchNames()).toContain('feature/new-name');
+    expect(await branchNames()).not.toContain('jean-claude/my-task');
+    const { stdout } = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    expect(stdout.trim()).toBe('feature/new-name');
+  });
+
+  it('rejects a name that already exists', async () => {
+    await expect(
+      renameWorktreeBranch({ worktreePath: testDir, newBranch: 'main' }),
+    ).rejects.toThrow(/already exists/);
+    expect(await branchNames()).toContain('jean-claude/my-task');
+  });
+
+  it('rejects an invalid branch name', async () => {
+    await expect(
+      renameWorktreeBranch({ worktreePath: testDir, newBranch: 'bad..name' }),
+    ).rejects.toThrow(/not a valid git branch name/);
+    expect(await branchNames()).toContain('jean-claude/my-task');
+  });
+
+  it('refuses to rename a branch that has an upstream', async () => {
+    await git(['update-ref', 'refs/remotes/origin/jean-claude/my-task', 'HEAD']);
+    await git(['config', 'branch.jean-claude/my-task.remote', 'origin']);
+    await git([
+      'config',
+      'branch.jean-claude/my-task.merge',
+      'refs/heads/jean-claude/my-task',
+    ]);
+
+    await expect(
+      renameWorktreeBranch({ worktreePath: testDir, newBranch: 'feature/x' }),
+    ).rejects.toThrow(/already pushed/);
+    expect(await branchNames()).toContain('jean-claude/my-task');
+  });
+
+  it('refuses to rename a detached HEAD', async () => {
+    await git(['checkout', '--detach', 'HEAD']);
+    await expect(
+      renameWorktreeBranch({ worktreePath: testDir, newBranch: 'feature/x' }),
+    ).rejects.toThrow(/detached HEAD/);
   });
 });

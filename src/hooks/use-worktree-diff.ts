@@ -72,14 +72,20 @@ export function useWorktreeFileContent(
   taskId: string | null,
   filePath: string | null,
   status: 'added' | 'modified' | 'deleted' | null,
+  originalPath?: string,
 ) {
   return useQuery<WorktreeFileContent>({
-    queryKey: ['worktree-file-content', taskId, filePath],
+    queryKey: ['worktree-file-content', taskId, filePath, originalPath],
     queryFn: () => {
       if (!taskId || !filePath || !status) {
         return { oldContent: null, newContent: null, isBinary: false };
       }
-      return api.tasks.worktree.getFileContent(taskId, filePath, status);
+      return api.tasks.worktree.getFileContent(
+        taskId,
+        filePath,
+        status,
+        originalPath,
+      );
     },
     enabled: !!taskId && !!filePath && !!status,
     // Cache file content for the session

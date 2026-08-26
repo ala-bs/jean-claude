@@ -54,8 +54,8 @@ import { useToastStore } from '@/stores/toasts';
 
 
 
-import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 import { ImagePreviewModal } from '@/common/ui/image-preview-modal';
+import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
 
 const EMPTY_IMAGES: PromptImagePart[] = [];
 
@@ -1203,6 +1203,7 @@ export function PromptComposer({
               maxHeight="500px"
               featureMap={featureMap}
               onPaste={handlePaste}
+              moveCursorBelowPaste
             />
           </div>
           <div

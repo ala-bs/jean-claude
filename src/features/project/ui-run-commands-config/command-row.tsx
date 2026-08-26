@@ -4,6 +4,7 @@ import {
   HelpCircle,
   Plus,
   Settings,
+  Star,
   Terminal,
   Trash2,
   X,
@@ -506,6 +507,25 @@ export function CommandRow({
             aria-label="Requires confirmation"
           />
         )}
+        <button
+          type="button"
+          onClick={() => onUpdate({ isFavorite: !command.isFavorite })}
+          aria-label={
+            command.isFavorite ? 'Remove from favorites' : 'Add to favorites'
+          }
+          aria-pressed={command.isFavorite}
+          title={
+            command.isFavorite
+              ? 'Favorite — runnable from the project root in the Running Commands overlay'
+              : 'Favorite this command to run it from the project root'
+          }
+          className={`hover:bg-glass-light rounded-md p-1.5 ${command.isFavorite ? 'text-status-warn' : 'text-ink-4'}`}
+        >
+          <Star
+            className="h-3.5 w-3.5"
+            fill={command.isFavorite ? 'currentColor' : 'none'}
+          />
+        </button>
         <button
           type="button"
           onClick={() => setIsOpen((open) => !open)}

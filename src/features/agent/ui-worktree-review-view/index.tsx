@@ -57,9 +57,11 @@ import { getFilesWithAnnotations } from '@/features/agent/ui-diff-annotation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import { Separator } from '@/common/ui/separator';
 import { SummaryPanel } from '@/features/agent/ui-summary-panel';
+import { TaskTodoDropdown } from '@/features/task/ui-task-todo-dropdown';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
+import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 import { useTaskSummary } from '@/hooks/use-task-summary';
 import { WorktreeActions } from '@/features/agent/ui-worktree-actions';
 
@@ -355,7 +357,8 @@ export function WorktreeReviewView({
   const selectedFileContent = useWorktreeFileContent(
     gitReviewEnabled ? taskId : null,
     selectedFilePath,
-    (data?.files ?? []).find((f) => f.path === selectedFilePath)?.status ?? null,
+    selectedFile?.status ?? null,
+    selectedFile?.originalPath,
   ).data;
 
   /**
@@ -381,8 +384,14 @@ export function WorktreeReviewView({
     return map;
   }, [diffFiles, selectedFilePath, selectedFileContent?.newContent]);
   // ── per-file review state + open tabs ──
-  const { reviewed, stale, treatment, setReviewed, cycleTreatment } =
-    useDiffReview(taskId, diffSignatures);
+  const {
+    reviewed,
+    stale,
+    treatment,
+    autoReviewedBy,
+    setReviewed,
+    cycleTreatment,
+  } = useDiffReview(taskId, diffSignatures);
   const {
     tabs,
     groups,
@@ -678,18 +687,21 @@ export function WorktreeReviewView({
             commitsCount={commits?.length}
             showGitModes={gitReviewEnabled}
           />
-          {gitReviewEnabled && (
-            <button
-              onClick={() => {
-                refresh();
-                void refetchLocalChanges();
-              }}
-              className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1 transition-colors"
-              title="Refresh"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-            </button>
-          )}
+          <div className="flex shrink-0 items-center gap-0.5">
+            <TaskTodoDropdown taskId={taskId} />
+            {gitReviewEnabled && (
+              <button
+                onClick={() => {
+                  refresh();
+                  void refetchLocalChanges();
+                }}
+                className="text-ink-3 hover:bg-glass-medium hover:text-ink-1 rounded p-1 transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         </div>
         <Separator />
         <div
@@ -726,6 +738,7 @@ export function WorktreeReviewView({
                   stalePaths={stale}
                   onToggleReviewed={setReviewed}
                   reviewedTreatment={treatment}
+                  autoReviewedBy={autoReviewedBy}
                   stickyFolders
                 />
               </div>
@@ -1047,6 +1060,9 @@ function LocalFileDiffContent({
       isBinary={data?.isBinary}
       oldImageDataUrl={data?.oldImageDataUrl}
       newImageDataUrl={data?.newImageDataUrl}
+      oldSpreadsheetBase64={data?.oldSpreadsheetBase64}
+      newSpreadsheetBase64={data?.newSpreadsheetBase64}
+      spreadsheetTooLarge={data?.spreadsheetTooLarge}
       headerClassName={HEADER_HEIGHT_CLS}
     />
   );
@@ -1088,6 +1104,7 @@ function WorktreeFileDiffContent({
     taskId,
     file.path,
     file.status,
+    file.originalPath,
   );
 
   // Get review comments for this specific file
@@ -1131,6 +1148,9 @@ function WorktreeFileDiffContent({
       isBinary={data?.isBinary}
       oldImageDataUrl={data?.oldImageDataUrl}
       newImageDataUrl={data?.newImageDataUrl}
+      oldSpreadsheetBase64={data?.oldSpreadsheetBase64}
+      newSpreadsheetBase64={data?.newSpreadsheetBase64}
+      spreadsheetTooLarge={data?.spreadsheetTooLarge}
       headerClassName={headerClassName}
       annotations={annotations}
       reviewComments={fileReviewComments}
@@ -1271,12 +1291,13 @@ function PlainFileViewer({
   onResolveReviewComment?: (commentId: string) => void;
 }) {
   const isRasterImage = isImagePath(filePath) && !isSvgPath(filePath);
+  const spreadsheet = useSpreadsheetFile(filePath);
   const { data, isLoading } = useQuery({
     queryKey: ['file-content', filePath],
     queryFn: () => api.fs.readFile(filePath),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
-    enabled: !isRasterImage,
+    enabled: !isRasterImage && !spreadsheet.isSpreadsheet,
   });
   const { data: imageDataUrl, isLoading: isImageLoading } = useQuery({
     queryKey: ['image-content', filePath],
@@ -1300,11 +1321,24 @@ function PlainFileViewer({
     [setDraft, clearDraft],
   );
 
-  if (isLoading || isImageLoading) {
+  if (isLoading || isImageLoading || spreadsheet.isLoading) {
     return (
       <div className="text-ink-3 flex h-full items-center justify-center text-sm">
         Loading...
       </div>
+    );
+  }
+
+  if (spreadsheet.isSpreadsheet) {
+    return (
+      <FileDiffContent
+        key={relativePath}
+        file={{ path: relativePath, status: 'unchanged' }}
+        oldContent=""
+        newContent=""
+        isBinary
+        newSpreadsheetBase64={spreadsheet.base64}
+      />
     );
   }
 
@@ -1485,6 +1519,9 @@ function CommitFileDiffContent({
       isBinary={data?.isBinary}
       oldImageDataUrl={data?.oldImageDataUrl}
       newImageDataUrl={data?.newImageDataUrl}
+      oldSpreadsheetBase64={data?.oldSpreadsheetBase64}
+      newSpreadsheetBase64={data?.newSpreadsheetBase64}
+      spreadsheetTooLarge={data?.spreadsheetTooLarge}
       reviewComments={fileReviewComments}
       onAddReviewComment={handleAddCommitReviewComment}
       onDeleteReviewComment={onDeleteReviewComment}

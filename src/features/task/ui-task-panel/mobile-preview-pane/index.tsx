@@ -53,12 +53,12 @@ import { useTasks } from '@/hooks/use-tasks';
 
 import { useQueryClient } from '@tanstack/react-query';
 
-import { DeviceRailRow } from './ui-device-rail-row';
-import { PreviewNotice, PreviewNoticeStack } from './ui-preview-notices';
 import {
   buildMobilePreviewDeviceTaskMap,
   resolveDeviceRowTaskInfo,
 } from './utils-device-assignments';
+import { PreviewNotice, PreviewNoticeStack } from './ui-preview-notices';
+import { DeviceRailRow } from './ui-device-rail-row';
 
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useRunCommands } from '@/hooks/use-run-commands';
@@ -87,7 +87,6 @@ import type {
   MobilePreviewTextSize,
 } from '@shared/mobile-simulator-types';
 
-import type { CommandRunStatus } from '@shared/run-command-types';
 import {
   appendNetworkFilterToken,
   getNetworkHostname,
@@ -100,16 +99,6 @@ import {
   type NetworkFilterToken,
   type NetworkPresetFilter,
 } from './utils-network';
-import {
-  NetworkFacetButton,
-  NetworkFilterAutocomplete,
-  NetworkFilterChip,
-  NetworkFilterContextMenu,
-  NetworkRequestDetails,
-} from './ui-network-inspector';
-import { useNetworkInspector } from './use-network-inspector';
-import type { MobilePreviewProjectConfig } from '@shared/types';
-
 import {
   applyPreviewDeviceSwitch,
   cancelPendingWorkspaceSetup,
@@ -124,39 +113,49 @@ import {
   shouldStopPreviousIosBuild,
 } from './utils-setup-operation';
 import {
-  getVisibleMobilePreviewPaneTab,
-  isMobilePreviewPaneTabVisible,
-  type MobilePreviewPaneTab,
-} from './utils-tabs';
+  canStartDevice,
+  formatDeviceState,
+  getDefaultAndroidProjectPath,
+  getPreviewDeviceKey,
+} from './utils-device-setup';
 import { EmptyState, PreviewErrorState } from './ui-common';
-import {
-  NativeLogsTabLabel,
-  NetworkTabLabel,
-  PreviewStatusText,
-} from './ui-stream-readouts';
 import {
   formatError,
   getStreamStrategyLabel,
   getWaitingForFrameDetail,
 } from './utils-preview-error';
 import {
-  canStartDevice,
-  formatDeviceState,
-  getDefaultAndroidProjectPath,
-  getPreviewDeviceKey,
-} from './utils-device-setup';
-import { useMobilePreviewInput } from './use-mobile-preview-input';
-import { ManageDevicesDialog } from './ui-manage-devices-dialog';
-import { DevServerTab } from './ui-dev-server-tab';
-import { DevToolsTab } from './ui-devtools-tab';
-import { LogsTab } from './ui-logs-tab';
-import { SetupTab } from './ui-setup-tab';
-import {
   GestureFeedbackOverlay,
   H264PreviewCanvas,
   ImagePreviewSurface,
   RawRgbaPreviewCanvas,
 } from './ui-preview-surface';
+import {
+  getVisibleMobilePreviewPaneTab,
+  isMobilePreviewPaneTabVisible,
+  type MobilePreviewPaneTab,
+} from './utils-tabs';
+import {
+  NativeLogsTabLabel,
+  NetworkTabLabel,
+  PreviewStatusText,
+} from './ui-stream-readouts';
+import {
+  NetworkFacetButton,
+  NetworkFilterAutocomplete,
+  NetworkFilterChip,
+  NetworkFilterContextMenu,
+  NetworkRequestDetails,
+} from './ui-network-inspector';
+import type { CommandRunStatus } from '@shared/run-command-types';
+import { DevServerTab } from './ui-dev-server-tab';
+import { DevToolsTab } from './ui-devtools-tab';
+import { LogsTab } from './ui-logs-tab';
+import { ManageDevicesDialog } from './ui-manage-devices-dialog';
+import type { MobilePreviewProjectConfig } from '@shared/types';
+import { SetupTab } from './ui-setup-tab';
+import { useMobilePreviewInput } from './use-mobile-preview-input';
+import { useNetworkInspector } from './use-network-inspector';
 
 export { buildGestureFeedbackPath } from './ui-preview-surface';
 import {

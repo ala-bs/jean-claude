@@ -1,6 +1,7 @@
 import {
   ArrowDownToLine,
   ArrowUpRight,
+  FileDiff,
   FileText,
   GitPullRequest,
   Loader2,
@@ -11,15 +12,21 @@ import {
 import type { ReactNode } from 'react';
 
 import { Button } from '@/common/ui/button';
+import { PrWorkspaceSummary } from '@/features/task/ui-pr-workspace-summary';
 
 export function shouldShowPrWorkspaceEmptyState({
   taskType,
   steps,
+  showWorkspaceOverview = false,
 }: {
   taskType: string;
   steps: unknown[] | undefined;
+  // Set when the user explicitly navigated back to the workspace overview,
+  // which stays reachable even once steps exist.
+  showWorkspaceOverview?: boolean;
 }): boolean {
-  return taskType === 'pr-review' && steps !== undefined && steps.length === 0;
+  if (taskType !== 'pr-review' || steps === undefined) return false;
+  return steps.length === 0 || showWorkspaceOverview;
 }
 
 export function PrWorkspaceEmptyState({
@@ -30,10 +37,14 @@ export function PrWorkspaceEmptyState({
   onOpenLogs,
   onOpenProjectSettings,
   onOpenPullRequest,
+  onViewDiff,
   onPull,
   isPulling = false,
   projectName,
   pullRequestId,
+  hasSteps = false,
+  projectId,
+  repoProviderId,
 }: {
   commandControls: ReactNode;
   commandAvailability: {
@@ -46,15 +57,28 @@ export function PrWorkspaceEmptyState({
   onOpenLogs: () => void;
   onOpenProjectSettings: () => void;
   onOpenPullRequest?: () => void;
+  // Omitted when the workspace has no git worktree to diff against.
+  onViewDiff?: () => void;
   onPull?: () => void;
   isPulling?: boolean;
   projectName: string;
   pullRequestId: string | null;
+  hasSteps?: boolean;
+  // Omitted in tests/contexts without repo access — the PR summary is skipped.
+  projectId?: string;
+  repoProviderId?: string;
 }) {
   return (
-    <div className="flex h-full min-w-0 items-center justify-center overflow-y-auto px-4 py-8 sm:px-8">
-      <section className="border-glass-border bg-bg-1/40 w-full max-w-2xl overflow-hidden rounded-xl border shadow-[0_18px_60px_rgba(0,0,0,0.16)]">
-        <div className="border-glass-border flex min-w-0 items-center gap-3 border-b px-4 py-3 sm:px-5">
+    // Wrapper scrolls too, so a wrapped action row on a short viewport can
+    // never clip the footer past the bottom of the card.
+    <div className="flex h-full min-w-0 justify-center overflow-y-auto px-4 py-6 sm:px-8">
+      {/* max-h-full + a scrolling body lets the card grow into the available
+          space without stretching when there is little to show. `my-auto`
+          centers it (flexbox centering would clip the top once it overflows),
+          and the body's min height pushes overflow out to this wrapper so a
+          wrapped action row can never clip the pinned footer. */}
+      <section className="border-glass-border bg-bg-1/40 my-auto flex max-h-full w-full max-w-5xl flex-col overflow-hidden rounded-xl border shadow-[0_18px_60px_rgba(0,0,0,0.16)]">
+        <div className="border-glass-border flex min-w-0 shrink-0 items-center gap-3 border-b px-4 py-3 sm:px-5">
           <div className="bg-acc/15 text-acc-ink flex h-9 w-9 shrink-0 items-center justify-center rounded-lg">
             <GitPullRequest className="h-4 w-4" aria-hidden />
           </div>
@@ -69,17 +93,29 @@ export function PrWorkspaceEmptyState({
           </span>
         </div>
 
-        <div className="space-y-5 p-4 sm:p-5">
+        <div className="min-h-24 flex-1 space-y-5 overflow-y-auto p-4 sm:p-5">
           <div>
             <h2 className="text-ink-0 text-base font-semibold">
-              Ready for your first step
+              {hasSteps ? 'Workspace overview' : 'Ready for your first step'}
             </h2>
             <p className="text-ink-3 mt-1 max-w-lg text-sm leading-relaxed">
-              Add Step creates an agent session in this pull request workspace.
-              Use it to investigate, review, or make changes.
+              {hasSteps
+                ? 'Workspace-level actions for this pull request. Select a step above to go back to its agent session.'
+                : 'Add Step creates an agent session in this pull request workspace. Use it to investigate, review, or make changes.'}
             </p>
           </div>
 
+          {projectId && pullRequestId ? (
+            <PrWorkspaceSummary
+              projectId={projectId}
+              pullRequestId={pullRequestId}
+              providerId={repoProviderId}
+            />
+          ) : null}
+        </div>
+
+        {/* Actions stay pinned so a long PR description can't scroll them away. */}
+        <div className="border-glass-border shrink-0 space-y-3 border-t p-4 sm:p-5">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
               type="button"
@@ -90,6 +126,17 @@ export function PrWorkspaceEmptyState({
             >
               Add Step
             </Button>
+            {onViewDiff ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={<FileDiff />}
+                onClick={onViewDiff}
+              >
+                View Diff
+              </Button>
+            ) : null}
             {onPull ? (
               <Button
                 type="button"

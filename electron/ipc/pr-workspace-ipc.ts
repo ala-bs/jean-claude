@@ -30,9 +30,6 @@ export function registerPrWorkspaceIpcHandlers(deps: {
     projectId: string;
     pullRequestId: number;
   }) => Promise<unknown>;
-  listPendingPrWorkspaceDecisions: () => Promise<
-    Array<{ projectId: string; pullRequestId: number; taskIds: string[] }>
-  >;
   createPrReviewTask: (params: {
     projectId: string;
     pullRequestId: number;
@@ -44,15 +41,7 @@ export function registerPrWorkspaceIpcHandlers(deps: {
     projectId: string;
     pullRequestId: number;
   }) => Promise<PrWorkspaceResolutionResult>;
-  resolveClosedPrWorkspace: (params: {
-    projectId: string;
-    pullRequestId: number;
-    action: 'keep' | 'delete';
-  }) => Promise<PrWorkspaceResolutionResult>;
 }) {
-  deps.ipcMain.handle('tasks:listPendingPrWorkspaceDecisions', () =>
-    deps.listPendingPrWorkspaceDecisions(),
-  );
   deps.ipcMain.handle('tasks:createPrReviewTask', async (_, params: unknown) =>
     deps.createPrReviewTask(validatePrWorkspacePairParams(params)),
   );
@@ -64,17 +53,6 @@ export function registerPrWorkspaceIpcHandlers(deps: {
   });
   deps.ipcMain.handle('tasks:deleteAllPrWorkspaces', async (_, params: unknown) =>
     deps.deleteAllPrWorkspaces(validatePrWorkspacePairParams(params)),
-  );
-  deps.ipcMain.handle(
-    'tasks:resolveClosedPrWorkspace',
-    async (_, params: unknown) => {
-      const pair = validatePrWorkspacePairParams(params);
-      const { action } = params as Record<string, unknown>;
-      if (action !== 'keep' && action !== 'delete') {
-        throw new Error('Invalid PR workspace resolution action');
-      }
-      return deps.resolveClosedPrWorkspace({ ...pair, action });
-    },
   );
   deps.ipcMain.handle(
     'azureDevOps:getPullRequest',

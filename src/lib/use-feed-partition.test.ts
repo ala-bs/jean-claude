@@ -174,3 +174,80 @@ describe('partitionFeedItems', () => {
     expect(result.prReviewItems.map((item) => item.id)).toContain(reviewedPr.id);
   });
 });
+
+describe('partitionFeedItems - completed PR zone', () => {
+  const base = {
+    hiddenProjectIdSet: new Set<string>(),
+    pinned: [] as { id: string; order: number }[],
+    pinnedIds: new Set<string>(),
+    dismissedIds: new Set<string>(),
+    lowPriorityIds: new Set<string>(),
+  };
+
+  it('promotes tasks whose PR is merged out of the normal zones', () => {
+    const merged = taskItem({ id: 'task-1', workItemPrStatus: 'completed' });
+    const plain = taskItem({ id: 'task-2' });
+
+    const result = partitionFeedItems({
+      ...base,
+      visibleFeedItems: [merged, plain],
+    });
+
+    expect(result.completedPrItems.map((i) => i.id)).toEqual([merged.id]);
+    expect(result.highPriorityItems.map((i) => i.id)).toEqual([plain.id]);
+  });
+
+  it('promotes a task whose child subtask has a merged PR', () => {
+    const parent = taskItem({
+      id: 'task-1',
+      children: [taskItem({ id: 'task-1a', workItemPrStatus: 'completed' })],
+    });
+
+    const result = partitionFeedItems({ ...base, visibleFeedItems: [parent] });
+
+    expect(result.completedPrItems.map((i) => i.id)).toEqual([parent.id]);
+  });
+
+  it('keeps blocked tasks in the action-needed zone even when merged', () => {
+    const blocked = taskItem({
+      id: 'task-1',
+      attention: 'needs-permission',
+      workItemPrStatus: 'completed',
+    });
+
+    const result = partitionFeedItems({ ...base, visibleFeedItems: [blocked] });
+
+    expect(result.actionNeededItems.map((i) => i.id)).toEqual([blocked.id]);
+    expect(result.completedPrItems).toEqual([]);
+  });
+
+  it('leaves pr-review workspace tasks in the PR workspace zone', () => {
+    const review = taskItem({
+      id: 'task-1',
+      taskType: 'pr-review',
+      workItemPrStatus: 'completed',
+    });
+
+    const result = partitionFeedItems({ ...base, visibleFeedItems: [review] });
+
+    expect(result.prWorkspaceItems.map((i) => i.id)).toEqual([review.id]);
+    expect(result.completedPrItems).toEqual([]);
+  });
+
+  it('does not promote dismissed or pinned merged tasks', () => {
+    const dismissed = taskItem({ id: 'task-1', workItemPrStatus: 'completed' });
+    const pinnedTask = taskItem({ id: 'task-2', workItemPrStatus: 'completed' });
+
+    const result = partitionFeedItems({
+      ...base,
+      visibleFeedItems: [dismissed, pinnedTask],
+      dismissedIds: new Set([dismissed.id]),
+      pinned: [{ id: pinnedTask.id, order: 0 }],
+      pinnedIds: new Set([pinnedTask.id]),
+    });
+
+    expect(result.completedPrItems).toEqual([]);
+    expect(result.dismissedCount).toBe(1);
+    expect(result.pinnedItems.map((i) => i.id)).toEqual([pinnedTask.id]);
+  });
+});

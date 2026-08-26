@@ -1503,7 +1503,53 @@ function isWorkActivitySetting(value: unknown): value is WorkActivitySetting {
   );
 }
 
+/**
+ * A glob whose matching files are treated as already reviewed in diff views,
+ * plus a color so they stay identifiable in the file tree. Rules are never
+ * baked into stored review state — they are applied when the tree is read, so
+ * editing a rule immediately re-derives which files count as reviewed.
+ */
+export interface AutoReviewRule {
+  id: string;
+  /** Picomatch glob, matched against the diff-relative file path. */
+  pattern: string;
+  /** Hex swatch used to tint matching rows. */
+  color: string;
+  enabled: boolean;
+  /** Optional human name shown in settings and as the row tooltip. */
+  label?: string;
+}
+
+export interface AutoReviewSetting {
+  rules: AutoReviewRule[];
+}
+
+function isAutoReviewRule(value: unknown): value is AutoReviewRule {
+  if (!value || typeof value !== 'object') return false;
+  const rule = value as Record<string, unknown>;
+  return (
+    typeof rule.id === 'string' &&
+    typeof rule.pattern === 'string' &&
+    typeof rule.color === 'string' &&
+    typeof rule.enabled === 'boolean' &&
+    (rule.label === undefined || typeof rule.label === 'string')
+  );
+}
+
+export function isAutoReviewSetting(value: unknown): value is AutoReviewSetting {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    Array.isArray((value as Record<string, unknown>).rules) &&
+    ((value as AutoReviewSetting).rules as unknown[]).every(isAutoReviewRule)
+  );
+}
+
 export const SETTINGS_DEFINITIONS = {
+  autoReview: {
+    defaultValue: { rules: [] } as AutoReviewSetting,
+    validate: isAutoReviewSetting,
+  },
   mobilePreviewRecordingFolder: {
     defaultValue: null as string | null,
     validate: (value: unknown): value is string | null =>

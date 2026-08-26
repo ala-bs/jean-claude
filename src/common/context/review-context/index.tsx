@@ -33,6 +33,8 @@ export interface MessageCommentParams {
   /** Character offset of the selection start within the message container's
    *  combined text content. Used for precise highlight placement. */
   charOffset?: number;
+  /** Selection length in the container's combined text — see FileCommentAnchor. */
+  charLength?: number;
   body: string;
   presets: string[];
   images?: PromptImagePart[];

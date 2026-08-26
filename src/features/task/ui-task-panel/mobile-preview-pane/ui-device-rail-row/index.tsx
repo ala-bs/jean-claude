@@ -2,9 +2,9 @@ import clsx from 'clsx';
 
 import type { MobilePreviewDevice } from '@shared/mobile-simulator-types';
 
-import { PlatformLogo } from '../ui-common';
-import type { MobilePreviewDeviceTaskInfo } from '../utils-device-assignments';
 import { formatDeviceState } from '../utils-device-setup';
+import type { MobilePreviewDeviceTaskInfo } from '../utils-device-assignments';
+import { PlatformLogo } from '../ui-common';
 
 /**
  * One row of the device rail.

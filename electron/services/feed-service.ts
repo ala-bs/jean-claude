@@ -572,7 +572,14 @@ async function enrichTaskFeedItemsWithPrStatus({
     providerId: string;
   }[] = [];
 
-  for (const item of feedItems) {
+  // Include child subtasks: they own their own PRs and the feed surfaces
+  // their PR status on the parent's rail.
+  const taskItemsWithChildren = feedItems.flatMap((item) => [
+    item,
+    ...(item.children ?? []),
+  ]);
+
+  for (const item of taskItemsWithChildren) {
     if (item.source !== 'task') continue;
 
     // Case 1: task has pullRequestId directly — check if we know the status
@@ -588,6 +595,7 @@ async function enrichTaskFeedItemsWithPrStatus({
         item.isWaitingForAuthor = activePrInfo.isWaitingForAuthor;
         item.activeThreadCount = activePrInfo.activeThreadCount;
         item.unresolvedCommentCount = activePrInfo.unresolvedCommentCount;
+        item.resolvedThreadCount = activePrInfo.resolvedThreadCount;
         await reconcileObservedPr(item, item.pullRequestId);
       }
 
@@ -653,6 +661,9 @@ async function enrichTaskFeedItemsWithPrStatus({
             entry.item.isWaitingForAuthor = !!status.isWaitingForAuthor;
             if (status.activeThreadCount !== undefined) {
               entry.item.activeThreadCount = status.activeThreadCount;
+            }
+            if (status.resolvedThreadCount !== undefined) {
+              entry.item.resolvedThreadCount = status.resolvedThreadCount;
             }
             await reconcileObservedPr(entry.item, entry.linkedPr.prId);
             if (status.url) {

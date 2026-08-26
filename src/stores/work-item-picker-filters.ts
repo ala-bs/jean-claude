@@ -1,6 +1,6 @@
-import { useCallback } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useCallback } from 'react';
 
 /**
  * Persists the work item picker's iteration filter per app project, shared by

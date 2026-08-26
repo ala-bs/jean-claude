@@ -136,29 +136,6 @@ function getEventLabel(event: WorkActivityEvent) {
   return formatEventType(event.type);
 }
 
-function formatCompactMarkdown(events: WorkActivityEvent[]) {
-  const grouped = groupWorkActivityEvents(events);
-  if (grouped.length === 0) return 'No work activity recorded.';
-
-  return grouped
-    .map((day) => {
-      const lines = [`## ${formatDay(day.date)}`];
-      for (const project of day.projects) {
-        lines.push(`- ${project.projectName ?? 'Unknown project'}`);
-        for (const workItem of project.workItems) {
-          const eventSummary = workItem.events
-            .map((event) => formatEventType(event.type))
-            .join(', ');
-          lines.push(
-            `  - ${getWorkItemLabel(workItem.workItemId)}: ${eventSummary}`,
-          );
-        }
-      }
-      return lines.join('\n');
-    })
-    .join('\n\n');
-}
-
 function hashString(value: string) {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -467,9 +444,7 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
   const addToast = useToastStore((state) => state.addToast);
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [dayCopied, setDayCopied] = useState(false);
-  const [rawCopied, setRawCopied] = useState(false);
   const [isEureciaDialogOpen, setIsEureciaDialogOpen] = useState(false);
   const [previewWorkItem, setPreviewWorkItem] = useState<{
     id: string;
@@ -625,28 +600,6 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
     { layer },
   );
 
-  async function copyTimesheet() {
-    try {
-      await navigator.clipboard.writeText(formatCompactMarkdown(events));
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1400);
-      addToast({ type: 'success', message: 'Timesheet copied to clipboard' });
-    } catch {
-      addToast({ type: 'error', message: 'Failed to copy timesheet' });
-    }
-  }
-
-  async function copyRawJson() {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(events, null, 2));
-      setRawCopied(true);
-      window.setTimeout(() => setRawCopied(false), 1400);
-      addToast({ type: 'success', message: 'Raw activity JSON copied' });
-    } catch {
-      addToast({ type: 'error', message: 'Failed to copy raw JSON' });
-    }
-  }
-
   async function copySelectedDay() {
     if (!selectedSummary) return;
 
@@ -742,29 +695,11 @@ export function WorkActivityOverlay({ onClose }: { onClose: () => void }) {
 
             <button
               type="button"
-              onClick={copyTimesheet}
-              disabled={events.length === 0}
-              className="bg-status-azure text-bg-0 inline-flex h-[38px] items-center gap-2 rounded-[10px] border border-status-azure px-4 text-[13px] font-semibold shadow-[0_8px_24px_-10px_var(--color-status-azure)] transition-colors hover:bg-status-azure/90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              {copied ? 'Copied' : 'Copy timesheet'}
-            </button>
-            <button
-              type="button"
               onClick={() => setIsEureciaDialogOpen(true)}
               className="border-status-warning/45 bg-status-warning/10 text-status-warning hover:bg-status-warning/15 inline-flex h-[38px] items-center gap-2 rounded-[10px] border px-4 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
             >
               <CalendarClock className="h-4 w-4" />
               Eurecia
-            </button>
-            <button
-              type="button"
-              onClick={copyRawJson}
-              disabled={events.length === 0}
-              className="border-line bg-glass-light text-ink-1 hover:bg-glass-medium inline-flex h-[38px] items-center gap-2 rounded-[10px] border px-4 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {rawCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              JSON
             </button>
             <IconButton
               variant="ghost"

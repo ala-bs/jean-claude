@@ -1,14 +1,14 @@
 import {
+  formatCpuPercentValue,
+  splitResourceBytes,
+} from '@/lib/format-resource-usage';
+import {
   MAX_MEMORY_USAGE_SAMPLES,
   type MemoryUsageSample,
   useMemoryUsage,
 } from '@/hooks/use-memory-usage';
 import { Sparkline } from '@/common/ui/sparkline';
 import { Tooltip } from '@/common/ui/tooltip';
-import {
-  formatCpuPercentValue,
-  splitResourceBytes,
-} from '@/lib/format-resource-usage';
 import { useOverlaysStore } from '@/stores/overlays';
 import { useState } from 'react';
 

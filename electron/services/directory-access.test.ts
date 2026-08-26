@@ -216,6 +216,32 @@ describe('directory access', () => {
     }
   });
 
+  it('lets a later rule revoke an earlier allow for the same directory', () => {
+    const temporaryDirectory = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'jc-directory-access-'),
+    );
+    const canonicalDirectory = fs.realpathSync.native(temporaryDirectory);
+    const pattern = toDirectoryPermissionPattern(canonicalDirectory);
+
+    try {
+      // Last match wins: a project `allow` overridden by a session `ask`.
+      expect(
+        getAllowedDirectories([
+          { tool: 'external_directory', pattern, action: 'allow' },
+          { tool: 'external_directory', pattern, action: 'ask' },
+        ]),
+      ).toEqual([]);
+      expect(
+        getAllowedDirectories([
+          { tool: 'external_directory', pattern, action: 'deny' },
+          { tool: 'external_directory', pattern, action: 'allow' },
+        ]),
+      ).toEqual([canonicalDirectory]);
+    } finally {
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('drops persisted directories whose canonical identity changed', () => {
     const temporaryDirectory = fs.mkdtempSync(
       path.join(os.tmpdir(), 'jc-directory-access-'),

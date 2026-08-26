@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 
-import type { FeedItem } from '@shared/feed-types';
 import type { AzureDevOpsPolicyEvaluation } from '@shared/azure-devops-types';
+import type { FeedItem } from '@shared/feed-types';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@/common/ui/dropdown', () => ({
@@ -104,6 +104,24 @@ describe('FeedItemCard PR workspace badge', () => {
 
     await act(() => root.render(<FeedItemCard item={item('agent')} />));
     expect(container.querySelector('[aria-label="PR Workspace"]')).toBeNull();
+  });
+
+  it('shows a Draft badge for pr-review tasks whose PR is a draft', async () => {
+    await act(() =>
+      root.render(
+        <FeedItemCard item={{ ...item('pr-review'), isDraft: true }} />,
+      ),
+    );
+    expect(container.querySelector('[aria-label="Draft"]')?.textContent).toBe(
+      'Draft',
+    );
+
+    await act(() =>
+      root.render(
+        <FeedItemCard item={{ ...item('pr-review'), isDraft: false }} />,
+      ),
+    );
+    expect(container.querySelector('[aria-label="Draft"]')).toBeNull();
   });
 });
 

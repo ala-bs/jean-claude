@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import type { PreviewDerived, PreviewFacts } from './utils-setup-model';
+import { baseDerived, baseFacts } from './utils-preview-fixtures';
 import {
   getSetupStepAction,
   type PreviewActionFacts,
   type PreviewStepAction,
 } from './utils-setup-step-actions';
-import { baseDerived, baseFacts } from './utils-preview-fixtures';
+import type { PreviewDerived, PreviewFacts } from './utils-setup-model';
 
 const baseActionFacts: PreviewActionFacts = {
   dependenciesInstallStarting: false,

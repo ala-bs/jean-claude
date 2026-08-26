@@ -425,6 +425,7 @@ describe('getTaskFeedItems', () => {
             mergeStatus: 'succeeded',
             approvedBy: [],
             activeThreadCount: 2,
+            resolvedThreadCount: 5,
             url: 'https://example.com/pr/12',
           },
         ],
@@ -436,6 +437,7 @@ describe('getTaskFeedItems', () => {
         taskId: 'task-1',
         workItemPrStatus: 'active',
         activeThreadCount: 2,
+        resolvedThreadCount: 5,
       }),
     ]);
   });

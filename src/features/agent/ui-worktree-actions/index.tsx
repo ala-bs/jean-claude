@@ -30,8 +30,8 @@ import {
 } from '@/hooks/use-worktree-diff';
 import { BranchSelect } from '@/common/ui/branch-select';
 import { Button } from '@/common/ui/button';
-import { Kbd } from '@/common/ui/kbd';
 import { formatKeyForDisplay } from '@/common/context/keyboard-bindings/utils';
+import { Kbd } from '@/common/ui/kbd';
 import { useAiSkillSlotsSetting } from '@/hooks/use-settings';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useProject } from '@/hooks/use-projects';

@@ -24,8 +24,10 @@ import { FileDiffContent } from '@/features/common/ui-file-diff';
 import { IconButton } from '@/common/ui/icon-button';
 import { normalizeWorktreeStatus } from '@/features/common/ui-file-diff/types';
 import { Separator } from '@/common/ui/separator';
+import { SpreadsheetViewer } from '@/features/common/ui-spreadsheet-viewer';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useInvalidateDirectoryListings } from '@/hooks/use-directory-listing';
+import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 import { useTaskRootPath } from '@/hooks/use-task-root-path';
 
 
@@ -409,6 +411,9 @@ function ExplorerDiffViewer({
       isBinary={data?.isBinary}
       oldImageDataUrl={data?.oldImageDataUrl}
       newImageDataUrl={data?.newImageDataUrl}
+      oldSpreadsheetBase64={data?.oldSpreadsheetBase64}
+      newSpreadsheetBase64={data?.newSpreadsheetBase64}
+      spreadsheetTooLarge={data?.spreadsheetTooLarge}
     />
   );
 }
@@ -416,13 +421,14 @@ function ExplorerDiffViewer({
 function ExplorerFileViewer({ filePath }: { filePath: string }) {
   const isSvg = isSvgPath(filePath);
   const isImage = isImagePath(filePath) && !isSvg;
+  const spreadsheet = useSpreadsheetFile(filePath);
 
   const { data, isLoading } = useQuery({
     queryKey: ['file-content', filePath],
     queryFn: () => api.fs.readFile(filePath),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
-    enabled: !isImage,
+    enabled: !isImage && !spreadsheet.isSpreadsheet,
   });
 
   const { data: imageDataUrl, isLoading: isImageLoading } = useQuery({
@@ -432,6 +438,28 @@ function ExplorerFileViewer({ filePath }: { filePath: string }) {
     refetchOnWindowFocus: false,
     enabled: isImage || isSvg,
   });
+
+  if (spreadsheet.isSpreadsheet) {
+    if (spreadsheet.isLoading) {
+      return (
+        <div className="text-ink-3 flex flex-1 items-center justify-center text-sm">
+          Loading...
+        </div>
+      );
+    }
+
+    if (!spreadsheet.base64) {
+      return (
+        <div className="text-ink-3 flex flex-1 items-center justify-center text-sm">
+          Unable to read spreadsheet
+        </div>
+      );
+    }
+
+    return (
+      <SpreadsheetViewer newBase64={spreadsheet.base64} className="flex-1" />
+    );
+  }
 
   if (isSvg) {
     if (isLoading || isImageLoading) {

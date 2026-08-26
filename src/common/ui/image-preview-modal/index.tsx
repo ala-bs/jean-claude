@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import {
   KeyboardLayerProvider,
