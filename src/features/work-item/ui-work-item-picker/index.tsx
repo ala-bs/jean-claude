@@ -22,6 +22,7 @@ import type { AzureDevOpsWorkItem } from '@/lib/api';
 import { EMPTY_BOARD_COLUMNS } from '@/features/work-item/ui-work-item-board';
 import { Select } from '@/common/ui/select';
 import type { SelectOption } from '@/common/ui/select';
+import { useRegisterKeyboardBindings } from '@/common/context/keyboard-bindings';
 import { WorkItemBoard } from '@/features/work-item/ui-work-item-board';
 import { WorkItemList } from '@/features/work-item/ui-work-item-list';
 import { WorkItemPreview } from '@/features/work-item/ui-work-item-preview';
@@ -281,24 +282,18 @@ export function WorkItemPicker({
     return null;
   }, [highlightedId, filteredWorkItems, selectedWorkItemIds]);
 
-  const handleHighlight = useCallback(
-    (workItem: AzureDevOpsWorkItem) => {
-      const id = workItem.id.toString();
-      startTransition(() => {
-        setHighlightedId(id);
-      });
-      onHighlightChange?.(id);
-    },
-    [onHighlightChange],
-  );
+  const handleHighlight = useCallback((workItem: AzureDevOpsWorkItem) => {
+    startTransition(() => {
+      setHighlightedId(workItem.id.toString());
+    });
+  }, []);
 
   useEffect(() => {
     if (!exactMatchWorkItemId) return;
     startTransition(() => {
       setHighlightedId(exactMatchWorkItemId);
     });
-    onHighlightChange?.(exactMatchWorkItemId);
-  }, [exactMatchWorkItemId, onHighlightChange]);
+  }, [exactMatchWorkItemId]);
 
   useEffect(() => {
     if (!highlightedId) return;
@@ -309,8 +304,25 @@ export function WorkItemPicker({
     startTransition(() => {
       setHighlightedId(null);
     });
-    onHighlightChange?.(null);
-  }, [filteredWorkItems, highlightedId, onHighlightChange]);
+  }, [filteredWorkItems, highlightedId]);
+
+  // Report the *resolved* highlight (which falls back to the first selected
+  // item) so consumers stay in sync with what the details panel shows.
+  useEffect(() => {
+    onHighlightChange?.(highlightedWorkItem?.id.toString() ?? null);
+  }, [highlightedWorkItem, onHighlightChange]);
+
+  const handleOpenInBrowser = useCallback(() => {
+    if (!highlightedWorkItem?.url) return false;
+    window.open(highlightedWorkItem.url, '_blank', 'noopener,noreferrer');
+    return true;
+  }, [highlightedWorkItem]);
+
+  // Own the shortcut here so the button and the chord share one code path and
+  // act on the same work item object the details panel is rendering.
+  useRegisterKeyboardBindings('work-item-picker', {
+    'cmd+shift+o': () => handleOpenInBrowser(),
+  });
 
   // Resizable panel (controlled or uncontrolled)
   const [internalPanelWidth, setInternalPanelWidth] = useState(65);
@@ -533,6 +545,9 @@ export function WorkItemPicker({
           projectId={appProjectId}
           providerId={providerId}
           projectName={projectName}
+          onOpenInBrowser={
+            highlightedWorkItem?.url ? handleOpenInBrowser : undefined
+          }
         />
       </div>
     </div>
