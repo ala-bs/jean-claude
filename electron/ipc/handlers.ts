@@ -5342,6 +5342,29 @@ export function registerIpcHandlers() {
   );
 
   // Debug
+  // Renderer-forwarded debug logs. Everything arriving here is untrusted: the
+  // TypeScript annotation describes intent, not what actually crosses IPC.
+  // Clamp lengths (entries are broadcast to every window and retained in the
+  // renderer log store) and never let a bad payload reject the caller.
+  ipcMain.handle(
+    'debug:log',
+    (_, params: { scope: string; message: string; data?: unknown }) => {
+      const clamp = (value: unknown, max: number) =>
+        String(value ?? '').slice(0, max);
+      let data = '';
+      if (params?.data !== undefined) {
+        try {
+          data = JSON.stringify(params.data)?.slice(0, 2000) ?? '';
+        } catch {
+          // Circular or non-serializable payload; the scope/message still help.
+          data = '[unserializable]';
+        }
+      }
+      // Format-string placeholders keep renderer input out of the format
+      // directive itself, so a `%j` in the message stays literal text.
+      dbg.renderer('%s %s %s', clamp(params?.scope, 64), clamp(params?.message, 200), data);
+    },
+  );
   ipcMain.handle('debug:getTableNames', () => DebugRepository.getTableNames());
   ipcMain.handle('debug:getDatabaseSize', () =>
     DebugRepository.getDatabaseSize(),

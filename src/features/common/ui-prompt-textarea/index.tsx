@@ -43,14 +43,13 @@ import {
   type PreparedProjectFeatures,
   prepareProjectFeatureReferences,
 } from '@/lib/prompt-feature-context';
+import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import {
-  MAX_FILES,
   processAttachmentFile,
   processAttachmentPath,
   processPastedPromptAttachment,
   shouldAttachPastedPromptContent,
 } from '@/lib/file-attachment-utils';
-import { MAX_IMAGES, processImageFile } from '@/lib/image-utils';
 import type { ProjectFeatureMap, PromptSnippet } from '@shared/types';
 import type {
   PromptFilePart,
@@ -1113,11 +1112,6 @@ export const PromptTextarea = forwardRef<
         projectRoot
       ) {
         e.preventDefault();
-        const currentFileCount = files?.length ?? 0;
-        if (currentFileCount >= MAX_FILES) {
-          showImageError('Remove a file before attaching pasted content');
-          return;
-        }
 
         void processPastedPromptAttachment(
           pastedText,
@@ -1171,7 +1165,6 @@ export const PromptTextarea = forwardRef<
       showImageError,
       onFileAttach,
       projectRoot,
-      files,
       value,
       onChange,
       dismiss,
@@ -1226,12 +1219,10 @@ export const PromptTextarea = forwardRef<
 
       // Handle non-image files
       if (onFileAttach && projectRoot) {
-        const currentFileCount = files?.length ?? 0;
-        const allowedFiles = MAX_FILES - currentFileCount;
         const nonImageFiles = droppedFiles.filter(
           (f) => !f.type.startsWith('image/'),
         );
-        for (const file of nonImageFiles.slice(0, allowedFiles)) {
+        for (const file of nonImageFiles) {
           void processAttachmentFile(
             file,
             projectRoot,
@@ -1241,7 +1232,7 @@ export const PromptTextarea = forwardRef<
         }
       }
     },
-    [onImageAttach, onFileAttach, images, files, projectRoot, showImageError],
+    [onImageAttach, onFileAttach, images, projectRoot, showImageError],
   );
 
   const handleFileSelect = useCallback(
@@ -1270,14 +1261,10 @@ export const PromptTextarea = forwardRef<
   const handleOpenFilePicker = useCallback(async () => {
     if (!onFileAttach || !projectRoot) return;
 
-    const currentFileCount = files?.length ?? 0;
-    const allowedFiles = MAX_FILES - currentFileCount;
-    if (allowedFiles <= 0) return;
-
     const selectedPaths = await window.api.dialog.openFiles();
     if (!selectedPaths) return;
 
-    for (const sourcePath of selectedPaths.slice(0, allowedFiles)) {
+    for (const sourcePath of selectedPaths) {
       void processAttachmentPath(
         sourcePath,
         projectRoot,
@@ -1285,7 +1272,7 @@ export const PromptTextarea = forwardRef<
         showImageError,
       );
     }
-  }, [onFileAttach, files, projectRoot, showImageError]);
+  }, [onFileAttach, projectRoot, showImageError]);
 
   const handleFileCreate = useCallback(
     async (filename: string, content: string) => {
@@ -1863,7 +1850,7 @@ function FileThumbnails({
   onFileRemove?: (index: number) => void;
 }) {
   return (
-    <div className="mt-2 flex flex-wrap gap-2">
+    <div className="mt-2 flex max-h-24 flex-wrap gap-2 overflow-y-auto">
       {files.map((file, index) => (
         <div
           key={`${file.filename}-${index}`}

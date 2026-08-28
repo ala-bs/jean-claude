@@ -16,9 +16,12 @@ import { ProjectRepository } from '../database/repositories/projects';
 import { TaskRepository } from '../database/repositories/tasks';
 
 import {
+  assertSafeToRawDelete,
+  canonicalizeWorktreePath as canonicalize,
   cleanupMissingWorktree,
   cleanupWorktree,
-  getWorktreesBaseDir,
+  segmentsBelowWorktreesBase as segmentsBelowBase,
+  WORKTREE_DEPTH_BELOW_BASE,
 } from './worktree-service';
 
 const execFileAsync = promisify(execFile) as (
@@ -44,56 +47,8 @@ const NON_WORKTREE_ENTRIES = new Set(['.project-id', '.DS_Store']);
 /** Branch prefix owned by Jean-Claude — only these branches get deleted */
 const MANAGED_BRANCH_PREFIX = 'jean-claude/';
 
-/**
- * Depth below ~/.jean-claude/worktrees that a directory must sit at before we
- * will `rm -rf` it: <base>/<project>/<worktree>. This is what stops a project
- * whose worktreesPath was mis-pointed at the base itself from turning every
- * *other* project's folder into a deletion candidate.
- */
-const WORKTREE_DEPTH_BELOW_BASE = 2;
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Resolves a path through symlinks so comparisons against git's canonical
- * worktree paths (always real paths) succeed on macOS (/var -> /private/var).
- * Returns null when the path cannot be resolved.
- */
-async function canonicalize(target: string): Promise<string | null> {
-  try {
-    return await fs.realpath(target);
-  } catch {
-    return null;
-  }
-}
-
-/** Path segments of `target` relative to the worktrees base, or null if outside it. */
-async function segmentsBelowBase(target: string): Promise<string[] | null> {
-  const base = (await canonicalize(getWorktreesBaseDir())) ?? getWorktreesBaseDir();
-  const resolved = (await canonicalize(target)) ?? path.resolve(target);
-  if (resolved === base) return [];
-  if (!resolved.startsWith(base + path.sep)) return null;
-  return resolved.slice(base.length + path.sep.length).split(path.sep);
-}
-
-/**
- * Guards raw recursive deletion. Only directories that sit exactly where
- * Jean-Claude puts worktrees may be removed without git's involvement.
- */
-async function assertSafeToRawDelete(target: string): Promise<void> {
-  const segments = await segmentsBelowBase(target);
-  if (segments === null) {
-    throw new Error(
-      `Refusing to delete "${target}" — it is not under "${getWorktreesBaseDir()}"`,
-    );
-  }
-  if (segments.length < WORKTREE_DEPTH_BELOW_BASE) {
-    throw new Error(
-      `Refusing to delete "${target}" — expected a <base>/<project>/<worktree> path, got depth ${segments.length}`,
-    );
-  }
 }
 
 /**

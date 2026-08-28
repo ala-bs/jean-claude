@@ -636,17 +636,17 @@ export function RunningCommandsOverlay({ onClose }: { onClose: () => void }) {
                             }}
                             className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2 text-left disabled:opacity-60"
                           >
-                            {isStarting ? (
-                              <Loader2 className="text-ink-4 mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
-                            ) : (
-                              <Play
+                            {isStarting || favorite.isRunning ? (
+                              <Loader2
                                 className={clsx(
-                                  'mt-0.5 h-3.5 w-3.5 shrink-0',
+                                  'mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin',
                                   favorite.isRunning
                                     ? 'text-status-done'
                                     : 'text-ink-4',
                                 )}
                               />
+                            ) : (
+                              <Play className="text-ink-4 mt-0.5 h-3.5 w-3.5 shrink-0" />
                             )}
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-xs font-medium">

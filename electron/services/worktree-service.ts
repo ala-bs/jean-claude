@@ -127,25 +127,6 @@ async function getIgnoredCommitPaths({
   return { ignoredPaths, ignoredStagedPaths };
 }
 
-async function getStatusPaths(worktreePath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync(
-    'git',
-    ['status', '--porcelain', '-z', '--untracked-files=all'],
-    { cwd: worktreePath, encoding: 'utf-8' },
-  );
-  const entries = stdout.split('\0').filter(Boolean);
-  const paths: string[] = [];
-
-  for (let i = 0; i < entries.length; i += 1) {
-    const entry = entries[i];
-    const status = entry.slice(0, 2);
-    paths.push(entry.slice(3));
-    if (status[0] === 'R' || status[0] === 'C') i += 1;
-  }
-
-  return paths;
-}
-
 async function runGitPathCommand({
   worktreePath,
   args,
@@ -161,6 +142,47 @@ async function runGitPathCommand({
       encoding: 'utf-8',
     });
   }
+}
+
+/**
+ * Stages every change in the repository except `excludedPaths`.
+ *
+ * Uses a broad `:/` pathspec narrowed by `:(exclude)` pathspecs rather than
+ * listing the included paths. Naming a path explicitly makes `git add` fail
+ * hard when that path is matched by a .gitignore rule but still appears in
+ * `git status` (e.g. a tracked file that was `git rm --cached`-ed while
+ * staying on disk); a broad pathspec lets git apply .gitignore itself.
+ *
+ * The pathspecs go over stdin because they cannot be chunked -- an exclude
+ * only narrows the pathspec it is passed alongside -- and a large ignore list
+ * would otherwise overflow ARG_MAX.
+ *
+ * `:/` and the `top` magic keep every pathspec relative to the repository
+ * root, matching the repo-root-relative paths that `git status` reports, so
+ * this stays correct even if `worktreePath` is a subdirectory of the repo.
+ */
+async function gitAddAllExcept({
+  worktreePath,
+  excludedPaths,
+}: {
+  worktreePath: string;
+  excludedPaths: Set<string>;
+}): Promise<void> {
+  const pathspecs = [
+    ':/',
+    ...[...excludedPaths].map((p) => `:(exclude,literal,top)${p}`),
+  ];
+
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(
+      'git',
+      ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
+      { cwd: worktreePath, encoding: 'utf-8' },
+      (error) => (error ? reject(error) : resolve()),
+    );
+    child.stdin?.on('error', reject);
+    child.stdin?.end(pathspecs.join('\0'));
+  });
 }
 
 async function hasStagedChanges(worktreePath: string): Promise<boolean> {
@@ -255,6 +277,61 @@ export function generateWorktreeName(prompt: string): string {
 export function getWorktreesBaseDir(): string {
   const homeDir = app.getPath('home');
   return path.join(homeDir, '.jean-claude', 'worktrees');
+}
+
+/**
+ * Depth below ~/.jean-claude/worktrees that a directory must sit at before we
+ * will `rm -rf` it: <base>/<project>/<worktree>. This is what stops a project
+ * whose worktreesPath was mis-pointed at the base itself from turning every
+ * *other* project's folder into a deletion candidate.
+ */
+export const WORKTREE_DEPTH_BELOW_BASE = 2;
+
+/**
+ * Resolves a path through symlinks so comparisons against git's canonical
+ * worktree paths (always real paths) succeed on macOS (/var -> /private/var).
+ * Returns null when the path cannot be resolved.
+ */
+export async function canonicalizeWorktreePath(
+  target: string,
+): Promise<string | null> {
+  try {
+    return await fs.realpath(target);
+  } catch {
+    return null;
+  }
+}
+
+/** Path segments of `target` relative to the worktrees base, or null if outside it. */
+export async function segmentsBelowWorktreesBase(
+  target: string,
+): Promise<string[] | null> {
+  const base =
+    (await canonicalizeWorktreePath(getWorktreesBaseDir())) ??
+    getWorktreesBaseDir();
+  const resolved =
+    (await canonicalizeWorktreePath(target)) ?? path.resolve(target);
+  if (resolved === base) return [];
+  if (!resolved.startsWith(base + path.sep)) return null;
+  return resolved.slice(base.length + path.sep.length).split(path.sep);
+}
+
+/**
+ * Guards raw recursive deletion. Only directories that sit exactly where
+ * Jean-Claude puts worktrees may be removed without git's involvement.
+ */
+export async function assertSafeToRawDelete(target: string): Promise<void> {
+  const segments = await segmentsBelowWorktreesBase(target);
+  if (segments === null) {
+    throw new Error(
+      `Refusing to delete "${target}" — it is not under "${getWorktreesBaseDir()}"`,
+    );
+  }
+  if (segments.length < WORKTREE_DEPTH_BELOW_BASE) {
+    throw new Error(
+      `Refusing to delete "${target}" — expected a <base>/<project>/<worktree> path, got depth ${segments.length}`,
+    );
+  }
 }
 
 /**
@@ -1699,23 +1776,13 @@ export async function commitWorktreeChanges(
         worktreePath,
         projectPath,
       });
-      const paths = await getStatusPaths(worktreePath);
-      const includedPaths = paths.filter(
-        (filePath) => !ignoredPaths.has(filePath),
-      );
-
-      dbg.worktree(
-        'Staging %d changes, skipping %d ignored paths',
-        includedPaths.length,
-        ignoredPaths.size,
-      );
-      if (includedPaths.length > 0) {
-        await runGitPathCommand({
-          worktreePath,
-          args: ['add', '-A'],
-          paths: includedPaths,
-        });
-      }
+      // Stage the whole worktree and subtract the commit-ignored paths with
+      // exclude pathspecs. Enumerating the included paths explicitly instead
+      // makes `git add` hard-fail when any of them is matched by a .gitignore
+      // rule but still shows up in `git status` (e.g. a tracked file that was
+      // `git rm --cached`-ed while remaining on disk).
+      dbg.worktree('Staging worktree, excluding %d paths', ignoredPaths.size);
+      await gitAddAllExcept({ worktreePath, excludedPaths: ignoredPaths });
       if (ignoredStagedPaths.size > 0) {
         await runGitPathCommand({
           worktreePath,
@@ -1796,6 +1863,41 @@ function getExecErrorMessage(error: unknown): string {
 
 export type WorktreeBranchCleanupBehavior = 'delete' | 'keep';
 
+/**
+ * Looks up a worktree in `git worktree list` for the given project.
+ * Returns `null` when git no longer tracks that path (e.g. it was pruned and
+ * only a stale directory is left on disk).
+ */
+async function findRegisteredWorktree(params: {
+  projectPath: string;
+  worktreePath: string;
+}): Promise<{ path?: string; branch?: string } | null> {
+  const { projectPath, worktreePath } = params;
+  const { stdout } = await execAsync('git worktree list --porcelain', {
+    cwd: projectPath,
+    encoding: 'utf-8',
+  });
+  const canonicalWorktreePath = path.join(
+    await fs.realpath(path.dirname(worktreePath)),
+    path.basename(worktreePath),
+  );
+  return (
+    stdout
+      .trim()
+      .split(/\n\s*\n/)
+      .map((block) => {
+        const lines = block.split('\n');
+        return {
+          path: lines.find((line) => line.startsWith('worktree '))?.slice(9),
+          branch: lines
+            .find((line) => line.startsWith('branch refs/heads/'))
+            ?.slice('branch refs/heads/'.length),
+        };
+      })
+      .find((entry) => entry.path === canonicalWorktreePath) ?? null
+  );
+}
+
 export interface CleanupWorktreeParams {
   worktreePath: string;
   projectPath: string;
@@ -1804,6 +1906,38 @@ export interface CleanupWorktreeParams {
   branchCleanup?: WorktreeBranchCleanupBehavior;
   force?: boolean;
   onVerified?: () => void | Promise<void>;
+}
+
+/**
+ * True when `worktreePath` is a leftover directory that git no longer tracks:
+ * running git inside it fails AND it is absent from `git worktree list`.
+ * Fails closed (returns false) whenever either probe is inconclusive, so a
+ * transient git failure can never be mistaken for an orphan.
+ */
+async function isOrphanedWorktree(params: {
+  worktreePath: string;
+  projectPath: string;
+}): Promise<boolean> {
+  const { worktreePath, projectPath } = params;
+  try {
+    await execAsync('git rev-parse --git-dir', {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+    });
+    return false;
+  } catch {
+    // Falls through: git is unusable inside the directory.
+  }
+  try {
+    return (await findRegisteredWorktree({ projectPath, worktreePath })) === null;
+  } catch (error) {
+    dbg.worktree(
+      'Failed to list worktrees while diagnosing %s: %O',
+      worktreePath,
+      error,
+    );
+    return false;
+  }
 }
 
 /**
@@ -1823,6 +1957,52 @@ export async function cleanupWorktree(
   } = params;
 
   if (!(await pathExists(worktreePath))) {
+    return;
+  }
+
+  // An orphaned worktree — directory still on disk, but git pruned its admin
+  // dir — fails every git command run inside it (`fatal: not a git
+  // repository`). Detect that up front, otherwise both the uncommitted-changes
+  // check and the branch verification below turn a recoverable state into a
+  // permanent failure that blocks task completion forever.
+  if (await isOrphanedWorktree({ worktreePath, projectPath })) {
+    if (skipIfChanges) {
+      // Git cannot tell us whether the directory holds uncommitted work, and
+      // the caller asked us to preserve it if so. Leave it for the explicit
+      // "Unused worktrees" cleanup rather than guessing.
+      dbg.worktree(
+        'Worktree %s is orphaned; skipping cleanup because unverifiable changes may exist',
+        worktreePath,
+      );
+      return;
+    }
+
+    const persisted = branchName?.trim() || null;
+    if (branchCleanup === 'delete' && !persisted) {
+      throw new Error(
+        'Cannot delete worktree branch without persisted branch metadata',
+      );
+    }
+
+    dbg.worktree(
+      'Worktree %s is orphaned (unregistered, missing git admin dir); removing directory directly',
+      worktreePath,
+    );
+    if (branchCleanup === 'delete') await onVerified?.();
+    // git will not remove a directory it no longer tracks, so this is a raw
+    // delete — gate it on the path actually being a Jean-Claude worktree.
+    await assertSafeToRawDelete(worktreePath);
+    await fs.rm(worktreePath, { force: true, recursive: true });
+    await cleanupMissingWorktree({
+      worktreePath,
+      projectPath,
+      branchName: persisted ?? '',
+      allowUnregistered: true,
+      // Deleting the branch is best-effort here; the blocking problem (the
+      // stale directory) is already resolved and must not be re-reported.
+      throwOnError: false,
+      skipBranchDelete: branchCleanup !== 'delete',
+    });
     return;
   }
 
@@ -1857,6 +2037,8 @@ export async function cleanupWorktree(
     worktreeBranch = stdout.trim();
   } catch (error) {
     if (branchCleanup === 'delete') {
+      // Still a registered worktree, so this is genuine corruption rather than
+      // an orphan (handled above) — refuse to guess at the branch.
       // Error `cause` is dropped by Electron IPC serialization, so the git
       // output has to be inlined in the message to reach the renderer.
       throw new Error(
@@ -1908,6 +2090,8 @@ export async function cleanupMissingWorktree(params: {
   branchName: string;
   throwOnError?: boolean;
   allowUnregistered?: boolean;
+  /** Prune the stale worktree entry but leave the branch in place. */
+  skipBranchDelete?: boolean;
   onVerified?: () => void | Promise<void>;
 }): Promise<void> {
   const {
@@ -1916,6 +2100,7 @@ export async function cleanupMissingWorktree(params: {
     branchName,
     throwOnError = false,
     allowUnregistered = false,
+    skipBranchDelete = false,
     onVerified,
   } = params;
 
@@ -1923,27 +2108,10 @@ export async function cleanupMissingWorktree(params: {
     if (!worktreePath) {
       throw new Error('Cannot verify missing worktree branch without its path');
     }
-    const { stdout } = await execAsync('git worktree list --porcelain', {
-      cwd: projectPath,
-      encoding: 'utf-8',
+    const registered = await findRegisteredWorktree({
+      projectPath,
+      worktreePath,
     });
-    const canonicalWorktreePath = path.join(
-      await fs.realpath(path.dirname(worktreePath)),
-      path.basename(worktreePath),
-    );
-    const registered = stdout
-      .trim()
-      .split(/\n\s*\n/)
-      .map((block) => {
-        const lines = block.split('\n');
-        return {
-          path: lines.find((line) => line.startsWith('worktree '))?.slice(9),
-          branch: lines
-            .find((line) => line.startsWith('branch refs/heads/'))
-            ?.slice('branch refs/heads/'.length),
-        };
-      })
-      .find((entry) => entry.path === canonicalWorktreePath);
     if (
       (registered && registered.branch !== branchName) ||
       (!registered && !allowUnregistered)
@@ -1970,6 +2138,8 @@ export async function cleanupMissingWorktree(params: {
     dbg.worktree('Failed to prune worktrees in %s: %O', projectPath, error);
     if (throwOnError) throw error;
   }
+
+  if (skipBranchDelete) return;
 
   // Delete the orphaned branch
   try {

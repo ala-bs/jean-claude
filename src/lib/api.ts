@@ -1603,6 +1603,11 @@ export interface Api {
     ) => UnsubscribeFn;
   };
   debug: {
+    log: (params: {
+      scope: string;
+      message: string;
+      data?: unknown;
+    }) => Promise<void>;
     getTableNames: () => Promise<string[]>;
     getDatabaseSize: () => Promise<DebugDatabaseSizeResult>;
     countOldCompletedTasks: () => Promise<OldCompletedTasksCountResult>;
@@ -2786,6 +2791,7 @@ export const api: Api = hasWindowApi
         onSession: () => () => {},
       },
       debug: {
+        log: async () => {},
         getTableNames: async () => [],
         getDatabaseSize: async () => ({
           bytes: 0,

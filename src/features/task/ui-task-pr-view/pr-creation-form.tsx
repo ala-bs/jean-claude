@@ -38,6 +38,7 @@ import {
   getPromptImageMarkdownSize,
   markdownImagePlaceholderPattern,
   replaceMarkdownImageUrl,
+  stripUnresolvedImagePlaceholders,
 } from '@/lib/markdown-image-size';
 import { Input } from '@/common/ui/input';
 import { invalidateFeedResource } from '@/cache/feed-cache';
@@ -60,6 +61,21 @@ type StagedPrImage = PromptImagePart & { placeholderMarkdown: string };
 
 function placeholderPattern(placeholderMarkdown: string) {
   return markdownImagePlaceholderPattern(placeholderMarkdown);
+}
+
+/**
+ * Fire-and-forget diagnostics for the two-phase PR image upload.
+ *
+ * Deliberately defensive: this runs on the critical PR-creation path, so a
+ * missing `api.debug` (older mocks, non-Electron contexts) or a rejected
+ * invoke must never take the user's PR down with it.
+ */
+function debugLog(params: { message: string; data?: unknown }) {
+  try {
+    void api.debug?.log?.({ scope: '[pr-create]', ...params })?.catch?.(() => {});
+  } catch {
+    // Diagnostics only.
+  }
 }
 
 async function readFileAsBase64(file: File): Promise<string> {
@@ -261,10 +277,36 @@ export function PrCreationForm({
     async (files: File[]) => {
       const imageFiles = files.filter((file) => file.type.startsWith('image/'));
       const nextVideoFile = files.find(isVideoFile);
+      const unsupported = files.filter(
+        (file) => !file.type.startsWith('image/') && !isVideoFile(file),
+      );
+      if (unsupported.length > 0) {
+        addToast({
+          type: 'error',
+          message: `Not an image or video, skipped: ${unsupported
+            .map((file) => file.name)
+            .join(', ')}`,
+        });
+      }
       if (imageFiles.length === 0 && !nextVideoFile) return;
 
       const allowed = MAX_IMAGES - stagedImages.length;
-      if (allowed <= 0) return;
+      if (allowed <= 0) {
+        addToast({
+          type: 'error',
+          message: `Attachment limit reached (${MAX_IMAGES}). Remove an image before adding another.`,
+        });
+        return;
+      }
+      if (imageFiles.length > allowed) {
+        addToast({
+          type: 'error',
+          message: `Only ${allowed} more attachment(s) fit (max ${MAX_IMAGES}); skipped: ${imageFiles
+            .slice(allowed)
+            .map((file) => file.name)
+            .join(', ')}`,
+        });
+      }
 
       try {
         await Promise.all(
@@ -289,8 +331,15 @@ export function PrCreationForm({
             );
           }),
         );
-        if (nextVideoFile && allowed > imageFiles.length) {
-          setVideoFile(nextVideoFile);
+        if (nextVideoFile) {
+          if (allowed > imageFiles.length) {
+            setVideoFile(nextVideoFile);
+          } else {
+            addToast({
+              type: 'error',
+              message: `No attachment slot left for "${nextVideoFile.name}" (max ${MAX_IMAGES}).`,
+            });
+          }
         }
       } catch (error) {
         addToast({
@@ -438,9 +487,27 @@ export function PrCreationForm({
       },
       descriptionToCreate,
     );
-    const imageOnlyDescription =
-      descriptionToCreate.trim() !== '' &&
-      descriptionWithoutImagePlaceholders.trim() === '';
+    debugLog({
+      message: 'submit',
+      data: {
+        taskId,
+        stagedImages: imagesToUpload.map((image) => ({
+          filename: image.filename,
+          mimeType: image.mimeType,
+          storageMimeType: image.storageMimeType,
+          dataBytes: image.data?.length ?? 0,
+          storageBytes: image.storageData?.length ?? 0,
+          // The stripped length below already reveals whether each placeholder
+          // matched; logging the markdown itself would leak user alt text.
+          placeholderLength: image.placeholderMarkdown.length,
+        })),
+        descriptionLength: descriptionToCreate.length,
+        strippedLength: descriptionWithoutImagePlaceholders.length,
+        repoProviderId,
+        repoProjectId,
+        repoId,
+      },
+    });
 
     // 1. Create background job
     const jobId = addRunningJob({
@@ -473,17 +540,61 @@ export function PrCreationForm({
         if (imagesToUpload.length > 0) {
           const uploadFailures: string[] = [];
           try {
-            let updatedDescription = descriptionToCreate;
-            if (imageOnlyDescription) {
-              const createdPullRequest =
-                await api.azureDevOps.getPullRequest({
-                  providerId: repoProviderId,
-                  projectId: repoProjectId,
-                  repoId,
+            // Read back what the server actually stored: the backend replaces
+            // an empty description with an AI-generated one, and guessing which
+            // case happened is what silently dropped images.
+            //
+            // This read must never block the uploads that follow. Failing here
+            // and aborting would cost every attachment; falling back to the
+            // local body only risks re-posting text we already authored.
+            let serverDescription: string | null = null;
+            try {
+              const createdPullRequest = await api.azureDevOps.getPullRequest({
+                providerId: repoProviderId,
+                projectId: repoProjectId,
+                repoId,
+                pullRequestId: result.id,
+              });
+              serverDescription = createdPullRequest.description ?? '';
+            } catch (readError) {
+              debugLog({
+                message: 'read-back FAILED, using local description',
+                data: {
                   pullRequestId: result.id,
-                });
-              updatedDescription = createdPullRequest.description ?? '';
+                  error: (readError instanceof Error
+                    ? readError.message
+                    : String(readError)
+                  ).slice(0, 500),
+                },
+              });
             }
+
+            // If the server kept our body, rebase onto the local copy so the
+            // placeholders (and therefore the inline image positions) survive.
+            // Azure round-trips descriptions through JSON and may normalize
+            // line endings, so compare on normalized text.
+            const normalize = (value: string) =>
+              value.replace(/\r\n/g, '\n').trim();
+            const serverKeptOurBody =
+              serverDescription === null ||
+              normalize(serverDescription) ===
+                normalize(descriptionWithoutImagePlaceholders);
+            let updatedDescription =
+              serverKeptOurBody || serverDescription === null
+                ? descriptionToCreate
+                : serverDescription;
+
+            debugLog({
+              message: 'created',
+              data: {
+                pullRequestId: result.id,
+                serverDescriptionLength: serverDescription?.length ?? null,
+                serverKeptOurBody,
+                readBackFailed: serverDescription === null,
+                baseHasPlaceholders: updatedDescription.includes('jc-image://'),
+              },
+            });
+
             for (const image of imagesToUpload) {
               // AVIF storage bytes render broken in Azure DevOps; pick a
               // format the host actually serves (GIF kept for animation).
@@ -510,9 +621,32 @@ export function PrCreationForm({
                   image.placeholderMarkdown,
                   attachment.url,
                 );
-                updatedDescription = pattern?.test(updatedDescription)
-                  ? updatedDescription.replace(pattern, replacement)
-                  : `${updatedDescription}${updatedDescription ? '\n\n' : ''}${replacement}`;
+                let matched = false;
+                if (pattern && pattern.test(updatedDescription)) {
+                  matched = true;
+                  // Defensive: `.test` advanced lastIndex on this global
+                  // regex. `String.replace` already resets it for global
+                  // patterns, but reset explicitly so the invariant does not
+                  // depend on that subtlety.
+                  pattern.lastIndex = 0;
+                  updatedDescription = updatedDescription.replace(
+                    pattern,
+                    replacement,
+                  );
+                } else {
+                  updatedDescription = `${updatedDescription}${updatedDescription ? '\n\n' : ''}${replacement}`;
+                }
+                debugLog({
+                  message: 'uploaded',
+                  data: {
+                    filename: image.filename,
+                    uploadedMimeType: mimeType,
+                    // The URL points at a private repo attachment; log only
+                    // enough to confirm the upload returned something usable.
+                    attachmentUrlLength: attachment.url.length,
+                    placeholderMatched: matched,
+                  },
+                });
               } catch (uploadError) {
                 // Keep going: already-uploaded images should still land in the
                 // description instead of being discarded by one failure.
@@ -521,13 +655,45 @@ export function PrCreationForm({
                   { pullRequestId: result.id, fileName: image.filename },
                   uploadError,
                 );
-                uploadFailures.push(image.filename || 'image');
+                const reason =
+                  uploadError instanceof Error
+                    ? uploadError.message
+                    : String(uploadError);
+                uploadFailures.push(
+                  `${image.filename || 'image'} (${reason.slice(0, 120)})`,
+                );
                 const pattern = placeholderPattern(image.placeholderMarkdown);
                 updatedDescription = pattern
                   ? updatedDescription.replace(pattern, '')
                   : updatedDescription;
               }
             }
+            // A surviving placeholder would ship to Azure as a broken
+            // `jc-image://` link. Strip it and say so rather than posting it.
+            const stripped =
+              stripUnresolvedImagePlaceholders(updatedDescription);
+            if (stripped.removed > 0) {
+              updatedDescription = stripped.text;
+              const leftoverWarning = `${stripped.removed} image(s) could not be linked in the PR description and were removed.`;
+              warningMessage = warningMessage
+                ? `${warningMessage}\n${leftoverWarning}`
+                : leftoverWarning;
+              addToast({ type: 'error', message: leftoverWarning });
+            }
+
+            debugLog({
+              message: 'patching description',
+              data: {
+                pullRequestId: result.id,
+                length: updatedDescription.length,
+                leftoverPlaceholders:
+                  updatedDescription.includes('jc-image://'),
+                imageMarkdownCount: (
+                  updatedDescription.match(/!\[[^\]]*\]\(/g) ?? []
+                ).length,
+                uploadFailures,
+              },
+            });
             await api.azureDevOps.updatePullRequestDescription({
               providerId: repoProviderId,
               projectId: repoProjectId,
@@ -571,10 +737,13 @@ export function PrCreationForm({
                 repoProjectId,
                 repoId,
                 imageCount: imagesToUpload.length,
-                imageOnlyDescription,
               },
               error,
             );
+            debugLog({
+              message: 'description update FAILED',
+              data: { pullRequestId: result.id, error: rawDetail.slice(0, 500) },
+            });
             const detailedWarning = `PR created, but the description could not be updated with attachments: ${detail}`;
             warningMessage = warningMessage
               ? `${warningMessage}\n${detailedWarning}`

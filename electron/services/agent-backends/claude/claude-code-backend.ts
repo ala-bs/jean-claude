@@ -152,6 +152,10 @@ interface ClaudeSession {
   // they don't finalize the turn while background work keeps streaming. Pushed
   // at stream end if no real result arrives after them.
   deferredResultEvents: AgentEvent[] | null;
+  // Ends the streaming-input generator, which lets the SDK close the CLI's
+  // stdin. Held open for the whole turn so the `canUseTool` control channel
+  // survives background-task `result` messages.
+  closePromptStream: (() => void) | null;
 }
 
 /**
@@ -160,6 +164,14 @@ interface ClaudeSession {
  * the end of the user's turn — finalizing on it marks the step completed while
  * the agent is still working.
  */
+/**
+ * How long the SDK stream may stay silent after a withheld background-task
+ * `result` before we assume nothing more is coming and close the input stream.
+ * Generous on purpose: background work (long builds, Monitor polls) reports
+ * back sporadically, and closing early would truncate a live run.
+ */
+const WITHHELD_RESULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
 function isBackgroundNotificationResult(message: AgentMessage): boolean {
   if (message.type !== 'result') return false;
   // Origins other than a human prompt (`task-notification`, `auto-continuation`,
@@ -218,6 +230,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       },
       messageIndex: this.taskContext.sessionStartIndex,
       deferredResultEvents: null,
+      closePromptStream: null,
     };
     this.sessions.set(sessionKey, session);
 
@@ -236,6 +249,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     if (!session) return;
 
     session.abortController.abort();
+    session.closePromptStream?.();
 
     // Reject all pending resolvers
     for (const [, resolver] of session.pendingResolvers) {
@@ -449,50 +463,93 @@ export class ClaudeCodeBackend implements AgentBackend {
     const promptText = getPromptText(parts);
     const images = getPromptImages(parts);
 
-    // When images are present, construct an SDKUserMessage with multimodal
-    // content blocks (text + base64 images) so Claude can see the images.
-    // Otherwise, pass the plain text string for simplicity.
-    let prompt: string | AsyncIterable<SDKUserMessage>;
-    if (images.length > 0) {
-      const content: Array<
-        | { type: 'text'; text: string }
-        | {
-            type: 'image';
-            source: { type: 'base64'; media_type: string; data: string };
-          }
-      > = [];
+    // The prompt is ALWAYS sent as a streaming AsyncIterable, never as a bare
+    // string. A string prompt puts the SDK in `isSingleUserTurn` mode, where it
+    // closes the CLI's stdin as soon as the *first* `result` message arrives.
+    // stdin is also the control channel that carries `canUseTool` responses, so
+    // once a background task (background bash, Monitor, background subagent)
+    // triggers an early zero-turn `result`, every later permission prompt dies
+    // with "Tool permission request failed: AbortError: Stream closed".
+    // Keeping the input stream open until the real end-of-turn result keeps the
+    // control channel alive for the whole run.
+    const content: Array<
+      | { type: 'text'; text: string }
+      | {
+          type: 'image';
+          source: { type: 'base64'; media_type: string; data: string };
+        }
+    > = [];
 
-      if (promptText) {
-        content.push({ type: 'text', text: promptText });
-      }
-
-      for (const img of images) {
-        content.push({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: img.mimeType,
-            data: img.data,
-          },
-        });
-      }
-
-      const userMessage: SDKUserMessage = {
-        type: 'user',
-        message: {
-          role: 'user',
-          content: content as SDKUserMessage['message']['content'],
-        },
-        parent_tool_use_id: null,
-        session_id: session.sessionId ?? '',
-      };
-
-      prompt = (async function* () {
-        yield userMessage;
-      })();
-    } else {
-      prompt = promptText;
+    // Always emit the text block, even when empty: this mirrors what the SDK
+    // itself writes for a bare-string prompt, and an empty `content` array is a
+    // different wire shape that the CLI may reject.
+    if (promptText || images.length === 0) {
+      content.push({ type: 'text', text: promptText });
     }
+
+    for (const img of images) {
+      content.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: img.mimeType,
+          data: img.data,
+        },
+      });
+    }
+
+    const userMessage: SDKUserMessage = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: content as SDKUserMessage['message']['content'],
+      },
+      parent_tool_use_id: null,
+      session_id: session.sessionId ?? '',
+    };
+
+    // Resolved once the turn genuinely ends (real `result`, error, or abort).
+    // Until then the input generator stays suspended, which keeps stdin — and
+    // therefore the permission control channel — open.
+    let closePromptStream!: () => void;
+    const promptStreamClosed = new Promise<void>((resolve) => {
+      closePromptStream = resolve;
+    });
+    session.closePromptStream = closePromptStream;
+
+    const prompt = (async function* () {
+      yield userMessage;
+      await promptStreamClosed;
+    })();
+
+    // Holding stdin open costs us the SDK's implicit liveness guarantee: with a
+    // string prompt the CLI exited on its own at the first `result`, which is
+    // what let the deferred-result replay below finalize a run that never
+    // produced a real result. Now that we keep the channel open past that
+    // point, an agent that goes silent after a background notification would
+    // idle forever. The watchdog restores the old terminating behaviour: after
+    // a withheld result, a long enough silence closes the input stream, the CLI
+    // exits, and the replay path finalizes the step as before.
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearIdleWatchdog = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
+    };
+    const syncIdleWatchdog = () => {
+      clearIdleWatchdog();
+      // Only armed while a withheld result is outstanding — a normal run in
+      // progress may legitimately be silent for a long time (a slow tool call).
+      if (!session.deferredResultEvents) return;
+      idleTimer = setTimeout(() => {
+        dbg.agent(
+          'Session %s idle for %dms after a withheld background result — closing input stream',
+          sessionKey,
+          WITHHELD_RESULT_IDLE_TIMEOUT_MS,
+        );
+        closePromptStream();
+      }, WITHHELD_RESULT_IDLE_TIMEOUT_MS);
+      idleTimer.unref?.();
+    };
 
     const generator = query({ prompt, options: queryOptions });
     session.queryInstance = generator;
@@ -541,16 +598,30 @@ export class ClaudeCodeBackend implements AgentBackend {
         // it only if the run ends without ever emitting a real result.
         if (isBackgroundNotificationResult(message)) {
           if (!sawRealResult) session.deferredResultEvents = agentEvents;
+          syncIdleWatchdog();
           continue;
         }
         if (message.type === 'result') {
           sawRealResult = true;
           session.deferredResultEvents = null;
+          // Real end of turn: let the input generator finish so the SDK closes
+          // stdin and the CLI process can exit. Background-notification results
+          // deliberately do NOT reach here — closing on those is what broke
+          // permissions for post-notification tool calls.
+          dbg.agentPermission(
+            'Real result for session %s — closing prompt stream (%d pending permission request(s))',
+            sessionKey,
+            session.pendingResolvers.size,
+          );
+          closePromptStream();
         }
 
         for (const event of agentEvents) {
           session.eventChannel.push(event);
         }
+
+        // Re-arm (or drop) the idle watchdog after every message.
+        syncIdleWatchdog();
       }
     } catch (error) {
       // SDK threw an unexpected error — push it as an error event so
@@ -571,6 +642,11 @@ export class ClaudeCodeBackend implements AgentBackend {
         error: errorMessage,
       });
     } finally {
+      // Never leave the input generator suspended — it would hold stdin (and
+      // the CLI process) open forever.
+      clearIdleWatchdog();
+      closePromptStream();
+      session.closePromptStream = null;
       // The stream ended on a withheld background-notification result and no
       // real result ever arrived: replay it so the step isn't stuck `running`.
       const deferred = session.deferredResultEvents;
@@ -578,6 +654,13 @@ export class ClaudeCodeBackend implements AgentBackend {
       if (deferred && !session.abortController.signal.aborted) {
         for (const event of deferred) session.eventChannel.push(event);
       }
+      // The stream is gone, so nobody can answer a still-open permission card.
+      // Settle the resolvers here — otherwise they dangle forever and the later
+      // `stop()` short-circuits on the already-deleted session key.
+      for (const [, resolver] of session.pendingResolvers) {
+        resolver.resolve({ behavior: 'deny', message: 'Session ended' });
+      }
+      session.pendingResolvers.clear();
       session.eventChannel.close();
       this.sessions.delete(sessionKey);
     }

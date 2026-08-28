@@ -112,6 +112,9 @@ export const dbg = {
   // IPC
   ipc: createLogger('ipc'),
 
+  // Renderer-forwarded logs (via the `debug:log` IPC channel)
+  renderer: createLogger('renderer'),
+
   // Agent service
   agent: createLogger('agent'),
   agentSession: createLogger('agent:session'),

@@ -45,6 +45,7 @@ vi.mock('@/lib/api', () => ({
       uploadPullRequestAttachment: uploadPullRequestAttachmentSpy,
       getPullRequest: getPullRequestSpy,
     },
+    debug: { log: vi.fn() },
   },
 }));
 
@@ -370,5 +371,189 @@ describe('PrCreationForm image previews', () => {
     expect(addPrFileCommentsSpy.mock.calls[0]?.[0]).not.toHaveProperty(
       'localProjectId',
     );
+  });
+
+  /**
+   * Stage a GIF into the description at `caretOffset`, set a title, and submit.
+   * Returns once the create-PR mutation has been dispatched.
+   */
+  async function submitWithInlineImage({
+    descriptionText,
+    caretOffset,
+  }: {
+    descriptionText: string;
+    caretOffset: number;
+  }) {
+    await act(async () => {
+      root.render(
+        createElement(PrCreationForm, {
+          taskId: 'task-id',
+          projectId: 'project-id',
+          onSuccess: vi.fn(),
+          onCancel: vi.fn(),
+        }),
+      );
+    });
+
+    const fileInput = container.querySelector<HTMLInputElement>(
+      'input[type="file"]',
+    );
+    const titleInput = container.querySelector<HTMLInputElement>('#pr-title');
+    const description =
+      container.querySelector<HTMLTextAreaElement>('#pr-description');
+    if (!fileInput || !titleInput || !description) {
+      throw new Error('PR form input not found');
+    }
+
+    const inputValueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    const textareaValueSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )?.set;
+
+    await act(async () => {
+      inputValueSetter?.call(titleInput, 'Inline image PR');
+      titleInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      textareaValueSetter?.call(description, descriptionText);
+      description.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    // Place the caret mid-body so an inline (not appended) placeholder is used.
+    description.setSelectionRange(caretOffset, caretOffset);
+
+    Object.defineProperty(fileInput, 'files', {
+      configurable: true,
+      value: [
+        new File([GIF_BYTES], 'converted-demo.gif', { type: 'image/gif' }),
+      ],
+    });
+    await act(async () => {
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const createButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('Create PR'),
+    );
+    if (!createButton) throw new Error('Create PR button not found');
+    await act(async () => createButton.click());
+  }
+
+  it('keeps the image inline when the server kept our description', async () => {
+    // Server echoes back exactly what we sent (placeholders stripped).
+    createPullRequestSpy.mockImplementation(
+      async (params: { description: string }) => {
+        getPullRequestSpy.mockResolvedValue({
+          description: params.description,
+        });
+        return { id: 42, url: 'https://dev.azure.com/pr/42' };
+      },
+    );
+
+    await submitWithInlineImage({
+      descriptionText: 'Intro\nOutro',
+      caretOffset: 6, // start of "Outro"
+    });
+
+    await vi.waitFor(() => {
+      expect(updatePullRequestDescriptionSpy).toHaveBeenCalled();
+    });
+    const posted = updatePullRequestDescriptionSpy.mock.calls[0]?.[0] as {
+      description: string;
+    };
+
+    // The image must sit between Intro and Outro, not appended at the end.
+    expect(posted.description).toMatch(
+      /Intro\n!\[converted-demo\.gif\]\(https:\/\/dev\.azure\.com\/attachments\/converted-demo\.gif[^)]*\)Outro/,
+    );
+    expect(posted.description).not.toContain('jc-image://');
+  });
+
+  it('keeps the image inline when the server normalizes line endings', async () => {
+    createPullRequestSpy.mockImplementation(
+      async (params: { description: string }) => {
+        getPullRequestSpy.mockResolvedValue({
+          // Azure round-trips descriptions and may return CRLF.
+          description: params.description.replace(/\n/g, '\r\n'),
+        });
+        return { id: 42, url: 'https://dev.azure.com/pr/42' };
+      },
+    );
+
+    await submitWithInlineImage({
+      descriptionText: 'Intro\nOutro',
+      caretOffset: 6,
+    });
+
+    await vi.waitFor(() => {
+      expect(updatePullRequestDescriptionSpy).toHaveBeenCalled();
+    });
+    const posted = updatePullRequestDescriptionSpy.mock.calls[0]?.[0] as {
+      description: string;
+    };
+
+    expect(posted.description).toMatch(
+      /Intro\n!\[converted-demo\.gif\]\(https:\/\/dev\.azure\.com\/attachments\/converted-demo\.gif[^)]*\)Outro/,
+    );
+  });
+
+  it('still uploads attachments when reading the created PR fails', async () => {
+    getPullRequestSpy.mockRejectedValue(new Error('403 Forbidden'));
+
+    await submitWithInlineImage({
+      descriptionText: 'Intro\nOutro',
+      caretOffset: 6,
+    });
+
+    // A read failure must not cost the attachments.
+    await vi.waitFor(() => {
+      expect(uploadPullRequestAttachmentSpy).toHaveBeenCalled();
+    });
+    await vi.waitFor(() => {
+      expect(updatePullRequestDescriptionSpy).toHaveBeenCalled();
+    });
+    const posted = updatePullRequestDescriptionSpy.mock.calls[0]?.[0] as {
+      description: string;
+    };
+    expect(posted.description).toContain(
+      'https://dev.azure.com/attachments/converted-demo.gif',
+    );
+    expect(posted.description).not.toContain('jc-image://');
+  });
+
+  it('drops the placeholder and never posts a jc-image link when upload fails', async () => {
+    createPullRequestSpy.mockImplementation(
+      async (params: { description: string }) => {
+        getPullRequestSpy.mockResolvedValue({
+          description: params.description,
+        });
+        return { id: 42, url: 'https://dev.azure.com/pr/42' };
+      },
+    );
+    uploadPullRequestAttachmentSpy.mockRejectedValue(
+      new Error('Unsupported attachment format "webp"'),
+    );
+
+    await submitWithInlineImage({
+      descriptionText: 'Intro\nOutro',
+      caretOffset: 6,
+    });
+
+    await vi.waitFor(() => {
+      expect(updatePullRequestDescriptionSpy).toHaveBeenCalled();
+    });
+    const posted = updatePullRequestDescriptionSpy.mock.calls[0]?.[0] as {
+      description: string;
+    };
+    expect(posted.description).not.toContain('jc-image://');
+    expect(posted.description).toContain('Intro');
+    expect(posted.description).toContain('Outro');
   });
 });

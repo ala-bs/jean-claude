@@ -1024,17 +1024,6 @@ export function NewTaskOverlay({
     });
   }, [highlightedWorkItemId, updateDraft]);
 
-  // Open highlighted work item in browser
-  const openHighlightedWorkItem = useCallback(() => {
-    if (!highlightedWorkItemId) return;
-    const workItem = workItems.find(
-      (wi) => wi.id.toString() === highlightedWorkItemId,
-    );
-    if (workItem?.url) {
-      window.open(workItem.url, '_blank');
-    }
-  }, [workItems, highlightedWorkItemId]);
-
   // Handle work item toggle from list click
   const handleWorkItemToggle = useCallback(
     (workItem: AzureDevOpsWorkItem) => {
@@ -1819,14 +1808,6 @@ export function NewTaskOverlay({
           shortcut: 'enter',
           handler: () => {
             toggleHighlightedWorkItem();
-          },
-        },
-      inputMode === 'search' &&
-        searchStep === 'select' && {
-          label: 'Open Highlighted Work Item in Browser',
-          shortcut: 'cmd+shift+o',
-          handler: () => {
-            openHighlightedWorkItem();
           },
         },
       canToggleMode && {
