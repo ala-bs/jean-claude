@@ -541,6 +541,51 @@ describe('project proposal validation', () => {
       }),
     ]);
   });
+
+  it('drops a verifier-rejected item and its differently worded nomination', () => {
+    const text = 'Prioritize documentation quality across work.';
+    const evidence = event({ text });
+    const result = validateProjectAgentMemoryProposal({
+      projectId: 'project-1',
+      proposal: {
+        schemaVersion: 1,
+        items: [
+          proposalItem({
+            statement: text,
+            semanticSubject: 'documentation quality',
+            category: 'recurring-priority',
+            kind: 'project-priority',
+            evidenceQuotes: [{ evidenceId: evidence.id, quote: text }],
+          }),
+        ],
+        nominations: [
+          {
+            schemaVersion: 1,
+            id: 'model-priority',
+            projectId: 'project-1',
+            statement: text,
+            // Deliberately worded differently than the item it came from.
+            semanticSubject: 'docs quality bar',
+            category: 'recurring-priority',
+            kind: 'project-priority',
+            confidence: 0.9,
+            evidenceIds: [evidence.id],
+            evidenceQuotes: [{ evidenceId: evidence.id, quote: text }],
+            taskIds: ['task-1'],
+            createdAt: now,
+          },
+        ],
+      },
+      events: [evidence],
+      existingItems: [],
+      timestamp: now,
+      globalEligibleItemIndexes: new Set([0]),
+      rejectedItemIndexes: new Set([0]),
+    });
+    expect(result.items).toEqual([]);
+    expect(result.nominations).toEqual([]);
+    expect(result.acceptedItemCount).toBe(0);
+  });
 });
 
 describe('global proposal validation', () => {
@@ -800,6 +845,25 @@ describe('extraction prompts and persistence', () => {
         }],
       },
     ],
+    [
+      'self-contradictory eligibility',
+      {
+        schemaVersion: 1,
+        decisions: [{
+          index: 0,
+          statementEntailed: true,
+          semanticSubjectEntailed: true,
+          categoryConsistent: true,
+          kindConsistent: true,
+          workRelevant: true,
+          nonSensitive: true,
+          instructionCopying: false,
+          projectScoped: true,
+          projectAgnostic: false,
+          globalEligible: true,
+        }],
+      },
+    ],
   ])('fails closed for verifier output with %s', async (_label, verification) => {
     await appendAgentMemoryEvent({ event: event(), homeDirectory });
     const paths = getAgentMemoryProjectPaths('project-1', homeDirectory);
@@ -821,6 +885,52 @@ describe('extraction prompts and persistence', () => {
         config: { backend: 'opencode', model: 'test', trigger: 'manual' },
       }),
     ).rejects.toThrow();
+    expect(
+      (JSON.parse(await fs.readFile(paths.itemsJson, 'utf-8')) as {
+        items: AgentMemoryItem[];
+      }).items,
+    ).toEqual([]);
+  });
+
+  it('drops a rejected item without failing the run', async () => {
+    await appendAgentMemoryEvent({ event: event(), homeDirectory });
+    const paths = getAgentMemoryProjectPaths('project-1', homeDirectory);
+    const service = createAgentMemoryExtractionService({
+      homeDirectory,
+      generate: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        items: [proposalItem({ kind: 'explicit-preference' })],
+        nominations: [groundedNomination()],
+      }),
+      verifyGrounding: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        decisions: [{
+          index: 0,
+          statementEntailed: true,
+          semanticSubjectEntailed: true,
+          categoryConsistent: true,
+          kindConsistent: true,
+          workRelevant: true,
+          nonSensitive: true,
+          instructionCopying: true,
+          projectScoped: true,
+          projectAgnostic: true,
+          globalEligible: false,
+        }],
+      }),
+      now: () => new Date(now),
+      createId: () => 'rejected-item-run',
+    });
+
+    await expect(
+      service.extractProjectMemory({
+        project: { id: 'project-1', name: 'Project', path: '/project' },
+        config: { backend: 'opencode', model: 'test', trigger: 'manual' },
+      }),
+    ).resolves.toMatchObject({
+      processed: true,
+      run: { status: 'succeeded', proposedItemCount: 1, acceptedItemCount: 0 },
+    });
     expect(
       (JSON.parse(await fs.readFile(paths.itemsJson, 'utf-8')) as {
         items: AgentMemoryItem[];
