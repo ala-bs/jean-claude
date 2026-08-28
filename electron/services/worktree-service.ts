@@ -127,25 +127,6 @@ async function getIgnoredCommitPaths({
   return { ignoredPaths, ignoredStagedPaths };
 }
 
-async function getStatusPaths(worktreePath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync(
-    'git',
-    ['status', '--porcelain', '-z', '--untracked-files=all'],
-    { cwd: worktreePath, encoding: 'utf-8' },
-  );
-  const entries = stdout.split('\0').filter(Boolean);
-  const paths: string[] = [];
-
-  for (let i = 0; i < entries.length; i += 1) {
-    const entry = entries[i];
-    const status = entry.slice(0, 2);
-    paths.push(entry.slice(3));
-    if (status[0] === 'R' || status[0] === 'C') i += 1;
-  }
-
-  return paths;
-}
-
 async function runGitPathCommand({
   worktreePath,
   args,
@@ -161,6 +142,47 @@ async function runGitPathCommand({
       encoding: 'utf-8',
     });
   }
+}
+
+/**
+ * Stages every change in the repository except `excludedPaths`.
+ *
+ * Uses a broad `:/` pathspec narrowed by `:(exclude)` pathspecs rather than
+ * listing the included paths. Naming a path explicitly makes `git add` fail
+ * hard when that path is matched by a .gitignore rule but still appears in
+ * `git status` (e.g. a tracked file that was `git rm --cached`-ed while
+ * staying on disk); a broad pathspec lets git apply .gitignore itself.
+ *
+ * The pathspecs go over stdin because they cannot be chunked -- an exclude
+ * only narrows the pathspec it is passed alongside -- and a large ignore list
+ * would otherwise overflow ARG_MAX.
+ *
+ * `:/` and the `top` magic keep every pathspec relative to the repository
+ * root, matching the repo-root-relative paths that `git status` reports, so
+ * this stays correct even if `worktreePath` is a subdirectory of the repo.
+ */
+async function gitAddAllExcept({
+  worktreePath,
+  excludedPaths,
+}: {
+  worktreePath: string;
+  excludedPaths: Set<string>;
+}): Promise<void> {
+  const pathspecs = [
+    ':/',
+    ...[...excludedPaths].map((p) => `:(exclude,literal,top)${p}`),
+  ];
+
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(
+      'git',
+      ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
+      { cwd: worktreePath, encoding: 'utf-8' },
+      (error) => (error ? reject(error) : resolve()),
+    );
+    child.stdin?.on('error', reject);
+    child.stdin?.end(pathspecs.join('\0'));
+  });
 }
 
 async function hasStagedChanges(worktreePath: string): Promise<boolean> {
@@ -1699,23 +1721,13 @@ export async function commitWorktreeChanges(
         worktreePath,
         projectPath,
       });
-      const paths = await getStatusPaths(worktreePath);
-      const includedPaths = paths.filter(
-        (filePath) => !ignoredPaths.has(filePath),
-      );
-
-      dbg.worktree(
-        'Staging %d changes, skipping %d ignored paths',
-        includedPaths.length,
-        ignoredPaths.size,
-      );
-      if (includedPaths.length > 0) {
-        await runGitPathCommand({
-          worktreePath,
-          args: ['add', '-A'],
-          paths: includedPaths,
-        });
-      }
+      // Stage the whole worktree and subtract the commit-ignored paths with
+      // exclude pathspecs. Enumerating the included paths explicitly instead
+      // makes `git add` hard-fail when any of them is matched by a .gitignore
+      // rule but still shows up in `git status` (e.g. a tracked file that was
+      // `git rm --cached`-ed while remaining on disk).
+      dbg.worktree('Staging worktree, excluding %d paths', ignoredPaths.size);
+      await gitAddAllExcept({ worktreePath, excludedPaths: ignoredPaths });
       if (ignoredStagedPaths.size > 0) {
         await runGitPathCommand({
           worktreePath,

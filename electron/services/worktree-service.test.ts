@@ -27,6 +27,8 @@ const execFileAsync = promisify(execFile);
 const fs =
   await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 const {
+  commitWorktreeChanges,
+  updateProjectCommitIgnore,
   cleanupMissingWorktree,
   cleanupWorktree,
   getDiffBaseInfo,
@@ -58,6 +60,231 @@ async function commit(message: string) {
   const { stdout } = await git(['rev-parse', 'HEAD']);
   return stdout.trim();
 }
+
+describe('commitWorktreeChanges', () => {
+  beforeEach(async () => {
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jc-worktree-commit-'));
+    await git(['init', '-b', 'main']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test User']);
+    await writeFile('tracked.txt', 'base\n');
+    await commit('base');
+  });
+
+  afterEach(async () => {
+    await fs.rm(testDir, { recursive: true, force: true });
+  });
+
+  it('commits when a gitignored file is untracked but still shows in status', async () => {
+    // A file that is tracked, then dropped from the index while staying on
+    // disk and matched by .gitignore: `git status` still reports it, but
+    // naming it in `git add` is a hard error.
+    await writeFile('.yarn/install-state.gz', 'state\n');
+    await commit('add yarn state');
+    await writeFile('.gitignore', '.yarn/install-state.gz\n');
+    await git(['rm', '--cached', '--quiet', '.yarn/install-state.gz']);
+    await writeFile('tracked.txt', 'changed\n');
+
+    await commitWorktreeChanges({
+      worktreePath: testDir,
+      message: 'commit with ignored path in status',
+      stageAll: true,
+    });
+
+    const { stdout: subject } = await git(['log', '-1', '--pretty=%s']);
+    expect(subject.trim()).toBe('commit with ignored path in status');
+    const { stdout: files } = await git([
+      'show',
+      '--name-status',
+      '--pretty=',
+      'HEAD',
+    ]);
+    expect(files).toContain('tracked.txt');
+    expect(files).toContain('.gitignore');
+    const { stdout: status } = await git(['status', '--porcelain']);
+    expect(status.trim()).toBe('');
+  });
+
+  it('still excludes paths matched by the project commit-ignore list', async () => {
+    await updateProjectCommitIgnore({
+      projectPath: testDir,
+      content: 'secret.env\n',
+    });
+    await writeFile('secret.env', 'token\n');
+    await writeFile('tracked.txt', 'changed\n');
+
+    await commitWorktreeChanges({
+      worktreePath: testDir,
+      projectPath: testDir,
+      message: 'skip commit-ignored file',
+      stageAll: true,
+    });
+
+    const { stdout: files } = await git([
+      'show',
+      '--name-status',
+      '--pretty=',
+      'HEAD',
+    ]);
+    expect(files).toContain('tracked.txt');
+    expect(files).not.toContain('secret.env');
+    const { stdout: status } = await git(['status', '--porcelain']);
+    expect(status).toContain('secret.env');
+  });
+
+  it('excludes commit-ignored files while a gitignored path sits in status', async () => {
+    await updateProjectCommitIgnore({
+      projectPath: testDir,
+      content: 'secret.env\n',
+    });
+    await writeFile('.yarn/install-state.gz', 'state\n');
+    await commit('add yarn state');
+    await writeFile('.gitignore', '.yarn/install-state.gz\n');
+    await git(['rm', '--cached', '--quiet', '.yarn/install-state.gz']);
+    await writeFile('secret.env', 'token\n');
+    await writeFile('tracked.txt', 'changed\n');
+
+    await commitWorktreeChanges({
+      worktreePath: testDir,
+      projectPath: testDir,
+      message: 'both ignore sources at once',
+      stageAll: true,
+    });
+
+    const { stdout: files } = await git([
+      'show',
+      '--name-status',
+      '--pretty=',
+      'HEAD',
+    ]);
+    expect(files).toContain('tracked.txt');
+    expect(files).not.toContain('secret.env');
+    const { stdout: status } = await git(['status', '--porcelain']);
+    expect(status).toContain('secret.env');
+  });
+
+  it('unstages a commit-ignored file that was already staged', async () => {
+    await updateProjectCommitIgnore({
+      projectPath: testDir,
+      content: 'secret.env\n',
+    });
+    await writeFile('secret.env', 'token\n');
+    await git(['add', 'secret.env']);
+    await writeFile('tracked.txt', 'changed\n');
+
+    await commitWorktreeChanges({
+      worktreePath: testDir,
+      projectPath: testDir,
+      message: 'unstage already-staged ignored file',
+      stageAll: true,
+    });
+
+    const { stdout: files } = await git([
+      'show',
+      '--name-status',
+      '--pretty=',
+      'HEAD',
+    ]);
+    expect(files).toContain('tracked.txt');
+    expect(files).not.toContain('secret.env');
+    const { stdout: status } = await git(['status', '--porcelain']);
+    expect(status).toContain('?? secret.env');
+  });
+
+  it('excludes ignored filenames containing glob metacharacters', async () => {
+    // The excluded path is fed to git as a pathspec. Without the `literal`
+    // magic git reads `[1]` as a character class, which would also swallow
+    // the unrelated sibling `report1.csv` and silently drop it from the
+    // commit.
+    await updateProjectCommitIgnore({
+      projectPath: testDir,
+      content: 'reports/*\n!reports/report1.csv\n',
+    });
+    await writeFile('reports/report[1].csv', 'data\n');
+    await writeFile('reports/report1.csv', 'other\n');
+    await writeFile('tracked.txt', 'changed\n');
+
+    await commitWorktreeChanges({
+      worktreePath: testDir,
+      projectPath: testDir,
+      message: 'literal pathspec handling',
+      stageAll: true,
+    });
+
+    const { stdout: files } = await git([
+      'show',
+      '--name-status',
+      '--pretty=',
+      'HEAD',
+    ]);
+    expect(files).toContain('tracked.txt');
+    expect(files).toContain('reports/report1.csv');
+    expect(files).not.toContain('report[1].csv');
+  });
+
+  it('stages the whole repo when the worktree path is a subdirectory', async () => {
+    await updateProjectCommitIgnore({
+      projectPath: testDir,
+      content: 'secret.env\n',
+    });
+    await writeFile('nested/deep.txt', 'nested\n');
+    await writeFile('secret.env', 'token\n');
+    await writeFile('tracked.txt', 'changed\n');
+
+    await commitWorktreeChanges({
+      worktreePath: path.join(testDir, 'nested'),
+      projectPath: testDir,
+      message: 'commit from a subdirectory',
+      stageAll: true,
+    });
+
+    const { stdout: files } = await git([
+      'show',
+      '--name-status',
+      '--pretty=',
+      'HEAD',
+    ]);
+    // Repo-root files are staged even though cwd was a subdirectory...
+    expect(files).toContain('tracked.txt');
+    expect(files).toContain('nested/deep.txt');
+    // ...and the repo-root-relative exclude still applies.
+    expect(files).not.toContain('secret.env');
+  });
+
+  it('handles an ignore list too large to pass as command-line arguments', async () => {
+    const ignoredNames = Array.from(
+      { length: 30000 },
+      (_, index) => `generated/file-${index}.tmp`,
+    );
+    await updateProjectCommitIgnore({
+      projectPath: testDir,
+      content: `generated/\n`,
+    });
+    await fs.mkdir(path.join(testDir, 'generated'), { recursive: true });
+    await Promise.all(
+      ignoredNames.map((name) =>
+        fs.writeFile(path.join(testDir, name), 'tmp\n', 'utf-8'),
+      ),
+    );
+    await writeFile('tracked.txt', 'changed\n');
+
+    await commitWorktreeChanges({
+      worktreePath: testDir,
+      projectPath: testDir,
+      message: 'large ignore list',
+      stageAll: true,
+    });
+
+    const { stdout: files } = await git([
+      'show',
+      '--name-status',
+      '--pretty=',
+      'HEAD',
+    ]);
+    expect(files).toContain('tracked.txt');
+    expect(files).not.toContain('generated/');
+  }, 120000);
+});
 
 describe('hasUncommittedWorktreeChanges', () => {
   beforeEach(async () => {
