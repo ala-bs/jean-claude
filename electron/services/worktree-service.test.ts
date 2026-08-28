@@ -386,7 +386,12 @@ describe('worktree cleanup branch safety', () => {
   });
 
   afterEach(async () => {
-    if (testDir) await fs.rm(testDir, { force: true, recursive: true });
+    if (!testDir) return;
+    await fs.rm(
+      path.join('/tmp', '.jean-claude', 'worktrees', path.basename(testDir)),
+      { force: true, recursive: true },
+    );
+    await fs.rm(testDir, { force: true, recursive: true });
   });
 
   it('rejects persisted branch mismatch before removing worktree', async () => {
@@ -432,6 +437,116 @@ describe('worktree cleanup branch safety', () => {
 
     const { stdout } = await git(['branch', '--list', 'feature-work']);
     expect(stdout).toContain('feature-work');
+  });
+
+  // `app.getPath('home')` is mocked to /tmp, so raw-delete-safe worktrees must
+  // live under /tmp/.jean-claude/worktrees/<project>/<worktree>.
+  async function addOrphanWorktree(name: string, branch: string) {
+    const worktreePath = path.join(
+      '/tmp',
+      '.jean-claude',
+      'worktrees',
+      path.basename(testDir),
+      name,
+    );
+    await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+    await git(['branch', branch]);
+    await git(['worktree', 'add', worktreePath, branch]);
+    // Simulate git having pruned the worktree admin dir while the directory is
+    // still on disk (what an interrupted `git worktree prune` leaves behind).
+    await fs.rm(path.join(testDir, '.git', 'worktrees', name), {
+      force: true,
+      recursive: true,
+    });
+    return worktreePath;
+  }
+
+  it('cleans up an orphaned worktree directory that git no longer tracks', async () => {
+    const worktreePath = await addOrphanWorktree('orphan-wt', 'orphan-work');
+
+    await cleanupWorktree({
+      worktreePath,
+      projectPath: testDir,
+      branchName: 'orphan-work',
+      branchCleanup: 'delete',
+      force: true,
+    });
+
+    await expect(fs.stat(worktreePath)).rejects.toThrow();
+    const { stdout } = await git(['branch', '--list', 'orphan-work']);
+    expect(stdout).not.toContain('orphan-work');
+  });
+
+  it('keeps the branch when cleaning an orphaned worktree with branchCleanup keep', async () => {
+    const worktreePath = await addOrphanWorktree('orphan-keep', 'keep-work');
+
+    await cleanupWorktree({
+      worktreePath,
+      projectPath: testDir,
+      branchName: 'keep-work',
+      branchCleanup: 'keep',
+      force: true,
+    });
+
+    await expect(fs.stat(worktreePath)).rejects.toThrow();
+    const { stdout } = await git(['branch', '--list', 'keep-work']);
+    expect(stdout).toContain('keep-work');
+  });
+
+  it('refuses to raw-delete an orphaned worktree outside the worktrees base', async () => {
+    const worktreePath = path.join(testDir, 'outside-orphan');
+    await git(['branch', 'outside-work']);
+    await git(['worktree', 'add', worktreePath, 'outside-work']);
+    await fs.rm(path.join(testDir, '.git', 'worktrees', 'outside-orphan'), {
+      force: true,
+      recursive: true,
+    });
+
+    await expect(
+      cleanupWorktree({
+        worktreePath,
+        projectPath: testDir,
+        branchName: 'outside-work',
+        branchCleanup: 'delete',
+        force: true,
+      }),
+    ).rejects.toThrow(/Refusing to delete/);
+
+    await expect(fs.stat(worktreePath)).resolves.toBeDefined();
+    const { stdout } = await git(['branch', '--list', 'outside-work']);
+    expect(stdout).toContain('outside-work');
+  });
+
+  it('requires persisted branch metadata before removing an orphaned worktree', async () => {
+    const worktreePath = await addOrphanWorktree('orphan-nobranch', 'no-meta');
+
+    await expect(
+      cleanupWorktree({
+        worktreePath,
+        projectPath: testDir,
+        branchName: null,
+        branchCleanup: 'delete',
+        force: true,
+      }),
+    ).rejects.toThrow(/persisted branch metadata/);
+
+    await expect(fs.stat(worktreePath)).resolves.toBeDefined();
+  });
+
+  it('leaves an orphaned worktree alone when changes cannot be verified', async () => {
+    const worktreePath = await addOrphanWorktree('orphan-skip', 'skip-work');
+
+    await cleanupWorktree({
+      worktreePath,
+      projectPath: testDir,
+      branchName: 'skip-work',
+      branchCleanup: 'delete',
+      skipIfChanges: true,
+    });
+
+    await expect(fs.stat(worktreePath)).resolves.toBeDefined();
+    const { stdout } = await git(['branch', '--list', 'skip-work']);
+    expect(stdout).toContain('skip-work');
   });
 
   it('does not delete arbitrary branch for missing registered worktree mismatch', async () => {
