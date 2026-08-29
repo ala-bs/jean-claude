@@ -158,22 +158,26 @@ export function ProjectEnvSettings({ projectId }: { projectId: string }) {
       </div>
 
       <div className="flex items-center gap-2">
-        <Input
-          value={newKey}
-          onChange={(e) => setNewKey(e.target.value)}
-          placeholder="API_KEY"
-          className="w-56 font-mono"
-        />
-        <Input
-          value={newValue}
-          onChange={(e) => setNewValue(e.target.value)}
-          placeholder="value"
-          type={newIsSecret ? 'password' : 'text'}
-          className="flex-1 font-mono"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') handleAdd();
-          }}
-        />
+        <div className="w-56 shrink-0">
+          <Input
+            value={newKey}
+            onChange={(e) => setNewKey(e.target.value)}
+            placeholder="API_KEY"
+            className="font-mono"
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <Input
+            value={newValue}
+            onChange={(e) => setNewValue(e.target.value)}
+            placeholder="value"
+            type={newIsSecret ? 'password' : 'text'}
+            className="font-mono"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleAdd();
+            }}
+          />
+        </div>
         {secretStorageAvailable && (
           <label className="text-ink-3 flex items-center gap-2 text-sm">
             <Switch checked={newIsSecret} onChange={setNewIsSecret} />
@@ -228,13 +232,15 @@ function EnvVarRow({
 
   return (
     <div className="flex items-center gap-2">
-      <Input
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        onBlur={commit}
-        className="w-56 font-mono"
-      />
-      <div className="relative flex-1">
+      <div className="w-56 shrink-0">
+        <Input
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          onBlur={commit}
+          className="font-mono"
+        />
+      </div>
+      <div className="relative min-w-0 flex-1">
         <Input
           value={value}
           onChange={(e) => {
