@@ -1887,6 +1887,10 @@ contextBridge.exposeInMainWorld('api', {
     hasExistingLocalStorageBucket,
     getIsPreviewMode: () =>
       ipcRenderer.invoke('app:getIsPreviewMode') as Promise<boolean>,
+    reportLocalStorageBootBlocked: () =>
+      ipcRenderer.invoke(
+        'app:reportLocalStorageBootBlocked',
+      ) as Promise<string>,
     getReloadUpdateInfo: (params: { builtCommitHash: string }) =>
       ipcRenderer.invoke('app:getReloadUpdateInfo', params) as Promise<{
         commitCount: number;

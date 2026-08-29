@@ -2146,6 +2146,11 @@ export interface Api {
      */
     hasExistingLocalStorageBucket: boolean;
     getIsPreviewMode: () => Promise<boolean>;
+    /**
+     * Reports that the localStorage boot guard blocked writes. Returns the path
+     * of the diagnostics log the main process appended the correlation to.
+     */
+    reportLocalStorageBootBlocked: () => Promise<string>;
     getReloadUpdateInfo: (params: {
       builtCommitHash: string;
     }) => Promise<ReloadUpdateInfo>;
@@ -3299,6 +3304,7 @@ export const api: Api = hasWindowApi
         devBadgeLabel: undefined,
         hasExistingLocalStorageBucket: true,
         getIsPreviewMode: async () => false,
+        reportLocalStorageBootBlocked: async () => '',
         getReloadUpdateInfo: async () => ({
           commitCount: 0,
           latestCommitHash: null,

@@ -443,6 +443,10 @@ import {
   generateMergeMessageForTask,
 } from '../services/commit-message-generation-service';
 import {
+  getLocalStorageDiagnosticsLogPath,
+  recordBootGuardBlocked,
+} from '../lib/localstorage-diagnostics';
+import {
   listOpenAiBaseImageOptions,
   removeOpenAiBaseImage,
   saveOpenAiBaseImage,
@@ -7418,6 +7422,14 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('app:getIsPreviewMode', () => {
     return !!process.env.JC_PREVIEW;
+  });
+
+  // The renderer's localStorage boot guard has blocked writes. Only the main
+  // process can say whether the previous instance was still alive — record the
+  // correlation while it is still true.
+  ipcMain.handle('app:reportLocalStorageBootBlocked', () => {
+    recordBootGuardBlocked();
+    return getLocalStorageDiagnosticsLogPath();
   });
 
   ipcMain.handle(

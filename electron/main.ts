@@ -4,6 +4,12 @@
 // default path at module scope, and module bodies run after their imports, so
 // anything ordered ahead of this would capture the old path.
 // eslint-disable-next-line import/order
+import {
+  recordBootDiagnostics,
+  recordCleanupDone,
+  recordProcessExit,
+  recordQuitStarted,
+} from './lib/localstorage-diagnostics';
 import { hasExistingLocalStorageBucket } from './lib/user-data-dir';
 
 import { join } from 'path';
@@ -395,6 +401,9 @@ app.on('second-instance', () => {
 
 app.whenReady().then(async () => {
   dbg.main('App ready, initializing...');
+  // Before the first window loads: loading one creates the bucket, and touches
+  // the LOCK we are trying to observe the previous process's grip on.
+  recordBootDiagnostics({ bucketExists: hasExistingLocalStorageBucket() });
   showDockIcon();
 
   // Reap framebuffer helpers left behind by a previous run (they otherwise keep
@@ -536,6 +545,7 @@ app.on('before-quit', (event) => {
 
   event.preventDefault();
   isQuittingAfterCleanup = true;
+  recordQuitStarted();
 
   // Chromium buffers localStorage in memory and commits to its LevelDB store on
   // a delayed timer, so a write made shortly before quitting can still be
@@ -600,6 +610,8 @@ app.on('before-quit', (event) => {
         );
       }
 
+      recordCleanupDone();
+
       // A timed-out or failed preview cleanup must not leave the registry
       // vetoing quits forever.
       stopVetoingQuit();
@@ -618,6 +630,9 @@ app.on('before-quit', (event) => {
 process.on('exit', () => {
   runCommandService.killAllProcessGroupsSync();
   killAllOpenCodeServersSync();
+  // Last write of the lifecycle breadcrumb: the next boot compares this against
+  // its own start time to see whether the two processes overlapped.
+  recordProcessExit();
 });
 
 app.on('window-all-closed', () => {
