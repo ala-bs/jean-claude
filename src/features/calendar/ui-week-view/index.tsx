@@ -12,6 +12,8 @@ import clsx from 'clsx';
 
 import {
   addDays,
+  blockDensity,
+  blockHeight,
   extractTeamsUrl,
   formatTimeHHMM,
   formatTimeRange,
@@ -19,6 +21,7 @@ import {
   isSameDay,
   layoutColumns,
   minutesBetween,
+  nextTopByMeetingId,
   startOfDay,
 } from '@/features/calendar/utils-calendar';
 import { api } from '@/lib/api';
@@ -227,6 +230,7 @@ export function WeekView({
               isSameDay(new Date(m.startAt), d),
             );
             const laid = layoutColumns(dayMeetings);
+            const nextTops = nextTopByMeetingId(laid, toY);
 
             return (
               <div
@@ -249,7 +253,13 @@ export function WeekView({
                 {/* Meeting blocks */}
                 {laid.map(({ meeting: m, col, totalCols }) => {
                   const y = toY(m.startAt);
-                  const h = Math.max(20, toY(m.endAt) - y);
+                  const h = blockHeight({
+                    top: y,
+                    bottom: toY(m.endAt),
+                    nextTop: nextTops.get(m.id),
+                    minHeight: 20,
+                  });
+                  const density = blockDensity(h);
                   const isIgnored = ignoredSet.has(m.id);
                   const dim = isIgnored;
                   const isSel = selected?.id === m.id;
@@ -277,16 +287,27 @@ export function WeekView({
                         width: `calc(${100 / totalCols}% - 6px)`,
                       }}
                     >
-                      <div className="px-1.5 py-1">
+                      <div
+                        className={clsx(
+                          'flex h-full flex-col justify-center px-1.5',
+                          density === 'regular' && 'justify-start py-1',
+                          density === 'compact' && 'py-0.5',
+                        )}
+                      >
                         <div
                           className={clsx(
-                            'truncate text-[11px] leading-tight font-medium',
+                            'truncate font-medium',
+                            density === 'micro'
+                              ? 'text-[9px] leading-none'
+                              : density === 'compact'
+                                ? 'text-[10px] leading-none'
+                                : 'text-[11px] leading-tight',
                             dim ? 'text-ink-3' : 'text-ink-0',
                           )}
                         >
                           {m.title}
                         </div>
-                        {h > 32 && (
+                        {density === 'regular' && (
                           <div className="text-ink-3 mt-0.5 font-mono text-[9.5px]">
                             {formatTimeHHMM(m.startAt)}
                           </div>
