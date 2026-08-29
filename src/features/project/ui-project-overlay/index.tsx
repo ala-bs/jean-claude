@@ -11,6 +11,7 @@ import { ProjectLogoBackground } from '@/features/project/ui-project-logo';
 import { useActiveProjects } from '@/hooks/use-projects';
 import { useCommands } from '@/common/hooks/use-commands';
 import { useCurrentVisibleProject } from '@/stores/navigation';
+import { useFeedStore } from '@/stores/feed';
 import { useKeyboardLayer } from '@/common/context/keyboard-bindings';
 
 
@@ -30,12 +31,24 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
   });
 
   const { data: projects = [] } = useActiveProjects();
-  const { projectId, moveToProject } = useCurrentVisibleProject();
+  const { moveToProject } = useCurrentVisibleProject();
+  const hiddenProjectIds = useFeedStore((state) => state.hiddenProjectIds);
+  const showOnlyProject = useFeedStore((state) => state.showOnlyProject);
+  const clearHiddenProjects = useFeedStore((state) => state.clearHiddenProjects);
 
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => a.sortOrder - b.sortOrder),
     [projects],
   );
+
+  // The feed list is the main view, so "current project" is the feed's project
+  // filter rather than a project-scoped route.
+  const projectId = useMemo(() => {
+    const visible = sortedProjects.filter(
+      (project) => !hiddenProjectIds.includes(project.id),
+    );
+    return visible.length === 1 ? visible[0].id : ('all' as const);
+  }, [hiddenProjectIds, sortedProjects]);
 
   const options = useMemo(
     () => ['all' as const, ...sortedProjects.map((project) => project.id)],
@@ -106,10 +119,26 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
         return;
       }
 
+      if (option === 'all') {
+        clearHiddenProjects();
+      } else {
+        showOnlyProject(
+          option,
+          sortedProjects.map((project) => project.id),
+        );
+      }
+
       moveToProject(option);
       onClose();
     },
-    [moveToProject, onClose, options],
+    [
+      clearHiddenProjects,
+      moveToProject,
+      onClose,
+      options,
+      showOnlyProject,
+      sortedProjects,
+    ],
   );
 
   useCommands(
@@ -183,7 +212,7 @@ export function ProjectOverlay({ onClose }: { onClose: () => void }) {
                 Switch Project
               </h2>
               <p className="text-ink-2 text-xs">
-                Choose a project to filter the sidebar task list.
+                Choose a project to filter the feed list.
               </p>
             </div>
             <Link

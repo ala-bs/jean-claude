@@ -382,11 +382,8 @@ function NewTask() {
     // Clear the draft now that we've submitted
     clearDraft();
 
-    // Navigate to the task
-    navigate({
-      to: '/projects/$projectId/tasks/$taskId',
-      params: { projectId, taskId: task.id },
-    });
+    // Navigate to the new task in the feed list, the main view
+    navigate({ to: '/all/$taskId', params: { taskId: task.id } });
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -405,7 +402,7 @@ function NewTask() {
           variant="ghost"
           size="sm"
           onClick={() =>
-            navigate({ to: '/projects/$projectId', params: { projectId } })
+            navigate({ to: '/all' })
           }
           icon={<ArrowLeft />}
           className="mb-6"

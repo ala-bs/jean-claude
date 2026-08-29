@@ -57,9 +57,7 @@ export function PrListPage({
   }
 
   const backLink =
-    basePath === 'all'
-      ? { to: '/' as const }
-      : { to: '/projects/$projectId' as const, params: { projectId } };
+    basePath === 'all' ? { to: '/' as const } : { to: '/all' as const };
 
   return (
     <div className="flex h-full flex-col">

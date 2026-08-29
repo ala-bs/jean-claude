@@ -277,9 +277,6 @@ interface NavigationState {
   // App-level: snippets rail width in settings (global setting)
   snippetsRailWidth: number;
 
-  // App-level: sidebar content tab ('tasks' or 'prs')
-  sidebarTab: 'tasks' | 'prs';
-
   // Per-project: last viewed task
   lastTaskByProject: Record<string, string>; // projectId -> taskId
 
@@ -322,7 +319,6 @@ interface NavigationState {
   setWorkItemCommentsPaneWidth: (width: number) => void;
   setSkillsRailWidth: (width: number) => void;
   setSnippetsRailWidth: (width: number) => void;
-  setSidebarTab: (tab: 'tasks' | 'prs') => void;
   setLastTaskForProject: (projectId: string, taskId: string) => void;
   setTaskRightPane: (taskId: string, pane: RightPane | null) => void;
   setTaskViewMode: (taskId: string, mode: TaskViewMode) => void;
@@ -381,7 +377,6 @@ const useStore = create<NavigationState>()(
       workItemCommentsPaneWidth: DEFAULT_WORK_ITEM_COMMENTS_PANE_WIDTH,
       skillsRailWidth: DEFAULT_SKILLS_RAIL_WIDTH,
       snippetsRailWidth: DEFAULT_SNIPPETS_RAIL_WIDTH,
-      sidebarTab: 'tasks' as 'tasks' | 'prs',
       lastTaskByProject: {},
       taskState: {},
       addStepDrafts: {},
@@ -552,8 +547,6 @@ const useStore = create<NavigationState>()(
             MAX_SNIPPETS_RAIL_WIDTH,
           ),
         }),
-
-      setSidebarTab: (tab) => set({ sidebarTab: tab }),
 
       setLastTaskForProject: (projectId, taskId) =>
         set((state) => ({
@@ -1110,10 +1103,9 @@ export function useCurrentVisibleProject() {
         return;
       }
 
-      navigate({
-        to: '/projects/$projectId',
-        params: { projectId: nextProjectId },
-      });
+      // The per-project task list was removed; the feed list is the only
+      // main view, so any project switch lands back on it.
+      navigate({ to: '/all' });
     },
     [
       navigate,
@@ -1126,38 +1118,6 @@ export function useCurrentVisibleProject() {
   );
 
   return { projectId, moveToProject };
-}
-
-// Hook for sidebar tab
-export function useSidebarTab() {
-  const sidebarTab = useStore((state) => state.sidebarTab);
-  const setSidebarTab = useStore((state) => state.setSidebarTab);
-  return { sidebarTab, setSidebarTab };
-}
-
-// Hook for per-project last task
-export function useLastTaskForProject(projectId: string) {
-  const lastTaskId = useStore(
-    (state) => state.lastTaskByProject[projectId] ?? null,
-  );
-  const setLastTaskForProjectAction = useStore(
-    (state) => state.setLastTaskForProject,
-  );
-  const clearTaskNavHistoryStateAction = useStore(
-    (state) => state.clearTaskNavHistoryState,
-  );
-
-  const setLastTaskForProject = useCallback(
-    (taskId: string) => setLastTaskForProjectAction(projectId, taskId),
-    [projectId, setLastTaskForProjectAction],
-  );
-
-  const clearTaskNavHistoryState = useCallback(
-    (taskId: string) => clearTaskNavHistoryStateAction(taskId),
-    [clearTaskNavHistoryStateAction],
-  );
-
-  return { lastTaskId, setLastTaskForProject, clearTaskNavHistoryState };
 }
 
 // Hook for per-task state

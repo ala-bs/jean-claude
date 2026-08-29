@@ -622,19 +622,9 @@ function NotificationTaskOpenBridge() {
   });
 
   useEffect(() => {
-    return api.notifications.onOpenTask(({ taskId, projectId }) => {
-      const shouldStayInProjectContext =
-        pathname.startsWith('/projects/') &&
-        !pathname.startsWith('/projects/new');
-
-      if (shouldStayInProjectContext) {
-        void navigate({
-          to: '/projects/$projectId/tasks/$taskId',
-          params: { projectId, taskId },
-        });
-        return;
-      }
-
+    return api.notifications.onOpenTask(({ taskId }) => {
+      // The feed list is the main view, so notifications always open the task
+      // there rather than in a project-scoped route.
       void navigate({
         to: '/all/$taskId',
         params: { taskId },

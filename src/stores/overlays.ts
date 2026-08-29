@@ -23,9 +23,13 @@ interface OverlaysState {
   // Current active overlay (null = none open)
   activeOverlay: OverlayType | null;
   runningCommandTarget: { taskId: string; runCommandId: string } | null;
+  // Project the settings overlay should focus, when opened for a specific
+  // project rather than inferred from the current view.
+  settingsProjectTarget: string | null;
 
   // Actions
   open: (overlay: OverlayType) => void;
+  openSettingsForProject: (projectId: string) => void;
   openRunningCommands: (target: {
     taskId: string;
     runCommandId: string;
@@ -39,6 +43,7 @@ interface OverlaysState {
 export const useOverlaysStore = create<OverlaysState>((set) => ({
   activeOverlay: null,
   runningCommandTarget: null,
+  settingsProjectTarget: null,
 
   open: (overlay) =>
     set((s) =>
@@ -47,10 +52,21 @@ export const useOverlaysStore = create<OverlaysState>((set) => ({
         : {
             activeOverlay: overlay,
             runningCommandTarget: null,
+            settingsProjectTarget: null,
           },
     ),
+  openSettingsForProject: (projectId) =>
+    set({
+      activeOverlay: 'settings',
+      runningCommandTarget: null,
+      settingsProjectTarget: projectId,
+    }),
   openRunningCommands: (target) =>
-    set({ activeOverlay: 'running-commands', runningCommandTarget: target }),
+    set({
+      activeOverlay: 'running-commands',
+      runningCommandTarget: target,
+      settingsProjectTarget: null,
+    }),
   clearRunningCommandTargetForTask: (taskId) =>
     set((s) =>
       s.runningCommandTarget?.taskId === taskId
@@ -68,6 +84,7 @@ export const useOverlaysStore = create<OverlaysState>((set) => ({
             activeOverlay: null,
             runningCommandTarget:
               overlay === 'running-commands' ? null : s.runningCommandTarget,
+            settingsProjectTarget: null,
           }
         : s,
     ),
@@ -75,11 +92,16 @@ export const useOverlaysStore = create<OverlaysState>((set) => ({
     set((s) => ({
       activeOverlay: s.activeOverlay === overlay ? null : overlay,
       runningCommandTarget: null,
+      settingsProjectTarget: null,
     })),
   closeAll: () =>
     set((s) =>
       s.activeOverlay === null && s.runningCommandTarget === null
         ? s
-        : { activeOverlay: null, runningCommandTarget: null },
+        : {
+            activeOverlay: null,
+            runningCommandTarget: null,
+            settingsProjectTarget: null,
+          },
     ),
 }));

@@ -742,10 +742,7 @@ describe('TaskPanel zero-step PR workspace', () => {
       mocks.commands.find((command) => command.label === 'Delete PR Workspace')!.handler(),
     );
     await act(async () => findButton('Confirm PR workspace delete').click());
-    expect(mocks.navigate).toHaveBeenLastCalledWith({
-      to: '/projects/$projectId',
-      params: { projectId: 'project-1' },
-    });
+    expect(mocks.navigate).toHaveBeenLastCalledWith({ to: '/all' });
 
     mocks.taskType = 'agent';
     mocks.commands = [];

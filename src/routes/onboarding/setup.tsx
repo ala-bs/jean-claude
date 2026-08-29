@@ -277,13 +277,6 @@ function SetupWizardPage() {
       return;
     }
     completeSetupWizard();
-    if (firstProject) {
-      void navigate({
-        to: '/projects/$projectId',
-        params: { projectId: firstProject.id },
-      });
-      return;
-    }
     void navigate({ to: '/all' });
   }
 

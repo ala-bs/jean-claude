@@ -84,7 +84,7 @@ function RepoRow({
 
       if (result.success) {
         // Create project with all metadata
-        const newProject = await createProject.mutateAsync({
+        await createProject.mutateAsync({
           name: repo.name,
           path: targetPath,
           type: 'local',
@@ -100,10 +100,9 @@ function RepoRow({
           updatedAt: new Date().toISOString(),
         });
 
-        // Navigate to the new project
+        // Navigate back to the feed list, where the new project shows up
         navigate({
-          to: '/projects/$projectId',
-          params: { projectId: newProject.id },
+          to: '/all',
         });
       } else {
         setCloneError(result.error || 'Clone failed');
