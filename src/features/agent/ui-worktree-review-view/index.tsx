@@ -53,6 +53,7 @@ import {
   useWorktreeLocalChanges,
   useWorktreeLocalFileContent,
 } from '@/hooks/use-worktree-diff';
+import { commitIgnoreMatchPaths } from '@shared/commit-ignore';
 import { getFilesWithAnnotations } from '@/features/agent/ui-diff-annotation';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 import { Separator } from '@/common/ui/separator';
@@ -60,6 +61,7 @@ import { SummaryPanel } from '@/features/agent/ui-summary-panel';
 import { TaskTodoDropdown } from '@/features/task/ui-task-todo-dropdown';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCommands } from '@/common/hooks/use-commands';
+import { useCommitIgnore } from '@/hooks/use-commit-ignore';
 import { useHorizontalResize } from '@/hooks/use-horizontal-resize';
 import { useSpreadsheetFile } from '@/hooks/use-spreadsheet-file';
 import { useTaskSummary } from '@/hooks/use-task-summary';
@@ -72,6 +74,9 @@ import { ReviewFilesTree } from './review-files-tree';
 import { ReviewModeTabs } from './review-mode-tabs';
 
 const HEADER_HEIGHT_CLS = `h-[40px] shrink-0`;
+
+/** Stable empty set so a not-yet-loaded ignore file can't churn renders. */
+const EMPTY_PATH_SET: ReadonlySet<string> = new Set<string>();
 
 export function WorktreeReviewView({
   taskId,
@@ -349,6 +354,9 @@ export function WorktreeReviewView({
       status: normalizeWorktreeStatus(f.status),
       additions: f.additions,
       deletions: f.deletions,
+      // Carried so renames can show their source and so commit-ignore matching
+      // sees both ends of the rename, like the main process does.
+      ...(f.originalPath ? { originalPath: f.originalPath } : {}),
     }));
   }, [data]);
 
@@ -404,6 +412,76 @@ export function WorktreeReviewView({
   const [tabSelection, setTabSelection] = useState<string[]>([]);
 
   const diffPaths = useMemo(() => diffFiles.map((f) => f.path), [diffFiles]);
+
+  // Commit-ignored files stay listed in the review tree but dimmed — they are
+  // still part of the diff, they just never get staged.
+  const {
+    isReady: commitIgnoreReady,
+    isIgnored: isCommitIgnored,
+    canUnignore: canUnignoreCommit,
+    setIgnored: setCommitIgnored,
+  } = useCommitIgnore(projectId);
+
+  /**
+   * A rename is ignored when either end matches, so both ends have to be
+   * offered to the matcher and removed when un-ignoring — same rule the main
+   * process applies to `R` entries in `git status`.
+   */
+  const commitIgnoreMatchPathsByFile = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const file of diffFiles) {
+      map.set(
+        file.path,
+        commitIgnoreMatchPaths({
+          path: file.path,
+          originalPath: file.originalPath,
+        }),
+      );
+    }
+    return map;
+  }, [diffFiles]);
+
+  const ignoredDiffPaths = useMemo(() => {
+    if (!commitIgnoreReady) return EMPTY_PATH_SET;
+    return new Set(
+      diffPaths.filter((path) =>
+        (commitIgnoreMatchPathsByFile.get(path) ?? [path]).some(isCommitIgnored),
+      ),
+    );
+  }, [
+    commitIgnoreReady,
+    diffPaths,
+    commitIgnoreMatchPathsByFile,
+    isCommitIgnored,
+  ]);
+
+  // Ignored by a glob that removing their own literal line would not undo.
+  const patternIgnoredDiffPaths = useMemo(
+    () =>
+      new Set(
+        [...ignoredDiffPaths].filter(
+          (path) =>
+            !canUnignoreCommit(commitIgnoreMatchPathsByFile.get(path) ?? [path]),
+        ),
+      ),
+    [ignoredDiffPaths, commitIgnoreMatchPathsByFile, canUnignoreCommit],
+  );
+
+  const handleToggleCommitIgnored = useCallback(
+    (paths: string[], ignored: boolean) => {
+      if (ignored) {
+        // Only the current path is written — the rename source is a historical
+        // detail the user did not ask to pin a rule to.
+        setCommitIgnored(paths, true);
+        return;
+      }
+      setCommitIgnored(
+        paths.flatMap((path) => commitIgnoreMatchPathsByFile.get(path) ?? [path]),
+        false,
+      );
+    },
+    [setCommitIgnored, commitIgnoreMatchPathsByFile],
+  );
   const reviewedCount = useMemo(
     () =>
       diffPaths.filter((path) => reviewed.has(path) && !stale.has(path)).length,
@@ -739,6 +817,9 @@ export function WorktreeReviewView({
                   onToggleReviewed={setReviewed}
                   reviewedTreatment={treatment}
                   autoReviewedBy={autoReviewedBy}
+                  ignoredPaths={ignoredDiffPaths}
+                  patternIgnoredPaths={patternIgnoredDiffPaths}
+                  onToggleIgnored={handleToggleCommitIgnored}
                   stickyFolders
                 />
               </div>

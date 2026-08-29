@@ -5,11 +5,14 @@ import { promisify } from 'util';
 
 
 import { app } from 'electron';
-import ignore from 'ignore';
 import { nanoid } from 'nanoid';
 
 
 
+import {
+  createCommitIgnoreMatcher,
+  matchesCommitIgnore,
+} from '@shared/commit-ignore';
 import { getImageMimeType, isSvgPath } from '@shared/image-types';
 import {
   isSpreadsheetPath,
@@ -90,11 +93,11 @@ async function getIgnoredCommitPaths({
   }
 
   const ignoreContent = await getProjectCommitIgnore(projectPath);
-  if (!ignoreContent.trim()) {
+  const matcher = createCommitIgnoreMatcher(ignoreContent);
+  if (!matcher) {
     return { ignoredPaths: new Set(), ignoredStagedPaths: new Set() };
   }
 
-  const matcher = ignore().add(ignoreContent);
   const { stdout } = await execFileAsync(
     'git',
     ['status', '--porcelain', '-z', '--untracked-files=all'],
@@ -111,10 +114,10 @@ async function getIgnoredCommitPaths({
     const sourcePath =
       status[0] === 'R' || status[0] === 'C' ? entries[i + 1] : undefined;
     const isIgnored =
-      matcher.ignores(filePath) ||
+      matchesCommitIgnore(matcher, filePath) ||
       (status[0] === 'R' &&
         sourcePath !== undefined &&
-        matcher.ignores(sourcePath));
+        matchesCommitIgnore(matcher, sourcePath));
     if (isIgnored) {
       ignoredPaths.add(filePath);
       if (status[0] !== ' ' && status[0] !== '?') {
