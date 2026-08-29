@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { spawnSync } from 'child_process';
 
 import { app } from 'electron';
 
@@ -9,12 +10,19 @@ import { dbg } from './debug';
  * On-disk breadcrumbs for diagnosing "Saved settings could not be read".
  *
  * The boot guard (`src/lib/local-storage-boot-guard.ts`) can tell that the
- * LevelDB bucket came up empty, but not *why*. The leading theory is LOCK
- * contention: a relaunch wins Electron's single-instance lock while the
- * outgoing process still holds `Local Storage/leveldb/LOCK`, so the new
- * renderer opens an empty store. Proving that needs facts from the *previous*
- * process, which by definition are gone from memory by the time the guard
- * fires — hence a file.
+ * LevelDB bucket came up empty, but not *why*. The theory is LOCK contention:
+ * two processes overlap on one profile, and since `Local Storage/leveldb`
+ * admits a single writer, the loser opens an empty store. Proving that needs
+ * facts from the *other* process, which are gone from memory by the time the
+ * guard fires — hence a file.
+ *
+ * The prime suspect is the reload-preview restart handoff, whose own doc
+ * comment already names this as a known residual gap
+ * (`reload-preview-service.ts`): it releases the single-instance lock and waits
+ * for the replacement to finish booting *before* exiting the outgoing process,
+ * so both are alive at once and only the LevelDB LOCK still separates them.
+ * Note this means an affected process is the single-instance-lock **winner** —
+ * do not read a BOOT line as proof that no one else was running.
  *
  * Two files under `userData`:
  *
@@ -94,13 +102,104 @@ function readPrevious(): LifecycleRecord | null {
   }
 }
 
+function leveldbDir(): string {
+  return join(app.getPath('userData'), 'Local Storage', 'leveldb');
+}
+
+/**
+ * Who actually holds `Local Storage/leveldb/LOCK`, by pid.
+ *
+ * The previous version of this stat'd the file and reported its mtime, which
+ * was worse than useless: LevelDB creates LOCK once and then holds it with
+ * `fcntl(F_SETLK)`, never writing to it. The mtime is therefore the profile's
+ * *creation* date — a real log line read `lock=present mtime=2026-01-27` during
+ * an August failure, which looks like evidence and is noise.
+ *
+ * `lsof` answers the question that actually matters ("is another process
+ * holding it, and which?"), and names a contender that `prev.pid` cannot see:
+ * lifecycle.json only records the last session we ourselves wrote, so a
+ * concurrent instance we did not spawn shows up as `prev=none`.
+ *
+ * Caveat for whoever reads the output: `lsof` reports processes with the file
+ * *open*, which is not identical to holding the `fcntl` lock. LevelDB does
+ * both, so in practice the distinction does not arise here — but a pid in this
+ * list is evidence, not proof.
+ *
+ * Only called from the GUARD_BLOCKED path, never on a healthy boot: `lsof`
+ * walks every process's fd table and measured ~143ms on a real profile, which
+ * is not a cost worth paying on every launch for a line nobody reads.
+ */
 function lockInfo(): string {
-  const lock = join(app.getPath('userData'), 'Local Storage', 'leveldb', 'LOCK');
+  const lock = join(leveldbDir(), 'LOCK');
   if (!existsSync(lock)) return 'lock=absent';
+  if (process.platform === 'win32') return 'lock=present holders=unsupported';
+
+  // `spawnSync` rather than `execFileSync` so a non-zero exit is a value to
+  // inspect rather than a throw: `lsof -t` exits 1 when *nothing* has the file
+  // open, and that is the single most informative outcome here — it rules
+  // contention out. Collapsing it into the same catch as "lsof is missing"
+  // would throw away the answer.
+  const result = spawnSync('lsof', ['-t', lock], {
+    encoding: 'utf8',
+    timeout: 2_000,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+
+  if (result.error) {
+    // Distinguish the two, since telling causes apart is this line's whole job:
+    // a timeout means the answer exists and we gave up, a missing binary means
+    // there was never going to be one.
+    const timedOut =
+      (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' ||
+      result.signal !== null;
+    return `lock=present holders=unknown (lsof ${
+      timedOut ? 'timed out' : 'unavailable'
+    })`;
+  }
+
+  const pids = (result.stdout ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const others = pids.filter((pid) => pid !== String(process.pid));
+  if (others.length === 0) {
+    return pids.length > 0
+      ? 'lock=present holders=self-only'
+      : 'lock=present holders=none';
+  }
+  return `lock=present holders=${others.join(',')}${
+    pids.includes(String(process.pid)) ? ' (incl. self)' : ''
+  }`;
+}
+
+/**
+ * LevelDB's own log, which distinguishes the two failure modes the app-level
+ * breadcrumbs cannot.
+ *
+ * `SanitizeOptions` (from the `DBImpl` constructor) rotates LOG to LOG.old and
+ * creates a fresh LOG; `DBImpl::Recover` then calls `env_->LockFile()` and only
+ * afterwards writes "Recovering log #N". Creation precedes locking, so an
+ * **empty** LOG means the open never got past its first fallible step — the
+ * file lock. That distinguishes "another process holds the bucket" from "the
+ * bucket is corrupt", which the renderer cannot tell apart: `getItem` returns
+ * `null` either way.
+ *
+ * Note the artifact is single-shot. A failed open still performs the rotation,
+ * so a loser overwrites the *winner's* LOG with an empty one and pushes the
+ * winner's history into LOG.old. Read it as "the most recent open attempt",
+ * never as a running history.
+ */
+function leveldbLogTail(): string {
   try {
-    return `lock=present mtime=${statSync(lock).mtime.toISOString()}`;
+    const contents = readFileSync(join(leveldbDir(), 'LOG'), 'utf8').trim();
+    if (!contents) {
+      return 'leveldbLog=EMPTY (open never reached recovery — lock acquisition failed)';
+    }
+    const lines = contents.split('\n');
+    return `leveldbLog=${JSON.stringify(lines.slice(-3).join(' | '))}`;
   } catch {
-    return 'lock=present mtime=unknown';
+    return 'leveldbLog=unreadable';
   }
 }
 
@@ -122,7 +221,11 @@ export function recordBootDiagnostics({
   const parts = [
     `BOOT pid=${process.pid}`,
     `bucket=${bucketExists ? 'present' : 'absent'}`,
-    lockInfo(),
+    // Presence only, not `lockInfo()`: this runs before the first window on
+    // every launch, and the `lsof` probe is too slow to belong on that path.
+    // The holder question only matters once something has actually gone wrong,
+    // and GUARD_BLOCKED asks it there.
+    existsSync(join(leveldbDir(), 'LOCK')) ? 'lock=present' : 'lock=absent',
   ];
 
   if (!previous) {
@@ -188,7 +291,11 @@ export function recordProcessExit(): void {
  * answers "was another process holding the lock?".
  */
 export function recordBootGuardBlocked(): void {
-  const parts = [`GUARD_BLOCKED pid=${process.pid}`, lockInfo()];
+  const parts = [
+    `GUARD_BLOCKED pid=${process.pid}`,
+    lockInfo(),
+    leveldbLogTail(),
+  ];
   if (previous) {
     parts.push(
       `prev.pid=${previous.pid}`,
