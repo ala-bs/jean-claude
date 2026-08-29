@@ -1235,6 +1235,7 @@ export function MobilePreviewPane({
     handleBackButton,
     handleHomeButton,
     handleKeyDown,
+    handlePaste,
     handlePointerCancel,
     handlePointerDown,
     handlePointerMove,
@@ -2826,6 +2827,7 @@ export function MobilePreviewPane({
           onPointerCancel={handlePointerCancel}
           onWheel={handleWheel}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           className="focus-visible:ring-acc relative min-h-0 flex-1 touch-none outline-none focus-visible:ring-2"
         >
           {inputPreparingOverlay}
@@ -2855,6 +2857,7 @@ export function MobilePreviewPane({
           onPointerCancel={handlePointerCancel}
           onWheel={handleWheel}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           className="focus-visible:ring-acc relative min-h-0 flex-1 touch-none outline-none focus-visible:ring-2"
         >
           {inputPreparingOverlay}
@@ -2885,6 +2888,7 @@ export function MobilePreviewPane({
           onPointerCancel={handlePointerCancel}
           onWheel={handleWheel}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           className="focus-visible:ring-acc relative flex min-h-0 flex-1 touch-none items-center justify-center p-4 outline-none focus-visible:ring-2"
         >
           {inputPreparingOverlay}

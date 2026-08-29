@@ -99,6 +99,15 @@ const REMOTE_SHELL_TEXT_META_CHARS = new Set([
   '<',
   '>',
   '\\',
+  // Glob characters: the device-side shell expands these before `input text`
+  // sees them, so an unescaped `*` is replaced by matching filenames.
+  '*',
+  '?',
+  '[',
+  ']',
+  '~',
+  '#',
+  '!',
 ]);
 const ANDROID_FONT_SCALE: Record<MobilePreviewTextSize, string> = {
   small: '0.85',
@@ -571,6 +580,17 @@ function assertTextInput(text: string): void {
   if (text.includes('%')) {
     throw new Error(
       'Unsupported Android text input: percent characters are not supported because adb shell input text treats %s specially.',
+    );
+  }
+  // `adb shell` joins its argv into one string that the device-side shell
+  // parses, so a raw newline terminates `input text` and starts a new command.
+  // Backslash-escaping does not help: `\<newline>` is a line continuation and
+  // would silently drop the break. Callers must split lines and send
+  // KEYCODE_ENTER between them instead.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(text)) {
+    throw new Error(
+      'Unsupported Android text input: control characters (including newlines and tabs) must be sent as separate key events.',
     );
   }
 }

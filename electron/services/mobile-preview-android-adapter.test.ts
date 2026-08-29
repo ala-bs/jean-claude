@@ -842,6 +842,33 @@ id: 33 or "unknown_phone"
     ).toEqual(['-s', 'device-1', 'shell', 'input', 'keyevent', 'KEYCODE_DEL']);
   });
 
+  it('rejects control characters so a newline cannot start a second device-shell command', () => {
+    // `adb shell` joins argv into one string parsed by the device shell, so an
+    // unescaped newline would terminate `input text` and run what follows.
+    expect(() =>
+      buildAdbInputArgs('device-1', {
+        type: 'text',
+        text: 'hello\npm uninstall com.example.app',
+      }),
+    ).toThrow(/control characters/);
+    expect(() =>
+      buildAdbInputArgs('device-1', { type: 'text', text: 'a\tb' }),
+    ).toThrow(/control characters/);
+  });
+
+  it('escapes glob characters so the device shell cannot expand them', () => {
+    expect(
+      buildAdbInputArgs('device-1', { type: 'text', text: '*?[]~#!' }),
+    ).toEqual([
+      '-s',
+      'device-1',
+      'shell',
+      'input',
+      'text',
+      '\\*\\?\\[\\]\\~\\#\\!',
+    ]);
+  });
+
   it('escapes remote shell metacharacters in text input', () => {
     expect(
       buildAdbInputArgs('device-1', {
