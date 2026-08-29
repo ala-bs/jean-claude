@@ -103,20 +103,22 @@ export function useAgentControls({
         if (pendingRequest?.type === 'permission') {
           setPermission(stepId, pendingRequest.data);
           setQuestion(stepId, null);
-          setPendingRequestForTask(taskId, {
-            type: 'permission',
-            permission: pendingRequest.data,
+          setPendingRequestForTask({
+            taskId,
+            stepId,
+            request: { type: 'permission', permission: pendingRequest.data },
           });
         } else if (pendingRequest?.type === 'question') {
           setQuestion(stepId, pendingRequest.data);
           setPermission(stepId, null);
-          setPendingRequestForTask(taskId, {
-            type: 'question',
-            question: pendingRequest.data,
+          setPendingRequestForTask({
+            taskId,
+            stepId,
+            request: { type: 'question', question: pendingRequest.data },
           });
         } else {
           setPermission(stepId, null);
-          clearPendingRequestForTask(taskId);
+          clearPendingRequestForTask({ taskId, stepId });
         }
       } catch (error) {
         addToast({
@@ -138,7 +140,7 @@ export function useAgentControls({
         currentState.pendingRequestsByTaskId[taskId]?.permission?.requestId ===
         requestId
       ) {
-        clearPendingRequestForTask(taskId);
+        clearPendingRequestForTask({ taskId, stepId });
       }
     },
     [
@@ -161,20 +163,22 @@ export function useAgentControls({
         if (pendingRequest?.type === 'question') {
           setQuestion(stepId, pendingRequest.data);
           setPermission(stepId, null);
-          setPendingRequestForTask(taskId, {
-            type: 'question',
-            question: pendingRequest.data,
+          setPendingRequestForTask({
+            taskId,
+            stepId,
+            request: { type: 'question', question: pendingRequest.data },
           });
         } else if (pendingRequest?.type === 'permission') {
           setPermission(stepId, pendingRequest.data);
           setQuestion(stepId, null);
-          setPendingRequestForTask(taskId, {
-            type: 'permission',
-            permission: pendingRequest.data,
+          setPendingRequestForTask({
+            taskId,
+            stepId,
+            request: { type: 'permission', permission: pendingRequest.data },
           });
         } else {
           setQuestion(stepId, null);
-          clearPendingRequestForTask(taskId);
+          clearPendingRequestForTask({ taskId, stepId });
         }
       } catch (error) {
         addToast({
@@ -196,7 +200,7 @@ export function useAgentControls({
         currentState.pendingRequestsByTaskId[taskId]?.question?.requestId ===
         requestId
       ) {
-        clearPendingRequestForTask(taskId);
+        clearPendingRequestForTask({ taskId, stepId });
       }
       return true;
     },

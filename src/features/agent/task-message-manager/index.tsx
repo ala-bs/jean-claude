@@ -164,7 +164,7 @@ export function TaskMessageManager() {
           invalidateTaskStatusResources(taskId, stepId);
           // Clear pending requests when agent resumes or reaches terminal state.
           if (clearsTaskPendingRequest(event.status)) {
-            clearPendingRequestForTask(taskId);
+            clearPendingRequestForTask({ taskId, stepId });
           }
           // Turn boundary: refresh changes regardless of which tools ran.
           // Agents can edit files via bash (sed/python), not just write/edit.
@@ -187,9 +187,10 @@ export function TaskMessageManager() {
           }
           // Always track at task level so the feed can refine attention
           // even when the step isn't loaded (task panel never opened).
-          setPendingRequestForTask(taskId, {
-            type: 'permission',
-            permission: event,
+          setPendingRequestForTask({
+            taskId,
+            stepId,
+            request: { type: 'permission', permission: event },
           });
           // Invalidate feed so attention changes to needs-permission
           invalidateTaskFeed(queryClient);
@@ -208,7 +209,7 @@ export function TaskMessageManager() {
             state.pendingRequestsByTaskId[taskId]?.permission?.requestId ===
             event.requestId
           ) {
-            clearPendingRequestForTask(taskId);
+            clearPendingRequestForTask({ taskId, stepId });
           }
           invalidateTaskFeed(queryClient);
           break;
@@ -219,7 +220,7 @@ export function TaskMessageManager() {
             if (isLoaded(stepId)) {
               setQuestion(stepId, null);
             }
-            clearPendingRequestForTask(taskId);
+            clearPendingRequestForTask({ taskId, stepId });
             invalidateTaskFeed(queryClient);
             break;
           }
@@ -229,9 +230,10 @@ export function TaskMessageManager() {
           }
           // Always track at task level so the feed can refine attention
           // even when the step isn't loaded (task panel never opened).
-          setPendingRequestForTask(taskId, {
-            type: 'question',
-            question: event,
+          setPendingRequestForTask({
+            taskId,
+            stepId,
+            request: { type: 'question', question: event },
           });
           // Invalidate feed so attention changes to has-question
           invalidateTaskFeed(queryClient);

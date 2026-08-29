@@ -50,12 +50,14 @@ export function useTaskMessages({
 
   const fetchPendingRequest = useCallback(async () => {
     if (!enabled || !stepId) return;
+    // Per-step version: a sibling step of the same task emitting status updates
+    // must not invalidate this step's fetch.
     const pendingRequestVersionAtStart =
-      useTaskMessagesStore.getState().pendingRequestVersion;
+      useTaskMessagesStore.getState().pendingRequestVersions[stepId] ?? 0;
     const pendingRequest = await api.agent.getPendingRequest(stepId);
     if (pendingRequest) {
       if (
-        useTaskMessagesStore.getState().pendingRequestVersion !==
+        (useTaskMessagesStore.getState().pendingRequestVersions[stepId] ?? 0) !==
         pendingRequestVersionAtStart
       ) {
         return;
@@ -71,15 +73,17 @@ export function useTaskMessages({
 
       if (pendingRequest.type === 'permission') {
         setPermission(stepId, pendingRequest.data);
-        setPendingRequestForTask(taskId, {
-          type: 'permission',
-          permission: pendingRequest.data,
+        setPendingRequestForTask({
+          taskId,
+          stepId,
+          request: { type: 'permission', permission: pendingRequest.data },
         });
       } else {
         setQuestion(stepId, pendingRequest.data);
-        setPendingRequestForTask(taskId, {
-          type: 'question',
-          question: pendingRequest.data,
+        setPendingRequestForTask({
+          taskId,
+          stepId,
+          request: { type: 'question', question: pendingRequest.data },
         });
       }
     }
