@@ -81,6 +81,8 @@ type CodexSessionState = {
   sessionId: string;
   threadId: string | null;
   turnId: string | null;
+  /** Env this session's app-server was pooled under; interrupts must reuse it. */
+  env?: Record<string, string>;
   eventChannel: AsyncEventChannel<AgentEvent>;
   normalizationCtx: CodexNormalizationContext;
   messageIndex: number;
@@ -124,6 +126,7 @@ export class CodexBackend implements AgentBackend {
       sessionId: sessionKey,
       threadId: null,
       turnId: null,
+      env: config.env,
       eventChannel: new AsyncEventChannel<AgentEvent>(),
       normalizationCtx: createCodexNormalizationContext(),
       messageIndex: this.taskContext.sessionStartIndex,
@@ -140,7 +143,7 @@ export class CodexBackend implements AgentBackend {
     this.sessions.set(sessionKey, session);
 
     try {
-      const { client, rootPid } = await getOrCreateCodexAppServer();
+      const { client, rootPid } = await getOrCreateCodexAppServer(config.env);
       const threadConfig = createCodexThreadConfig(config);
       const threadResult = config.sessionId
         ? await client.request('thread/resume', {
@@ -225,7 +228,7 @@ export class CodexBackend implements AgentBackend {
       return;
     }
 
-    const { client } = await getOrCreateCodexAppServer();
+    const { client } = await getOrCreateCodexAppServer(session.env);
     await client.request('turn/interrupt', {
       threadId: session.threadId,
       turnId: session.turnId,

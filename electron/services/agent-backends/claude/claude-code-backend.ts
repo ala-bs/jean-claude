@@ -490,7 +490,7 @@ export class ClaudeCodeBackend implements AgentBackend {
 
     const queryOptions: NonNullable<Parameters<typeof query>[0]['options']> = {
       cwd: config.cwd,
-      env: getChildProcessEnv(),
+      env: getChildProcessEnv({ overrides: config.env }),
       allowedTools: [],
       // Disable the built-in question tool: we expose our own
       // `mcp__jean-claude-mcp__ask_question` which renders in the task UI.

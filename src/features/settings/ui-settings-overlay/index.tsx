@@ -262,6 +262,7 @@ const PROJECT_SECTIONS: ProjectSection[] = [
     subs: [
       { id: 'details', label: 'Details' },
       { id: 'commit-ignore', label: 'Commit Ignore' },
+      { id: 'env-vars', label: 'Environment Variables' },
       { id: 'worktree', label: 'Worktree' },
       { id: 'feature-map', label: 'Feature Map' },
       { id: 'prompt-preface', label: 'Prompt Preface' },
@@ -487,6 +488,7 @@ function getProjectNavGroups(): SettingsNavGroup[] {
       items: [
         projectLeaf('project-general', 'details'),
         projectLeaf('project-general', 'commit-ignore'),
+        projectLeaf('project-general', 'env-vars'),
         projectLeaf('project-general', 'worktree'),
         projectLeaf('project-general', 'feature-map'),
         projectLeaf('project-general', 'autocomplete'),

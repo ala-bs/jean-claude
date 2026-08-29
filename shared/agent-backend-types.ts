@@ -88,6 +88,11 @@ export interface AgentBackendConfig {
     string,
     { command: string; args?: string[]; env?: Record<string, string> }
   >;
+  /**
+   * Project-scoped environment variables (secrets already decrypted) layered
+   * over the inherited process environment for the agent process.
+   */
+  env?: Record<string, string>;
 }
 
 export interface AgentSession {

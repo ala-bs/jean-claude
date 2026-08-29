@@ -75,6 +75,7 @@ const {
   normalizeToolRequestMock,
   openCodeCompactRawMessagesForTaskMock,
   pathExistsMock,
+  projectEnvVarRepositoryMock,
   projectRepositoryMock,
   providerCalls,
   providerState,
@@ -235,6 +236,11 @@ const {
       notify: vi.fn(),
     },
     pathExistsMock: vi.fn(),
+    projectEnvVarRepositoryMock: {
+      getResolvedEnv: vi
+        .fn()
+        .mockResolvedValue({ env: {}, undecryptableKeys: [] }),
+    },
     projectRepositoryMock: {
       findById: vi.fn(),
     },
@@ -297,6 +303,7 @@ vi.mock('electron', () => ({
 
 vi.mock('../database/repositories', () => ({
   AgentMessageRepository: agentMessageRepositoryMock,
+  ProjectEnvVarRepository: projectEnvVarRepositoryMock,
   ProjectRepository: projectRepositoryMock,
   RawMessageRepository: rawMessageRepositoryMock,
   TaskRepository: taskRepositoryMock,
@@ -1495,6 +1502,59 @@ describe('agentService provider runtime', () => {
       status: 'waiting',
     });
     expect(stepServiceMock.syncTaskStatus).not.toHaveBeenCalled();
+  });
+
+  it("passes the project's resolved env vars to the backend config", async () => {
+    projectEnvVarRepositoryMock.getResolvedEnv.mockResolvedValueOnce({
+      env: {
+        API_URL: 'https://example.test',
+        SECRET_TOKEN: 'decrypted-value',
+      },
+      undecryptableKeys: [],
+    });
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    expect(projectEnvVarRepositoryMock.getResolvedEnv).toHaveBeenCalledWith(
+      'project-1',
+    );
+    expect(providerCalls.runStarts[0]).toMatchObject({
+      config: {
+        env: {
+          API_URL: 'https://example.test',
+          SECRET_TOKEN: 'decrypted-value',
+        },
+      },
+    });
+  });
+
+  it('warns by name but still runs when a project secret cannot be decrypted', async () => {
+    projectEnvVarRepositoryMock.getResolvedEnv.mockResolvedValueOnce({
+      env: { API_URL: 'https://example.test' },
+      undecryptableKeys: ['SECRET_TOKEN'],
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const handle = createHandle({ events: [completeEvent()] });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(providerCalls.runStarts).toHaveLength(1);
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SECRET_TOKEN'),
+    );
+    // The run proceeds with whatever did resolve rather than failing outright.
+    expect(providerCalls.runStarts[0]).toMatchObject({
+      config: { env: { API_URL: 'https://example.test' } },
+    });
+    warnSpy.mockRestore();
   });
 
   it('starts active runs through the provider without constructing legacy backend classes', async () => {

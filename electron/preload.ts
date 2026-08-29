@@ -133,6 +133,16 @@ contextBridge.exposeInMainWorld('api', {
   },
   projects: {
     findAll: () => ipcRenderer.invoke('projects:findAll'),
+    listEnvVars: (projectId: string) =>
+      ipcRenderer.invoke('projects:listEnvVars', projectId),
+    createEnvVar: (data: unknown) =>
+      ipcRenderer.invoke('projects:createEnvVar', data),
+    updateEnvVar: (id: string, data: unknown) =>
+      ipcRenderer.invoke('projects:updateEnvVar', id, data),
+    deleteEnvVar: (id: string) =>
+      ipcRenderer.invoke('projects:deleteEnvVar', id),
+    isSecretStorageAvailable: () =>
+      ipcRenderer.invoke('projects:isSecretStorageAvailable'),
     findById: (id: string) => ipcRenderer.invoke('projects:findById', id),
     create: (data: unknown) => ipcRenderer.invoke('projects:create', data),
     update: (id: string, data: unknown) =>

@@ -263,6 +263,7 @@ import {
 import {
   AiUsageRepository,
   DebugRepository,
+  ProjectEnvVarRepository,
   ProjectRepository,
   ProjectTodoRepository,
   ProviderRepository,
@@ -455,6 +456,10 @@ import {
   UpdateProvider,
   UpdateTask,
 } from '../database/schema';
+import type {
+  NewProjectEnvVar,
+  UpdateProjectEnvVar,
+} from '@shared/types';
 import {
   readBackendUserConfig,
   writeBackendUserConfig,
@@ -1332,6 +1337,38 @@ export function registerIpcHandlers() {
       return result;
     },
   );
+  // Project environment variables. Values of secret vars never cross this
+  // boundary: the repository strips them on read, and writes are one-way.
+  ipcMain.handle('projects:listEnvVars', async (_, projectId: string) => {
+    dbg.ipc('projects:listEnvVars %s', projectId);
+    return ProjectEnvVarRepository.findByProjectId(projectId);
+  });
+
+  ipcMain.handle('projects:createEnvVar', async (_, data: NewProjectEnvVar) => {
+    dbg.ipc('projects:createEnvVar %s %s', data.projectId, data.key);
+    return ProjectEnvVarRepository.create(data);
+  });
+
+  ipcMain.handle(
+    'projects:updateEnvVar',
+    async (_, id: string, data: UpdateProjectEnvVar) => {
+      dbg.ipc('projects:updateEnvVar %s %s', id, data.key ?? '(key unchanged)');
+      return ProjectEnvVarRepository.update(id, data);
+    },
+  );
+
+  ipcMain.handle('projects:deleteEnvVar', async (_, id: string) => {
+    dbg.ipc('projects:deleteEnvVar %s', id);
+    return ProjectEnvVarRepository.delete(id);
+  });
+
+  ipcMain.handle('projects:isSecretStorageAvailable', async () => {
+    const { encryptionService } = await import(
+      '../services/encryption-service'
+    );
+    return encryptionService.isEncryptionAvailable();
+  });
+
   ipcMain.handle(
     'projects:update',
     async (_, id: string, data: UpdateProject) => {

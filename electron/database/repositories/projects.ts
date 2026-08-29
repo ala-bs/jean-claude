@@ -274,8 +274,16 @@ export const ProjectRepository = {
     return ProjectRepository.findById(id);
   },
 
-  delete: (id: string) => {
+  delete: async (id: string) => {
     dbg.db('projects.delete id=%s', id);
+    // Explicit rather than relying on ON DELETE CASCADE: SQLite enforces
+    // foreign keys per-connection and this app never sets `PRAGMA
+    // foreign_keys = ON`, so the cascade would not fire and the project's
+    // encrypted secrets would linger in the database indefinitely.
+    await db
+      .deleteFrom('project_env_vars')
+      .where('projectId', '=', id)
+      .execute();
     return db.deleteFrom('projects').where('id', '=', id).execute();
   },
 

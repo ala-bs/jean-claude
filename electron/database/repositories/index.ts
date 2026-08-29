@@ -1,4 +1,5 @@
 export { ProjectRepository } from './projects';
+export { ProjectEnvVarRepository } from './project-env-vars';
 export { TaskRepository } from './tasks';
 export { ProviderRepository } from './providers';
 export { TokenRepository } from './tokens';

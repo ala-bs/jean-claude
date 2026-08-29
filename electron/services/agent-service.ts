@@ -76,6 +76,7 @@ import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 
 import {
   AgentMessageRepository,
+  ProjectEnvVarRepository,
   ProjectRepository,
   RawMessageRepository,
   TaskRepository,
@@ -1689,6 +1690,28 @@ class AgentService {
         }
       }
 
+      // Project-scoped env vars (secrets decrypted here, in main) are layered
+      // over the inherited process env by each backend's spawn call.
+      const { env: projectEnv, undecryptableKeys } =
+        await ProjectEnvVarRepository.getResolvedEnv(task.projectId);
+      const projectEnvKeys = Object.keys(projectEnv);
+      if (projectEnvKeys.length > 0) {
+        // Names only — values may be secrets and must never reach the logs.
+        dbg.agentSession(
+          'Injecting %d project env var(s) for step %s: %s',
+          projectEnvKeys.length,
+          stepId,
+          projectEnvKeys.join(', '),
+        );
+      }
+      if (undecryptableKeys.length > 0) {
+        // The run continues without these, so say so loudly and by name —
+        // a missing credential otherwise surfaces as a confusing agent failure.
+        console.warn(
+          `[project-env-vars] Skipping ${undecryptableKeys.length} project secret(s) that could not be decrypted for project ${task.projectId}: ${undecryptableKeys.join(', ')}. Re-enter them in Project Settings > Environment Variables.`,
+        );
+      }
+
       const config = {
         type: session.backendType,
         cwd: workingDir,
@@ -1711,6 +1734,7 @@ class AgentService {
         persistedSessionRules: sessionRules,
         permissionRules: rules,
         mcpServers,
+        env: projectEnv,
       };
 
       const runCapability = requireCapability(

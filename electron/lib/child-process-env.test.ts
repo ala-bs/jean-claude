@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getChildProcessEnv } from './child-process-env';
+import { getChildProcessEnv, getEnvPoolKey } from './child-process-env';
 
 describe('getChildProcessEnv', () => {
   it('removes app-owned variables and undefined values', () => {
@@ -54,5 +54,32 @@ describe('getChildProcessEnv', () => {
       ELECTRON_RUN_AS_NODE: '0',
       JC_PROJECT_VALUE: 'configured',
     });
+  });
+
+  it('lets project overrides win over inherited values', () => {
+    expect(
+      getChildProcessEnv({
+        inheritedEnv: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'inherited' },
+        overrides: { ANTHROPIC_API_KEY: 'project' },
+      }),
+    ).toEqual({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'project' });
+  });
+});
+
+describe('getEnvPoolKey', () => {
+  it('treats undefined and empty overrides as the shared pool', () => {
+    expect(getEnvPoolKey(undefined)).toBe('');
+    expect(getEnvPoolKey({})).toBe('');
+  });
+
+  it('is order-independent so equivalent envs share a process', () => {
+    expect(getEnvPoolKey({ A: '1', B: '2' })).toBe(
+      getEnvPoolKey({ B: '2', A: '1' }),
+    );
+  });
+
+  it('separates different values and different keys', () => {
+    expect(getEnvPoolKey({ A: '1' })).not.toBe(getEnvPoolKey({ A: '2' }));
+    expect(getEnvPoolKey({ A: '1' })).not.toBe(getEnvPoolKey({ B: '1' }));
   });
 });

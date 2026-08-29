@@ -38,11 +38,13 @@ import type {
   DetectedProjectLogo,
   InteractionMode,
   NewProject,
+  NewProjectEnvVar,
   NewProvider,
   NewTask,
   NewTaskStep,
   NewToken,
   Project,
+  ProjectEnvVar,
   ProjectFeatureMap,
   ProjectLogoHistoryItem,
   ProjectTodo,
@@ -53,6 +55,7 @@ import type {
   ThinkingEffort,
   Token,
   UpdateProject,
+  UpdateProjectEnvVar,
   UpdateProvider,
   UpdateTask,
   UpdateTaskStep,
@@ -590,6 +593,14 @@ export interface Api {
   };
   projects: {
     findAll: () => Promise<Project[]>;
+    listEnvVars: (projectId: string) => Promise<ProjectEnvVar[]>;
+    createEnvVar: (data: NewProjectEnvVar) => Promise<ProjectEnvVar>;
+    updateEnvVar: (
+      id: string,
+      data: UpdateProjectEnvVar,
+    ) => Promise<ProjectEnvVar>;
+    deleteEnvVar: (id: string) => Promise<void>;
+    isSecretStorageAvailable: () => Promise<boolean>;
     findById: (id: string) => Promise<Project | undefined>;
     create: (data: NewProject) => Promise<Project>;
     update: (id: string, data: UpdateProject) => Promise<Project>;
@@ -2211,6 +2222,17 @@ export const api: Api = hasWindowApi
       projects: {
         findAll: async () => [],
         findById: async () => undefined,
+        listEnvVars: async () => [],
+        createEnvVar: async () => {
+          throw new Error('API not available');
+        },
+        updateEnvVar: async () => {
+          throw new Error('API not available');
+        },
+        deleteEnvVar: async () => {
+          throw new Error('API not available');
+        },
+        isSecretStorageAvailable: async () => false,
         create: async () => {
           throw new Error('API not available');
         },
