@@ -186,6 +186,11 @@ import { runWorkspaceSetup } from './utils-run-workspace-setup';
 import { getDeviceCornerRadiusRatio } from './utils-device-frame';
 import { waitForDevToolsReattach } from './utils-devtools-reattach';
 import { getMobilePreviewStandaloneLayoutClasses } from '@/features/mobile-preview/utils-mobile-preview-standalone-layout';
+import {
+  clearDismissedNotice,
+  isNoticeDismissed,
+  markNoticeDismissed,
+} from '@/features/mobile-preview/mobile-preview-dismissed-notices-store';
 import { useMobilePreviewAutoStart } from '@/features/mobile-preview/use-mobile-preview-auto-start';
 import { useMobilePreviewExpoLaunch } from '@/features/mobile-preview/use-mobile-preview-expo-launch';
 
@@ -255,10 +260,14 @@ export function MobilePreviewPane({
    * Identity of the runtime-launch notice the user dismissed (device +
    * message), so a different failure — or the same failure on another device —
    * still surfaces instead of staying silently hidden.
+   *
+   * The module-scope dismissal store is the real source of truth (it survives
+   * this pane unmounting when the workspace is closed). This state exists only
+   * to re-render on dismiss, which is why every store write below is paired
+   * with a `setState`.
    */
-  const [dismissedRuntimeLaunchKey, setDismissedRuntimeLaunchKey] = useState<
-    string | null
-  >(null);
+  const [dismissedRuntimeLaunchKey, setDismissedRuntimeLaunchKeyState] =
+    useState<string | null>(null);
   const [isStandaloneInspectorOpen, setIsStandaloneInspectorOpen] =
     useState(false);
   const [activeTab, setActiveTab] = useState<MobilePreviewPaneTab>('setup');
@@ -1155,17 +1164,35 @@ export function MobilePreviewPane({
     'message' in runtimeLaunchState ? runtimeLaunchState.message : '';
   // Mirrors the inputs that make `useMobilePreviewExpoLaunch` try again, so a
   // dismissal never carries over to a fresh attempt.
+  //
+  // `taskId`/`appPath` lead the key because dismissals are persisted in a
+  // module-scope store shared by the whole renderer. Without them, two tasks on
+  // the same simulator with Metro not yet running produce byte-identical keys
+  // (pid collapses to '-', port is the project default), so dismissing in one
+  // task would silently hide the banner in the other.
   const runtimeLaunchAttemptKey = getRuntimeLaunchAttemptKey([
+    taskId,
+    appPath,
     runtimeLaunchRetry,
     selectedPreviewDeviceKey,
     effectiveDevServerPort,
     devServerStatus?.pid,
   ]);
+  const runtimeLaunchDismissKey = getRuntimeLaunchDismissKey({
+    attemptKey: runtimeLaunchAttemptKey,
+    message: runtimeLaunchMessage,
+  });
   const showRuntimeLaunchNotice = shouldShowRuntimeLaunchNotice({
     status: runtimeLaunchState.status,
     message: runtimeLaunchMessage,
     attemptKey: runtimeLaunchAttemptKey,
-    dismissedKey: dismissedRuntimeLaunchKey,
+    // Fall back to the persisted dismissal so a notice dismissed before the
+    // pane unmounted stays dismissed after the workspace is reopened.
+    dismissedKey:
+      dismissedRuntimeLaunchKey ??
+      (isNoticeDismissed(runtimeLaunchDismissKey)
+        ? runtimeLaunchDismissKey
+        : null),
   });
   const handlePreviewFrameRendered = useCallback(
     (sessionId: string, source: 'image' | 'raw-rgba' | 'h264') => {
@@ -1272,6 +1299,7 @@ export function MobilePreviewPane({
     error: autoPreviewStartError,
     retry: retryAutoPreviewStart,
     clearError: clearAutoPreviewStartError,
+    dismissError: dismissAutoPreviewStartError,
   } = useMobilePreviewAutoStart({
     enabled:
       autoLaunchRunningRuntime &&
@@ -3059,7 +3087,7 @@ export function MobilePreviewPane({
                   Retry preview
                 </Button>
               }
-              onDismiss={clearAutoPreviewStartError}
+              onDismiss={dismissAutoPreviewStartError}
             >
               {autoPreviewStartError}
             </PreviewNotice>
@@ -3085,7 +3113,12 @@ export function MobilePreviewPane({
                     variant="ghost"
                     size="xs"
                     onClick={() => {
-                      setDismissedRuntimeLaunchKey(null);
+                      // Clear the persisted dismissal for the notice actually
+                      // on screen, not just the component-local mirror — after
+                      // a reopen the mirror is null while the store still
+                      // holds the key.
+                      clearDismissedNotice(runtimeLaunchDismissKey);
+                      setDismissedRuntimeLaunchKeyState(null);
                       setRuntimeLaunchRetry((value) => value + 1);
                     }}
                   >
@@ -3095,13 +3128,12 @@ export function MobilePreviewPane({
               }
               onDismiss={
                 canDismissRuntimeLaunchNotice
-                  ? () =>
-                      setDismissedRuntimeLaunchKey(
-                        getRuntimeLaunchDismissKey({
-                          attemptKey: runtimeLaunchAttemptKey,
-                          message: runtimeLaunchMessage,
-                        }),
-                      )
+                  ? () => {
+                      markNoticeDismissed(runtimeLaunchDismissKey);
+                      setDismissedRuntimeLaunchKeyState(
+                        runtimeLaunchDismissKey,
+                      );
+                    }
                   : undefined
               }
             >
