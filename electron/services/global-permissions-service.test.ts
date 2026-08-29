@@ -1,11 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const storage = vi.hoisted(() => ({ content: null as string | null }));
+const storage = vi.hoisted(() => ({
+  content: null as string | null,
+  /** When set, `readFile` rejects with this instead of reading `content`. */
+  readError: null as NodeJS.ErrnoException | null,
+}));
 
 vi.mock('fs/promises', () => ({
   mkdir: vi.fn(),
   readFile: vi.fn(async () => {
-    if (storage.content === null) throw new Error('ENOENT');
+    if (storage.readError) throw storage.readError;
+    if (storage.content === null) {
+      const error: NodeJS.ErrnoException = new Error('ENOENT');
+      error.code = 'ENOENT';
+      throw error;
+    }
     return storage.content;
   }),
 }));
@@ -23,6 +32,99 @@ import {
 
 beforeEach(() => {
   storage.content = null;
+  storage.readError = null;
+});
+
+describe('readGlobalPermissions transient failures', () => {
+  /**
+   * Fresh module instance so the last-known-good cache starts empty and does
+   * not leak between cases.
+   */
+  async function loadService() {
+    vi.resetModules();
+    return import('./global-permissions-service');
+  }
+
+  const SETTINGS = JSON.stringify({
+    version: 1,
+    permissions: { read: 'allow', bash: { 'git *': 'allow' } },
+  });
+
+  it('reuses the last known good scope when the read transiently fails', async () => {
+    const service = await loadService();
+    storage.content = SETTINGS;
+    const good = await service.readGlobalPermissions();
+    expect(good).toEqual({ read: 'allow', bash: { 'git *': 'allow' } });
+
+    // Bust the in-memory cache the way a write does, then fail the next read.
+    await service.removeGlobalPermission({ tool: 'nonexistent' });
+    storage.readError = Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+
+    // Must NOT collapse to {} — that would drop every allowed tool to `ask`.
+    expect(await service.readGlobalPermissions()).toEqual({
+      read: 'allow',
+      bash: { 'git *': 'allow' },
+    });
+  });
+
+  it('reuses the last known good scope when the file is unparseable', async () => {
+    const service = await loadService();
+    storage.content = SETTINGS;
+    await service.readGlobalPermissions();
+
+    await service.removeGlobalPermission({ tool: 'nonexistent' });
+    storage.content = '{ truncated';
+
+    expect(await service.readGlobalPermissions()).toEqual({
+      read: 'allow',
+      bash: { 'git *': 'allow' },
+    });
+  });
+
+  it('returns an empty scope when the file genuinely does not exist', async () => {
+    const service = await loadService();
+    storage.content = null;
+    expect(await service.readGlobalPermissions()).toEqual({});
+  });
+
+  it('does not serve a revoked rule when the post-write read fails', async () => {
+    const service = await loadService();
+    storage.content = SETTINGS;
+    await service.readGlobalPermissions();
+
+    // User revokes the bash rule. The write busts the cache, so the refresh
+    // that follows goes to disk — and that read is the one that fails.
+    await service.removeGlobalPermission({ tool: 'bash' });
+    storage.readError = Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+
+    // Must NOT resurrect `bash` — that would be wider than disk.
+    expect(await service.readGlobalPermissions()).toEqual({ read: 'allow' });
+  });
+
+  it('reports empty when the settings file disappears', async () => {
+    const service = await loadService();
+    storage.content = SETTINGS;
+    await service.readGlobalPermissions();
+
+    // A vanished file is a real "no rules" answer, not an unknown one — unlike
+    // a failed read, it must NOT fall back to the last known good scope.
+    await service.removeGlobalPermission({ tool: 'nonexistent' });
+    storage.content = null;
+    expect(await service.readGlobalPermissions()).toEqual({});
+  });
+
+  it('does not hand out a mutable reference to the cached scope', async () => {
+    const service = await loadService();
+    storage.content = SETTINGS;
+
+    const first = await service.readGlobalPermissions();
+    delete first.read;
+
+    expect(await service.readGlobalPermissions()).toEqual({
+      read: 'allow',
+      bash: { 'git *': 'allow' },
+    });
+  });
 });
 
 describe('addGlobalPermission', () => {
