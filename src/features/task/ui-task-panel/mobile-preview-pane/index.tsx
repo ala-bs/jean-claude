@@ -131,6 +131,12 @@ import {
   RawRgbaPreviewCanvas,
 } from './ui-preview-surface';
 import {
+  getRuntimeLaunchAttemptKey,
+  getRuntimeLaunchDismissKey,
+  isRuntimeLaunchNoticeDismissable,
+  shouldShowRuntimeLaunchNotice,
+} from './utils-runtime-launch-notice';
+import {
   getVisibleMobilePreviewPaneTab,
   isMobilePreviewPaneTabVisible,
   type MobilePreviewPaneTab,
@@ -245,6 +251,14 @@ export function MobilePreviewPane({
     setInputNotice(null);
   }, []);
   const [runtimeLaunchRetry, setRuntimeLaunchRetry] = useState(0);
+  /**
+   * Identity of the runtime-launch notice the user dismissed (device +
+   * message), so a different failure — or the same failure on another device —
+   * still surfaces instead of staying silently hidden.
+   */
+  const [dismissedRuntimeLaunchKey, setDismissedRuntimeLaunchKey] = useState<
+    string | null
+  >(null);
   const [isStandaloneInspectorOpen, setIsStandaloneInspectorOpen] =
     useState(false);
   const [activeTab, setActiveTab] = useState<MobilePreviewPaneTab>('setup');
@@ -1131,6 +1145,27 @@ export function MobilePreviewPane({
         ? androidAppStatus?.appInstalled
         : iosAppStatus?.appInstalled) ?? null,
     appScheme: configuredAppScheme,
+  });
+  // Only terminal notices can be dismissed; transient progress ones clear on
+  // their own once the launch settles.
+  const canDismissRuntimeLaunchNotice = isRuntimeLaunchNoticeDismissable(
+    runtimeLaunchState.status,
+  );
+  const runtimeLaunchMessage =
+    'message' in runtimeLaunchState ? runtimeLaunchState.message : '';
+  // Mirrors the inputs that make `useMobilePreviewExpoLaunch` try again, so a
+  // dismissal never carries over to a fresh attempt.
+  const runtimeLaunchAttemptKey = getRuntimeLaunchAttemptKey([
+    runtimeLaunchRetry,
+    selectedPreviewDeviceKey,
+    effectiveDevServerPort,
+    devServerStatus?.pid,
+  ]);
+  const showRuntimeLaunchNotice = shouldShowRuntimeLaunchNotice({
+    status: runtimeLaunchState.status,
+    message: runtimeLaunchMessage,
+    attemptKey: runtimeLaunchAttemptKey,
+    dismissedKey: dismissedRuntimeLaunchKey,
   });
   const handlePreviewFrameRendered = useCallback(
     (sessionId: string, source: 'image' | 'raw-rgba' | 'h264') => {
@@ -3000,10 +3035,7 @@ export function MobilePreviewPane({
           )}
         />
       ) : null}
-      {inputNotice ||
-      autoPreviewStartError ||
-      (runtimeLaunchState.status !== 'idle' &&
-        runtimeLaunchState.status !== 'ready') ? (
+      {inputNotice || autoPreviewStartError || showRuntimeLaunchNotice ? (
         <PreviewNoticeStack insetLeft={!isStandalone}>
           {inputNotice ? (
             <PreviewNotice
@@ -3023,12 +3055,12 @@ export function MobilePreviewPane({
                   Retry preview
                 </Button>
               }
+              onDismiss={clearAutoPreviewStartError}
             >
               {autoPreviewStartError}
             </PreviewNotice>
           ) : null}
-          {runtimeLaunchState.status !== 'idle' &&
-          runtimeLaunchState.status !== 'ready' ? (
+          {showRuntimeLaunchNotice ? (
             <PreviewNotice
               tone={
                 runtimeLaunchState.status === 'error'
@@ -3048,14 +3080,28 @@ export function MobilePreviewPane({
                   <Button
                     variant="ghost"
                     size="xs"
-                    onClick={() => setRuntimeLaunchRetry((value) => value + 1)}
+                    onClick={() => {
+                      setDismissedRuntimeLaunchKey(null);
+                      setRuntimeLaunchRetry((value) => value + 1);
+                    }}
                   >
                     Retry
                   </Button>
                 ) : null
               }
+              onDismiss={
+                canDismissRuntimeLaunchNotice
+                  ? () =>
+                      setDismissedRuntimeLaunchKey(
+                        getRuntimeLaunchDismissKey({
+                          attemptKey: runtimeLaunchAttemptKey,
+                          message: runtimeLaunchMessage,
+                        }),
+                      )
+                  : undefined
+              }
             >
-              {runtimeLaunchState.message}
+              {runtimeLaunchMessage}
             </PreviewNotice>
           ) : null}
         </PreviewNoticeStack>
