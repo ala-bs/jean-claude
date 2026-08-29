@@ -5,10 +5,11 @@ import {
   type DragEvent,
   memo,
   useCallback,
+  useMemo,
   useRef,
   useState,
 } from 'react';
-import { Image, Plus, Sparkles, X } from 'lucide-react';
+import { Eye, Image, Pencil, Sparkles, X } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 
 
@@ -20,22 +21,27 @@ import {
   useAddPrFileComments,
   useCreatePullRequest,
 } from '@/hooks/use-create-pull-request';
-import { useGenerateSummary, useTaskSummary } from '@/hooks/use-task-summary';
+import { AzureMarkdownContent } from '@/features/common/ui-azure-html-content';
+import { descriptionPreviewMarkdown } from '@/lib/description-preview-markdown';
+import { useDebouncedValue } from '@/hooks/use-debounced-value';
+import { useGeneratePrDescription } from '@/hooks/use-generate-pr-description';
 import { useImagePreviewUrls } from '@/hooks/use-image-preview-urls';
+import { useGenerateSummary, useTaskSummary } from '@/hooks/use-task-summary';
 import {
   getAttachmentFileName,
   getAzureAttachmentPayload,
   MAX_FILE_SIZE,
-  MAX_IMAGES,
+  MAX_PR_DRAFT_IMAGES,
   processImageFile,
 } from '@/lib/image-utils';
+import { type PrDraftImage, usePrDraftImages } from './use-pr-draft-images';
+import { useWorktreeCommits } from '@/hooks/use-worktree-diff';
 import { api } from '@/lib/api';
 import { Button } from '@/common/ui/button';
 import { Checkbox } from '@/common/ui/checkbox';
 import type { FileAnnotation } from '@/lib/api';
 import { formatBytes } from '@/lib/format-bytes';
 import {
-  getPromptImageMarkdownSize,
   markdownImagePlaceholderPattern,
   replaceMarkdownImageUrl,
   stripUnresolvedImagePlaceholders,
@@ -56,8 +62,6 @@ import { useToastStore } from '@/stores/toasts';
 import { useWorktreeStatus } from '@/hooks/use-worktree-diff';
 
 
-
-type StagedPrImage = PromptImagePart & { placeholderMarkdown: string };
 
 function placeholderPattern(placeholderMarkdown: string) {
   return markdownImagePlaceholderPattern(placeholderMarkdown);
@@ -92,17 +96,24 @@ export const PrImageAttachments = memo(function PrImageAttachments({
   previewUrls,
   onRemove,
 }: {
-  images: StagedPrImage[];
+  images: PrDraftImage[];
   previewUrls: (string | undefined)[];
-  onRemove: (index: number) => void;
+  onRemove: (token: string) => void;
 }) {
   if (images.length === 0) return null;
 
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">
       {images.map((image, index) => (
-        <div key={`${image.filename ?? 'img'}-${index}`} className="group relative">
-          {previewUrls[index] ? (
+        <div key={image.token} className="group relative">
+          {image.missing ? (
+            <div
+              title={`${image.filename} is no longer on disk`}
+              className="text-status-fail border-status-fail/40 flex h-10 max-w-36 items-center rounded border border-dashed px-1.5 text-[9px]"
+            >
+              <span className="truncate">Missing: {image.filename}</span>
+            </div>
+          ) : previewUrls[index] ? (
             <img
               src={previewUrls[index]}
               alt={image.filename || 'Attached image'}
@@ -124,7 +135,7 @@ export const PrImageAttachments = memo(function PrImageAttachments({
           )}
           <button
             type="button"
-            onClick={() => onRemove(index)}
+            onClick={() => onRemove(image.token)}
             className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-white opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
             aria-label={`Remove ${image.filename ?? 'attached image'}`}
           >
@@ -151,37 +162,57 @@ export function PrCreationForm({
   const { data: project } = useProject(projectId);
 
   // Derive values from task and project
-  const taskName = task?.name ?? null;
-  const taskPrompt = task?.prompt ?? '';
   const branchName = task?.branchName ?? '';
   const workItemId = task?.workItemIds?.[0] ?? null;
   const targetBranch = task?.sourceBranch ?? project?.defaultBranch ?? 'main';
   const repoProviderId = project?.repoProviderId ?? '';
   const repoProjectId = project?.repoProjectId ?? '';
   const repoId = project?.repoId ?? '';
-  const { prDraft, setPrDraft } = usePrDraftState(taskId);
+  const { prDraft, setPrDraft, clearPrDraft } = usePrDraftState(taskId);
   const [title, setTitle] = useState(prDraft?.title ?? '');
   const [description, setDescription] = useState(prDraft?.description ?? '');
   const [isDraft, setIsDraft] = useState(true);
-  const [annotationStates, setAnnotationStates] = useState<
-    Array<{ annotation: FileAnnotation; checked: boolean }>
-  >([]);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [uncheckedAnnotations, setUncheckedAnnotations] = useState<
+    Record<string, boolean>
+  >({});
   const [commitUnstaged, setCommitUnstaged] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [formFilledFromSummary, setFormFilledFromSummary] = useState(false);
-  const [stagedImages, setStagedImages] = useState<StagedPrImage[]>([]);
-  const stagedImagePreviewUrls = useImagePreviewUrls(stagedImages);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
-  const imageTokenCounterRef = useRef(0);
   const submittedRef = useRef(false);
   const titleRef = useRef(title);
   const addToast = useToastStore((s) => s.addToast);
   const queryClient = useQueryClient();
 
+  const {
+    images: stagedImages,
+    isHydrating,
+    addImage,
+    removeImage,
+    deleteImageFiles,
+  } = usePrDraftImages({ taskId, worktreePath: task?.worktreePath ?? null });
+  const stagedImagePreviewUrls = useImagePreviewUrls(stagedImages);
+
   const { data: worktreeStatus } = useWorktreeStatus(taskId);
   const hasUncommittedChanges = worktreeStatus?.hasUncommittedChanges ?? false;
+
+  // The description generator is diff-driven, so it has nothing to work from
+  // until the branch has at least one commit.
+  const { data: worktreeCommits } = useWorktreeCommits(taskId);
+  const hasCommits = (worktreeCommits?.length ?? 0) > 0;
+
+  const debouncedDescription = useDebouncedValue(description, 300);
+  const previewMarkdown = useMemo(
+    () =>
+      descriptionPreviewMarkdown(
+        debouncedDescription,
+        stagedImages,
+        stagedImagePreviewUrls,
+      ),
+    [debouncedDescription, stagedImages, stagedImagePreviewUrls],
+  );
 
   const handleTitleChange = useCallback(
     (newTitle: string) => {
@@ -236,41 +267,58 @@ export function PrCreationForm({
   );
 
   const stageDescriptionImage = useCallback(
-    (image: PromptImagePart) => {
-      if (stagedImages.length >= MAX_IMAGES) {
+    async (image: PromptImagePart) => {
+      // `stagedImages` reads empty until hydration finishes, so the cap below
+      // would not be enforced against images already in the draft.
+      if (isHydrating) return;
+      if (stagedImages.length >= MAX_PR_DRAFT_IMAGES) {
         addToast({
           type: 'error',
-          message: `Only ${MAX_IMAGES} images or GIFs can be attached.`,
+          message: `Only ${MAX_PR_DRAFT_IMAGES} images or GIFs can be attached.`,
         });
         return;
       }
 
-      imageTokenCounterRef.current += 1;
-      const token = imageTokenCounterRef.current;
-      const fileName = image.filename || `image-${token}.png`;
-      const safeAltText = fileName.replace(/[[\]()\\]/g, '_');
-      const placeholderMarkdown = `![${safeAltText}](jc-image://${token}${getPromptImageMarkdownSize(image)})`;
-
-      insertDescriptionMarkdown(placeholderMarkdown);
-      setStagedImages((current) => [
-        ...current,
-        { ...image, placeholderMarkdown },
-      ]);
+      try {
+        // Persist first: inserting a placeholder whose file failed to write
+        // would leave a permanently broken reference in the draft.
+        const placeholderMarkdown = await addImage(image);
+        if (!placeholderMarkdown) {
+          addToast({
+            type: 'error',
+            message: 'Cannot attach images to a task without a worktree.',
+          });
+          return;
+        }
+        insertDescriptionMarkdown(placeholderMarkdown);
+      } catch (error) {
+        addToast({
+          type: 'error',
+          message:
+            error instanceof Error ? error.message : 'Failed to save image',
+        });
+      }
     },
-    [addToast, insertDescriptionMarkdown, stagedImages.length],
+    [
+      addImage,
+      addToast,
+      insertDescriptionMarkdown,
+      isHydrating,
+      stagedImages.length,
+    ],
   );
 
   const removeStagedImage = useCallback(
-    (index: number) => {
-      const image = stagedImages[index];
+    (token: string) => {
+      const image = stagedImages.find((entry) => entry.token === token);
       if (!image) return;
       const pattern = placeholderPattern(image.placeholderMarkdown);
       updateDescription((current) =>
         pattern ? current.replace(pattern, '') : current,
       );
-      setStagedImages((current) => current.filter((_, i) => i !== index));
+      removeImage(token);
     },
-    [stagedImages, updateDescription],
+    [removeImage, stagedImages, updateDescription],
   );
 
   const stageImageFiles = useCallback(
@@ -290,18 +338,19 @@ export function PrCreationForm({
       }
       if (imageFiles.length === 0 && !nextVideoFile) return;
 
-      const allowed = MAX_IMAGES - stagedImages.length;
+      if (isHydrating) return;
+      const allowed = MAX_PR_DRAFT_IMAGES - stagedImages.length;
       if (allowed <= 0) {
         addToast({
           type: 'error',
-          message: `Attachment limit reached (${MAX_IMAGES}). Remove an image before adding another.`,
+          message: `Attachment limit reached (${MAX_PR_DRAFT_IMAGES}). Remove an image before adding another.`,
         });
         return;
       }
       if (imageFiles.length > allowed) {
         addToast({
           type: 'error',
-          message: `Only ${allowed} more attachment(s) fit (max ${MAX_IMAGES}); skipped: ${imageFiles
+          message: `Only ${allowed} more attachment(s) fit (max ${MAX_PR_DRAFT_IMAGES}); skipped: ${imageFiles
             .slice(allowed)
             .map((file) => file.name)
             .join(', ')}`,
@@ -337,7 +386,7 @@ export function PrCreationForm({
           } else {
             addToast({
               type: 'error',
-              message: `No attachment slot left for "${nextVideoFile.name}" (max ${MAX_IMAGES}).`,
+              message: `No attachment slot left for "${nextVideoFile.name}" (max ${MAX_PR_DRAFT_IMAGES}).`,
             });
           }
         }
@@ -349,7 +398,7 @@ export function PrCreationForm({
         });
       }
     },
-    [addToast, stageDescriptionImage, stagedImages.length],
+    [addToast, isHydrating, stageDescriptionImage, stagedImages.length],
   );
 
   const handleImageSelection = useCallback(
@@ -399,9 +448,29 @@ export function PrCreationForm({
     [],
   );
 
+  const generatePrDescription = useGeneratePrDescription();
+  const createPr = useCreatePullRequest();
+
+  // The ✨ button now generates the PR description from the diff rather than
+  // from the task summary. Annotation comments still come from a summary, so
+  // generating one keeps its own (secondary) affordance below -- without it
+  // `tasks:summary:generate` would have no caller left in the app.
   const { data: existingSummary } = useTaskSummary(taskId);
   const generateSummary = useGenerateSummary();
-  const createPr = useCreatePullRequest();
+  // Derived rather than mirrored into state: the summary arrives asynchronously,
+  // and copying it in an effect would cascade an extra render. Only the
+  // per-annotation checkbox overrides are stateful.
+  const annotationStates = useMemo(
+    () =>
+      (existingSummary?.annotations ?? []).map((annotation) => ({
+        annotation,
+        checked:
+          uncheckedAnnotations[
+            `${annotation.filePath}:${annotation.lineNumber}`
+          ] !== true,
+      })),
+    [existingSummary?.annotations, uncheckedAnnotations],
+  );
   const addComments = useAddPrFileComments();
 
   const addRunningJob = useBackgroundJobsStore((s) => s.addRunningJob);
@@ -413,62 +482,60 @@ export function PrCreationForm({
     project?.aiSkillSlots?.['pr-description'] || globalSlots?.['pr-description']
   );
 
-  // Helper to populate form from a summary
-  function fillFormFromSummary(summary: {
-    summary: { whatIDid: string; keyDecisions: string };
-    annotations: FileAnnotation[];
-  }) {
-    // Populate title
-    const generatedTitle = taskName ?? taskPrompt.split('\n')[0].slice(0, 100);
-    titleRef.current = generatedTitle;
-    setTitle(generatedTitle);
-
-    // Populate description
-    const workItemRef = workItemId ? `AB#${workItemId}\n\n` : '';
-    const desc = `${workItemRef}## What I Did\n${summary.summary.whatIDid}\n\n## Key Decisions\n${summary.summary.keyDecisions}`;
-    setDescription(desc);
-
-    // Persist draft
-    setPrDraft({ title: generatedTitle, description: desc });
-
-    // Populate annotations
-    if (summary.annotations) {
-      setAnnotationStates(
-        summary.annotations.map((annotation) => ({
-          annotation,
-          checked: true,
-        })),
-      );
-    }
-
-    setFormFilledFromSummary(true);
-  }
-
-  async function handleFillFromSummary() {
+  async function handleGenerateDescription() {
+    // Placeholders are re-appended from `stagedImages` below; running before
+    // hydration would orphan every persisted image.
+    if (isHydrating) return;
     setSummaryError(null);
 
-    // If we already have a summary, use it to fill the form
-    if (existingSummary) {
-      fillFormFromSummary(existingSummary);
+    // A draft can represent days of writing, so never clobber it silently.
+    const hasContent = !!title.trim() || !!description.trim();
+    if (
+      hasContent &&
+      !window.confirm(
+        'Replace the current PR title and description with an AI-generated one?',
+      )
+    ) {
       return;
     }
 
-    // Otherwise, generate a new summary
     try {
-      const summary = await generateSummary.mutateAsync(taskId);
-      fillFormFromSummary(summary);
+      const generated = await generatePrDescription.mutateAsync(taskId);
+      // Image placeholders are anchored in the description that is about to be
+      // replaced, so re-append them rather than orphaning the staged files.
+      const placeholders = stagedImages
+        .map((image) => image.placeholderMarkdown)
+        .join('\n\n');
+      const nextDescription = placeholders
+        ? `${generated.description}\n\n${placeholders}`
+        : generated.description;
+
+      titleRef.current = generated.title;
+      setTitle(generated.title);
+      setDescription(nextDescription);
+      setPrDraft({ title: generated.title, description: nextDescription });
     } catch (err) {
       setSummaryError(
-        err instanceof Error ? err.message : 'Failed to generate summary',
+        err instanceof Error
+          ? err.message
+          : 'Failed to generate PR description',
       );
     }
   }
 
   function handleCreate() {
     if (submittedRef.current) return;
+    // Draft images load from disk asynchronously. Submitting mid-hydration
+    // would see an empty list, ship raw `jc-image://` links to the host, and
+    // then delete the backing files on success -- unrecoverable image loss.
+    if (isHydrating) return;
     submittedRef.current = true;
     const descriptionToCreate = description;
-    const imagesToUpload = stagedImages;
+    // A ref whose file has gone carries no bytes; uploading it would post a
+    // 0-byte attachment and rewrite the placeholder to point at it.
+    const imagesToUpload = stagedImages.filter(
+      (image) => !image.missing && !!image.data,
+    );
 
     // Collect checked annotations before closing
     const checkedAnnotations = annotationStates
@@ -480,13 +547,14 @@ export function PrCreationForm({
       }));
 
     const displayTitle = title.trim() || 'AI-generated PR';
-    const descriptionWithoutImagePlaceholders = imagesToUpload.reduce(
-      (current, image) => {
+    // Strip unconditionally rather than only for known images: a placeholder
+    // left by a pruned or unreadable ref would otherwise be posted verbatim.
+    const descriptionWithoutImagePlaceholders = stripUnresolvedImagePlaceholders(
+      imagesToUpload.reduce((current, image) => {
         const pattern = placeholderPattern(image.placeholderMarkdown);
         return pattern ? current.replace(pattern, '') : current;
-      },
-      descriptionToCreate,
-    );
+      }, descriptionToCreate),
+    ).text;
     debugLog({
       message: 'submit',
       data: {
@@ -521,8 +589,9 @@ export function PrCreationForm({
       },
     });
 
-    // 2. Clear persisted draft and close the form
-    setPrDraft({ title: '', description: '' });
+    // 2. Close the form. The draft is deliberately NOT cleared here: creation
+    // is fire-and-forget, so clearing now would destroy the user's writing on
+    // any failure. It is cleared in the success branch below instead.
     onSuccess();
 
     // 3. Fire-and-forget PR creation (backend generates title/description if empty)
@@ -536,6 +605,10 @@ export function PrCreationForm({
       })
       .then(async (result) => {
         let warningMessage = result.editorCloseWarning ?? null;
+        // Only files that actually reached the host may be reclaimed; anything
+        // that failed stays on disk so the draft remains retryable.
+        const uploadedTokens: string[] = [];
+        let attachmentPhaseFailed = false;
 
         if (imagesToUpload.length > 0) {
           const uploadFailures: string[] = [];
@@ -636,6 +709,7 @@ export function PrCreationForm({
                 } else {
                   updatedDescription = `${updatedDescription}${updatedDescription ? '\n\n' : ''}${replacement}`;
                 }
+                uploadedTokens.push(image.token);
                 debugLog({
                   message: 'uploaded',
                   data: {
@@ -723,6 +797,7 @@ export function PrCreationForm({
               addToast({ type: 'error', message: partialWarning });
             }
           } catch (error) {
+            attachmentPhaseFailed = true;
             const rawDetail =
               error instanceof Error ? error.message : String(error);
             const detail =
@@ -771,6 +846,25 @@ export function PrCreationForm({
           }
         }
 
+        // Reclaim only what actually landed on the host.
+        await deleteImageFiles(uploadedTokens);
+
+        // Keep the draft whenever an image did not make it: the PR body is
+        // missing it, and the draft holds the only remaining copy.
+        const allImagesLanded =
+          !attachmentPhaseFailed &&
+          uploadedTokens.length === imagesToUpload.length &&
+          stagedImages.every((image) => !image.missing);
+        if (allImagesLanded) {
+          clearPrDraft();
+        } else {
+          addToast({
+            type: 'error',
+            message:
+              'Your PR draft was kept because some images could not be attached.',
+          });
+        }
+
         markJobSucceeded(jobId, {
           warningMessage,
         });
@@ -778,24 +872,26 @@ export function PrCreationForm({
       .catch((err: unknown) => {
         const message =
           err instanceof Error ? err.message : 'Failed to create PR';
+        // Draft intentionally left intact so the user can retry.
+        submittedRef.current = false;
         markJobFailed(jobId, message);
         addToast({ type: 'error', message });
       });
   }
 
-  function toggleAnnotation(index: number) {
-    setAnnotationStates((prev) =>
-      prev.map((item, i) =>
-        i === index ? { ...item, checked: !item.checked } : item,
-      ),
-    );
+  function toggleAnnotation(annotation: FileAnnotation) {
+    const key = `${annotation.filePath}:${annotation.lineNumber}`;
+    setUncheckedAnnotations((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  // Allow submit when title is provided, OR when AI generation is configured
-  // Block submit if uncommitted changes exist and checkbox not checked
+  // Allow submit when title is provided, OR when AI generation is configured.
+  // Block submit if uncommitted changes exist and the checkbox is unchecked,
+  // or while draft images are still loading from disk (submitting then would
+  // publish unresolved image placeholders and delete the files).
   const canSubmit =
     (!!title.trim() || canAutoGeneratePrDescription) &&
-    (!hasUncommittedChanges || commitUnstaged);
+    (!hasUncommittedChanges || commitUnstaged) &&
+    !isHydrating;
 
   useCommands('pr-creation-form', [
     canSubmit && {
@@ -808,33 +904,11 @@ export function PrCreationForm({
     },
   ]);
 
-  const hasSummary = !!(generateSummary.data ?? existingSummary);
-
-  // Button label logic:
-  // - If generating: "Generating..."
-  // - If form already filled from summary: "Filled"
-  // - If summary exists but form not filled: "Fill from Summary"
-  // - If no summary: "Generate Summary"
-  const getSummaryButtonLabel = () => {
-    if (generateSummary.isPending) return 'Generating...';
-    if (formFilledFromSummary) return 'Filled';
-    if (hasSummary) return 'Fill from Summary';
-    return 'Generate Summary';
-  };
-
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-3">
-        <Plus className="text-ink-2 h-5 w-5" />
-        <span className="text-ink-1 text-sm font-medium">
-          Create Pull Request
-        </span>
-      </div>
-      <Separator />
-
-      {/* Scrollable form content */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+    // The parent PR view owns the header and the scroll container, so this
+    // flows inline rather than nesting a second scrollable region.
+    <div className="flex flex-col">
+      <div>
         <div className="space-y-4">
           {/* AI hint */}
           {canAutoGeneratePrDescription &&
@@ -876,34 +950,75 @@ export function PrCreationForm({
               >
                 Description
               </label>
-              <Button
-                type="button"
-                onClick={handleFillFromSummary}
-                disabled={generateSummary.isPending || formFilledFromSummary}
-                loading={generateSummary.isPending}
-                variant="secondary"
-                size="sm"
-                icon={!generateSummary.isPending ? <Sparkles /> : undefined}
-              >
-                {getSummaryButtonLabel()}
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  type="button"
+                  onClick={() => setIsPreviewing((current) => !current)}
+                  variant="secondary"
+                  size="sm"
+                  icon={isPreviewing ? <Pencil /> : <Eye />}
+                >
+                  {isPreviewing ? 'Edit' : 'Preview'}
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleGenerateDescription}
+                  disabled={
+                    generatePrDescription.isPending ||
+                    !hasCommits ||
+                    isHydrating
+                  }
+                  loading={generatePrDescription.isPending}
+                  title={
+                    hasCommits
+                      ? 'Generate a title and description from the branch diff'
+                      : 'No commits yet'
+                  }
+                  variant="secondary"
+                  size="sm"
+                  icon={
+                    !generatePrDescription.isPending ? <Sparkles /> : undefined
+                  }
+                >
+                  {generatePrDescription.isPending
+                    ? 'Generating...'
+                    : 'Generate'}
+                </Button>
+              </div>
             </div>
-            <Textarea
-              ref={descriptionRef}
-              id="pr-description"
-              value={description}
-              onChange={(e) => handleDescriptionChange(e.target.value)}
-              onPaste={handleDescriptionPaste}
-              onDrop={handleDescriptionDrop}
-              onDragOver={handleDescriptionDragOver}
-              placeholder={
-                canAutoGeneratePrDescription
-                  ? 'Leave empty for AI generation...'
-                  : 'Enter PR description...'
-              }
-              rows={8}
-              autoComplete="off"
-            />
+            {isPreviewing ? (
+              <div className="border-glass-border bg-bg-2/60 min-h-[12rem] rounded-md border p-3">
+                {previewMarkdown.trim() ? (
+                  <AzureMarkdownContent
+                    markdown={previewMarkdown}
+                    providerId={repoProviderId}
+                    className="text-ink-1 text-sm"
+                    imageClassName="max-h-[360px] object-contain"
+                    enableImageModal
+                    allowBlobImages
+                  />
+                ) : (
+                  <p className="text-ink-3 text-sm italic">Nothing to preview</p>
+                )}
+              </div>
+            ) : (
+              <Textarea
+                ref={descriptionRef}
+                id="pr-description"
+                value={description}
+                onChange={(e) => handleDescriptionChange(e.target.value)}
+                onPaste={handleDescriptionPaste}
+                onDrop={handleDescriptionDrop}
+                onDragOver={handleDescriptionDragOver}
+                placeholder={
+                  canAutoGeneratePrDescription
+                    ? 'Leave empty for AI generation...'
+                    : 'Enter PR description...'
+                }
+                rows={8}
+                autoComplete="off"
+              />
+            )}
             <PrImageAttachments
               images={stagedImages}
               previewUrls={stagedImagePreviewUrls}
@@ -929,6 +1044,26 @@ export function PrCreationForm({
             </Button>
           </div>
 
+          {/* Inline review comments come from a task summary. Without this
+              button nothing in the app can generate one any more, so the
+              annotation feature would be permanently unreachable. */}
+          {annotationStates.length === 0 && hasCommits && (
+            <Button
+              type="button"
+              onClick={() => {
+                generateSummary.mutate(taskId);
+              }}
+              disabled={generateSummary.isPending}
+              loading={generateSummary.isPending}
+              variant="secondary"
+              size="sm"
+            >
+              {generateSummary.isPending
+                ? 'Generating summary...'
+                : 'Suggest inline comments'}
+            </Button>
+          )}
+
           {/* Annotations checklist (only shown after summary) */}
           {annotationStates.length > 0 && (
             <div>
@@ -936,7 +1071,7 @@ export function PrCreationForm({
                 Comments to Post
               </label>
               <div className="bg-bg-1/50 border-glass-border max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
-                {annotationStates.map((item, index) => (
+                {annotationStates.map((item) => (
                   <div
                     key={`${item.annotation.filePath}:${item.annotation.lineNumber}`}
                     className="hover:bg-glass-medium/50 flex cursor-pointer items-start gap-2 rounded p-1.5 transition-colors"
@@ -944,7 +1079,7 @@ export function PrCreationForm({
                     <Checkbox
                       size="sm"
                       checked={item.checked}
-                      onChange={() => toggleAnnotation(index)}
+                      onChange={() => toggleAnnotation(item.annotation)}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="text-ink-2 truncate font-mono text-xs">
@@ -1001,13 +1136,13 @@ export function PrCreationForm({
       </div>
 
       {/* Footer with buttons */}
-      <Separator />
+      <Separator className="my-4" />
       <VideoGifConverter
         file={videoFile}
         onAttach={stageDescriptionImage}
         onClose={() => setVideoFile(null)}
       />
-      <div className="flex gap-2 p-4">
+      <div className="flex gap-2">
         <Button
           type="button"
           onClick={onCancel}

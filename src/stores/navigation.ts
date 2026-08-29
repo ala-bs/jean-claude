@@ -76,9 +76,29 @@ function isLegacyMobilePreviewPane(
   );
 }
 
+/**
+ * A draft image persisted to `<worktreePath>/.jean-claude/tmp`.
+ *
+ * Only the file reference is kept in the store: base64 bytes would blow up the
+ * localStorage budget (this is why `new-task-draft` strips its own images). The
+ * tmp dir is already in `ignoredPaths`, so these files never reach the task diff
+ * or a `stageAll` commit.
+ */
+export interface PrDraftImageRef {
+  /** Matches the `jc-image://<token>` placeholder inside the description. */
+  token: string;
+  filePath: string;
+  filename: string;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
+}
+
 interface PrDraft {
   title?: string;
   description?: string;
+  images?: PrDraftImageRef[];
 }
 
 export type PrDetailTab = 'overview' | 'files' | 'commits';
@@ -339,7 +359,8 @@ interface NavigationState {
     options?: { keepWorkspaceOverview?: boolean },
   ) => void;
   setShowWorkspaceOverview: (taskId: string, show: boolean) => void;
-  setPrDraft: (taskId: string, draft: PrDraft) => void;
+  setPrDraft: (taskId: string, draft: Partial<PrDraft>) => void;
+  clearPrDraft: (taskId: string) => void;
   setAddStepDraft: (taskId: string, draft: Partial<AddStepDialogDraft>) => void;
   clearAddStepDraft: (taskId: string) => void;
   setPrSelectedFile: (prKey: string, filePath: string | null) => void;
@@ -712,13 +733,20 @@ const useStore = create<NavigationState>()(
           },
         })),
 
+      // Partial merge, not replace: the editor persists title/description on
+      // every keystroke, and a replace would drop the image refs each time.
       setPrDraft: (taskId, draft) =>
         set((state) => {
-          // Remove empty strings, keep only non-empty values
+          const current = state.taskState[taskId]?.prDraft ?? {};
+          const merged: PrDraft = { ...current, ...draft };
+
+          // Remove empty values so an untouched draft stays `undefined`.
           const cleaned: PrDraft = {};
-          if (draft.title?.trim()) cleaned.title = draft.title;
-          if (draft.description?.trim())
-            cleaned.description = draft.description;
+          if (merged.title?.trim()) cleaned.title = merged.title;
+          if (merged.description?.trim())
+            cleaned.description = merged.description;
+          if (merged.images && merged.images.length > 0)
+            cleaned.images = merged.images;
 
           return {
             taskState: {
@@ -731,6 +759,18 @@ const useStore = create<NavigationState>()(
             },
           };
         }),
+
+      clearPrDraft: (taskId) =>
+        set((state) => ({
+          taskState: {
+            ...state.taskState,
+            [taskId]: {
+              ...defaultTaskState,
+              ...state.taskState[taskId],
+              prDraft: undefined,
+            },
+          },
+        })),
 
       setAddStepDraft: (taskId, draft) =>
         set((state) => ({
@@ -1570,12 +1610,32 @@ export function usePrDraftState(taskId: string) {
   const prDraft = useStore((state) => state.taskState[taskId]?.prDraft);
   const setPrDraftAction = useStore((state) => state.setPrDraft);
 
+  const clearPrDraftAction = useStore((state) => state.clearPrDraft);
+
   const setPrDraft = useCallback(
-    (draft: PrDraft) => setPrDraftAction(taskId, draft),
+    (draft: Partial<PrDraft>) => setPrDraftAction(taskId, draft),
     [taskId, setPrDraftAction],
   );
+  const clearPrDraft = useCallback(
+    () => clearPrDraftAction(taskId),
+    [taskId, clearPrDraftAction],
+  );
 
-  return { prDraft, setPrDraft };
+  return { prDraft, setPrDraft, clearPrDraft };
+}
+
+/** True when a task has PR draft content worth surfacing in the task menu. */
+export function useHasPrDraft(taskId: string): boolean {
+  return useStore((state) => {
+    const draft = state.taskState[taskId]?.prDraft;
+    // Images count: a draft of screenshots with no prose is still real work,
+    // and without this its files would be invisible to the user.
+    return !!(
+      draft?.title?.trim() ||
+      draft?.description?.trim() ||
+      draft?.images?.length
+    );
+  });
 }
 
 // Hook for tool diff preview pane width

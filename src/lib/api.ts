@@ -797,6 +797,13 @@ export interface Api {
       get: (taskId: string) => Promise<TaskSummary | undefined>;
       generate: (taskId: string) => Promise<TaskSummary>;
     };
+    /**
+     * Generate a PR title/description from the worktree diff without creating
+     * a PR. Rejects when the task has no diff context or no AI slot is set.
+     */
+    generatePrDescription: (params: {
+      taskId: string;
+    }) => Promise<{ title: string; description: string }>;
     createPullRequest: (params: {
       taskId: string;
       title: string;
@@ -2391,6 +2398,9 @@ export const api: Api = hasWindowApi
           generate: async () => {
             throw new Error('API not available');
           },
+        },
+        generatePrDescription: async () => {
+          throw new Error('API not available');
         },
         createPullRequest: async () => ({ id: 0, url: '' }),
         createPrReviewTask: async () => {

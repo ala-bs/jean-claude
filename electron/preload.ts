@@ -351,12 +351,15 @@ contextBridge.exposeInMainWorld('api', {
       generate: (taskId: string) =>
         ipcRenderer.invoke('tasks:summary:generate', taskId),
     },
+    generatePrDescription: (params: { taskId: string }) =>
+      ipcRenderer.invoke('tasks:generatePrDescription', params),
     createPullRequest: (params: {
       taskId: string;
       title: string;
       description: string;
       isDraft: boolean;
       deleteWorktree?: boolean;
+      commitUnstaged?: boolean;
     }) => ipcRenderer.invoke('tasks:createPullRequest', params),
     createPrReviewTask: (params: {
       projectId: string;

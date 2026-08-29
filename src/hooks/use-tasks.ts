@@ -38,6 +38,7 @@ import { invalidateFeedResources } from '@/cache/feed-cache';
 import { setDocumentResource } from '@/cache/cache-actions';
 import { useBackgroundJobsStore } from '@/stores/background-jobs';
 import { useCacheResource } from '@/cache/use-cache-resource';
+import { useNavigationStore } from '@/stores/navigation';
 import { useTaskMessagesStore } from '@/stores/task-messages';
 import { useToastStore } from '@/stores/toasts';
 
@@ -306,6 +307,10 @@ export function useDeleteTask() {
     onSuccess: (_, { id }) => {
       clearAllRunCommandLogs(id);
       setRunCommandRunning(id, false);
+      // The PR draft is persisted to localStorage and is never otherwise
+      // pruned, so a deleted task would leave its text and image file refs
+      // (pointing into a worktree that no longer exists) behind forever.
+      useNavigationStore.getState().clearPrDraft(id);
       removeTask(id, { deleteResource: false });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       invalidateFeedItems(queryClient);

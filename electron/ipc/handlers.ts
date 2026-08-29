@@ -4346,6 +4346,32 @@ export function registerIpcHandlers() {
     },
   );
 
+  // Standalone PR description generation, so a draft can be previewed and
+  // edited long before the PR exists. `tasks:createPullRequest` runs the same
+  // generator, but only when the submitted title/description are blank.
+  ipcMain.handle(
+    'tasks:generatePrDescription',
+    async (_, params: { taskId: string }) => {
+      const task = await TaskRepository.findById(params.taskId);
+      if (!task?.worktreePath || !task?.startCommitHash) {
+        throw new Error(
+          'This task has no worktree diff to generate a description from.',
+        );
+      }
+
+      const project = await ProjectRepository.findById(task.projectId);
+      if (!project) throw new Error(`Project ${task.projectId} not found`);
+
+      const generated = await generatePrDescriptionForTask(task, project);
+      if (!generated) {
+        throw new Error(
+          'No AI skill is configured for PR descriptions. Set one in Settings > AI skill slots.',
+        );
+      }
+      return generated;
+    },
+  );
+
   ipcMain.handle(
     'tasks:createPullRequest',
     async (

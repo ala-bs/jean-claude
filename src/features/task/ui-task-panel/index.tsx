@@ -30,6 +30,7 @@ import {
   type AddStepPresetType,
   type ReviewMode,
   useDiffViewState,
+  useHasPrDraft,
   useNavigationStore,
   usePrViewState,
   useTaskFileExplorerState,
@@ -1298,6 +1299,15 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     closePrView,
   } = usePrViewState(taskId);
 
+  // Drafting a PR description is available for any task with a worktree and a
+  // linked repo, long before the PR itself exists.
+  const canDraftPr =
+    !!task?.worktreePath &&
+    !!project?.repoProviderId &&
+    !!project?.repoProjectId &&
+    !!project?.repoId;
+  const hasPrDraft = useHasPrDraft(taskId);
+
   // The PR/diff views render ahead of the overview in the main content, so both
   // must close or opening the overview would be a silent no-op.
   const openWorkspaceOverview = useCallback(() => {
@@ -2280,6 +2290,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         openDiffView();
       },
     },
+    // cmd+shift+g rather than a P mnemonic: cmd+p is the command palette
+    // (routes/__root.tsx) and cmd+shift+p is already taken twice -- feed-list
+    // "Toggle Pin" and worktree-actions "Create Pull Request".
+    canDraftPr && {
+      label: 'Toggle Pull Request',
+      shortcut: 'cmd+shift+g',
+      section: 'Task',
+      handler: () => {
+        togglePrView();
+      },
+    },
     isDiffViewOpen && {
       label: isComposerCollapsed ? 'Expand Composer' : 'Collapse Composer',
       shortcut: 'cmd+/',
@@ -2832,8 +2853,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     icon={<GitPullRequest />}
                     onClick={togglePrView}
                     checked={isPrViewOpen}
+                    shortcut="cmd+shift+g"
                   >
-                    Pull Request
+                    <span className="flex items-center gap-1.5">
+                      Pull Request
+                      {hasPrDraft && (
+                        <span
+                          title="You have an unsubmitted PR description draft"
+                          className="bg-acc-ink h-1.5 w-1.5 shrink-0 rounded-full"
+                        />
+                      )}
+                    </span>
                   </DropdownItem>
                 )}
                 {hasWorkItemsLink && (

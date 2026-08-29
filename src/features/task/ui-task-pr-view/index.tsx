@@ -4,8 +4,9 @@ import {
   GitPullRequest,
   Link,
   Loader2,
+  X,
 } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import clsx from 'clsx';
 
 
@@ -113,6 +114,7 @@ function PrLinkingView({
     'all',
   );
   const updateTask = useUpdateTask();
+  const [isLinkBannerDismissed, setIsLinkBannerDismissed] = useState(false);
 
   const branchName = task?.branchName ?? null;
   const hasRepoLinked = !!project?.repoProviderId;
@@ -182,9 +184,7 @@ function PrLinkingView({
           Back
         </Button>
         <span className="text-ink-1 text-sm font-medium">
-          {!isPrsLoading && matchingPrs.length === 0 && canCreatePr
-            ? 'Create Pull Request'
-            : 'Link Pull Request'}
+          Pull Request
         </span>
       </div>
       <Separator />
@@ -205,14 +205,27 @@ function PrLinkingView({
               Create a worktree task to enable pull request linking.
             </p>
           </div>
-        ) : matchingPrs.length === 0 ? (
-          canCreatePr ? (
-            <PrCreationForm
-              taskId={taskId}
-              projectId={projectId}
-              onSuccess={onClose}
-              onCancel={onClose}
-            />
+        ) : !canCreatePr ? (
+          // Drafting needs a fully linked repo, but linking an existing PR
+          // only needs the branch -- so keep that reachable here.
+          matchingPrs.length > 0 ? (
+            <div className="space-y-3">
+              <p className="text-ink-2 text-sm">
+                Found {matchingPrs.length} pull request
+                {matchingPrs.length > 1 ? 's' : ''} for branch{' '}
+                <code className="bg-bg-1 rounded px-1.5 py-0.5 font-mono text-xs">
+                  {branchName}
+                </code>
+              </p>
+              {matchingPrs.map((pr) => (
+                <PrSuggestionItem
+                  key={pr.id}
+                  pr={pr}
+                  onLink={() => handleLinkPr(pr)}
+                  isLinking={updateTask.isPending}
+                />
+              ))}
+            </div>
           ) : (
             <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
               <GitPullRequest className="text-ink-4 h-12 w-12" />
@@ -229,23 +242,43 @@ function PrLinkingView({
           )
         ) : (
           <div className="space-y-3">
-            <p className="text-ink-2 text-sm">
-              Found {matchingPrs.length} pull request
-              {matchingPrs.length > 1 ? 's' : ''} for branch{' '}
-              <code className="bg-bg-1 rounded px-1.5 py-0.5 font-mono text-xs">
-                {branchName}
-              </code>
-            </p>
-            <div className="space-y-2">
-              {matchingPrs.map((pr) => (
-                <PrSuggestionItem
-                  key={pr.id}
-                  pr={pr}
-                  onLink={() => handleLinkPr(pr)}
-                  isLinking={updateTask.isPending}
-                />
-              ))}
-            </div>
+            {/* Existing PRs no longer replace the editor: drafting must stay
+                reachable even once a PR exists for the branch. */}
+            {matchingPrs.length > 0 && !isLinkBannerDismissed && (
+              <div className="border-glass-border bg-bg-1/50 space-y-2 rounded-lg border p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-ink-2 text-sm">
+                    Found {matchingPrs.length} pull request
+                    {matchingPrs.length > 1 ? 's' : ''} for branch{' '}
+                    <code className="bg-bg-1 rounded px-1.5 py-0.5 font-mono text-xs">
+                      {branchName}
+                    </code>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsLinkBannerDismissed(true)}
+                    className="text-ink-3 hover:text-ink-1 shrink-0 rounded p-0.5 transition-colors"
+                    aria-label="Dismiss"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                {matchingPrs.map((pr) => (
+                  <PrSuggestionItem
+                    key={pr.id}
+                    pr={pr}
+                    onLink={() => handleLinkPr(pr)}
+                    isLinking={updateTask.isPending}
+                  />
+                ))}
+              </div>
+            )}
+            <PrCreationForm
+              taskId={taskId}
+              projectId={projectId}
+              onSuccess={onClose}
+              onCancel={onClose}
+            />
           </div>
         )}
       </div>
