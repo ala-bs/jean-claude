@@ -612,6 +612,7 @@ export function Header() {
             </Button>
           }
           align="left"
+          preferredMaxHeight={560}
         >
           <DropdownItem
             icon={<Plus />}
