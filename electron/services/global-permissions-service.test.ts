@@ -1,3 +1,7 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = vi.hoisted(() => ({
@@ -191,5 +195,61 @@ describe('addGlobalPermission', () => {
     expect(await readGlobalPermissions()).toEqual({
       bash: { 'pnpm lint': 'allow' },
     });
+  });
+});
+
+describe('global external directories', () => {
+  it('stores a directory grant and resolves it into allowed directories', async () => {
+    vi.resetModules();
+    const service = await import('./global-permissions-service');
+    const { getAllowedDirectories } = await import('./directory-access');
+
+    const directory = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'jc-global-dir-')),
+    );
+    try {
+      await expect(
+        service.addGlobalPermission({
+          toolName: 'external_directory',
+          input: { permissionPatterns: [`${directory}/**`] },
+          action: 'allow',
+        }),
+      ).resolves.toBe(true);
+
+      expect(await service.readGlobalPermissions()).toEqual({
+        external_directory: { [`${directory}/**`]: 'allow' },
+      });
+
+      // The rules global scope contributes must survive into the list the
+      // backends hand to the agent as additional writable roots.
+      expect(getAllowedDirectories(await service.resolveGlobalRules())).toEqual([
+        directory,
+      ]);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('drops a global directory grant that a later deny cancels', async () => {
+    vi.resetModules();
+    const service = await import('./global-permissions-service');
+    const { getAllowedDirectories } = await import('./directory-access');
+
+    const directory = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'jc-global-dir-')),
+    );
+    try {
+      await service.addGlobalPermission({
+        toolName: 'external_directory',
+        input: { permissionPatterns: [`${directory}/**`] },
+        action: 'deny',
+      });
+
+      expect(getAllowedDirectories(await service.resolveGlobalRules())).toEqual(
+        [],
+      );
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

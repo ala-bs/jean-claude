@@ -40,6 +40,7 @@ export default defineConfig({
       'src/features/common/ui-prompt-textarea/**/*.test.ts',
       'src/features/common/ui-mermaid-diagram/**/*.test.tsx',
       'src/features/common/ui-ai-skill-slot/**/*.test.tsx',
+      'src/features/common/ui-external-directories/**/*.test.tsx',
       'src/features/work-item/**/*.test.ts',
       'src/features/work-item/**/*.test.tsx',
       'src/features/project/ui-project-settings/**/*.test.ts',
