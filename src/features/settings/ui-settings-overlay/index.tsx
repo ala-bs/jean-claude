@@ -1,19 +1,44 @@
 import {
-  AlertTriangle,
+  ArrowLeftRight,
+  Bell,
+  Bot,
   Box,
+  Brain,
+  Bug,
+  Calendar,
+  CalendarClock,
   ChevronRight,
+  Cog,
   Cpu,
   Diamond,
+  Eye,
+  FileCode,
+  FileText,
   Folder,
+  FolderGit2,
+  GaugeCircle,
+  GitBranch,
   Grid3X3,
-  List,
-  MoreHorizontal,
+  KeyRound,
+  Layers,
+  LibraryBig,
+  MessageSquareQuote,
+  Palette,
   Play,
   Plug,
   Search,
   Settings,
+  Settings2,
+  Sliders,
+  Smartphone,
   Sparkles,
-  Terminal,
+  StickyNote,
+  TextCursorInput,
+  Trash2,
+  Variable,
+  Wand2,
+  Workflow,
+  Wrench,
   X,
   Zap,
 } from 'lucide-react';
@@ -46,6 +71,7 @@ import {
   BackendConfigSettings,
   OpenCodeProcessModeSettings,
 } from '@/features/settings/ui-backend-config-settings';
+import { IconClaude, IconCodex, IconGithubCopilot } from '@/common/ui/icons';
 import {
   ProjectSettings,
   type ProjectSettingsMenuItem,
@@ -80,6 +106,21 @@ import { TokensTab } from '@/features/settings/ui-tokens-tab';
 
 import { useCurrentSettingsProject } from './use-current-settings-project';
 
+/* ── Brand icon adapters ──
+   Nav leaves render `<Icon size={n} />`; SVGR components need width/height. */
+
+function brandIcon(
+  Brand: React.ComponentType<React.SVGProps<SVGSVGElement>>,
+): React.ElementType {
+  return function BrandNavIcon({ size = 14 }: { size?: number }) {
+    return <Brand width={size} height={size} />;
+  };
+}
+
+const IconClaudeNav = brandIcon(IconClaude);
+const IconCodexNav = brandIcon(IconCodex);
+const IconCopilotNav = brandIcon(IconGithubCopilot);
+
 /* ── Types ── */
 
 type GlobalSubItem = {
@@ -87,6 +128,7 @@ type GlobalSubItem = {
   label: string;
   beta?: boolean;
   layout?: SettingsContentLayout;
+  icon?: React.ElementType;
 };
 
 type SettingsContentLayout = 'standard' | 'fill';
@@ -105,6 +147,7 @@ type ProjectSubItem = {
   id: string;
   label: string;
   layout?: SettingsContentLayout;
+  icon?: React.ElementType;
 };
 
 type ProjectSection = {
@@ -123,19 +166,24 @@ function getGlobalSections(): GlobalSection[] {
   if (_cachedGlobalSections) return _cachedGlobalSections;
 
   const generalSubs: GlobalSubItem[] = [
-    { id: 'appearance', label: 'Appearance' },
-    { id: 'auto-review', label: 'Auto File Review' },
-    { id: 'mobile-preview', label: 'Mobile Preview' },
-    { id: 'editor', label: 'Editor' },
-    { id: 'notifications', label: 'Notifications' },
+    { id: 'appearance', label: 'Appearance', icon: Palette },
+    { id: 'auto-review', label: 'Auto File Review', icon: Eye },
+    { id: 'mobile-preview', label: 'Mobile Preview', icon: Smartphone },
+    { id: 'editor', label: 'Editor', icon: Settings2 },
+    { id: 'notifications', label: 'Notifications', icon: Bell },
     ...(api.platform === 'darwin'
-      ? [{ id: 'calendar', label: 'Calendar' }]
+      ? [{ id: 'calendar', label: 'Calendar', icon: Calendar }]
       : []),
-    { id: 'usage', label: 'Usage Display' },
-    { id: 'work-activity', label: 'Work Activity' },
-    { id: 'eurecia', label: 'Eurecia' },
-    { id: 'agent-memory', label: 'Agent Memory', beta: true },
-    { id: 'maintenance', label: 'Maintenance' },
+    { id: 'usage', label: 'Usage Display', icon: GaugeCircle },
+    { id: 'work-activity', label: 'Work Activity', icon: CalendarClock },
+    { id: 'eurecia', label: 'Eurecia', icon: Plug },
+    {
+      id: 'agent-memory',
+      label: 'Agent Memory',
+      beta: true,
+      icon: Brain,
+    },
+    { id: 'maintenance', label: 'Maintenance', icon: Wrench },
   ];
 
   _cachedGlobalSections = [
@@ -154,10 +202,14 @@ function getGlobalSections(): GlobalSection[] {
       title: 'Coding Agents',
       subtitle: 'Backends, thinking defaults, and model presets',
       subs: [
-        { id: 'presets', label: 'Model Presets' },
-        { id: 'process-mode', label: 'Process Mode' },
-        { id: 'prompt-preface', label: 'Prompt Preface' },
-        { id: 'rate-limit-swap', label: 'Rate Limit Swap' },
+        { id: 'presets', label: 'Model Presets', icon: Sliders },
+        { id: 'process-mode', label: 'Process Mode', icon: Cog },
+        {
+          id: 'prompt-preface',
+          label: 'Prompt Preface',
+          icon: MessageSquareQuote,
+        },
+        { id: 'rate-limit-swap', label: 'Rate Limit Swap', icon: ArrowLeftRight },
         createBackendSubItem({ id: 'claude-code', label: 'Claude Code' }),
         createBackendSubItem({ id: 'opencode', label: 'OpenCode' }),
         createBackendSubItem({ id: 'codex', label: 'Codex' }),
@@ -187,15 +239,15 @@ function getGlobalSections(): GlobalSection[] {
       title: 'Skills & Agents',
       subtitle: 'Manage skills, sources, and backend subagents',
       subs: [
-        { id: 'sources', label: 'Sources', layout: 'fill' },
-        { id: 'skills', label: 'Skills', layout: 'fill' },
-        { id: 'agents', label: 'Agents', layout: 'fill' },
+        { id: 'sources', label: 'Sources', layout: 'fill', icon: LibraryBig },
+        { id: 'skills', label: 'Skills', layout: 'fill', icon: Wand2 },
+        { id: 'agents', label: 'Agents', layout: 'fill', icon: Bot },
       ],
     },
     {
       id: 'prompt-snippets',
       label: 'Snippets',
-      icon: Terminal,
+      icon: StickyNote,
       title: 'Prompt Snippets',
       subtitle: 'Reusable prompt templates with variables',
       layout: 'fill',
@@ -210,7 +262,7 @@ function getGlobalSections(): GlobalSection[] {
     {
       id: 'tokens',
       label: 'Tokens',
-      icon: MoreHorizontal,
+      icon: KeyRound,
       title: 'Tokens',
       subtitle: 'Provider authentication tokens',
     },
@@ -224,20 +276,28 @@ function getGlobalSections(): GlobalSection[] {
     {
       id: 'autocomplete',
       label: 'Autocomplete',
-      icon: Terminal,
+      icon: TextCursorInput,
       title: 'Autocomplete',
       subtitle: 'Inline code completion configuration',
     },
     {
       id: 'debug',
       label: 'Debug',
-      icon: List,
+      icon: Bug,
       title: 'Debug',
       subtitle: 'Database viewer and diagnostics',
     },
   ];
   return _cachedGlobalSections;
 }
+
+const BACKEND_NAV_ICONS: Partial<
+  Record<AgentBackendType, React.ElementType>
+> = {
+  'claude-code': IconClaudeNav,
+  codex: IconCodexNav,
+  copilot: IconCopilotNav,
+};
 
 function createBackendSubItem({
   id,
@@ -251,6 +311,7 @@ function createBackendSubItem({
     label,
     beta: getAgentBackendBadge(id) === 'Beta',
     layout: 'fill',
+    icon: BACKEND_NAV_ICONS[id] ?? Bot,
   };
 }
 
@@ -260,13 +321,17 @@ const PROJECT_SECTIONS: ProjectSection[] = [
     label: 'General',
     icon: Settings,
     subs: [
-      { id: 'details', label: 'Details' },
-      { id: 'commit-ignore', label: 'Commit Ignore' },
-      { id: 'env-vars', label: 'Environment Variables' },
-      { id: 'worktree', label: 'Worktree' },
-      { id: 'feature-map', label: 'Feature Map' },
-      { id: 'prompt-preface', label: 'Prompt Preface' },
-      { id: 'autocomplete', label: 'Autocomplete' },
+      { id: 'details', label: 'Details', icon: FileText },
+      { id: 'commit-ignore', label: 'Commit Ignore', icon: FileCode },
+      { id: 'env-vars', label: 'Environment Variables', icon: Variable },
+      { id: 'worktree', label: 'Worktree', icon: GitBranch },
+      { id: 'feature-map', label: 'Feature Map', icon: Layers },
+      {
+        id: 'prompt-preface',
+        label: 'Prompt Preface',
+        icon: MessageSquareQuote,
+      },
+      { id: 'autocomplete', label: 'Autocomplete', icon: TextCursorInput },
     ],
   },
   { id: 'permissions', label: 'Permissions', icon: Zap },
@@ -275,8 +340,8 @@ const PROJECT_SECTIONS: ProjectSection[] = [
     label: 'Integrations',
     icon: Plug,
     subs: [
-      { id: 'integrations', label: 'Repo & Work Items' },
-      { id: 'pipelines', label: 'Pipelines' },
+      { id: 'integrations', label: 'Repo & Work Items', icon: FolderGit2 },
+      { id: 'pipelines', label: 'Pipelines', icon: Workflow },
     ],
   },
   { id: 'run-commands', label: 'Run Commands', icon: Play },
@@ -288,7 +353,7 @@ const PROJECT_SECTIONS: ProjectSection[] = [
     icon: Sparkles,
     layout: 'fill',
   },
-  { id: 'danger-zone', label: 'Danger Zone', icon: AlertTriangle },
+  { id: 'danger-zone', label: 'Danger Zone', icon: Trash2 },
 ];
 
 /* ── Shared style constants ── */
@@ -399,7 +464,7 @@ function globalLeaf(
   return {
     key: subId ? `${sectionId}:${subId}` : sectionId,
     label: label ?? sub?.label ?? section.label,
-    icon: section.icon,
+    icon: sub?.icon ?? section.icon,
     beta: sub?.beta,
     selection: subId ? { sectionId, subId } : { sectionId },
   };
@@ -417,7 +482,7 @@ function projectLeaf(
   return {
     key: subId ? `${sectionId}:${subId}` : sectionId,
     label: label ?? sub?.label ?? section.label,
-    icon: section.icon,
+    icon: sub?.icon ?? section.icon,
     selection: subId ? { sectionId, subId } : { sectionId },
   };
 }
