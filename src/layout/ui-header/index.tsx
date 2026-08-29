@@ -5,6 +5,7 @@ import {
   ClipboardList,
   History,
   Menu,
+  Plus,
   RefreshCw,
   SlidersHorizontal,
   Smartphone,
@@ -612,6 +613,14 @@ export function Header() {
           }
           align="left"
         >
+          <DropdownItem
+            icon={<Plus />}
+            onClick={() => openOverlay('new-task')}
+            shortcut="cmd+n"
+          >
+            New Task
+          </DropdownItem>
+          <DropdownDivider />
           <DropdownItem
             icon={<SlidersHorizontal />}
             onClick={() => openOverlay('settings')}
