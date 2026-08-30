@@ -284,6 +284,17 @@ export function isWriteToolUseResult(
   );
 }
 
+/**
+ * A background job the agent is still waiting on (background subagent,
+ * `run_in_background` bash shell, Monitor). Reported live by the Claude
+ * backend from `background_tasks_changed` snapshots.
+ */
+export interface AgentBackgroundTask {
+  taskId: string;
+  description?: string;
+  taskType?: string;
+}
+
 // IPC channel names
 export const AGENT_CHANNELS = {
   // Events (main -> renderer) — single unified channel
@@ -300,6 +311,7 @@ export const AGENT_CHANNELS = {
   UPDATE_QUEUED_PROMPT: 'agent:updateQueuedPrompt',
   CANCEL_QUEUED_PROMPT: 'agent:cancelQueuedPrompt',
   GET_PENDING_REQUEST: 'agent:getPendingRequest',
+  GET_BACKGROUND_TASKS: 'agent:getBackgroundTasks',
   GET_MESSAGES_WITH_RAW_DATA: 'agent:getMessagesWithRawData',
   COMPACT_RAW_MESSAGES: 'agent:compactRawMessages',
   REPROCESS_NORMALIZATION: 'agent:reprocessNormalization',

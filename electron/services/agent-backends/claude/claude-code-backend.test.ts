@@ -392,6 +392,64 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
     }
   });
 
+  it('emits a background-tasks event for every snapshot so the UI can show live jobs', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    try {
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [
+          {
+            task_id: 'task-a',
+            task_type: 'local_agent',
+            description: 'Review: behavior regressions',
+          },
+        ],
+      });
+      const live = await events.next();
+      expect(live.value).toEqual({
+        type: 'background-tasks',
+        tasks: [
+          {
+            taskId: 'task-a',
+            description: 'Review: behavior regressions',
+            taskType: 'local_agent',
+          },
+        ],
+      });
+
+      // REPLACE semantics: an empty snapshot clears the indicator.
+      controller.send(backgroundTasksChanged([]));
+      const drained = await events.next();
+      expect(drained.value).toEqual({ type: 'background-tasks', tasks: [] });
+    } finally {
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  it('clears background tasks when the stream ends without a final snapshot', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    try {
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send(backgroundTasksChanged(['never-reported-done']));
+      await events.next(); // the live snapshot
+      controller.end();
+
+      const cleared = await events.next();
+      expect(cleared.value).toEqual({ type: 'background-tasks', tasks: [] });
+    } finally {
+      await backend.dispose();
+    }
+  });
+
   it('still closes stdin when a background task never terminates', async () => {
     const controller = makeControllableQuery();
     const { backend, session } = await startBackend(controller);
@@ -412,6 +470,11 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
       controller.send(backgroundTasksChanged(['never-ends']));
       controller.send(originlessResult);
       await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      // A quiet stretch shorter than the grace must NOT close the channel —
+      // a real transcript went 4m21s without a message mid-run.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
       expect(closed).toBe(false);
 
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1_000);

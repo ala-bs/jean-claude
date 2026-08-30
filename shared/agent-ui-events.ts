@@ -1,4 +1,8 @@
-import type { AgentQuestion, QueuedPrompt } from './agent-types';
+import type {
+  AgentBackgroundTask,
+  AgentQuestion,
+  QueuedPrompt,
+} from './agent-types';
 import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
@@ -33,7 +37,9 @@ export type AgentUIEventPayload =
     }
   | { type: 'name-updated'; name: string }
   | { type: 'resource-snapshot'; snapshot: AgentResourceSnapshot }
-  | { type: 'queue-update'; queuedPrompts: QueuedPrompt[] };
+  | { type: 'queue-update'; queuedPrompts: QueuedPrompt[] }
+  /** Live set of background jobs still running for this step (REPLACE). */
+  | { type: 'background-tasks'; tasks: AgentBackgroundTask[] };
 
 export type AgentUIEvent = {
   taskId: string;

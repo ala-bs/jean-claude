@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 
-import type { AgentQuestion, QueuedPrompt } from '@shared/agent-types';
+import type {
+  AgentBackgroundTask,
+  AgentQuestion,
+  QueuedPrompt,
+} from '@shared/agent-types';
 import type {
   NormalizedEntry,
   NormalizedPermissionRequest,
@@ -233,6 +237,21 @@ interface TaskMessagesStore {
   /** Keyed by taskId — lightweight pending request tracking (always populated) */
   pendingRequestsByTaskId: Record<string, PendingRequest>;
   /**
+   * Keyed by stepId — background jobs (background subagents, `run_in_background`
+   * shells, Monitor) the agent is still waiting on. Kept outside `steps` so the
+   * indicator survives step-cache eviction and arrives even before the step's
+   * messages are loaded. Empty snapshots delete the key.
+   */
+  backgroundTasksByStepId: Record<string, AgentBackgroundTask[]>;
+  /**
+   * Keyed by stepId — bumped on every live `background-tasks` event so an
+   * in-flight `getBackgroundTasks` hydration fetch can tell that a newer
+   * snapshot landed while it was awaiting, and drop its stale result. A
+   * reference check on the array is not enough: a set-then-clear pair during
+   * the await returns the key to `undefined`, which looks unchanged.
+   */
+  backgroundTasksVersions: Record<string, number>;
+  /**
    * Keyed by stepId — bumped whenever a step's pending request changes, so an
    * in-flight `getPendingRequest` fetch can detect that it raced. Per-step (not
    * global): sibling steps of the same task emit status updates constantly, and
@@ -294,6 +313,7 @@ interface TaskMessagesStore {
   tryStartQuestionResponse: (key: string) => boolean;
   finishQuestionResponse: (key: string) => void;
   setQueuedPrompts: (stepId: string, queuedPrompts: QueuedPrompt[]) => void;
+  setBackgroundTasks: (stepId: string, tasks: AgentBackgroundTask[]) => void;
   appendRunCommandLogBatch: (
     taskId: string,
     runCommandId: string,
@@ -509,6 +529,8 @@ function shouldKeepExistingEntry({
 export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
   steps: {},
   pendingRequestsByTaskId: {},
+  backgroundTasksByStepId: {},
+  backgroundTasksVersions: {},
   pendingRequestVersions: {},
   runCommandLogs: {},
   runCommandLogGenerations: {},
@@ -820,6 +842,46 @@ export const useTaskMessagesStore = create<TaskMessagesStore>((set, get) => ({
             ...step,
             queuedPrompts,
           },
+        },
+      };
+    });
+  },
+
+  setBackgroundTasks: (stepId, tasks) => {
+    set((state) => {
+      const bumpVersion = {
+        backgroundTasksVersions: {
+          ...state.backgroundTasksVersions,
+          [stepId]: (state.backgroundTasksVersions[stepId] ?? 0) + 1,
+        },
+      };
+      const current = state.backgroundTasksByStepId[stepId];
+      if (tasks.length === 0) {
+        if (!current) return bumpVersion;
+        const { [stepId]: _removed, ...rest } = state.backgroundTasksByStepId;
+        void _removed;
+        return { ...bumpVersion, backgroundTasksByStepId: rest };
+      }
+      // Identity check keeps the array reference stable across no-op
+      // snapshots. Compares every field, so a description that arrives late
+      // for an already-known task still updates the UI.
+      if (
+        current &&
+        current.length === tasks.length &&
+        current.every(
+          (task, index) =>
+            task.taskId === tasks[index]?.taskId &&
+            task.description === tasks[index]?.description &&
+            task.taskType === tasks[index]?.taskType,
+        )
+      ) {
+        return bumpVersion;
+      }
+      return {
+        ...bumpVersion,
+        backgroundTasksByStepId: {
+          ...state.backgroundTasksByStepId,
+          [stepId]: tasks,
         },
       };
     });

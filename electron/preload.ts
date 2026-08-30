@@ -1055,6 +1055,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke(AGENT_CHANNELS.GET_MESSAGE_COUNT, stepId),
     getPendingRequest: (stepId: string) =>
       ipcRenderer.invoke(AGENT_CHANNELS.GET_PENDING_REQUEST, stepId),
+    getBackgroundTasks: (stepId: string) =>
+      ipcRenderer.invoke(AGENT_CHANNELS.GET_BACKGROUND_TASKS, stepId),
     getMessagesWithRawData: (taskId: string, stepId: string) =>
       ipcRenderer.invoke(
         AGENT_CHANNELS.GET_MESSAGES_WITH_RAW_DATA,

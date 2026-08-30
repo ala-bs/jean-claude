@@ -34,6 +34,7 @@ import type {
   PromptPart,
 } from '@shared/agent-backend-types';
 import type {
+  AgentBackgroundTask,
   AgentMessage,
   AgentQuestion,
   QuestionResponseMetadata,
@@ -217,8 +218,16 @@ const POST_RESULT_CLOSE_GRACE_MS = 30 * 1000;
  * live: those report back sporadically, and a notification can resume the agent
  * long after the `result`. Bounded on purpose — an unbounded wait would hang a
  * run whose background task never terminates.
+ *
+ * 10 minutes, not 5: every message re-arms this timer, so the cap only bites on
+ * TOTAL silence, and a real transcript already showed a 4m21s quiet stretch
+ * mid-run (a Monitor on a long poll or a subagent on a slow build goes quiet for
+ * longer still). Closing early kills the `canUseTool` channel, so the resumed
+ * agent fails every later tool call with "AbortError: Stream closed" — the cost
+ * of waiting longer is one idle CLI process, which is far cheaper. Matches
+ * WITHHELD_RESULT_IDLE_TIMEOUT_MS so both silence-based exits agree.
  */
-const BACKGROUND_WORK_CLOSE_GRACE_MS = 5 * 60 * 1000;
+const BACKGROUND_WORK_CLOSE_GRACE_MS = 10 * 60 * 1000;
 
 /**
  * Live background tasks reported by a `background_tasks_changed` system
@@ -230,17 +239,31 @@ const BACKGROUND_WORK_CLOSE_GRACE_MS = 5 * 60 * 1000;
  * retaining a stale non-empty set would silently extend every close grace to
  * the maximum for the rest of the run.
  */
-function readBackgroundTaskSnapshot(message: AgentMessage): string[] | null {
+function readBackgroundTaskSnapshot(
+  message: AgentMessage,
+): AgentBackgroundTask[] | null {
   if (message.type !== 'system') return null;
   const system = message as unknown as {
     subtype?: string;
-    tasks?: Array<{ task_id?: string }>;
+    tasks?: Array<{
+      task_id?: string;
+      description?: string;
+      task_type?: string;
+    }>;
   };
   if (system.subtype !== 'background_tasks_changed') return null;
   if (!Array.isArray(system.tasks)) return [];
   return system.tasks
-    .map((task) => task.task_id)
-    .filter((id): id is string => typeof id === 'string');
+    .filter((task) => typeof task.task_id === 'string')
+    .map((task) => ({
+      taskId: task.task_id as string,
+      ...(typeof task.description === 'string'
+        ? { description: task.description }
+        : {}),
+      ...(typeof task.task_type === 'string'
+        ? { taskType: task.task_type }
+        : {}),
+    }));
 }
 
 export class ClaudeCodeBackend implements AgentBackend {
@@ -715,13 +738,21 @@ export class ClaudeCodeBackend implements AgentBackend {
         // terminates (a leftover `run_in_background` shell, a Monitor).
         const taskSnapshot = readBackgroundTaskSnapshot(message);
         if (taskSnapshot) {
-          session.backgroundTaskIds = new Set(taskSnapshot);
+          session.backgroundTaskIds = new Set(
+            taskSnapshot.map((task) => task.taskId),
+          );
           dbg.agentPermission(
             'Session %s background tasks: %d live %o',
             sessionKey,
             session.backgroundTaskIds.size,
             taskSnapshot,
           );
+          // Surface the snapshot to the UI so a turn that "finished" while
+          // background work is still live doesn't look idle.
+          session.eventChannel.push({
+            type: 'background-tasks',
+            tasks: taskSnapshot,
+          });
         }
 
         // A background-task notification produces a no-op `result`. Withhold it
@@ -782,6 +813,16 @@ export class ClaudeCodeBackend implements AgentBackend {
       session.closePromptStream = null;
       // The stream ended on a withheld background-notification result and no
       // real result ever arrived: replay it so the step isn't stuck `running`.
+      // The run is over, so nothing is still working in the background —
+      // clear the UI indicator even if the SDK never sent a final empty
+      // snapshot (it stops streaming once the process exits).
+      if (
+        session.backgroundTaskIds.size > 0 &&
+        !session.abortController.signal.aborted
+      ) {
+        session.backgroundTaskIds = new Set();
+        session.eventChannel.push({ type: 'background-tasks', tasks: [] });
+      }
       const deferred = session.deferredResultEvents;
       session.deferredResultEvents = null;
       if (deferred && !session.abortController.signal.aborted) {

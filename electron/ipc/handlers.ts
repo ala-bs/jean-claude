@@ -4853,6 +4853,10 @@ export function registerIpcHandlers() {
     return agentService.getPendingRequest(stepId);
   });
 
+  ipcMain.handle(AGENT_CHANNELS.GET_BACKGROUND_TASKS, (_, stepId: string) => {
+    return agentService.getBackgroundTasks(stepId);
+  });
+
   ipcMain.handle(
     AGENT_CHANNELS.GET_MESSAGES_WITH_RAW_DATA,
     async (_, taskId: string, stepId: string) => {

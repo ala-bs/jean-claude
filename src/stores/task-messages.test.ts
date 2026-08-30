@@ -22,6 +22,81 @@ describe('task messages store', () => {
       questionDrafts: {},
       questionResponsesInFlight: {},
       areRunCommandStatusesHydrated: false,
+      backgroundTasksByStepId: {},
+      backgroundTasksVersions: {},
+    });
+  });
+
+  describe('setBackgroundTasks', () => {
+    it('tracks live background jobs outside the step cache', () => {
+      // No loadStep call: the indicator must work before messages load.
+      useTaskMessagesStore
+        .getState()
+        .setBackgroundTasks('step-1', [
+          { taskId: 'bg-1', description: 'Review: regressions' },
+        ]);
+
+      expect(
+        useTaskMessagesStore.getState().backgroundTasksByStepId['step-1'],
+      ).toEqual([{ taskId: 'bg-1', description: 'Review: regressions' }]);
+    });
+
+    it('drops the key on an empty snapshot', () => {
+      const store = useTaskMessagesStore.getState();
+      store.setBackgroundTasks('step-1', [{ taskId: 'bg-1' }]);
+      store.setBackgroundTasks('step-1', []);
+
+      expect(
+        useTaskMessagesStore.getState().backgroundTasksByStepId,
+      ).not.toHaveProperty('step-1');
+    });
+
+    it('keeps the array reference stable for an identical snapshot', () => {
+      const store = useTaskMessagesStore.getState();
+      store.setBackgroundTasks('step-1', [
+        { taskId: 'bg-1', description: 'same' },
+      ]);
+      const first =
+        useTaskMessagesStore.getState().backgroundTasksByStepId['step-1'];
+
+      store.setBackgroundTasks('step-1', [
+        { taskId: 'bg-1', description: 'same' },
+      ]);
+
+      expect(
+        useTaskMessagesStore.getState().backgroundTasksByStepId['step-1'],
+      ).toBe(first);
+    });
+
+    it('bumps the version even for a no-op snapshot so an in-flight fetch can detect it', () => {
+      const store = useTaskMessagesStore.getState();
+      // set-then-clear: the key round-trips back to `undefined`, so only the
+      // version tells a racing hydration fetch that it lost.
+      store.setBackgroundTasks('step-1', [{ taskId: 'bg-1' }]);
+      const afterSet =
+        useTaskMessagesStore.getState().backgroundTasksVersions['step-1'];
+      store.setBackgroundTasks('step-1', []);
+      const afterClear =
+        useTaskMessagesStore.getState().backgroundTasksVersions['step-1'];
+      // Identical repeat snapshot: still a newer event than any older fetch.
+      store.setBackgroundTasks('step-1', []);
+
+      expect(afterClear).toBeGreaterThan(afterSet ?? 0);
+      expect(
+        useTaskMessagesStore.getState().backgroundTasksVersions['step-1'],
+      ).toBeGreaterThan(afterClear ?? 0);
+    });
+
+    it('applies a description that arrives after the task id is known', () => {
+      const store = useTaskMessagesStore.getState();
+      store.setBackgroundTasks('step-1', [{ taskId: 'bg-1' }]);
+      store.setBackgroundTasks('step-1', [
+        { taskId: 'bg-1', description: 'Review: regressions' },
+      ]);
+
+      expect(
+        useTaskMessagesStore.getState().backgroundTasksByStepId['step-1'],
+      ).toEqual([{ taskId: 'bg-1', description: 'Review: regressions' }]);
     });
   });
 

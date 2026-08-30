@@ -11,6 +11,7 @@ import { nanoid } from 'nanoid';
 
 import {
   AGENT_CHANNELS,
+  type AgentBackgroundTask,
   type AgentQuestion,
   DECIDE_FOR_ME,
   getStableQuestionKeys,
@@ -516,6 +517,13 @@ interface ActiveSession {
   }>;
   hasTerminalError: boolean;
   /**
+   * Live background jobs (background subagents, `run_in_background` shells,
+   * Monitor) the agent is still waiting on. Kept so a renderer that reloads
+   * mid-run can re-hydrate the indicator via `getBackgroundTasks()` — the SDK
+   * only reports this set on change, never periodically.
+   */
+  backgroundTasks: AgentBackgroundTask[];
+  /**
    * True once a terminal `result`/`error` event was handled for the current
    * turn while the backend stream is still open. Background subagents keep
    * streaming after the main turn reports a result, so activity arriving after
@@ -920,6 +928,16 @@ class AgentService {
       shellEditTracker.end(stepId, session.shellEditToken);
     }
     if (this.sessions.get(stepId) === session) {
+      // The run is gone; any background-job indicator for it is stale. Only
+      // broadcast when there was something to clear — most steps never run
+      // background work at all.
+      if (session.backgroundTasks.length > 0) {
+        session.backgroundTasks = [];
+        this.emitEvent(session.taskId, stepId, {
+          type: 'background-tasks',
+          tasks: [],
+        });
+      }
       this.sessions.delete(stepId);
       this.autoAcceptSteps.delete(stepId);
       this.permissionRefreshGeneration.delete(stepId);
@@ -1360,6 +1378,7 @@ class AgentService {
       abortController: new AbortController(),
       pendingRequests: [],
       hasTerminalError: false,
+      backgroundTasks: [],
       turnFinalized: false,
       lastTerminalStatus: null,
       stopRequested: false,
@@ -2463,6 +2482,22 @@ class AgentService {
           isSynthetic: true,
           type: 'assistant-message',
           value: message,
+        });
+        break;
+      }
+
+      case 'background-tasks': {
+        // Forward the live snapshot so the UI can show that the agent is
+        // still waiting on background work even after the turn "ended".
+        dbg.agent(
+          'Background tasks for step %s: %d live',
+          stepId,
+          event.tasks.length,
+        );
+        session.backgroundTasks = event.tasks;
+        this.emitEvent(taskId, stepId, {
+          type: 'background-tasks',
+          tasks: event.tasks,
         });
         break;
       }
@@ -3655,6 +3690,14 @@ class AgentService {
   getQueuedPrompts(stepId: string): QueuedPrompt[] {
     const session = this.sessions.get(stepId);
     return session?.queuedPrompts ?? [];
+  }
+
+  /**
+   * Live background jobs for a step. Empty when the step has no active session
+   * (a finished run can't still be waiting on background work).
+   */
+  getBackgroundTasks(stepId: string): AgentBackgroundTask[] {
+    return this.sessions.get(stepId)?.backgroundTasks ?? [];
   }
 
   /**

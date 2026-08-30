@@ -6,6 +6,12 @@ import type {
 } from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
+  AgentBackgroundTask,
+  AgentQuestion,
+  PermissionResponse,
+  QuestionResponse,
+} from '@shared/agent-types';
+import type {
   AgentMemoryCaptureWarning,
   AgentMemoryDashboard,
   AgentMemoryExtractionRun,
@@ -18,11 +24,6 @@ import type {
   AgentMigrationPreviewResult,
   ManagedAgent,
 } from '@shared/agent-management-types';
-import type {
-  AgentQuestion,
-  PermissionResponse,
-  QuestionResponse,
-} from '@shared/agent-types';
 import type {
   AiUsageDashboard,
   AiUsageDashboardParams,
@@ -1486,6 +1487,8 @@ export interface Api {
         }
       | null
     >;
+    /** Live background jobs for a step — used to hydrate after a reload. */
+    getBackgroundTasks: (stepId: string) => Promise<AgentBackgroundTask[]>;
     onEvent: (callback: AgentEventCallback<AgentUIEvent>) => UnsubscribeFn;
   };
   mobilePreview: {
@@ -2728,6 +2731,7 @@ export const api: Api = hasWindowApi
         compactRawMessages: async () => {},
         reprocessNormalization: async () => 0,
         getPendingRequest: async () => null,
+        getBackgroundTasks: async () => [],
         onEvent: () => () => {},
       },
       mobilePreview: {

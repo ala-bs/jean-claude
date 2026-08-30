@@ -5338,6 +5338,45 @@ describe('agentService provider runtime', () => {
     });
   });
 
+  it('forwards background-task snapshots to the renderer and clears them when the run ends', async () => {
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: {
+          isDestroyed: () => false,
+          send: webContentsSendMock,
+        },
+      },
+    ] as never);
+    const handle = createHandle({
+      events: [
+        {
+          type: 'background-tasks',
+          tasks: [{ taskId: 'bg-1', description: 'Review: regressions' }],
+        },
+        completeEvent(),
+      ],
+    });
+    providerState.runStartImplementation = async () => handle;
+
+    await agentService.start('step-1');
+    await waitForAssertion(() => {
+      expect(stepServiceMock.completeStep).toHaveBeenCalledWith('step-1');
+    });
+
+    const snapshots = webContentsSendMock.mock.calls
+      .map(([, payload]) => payload)
+      .filter((payload) => payload?.type === 'background-tasks');
+
+    // The live snapshot reaches the UI...
+    expect(snapshots[0]).toMatchObject({
+      stepId: 'step-1',
+      tasks: [{ taskId: 'bg-1', description: 'Review: regressions' }],
+    });
+    // ...and the session teardown clears it, so no stale indicator survives.
+    expect(snapshots.at(-1)).toMatchObject({ stepId: 'step-1', tasks: [] });
+  });
+
   it('syncs session allowed tools through the provider only when supported', async () => {
     const sibling = {
       ...defaultStep,

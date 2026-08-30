@@ -63,6 +63,7 @@ export function TaskMessageManager() {
   const setPermission = useTaskMessagesStore((s) => s.setPermission);
   const setQuestion = useTaskMessagesStore((s) => s.setQuestion);
   const setQueuedPrompts = useTaskMessagesStore((s) => s.setQueuedPrompts);
+  const setBackgroundTasks = useTaskMessagesStore((s) => s.setBackgroundTasks);
   const isLoaded = useTaskMessagesStore((s) => s.isLoaded);
   const setPendingRequestForTask = useTaskMessagesStore(
     (s) => s.setPendingRequestForTask,
@@ -248,6 +249,11 @@ export function TaskMessageManager() {
             setQueuedPrompts(stepId, event.queuedPrompts);
           }
           break;
+        case 'background-tasks':
+          // Tracked outside the step cache, so it applies even when the
+          // step's messages haven't been loaded yet.
+          setBackgroundTasks(stepId, event.tasks);
+          break;
       }
     });
 
@@ -266,6 +272,7 @@ export function TaskMessageManager() {
     setPermission,
     setQuestion,
     setQueuedPrompts,
+    setBackgroundTasks,
     isLoaded,
     setPendingRequestForTask,
     clearPendingRequestForTask,
