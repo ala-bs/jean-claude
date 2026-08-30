@@ -9,8 +9,6 @@ import { api } from '@/lib/api';
 type RestoreNavigationRoutes =
   | '/all'
   | '/all/$taskId'
-  | '/projects/$projectId'
-  | '/projects/$projectId/tasks/$taskId'
   | '/projects/new';
 
 export type RedirectTarget = NavigateOptions<
@@ -64,20 +62,16 @@ export async function resolveLocationRedirect({
         // Validate task still exists
         const task = await api.tasks.findById(lastLocation.taskId);
         if (task) {
+          // Restore into the feed list, the main view, even for locations
+          // persisted while the legacy project task list still existed.
           return {
-            to: '/projects/$projectId/tasks/$taskId',
-            params: {
-              projectId: lastLocation.projectId,
-              taskId: lastLocation.taskId,
-            },
+            to: '/all/$taskId',
+            params: { taskId: lastLocation.taskId },
           };
         }
       }
-      // Task invalid or not set, go to project
-      return {
-        to: '/projects/$projectId',
-        params: { projectId: lastLocation.projectId },
-      };
+      // Task invalid or not set, fall back to the feed list
+      return { to: '/all' };
     }
 
     // Project invalid, clear stored location

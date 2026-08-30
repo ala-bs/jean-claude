@@ -16,10 +16,7 @@ export type PreviewStepActionIntent =
   | 'ios-app-status-retry'
   | 'build-toggle'
   | 'dev-server-toggle'
-  | 'preview-toggle'
-  | 'proxy-toggle'
-  | 'android-app-trust'
-  | 'install-network-certificate';
+  | 'preview-toggle';
 
 export type PreviewStepAction = {
   label: string;
@@ -36,7 +33,6 @@ export type PreviewStepAction = {
 export type PreviewActionFacts = {
   dependenciesInstallStarting: boolean;
   hasBuildCommand: boolean;
-  hasNetworkProxyStartParams: boolean;
 };
 
 export function getSetupStepAction(
@@ -90,7 +86,11 @@ export function getSetupStepAction(
       disabled:
         !actionFacts.hasBuildCommand ||
         needsAppSelection ||
-        (platform === 'ios' && !deviceId) ||
+        // Both platforms scope the build command id by device now, so a build
+        // without a target device would write into a shared "no-device" stream.
+        // A physical device satisfies this as soon as it is connected.
+        !deviceId ||
+        (facts.selectedDeviceIsPhysical && !facts.selectedDeviceConnected) ||
         facts.normalizedBuildStatus === 'loading' ||
         facts.buildStarting ||
         facts.buildStopping,
@@ -111,10 +111,15 @@ export function getSetupStepAction(
   }
 
   if (stepKey === 'preview') {
+    // Physical iPhones have no capture path, so offering "Start" here would
+    // only produce an adapter error. The step itself explains why.
+    const physicalIosStreamingUnsupported =
+      platform === 'ios' && facts.selectedDeviceIsPhysical;
     return {
       label: facts.hasActiveSession ? 'Stop' : 'Start',
       intent: 'preview-toggle',
       disabled:
+        (physicalIosStreamingUnsupported && !facts.hasActiveSession) ||
         facts.isStopping ||
         (!facts.hasActiveSession &&
           (!deviceId ||
@@ -129,39 +134,6 @@ export function getSetupStepAction(
   // NOTE: there is no 'logs' step in the setup model, so native log capture has
   // no start affordance in this pane. Add a 'logs' step to getSetupModel to
   // bring it back.
-
-  if (stepKey === 'proxy') {
-    return {
-      label: facts.networkRunning ? 'Stop' : 'Start',
-      intent: 'proxy-toggle',
-      disabled:
-        !actionFacts.hasNetworkProxyStartParams ||
-        facts.proxyIsStarting ||
-        facts.proxyIsStopping ||
-        facts.proxyIsInstallingCertificate,
-      loading: facts.proxyIsStarting || facts.proxyIsStopping,
-      variant: facts.networkRunning ? 'secondary' : 'primary',
-    };
-  }
-
-  if (stepKey === 'https') {
-    const needsTrust = platform === 'android' && !derived.androidTrustConfigured;
-    return {
-      label: needsTrust ? 'Trust app' : 'Install cert',
-      intent: needsTrust ? 'android-app-trust' : 'install-network-certificate',
-      disabled:
-        !deviceId ||
-        !actionFacts.hasNetworkProxyStartParams ||
-        facts.proxyIsInstallingCertificate ||
-        facts.proxyIsPreparingAndroidAppTrust ||
-        facts.proxyIsStarting ||
-        facts.proxyIsStopping,
-      loading:
-        facts.proxyIsInstallingCertificate ||
-        facts.proxyIsPreparingAndroidAppTrust,
-      variant: 'secondary',
-    };
-  }
 
   return null;
 }

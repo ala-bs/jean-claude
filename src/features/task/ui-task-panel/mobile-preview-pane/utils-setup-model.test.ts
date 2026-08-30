@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { baseDerived, baseFacts } from './utils-preview-fixtures';
 import {
   getSetupModel,
+  PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL,
   type PreviewDerived,
   type PreviewFacts,
   type PreviewStepKey,
@@ -33,7 +34,7 @@ function step(
 }
 
 describe('getSetupModel — which steps are present', () => {
-  it('shows the base steps with proxy disabled', () => {
+  it('shows the base steps', () => {
     expect(keys()).toEqual([
       'app',
       'dependencies-install',
@@ -44,30 +45,8 @@ describe('getSetupModel — which steps are present', () => {
     ]);
   });
 
-  it('adds proxy and https when autoStartProxy is on', () => {
-    expect(keys({ autoStartProxy: true })).toContain('proxy');
-    expect(keys({ autoStartProxy: true })).toContain('https');
-  });
-
-  it('omits proxy and https when autoStartProxy is off', () => {
-    expect(keys()).not.toContain('proxy');
-    expect(keys()).not.toContain('https');
-  });
-
   it('adds prebuild for ios when an ios prebuild is needed', () => {
     expect(keys({}, { needsExpoIosPrebuild: true })).toContain('prebuild');
-  });
-
-  it('adds prebuild for android only when the proxy is auto-started', () => {
-    expect(
-      keys({ platform: 'android' }, { needsExpoAndroidPrebuild: true }),
-    ).not.toContain('prebuild');
-    expect(
-      keys(
-        { platform: 'android', autoStartProxy: true },
-        { needsExpoAndroidPrebuild: true },
-      ),
-    ).toContain('prebuild');
   });
 
   it('omits the install step on android without a resolved project path', () => {
@@ -156,81 +135,6 @@ describe('getSetupModel — step statuses', () => {
     expect(step('preview').detail).toBe('Not started');
   });
 
-  it('surfaces proxy errors in the proxy step', () => {
-    const proxy = step('proxy', {
-      autoStartProxy: true,
-      networkProxyErrorRaw: new Error('proxy exploded'),
-    });
-    expect(proxy.status).toBe('idle');
-    expect(String(proxy.detail)).toContain('proxy exploded');
-  });
-
-  it('shows the proxy url when running', () => {
-    expect(
-      step('proxy', {
-        autoStartProxy: true,
-        networkStatus: 'running',
-        networkSessionProxyUrl: 'http://127.0.0.1:9090',
-      }).detail,
-    ).toBe('http://127.0.0.1:9090');
-  });
-});
-
-describe('getSetupModel — https step detail is a descriptor, never JSX', () => {
-  it('returns the network-request-count descriptor when ready', () => {
-    expect(step('https', { autoStartProxy: true }, { httpsStatus: 'ready' }).detail).toEqual({
-      kind: 'network-request-count',
-    });
-  });
-
-  it('explains android trust when blocked', () => {
-    expect(
-      step(
-        'https',
-        { autoStartProxy: true, platform: 'android' },
-        {
-          httpsStatus: 'blocked',
-          effectiveAndroidProjectPath: 'apps/mobile/android',
-          androidTrustConfigured: true,
-        },
-      ).detail,
-    ).toBe('Build and install app on device');
-
-    expect(
-      step(
-        'https',
-        { autoStartProxy: true, platform: 'android' },
-        {
-          httpsStatus: 'blocked',
-          effectiveAndroidProjectPath: 'apps/mobile/android',
-          androidTrustConfigured: false,
-        },
-      ).detail,
-    ).toBe('Rebuild app so debug trust config applies');
-
-    expect(
-      step(
-        'https',
-        { autoStartProxy: true, platform: 'android' },
-        { httpsStatus: 'blocked', effectiveAndroidProjectPath: null },
-      ).detail,
-    ).toBe('Set Android project folder in project settings');
-  });
-
-  it('guides certificate install when not yet installed', () => {
-    expect(
-      step('https', { autoStartProxy: true, networkCertificateInstalled: false }).detail,
-    ).toBe('Install CA certificate to decrypt HTTPS');
-
-    expect(
-      step('https', {
-        autoStartProxy: true,
-        platform: 'android',
-        networkCertificateInstalled: false,
-        androidCertGuidanceVisible: true,
-      }).detail,
-    ).toBe('Finish CA install on Android, then restart app');
-  });
 });
 
 describe('getSetupModel — summary', () => {
@@ -247,7 +151,7 @@ describe('getSetupModel — summary', () => {
     expect(result.ctaLabel).toBe('Workspace ready');
     expect(result.ctaDisabled).toBe(true);
     expect(result.setupHeadline).toBe('Workspace ready');
-    expect(result.setupDetail).toBe('Preview and Metro are live. Proxy stays manual.');
+    expect(result.setupDetail).toBe('Preview and Metro are live.');
   });
 
   it('reports running while a step is starting', () => {
@@ -274,18 +178,6 @@ describe('getSetupModel — summary', () => {
     ).toBe('Run Expo prebuild');
   });
 
-  it('offers to restart a failed proxy', () => {
-    expect(
-      model({ autoStartProxy: true }, { proxyStatus: 'error' }).ctaLabel,
-    ).toBe('Restart proxy');
-  });
-
-  it('offers to fix android trust when https is blocked', () => {
-    expect(
-      model({ autoStartProxy: true }, { httpsStatus: 'blocked' }).ctaLabel,
-    ).toBe('Fix Android trust');
-  });
-
   it('disables the cta when the device is not ready', () => {
     expect(model({}, { deviceReady: false }).ctaDisabled).toBe(true);
   });
@@ -309,7 +201,6 @@ describe('getSetupModel — summary', () => {
     expect(model({ devServerRunning: true }).canStopSetup).toBe(true);
     expect(model({ buildRunning: true }).canStopSetup).toBe(true);
     expect(model({ nativeLogRunning: true }).canStopSetup).toBe(true);
-    expect(model({ networkRunning: true }).canStopSetup).toBe(true);
     expect(model({ prebuildStatusStatus: 'running' }).canStopSetup).toBe(true);
   });
 
@@ -318,15 +209,154 @@ describe('getSetupModel — summary', () => {
     expect(model({ devServerStopping: true }).anySetupStopping).toBe(true);
     expect(model({ buildStopping: true }).anySetupStopping).toBe(true);
     expect(model({ prebuildStopping: true }).anySetupStopping).toBe(true);
-    expect(model({ proxyIsStopping: true }).anySetupStopping).toBe(true);
     expect(model().anySetupStopping).toBe(false);
   });
 
-  it('never interpolates a descriptor detail into the summary text', () => {
-    const result = model(
-      { autoStartProxy: true, deviceId: '' },
-      { httpsStatus: 'ready', deviceReady: false },
+});
+
+describe('getSetupModel — physical devices', () => {
+  const connectedIphone: Partial<PreviewFacts> = {
+    platform: 'ios',
+    selectedDevice: { name: "Pat's iPhone", state: 'booted' },
+    selectedDeviceIsPhysical: true,
+    selectedDeviceConnected: true,
+  };
+  const unreachableIphone: Partial<PreviewFacts> = {
+    ...connectedIphone,
+    selectedDeviceConnected: false,
+    selectedDeviceUnavailableReason: 'Device is locked; unlock to continue',
+  };
+
+  it('marks a connected physical device ready and says "Connected"', () => {
+    const deviceStep = step(
+      'device',
+      connectedIphone,
+      { deviceReady: true },
     );
-    expect(result.setupDetail).not.toContain('[object Object]');
+    expect(deviceStep.status).toBe('ready');
+    expect(deviceStep.detail).toBe("Pat's iPhone · Connected");
+  });
+
+  it('lets the install step reach ready on a connected physical device', () => {
+    const installStep = step(
+      'install',
+      { ...connectedIphone, iosAppStatus: { bundleId: 'com.acme.app' } as never },
+      { deviceReady: true, selectedAppInstalled: true },
+    );
+    expect(installStep.status).toBe('ready');
+    expect(installStep.detail).toBe('com.acme.app · installed');
+  });
+
+  it('blocks the install step with the unavailable reason when not connected', () => {
+    const installStep = step(
+      'install',
+      unreachableIphone,
+      { deviceReady: false, selectedAppInstalled: true },
+    );
+    expect(installStep.status).toBe('blocked');
+    expect(installStep.detail).toBe('Device is locked; unlock to continue');
+  });
+
+  it('blocks the device step with the unavailable reason when not connected', () => {
+    const deviceStep = step('device', unreachableIphone, { deviceReady: false });
+    expect(deviceStep.status).toBe('blocked');
+    expect(deviceStep.detail).toBe(
+      "Pat's iPhone · Device is locked; unlock to continue",
+    );
+  });
+
+  it('falls back to generic copy when no unavailable reason is given', () => {
+    const deviceStep = step(
+      'device',
+      { ...connectedIphone, selectedDeviceConnected: false },
+      { deviceReady: false },
+    );
+    expect(deviceStep.detail).toBe("Pat's iPhone · Device not connected");
+  });
+
+  it('surfaces the build-command notice on the install step', () => {
+    const installStep = step(
+      'install',
+      { ...connectedIphone, buildCommandDeviceNotice: 'Add {{device}} yourself' },
+      { deviceReady: true, selectedAppInstalled: true },
+    );
+    expect(installStep.detail).toBe('Add {{device}} yourself');
+  });
+
+  it('drops the preview step entirely for a physical iPhone', () => {
+    expect(keys(connectedIphone, { deviceReady: true })).toEqual([
+      'app',
+      'dependencies-install',
+      'device',
+      'install',
+      'metro',
+    ]);
+    expect(() => step('preview', connectedIphone, { deviceReady: true })).toThrow(
+      'step preview not present',
+    );
+  });
+
+  it('lets a built and launched physical iPhone read as fully ready', () => {
+    const result = model(connectedIphone, {
+      deviceReady: true,
+      selectedAppInstalled: true,
+      metroStatus: 'ready',
+    });
+    expect(result.allSetupReady).toBe(true);
+    expect(result.nextSetupStep).toBeNull();
+    expect(result.ctaLabel).toBe('Workspace ready');
+    expect(result.setupHeadline).toBe('Workspace ready');
+    // The explanation is not lost: it moves into the ready summary (and onto
+    // the preview surface's empty state).
+    expect(result.setupDetail).toContain(
+      PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL,
+    );
+  });
+
+  it('does not report a preview step as the next action on a physical iPhone', () => {
+    const result = model(connectedIphone, {
+      deviceReady: true,
+      selectedAppInstalled: false,
+      appNeedsBuild: true,
+    });
+    expect(result.nextSetupStep?.key).toBe('install');
+    expect(result.missingSetupLabels).not.toContain('Preview streaming');
+  });
+
+  it('keeps the preview step for a physical Android device', () => {
+    expect(
+      keys(
+        {
+          platform: 'android',
+          selectedDeviceIsPhysical: true,
+          selectedDeviceConnected: true,
+        },
+        { deviceReady: true },
+      ),
+    ).toContain('preview');
+  });
+
+  it('keeps physical Android streaming supported', () => {
+    const previewStep = step(
+      'preview',
+      {
+        platform: 'android',
+        selectedDevice: { name: 'Pixel 7', state: 'booted' },
+        selectedDeviceIsPhysical: true,
+        selectedDeviceConnected: true,
+        previewMethodText: 'scrcpy',
+      },
+      { deviceReady: true, previewStatus: 'ready' },
+    );
+    expect(previewStep.status).toBe('ready');
+    expect(previewStep.detail).toBe('scrcpy');
+  });
+
+  it('does not change any simulator step', () => {
+    const deviceStep = step('device');
+    expect(deviceStep.status).toBe('ready');
+    expect(deviceStep.detail).toBe('iPhone 15 · booted');
+    expect(step('preview').status).toBe('idle');
+    expect(keys()).toContain('preview');
   });
 });

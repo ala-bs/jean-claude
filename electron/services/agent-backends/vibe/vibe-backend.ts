@@ -128,7 +128,7 @@ export class VibeBackend implements AgentBackend {
     config: AgentBackendConfig,
     parts: PromptPart[],
   ): Promise<AgentSession> {
-    const { client, rootPid } = await getOrCreateVibeAcpServer();
+    const { client, rootPid } = await getOrCreateVibeAcpServer(config.env);
     const mcpServers = toVibeMcpServers(config.mcpServers);
     const sessionResult = config.sessionId
       ? await client.request('session/load', {

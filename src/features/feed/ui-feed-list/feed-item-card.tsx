@@ -8,7 +8,6 @@ import {
   CircleDotDashed,
   CircleHelp,
   ClipboardList,
-  FolderOpen,
   GitMerge,
   GitPullRequest,
   Hand,
@@ -664,27 +663,6 @@ export function FeedItemCard({
     menuRef.current?.toggle();
   }, [dismiss, item.id]);
 
-  const handleOpenInProject = useCallback(() => {
-    if (item.source === 'pull-request' && item.pullRequestId) {
-      navigate({
-        to: '/projects/$projectId/prs/$prId',
-        params: {
-          projectId: item.projectId,
-          prId: String(item.pullRequestId),
-        },
-      });
-    } else if (item.taskId) {
-      navigate({
-        to: '/projects/$projectId/tasks/$taskId',
-        params: {
-          projectId: item.projectId,
-          taskId: item.taskId,
-        },
-      });
-    }
-    menuRef.current?.toggle();
-  }, [navigate, item]);
-
   const openOverlay = useOverlaysStore((s) => s.open);
   const setDraftProjectId = useNewTaskDraftStore((s) => s.setSelectedProjectId);
   const setDraft = useNewTaskDraftStore((s) => s.setDraft);
@@ -1281,14 +1259,6 @@ export function FeedItemCard({
           Create sub-task
         </DropdownItem>
       )}
-      <DropdownDivider />
-      <DropdownItem
-        onClick={handleOpenInProject}
-        shortcut="cmd+shift+o"
-        icon={<FolderOpen className="text-ink-2" />}
-      >
-        Open in project
-      </DropdownItem>
       <DropdownDivider />
       <DropdownInfo label="Menu shortcut" value="Shift+F10" />
     </Dropdown>

@@ -15,6 +15,8 @@ import { getRunCommandDisplayName } from '@shared/run-command-types';
 import { IconButton } from '@/common/ui/icon-button';
 import { Input } from '@/common/ui/input';
 
+import { useDebouncedUpdate } from './use-debounced-update';
+
 
 
 export function GroupRow({
@@ -48,9 +50,18 @@ export function GroupRow({
     transition,
   };
 
+  const {
+    schedule: scheduleUpdate,
+    flush: flushUpdate,
+    discard: discardUpdate,
+    cancel: cancelUpdate,
+    hasPending,
+  } = useDebouncedUpdate<UpdateProjectCommandGroup>(onUpdate);
+
   useEffect(() => {
+    if (hasPending('name', group.name)) return;
     startTransition(() => setLocalName(group.name));
-  }, [group.name]);
+  }, [group.name, hasPending]);
 
   const selectedCount = useMemo(
     () =>
@@ -59,12 +70,20 @@ export function GroupRow({
     [commands, group.commandIds],
   );
 
-  const handleNameBlur = () => {
-    const trimmed = localName.trim();
-    if (trimmed && trimmed !== group.name) {
-      onUpdate({ name: trimmed });
+  const handleNameChange = (value: string) => {
+    setLocalName(value);
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === group.name) {
+      // Empty names are not persistable; drop any queued edit instead.
+      discardUpdate('name');
+      return;
     }
-    setLocalName(trimmed || group.name);
+    scheduleUpdate({ name: trimmed });
+  };
+
+  const handleNameBlur = () => {
+    flushUpdate();
+    setLocalName((current) => current.trim() || group.name);
   };
 
   const handleToggleCommand = (commandId: string, checked: boolean) => {
@@ -110,7 +129,7 @@ export function GroupRow({
           <Input
             size="md"
             value={localName}
-            onChange={(e) => setLocalName(e.target.value)}
+            onChange={(e) => handleNameChange(e.target.value)}
             onBlur={handleNameBlur}
             onKeyDown={(e) => {
               if (e.key === 'Enter') e.currentTarget.blur();
@@ -132,7 +151,10 @@ export function GroupRow({
         <IconButton
           variant="ghost"
           size="md"
-          onClick={onDelete}
+          onClick={() => {
+            cancelUpdate();
+            onDelete();
+          }}
           icon={<Trash2 />}
           tooltip="Delete group"
         />

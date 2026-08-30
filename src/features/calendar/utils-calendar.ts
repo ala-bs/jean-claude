@@ -179,6 +179,83 @@ export function computeFreeBlocks(
     .slice(0, 2);
 }
 
+/**
+ * Height of a meeting block, clamped so a short meeting bumped up to
+ * `minHeight` never spills over the next block it shares horizontal
+ * space with. `nextTop` values at or above `top` are ignored: blocks
+ * collapsed onto the same y (out-of-window or zero-duration meetings)
+ * would otherwise shrink to an unreadable sliver.
+ */
+export function blockHeight({
+  top,
+  bottom,
+  nextTop,
+  minHeight,
+  gap = 2,
+}: {
+  top: number;
+  bottom: number;
+  nextTop?: number;
+  minHeight: number;
+  gap?: number;
+}): number {
+  const hasNext = nextTop !== undefined && nextTop > top;
+  const desired = Math.max(minHeight, bottom - top - gap);
+  const available = hasNext ? nextTop - top - gap : Number.POSITIVE_INFINITY;
+  return Math.max(Math.min(desired, available), MIN_BLOCK_HEIGHT);
+}
+
+/**
+ * Absolute floor, only reachable when the next block starts a few pixels
+ * below this one (sub-5-minute meetings). Kept tiny so the no-overlap
+ * clamp above always wins.
+ */
+const MIN_BLOCK_HEIGHT = 4;
+
+/**
+ * Text density tier for a meeting block, so a 12px sliver renders
+ * legible single-line text instead of clipping a padded 11px label.
+ */
+export function blockDensity(height: number): 'micro' | 'compact' | 'regular' {
+  if (height < 20) return 'micro';
+  if (height < 34) return 'compact';
+  return 'regular';
+}
+
+/**
+ * For each meeting, the y of the nearest following block that shares
+ * horizontal space with it, so blocks can be clamped to avoid overlap.
+ *
+ * `col`/`totalCols` are assigned per cluster, so the same `col` index means
+ * different x-ranges in different clusters. Comparing actual x-ranges is what
+ * makes this correct across cluster boundaries — a half-width block in one
+ * cluster still gets clamped by a full-width block in the next.
+ */
+export function nextTopByMeetingId(
+  laid: { meeting: UpcomingMeeting; col: number; totalCols: number }[],
+  toY: (dateStr: string) => number,
+): Map<string, number> {
+  const blocks = laid.map(({ meeting, col, totalCols }) => ({
+    id: meeting.id,
+    top: toY(meeting.startAt),
+    left: col / totalCols,
+    right: (col + 1) / totalCols,
+  }));
+
+  const result = new Map<string, number>();
+  for (const block of blocks) {
+    let nearest: number | undefined;
+    for (const other of blocks) {
+      if (other === block || other.top <= block.top) continue;
+      const overlapsX = other.left < block.right && block.left < other.right;
+      if (!overlapsX) continue;
+      if (nearest === undefined || other.top < nearest) nearest = other.top;
+    }
+    if (nearest !== undefined) result.set(block.id, nearest);
+  }
+  return result;
+}
+
 export function layoutColumns(
   meetings: UpcomingMeeting[],
 ): { meeting: UpcomingMeeting; col: number; totalCols: number }[] {

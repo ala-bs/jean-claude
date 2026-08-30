@@ -94,6 +94,7 @@ import isEqual from 'lodash-es/isEqual';
 import { Kbd } from '@/common/ui/kbd';
 import { Modal } from '@/common/ui/modal';
 import { ProjectColorPicker } from '@/features/project/ui-project-color-picker';
+import { ProjectEnvSettings } from '@/features/project/ui-project-env-settings';
 import { ProjectLogo } from '@/features/project/ui-project-logo';
 import { ProjectLogoSuggestions } from '@/features/project/ui-project-logo-suggestions';
 import { ProjectMcpSettings } from '@/features/project/ui-project-mcp-settings';
@@ -128,6 +129,7 @@ const PROMPT_PREFACE_MODE_OPTIONS = [
 export type ProjectSettingsMenuItem =
   | 'details'
   | 'commit-ignore'
+  | 'env-vars'
   | 'permissions'
   | 'worktree'
   | 'feature-map'
@@ -1724,6 +1726,9 @@ export function ProjectSettings({
       break;
     case 'commit-ignore':
       content = <ProjectCommitIgnoreSettings projectId={projectId} />;
+      break;
+    case 'env-vars':
+      content = <ProjectEnvSettings projectId={projectId} />;
       break;
     case 'permissions':
       content = <ProjectPermissionsSettings projectPath={project.path} />;

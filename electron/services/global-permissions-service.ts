@@ -137,26 +137,73 @@ export function validatePermissionScope(scope: unknown): PermissionScope {
 // ---------------------------------------------------------------------------
 
 /**
+ * Last successfully parsed scope. Survives cache invalidation so a transient
+ * read/parse failure can fall back to it instead of collapsing to `{}`.
+ *
+ * Returning `{}` on failure is only correct when the file genuinely does not
+ * exist. For any other error the real permissions are *unknown*, and an empty
+ * scope is the worst possible guess: `refreshPermissionRules` pushes it into
+ * every live agent session as the authoritative global snapshot, so every
+ * globally-allowed tool silently drops to `ask`/deny at once.
+ */
+let lastKnownGoodPermissions: PermissionScope | null = null;
+
+/**
  * Read global permissions from `~/.config/jean-claude/settings.json`.
- * Returns an empty `PermissionScope` if the file doesn't exist or is invalid.
+ * Returns an empty `PermissionScope` only when the file does not exist.
+ * On a transient read/parse failure, falls back to the last known good scope.
  * Uses an in-memory cache; invalidated on write.
  */
 export async function readGlobalPermissions(): Promise<PermissionScope> {
   if (cachedPermissions) return structuredClone(cachedPermissions);
 
+  let content: string;
   try {
-    const content = await fs.readFile(getGlobalSettingsPath(), 'utf-8');
+    content = await fs.readFile(getGlobalSettingsPath(), 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      // No settings file yet — an empty scope really is the truth.
+      cachedPermissions = {};
+      // Only seed the fallback on first run. If we already had a good scope,
+      // the file vanishing underneath us (synced ~/.config, external cleanup)
+      // must not destroy the fallback for later transient failures.
+      if (lastKnownGoodPermissions === null) {
+        lastKnownGoodPermissions = {};
+      } else if (Object.keys(lastKnownGoodPermissions).length > 0) {
+        dbg.agentPermission(
+          'Global settings file disappeared — keeping last known good scope (%d tools) as fallback',
+          Object.keys(lastKnownGoodPermissions).length,
+        );
+      }
+      return {};
+    }
+    dbg.agentPermission(
+      'Failed reading global settings (%O) — reusing last known good scope (%d tools)',
+      error,
+      Object.keys(lastKnownGoodPermissions ?? {}).length,
+    );
+    return structuredClone(lastKnownGoodPermissions ?? {});
+  }
+
+  try {
     const parsed = JSON.parse(content) as GlobalSettings;
     if (parsed.version !== 1 || !parsed.permissions) {
       dbg.agentPermission(
-        'Invalid global settings format, returning empty scope',
+        'Invalid global settings format — reusing last known good scope (%d tools)',
+        Object.keys(lastKnownGoodPermissions ?? {}).length,
       );
-      return {};
+      return structuredClone(lastKnownGoodPermissions ?? {});
     }
     cachedPermissions = parsed.permissions;
-    return parsed.permissions;
-  } catch {
-    return {};
+    lastKnownGoodPermissions = parsed.permissions;
+    return structuredClone(parsed.permissions);
+  } catch (error) {
+    dbg.agentPermission(
+      'Failed parsing global settings (%O) — reusing last known good scope (%d tools)',
+      error,
+      Object.keys(lastKnownGoodPermissions ?? {}).length,
+    );
+    return structuredClone(lastKnownGoodPermissions ?? {});
   }
 }
 
@@ -183,8 +230,12 @@ export async function writeGlobalPermissions(
     { encoding: 'utf-8', mode: 0o600 },
   );
 
-  // Invalidate cache after write
+  // Invalidate cache after write. The fallback must advance with it: leaving it
+  // on the pre-write scope would make a failed read immediately after a
+  // *revocation* serve the rule the user just removed — wider than both disk
+  // and the old fail-to-`ask` behaviour.
   cachedPermissions = null;
+  lastKnownGoodPermissions = structuredClone(permissions);
 
   // Single choke point: every add/remove/edit path writes through here.
   emitPermissionsChanged({ scope: 'global' });

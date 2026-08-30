@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   canStartPointerInteraction,
   createWheelGestureFeedback,
+  getPasteInputs,
   getPointerDownInput,
   getPointerMoveInputs,
   getPointerUpInput,
   isPointWithinSurfaceBounds,
   matchesActivePointer,
+  MAX_PASTE_LENGTH,
   restartGestureFeedbackTimer,
   shouldUseHidTouchLifecycle,
 } from './utils-input';
@@ -182,5 +184,103 @@ describe('wheel gesture feedback', () => {
     expect(firstExpired).not.toHaveBeenCalled();
     expect(secondExpired).toHaveBeenCalledOnce();
     vi.useRealTimers();
+  });
+});
+
+describe('getPasteInputs', () => {
+  it('sends a single-line paste as one text event', () => {
+    expect(getPasteInputs({ text: 'hello world', platform: 'ios' })).toEqual({
+      ok: true,
+      inputs: [{ type: 'text', text: 'hello world' }],
+    });
+  });
+
+  it('splits lines into text events separated by enter key events', () => {
+    expect(getPasteInputs({ text: 'a\nb', platform: 'android' })).toEqual({
+      ok: true,
+      inputs: [
+        { type: 'text', text: 'a' },
+        { type: 'key', key: 'enter' },
+        { type: 'text', text: 'b' },
+      ],
+    });
+  });
+
+  it('never lets a newline ride along inside a text event', () => {
+    const result = getPasteInputs({
+      text: 'hello\npm uninstall com.example.app',
+      platform: 'android',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const input of result.inputs) {
+      if (input.type === 'text') expect(input.text).not.toContain('\n');
+    }
+  });
+
+  it('normalizes CRLF and lone CR to a single break', () => {
+    expect(getPasteInputs({ text: 'a\r\nb\rc', platform: 'ios' })).toEqual({
+      ok: true,
+      inputs: [
+        { type: 'text', text: 'a' },
+        { type: 'key', key: 'enter' },
+        { type: 'text', text: 'b' },
+        { type: 'key', key: 'enter' },
+        { type: 'text', text: 'c' },
+      ],
+    });
+  });
+
+  it('preserves blank lines as bare enter key events', () => {
+    expect(getPasteInputs({ text: 'a\n\nb', platform: 'ios' })).toEqual({
+      ok: true,
+      inputs: [
+        { type: 'text', text: 'a' },
+        { type: 'key', key: 'enter' },
+        { type: 'key', key: 'enter' },
+        { type: 'text', text: 'b' },
+      ],
+    });
+  });
+
+  it('strips control characters that no backend can type', () => {
+    expect(getPasteInputs({ text: 'a\tbc', platform: 'ios' })).toEqual({
+      ok: true,
+      inputs: [{ type: 'text', text: 'abc' }],
+    });
+  });
+
+  it('returns no inputs for empty or fully stripped clipboard text', () => {
+    expect(getPasteInputs({ text: '', platform: 'ios' })).toEqual({
+      ok: true,
+      inputs: [],
+    });
+    expect(getPasteInputs({ text: '\u0000\u0007', platform: 'ios' })).toEqual({
+      ok: true,
+      inputs: [],
+    });
+  });
+
+  it('rejects text longer than the cap instead of truncating it', () => {
+    const result = getPasteInputs({
+      text: 'x'.repeat(MAX_PASTE_LENGTH + 1),
+      platform: 'ios',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toContain('too long');
+  });
+
+  it('accepts text exactly at the cap', () => {
+    expect(
+      getPasteInputs({ text: 'x'.repeat(MAX_PASTE_LENGTH), platform: 'ios' }).ok,
+    ).toBe(true);
+  });
+
+  it('rejects percent only on android, where input text treats %s specially', () => {
+    expect(getPasteInputs({ text: '100% done', platform: 'android' }).ok).toBe(
+      false,
+    );
+    expect(getPasteInputs({ text: '100% done', platform: 'ios' }).ok).toBe(true);
   });
 });

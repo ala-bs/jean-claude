@@ -7,8 +7,7 @@ export type PrWorkspaceDeletionDestination =
       to: '/projects/$projectId/prs/$prId';
       params: { projectId: string; prId: string };
     }
-  | { to: '/all' }
-  | { to: '/projects/$projectId'; params: { projectId: string } };
+  | { to: '/all' };
 
 function decodeSegment(segment: string) {
   try {
@@ -60,9 +59,5 @@ export function getPrWorkspaceDeletionDestination({
   }
 
   if (!currentTaskId || !deletedTaskIdSet.has(currentTaskId)) return null;
-  if (segments[0] === 'all') return { to: '/all' };
-  return {
-    to: '/projects/$projectId',
-    params: { projectId },
-  };
+  return { to: '/all' };
 }

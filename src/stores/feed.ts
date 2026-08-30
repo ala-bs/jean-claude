@@ -30,6 +30,8 @@ interface FeedOverridesState {
   markLowPriority: (id: string) => void;
   toggleLowPriority: (id: string) => void;
   toggleProjectHidden: (projectId: string) => void;
+  /** Show only this project in the feed, hiding all others. */
+  showOnlyProject: (projectId: string, allProjectIds: string[]) => void;
   clearHiddenProjects: () => void;
   saveFilterPreset: (name: string) => void;
   applyFilterPreset: (id: string) => void;
@@ -105,6 +107,11 @@ export const useFeedStore = create<FeedOverridesState>()(
               ? state.hiddenProjectIds.filter((id) => id !== projectId)
               : [...state.hiddenProjectIds, projectId],
           };
+        }),
+
+      showOnlyProject: (projectId, allProjectIds) =>
+        set({
+          hiddenProjectIds: allProjectIds.filter((id) => id !== projectId),
         }),
 
       clearHiddenProjects: () => set({ hiddenProjectIds: [] }),

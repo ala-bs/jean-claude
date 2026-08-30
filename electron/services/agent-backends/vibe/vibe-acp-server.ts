@@ -1,8 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import {
+  getChildProcessEnv,
+  getEnvPoolKey,
+} from '../../../lib/child-process-env';
 import { dbg } from '../../../lib/debug';
-import { getChildProcessEnv } from '../../../lib/child-process-env';
 
 import { AcpJsonRpcClient } from '../acp-json-rpc-client';
 
@@ -21,21 +24,35 @@ type VibeAcpServerState = {
   handle?: VibeAcpServerHandle;
 };
 
-let serverState: VibeAcpServerState | undefined;
+// One server per distinct env override set. Projects with no env vars all
+// share the '' entry, preserving the previous single-server behaviour.
+//
+// KNOWN LIMITATION: entries are only removed when their process exits, so
+// editing a project env var strands the old key's server until app quit (it
+// keeps running with the previous values in its environment). Acceptable for
+// now because the pre-existing behaviour also leaked one server for the app's
+// lifetime, but this needs refcounting or an idle reaper before env editing
+// becomes common. Tracked in the follow-ups for this feature.
+const serverStates = new Map<string, VibeAcpServerState>();
 
-export async function getOrCreateVibeAcpServer(): Promise<VibeAcpServerHandle> {
+export async function getOrCreateVibeAcpServer(
+  env?: Record<string, string>,
+): Promise<VibeAcpServerHandle> {
+  const poolKey = getEnvPoolKey(env);
+  let serverState = serverStates.get(poolKey);
+
   if (serverState === undefined) {
     let state: VibeAcpServerState;
     const clearIfCurrent = () => {
-      if (serverState === state) {
-        serverState = undefined;
+      if (serverStates.get(poolKey) === state) {
+        serverStates.delete(poolKey);
       }
     };
 
-    const promise = startVibeAcpServer(clearIfCurrent)
+    const promise = startVibeAcpServer(clearIfCurrent, env)
       .then(async (handle) => {
         state.handle = handle;
-        if (serverState !== state) {
+        if (serverStates.get(poolKey) !== state) {
           await handle.dispose();
           throw new Error('Vibe ACP server startup was superseded');
         }
@@ -48,34 +65,42 @@ export async function getOrCreateVibeAcpServer(): Promise<VibeAcpServerHandle> {
       });
     state = { promise };
     serverState = state;
+    serverStates.set(poolKey, state);
   }
 
   return serverState.promise;
 }
 
 export async function resetVibeAcpServerForTest(): Promise<void> {
-  const state = serverState;
-  serverState = undefined;
+  const states = [...serverStates.values()];
+  serverStates.clear();
 
-  if (state === undefined) {
-    return;
+  // allSettled so one failing dispose can't strand the remaining servers.
+  // Only already-started servers are awaited: a startup still in flight is
+  // disposed fire-and-forget, because awaiting it here would deadlock a reset
+  // that happens while a caller is blocked mid-handshake.
+  await Promise.allSettled(
+    states
+      .filter((state) => state.handle !== undefined)
+      .map((state) => state.handle!.dispose()),
+  );
+
+  for (const state of states) {
+    if (state.handle !== undefined) continue;
+    void state.promise.then((handle) => handle.dispose()).catch(() => undefined);
   }
-
-  if (state.handle !== undefined) {
-    await state.handle.dispose();
-    return;
-  }
-
-  void state.promise.then((handle) => handle.dispose()).catch(() => undefined);
 }
 
 async function startVibeAcpServer(
   clearIfCurrent: () => void,
+  env?: Record<string, string>,
 ): Promise<VibeAcpServerHandle> {
-  await assertVibeAcpAvailable();
+  // Same env as the spawn below: a project-supplied PATH must resolve the same
+  // binary here, or we report "not found" for a CLI that would have launched.
+  await assertVibeAcpAvailable(env);
 
   const proc = spawn('vibe-acp', [], {
-    env: getChildProcessEnv(),
+    env: getChildProcessEnv({ overrides: env }),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const client = new AcpJsonRpcClient({ process: proc });
@@ -161,10 +186,12 @@ function waitForProcessTerminal(
   });
 }
 
-async function assertVibeAcpAvailable(): Promise<void> {
+async function assertVibeAcpAvailable(
+  env?: Record<string, string>,
+): Promise<void> {
   try {
     await execFileAsync('vibe-acp', ['--version'], {
-      env: getChildProcessEnv(),
+      env: getChildProcessEnv({ overrides: env }),
       timeout: 5_000,
     });
   } catch (error) {

@@ -76,9 +76,29 @@ function isLegacyMobilePreviewPane(
   );
 }
 
+/**
+ * A draft image persisted to `<worktreePath>/.jean-claude/tmp`.
+ *
+ * Only the file reference is kept in the store: base64 bytes would blow up the
+ * localStorage budget (this is why `new-task-draft` strips its own images). The
+ * tmp dir is already in `ignoredPaths`, so these files never reach the task diff
+ * or a `stageAll` commit.
+ */
+export interface PrDraftImageRef {
+  /** Matches the `jc-image://<token>` placeholder inside the description. */
+  token: string;
+  filePath: string;
+  filename: string;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
+}
+
 interface PrDraft {
   title?: string;
   description?: string;
+  images?: PrDraftImageRef[];
 }
 
 export type PrDetailTab = 'overview' | 'files' | 'commits';
@@ -250,9 +270,6 @@ interface NavigationState {
   mobilePreviewQuality: MobilePreviewQuality;
   mobilePreviewQualityDefaultVersion: number;
 
-  // App-level: include network proxy in mobile preview setup flow
-  mobilePreviewAutoStartProxy: boolean;
-
   // App-level: show pointer gestures over mobile preview
   mobilePreviewShowGestures: boolean;
 
@@ -277,9 +294,6 @@ interface NavigationState {
   // App-level: snippets rail width in settings (global setting)
   snippetsRailWidth: number;
 
-  // App-level: sidebar content tab ('tasks' or 'prs')
-  sidebarTab: 'tasks' | 'prs';
-
   // Per-project: last viewed task
   lastTaskByProject: Record<string, string>; // projectId -> taskId
 
@@ -302,7 +316,6 @@ interface NavigationState {
   setMobilePreviewPaneWidth: (width: number) => void;
   setMobilePreviewFps: (fps: number) => void;
   setMobilePreviewQuality: (quality: MobilePreviewQuality) => void;
-  setMobilePreviewAutoStartProxy: (autoStart: boolean) => void;
   setMobilePreviewShowGestures: (showGestures: boolean) => void;
   toggleMobilePreviewFavoriteDeviceId: (
     platform: MobilePlatform,
@@ -322,7 +335,6 @@ interface NavigationState {
   setWorkItemCommentsPaneWidth: (width: number) => void;
   setSkillsRailWidth: (width: number) => void;
   setSnippetsRailWidth: (width: number) => void;
-  setSidebarTab: (tab: 'tasks' | 'prs') => void;
   setLastTaskForProject: (projectId: string, taskId: string) => void;
   setTaskRightPane: (taskId: string, pane: RightPane | null) => void;
   setTaskViewMode: (taskId: string, mode: TaskViewMode) => void;
@@ -343,7 +355,8 @@ interface NavigationState {
     options?: { keepWorkspaceOverview?: boolean },
   ) => void;
   setShowWorkspaceOverview: (taskId: string, show: boolean) => void;
-  setPrDraft: (taskId: string, draft: PrDraft) => void;
+  setPrDraft: (taskId: string, draft: Partial<PrDraft>) => void;
+  clearPrDraft: (taskId: string) => void;
   setAddStepDraft: (taskId: string, draft: Partial<AddStepDialogDraft>) => void;
   clearAddStepDraft: (taskId: string) => void;
   setPrSelectedFile: (prKey: string, filePath: string | null) => void;
@@ -373,7 +386,6 @@ const useStore = create<NavigationState>()(
       mobilePreviewQuality: DEFAULT_MOBILE_PREVIEW_QUALITY,
       mobilePreviewQualityDefaultVersion:
         MOBILE_PREVIEW_QUALITY_DEFAULT_VERSION,
-      mobilePreviewAutoStartProxy: false,
       mobilePreviewShowGestures: true,
       mobilePreviewFavoriteDeviceIdsByPlatform: { ios: [], android: [] },
       mobilePreviewVisibleDeviceIdsByPlatform: { ios: null, android: null },
@@ -381,7 +393,6 @@ const useStore = create<NavigationState>()(
       workItemCommentsPaneWidth: DEFAULT_WORK_ITEM_COMMENTS_PANE_WIDTH,
       skillsRailWidth: DEFAULT_SKILLS_RAIL_WIDTH,
       snippetsRailWidth: DEFAULT_SNIPPETS_RAIL_WIDTH,
-      sidebarTab: 'tasks' as 'tasks' | 'prs',
       lastTaskByProject: {},
       taskState: {},
       addStepDrafts: {},
@@ -454,9 +465,6 @@ const useStore = create<NavigationState>()(
         set({
           mobilePreviewQuality: quality,
         }),
-
-      setMobilePreviewAutoStartProxy: (autoStart) =>
-        set({ mobilePreviewAutoStartProxy: autoStart }),
 
       setMobilePreviewShowGestures: (showGestures) =>
         set({ mobilePreviewShowGestures: showGestures }),
@@ -552,8 +560,6 @@ const useStore = create<NavigationState>()(
             MAX_SNIPPETS_RAIL_WIDTH,
           ),
         }),
-
-      setSidebarTab: (tab) => set({ sidebarTab: tab }),
 
       setLastTaskForProject: (projectId, taskId) =>
         set((state) => ({
@@ -719,13 +725,20 @@ const useStore = create<NavigationState>()(
           },
         })),
 
+      // Partial merge, not replace: the editor persists title/description on
+      // every keystroke, and a replace would drop the image refs each time.
       setPrDraft: (taskId, draft) =>
         set((state) => {
-          // Remove empty strings, keep only non-empty values
+          const current = state.taskState[taskId]?.prDraft ?? {};
+          const merged: PrDraft = { ...current, ...draft };
+
+          // Remove empty values so an untouched draft stays `undefined`.
           const cleaned: PrDraft = {};
-          if (draft.title?.trim()) cleaned.title = draft.title;
-          if (draft.description?.trim())
-            cleaned.description = draft.description;
+          if (merged.title?.trim()) cleaned.title = merged.title;
+          if (merged.description?.trim())
+            cleaned.description = merged.description;
+          if (merged.images && merged.images.length > 0)
+            cleaned.images = merged.images;
 
           return {
             taskState: {
@@ -738,6 +751,18 @@ const useStore = create<NavigationState>()(
             },
           };
         }),
+
+      clearPrDraft: (taskId) =>
+        set((state) => ({
+          taskState: {
+            ...state.taskState,
+            [taskId]: {
+              ...defaultTaskState,
+              ...state.taskState[taskId],
+              prDraft: undefined,
+            },
+          },
+        })),
 
       setAddStepDraft: (taskId, draft) =>
         set((state) => ({
@@ -1110,10 +1135,9 @@ export function useCurrentVisibleProject() {
         return;
       }
 
-      navigate({
-        to: '/projects/$projectId',
-        params: { projectId: nextProjectId },
-      });
+      // The per-project task list was removed; the feed list is the only
+      // main view, so any project switch lands back on it.
+      navigate({ to: '/all' });
     },
     [
       navigate,
@@ -1126,38 +1150,6 @@ export function useCurrentVisibleProject() {
   );
 
   return { projectId, moveToProject };
-}
-
-// Hook for sidebar tab
-export function useSidebarTab() {
-  const sidebarTab = useStore((state) => state.sidebarTab);
-  const setSidebarTab = useStore((state) => state.setSidebarTab);
-  return { sidebarTab, setSidebarTab };
-}
-
-// Hook for per-project last task
-export function useLastTaskForProject(projectId: string) {
-  const lastTaskId = useStore(
-    (state) => state.lastTaskByProject[projectId] ?? null,
-  );
-  const setLastTaskForProjectAction = useStore(
-    (state) => state.setLastTaskForProject,
-  );
-  const clearTaskNavHistoryStateAction = useStore(
-    (state) => state.clearTaskNavHistoryState,
-  );
-
-  const setLastTaskForProject = useCallback(
-    (taskId: string) => setLastTaskForProjectAction(projectId, taskId),
-    [projectId, setLastTaskForProjectAction],
-  );
-
-  const clearTaskNavHistoryState = useCallback(
-    (taskId: string) => clearTaskNavHistoryStateAction(taskId),
-    [clearTaskNavHistoryStateAction],
-  );
-
-  return { lastTaskId, setLastTaskForProject, clearTaskNavHistoryState };
 }
 
 // Hook for per-task state
@@ -1610,12 +1602,32 @@ export function usePrDraftState(taskId: string) {
   const prDraft = useStore((state) => state.taskState[taskId]?.prDraft);
   const setPrDraftAction = useStore((state) => state.setPrDraft);
 
+  const clearPrDraftAction = useStore((state) => state.clearPrDraft);
+
   const setPrDraft = useCallback(
-    (draft: PrDraft) => setPrDraftAction(taskId, draft),
+    (draft: Partial<PrDraft>) => setPrDraftAction(taskId, draft),
     [taskId, setPrDraftAction],
   );
+  const clearPrDraft = useCallback(
+    () => clearPrDraftAction(taskId),
+    [taskId, clearPrDraftAction],
+  );
 
-  return { prDraft, setPrDraft };
+  return { prDraft, setPrDraft, clearPrDraft };
+}
+
+/** True when a task has PR draft content worth surfacing in the task menu. */
+export function useHasPrDraft(taskId: string): boolean {
+  return useStore((state) => {
+    const draft = state.taskState[taskId]?.prDraft;
+    // Images count: a draft of screenshots with no prose is still real work,
+    // and without this its files would be invisible to the user.
+    return !!(
+      draft?.title?.trim() ||
+      draft?.description?.trim() ||
+      draft?.images?.length
+    );
+  });
 }
 
 // Hook for tool diff preview pane width
@@ -1653,14 +1665,6 @@ export function useMobilePreviewQuality() {
   const quality = useStore((state) => state.mobilePreviewQuality);
   const setQuality = useStore((state) => state.setMobilePreviewQuality);
   return { quality, setQuality };
-}
-
-export function useMobilePreviewAutoStartProxy() {
-  const autoStartProxy = useStore((state) => state.mobilePreviewAutoStartProxy);
-  const setAutoStartProxy = useStore(
-    (state) => state.setMobilePreviewAutoStartProxy,
-  );
-  return { autoStartProxy, setAutoStartProxy };
 }
 
 export function useMobilePreviewShowGestures() {

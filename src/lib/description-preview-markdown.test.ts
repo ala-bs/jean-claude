@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PromptImagePart } from '@shared/agent-backend-types';
 
-import { descriptionPreviewMarkdown } from './media-preview';
+import { descriptionPreviewMarkdown } from './description-preview-markdown';
 
 function image(
   placeholderMarkdown: string,

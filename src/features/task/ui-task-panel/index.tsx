@@ -30,6 +30,7 @@ import {
   type AddStepPresetType,
   type ReviewMode,
   useDiffViewState,
+  useHasPrDraft,
   useNavigationStore,
   usePrViewState,
   useTaskFileExplorerState,
@@ -138,6 +139,7 @@ import type { AgentResourceSample } from '@/hooks/use-agent-resource-snapshots';
 import { api } from '@/lib/api';
 import { AutoAcceptToggle } from '@/features/agent/ui-auto-accept-toggle';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
+import { BackgroundJobsIndicator } from '@/features/agent/ui-background-jobs-indicator';
 import { Button } from '@/common/ui/button';
 import { Chip } from '@/common/ui/chip';
 import { ContextUsageDisplay } from '@/features/agent/ui-context-usage-display';
@@ -1298,6 +1300,15 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     closePrView,
   } = usePrViewState(taskId);
 
+  // Drafting a PR description is available for any task with a worktree and a
+  // linked repo, long before the PR itself exists.
+  const canDraftPr =
+    !!task?.worktreePath &&
+    !!project?.repoProviderId &&
+    !!project?.repoProjectId &&
+    !!project?.repoId;
+  const hasPrDraft = useHasPrDraft(taskId);
+
   // The PR/diff views render ahead of the overview in the main content, so both
   // must close or opening the overview would be a silent no-op.
   const openWorkspaceOverview = useCallback(() => {
@@ -2280,6 +2291,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         openDiffView();
       },
     },
+    // cmd+shift+g rather than a P mnemonic: cmd+p is the command palette
+    // (routes/__root.tsx) and cmd+shift+p is already taken twice -- feed-list
+    // "Toggle Pin" and worktree-actions "Create Pull Request".
+    canDraftPr && {
+      label: 'Toggle Pull Request',
+      shortcut: 'cmd+shift+g',
+      section: 'Task',
+      handler: () => {
+        togglePrView();
+      },
+    },
     isDiffViewOpen && {
       label: isComposerCollapsed ? 'Expand Composer' : 'Collapse Composer',
       shortcut: 'cmd+/',
@@ -2482,6 +2504,15 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       clearTaskNavHistoryState(taskId);
     }
   }, [clearTaskNavHistoryState, isTaskError, isTaskLoading, task, taskId]);
+
+  // Boolean (not the array) so the stream's `afterLastPromptGroup` slot stays
+  // null when there is nothing to show — a non-null node renders a wrapper with
+  // margins and would add dead space under every prompt group.
+  const hasBackgroundJobs = useTaskMessagesStore((state) =>
+    activeStepId
+      ? (state.backgroundTasksByStepId[activeStepId]?.length ?? 0) > 0
+      : false,
+  );
 
   if (isTaskError || isProjectError) {
     return (
@@ -2832,8 +2863,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                     icon={<GitPullRequest />}
                     onClick={togglePrView}
                     checked={isPrViewOpen}
+                    shortcut="cmd+shift+g"
                   >
-                    Pull Request
+                    <span className="flex items-center gap-1.5">
+                      Pull Request
+                      {hasPrDraft && (
+                        <span
+                          title="You have an unsubmitted PR description draft"
+                          className="bg-acc-ink h-1.5 w-1.5 shrink-0 rounded-full"
+                        />
+                      )}
+                    </span>
                   </DropdownItem>
                 )}
                 {hasWorkItemsLink && (
@@ -3133,16 +3173,23 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   }
                   worktreePath={task.worktreePath}
                   afterLastPromptGroup={
-                    canContinueInterruptedStep ? (
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        icon={<Play />}
-                        onClick={handleContinueInterruptedStep}
-                        title="Continue interrupted step"
-                      >
-                        Continue
-                      </Button>
+                    hasBackgroundJobs || canContinueInterruptedStep ? (
+                      <div className="flex flex-col items-start gap-2">
+                        {hasBackgroundJobs && (
+                          <BackgroundJobsIndicator stepId={activeStepId} />
+                        )}
+                        {canContinueInterruptedStep && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            icon={<Play />}
+                            onClick={handleContinueInterruptedStep}
+                            title="Continue interrupted step"
+                          >
+                            Continue
+                          </Button>
+                        )}
+                      </div>
                     ) : null
                   }
                 />

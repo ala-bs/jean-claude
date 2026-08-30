@@ -3,6 +3,10 @@
 // The rest of the app (IPC, database, UI) only sees these types.
 
 import type {
+  AgentBackgroundTask,
+  QuestionResponseMetadata,
+} from './agent-types';
+import type {
   InteractionMode,
   ThinkingEffort,
 } from './types';
@@ -11,7 +15,6 @@ import type {
   ResolvedPermissionRule,
 } from './permission-types';
 import type { NormalizationEvent } from './normalized-message-v2';
-import type { QuestionResponseMetadata } from './agent-types';
 
 
 
@@ -88,6 +91,11 @@ export interface AgentBackendConfig {
     string,
     { command: string; args?: string[]; env?: Record<string, string> }
   >;
+  /**
+   * Project-scoped environment variables (secrets already decrypted) layered
+   * over the inherited process environment for the agent process.
+   */
+  env?: Record<string, string>;
 }
 
 export interface AgentSession {
@@ -179,7 +187,12 @@ export type AgentEvent =
       rawMessageId: string | null;
     })
   | { type: 'question'; request: NormalizedQuestionRequest }
-  | { type: 'mode-change'; mode: InteractionMode };
+  | { type: 'mode-change'; mode: InteractionMode }
+  /**
+   * Live snapshot of background jobs the agent is still waiting on.
+   * REPLACE semantics: the array is the complete current set (empty = none).
+   */
+  | { type: 'background-tasks'; tasks: AgentBackgroundTask[] };
 
 // --- Question types (backend-only, not produced by normalizers) ---
 

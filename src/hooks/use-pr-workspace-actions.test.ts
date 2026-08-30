@@ -88,12 +88,16 @@ describe('usePrWorkspaceActions', () => {
       requestId: 'question-1',
       questions: [],
     });
-    messages.setPendingRequestForTask('review-1', {
-      type: 'question',
-      question: {
-        taskId: 'review-1',
-        requestId: 'question-1',
-        questions: [],
+    messages.setPendingRequestForTask({
+      taskId: 'review-1',
+      stepId: 'step-1',
+      request: {
+        type: 'question',
+        question: {
+          taskId: 'review-1',
+          requestId: 'question-1',
+          questions: [],
+        },
       },
     });
     expect(useTaskMessagesStore.getState().steps['step-1']).toMatchObject({

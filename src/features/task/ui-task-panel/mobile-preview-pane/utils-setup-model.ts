@@ -5,9 +5,19 @@ import type {
   MobilePreviewIosAppStatus,
 } from '@shared/mobile-simulator-types';
 
-import { cleanPreviewError, formatError } from './utils-preview-error';
-
 export type PreviewStepStatus = 'idle' | 'running' | 'ready' | 'blocked' | 'error';
+
+/**
+ * Physical iPhones can be built to and launched, but not mirrored: there is no
+ * AVFoundation capture path, so the iOS adapter throws for physical devices.
+ * Say so plainly instead of surfacing that error.
+ */
+export const PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL =
+  'Live mirroring is not supported on a physical iPhone. Build, install and launch still work — watch the device itself.';
+
+/** Same, for physical iOS in the preview surface's empty state. */
+export const PHYSICAL_IOS_STREAMING_UNSUPPORTED_TITLE =
+  'Mirroring unavailable on this iPhone';
 
 export type PreviewStepKey =
   | 'app'
@@ -16,34 +26,27 @@ export type PreviewStepKey =
   | 'prebuild'
   | 'install'
   | 'metro'
-  | 'preview'
-  | 'proxy'
-  | 'https';
+  | 'preview';
 
 /**
  * Step detail is a descriptor, never JSX, so this module stays pure and
- * testable. The `network-request-count` variant is rendered by the setup tab
- * as <NetworkRequestCountDetail/>.
+ * testable.
  */
-export type PreviewStepDetail =
-  | string
-  | null
-  | undefined
-  | { kind: 'network-request-count' };
+export type PreviewStepDetail = string | null | undefined;
 
 export type PreviewStepView = {
   key: PreviewStepKey;
   label: string;
   status: PreviewStepStatus;
   detail: PreviewStepDetail;
-  tab: 'dev-server' | 'network' | null;
+  tab: 'dev-server' | null;
 };
 
 /**
  * The complete scalar input to mobile-preview setup derivation.
  *
  * This is the boundary that keeps the derivation pure: adapters
- * (useMobilePreviewSession / useRunCommands / networkProxy / ...) are projected
+ * (useMobilePreviewSession / useRunCommands / ...) are projected
  * down to these ~50 scalars, and nothing downstream touches the adapters.
  */
 export type PreviewFacts = {
@@ -51,13 +54,24 @@ export type PreviewFacts = {
   deviceId: string;
   appPath: string;
   isExpoApp: boolean;
-  autoStartProxy: boolean;
   needsAppSelection: boolean;
 
   // device
   selectedDeviceCanStart: boolean;
   activeSessionDeviceReady: boolean;
   selectedDevice: { name: string; state: MobilePreviewDevice['state'] } | null;
+  /** True when the selected device is real hardware rather than a simulator. */
+  selectedDeviceIsPhysical: boolean;
+  /** Physical devices only: whether the handset is reachable right now. */
+  selectedDeviceConnected: boolean;
+  /** Why the selected device cannot be used, straight from the adapter. */
+  selectedDeviceUnavailableReason: string | null;
+  /**
+   * Set when the configured build command could not be pointed at the selected
+   * physical device (unrecognised custom command). See
+   * `utils-device-build-command`.
+   */
+  buildCommandDeviceNotice: string | null;
 
   // stream session
   sessionStatus: string | undefined;
@@ -86,7 +100,7 @@ export type PreviewFacts = {
   dependenciesInstallStatusStatus: string | undefined;
   dependenciesInstallCommand: string;
 
-  // app install / trust
+  // app install
   androidProjectPath: string | null;
   androidProjectExists: boolean | null;
   inferredAndroidProjectPath: string | null;
@@ -94,20 +108,6 @@ export type PreviewFacts = {
   iosAppStatus: MobilePreviewIosAppStatus | null;
   iosAppStatusError: string | null;
   isIosAppStatusLoading: boolean;
-  androidCertGuidanceVisible: boolean;
-
-  // network proxy
-  networkStatus: string;
-  networkProxyErrorRaw: unknown;
-  networkSessionEnableMitm: boolean | undefined;
-  networkSessionProxyUrl: string | null | undefined;
-  networkCertificateInstalled: boolean;
-  proxyIsStarting: boolean;
-  proxyIsStopping: boolean;
-  proxyIsInstallingCertificate: boolean;
-  proxyIsPreparingAndroidAppTrust: boolean;
-  networkRunning: boolean;
-  showTunneledNetworkRequests: boolean;
 
   // native logs
   nativeLogRunning: boolean;
@@ -120,16 +120,12 @@ export type PreviewDerived = {
   deviceReady: boolean;
   metroStatus: PreviewStepStatus;
   previewStatus: PreviewStepStatus;
-  proxyStatus: PreviewStepStatus;
-  httpsStatus: PreviewStepStatus;
   prebuildStatusValue: PreviewStepStatus;
   dependenciesInstallStatusValue: string | undefined;
   effectiveAndroidProjectPath: string | null;
-  needsExpoAndroidPrebuild: boolean;
   needsExpoIosPrebuild: boolean;
   prebuildDone: boolean;
   androidAppInstalled: boolean;
-  androidTrustConfigured: boolean;
   selectedAppInstalled: boolean;
   appNeedsBuild: boolean;
   iosAppReady: boolean;
@@ -141,31 +137,33 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
     platform,
     deviceId,
     appPath,
-    autoStartProxy,
     needsAppSelection,
   } = facts;
-
-  const networkProxyError = facts.networkProxyErrorRaw;
   const {
     appReady,
     deviceReady,
     metroStatus,
     previewStatus,
-    proxyStatus,
-    httpsStatus,
     prebuildStatusValue,
     dependenciesInstallStatusValue,
     effectiveAndroidProjectPath,
-    needsExpoAndroidPrebuild,
     needsExpoIosPrebuild,
     prebuildDone,
     androidAppInstalled,
-    androidTrustConfigured,
     selectedAppInstalled,
     appNeedsBuild,
     iosAppReady,
     iosBuildVerificationFailed,
   } = derived;
+
+  // A physical handset that is not reachable blocks everything downstream of
+  // the device step: there is nothing to install onto and nothing to stream.
+  const physicalDeviceUnreachable =
+    facts.selectedDeviceIsPhysical && !facts.selectedDeviceConnected;
+  const physicalDeviceDetail =
+    facts.selectedDeviceUnavailableReason ?? 'Device not connected';
+  const physicalIosStreamingUnsupported =
+    facts.selectedDeviceIsPhysical && platform === 'ios';
 
   const setupSteps: PreviewStepView[] = [
     {
@@ -201,13 +199,17 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
       label: 'Device ready',
       status: deviceReady ? 'ready' : deviceId ? 'blocked' : 'idle',
       detail: facts.selectedDevice
-        ? `${facts.selectedDevice.name} · ${facts.formatDeviceState(facts.selectedDevice.state)}`
+        ? facts.selectedDeviceIsPhysical
+          ? `${facts.selectedDevice.name} · ${
+              facts.selectedDeviceConnected ? 'Connected' : physicalDeviceDetail
+            }`
+          : `${facts.selectedDevice.name} · ${facts.formatDeviceState(facts.selectedDevice.state)}`
         : facts.activeSessionDeviceReady
           ? `${deviceId} · active preview session`
           : 'Select booted device',
       tab: null,
     },
-    ...((autoStartProxy && needsExpoAndroidPrebuild) || needsExpoIosPrebuild
+    ...(needsExpoIosPrebuild
       ? [
           {
             key: 'prebuild' as const,
@@ -231,7 +233,9 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
           {
             key: 'install' as const,
             label: 'App installed',
-            status: (facts.iosAppStatusError
+            status: (physicalDeviceUnreachable
+              ? 'blocked'
+              : facts.iosAppStatusError
               ? 'error'
               : facts.isIosAppStatusLoading ||
                   facts.normalizedBuildStatus === 'loading' ||
@@ -243,8 +247,10 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
                   : appNeedsBuild
                     ? 'blocked'
                     : 'idle') as PreviewStepStatus,
-            detail:
-              platform === 'android'
+            detail: physicalDeviceUnreachable
+              ? physicalDeviceDetail
+              : (facts.buildCommandDeviceNotice ??
+                (platform === 'android'
                 ? facts.androidAppStatus?.packageName
                   ? androidAppInstalled
                     ? `${facts.androidAppStatus.packageName} · installed`
@@ -264,7 +270,7 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
                           ? 'Build completed, but bundle id is still unresolved'
                           : facts.normalizedBuildStatus === 'errored'
                             ? 'Build failed; check iOS build logs'
-                            : 'Bundle id not detected; build required',
+                            : 'Bundle id not detected; build required')),
             tab: 'dev-server' as const,
           },
         ]
@@ -280,57 +286,27 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
           : 'Not started',
       tab: 'dev-server',
     },
-    {
-      key: 'preview',
-      label: 'Preview streaming',
-      status: previewStatus,
-      detail:
-        facts.previewMethodText ??
-        (previewStatus === 'running' ? 'Starting stream...' : 'Not started'),
-      tab: null,
-    },
-    ...(autoStartProxy
-      ? [
+    // Physical iOS has no capture path, so streaming is not part of that
+    // target's setup at all — build, install and launch *are* the complete
+    // working setup there. A step that could never reach `ready` would make a
+    // correctly-running workspace look permanently broken. The explanation
+    // lives on the preview surface instead (see
+    // PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL).
+    ...(physicalIosStreamingUnsupported
+      ? []
+      : [
           {
-            key: 'proxy' as const,
-            label: 'Proxy running',
-            status: proxyStatus,
-            detail: networkProxyError
-              ? cleanPreviewError(formatError(networkProxyError) ?? 'Proxy failed')
-              : facts.networkStatus === 'running'
-                ? (facts.networkSessionProxyUrl ?? 'Proxy live')
-                : facts.proxyIsStarting
-                  ? 'Starting proxy...'
-                  : platform === 'android'
-                    ? 'Android emulator proxy auto-configured'
-                    : 'iOS proxy routing automatic',
-            tab: 'network' as const,
+            key: 'preview' as const,
+            label: 'Preview streaming',
+            status: previewStatus,
+            detail:
+              facts.previewMethodText ??
+              (previewStatus === 'running'
+                ? 'Starting stream...'
+                : 'Not started'),
+            tab: null,
           },
-          {
-            key: 'https' as const,
-            label: 'HTTPS decrypt ready',
-            status: httpsStatus,
-            detail: (httpsStatus === 'ready'
-              ? { kind: 'network-request-count' }
-              : httpsStatus === 'blocked'
-                ? effectiveAndroidProjectPath
-                  ? androidTrustConfigured
-                    ? 'Build and install app on device'
-                    : 'Rebuild app so debug trust config applies'
-                  : 'Set Android project folder in project settings'
-                : httpsStatus === 'running'
-                  ? 'Preparing certificate trust...'
-                  : !facts.networkCertificateInstalled
-                    ? platform === 'android' && facts.androidCertGuidanceVisible
-                      ? 'Finish CA install on Android, then restart app'
-                      : 'Install CA certificate to decrypt HTTPS'
-                    : facts.networkStatus !== 'running'
-                      ? 'Start proxy with HTTPS decrypt'
-                      : 'Waiting for certificate trust') as PreviewStepDetail,
-            tab: 'network' as const,
-          },
-        ]
-      : []),
+        ]),
   ];
 
   const readySetupSteps = setupSteps.filter(
@@ -344,8 +320,7 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
     facts.isStopping ||
     facts.devServerStopping ||
     facts.buildStopping ||
-    facts.prebuildStopping ||
-    facts.proxyIsStopping;
+    facts.prebuildStopping;
   const canStopSetup = !!(
     facts.hasActiveSession ||
     facts.isStarting ||
@@ -353,7 +328,6 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
     facts.buildRunning ||
     facts.prebuildStatusStatus === 'running' ||
     facts.nativeLogRunning ||
-    facts.networkRunning ||
     anySetupStopping
   );
   const allSetupReady = readySetupSteps === setupSteps.length;
@@ -380,21 +354,11 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
         ? 'Continue setup'
         : platform === 'ios' && facts.iosAppStatusError
           ? 'Retry app status'
-          : ((autoStartProxy && needsExpoAndroidPrebuild) ||
-                needsExpoIosPrebuild) &&
-              !prebuildDone
+          : needsExpoIosPrebuild && !prebuildDone
             ? 'Run Expo prebuild'
-            : autoStartProxy && proxyStatus === 'error'
-              ? 'Restart proxy'
-              : autoStartProxy && httpsStatus === 'blocked'
-                ? 'Fix Android trust'
-                : nextSetupStep?.key === 'https'
-                  ? facts.networkCertificateInstalled
-                    ? 'Finish HTTPS setup'
-                    : 'Install certificate'
-                  : readySetupSteps > 2
-                    ? 'Continue setup'
-                    : 'Start workspace';
+            : readySetupSteps > 2
+              ? 'Continue setup'
+              : 'Start workspace';
   const ctaDisabled =
     allSetupReady || anySetupRunning || needsAppSelection || !deviceReady;
   const setupHeadline = allSetupReady
@@ -405,14 +369,12 @@ export function getSetupModel(facts: PreviewFacts, derived: PreviewDerived) {
         ? 'Resume mobile debug'
         : 'Debug this app end-to-end';
   const setupDetail = allSetupReady
-    ? autoStartProxy
-      ? 'Preview, Metro, proxy, and HTTPS decrypt are live.'
-      : 'Preview and Metro are live. Proxy stays manual.'
+    ? physicalIosStreamingUnsupported
+      ? `The app is built, installed and launched on this iPhone. ${PHYSICAL_IOS_STREAMING_UNSUPPORTED_DETAIL}`
+      : 'Preview and Metro are live.'
     : nextSetupStep
       ? `${typeof nextSetupStep.detail === 'string' ? nextSetupStep.detail : ''}. ${missingSetupDetail}`
-      : autoStartProxy
-        ? 'One action starts Metro, preview, proxy, and HTTPS decrypt. Logs stay manual.'
-        : 'One action starts Metro and preview. Proxy stays manual.';
+      : 'One action starts Metro and preview. Logs stay manual.';
 
   return {
     setupSteps,

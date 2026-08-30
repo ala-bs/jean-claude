@@ -42,6 +42,62 @@ describe('navigation store', () => {
     });
   });
 
+  it('keeps PR draft images when only the text changes', async () => {
+    const { useNavigationStore } = await import('./navigation');
+    const store = () => useNavigationStore.getState();
+
+    store().setPrDraft('task-1', {
+      images: [
+        {
+          token: '1',
+          filePath: '/wt/.jean-claude/tmp/a.png',
+          filename: 'a.png',
+          mimeType: 'image/png',
+        },
+      ],
+    });
+
+    // The editor persists title/description on every keystroke; a replacing
+    // setter would drop the image refs each time.
+    store().setPrDraft('task-1', { title: 'My PR' });
+    store().setPrDraft('task-1', { description: 'Body' });
+
+    const draft = store().taskState['task-1']?.prDraft;
+    expect(draft?.title).toBe('My PR');
+    expect(draft?.description).toBe('Body');
+    expect(draft?.images).toHaveLength(1);
+  });
+
+  it('unsets the PR draft once every field is emptied', async () => {
+    const { useNavigationStore } = await import('./navigation');
+    const store = () => useNavigationStore.getState();
+
+    store().setPrDraft('task-2', { title: 'Temp' });
+    store().setPrDraft('task-2', { title: '' });
+
+    expect(store().taskState['task-2']?.prDraft).toBeUndefined();
+  });
+
+  it('clears the whole PR draft, images included', async () => {
+    const { useNavigationStore } = await import('./navigation');
+    const store = () => useNavigationStore.getState();
+
+    store().setPrDraft('task-3', {
+      title: 'My PR',
+      images: [
+        {
+          token: '1',
+          filePath: '/wt/.jean-claude/tmp/a.png',
+          filename: 'a.png',
+          mimeType: 'image/png',
+        },
+      ],
+    });
+    store().clearPrDraft('task-3');
+
+    expect(store().taskState['task-3']?.prDraft).toBeUndefined();
+  });
+
   it('leaves the workspace overview when a step is explicitly selected', async () => {
     const { useNavigationStore } = await import('./navigation');
 

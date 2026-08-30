@@ -4,6 +4,12 @@
 // default path at module scope, and module bodies run after their imports, so
 // anything ordered ahead of this would capture the old path.
 // eslint-disable-next-line import/order
+import {
+  recordBootDiagnostics,
+  recordCleanupDone,
+  recordProcessExit,
+  recordQuitStarted,
+} from './lib/localstorage-diagnostics';
 import { hasExistingLocalStorageBucket } from './lib/user-data-dir';
 
 import { join } from 'path';
@@ -26,7 +32,9 @@ import {
 } from './services/local-image-protocol-service';
 import {
   RELOAD_PREVIEW_FLUSH_SETTLE_MS,
+  RELOAD_PREVIEW_PREVIOUS_PID_ENV,
   startReloadPreviewLogLimiter,
+  waitForPreviousPreviewExit,
 } from './services/reload-preview-service';
 import {
   runBeforeQuitCleanups,
@@ -39,7 +47,6 @@ import { createReloadPreviewReadinessRegistrar } from './services/reload-preview
 import { dbg } from './lib/debug';
 import { killOrphanedCoreSimulatorHelpers } from './services/mobile-preview-ios-idb-adapter';
 import { migrateDatabase } from './database';
-import { mobilePreviewNetworkProxyService } from './services/mobile-preview-network-proxy-service';
 import { pipelineTrackingService } from './services/pipeline-tracking-service';
 import { rawMessageCleanupService } from './services/raw-message-cleanup-service';
 import { registerIpcHandlers } from './ipc/handlers';
@@ -395,6 +402,60 @@ app.on('second-instance', () => {
 
 app.whenReady().then(async () => {
   dbg.main('App ready, initializing...');
+
+  // ── Reload-preview handoff. MUST be the first thing in `whenReady`. ────────
+  //
+  // Chromium's `Local Storage/leveldb` admits one process at a time (fcntl LOCK
+  // held by the browser process), and a process that cannot open it comes up
+  // with an EMPTY store — every persisted zustand store then rehydrates to
+  // defaults, which reads as "the restart wiped my settings".
+  //
+  // `orchestrateReloadedPreview` keeps the outgoing process alive until this
+  // one signals ready, so we must (a) signal before touching the store and
+  // (b) not touch the store until the predecessor's pid is gone.
+  //
+  // "Before touching the store" is earlier than it looks. It is NOT window
+  // creation: `protocol.handle()` opens the LevelDB on its own, verified
+  // against Electron 42.7.0 with no window ever created —
+  //
+  //     MODE=none    whenReady lockExists=false → final lockExists=false
+  //     MODE=handle  whenReady lockExists=false → after-protocol.handle=true
+  //
+  // — and this file registers two protocol handlers below. An earlier version
+  // of this fix sat after them and was therefore inert. Anything added above
+  // this block must be verified not to touch `session.defaultSession`.
+  registerReloadPreviewReadiness.signalNow();
+
+  const previousPreviewPid = Number(
+    process.env[RELOAD_PREVIEW_PREVIOUS_PID_ENV],
+  );
+  if (process.env[RELOAD_PREVIEW_PREVIOUS_PID_ENV]) {
+    const { exited, attempts } = await waitForPreviousPreviewExit({
+      pid: previousPreviewPid,
+    });
+    dbg.main(
+      'Reload-preview predecessor %d exited=%s after %d checks',
+      previousPreviewPid,
+      exited,
+      attempts,
+    );
+    if (!exited) {
+      // Proceeding is the lesser evil: a session with possibly-empty
+      // localStorage is recoverable next launch, a permanently blank app is
+      // not. The boot guard still refuses to overwrite good data on disk.
+      dbg.main(
+        'Reload-preview predecessor %d never exited — continuing anyway; ' +
+          'localStorage may come up empty for this session',
+        previousPreviewPid,
+      );
+    }
+  }
+  // ── End handoff. The LevelDB is free from here. ───────────────────────────
+
+  // Sampled after the handoff so it describes the store we will actually get,
+  // and before anything opens it — `protocol.handle` below would create the
+  // bucket and make a genuine first run look like a failed read.
+  recordBootDiagnostics({ bucketExists: hasExistingLocalStorageBucket() });
   showDockIcon();
 
   // Reap framebuffer helpers left behind by a previous run (they otherwise keep
@@ -499,8 +560,11 @@ app.whenReady().then(async () => {
     dbg.main('Failed to cleanup orphaned workspaces: %O', err);
   });
 
-  canCreateMainWindow = true;
   disableCloseWindowShortcut();
+  // Set immediately before the window it guards: `second-instance` can fire at
+  // any await above and calls `restoreOrCreateWindow()`, which creates a window
+  // as soon as this flag is true.
+  canCreateMainWindow = true;
   createWindow();
   dbg.main('Main window created, app ready');
 
@@ -536,6 +600,7 @@ app.on('before-quit', (event) => {
 
   event.preventDefault();
   isQuittingAfterCleanup = true;
+  recordQuitStarted();
 
   // Chromium buffers localStorage in memory and commits to its LevelDB store on
   // a delayed timer, so a write made shortly before quitting can still be
@@ -575,8 +640,6 @@ app.on('before-quit', (event) => {
           // registry must not quit while agents/DB writes are still in flight.
           await runBeforeQuitCleanups();
           dbg.main('Mobile preview sessions stopped');
-          await mobilePreviewNetworkProxyService.stopAll();
-          dbg.main('Mobile preview network proxies stopped');
         })(),
         QUIT_CLEANUP_TIMEOUT_MS,
       );
@@ -600,6 +663,8 @@ app.on('before-quit', (event) => {
         );
       }
 
+      recordCleanupDone();
+
       // A timed-out or failed preview cleanup must not leave the registry
       // vetoing quits forever.
       stopVetoingQuit();
@@ -618,6 +683,9 @@ app.on('before-quit', (event) => {
 process.on('exit', () => {
   runCommandService.killAllProcessGroupsSync();
   killAllOpenCodeServersSync();
+  // Last write of the lifecycle breadcrumb: the next boot compares this against
+  // its own start time to see whether the two processes overlapped.
+  recordProcessExit();
 });
 
 app.on('window-all-closed', () => {

@@ -193,6 +193,7 @@ src/                     # Renderer (React)
   lib/                   # Utilities (api.ts, colors.ts, time.ts)
 
 docs/plans/              # Design and implementation documents
+docs/keyboard-shortcuts.md  # Every key binding + collision rules (keep in sync)
 ```
 
 ## Development Notes
@@ -237,6 +238,30 @@ import { MessageStream } from '@/features/agent/ui-message-stream';
 ```
 
 Push logic down to the most specific child component. Keep parents focused on composition and data flow.
+
+### Keyboard Shortcuts
+
+`docs/keyboard-shortcuts.md` is the single source of truth for every binding.
+
+**Before adding or changing a shortcut:**
+
+1. Run `node scripts/list-shortcuts.mjs --check` and read `docs/keyboard-shortcuts.md`.
+2. Confirm the key is not OS/Electron reserved (see the Reserved table there —
+   `cmd+r`, `cmd+shift+i`, `cmd+q`, etc.).
+3. If the key is already bound, prove the two scopes can never be mounted at the
+   same time. Dispatch is **LIFO with no layer precedence**
+   (`src/common/context/keyboard-bindings/index.tsx`), so the component that
+   mounts last silently shadows the other. "Different scope" is not sufficient —
+   the feed list stays mounted behind an open task panel.
+4. Run `node scripts/list-shortcuts.mjs --write` and commit the regenerated
+   table in the same change.
+
+Note that a `shortcut` **prop** on a component (e.g. `<ModeSelector
+shortcut="cmd+i" />`) registers a real binding — grepping only for `shortcut:`
+object literals will miss those.
+
+Register bindings through `useCommands(scope, [...])` with a `label` and
+`section` so they appear in the command palette.
 
 ### Electron IPC
 

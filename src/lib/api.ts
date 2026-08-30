@@ -6,6 +6,12 @@ import type {
 } from '@shared/source-management-types';
 import type { AgentBackendType, PromptPart } from '@shared/agent-backend-types';
 import type {
+  AgentBackgroundTask,
+  AgentQuestion,
+  PermissionResponse,
+  QuestionResponse,
+} from '@shared/agent-types';
+import type {
   AgentMemoryCaptureWarning,
   AgentMemoryDashboard,
   AgentMemoryExtractionRun,
@@ -18,11 +24,6 @@ import type {
   AgentMigrationPreviewResult,
   ManagedAgent,
 } from '@shared/agent-management-types';
-import type {
-  AgentQuestion,
-  PermissionResponse,
-  QuestionResponse,
-} from '@shared/agent-types';
 import type {
   AiUsageDashboard,
   AiUsageDashboardParams,
@@ -38,11 +39,13 @@ import type {
   DetectedProjectLogo,
   InteractionMode,
   NewProject,
+  NewProjectEnvVar,
   NewProvider,
   NewTask,
   NewTaskStep,
   NewToken,
   Project,
+  ProjectEnvVar,
   ProjectFeatureMap,
   ProjectLogoHistoryItem,
   ProjectTodo,
@@ -53,6 +56,7 @@ import type {
   ThinkingEffort,
   Token,
   UpdateProject,
+  UpdateProjectEnvVar,
   UpdateProvider,
   UpdateTask,
   UpdateTaskStep,
@@ -124,8 +128,6 @@ import type {
   MobilePreviewAndroidAppRestartResult,
   MobilePreviewAndroidAppStatus,
   MobilePreviewAndroidAppStatusParams,
-  MobilePreviewAndroidAppTrustParams,
-  MobilePreviewAndroidAppTrustResult,
   MobilePreviewAndroidCreateDeviceParams,
   MobilePreviewAndroidDeviceProfile,
   MobilePreviewAndroidInstallSystemImageParams,
@@ -155,18 +157,8 @@ import type {
   MobilePreviewNativeLogSession,
   MobilePreviewNativeLogSessionEvent,
   MobilePreviewNativeLogStartParams,
-  MobilePreviewNetworkProxyCertificate,
-  MobilePreviewNetworkProxyCertificateParams,
-  MobilePreviewNetworkProxyEvent,
-  MobilePreviewNetworkProxySession,
-  MobilePreviewNetworkProxySessionEvent,
-  MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
-  MobilePreviewPacketCaptureEvent,
-  MobilePreviewPacketCaptureSession,
-  MobilePreviewPacketCaptureSessionEvent,
-  MobilePreviewPacketCaptureStartParams,
   MobilePreviewReloadExpoParams,
   MobilePreviewSession,
   MobilePreviewSessionEvent,
@@ -590,6 +582,14 @@ export interface Api {
   };
   projects: {
     findAll: () => Promise<Project[]>;
+    listEnvVars: (projectId: string) => Promise<ProjectEnvVar[]>;
+    createEnvVar: (data: NewProjectEnvVar) => Promise<ProjectEnvVar>;
+    updateEnvVar: (
+      id: string,
+      data: UpdateProjectEnvVar,
+    ) => Promise<ProjectEnvVar>;
+    deleteEnvVar: (id: string) => Promise<void>;
+    isSecretStorageAvailable: () => Promise<boolean>;
     findById: (id: string) => Promise<Project | undefined>;
     create: (data: NewProject) => Promise<Project>;
     update: (id: string, data: UpdateProject) => Promise<Project>;
@@ -786,6 +786,13 @@ export interface Api {
       get: (taskId: string) => Promise<TaskSummary | undefined>;
       generate: (taskId: string) => Promise<TaskSummary>;
     };
+    /**
+     * Generate a PR title/description from the worktree diff without creating
+     * a PR. Rejects when the task has no diff context or no AI slot is set.
+     */
+    generatePrDescription: (params: {
+      taskId: string;
+    }) => Promise<{ title: string; description: string }>;
     createPullRequest: (params: {
       taskId: string;
       title: string;
@@ -1468,6 +1475,8 @@ export interface Api {
         }
       | null
     >;
+    /** Live background jobs for a step — used to hydrate after a reload. */
+    getBackgroundTasks: (stepId: string) => Promise<AgentBackgroundTask[]>;
     onEvent: (callback: AgentEventCallback<AgentUIEvent>) => UnsubscribeFn;
   };
   mobilePreview: {
@@ -1526,6 +1535,10 @@ export interface Api {
     openDevMenu: (params: MobilePreviewOpenDevMenuParams) => Promise<void>;
     reloadExpo: (params: MobilePreviewReloadExpoParams) => Promise<void>;
     forwardPort: (params: MobilePreviewForwardPortParams) => Promise<void>;
+    ensureMetroReverse: (params: {
+      deviceId: string;
+      metroPort: number;
+    }) => Promise<{ reversed: boolean; alreadyPresent: boolean }>;
     setTextSize: (params: MobilePreviewSetTextSizeParams) => Promise<void>;
     setColorScheme: (
       sessionId: string,
@@ -1539,14 +1552,6 @@ export interface Api {
       params: MobilePreviewNativeLogStartParams,
     ) => Promise<MobilePreviewNativeLogSession>;
     stopNativeLogs: (sessionId: string) => Promise<void>;
-    startNetworkProxy: (
-      params: MobilePreviewNetworkProxyStartParams,
-    ) => Promise<MobilePreviewNetworkProxySession>;
-    stopNetworkProxy: (sessionId: string) => Promise<void>;
-    startPacketCapture: (
-      params: MobilePreviewPacketCaptureStartParams,
-    ) => Promise<MobilePreviewPacketCaptureSession>;
-    stopPacketCapture: (sessionId: string) => Promise<void>;
     resolveReactNativeDevTools: (
       params: ReactNativeDevToolsResolveParams,
     ) => Promise<ReactNativeDevToolsResolveResult>;
@@ -1565,12 +1570,6 @@ export interface Api {
     closeEmbeddedReactNativeDevTools: (
       params: ReactNativeDevToolsEmbeddedCloseParams,
     ) => Promise<void>;
-    installNetworkProxyCertificate: (
-      params: MobilePreviewNetworkProxyCertificateParams,
-    ) => Promise<MobilePreviewNetworkProxyCertificate>;
-    prepareAndroidAppTrust: (
-      params: MobilePreviewAndroidAppTrustParams,
-    ) => Promise<MobilePreviewAndroidAppTrustResult>;
     getAndroidAppStatus: (
       params: MobilePreviewAndroidAppStatusParams,
     ) => Promise<MobilePreviewAndroidAppStatus>;
@@ -1582,18 +1581,6 @@ export interface Api {
     ) => UnsubscribeFn;
     onNativeLog: (
       callback: (event: MobilePreviewNativeLogEvent) => void,
-    ) => UnsubscribeFn;
-    onNetworkProxySession: (
-      callback: (event: MobilePreviewNetworkProxySessionEvent) => void,
-    ) => UnsubscribeFn;
-    onNetworkProxyRequest: (
-      callback: (event: MobilePreviewNetworkProxyEvent) => void,
-    ) => UnsubscribeFn;
-    onPacketCaptureSession: (
-      callback: (event: MobilePreviewPacketCaptureSessionEvent) => void,
-    ) => UnsubscribeFn;
-    onPacketCaptureRequest: (
-      callback: (event: MobilePreviewPacketCaptureEvent) => void,
     ) => UnsubscribeFn;
     onFrame: (
       callback: (event: MobilePreviewFrameEvent) => void,
@@ -2135,6 +2122,11 @@ export interface Api {
      */
     hasExistingLocalStorageBucket: boolean;
     getIsPreviewMode: () => Promise<boolean>;
+    /**
+     * Reports that the localStorage boot guard blocked writes. Returns the path
+     * of the diagnostics log the main process appended the correlation to.
+     */
+    reportLocalStorageBootBlocked: () => Promise<string>;
     getReloadUpdateInfo: (params: {
       builtCommitHash: string;
     }) => Promise<ReloadUpdateInfo>;
@@ -2211,6 +2203,17 @@ export const api: Api = hasWindowApi
       projects: {
         findAll: async () => [],
         findById: async () => undefined,
+        listEnvVars: async () => [],
+        createEnvVar: async () => {
+          throw new Error('API not available');
+        },
+        updateEnvVar: async () => {
+          throw new Error('API not available');
+        },
+        deleteEnvVar: async () => {
+          throw new Error('API not available');
+        },
+        isSecretStorageAvailable: async () => false,
         create: async () => {
           throw new Error('API not available');
         },
@@ -2364,6 +2367,9 @@ export const api: Api = hasWindowApi
           generate: async () => {
             throw new Error('API not available');
           },
+        },
+        generatePrDescription: async () => {
+          throw new Error('API not available');
         },
         createPullRequest: async () => ({ id: 0, url: '' }),
         createPrReviewTask: async () => {
@@ -2687,6 +2693,7 @@ export const api: Api = hasWindowApi
         compactRawMessages: async () => {},
         reprocessNormalization: async () => 0,
         getPendingRequest: async () => null,
+        getBackgroundTasks: async () => [],
         onEvent: () => () => {},
       },
       mobilePreview: {
@@ -2741,6 +2748,10 @@ export const api: Api = hasWindowApi
         openDevMenu: async () => {},
         reloadExpo: async () => {},
         forwardPort: async () => {},
+        ensureMetroReverse: async () => ({
+          reversed: false,
+          alreadyPresent: false,
+        }),
         setTextSize: async () => {},
         setColorScheme: async () => {},
         rotate: async () => {},
@@ -2748,14 +2759,6 @@ export const api: Api = hasWindowApi
           throw new Error('API not available');
         },
         stopNativeLogs: async () => {},
-        startNetworkProxy: async () => {
-          throw new Error('API not available');
-        },
-        stopNetworkProxy: async () => {},
-        startPacketCapture: async () => {
-          throw new Error('API not available');
-        },
-        stopPacketCapture: async () => {},
         resolveReactNativeDevTools: async (params) => ({
           metroBaseUrl: `http://localhost:${params.metroPort}`,
           frontendUrl: null,
@@ -2769,12 +2772,6 @@ export const api: Api = hasWindowApi
         setEmbeddedReactNativeDevToolsBounds: async () => {},
         setEmbeddedReactNativeDevToolsVisibility: async () => {},
         closeEmbeddedReactNativeDevTools: async () => {},
-        installNetworkProxyCertificate: async () => {
-          throw new Error('API not available');
-        },
-        prepareAndroidAppTrust: async () => {
-          throw new Error('API not available');
-        },
         getAndroidAppStatus: async () => {
           throw new Error('API not available');
         },
@@ -2783,10 +2780,6 @@ export const api: Api = hasWindowApi
         },
         onNativeLogSession: () => () => {},
         onNativeLog: () => () => {},
-        onNetworkProxySession: () => () => {},
-        onNetworkProxyRequest: () => () => {},
-        onPacketCaptureSession: () => () => {},
-        onPacketCaptureRequest: () => () => {},
         onFrame: () => () => {},
         onSession: () => () => {},
       },
@@ -3277,6 +3270,7 @@ export const api: Api = hasWindowApi
         devBadgeLabel: undefined,
         hasExistingLocalStorageBucket: true,
         getIsPreviewMode: async () => false,
+        reportLocalStorageBootBlocked: async () => '',
         getReloadUpdateInfo: async () => ({
           commitCount: 0,
           latestCommitHash: null,

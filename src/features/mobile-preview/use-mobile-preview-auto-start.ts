@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useLatestRef } from '@/hooks/use-latest-ref';
 
+import {
+  clearDismissedNotice,
+  isNoticeDismissed,
+  markNoticeDismissed,
+} from './mobile-preview-dismissed-notices-store';
+
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -43,15 +49,40 @@ export function useMobilePreviewAutoStart({
     };
   }, [requestKey, startRef]);
 
+  const dismissKey =
+    requestKey && failure?.requestKey === requestKey
+      ? `auto-start\0${requestKey}\0${failure.message}`
+      : null;
+
   const retry = useCallback(() => {
+    clearDismissedNotice(dismissKey);
     setFailure(null);
     setRetryGeneration((value) => value + 1);
-  }, []);
+  }, [dismissKey]);
+
+  /**
+   * User explicitly dismissed the banner: remember it so reopening the preview
+   * (which remounts the pane and re-runs the failing attempt) stays quiet.
+   */
+  const dismissError = useCallback(() => {
+    markNoticeDismissed(dismissKey);
+    setFailure(null);
+  }, [dismissKey]);
+
+  /**
+   * The error is merely stale (e.g. a manual start succeeded). Drop it without
+   * recording a dismissal — otherwise a later identical failure would be
+   * silently swallowed.
+   */
   const clearError = useCallback(() => setFailure(null), []);
 
   return {
-    error: failure?.requestKey === requestKey ? failure.message : null,
+    error:
+      failure?.requestKey === requestKey && !isNoticeDismissed(dismissKey)
+        ? failure.message
+        : null,
     retry,
+    dismissError,
     clearError,
   };
 }

@@ -47,13 +47,13 @@ describe('preview setup operation coordinator', () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it('uses durable per-device iOS IDs across A/B/A while preserving Android IDs', () => {
+  it('uses durable per-device IDs across A/B/A', () => {
     expect(
       getMobileBuildCommandId({
         appPath: 'apps/mobile',
         platform: 'android',
       }),
-    ).toBe('mobile-build:apps%2Fmobile:android');
+    ).toBe('mobile-build:apps%2Fmobile:android:no-device');
     const firstA = getMobileBuildCommandId({
       appPath: 'apps/mobile',
       platform: 'ios',
@@ -73,6 +73,23 @@ describe('preview setup operation coordinator', () => {
     expect(firstA).toBe('mobile-build:apps%2Fmobile:ios:simulator-a');
     expect(deviceB).toBe('mobile-build:apps%2Fmobile:ios:simulator-b');
     expect(secondA).toBe(firstA);
+  });
+
+  it('scopes Android build IDs per device so two handsets never collide', () => {
+    const pixel = getMobileBuildCommandId({
+      appPath: 'apps/mobile',
+      platform: 'android',
+      deviceId: '39021FDJH00123',
+    });
+    const emulator = getMobileBuildCommandId({
+      appPath: 'apps/mobile',
+      platform: 'android',
+      deviceId: 'emulator-5554',
+    });
+
+    expect(pixel).toBe('mobile-build:apps%2Fmobile:android:39021FDJH00123');
+    expect(emulator).toBe('mobile-build:apps%2Fmobile:android:emulator-5554');
+    expect(pixel).not.toBe(emulator);
   });
 
   it('uses persisted per-device completion as durable loop guard', () => {

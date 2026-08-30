@@ -94,7 +94,7 @@ describe('CodexBackend', () => {
       [{ type: 'text', text: 'Hello Codex' }],
     );
 
-    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith();
+    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith(undefined);
     expect(client.request).toHaveBeenCalledWith('thread/start', {
       cwd: '/tmp/project',
       model: undefined,
@@ -132,7 +132,7 @@ describe('CodexBackend', () => {
       [{ type: 'text', text: 'Continue' }],
     );
 
-    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith();
+    expect(mocks.getOrCreateCodexAppServer).toHaveBeenCalledWith(undefined);
     expect(client.request).toHaveBeenCalledWith('thread/resume', {
       threadId: 'thread-existing',
       cwd: '/tmp/project',

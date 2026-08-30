@@ -30,7 +30,7 @@ export async function reconcilePrWorkspaceDeletion(
     }
     messages.clearAllRunCommandLogs(taskId);
     messages.setRunCommandRunning(taskId, false);
-    messages.clearPendingRequestForTask(taskId);
+    messages.clearPendingRequestForTask({ taskId });
     overlays.clearRunningCommandTargetForTask(taskId);
     removeTask(taskId);
     queryClient.removeQueries({ queryKey: ['tasks', taskId] });

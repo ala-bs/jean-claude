@@ -4,12 +4,14 @@ import type { TaskStep } from '@shared/types';
 
 let buildStepGraphLayout: typeof import('@/features/task/ui-step-flow-bar').buildStepGraphLayout;
 let buildCollapsedSteps: typeof import('@/features/task/ui-step-flow-bar').buildCollapsedSteps;
+let getStepChipAttention: typeof import('@/features/task/ui-step-flow-bar').getStepChipAttention;
 
 beforeAll(async () => {
   globalThis.window = {} as Window & typeof globalThis;
   const mod = await import('@/features/task/ui-step-flow-bar');
   buildStepGraphLayout = mod.buildStepGraphLayout;
   buildCollapsedSteps = mod.buildCollapsedSteps;
+  getStepChipAttention = mod.getStepChipAttention;
 });
 
 function makeStep({
@@ -286,5 +288,47 @@ describe('buildCollapsedSteps edge cases', () => {
       'step-2',
       'step-3',
     ]);
+  });
+});
+
+describe('getStepChipAttention', () => {
+  it('surfaces the pending attention while the step is running', () => {
+    expect(
+      getStepChipAttention({
+        step: { status: 'running', archivedAt: null },
+        pendingAttention: 'permission',
+      }),
+    ).toBe('permission');
+    expect(
+      getStepChipAttention({
+        step: { status: 'running', archivedAt: null },
+        pendingAttention: 'question',
+      }),
+    ).toBe('question');
+  });
+
+  it('ignores a stale pending request on a non-running step', () => {
+    expect(
+      getStepChipAttention({
+        step: { status: 'completed', archivedAt: null },
+        pendingAttention: 'permission',
+      }),
+    ).toBeNull();
+  });
+
+  it('ignores archived steps and collapsed archived groups', () => {
+    expect(
+      getStepChipAttention({
+        step: { status: 'running', archivedAt: '2026-01-01T00:00:00.000Z' },
+        pendingAttention: 'question',
+      }),
+    ).toBeNull();
+    expect(
+      getStepChipAttention({
+        step: { status: 'running', archivedAt: null },
+        pendingAttention: 'question',
+        isArchivedGroup: true,
+      }),
+    ).toBeNull();
   });
 });

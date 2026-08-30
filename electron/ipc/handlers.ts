@@ -74,7 +74,6 @@ import type {
   MobilePlatform,
   MobilePreviewAndroidAppRestartParams,
   MobilePreviewAndroidAppStatusParams,
-  MobilePreviewAndroidAppTrustParams,
   MobilePreviewAndroidCreateDeviceParams,
   MobilePreviewAndroidInstallSystemImageParams,
   MobilePreviewAttachSessionParams,
@@ -89,11 +88,8 @@ import type {
   MobilePreviewIosRenameDeviceParams,
   MobilePreviewListSessionsParams,
   MobilePreviewNativeLogStartParams,
-  MobilePreviewNetworkProxyCertificateParams,
-  MobilePreviewNetworkProxyStartParams,
   MobilePreviewOpenDeeplinkParams,
   MobilePreviewOpenDevMenuParams,
-  MobilePreviewPacketCaptureStartParams,
   MobilePreviewReloadExpoParams,
   MobilePreviewSetTextSizeParams,
   MobilePreviewStartParams,
@@ -263,6 +259,7 @@ import {
 import {
   AiUsageRepository,
   DebugRepository,
+  ProjectEnvVarRepository,
   ProjectRepository,
   ProjectTodoRepository,
   ProviderRepository,
@@ -429,9 +426,8 @@ import {
   searchRegistry,
 } from '../services/skill-registry-service';
 import { detectMobilePreviewProjectConfig } from '../services/mobile-preview-project-detector';
+import { mobilePreviewAndroidAppService } from '../services/mobile-preview-android-app-service';
 import { mobilePreviewNativeLogService } from '../services/mobile-preview-native-log-service';
-import { mobilePreviewNetworkProxyService } from '../services/mobile-preview-network-proxy-service';
-import { mobilePreviewPacketCaptureService } from '../services/mobile-preview-packet-capture-service';
 
 import {
   assertProjectPathUnchanged,
@@ -441,6 +437,10 @@ import {
   generateCommitMessageForTask,
   generateMergeMessageForTask,
 } from '../services/commit-message-generation-service';
+import {
+  getLocalStorageDiagnosticsLogPath,
+  recordBootGuardBlocked,
+} from '../lib/localstorage-diagnostics';
 import {
   listOpenAiBaseImageOptions,
   removeOpenAiBaseImage,
@@ -455,6 +455,10 @@ import {
   UpdateProvider,
   UpdateTask,
 } from '../database/schema';
+import type {
+  NewProjectEnvVar,
+  UpdateProjectEnvVar,
+} from '@shared/types';
 import {
   readBackendUserConfig,
   writeBackendUserConfig,
@@ -469,6 +473,7 @@ import { deleteProjectRetainingMemory } from '../services/project-deletion-servi
 import { detectProjectLogos } from '../services/project-logo-detection-service';
 import { detectProjects } from '../services/project-detection-service';
 import { encodeLocalImageUrl } from '../services/local-image-protocol-service';
+import { ensureAndroidMetroReverse } from '../services/mobile-preview-android-adapter';
 import { eureciaSessionService } from '../services/eurecia-session-service';
 import { exitCurrentPreviewAfterReload } from '../services/reload-preview-service';
 import { fetchImageAsBase64 } from '../services/azure-image-proxy-service';
@@ -1332,6 +1337,38 @@ export function registerIpcHandlers() {
       return result;
     },
   );
+  // Project environment variables. Values of secret vars never cross this
+  // boundary: the repository strips them on read, and writes are one-way.
+  ipcMain.handle('projects:listEnvVars', async (_, projectId: string) => {
+    dbg.ipc('projects:listEnvVars %s', projectId);
+    return ProjectEnvVarRepository.findByProjectId(projectId);
+  });
+
+  ipcMain.handle('projects:createEnvVar', async (_, data: NewProjectEnvVar) => {
+    dbg.ipc('projects:createEnvVar %s %s', data.projectId, data.key);
+    return ProjectEnvVarRepository.create(data);
+  });
+
+  ipcMain.handle(
+    'projects:updateEnvVar',
+    async (_, id: string, data: UpdateProjectEnvVar) => {
+      dbg.ipc('projects:updateEnvVar %s %s', id, data.key ?? '(key unchanged)');
+      return ProjectEnvVarRepository.update(id, data);
+    },
+  );
+
+  ipcMain.handle('projects:deleteEnvVar', async (_, id: string) => {
+    dbg.ipc('projects:deleteEnvVar %s', id);
+    return ProjectEnvVarRepository.delete(id);
+  });
+
+  ipcMain.handle('projects:isSecretStorageAvailable', async () => {
+    const { encryptionService } = await import(
+      '../services/encryption-service'
+    );
+    return encryptionService.isEncryptionAvailable();
+  });
+
   ipcMain.handle(
     'projects:update',
     async (_, id: string, data: UpdateProject) => {
@@ -4305,6 +4342,32 @@ export function registerIpcHandlers() {
     },
   );
 
+  // Standalone PR description generation, so a draft can be previewed and
+  // edited long before the PR exists. `tasks:createPullRequest` runs the same
+  // generator, but only when the submitted title/description are blank.
+  ipcMain.handle(
+    'tasks:generatePrDescription',
+    async (_, params: { taskId: string }) => {
+      const task = await TaskRepository.findById(params.taskId);
+      if (!task?.worktreePath || !task?.startCommitHash) {
+        throw new Error(
+          'This task has no worktree diff to generate a description from.',
+        );
+      }
+
+      const project = await ProjectRepository.findById(task.projectId);
+      if (!project) throw new Error(`Project ${task.projectId} not found`);
+
+      const generated = await generatePrDescriptionForTask(task, project);
+      if (!generated) {
+        throw new Error(
+          'No AI skill is configured for PR descriptions. Set one in Settings > AI skill slots.',
+        );
+      }
+      return generated;
+    },
+  );
+
   ipcMain.handle(
     'tasks:createPullRequest',
     async (
@@ -4783,6 +4846,10 @@ export function registerIpcHandlers() {
 
   ipcMain.handle(AGENT_CHANNELS.GET_PENDING_REQUEST, (_, stepId: string) => {
     return agentService.getPendingRequest(stepId);
+  });
+
+  ipcMain.handle(AGENT_CHANNELS.GET_BACKGROUND_TASKS, (_, stepId: string) => {
+    return agentService.getBackgroundTasks(stepId);
   });
 
   ipcMain.handle(
@@ -5716,6 +5783,11 @@ export function registerIpcHandlers() {
       mobilePreviewService.forwardPort(params),
   );
   ipcMain.handle(
+    'mobilePreview:ensureMetroReverse',
+    (_, params: { deviceId: string; metroPort: number }) =>
+      ensureAndroidMetroReverse(params),
+  );
+  ipcMain.handle(
     'mobilePreview:setTextSize',
     (_, params: MobilePreviewSetTextSizeParams) =>
       mobilePreviewService.setTextSize(params),
@@ -5739,36 +5811,6 @@ export function registerIpcHandlers() {
     mobilePreviewNativeLogService.stop(sessionId),
   );
   ipcMain.handle(
-    'mobilePreview:startNetworkProxy',
-    (_, params: MobilePreviewNetworkProxyStartParams) =>
-      mobilePreviewNetworkProxyService.start(params),
-  );
-  ipcMain.handle('mobilePreview:stopNetworkProxy', (_, sessionId: string) =>
-    mobilePreviewNetworkProxyService.stop(sessionId),
-  );
-  ipcMain.handle(
-    'mobilePreview:installNetworkProxyCertificate',
-    (_, params: MobilePreviewNetworkProxyCertificateParams) =>
-      mobilePreviewNetworkProxyService.installCertificate(params),
-  );
-  ipcMain.handle(
-    'mobilePreview:prepareAndroidAppTrust',
-    async (_, params: MobilePreviewAndroidAppTrustParams) => {
-      const [project, task] = await Promise.all([
-        ProjectRepository.findById(params.projectId),
-        TaskRepository.findById(params.taskId),
-      ]);
-      if (!project) throw new Error('Project not found');
-      if (!task || task.projectId !== project.id) {
-        throw new Error('Task not found for project');
-      }
-      return mobilePreviewNetworkProxyService.prepareAndroidAppTrust({
-        projectPath: task.worktreePath ?? project.path,
-        androidProjectPath: params.androidProjectPath,
-      });
-    },
-  );
-  ipcMain.handle(
     'mobilePreview:getAndroidAppStatus',
     async (_, params: MobilePreviewAndroidAppStatusParams) => {
       const [project, task] = await Promise.all([
@@ -5779,7 +5821,7 @@ export function registerIpcHandlers() {
       if (!task || task.projectId !== project.id) {
         throw new Error('Task not found for project');
       }
-      return mobilePreviewNetworkProxyService.getAndroidAppStatus({
+      return mobilePreviewAndroidAppService.getAndroidAppStatus({
         projectPath: task.worktreePath ?? project.path,
         androidProjectPath: params.androidProjectPath,
         deviceId: params.deviceId,
@@ -5797,20 +5839,12 @@ export function registerIpcHandlers() {
       if (!task || task.projectId !== project.id) {
         throw new Error('Task not found for project');
       }
-      return mobilePreviewNetworkProxyService.restartAndroidApp({
+      return mobilePreviewAndroidAppService.restartAndroidApp({
         projectPath: task.worktreePath ?? project.path,
         androidProjectPath: params.androidProjectPath,
         deviceId: params.deviceId,
       });
     },
-  );
-  ipcMain.handle(
-    'mobilePreview:startPacketCapture',
-    (_, params: MobilePreviewPacketCaptureStartParams) =>
-      mobilePreviewPacketCaptureService.start(params),
-  );
-  ipcMain.handle('mobilePreview:stopPacketCapture', (_, sessionId: string) =>
-    mobilePreviewPacketCaptureService.stop(sessionId),
   );
   ipcMain.handle(
     'mobilePreview:resolveReactNativeDevTools',
@@ -5870,34 +5904,6 @@ export function registerIpcHandlers() {
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         win.webContents.send('mobilePreview:nativeLog', event);
-      }
-    });
-  });
-  mobilePreviewNetworkProxyService.onSession((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('mobilePreview:networkProxySession', event);
-      }
-    });
-  });
-  mobilePreviewNetworkProxyService.onRequest((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('mobilePreview:networkProxyRequest', event);
-      }
-    });
-  });
-  mobilePreviewPacketCaptureService.onSession((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('mobilePreview:packetCaptureSession', event);
-      }
-    });
-  });
-  mobilePreviewPacketCaptureService.onRequest((event) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('mobilePreview:packetCaptureRequest', event);
       }
     });
   });
@@ -7381,6 +7387,14 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('app:getIsPreviewMode', () => {
     return !!process.env.JC_PREVIEW;
+  });
+
+  // The renderer's localStorage boot guard has blocked writes. Only the main
+  // process can say whether the previous instance was still alive — record the
+  // correlation while it is still true.
+  ipcMain.handle('app:reportLocalStorageBootBlocked', () => {
+    recordBootGuardBlocked();
+    return getLocalStorageDiagnosticsLogPath();
   });
 
   ipcMain.handle(

@@ -408,7 +408,9 @@ export function ActivityCenterOverlay({
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const openOverlay = useOverlaysStore((s) => s.open);
+  const openSettingsForProject = useOverlaysStore(
+    (s) => s.openSettingsForProject,
+  );
 
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState('');
@@ -649,26 +651,22 @@ export function ActivityCenterOverlay({
 
   // --- Handlers ---
   const handleOpenTask = useCallback(
-    (projectId: string, taskId: string) => {
-      void navigate({
-        to: '/projects/$projectId/tasks/$taskId',
-        params: { projectId, taskId },
-      });
+    (_projectId: string, taskId: string) => {
+      // Global overlay opened over the feed: open the task in the feed.
+      void navigate({ to: '/all/$taskId', params: { taskId } });
       onClose();
     },
     [navigate, onClose],
   );
 
+  // Settings is a global overlay rendered above the feed, so it is targeted at
+  // the project explicitly rather than by navigating into a project route.
   const handleOpenProjectSettings = useCallback(
     (projectId: string) => {
-      void navigate({
-        to: '/projects/$projectId',
-        params: { projectId },
-      }).finally(() => {
-        openOverlay('settings');
-      });
+      openSettingsForProject(projectId);
+      onClose();
     },
-    [navigate, openOverlay],
+    [onClose, openSettingsForProject],
   );
 
   const handleRetry = useCallback(

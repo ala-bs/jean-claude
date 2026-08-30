@@ -54,6 +54,15 @@ import {
   parseSimctlRuntimes,
 } from './mobile-preview-ios-simctl';
 import {
+  assertSimulatorOnlyIosDevice,
+  assertSimulatorOnlyIosDeviceAsync,
+  isKnownPhysicalIosDevice,
+  launchIosAppOnDevice,
+  listDevicectlDevices,
+  listInstalledIosAppBundleIdsOnDevice,
+  rememberPhysicalIosDevices,
+} from './mobile-preview-ios-devicectl';
+import {
   cancelIosNonTouchInputs,
   compensateIosTouch,
   enqueueIosKeyboardInput,
@@ -324,6 +333,7 @@ export const iosIdbAdapter = {
         params.appPath,
       );
       assertSafeSimctlDeviceSelector('iOS simulator deviceId', params.deviceId);
+      const isPhysicalDevice = isKnownPhysicalIosDevice(params.deviceId);
       const appPath = await resolveTrustedIosAppRoot({
         trustedRoot: params.trustedRoot,
         appPath: params.appPath,
@@ -340,6 +350,33 @@ export const iosIdbAdapter = {
           appInstalled: null,
           bundleId: null,
           nativeProjectExists: resolvedApp.nativeProjectExists,
+        };
+      }
+
+      if (isPhysicalDevice) {
+        // devicectl's app listing is unverified against real hardware, so any
+        // failure (missing Xcode, command error, unexpected payload) must read
+        // as "unknown", never as "not installed" — a false negative would make
+        // the UI kick off a spurious native rebuild.
+        let installedBundleIds: string[] | null = null;
+        try {
+          installedBundleIds = await listInstalledIosAppBundleIdsOnDevice({
+            deviceId: params.deviceId,
+            signal: abortController.signal,
+          });
+        } catch (error) {
+          if (abortController.signal.aborted) throw error;
+          debug(
+            'iOS physical app status query failed deviceId=%s error=%s',
+            params.deviceId,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        return {
+          ...resolvedApp,
+          appInstalled: installedBundleIds
+            ? installedBundleIds.includes(resolvedApp.bundleId)
+            : null,
         };
       }
 
@@ -384,6 +421,7 @@ export const iosIdbAdapter = {
     const promise = (async () => {
       if (isIosPreviewDisposed()) throw new Error('iOS preview is shutting down.');
       assertSafeSimctlDeviceSelector('iOS simulator deviceId', params.deviceId);
+      const isPhysicalDevice = isKnownPhysicalIosDevice(params.deviceId);
       const appPath = await resolveTrustedIosAppRoot({
         trustedRoot: params.trustedRoot,
         appPath: params.appPath,
@@ -397,6 +435,17 @@ export const iosIdbAdapter = {
       abortController.signal.throwIfAborted();
       if (!bundleId) {
         throw new Error('Unable to detect iOS bundle identifier.');
+      }
+
+      if (isPhysicalDevice) {
+        // devicectl has no separate terminate command we can rely on; the
+        // launch itself is asked to replace any running instance.
+        await launchIosAppOnDevice({
+          deviceId: params.deviceId,
+          bundleId,
+          signal: abortController.signal,
+        });
+        return { bundleId, restartedAt: new Date().toISOString() };
       }
 
       try {
@@ -482,12 +531,20 @@ export const iosIdbAdapter = {
   async deleteIosDevice(deviceId: string): Promise<void> {
     await assertXcrunAvailable();
     assertSafeSimctlDeviceSelector('iOS simulator deviceId', deviceId);
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId,
+      capability: 'Deleting a device',
+    });
     await runCommand('xcrun', ['simctl', 'delete', deviceId]);
   },
 
   async eraseIosDevice(deviceId: string): Promise<void> {
     await assertXcrunAvailable();
     assertSafeSimctlDeviceSelector('iOS simulator deviceId', deviceId);
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId,
+      capability: 'Erasing a device',
+    });
     await runCommand('xcrun', ['simctl', 'erase', deviceId]);
   },
 
@@ -496,6 +553,10 @@ export const iosIdbAdapter = {
   ): Promise<void> {
     await assertXcrunAvailable();
     assertSafeSimctlDeviceSelector('iOS simulator deviceId', params.deviceId);
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId: params.deviceId,
+      capability: 'Renaming a device',
+    });
     assertSafeSimctlValue('iOS simulator name', params.name);
     await runCommand('xcrun', [
       'simctl',
@@ -507,13 +568,21 @@ export const iosIdbAdapter = {
 
   async listDevices(): Promise<MobilePreviewDevice[]> {
     await assertXcrunAvailable();
-    const { stdout } = await runCommand('xcrun', [
-      'simctl',
-      'list',
-      'devices',
-      '--json',
+    const [simulators, physical] = await Promise.all([
+      runCommand('xcrun', ['simctl', 'list', 'devices', '--json']).then(
+        ({ stdout }) =>
+          parseSimctlDevices(stdout).map((device) => ({
+            ...device,
+            kind: 'simulator' as const,
+          })),
+      ),
+      listDevicectlDevices(),
     ]);
-    return parseSimctlDevices(stdout);
+    rememberPhysicalIosDevices({
+      devices: physical.devices,
+      listingSucceeded: physical.ok,
+    });
+    return [...simulators, ...physical.devices];
   },
 
   async startStream(params: {
@@ -534,6 +603,11 @@ export const iosIdbAdapter = {
     params.signal?.throwIfAborted();
     await assertXcrunAvailable(params.signal);
     assertDeviceId(params.deviceId);
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId: params.deviceId,
+      capability: 'Live screen streaming',
+      signal: params.signal,
+    });
     if (isIosPreviewDisposed()) throw new Error('iOS preview is shutting down.');
 
     const device = await ensureIosSimulatorBooted(
@@ -604,6 +678,11 @@ export const iosIdbAdapter = {
     if (isIosPreviewDisposed()) {
       throw new Error('iOS preview is shutting down.');
     }
+
+    assertSimulatorOnlyIosDevice({
+      deviceId,
+      capability: 'Remote touch and keyboard input',
+    });
 
     if (event.type === 'showKeyboard') {
       await runIosNonTouchInput(sessionId, (signal) =>
@@ -795,6 +874,13 @@ export const iosIdbAdapter = {
     signal.throwIfAborted();
     await assertXcrunAvailable(signal);
     assertDeviceId(deviceId);
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId,
+      capability: 'Opening deeplinks',
+      signal,
+    });
+    // The guard may await a devicectl refresh; re-check before spawning simctl.
+    signal.throwIfAborted();
     assertDeeplinkUrl(url);
     try {
       await runCommand('xcrun', ['simctl', 'openurl', deviceId, url], {
@@ -819,6 +905,10 @@ export const iosIdbAdapter = {
   ): Promise<void> {
     await assertXcrunAvailable();
     assertDeviceId(deviceId);
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId,
+      capability: 'Changing the text size',
+    });
     await runCommand('xcrun', [
       'simctl',
       'ui',
@@ -833,13 +923,18 @@ export const iosIdbAdapter = {
     scheme: MobileColorScheme,
   ): Promise<void> {
     await assertXcrunAvailable();
+    await assertSimulatorOnlyIosDeviceAsync({
+      deviceId,
+      capability: 'Changing the appearance',
+    });
     await runCommand('xcrun', ['simctl', 'ui', deviceId, 'appearance', scheme]);
   },
 
   async rotate(
-    _deviceId: string,
+    deviceId: string,
     _direction: MobileRotationDirection,
   ): Promise<void> {
+    assertSimulatorOnlyIosDevice({ deviceId, capability: 'Rotating the screen' });
     // iOS preview rotation is applied in the renderer. simctl has no scoped
     // rotate command, and Simulator menu automation can target the wrong window.
   },

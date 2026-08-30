@@ -27,6 +27,8 @@ import {
   buildAdbInputArgs,
   buildAdbScreenrecordArgs,
   createAndroidMobilePreviewAdapter,
+  ensureAndroidMetroReverse,
+  parseAdbReverseList,
   mergeAndroidAvdConfig,
   parseAndroidDeviceProfiles,
   parseAndroidSystemImages,
@@ -91,19 +93,119 @@ ABC987 unauthorized usb:1-1 model:Unauthorized_Device transport_id:3
         id: 'emulator-5554',
         name: 'Pixel 8 API 35',
         platform: 'android',
+        kind: 'simulator',
+        connection: 'connected',
         state: 'booted',
       },
       {
         id: 'R58M123456',
         name: 'SM G991U',
+        model: 'SM G991U',
         platform: 'android',
+        kind: 'physical',
+        connection: 'unavailable',
         state: 'unknown',
+        unavailableReason:
+          'Device is offline — reconnect the cable or re-enable USB debugging.',
       },
       {
         id: 'ABC987',
         name: 'Unauthorized Device',
+        model: 'Unauthorized Device',
         platform: 'android',
+        kind: 'physical',
+        connection: 'unauthorized',
         state: 'unknown',
+        unavailableReason: 'Accept the USB debugging prompt on the device.',
+      },
+    ]);
+  });
+
+  it('classifies a connected physical device from adb devices -l details', () => {
+    expect(
+      parseAdbDevices(
+        'List of devices attached\n1A2B3C4D device usb:1-2 product:panther model:Pixel_7 device:panther transport_id:4\n',
+      ),
+    ).toEqual([
+      {
+        id: '1A2B3C4D',
+        name: 'Pixel 7',
+        model: 'Pixel 7',
+        platform: 'android',
+        kind: 'physical',
+        connection: 'connected',
+        state: 'booted',
+      },
+    ]);
+  });
+
+  it('falls back to the adb serial when a physical device reports no details', () => {
+    expect(parseAdbDevices('List of devices attached\nR3CT90ZZZZ device\n')).toEqual(
+      [
+        {
+          id: 'R3CT90ZZZZ',
+          name: 'R3CT90ZZZZ',
+          platform: 'android',
+          kind: 'physical',
+          connection: 'connected',
+          state: 'booted',
+        },
+      ],
+    );
+  });
+
+  it('separates emulators from physical devices in one adb devices -l output', () => {
+    const devices = parseAdbDevices(
+      `List of devices attached
+emulator-5554 device product:sdk_gphone64_arm64 model:Pixel_8 device:emu64a transport_id:1
+1A2B3C4D device usb:1-2 model:Pixel_7 device:panther transport_id:2
+`,
+    );
+
+    expect(
+      devices.map((device) => ({ id: device.id, kind: device.kind })),
+    ).toEqual([
+      { id: 'emulator-5554', kind: 'simulator' },
+      { id: '1A2B3C4D', kind: 'physical' },
+    ]);
+    expect(devices[0]?.model).toBeUndefined();
+    expect(devices[1]?.model).toBe('Pixel 7');
+  });
+
+  it('keeps devices in transient and unrecognized adb states in the rail', () => {
+    const devices = parseAdbDevices(`List of devices attached
+AUTHZ001 authorizing usb:1-1 transport_id:1
+CONN002 connecting usb:1-2 transport_id:2
+RECOV003 recovery usb:1-3 transport_id:3
+`);
+
+    expect(
+      devices.map((device) => ({
+        id: device.id,
+        connection: device.connection,
+        state: device.state,
+        unavailableReason: device.unavailableReason,
+      })),
+    ).toEqual([
+      {
+        id: 'AUTHZ001',
+        connection: 'unauthorized',
+        state: 'unknown',
+        unavailableReason: 'Accept the USB debugging prompt on the device.',
+      },
+      {
+        id: 'CONN002',
+        connection: 'unavailable',
+        state: 'unknown',
+        unavailableReason:
+          'Device is still connecting — reconnect the cable if this does not clear.',
+      },
+      {
+        id: 'RECOV003',
+        connection: 'unavailable',
+        state: 'unknown',
+        unavailableReason:
+          'Device is in "recovery" state and cannot be used for preview.',
       },
     ]);
   });
@@ -136,15 +238,101 @@ ABC987 unauthorized usb:1-1 model:Unauthorized_Device transport_id:3
     await expect(androidAdapter.listDevices()).resolves.toEqual([
       {
         id: 'Pixel_8',
+        connectionId: 'emulator-5554',
         name: 'Pixel 8',
         platform: 'android',
+        kind: 'simulator',
+        connection: 'connected',
         state: 'booted',
       },
       {
         id: 'Pixel_9',
         name: 'Pixel 9',
         platform: 'android',
+        kind: 'simulator',
         state: 'shutdown',
+      },
+    ]);
+  });
+
+  it('keeps the adb serial in connectionId when a booted emulator is renamed to its AVD name', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout:
+            'List of devices attached\nemulator-5556 device model:Pixel_7 transport_id:1\n',
+          stderr: '',
+        };
+      }
+      if (
+        command === 'adb' &&
+        args.join(' ') === '-s emulator-5556 emu avd name'
+      ) {
+        return { stdout: 'Pixel_7_API_34\nOK\n', stderr: '' };
+      }
+      if (command === 'emulator' && args.join(' ') === '-list-avds') {
+        return { stdout: 'Pixel_7_API_34\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    const devices = await androidAdapter.listDevices();
+    const booted = devices.find((device) => device.state === 'booted');
+    expect(booted?.id).toBe('Pixel_7_API_34');
+    expect(booted?.connectionId).toBe('emulator-5556');
+  });
+
+  it('lists physical devices alongside emulators with their adb serials', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: `List of devices attached
+emulator-5554 device model:Pixel_8 transport_id:1
+1A2B3C4D device usb:1-2 model:Pixel_7 device:panther transport_id:2
+R58M999 unauthorized usb:1-3 transport_id:3
+`,
+          stderr: '',
+        };
+      }
+      if (
+        command === 'adb' &&
+        args.join(' ') === '-s emulator-5554 emu avd name'
+      ) {
+        return { stdout: 'Pixel_8\nOK\n', stderr: '' };
+      }
+      if (command === 'emulator' && args.join(' ') === '-list-avds') {
+        return { stdout: 'Pixel_8\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(androidAdapter.listDevices()).resolves.toEqual([
+      {
+        id: 'Pixel_8',
+        connectionId: 'emulator-5554',
+        name: 'Pixel 8',
+        platform: 'android',
+        kind: 'simulator',
+        connection: 'connected',
+        state: 'booted',
+      },
+      {
+        id: '1A2B3C4D',
+        name: 'Pixel 7',
+        model: 'Pixel 7',
+        platform: 'android',
+        kind: 'physical',
+        connection: 'connected',
+        state: 'booted',
+      },
+      {
+        id: 'R58M999',
+        name: 'R58M999',
+        platform: 'android',
+        kind: 'physical',
+        connection: 'unauthorized',
+        state: 'unknown',
+        unavailableReason: 'Accept the USB debugging prompt on the device.',
       },
     ]);
   });
@@ -175,18 +363,22 @@ ABC987 unauthorized usb:1-1 model:Unauthorized_Device transport_id:3
         id: 'emulator-5554',
         name: 'sdk gphone64 arm64',
         platform: 'android',
+        kind: 'simulator',
+        connection: 'connected',
         state: 'booted',
       },
       {
         id: 'Medium_Phone_2',
         name: 'Medium Phone 2',
         platform: 'android',
+        kind: 'simulator',
         state: 'shutdown',
       },
       {
         id: 'Pixel_9',
         name: 'Pixel 9',
         platform: 'android',
+        kind: 'simulator',
         state: 'shutdown',
       },
     ]);
@@ -198,12 +390,14 @@ ABC987 unauthorized usb:1-1 model:Unauthorized_Device transport_id:3
         id: 'Medium_Phone',
         name: 'Medium Phone',
         platform: 'android',
+        kind: 'simulator',
         state: 'shutdown',
       },
       {
         id: 'Small_Phone',
         name: 'Small Phone',
         platform: 'android',
+        kind: 'simulator',
         state: 'shutdown',
       },
     ]);
@@ -283,6 +477,9 @@ ABC987 unauthorized usb:1-1 model:Unauthorized_Device transport_id:3
       if (command === 'adb' && args.join(' ') === '-s emulator-5554 shell wm size') {
         return { stdout: 'Physical size: 1080x2400\n', stderr: '' };
       }
+      if (command === 'emulator' && args.join(' ') === '-list-avds') {
+        return { stdout: 'Pixel_8\n', stderr: '' };
+      }
       throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
     });
 
@@ -317,6 +514,9 @@ ABC987 unauthorized usb:1-1 model:Unauthorized_Device transport_id:3
       }
       if (command === 'adb' && args.join(' ') === '-s emulator-5554 shell wm size') {
         return { stdout: 'Physical size: 1080x2400\n', stderr: '' };
+      }
+      if (command === 'emulator' && args.join(' ') === '-list-avds') {
+        return { stdout: 'Pixel_8\n', stderr: '' };
       }
       throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
     });
@@ -840,6 +1040,33 @@ id: 33 or "unknown_phone"
     expect(
       buildAdbInputArgs('device-1', { type: 'key', key: 'backspace' }),
     ).toEqual(['-s', 'device-1', 'shell', 'input', 'keyevent', 'KEYCODE_DEL']);
+  });
+
+  it('rejects control characters so a newline cannot start a second device-shell command', () => {
+    // `adb shell` joins argv into one string parsed by the device shell, so an
+    // unescaped newline would terminate `input text` and run what follows.
+    expect(() =>
+      buildAdbInputArgs('device-1', {
+        type: 'text',
+        text: 'hello\npm uninstall com.example.app',
+      }),
+    ).toThrow(/control characters/);
+    expect(() =>
+      buildAdbInputArgs('device-1', { type: 'text', text: 'a\tb' }),
+    ).toThrow(/control characters/);
+  });
+
+  it('escapes glob characters so the device shell cannot expand them', () => {
+    expect(
+      buildAdbInputArgs('device-1', { type: 'text', text: '*?[]~#!' }),
+    ).toEqual([
+      '-s',
+      'device-1',
+      'shell',
+      'input',
+      'text',
+      '\\*\\?\\[\\]\\~\\#\\!',
+    ]);
   });
 
   it('escapes remote shell metacharacters in text input', () => {
@@ -1802,6 +2029,214 @@ id: 33 or "unknown_phone"
     expect(onSession).not.toHaveBeenCalledWith({ width: 488, height: 1080 });
   });
 
+  it('refuses to boot an emulator for a disconnected physical serial', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return { stdout: 'List of devices attached\n', stderr: '' };
+      }
+      if (command === 'emulator' && args.join(' ') === '-list-avds') {
+        return { stdout: 'Pixel_8\nPixel_9\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      androidAdapter.openDevMenu('1A2B3C4D'),
+    ).rejects.toThrow('Device 1A2B3C4D is no longer connected.');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses to boot an emulator for an unplugged emulator-style serial', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return { stdout: 'List of devices attached\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(androidAdapter.openDevMenu('emulator-5556')).rejects.toThrow(
+      'Device emulator-5556 is no longer connected.',
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('reports a disconnected physical serial when the emulator tool is missing', async () => {
+    commandExistsMock.mockImplementation(async (command) => command === 'adb');
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return { stdout: 'List of devices attached\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(androidAdapter.openDevMenu('1A2B3C4D')).rejects.toThrow(
+      'Device 1A2B3C4D is no longer connected.',
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses to install on an unauthorized device with the actionable reason', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D unauthorized usb:1-2\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      androidAdapter.installAndroidApk({
+        deviceId: '1A2B3C4D',
+        apkPath: '/tmp/app.apk',
+      }),
+    ).rejects.toThrow('Accept the USB debugging prompt on the device.');
+  });
+
+  it('installs an APK whose path contains the word Failure', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D device\n',
+          stderr: '',
+        };
+      }
+      if (command === 'adb' && args.includes('install')) {
+        return {
+          stdout:
+            'Performing Streamed Install: /tmp/FailureRepro/app.apk\nSuccess\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      androidAdapter.installAndroidApk({
+        deviceId: '1A2B3C4D',
+        apkPath: '/tmp/FailureRepro/app.apk',
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('installs an APK on a physical device serial', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout:
+            'List of devices attached\n1A2B3C4D device model:Pixel_7 transport_id:2\n',
+          stderr: '',
+        };
+      }
+      if (
+        command === 'adb' &&
+        args.join(' ') === '-s 1A2B3C4D install -r /tmp/app.apk'
+      ) {
+        return { stdout: 'Performing Streamed Install\nSuccess\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      androidAdapter.installAndroidApk({
+        deviceId: '1A2B3C4D',
+        apkPath: '/tmp/app.apk',
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('surfaces adb install failures as errors', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D device\n',
+          stderr: '',
+        };
+      }
+      if (command === 'adb' && args.includes('install')) {
+        return {
+          stdout: 'Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      androidAdapter.installAndroidApk({
+        deviceId: '1A2B3C4D',
+        apkPath: '/tmp/app.apk',
+      }),
+    ).rejects.toThrow(
+      'Failed to install /tmp/app.apk on 1A2B3C4D: INSTALL_FAILED_INSUFFICIENT_STORAGE',
+    );
+  });
+
+  it('launches an Android app through monkey and through an explicit activity', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D device\n',
+          stderr: '',
+        };
+      }
+      if (command === 'adb' && args.includes('monkey')) {
+        return { stdout: 'Events injected: 1\n', stderr: '' };
+      }
+      if (command === 'adb' && args.includes('am')) {
+        return { stdout: 'Starting: Intent { ... }\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await androidAdapter.launchAndroidApp({
+      deviceId: '1A2B3C4D',
+      packageName: 'com.example.app',
+    });
+    await androidAdapter.launchAndroidApp({
+      deviceId: '1A2B3C4D',
+      packageName: 'com.example.app',
+      activity: '.MainActivity',
+    });
+
+    const adbArgs = runCommandMock.mock.calls
+      .filter(([command]) => command === 'adb')
+      .map(([, args]) => args.join(' '));
+    expect(adbArgs).toContain(
+      '-s 1A2B3C4D shell monkey -p com.example.app -c android.intent.category.LAUNCHER 1',
+    );
+    expect(adbArgs).toContain(
+      '-s 1A2B3C4D shell am start -n com.example.app/.MainActivity',
+    );
+  });
+
+  it('surfaces Android launch errors reported on stdout', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D device\n',
+          stderr: '',
+        };
+      }
+      if (command === 'adb' && args.includes('monkey')) {
+        return {
+          stdout:
+            'No activities found to run, monkey aborted.\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      androidAdapter.launchAndroidApp({
+        deviceId: '1A2B3C4D',
+        packageName: 'com.example.app',
+      }),
+    ).rejects.toThrow('Failed to launch com.example.app on 1A2B3C4D');
+  });
+
   it('resolves a booted AVD name to its adb serial without launching another emulator', async () => {
     const h264Frame = Buffer.from([0, 0, 0, 1]);
     const startScrcpyStream = vi.fn(
@@ -2174,6 +2609,115 @@ id: 33 or "unknown_phone"
       'input_method',
       'show-soft-input',
     ]);
+  });
+
+  it('parses adb reverse --list output', () => {
+    expect(
+      parseAdbReverseList(
+        '1A2B3C4D tcp:8081 tcp:8081\n(reverse) tcp:9090 tcp:9090\n',
+      ),
+    ).toEqual([
+      { remote: 'tcp:8081', local: 'tcp:8081' },
+      { remote: 'tcp:9090', local: 'tcp:9090' },
+    ]);
+    expect(parseAdbReverseList('')).toEqual([]);
+    expect(parseAdbReverseList('   \n\n')).toEqual([]);
+    expect(
+      parseAdbReverseList('adb: error: no devices/emulators found\n'),
+    ).toEqual([]);
+    expect(parseAdbReverseList('tcp:8081\n')).toEqual([]);
+  });
+
+  it('skips adb reverse when the Metro mapping already exists', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D device model:Pixel_7\n',
+          stderr: '',
+        };
+      }
+      if (command === 'adb' && args.join(' ') === '-s 1A2B3C4D reverse --list') {
+        return { stdout: '1A2B3C4D tcp:8081 tcp:8081\n', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      ensureAndroidMetroReverse({ deviceId: '1A2B3C4D', metroPort: 8081 }),
+    ).resolves.toEqual({ reversed: false, alreadyPresent: true });
+  });
+
+  it('creates the Metro reverse when it is missing', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D device model:Pixel_7\n',
+          stderr: '',
+        };
+      }
+      if (command === 'adb' && args.join(' ') === '-s 1A2B3C4D reverse --list') {
+        return { stdout: '1A2B3C4D tcp:9090 tcp:9090\n', stderr: '' };
+      }
+      if (
+        command === 'adb' &&
+        args.join(' ') === '-s 1A2B3C4D reverse tcp:8081 tcp:8081'
+      ) {
+        return { stdout: '', stderr: '' };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      ensureAndroidMetroReverse({ deviceId: '1A2B3C4D', metroPort: 8081 }),
+    ).resolves.toEqual({ reversed: true, alreadyPresent: false });
+    expect(runCommandMock).toHaveBeenCalledWith(
+      'adb',
+      ['-s', '1A2B3C4D', 'reverse', 'tcp:8081', 'tcp:8081'],
+    );
+  });
+
+  it('refuses the Metro reverse on an unauthorized device with the actionable reason', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\n1A2B3C4D unauthorized usb:1-2\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      ensureAndroidMetroReverse({ deviceId: '1A2B3C4D', metroPort: 8081 }),
+    ).rejects.toThrow('Accept the USB debugging prompt on the device.');
+  });
+
+  it('is a no-op for emulators', async () => {
+    runCommandMock.mockImplementation(async (command, args) => {
+      if (command === 'adb' && args.join(' ') === 'devices -l') {
+        return {
+          stdout: 'List of devices attached\nemulator-5554 device\n',
+          stderr: '',
+        };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
+    });
+
+    await expect(
+      ensureAndroidMetroReverse({ deviceId: 'emulator-5554', metroPort: 8081 }),
+    ).resolves.toEqual({ reversed: false, alreadyPresent: false });
+    expect(
+      runCommandMock.mock.calls.some((call) => call[1].includes('reverse')),
+    ).toBe(false);
+  });
+
+  it('rejects invalid Metro ports', async () => {
+    for (const metroPort of [0, 70000, Number.NaN, 1.5]) {
+      await expect(
+        ensureAndroidMetroReverse({ deviceId: '1A2B3C4D', metroPort }),
+      ).rejects.toThrow('Metro port must be between 1 and 65535');
+    }
+    expect(runCommandMock).not.toHaveBeenCalled();
   });
 
   it('rejects invalid IPC input event payloads', () => {

@@ -220,6 +220,7 @@ async function createDedicatedServer(
     port: 0,
     timeout: 30_000,
     ...(Object.keys(mcp).length > 0 ? { config: { mcp } } : {}),
+    env: config.env,
   });
 }
 
@@ -228,6 +229,7 @@ async function createOpencodeServerHandle(options: {
   port: number;
   timeout: number;
   config?: OpencodeServerConfig;
+  env?: Record<string, string>;
 }): Promise<ServerHandle> {
   const proc = spawn(
     'opencode',
@@ -235,7 +237,7 @@ async function createOpencodeServerHandle(options: {
     {
       detached: process.platform !== 'win32',
       env: {
-        ...getChildProcessEnv(),
+        ...getChildProcessEnv({ overrides: options.env }),
         OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config ?? {}),
       },
     },
@@ -514,8 +516,14 @@ export class OpenCodeBackend implements AgentBackend {
     const processSetting = await SettingsRepository.get('opencodeProcess');
     const hasRuntimeMcpServers =
       Object.keys(config.mcpServers ?? {}).length > 0;
+    // The shared server is process-global and long-lived, so it can't carry
+    // project-scoped env without leaking one project's values into another's
+    // sessions. Project env forces a dedicated server, same as runtime MCP.
+    const hasProjectEnv = Object.keys(config.env ?? {}).length > 0;
     const useSharedServer =
-      processSetting.mode === 'shared' && !hasRuntimeMcpServers;
+      processSetting.mode === 'shared' &&
+      !hasRuntimeMcpServers &&
+      !hasProjectEnv;
     const serverHandle = useSharedServer
       ? await acquireSharedServer()
       : await createDedicatedServer(config);

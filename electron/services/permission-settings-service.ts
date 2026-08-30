@@ -210,26 +210,62 @@ export function getSettingsPath(rootDir: string): string {
 }
 
 /**
+ * Last successfully parsed settings per project root. Survives a transient
+ * read/parse failure so `readSettings` can fall back to it instead of
+ * returning empty defaults.
+ *
+ * Falling back to `createDefaultSettings()` is only correct when the file
+ * genuinely does not exist. For any other error the real permissions are
+ * *unknown*, and empty defaults are the worst possible guess:
+ * `refreshPermissionRules` pushes the resolved snapshot into every live agent
+ * session, so a single failed read drops every previously-allowed tool to
+ * `ask`/deny at once — for the rest of the run.
+ */
+const lastKnownGoodSettings = new Map<string, JeanClaudeSettings>();
+
+/**
  * Reads the `.jean-claude/settings.local.json` file.
- * Returns default settings if the file doesn't exist or is invalid.
+ * Returns default settings if the file doesn't exist; on a transient
+ * read/parse failure, falls back to the last known good settings.
  */
 export async function readSettings(
   rootDir: string,
 ): Promise<JeanClaudeSettings> {
+  let content: string;
   try {
-    const content = await fs.readFile(getSettingsPath(rootDir), 'utf-8');
+    content = await fs.readFile(getSettingsPath(rootDir), 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      const cached = lastKnownGoodSettings.get(rootDir);
+      dbg.agentPermission(
+        'Failed reading settings for %s (%O) — %s',
+        rootDir,
+        error,
+        cached ? 'reusing last known good' : 'no cached settings, falling back',
+      );
+      if (cached) return structuredClone(cached);
+    }
+    return (await readLegacySettings(rootDir)) ?? createDefaultSettings();
+  }
+
+  try {
     const parsed = JSON.parse(content) as JeanClaudeSettings;
     if (parsed.version !== 1 || !parsed.permissions) {
       throw new Error('Invalid .jean-claude settings format');
     }
-
-    return normalizeSettingsShape(parsed);
-  } catch {
-    const legacySettings = await readLegacySettings(rootDir);
-    if (legacySettings) {
-      return legacySettings;
-    }
-    return createDefaultSettings();
+    const normalized = normalizeSettingsShape(parsed);
+    lastKnownGoodSettings.set(rootDir, normalized);
+    return structuredClone(normalized);
+  } catch (error) {
+    const cached = lastKnownGoodSettings.get(rootDir);
+    dbg.agentPermission(
+      'Failed parsing settings for %s (%O) — %s',
+      rootDir,
+      error,
+      cached ? 'reusing last known good' : 'no cached settings, falling back',
+    );
+    if (cached) return structuredClone(cached);
+    return (await readLegacySettings(rootDir)) ?? createDefaultSettings();
   }
 }
 
@@ -248,6 +284,10 @@ export async function writeSettings(
   await writeFileAtomic(filePath, JSON.stringify(settings, null, 2) + '\n', {
     encoding: 'utf-8',
   });
+  // Advance the fallback with the write. Leaving it on the pre-write settings
+  // would make a failed read immediately after a *revocation* serve the rule
+  // the user just removed — wider than both disk and the old behaviour.
+  lastKnownGoodSettings.set(rootDir, normalizeSettingsShape(settings));
 }
 
 /**

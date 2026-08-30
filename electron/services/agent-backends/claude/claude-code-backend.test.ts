@@ -282,23 +282,205 @@ describe('ClaudeCodeBackend prompt stream lifetime', () => {
   it('keeps the input stream open across a background-notification result', async () => {
     const controller = makeControllableQuery();
     const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const iterator = controller.getPromptIterator()!;
       await iterator.next(); // the user message
-      const secondNext = iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
 
       controller.send(notificationResult);
       // Consume events so the backend actually processes the message.
       const events = session.events[Symbol.asyncIterator]();
       await events.next(); // synthetic user prompt
+      await vi.advanceTimersByTimeAsync(50);
 
       // Still suspended => stdin still open => permissions still answerable.
-      expect(await settlesSoon(secondNext)).toBe(false);
+      expect(closed).toBe(false);
 
+      // A real result no longer closes stdin immediately: it schedules the
+      // close so that any further activity can cancel it.
       controller.send(realResult);
-      expect(await settlesSoon(secondNext)).toBe(true);
-      expect((await secondNext).done).toBe(true);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(true);
     } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  // Replays the sequence from a real transcript that broke permissions: the
+  // agent launched 11 background subagents, then emitted a `result` with NO
+  // `origin` field and `num_turns: 17`. Both the origin and zero-turn
+  // heuristics classified that as a real end-of-turn, so stdin closed — and the
+  // run went on for 25 more minutes and 245 tool calls with a dead `canUseTool`
+  // channel, failing every permission request in that window.
+  const backgroundTasksChanged = (ids: string[]) => ({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: ids.map((id) => ({ task_id: id, task_type: 'local_agent' })),
+  });
+  const originlessResult = {
+    type: 'result',
+    subtype: 'success',
+    num_turns: 17,
+    result: 'first turn done',
+  };
+  // Transcript idx 1164: a task-notification result that reports real work, so
+  // `isBackgroundNotificationResult` (which withholds only zero-turn no-ops)
+  // treats it as a genuine end of turn.
+  const notificationRealWorkResult = {
+    type: 'result',
+    subtype: 'success',
+    origin: { kind: 'task-notification' },
+    num_turns: 1,
+    result: 'notification turn done',
+  };
+
+  it('keeps stdin open through BOTH misclassified results in the real transcript', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next(); // the user message
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      // --- Window 1 (transcript idx 427): origin absent, num_turns 17, with
+      // 11 background subagents live. Looked like a human end-of-turn.
+      controller.send(backgroundTasksChanged(['task-a', 'task-b']));
+      controller.send(originlessResult);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      // The agent keeps working, which must cancel the pending close.
+      controller.send({ type: 'assistant', message: { content: [] } });
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+      expect(closed).toBe(false);
+
+      // --- Window 2 (transcript idx 1164): tasks have legitimately drained to
+      // zero and the result carries origin `task-notification` with
+      // num_turns 1. The background-task signal CANNOT catch this one — only
+      // the silence grace can. The run continued for 20 more minutes here.
+      controller.send(backgroundTasksChanged([]));
+      controller.send(notificationRealWorkResult);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      controller.send({ type: 'assistant', message: { content: [] } });
+      await vi.advanceTimersByTimeAsync(20 * 1000);
+      expect(closed).toBe(false);
+
+      // Only sustained silence ends the run.
+      await vi.advanceTimersByTimeAsync(30 * 1000 + 1_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  it('emits a background-tasks event for every snapshot so the UI can show live jobs', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    try {
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send({
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [
+          {
+            task_id: 'task-a',
+            task_type: 'local_agent',
+            description: 'Review: behavior regressions',
+          },
+        ],
+      });
+      const live = await events.next();
+      expect(live.value).toEqual({
+        type: 'background-tasks',
+        tasks: [
+          {
+            taskId: 'task-a',
+            description: 'Review: behavior regressions',
+            taskType: 'local_agent',
+          },
+        ],
+      });
+
+      // REPLACE semantics: an empty snapshot clears the indicator.
+      controller.send(backgroundTasksChanged([]));
+      const drained = await events.next();
+      expect(drained.value).toEqual({ type: 'background-tasks', tasks: [] });
+    } finally {
+      controller.end();
+      await backend.dispose();
+    }
+  });
+
+  it('clears background tasks when the stream ends without a final snapshot', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    try {
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      controller.send(backgroundTasksChanged(['never-reported-done']));
+      await events.next(); // the live snapshot
+      controller.end();
+
+      const cleared = await events.next();
+      expect(cleared.value).toEqual({ type: 'background-tasks', tasks: [] });
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('still closes stdin when a background task never terminates', async () => {
+    const controller = makeControllableQuery();
+    const { backend, session } = await startBackend(controller);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const iterator = controller.getPromptIterator()!;
+      await iterator.next();
+      let closed = false;
+      void iterator.next().then(() => {
+        closed = true;
+      });
+      const events = session.events[Symbol.asyncIterator]();
+      await events.next(); // synthetic user prompt
+
+      // A leftover `run_in_background` shell (or a Monitor) never completes, so
+      // the task set never drains. The grace period must stay BOUNDED — gating
+      // the close on an empty task set would hang the run forever.
+      controller.send(backgroundTasksChanged(['never-ends']));
+      controller.send(originlessResult);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(closed).toBe(false);
+
+      // A quiet stretch shorter than the grace must NOT close the channel —
+      // a real transcript went 4m21s without a message mid-run.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(closed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1_000);
+      expect(closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
       controller.end();
       await backend.dispose();
     }

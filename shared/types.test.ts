@@ -10,7 +10,6 @@ import {
   SETTINGS_DEFINITIONS,
 } from './types';
 import type { AgentBackendType } from './agent-backend-types';
-import type { MobilePreviewNetworkCaptureSource } from './mobile-simulator-types';
 
 describe('getInteractionModeOptions', () => {
   it('falls back instead of returning undefined for stale backend values', () => {
@@ -40,19 +39,6 @@ describe('SETTINGS_DEFINITIONS.thinkingSettings', () => {
         },
       }),
     ).toBe(true);
-  });
-});
-
-describe('MobilePreviewNetworkCaptureSource', () => {
-  it('accepts packet-only capture entries', () => {
-    const allowedSources = [
-      'proxied',
-      'mitm',
-      'tunneled',
-      'packet-only',
-    ] satisfies MobilePreviewNetworkCaptureSource[];
-
-    expect(allowedSources).toContain('packet-only');
   });
 });
 

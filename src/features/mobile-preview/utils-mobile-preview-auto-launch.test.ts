@@ -88,6 +88,43 @@ describe('mobile preview auto-launch policy', () => {
   );
 
   it.each(['ios', 'android'] as const)(
+    'never auto-starts a physical %s device',
+    (platform) => {
+      expect(
+        canAutoStartMobilePreviewDevice({
+          id: `${platform}-handset`,
+          platform,
+          state: 'booted',
+          kind: 'physical',
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it('keeps auto-start for devices explicitly marked as simulators', () => {
+    expect(
+      canAutoStartMobilePreviewDevice({
+        id: 'sim-1',
+        platform: 'ios',
+        state: 'shutdown',
+        kind: 'simulator',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects unknown-state and missing devices', () => {
+    expect(
+      canAutoStartMobilePreviewDevice({
+        id: 'sim-1',
+        platform: 'ios',
+        state: 'unknown',
+      }),
+    ).toBe(false);
+    expect(canAutoStartMobilePreviewDevice(null)).toBe(false);
+    expect(canAutoStartMobilePreviewDevice(undefined)).toBe(false);
+  });
+
+  it.each(['ios', 'android'] as const)(
     'launches Expo for ready %s session despite stale shutdown inventory',
     (platform) => {
       expect(

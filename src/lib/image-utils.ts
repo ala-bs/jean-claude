@@ -4,6 +4,12 @@ import type { PromptImagePart } from '@shared/agent-backend-types';
 import { compressImage, transcodeBase64Image } from './image-compression';
 
 export const MAX_IMAGES = 5;
+/**
+ * PR descriptions routinely carry a before/after pair per change, which the
+ * app-wide limit of 5 cuts off. Drafts are persisted to the worktree tmp dir
+ * rather than localStorage, so the higher ceiling costs nothing.
+ */
+export const MAX_PR_DRAFT_IMAGES = 10;
 export const MAX_FILE_SIZE = MAX_IMAGE_ATTACHMENT_BYTES;
 export const ALLOWED_IMAGE_TYPES = [
   'image/png',

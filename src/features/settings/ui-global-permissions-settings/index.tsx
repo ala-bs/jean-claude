@@ -4,6 +4,10 @@ import type { PermissionAction } from '@shared/permission-types';
 import { SCRIPT_EDIT_TOOL } from '@shared/script-edit-detect';
 
 import {
+  EXTERNAL_DIRECTORY_TOOL,
+  ExternalDirectories,
+} from '@/features/common/ui-external-directories';
+import {
   type FlatRule,
   PermissionsEditor,
 } from '@/features/common/ui-permissions-editor';
@@ -17,14 +21,14 @@ import {
   useGlobalPermissions,
   useRemoveGlobalPermissionRule,
 } from '@/hooks/use-global-permissions';
-
-
+import { useToastStore } from '@/stores/toasts';
 
 export function GlobalPermissionsSettings() {
   const { data: permissions, isLoading } = useGlobalPermissions();
   const addRule = useAddGlobalPermissionRule();
   const removeRule = useRemoveGlobalPermissionRule();
   const editRule = useEditGlobalPermissionRule();
+  const addToast = useToastStore((state) => state.addToast);
 
   const handleAdd = useCallback(
     async (params: {
@@ -77,6 +81,34 @@ export function GlobalPermissionsSettings() {
     [addRule, removeRule],
   );
 
+  const handleAddExternalDirectory = useCallback(
+    async (pattern: string) => {
+      await addRule.mutateAsync({
+        toolName: EXTERNAL_DIRECTORY_TOOL,
+        input: { permissionPatterns: [pattern] },
+        action: 'allow',
+      });
+    },
+    [addRule],
+  );
+
+  const handleRemoveExternalDirectory = useCallback(
+    (pattern: string) => {
+      removeRule.mutate(
+        { tool: EXTERNAL_DIRECTORY_TOOL, pattern },
+        {
+          onError: (err: Error) => {
+            addToast({
+              message: `Failed to remove directory: ${err.message}`,
+              type: 'error',
+            });
+          },
+        },
+      );
+    },
+    [removeRule, addToast],
+  );
+
   const isBusy =
     addRule.isPending || removeRule.isPending || editRule.isPending;
 
@@ -88,9 +120,18 @@ export function GlobalPermissionsSettings() {
         disabled={isBusy || isLoading}
         scopeLabel="Applies to all projects"
       />
+      <ExternalDirectories
+        permissions={permissions}
+        isLoading={isLoading}
+        isBusy={isBusy}
+        description="Directories outside your projects that agents may read and write. Applies to all projects and their worktrees."
+        emptyDescription="No external directories. Agents are limited to each project's own directory."
+        onAdd={handleAddExternalDirectory}
+        onRemove={handleRemoveExternalDirectory}
+      />
       <PermissionsEditor
-      permissions={permissions}
-      isLoading={isLoading}
+        permissions={permissions}
+        isLoading={isLoading}
         isBusy={isBusy}
         onAdd={handleAdd}
         onRemove={handleRemove}

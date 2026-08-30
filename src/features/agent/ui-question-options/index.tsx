@@ -802,7 +802,9 @@ export function QuestionOptions({
 
   const submitAnswers = async () => {
     if (!allAnswered) return;
-    if (!tryStartQuestionResponse(request.taskId)) return;
+    // Keyed per request, not per task: sibling steps of the same task can each
+    // have their own question in flight concurrently.
+    if (!tryStartQuestionResponse(draftKey)) return;
     try {
       const effectiveWasFreeformByQuestion = { ...wasFreeformByQuestion };
       for (const question of request.questions) {
@@ -836,7 +838,7 @@ export function QuestionOptions({
         clearQuestionDraft(draftKey, draft ?? null);
       }
     } finally {
-      finishQuestionResponse(request.taskId);
+      finishQuestionResponse(draftKey);
     }
   };
 

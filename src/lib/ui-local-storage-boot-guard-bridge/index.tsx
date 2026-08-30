@@ -49,10 +49,28 @@ export function LocalStorageBootGuardBridge() {
   }, [isError, projects]);
 
   useEffect(() => {
+    let reported = false;
     const announce = (
       next: ReturnType<typeof getLocalStorageBootGuardState>,
     ) => {
       if (next !== 'blocked') return;
+      // Ask the main process to record *why* — only it can see whether the
+      // previous instance was still alive and holding the LevelDB lock. Fired
+      // once per session; a failure here must not swallow the user-facing toast.
+      if (!reported) {
+        reported = true;
+        void api.app
+          .reportLocalStorageBootBlocked()
+          .then((logPath) => {
+            console.error(
+              '[ls-guard] boot failure recorded in diagnostics log:',
+              logPath,
+            );
+          })
+          .catch((error: unknown) => {
+            console.error('[ls-guard] failed to record diagnostics', error);
+          });
+      }
       addToast({
         type: 'error',
         message:

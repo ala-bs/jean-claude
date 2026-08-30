@@ -44,19 +44,6 @@ function createRecordingPort(
       'startPreviewSession',
       Promise.resolve(session),
     ),
-    startNetworkProxy: record('startNetworkProxy', Promise.resolve(undefined)),
-    stopNetworkProxy: record('stopNetworkProxy', Promise.resolve(undefined)),
-    installCertificate: record('installCertificate', Promise.resolve(undefined)),
-    prepareAndroidAppTrust: record(
-      'prepareAndroidAppTrust',
-      Promise.resolve({
-        appPath: 'apps/mobile',
-        nativeFiles: [],
-        message: 'ok',
-        changed: true,
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      }),
-    ),
     setInputNotice: record('setInputNotice', undefined),
     showActionNotice: record('showActionNotice', undefined),
     setResumeSetupAfterDependenciesInstall: record(
@@ -72,12 +59,11 @@ function createRecordingPort(
       'setLaunchedIosBuildCommandIds',
       undefined,
     ),
-    setEnableNetworkMitm: record('setEnableNetworkMitm', undefined),
-    setAndroidCertGuidanceVisible: record(
-      'setAndroidCertGuidanceVisible',
-      undefined,
-    ),
     setAndroidAppStatus: record('setAndroidAppStatus', undefined),
+    ensureMetroReverse: record('ensureMetroReverse', Promise.resolve({
+      reversed: true,
+      alreadyPresent: false,
+    })),
     ...overrides,
   } as unknown as PreviewPort;
 
@@ -124,7 +110,6 @@ function createFakeIosBuildCoordinator() {
 const baseFacts: RunWorkspaceSetupFacts = {
   platform: 'android',
   deviceId: 'device-1',
-  autoStartProxy: true,
   needsAppSelection: false,
   deviceReady: true,
 
@@ -146,9 +131,9 @@ const baseFacts: RunWorkspaceSetupFacts = {
   buildCommand: 'gradlew installDebug',
   buildRunning: false,
   buildStarting: false,
+  selectedDeviceIsPhysical: false,
 
   androidAppMissing: false,
-  androidTrustConfigured: true,
 
   hasActiveSession: true,
   session: { id: 'session-1', platform: 'android', deviceId: 'device-1' },
@@ -157,23 +142,10 @@ const baseFacts: RunWorkspaceSetupFacts = {
   quality: 'balanced',
   projectId: 'project-1',
   taskId: 'task-1',
-
-  proxyStatus: 'ready',
-  networkStatus: 'running',
-  networkSession: { id: 'proxy-1', enableMitm: true },
-  networkProxyParams: {
-    projectPath: '/repo',
-    appPath: 'apps/mobile',
-    platform: 'android',
-    deviceId: 'device-1',
-    autoConfigureDevice: true,
-  },
-  networkCertificateInstalled: true,
 };
 
 const baseOptions = {
   shouldAutoBuildIos: false,
-  shouldPrebuildAndroid: false,
   shouldPrebuildIos: false,
 };
 
@@ -306,25 +278,18 @@ describe('runWorkspaceSetup', () => {
     ]);
   });
 
-  it('runs the android prebuild and defers setup when the project is missing', async () => {
-    const { port, calls, names } = createRecordingPort();
+  it('never runs the android prebuild, even when the project is missing', async () => {
+    const { port, names } = createRecordingPort();
     const { coordinator } = createFakeCoordinator();
     await run({
       facts: { androidProjectPath: null, androidProjectExists: false },
       port,
       coordinator,
-      options: { shouldPrebuildAndroid: true },
     });
-    expect(names()).toEqual([
-      'setResumeSetupAfterPrebuild',
-      'startAdHocCommand',
-      'showActionNotice',
-    ]);
-    expect(calls[1].args[0]).toMatchObject({
-      runCommandId: 'prebuild-id',
-      name: 'Expo Android prebuild',
-      command: 'expo prebuild',
-    });
+    // `expo prebuild` writes a native `android/` directory into the worktree,
+    // so it must not run just because the project has no android/ folder.
+    expect(names()).not.toContain('setResumeSetupAfterPrebuild');
+    expect(names()).not.toContain('startAdHocCommand');
   });
 
   it('runs the ios prebuild and defers setup', async () => {
@@ -369,7 +334,6 @@ describe('runWorkspaceSetup', () => {
     });
     expect(coordinator.cancel).toHaveBeenCalledTimes(1);
     expect(names()).not.toContain('startPreviewSession');
-    expect(names()).not.toContain('startNetworkProxy');
   });
 
   it('starts a preview session when there is none', async () => {
@@ -416,7 +380,6 @@ describe('runWorkspaceSetup', () => {
       facts: {
         platform: 'ios',
         session: { id: 'session-1', platform: 'ios', deviceId: 'device-1' },
-        autoStartProxy: false,
       },
       port,
       coordinator,
@@ -448,30 +411,11 @@ describe('runWorkspaceSetup', () => {
     expect(names()).toEqual([]);
   });
 
-  it('never touches the proxy when autoStartProxy is off', async () => {
-    const { port, names } = createRecordingPort();
-    const { coordinator } = createFakeCoordinator();
-    await run({
-      facts: {
-        autoStartProxy: false,
-        networkCertificateInstalled: false,
-        networkStatus: 'stopped',
-        proxyStatus: 'error',
-      },
-      port,
-      coordinator,
-    });
-    expect(names()).not.toContain('startNetworkProxy');
-    expect(names()).not.toContain('stopNetworkProxy');
-    expect(names()).not.toContain('installCertificate');
-    expect(names()).not.toContain('prepareAndroidAppTrust');
-  });
-
-  it('builds the android app without the proxy when it is missing', async () => {
+  it('builds the android app when it is missing', async () => {
     const { port, calls, names } = createRecordingPort();
     const { coordinator } = createFakeCoordinator();
     await run({
-      facts: { autoStartProxy: false, androidAppMissing: true },
+      facts: { androidAppMissing: true },
       port,
       coordinator,
     });
@@ -485,190 +429,84 @@ describe('runWorkspaceSetup', () => {
     });
   });
 
-  it('prompts for the android project folder instead of proxying when prebuild is off', async () => {
+  it('does not rebuild the android app when it is already installed', async () => {
+    const { port, names } = createRecordingPort();
+    const { coordinator } = createFakeCoordinator();
+    await run({ facts: { androidAppMissing: false }, port, coordinator });
+    expect(names()).not.toContain('startAdHocCommand');
+  });
+});
+
+describe('runWorkspaceSetup — physical devices', () => {
+  it('reverses the Metro port for a physical Android device', async () => {
     const { port, calls, names } = createRecordingPort();
     const { coordinator } = createFakeCoordinator();
     await run({
-      facts: { androidProjectPath: null, androidProjectExists: false },
+      facts: { selectedDeviceIsPhysical: true, configuredDevServerPort: 8082 },
       port,
       coordinator,
     });
-    expect(names()).toEqual(['showActionNotice']);
-    expect(calls[0].args).toEqual([
-      'Checking Android project folder before proxy setup',
-    ]);
+    expect(names()).toContain('ensureMetroReverse');
+    const reverse = calls.find((call) => call.name === 'ensureMetroReverse');
+    expect(reverse?.args[0]).toEqual({ deviceId: 'device-1', metroPort: 8082 });
   });
 
-  it('stops nothing and starts nothing when the proxy is already healthy', async () => {
+  it('never reverses the Metro port for an emulator', async () => {
     const { port, names } = createRecordingPort();
     const { coordinator } = createFakeCoordinator();
     await run({ port, coordinator });
-    expect(names()).toEqual([]);
+    expect(names()).not.toContain('ensureMetroReverse');
   });
 
-  it('restarts the proxy when it is in an error state', async () => {
-    const { port, calls, names } = createRecordingPort();
-    const { coordinator } = createFakeCoordinator();
-    await run({
-      facts: { proxyStatus: 'error', networkStatus: 'stopped' },
-      port,
-      coordinator,
-    });
-    expect(names()).toEqual([
-      'stopNetworkProxy',
-      'setEnableNetworkMitm',
-      'startNetworkProxy',
-    ]);
-    expect(calls[0].args).toEqual(['proxy-1']);
-    expect(calls[2].args[0]).toMatchObject({ enableMitm: true });
-  });
-
-  it('installs the certificate and starts the proxy when no certificate is installed', async () => {
-    const { port, calls, names } = createRecordingPort();
-    const { coordinator } = createFakeCoordinator();
-    await run({
-      facts: { networkCertificateInstalled: false },
-      port,
-      coordinator,
-    });
-    expect(names()).toEqual([
-      'stopNetworkProxy',
-      'installCertificate',
-      'setEnableNetworkMitm',
-      'setAndroidCertGuidanceVisible',
-      'startNetworkProxy',
-    ]);
-    expect(calls[1].args[0]).toEqual({
-      platform: 'android',
-      deviceId: 'device-1',
-    });
-  });
-
-  it('skips the android certificate guidance on ios', async () => {
+  it('never reverses the Metro port on iOS', async () => {
     const { port, names } = createRecordingPort();
     const { coordinator } = createFakeCoordinator();
     await run({
       facts: {
         platform: 'ios',
+        selectedDeviceIsPhysical: true,
         session: { id: 'session-1', platform: 'ios', deviceId: 'device-1' },
-        networkCertificateInstalled: false,
       },
       port,
       coordinator,
     });
-    expect(names()).toEqual([
-      'stopNetworkProxy',
-      'installCertificate',
-      'setEnableNetworkMitm',
-      'startNetworkProxy',
-    ]);
+    expect(names()).not.toContain('ensureMetroReverse');
   });
 
-  it('starts the proxy when it is not running', async () => {
+  it('skips the preview stream but still builds on a physical iPhone', async () => {
+    const { port, names } = createRecordingPort();
+    const { coordinator } = createFakeCoordinator();
+    const { iosBuildCoordinator, launched } = createFakeIosBuildCoordinator();
+    await run({
+      facts: {
+        platform: 'ios',
+        selectedDeviceIsPhysical: true,
+        hasActiveSession: false,
+        session: null,
+        buildCommand: 'npx expo run:ios --device abc',
+      },
+      port,
+      coordinator,
+      iosBuildCoordinator,
+      options: { shouldAutoBuildIos: true },
+    });
+    expect(names()).not.toContain('startPreviewSession');
+    expect(coordinator.waitForFrame).not.toHaveBeenCalled();
+    expect(launched).toEqual(['build-id']);
+  });
+
+  it('still opens a preview stream for a physical Android device', async () => {
     const { port, names } = createRecordingPort();
     const { coordinator } = createFakeCoordinator();
     await run({
-      facts: { networkStatus: 'stopped', networkSession: null },
+      facts: {
+        selectedDeviceIsPhysical: true,
+        hasActiveSession: false,
+        session: null,
+      },
       port,
       coordinator,
     });
-    expect(names()).toEqual(['setEnableNetworkMitm', 'startNetworkProxy']);
-  });
-
-  it('restarts the proxy with mitm when the running session has mitm off', async () => {
-    const { port, names } = createRecordingPort();
-    const { coordinator } = createFakeCoordinator();
-    await run({
-      facts: { networkSession: { id: 'proxy-1', enableMitm: false } },
-      port,
-      coordinator,
-    });
-    expect(names()).toEqual([
-      'stopNetworkProxy',
-      'setEnableNetworkMitm',
-      'startNetworkProxy',
-    ]);
-  });
-
-  it('returns early when there are no proxy params', async () => {
-    const { port, names } = createRecordingPort();
-    const { coordinator } = createFakeCoordinator();
-    await run({
-      facts: { networkProxyParams: null, networkStatus: 'stopped' },
-      port,
-      coordinator,
-    });
-    expect(names()).toEqual([]);
-  });
-
-  it('prepares android trust and rebuilds the app', async () => {
-    const { port, calls, names } = createRecordingPort();
-    const { coordinator } = createFakeCoordinator();
-    await run({
-      facts: { androidTrustConfigured: false },
-      port,
-      coordinator,
-    });
-    expect(names()).toEqual([
-      'prepareAndroidAppTrust',
-      'setAndroidAppStatus',
-      'setActiveConsoleCommandId',
-      'startAdHocCommand',
-    ]);
-    expect(calls[0].args[0]).toEqual({
-      projectId: 'project-1',
-      taskId: 'task-1',
-      androidProjectPath: 'apps/mobile/android',
-    });
-    expect(calls[3].args[0]).toMatchObject({ name: 'Android build' });
-  });
-
-  it('skips the rebuild when trust did not change and the app is installed', async () => {
-    const { port, names } = createRecordingPort({
-      prepareAndroidAppTrust: (() =>
-        Promise.resolve({
-          appPath: 'apps/mobile',
-          nativeFiles: [],
-          message: 'ok',
-          changed: false,
-          updatedAt: '2026-01-01T00:00:00.000Z',
-        })) as PreviewPort['prepareAndroidAppTrust'],
-    });
-    const { coordinator } = createFakeCoordinator();
-    await run({
-      facts: { androidTrustConfigured: false },
-      port,
-      coordinator,
-    });
-    expect(names()).toEqual(['setAndroidAppStatus']);
-  });
-
-  it('rebuilds the android app when trust is already configured but the app is missing', async () => {
-    const { port, calls, names } = createRecordingPort();
-    const { coordinator } = createFakeCoordinator();
-    await run({ facts: { androidAppMissing: true }, port, coordinator });
-    expect(names()).toEqual([
-      'setActiveConsoleCommandId',
-      'startAdHocCommand',
-    ]);
-    expect(calls[1].args[0]).toMatchObject({ name: 'Android build' });
-  });
-
-  it('reports setup failures through the input notice', async () => {
-    const { port, calls, names } = createRecordingPort({
-      installCertificate: (() =>
-        Promise.reject(
-          new Error('cert boom'),
-        )) as PreviewPort['installCertificate'],
-    });
-    const { coordinator, operation } = createFakeCoordinator();
-    await run({
-      facts: { networkCertificateInstalled: false },
-      port,
-      coordinator,
-    });
-    expect(names()).toEqual(['stopNetworkProxy', 'setInputNotice']);
-    expect(calls[1].args).toEqual(['cert boom']);
-    expect(coordinator.complete).toHaveBeenCalledWith(operation);
+    expect(names()).toContain('startPreviewSession');
   });
 });

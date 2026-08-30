@@ -1,4 +1,5 @@
 import {
+  type ClipboardEvent,
   type KeyboardEvent,
   type PointerEvent,
   type RefObject,
@@ -12,6 +13,7 @@ import {
   canStartPointerInteraction,
   createWheelGestureFeedback,
   getNextGestureFeedbackId,
+  getPasteInputs,
   getPointerDownInput,
   getPointerMoveInputs,
   getPointerUpInput,
@@ -636,6 +638,36 @@ export function useMobilePreviewInput({
     [isRunning, sendInputSafe, session?.platform],
   );
 
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLDivElement>) => {
+      if (!isRunning) return;
+      event.preventDefault();
+
+      const result = getPasteInputs({
+        text: event.clipboardData.getData('text/plain'),
+        platform: session?.platform,
+      });
+      if (!result.ok) {
+        setInputNotice(result.reason);
+        return;
+      }
+      // Sent sequentially rather than via sendInputSafe: that helper is
+      // fire-and-forget, and pasted characters must reach the device in order.
+      const { inputs } = result;
+      void (async () => {
+        try {
+          for (const input of inputs) {
+            await sendInput(input);
+          }
+          setInputNotice(null);
+        } catch (pasteError) {
+          setInputNotice(formatError(pasteError) ?? 'Paste failed');
+        }
+      })();
+    },
+    [isRunning, sendInput, session?.platform, setInputNotice],
+  );
+
   const handleHomeButton = useCallback(() => {
     if (!isRunning) return;
     sendInputSafe({ type: 'key', key: 'home' });
@@ -709,6 +741,7 @@ export function useMobilePreviewInput({
     handleBackButton,
     handleHomeButton,
     handleKeyDown,
+    handlePaste,
     handlePointerCancel,
     handlePointerDown,
     handlePointerMove,

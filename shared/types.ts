@@ -462,6 +462,45 @@ export interface UpdateProject {
   updatedAt?: string;
 }
 
+/**
+ * A project environment variable as seen by the renderer.
+ *
+ * Secret values are intentionally absent: `value` is null when `isSecret` is
+ * true, so a secret can be replaced or deleted from the UI but never read back.
+ */
+export interface ProjectEnvVar {
+  id: string;
+  projectId: string;
+  key: string;
+  value: string | null;
+  isSecret: boolean;
+  /**
+   * True when a stored secret can no longer be decrypted (keychain reset, or
+   * the database moved between machines). The variable is skipped at run time,
+   * so the UI must prompt the user to re-enter its value.
+   */
+  decryptionFailed: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NewProjectEnvVar {
+  projectId: string;
+  key: string;
+  value: string;
+  isSecret?: boolean;
+  sortOrder?: number;
+}
+
+export interface UpdateProjectEnvVar {
+  key?: string;
+  /** Omit to keep the stored value; required when switching a var to secret. */
+  value?: string;
+  isSecret?: boolean;
+  sortOrder?: number;
+}
+
 export interface Task {
   id: string;
   projectId: string;

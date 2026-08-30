@@ -1,8 +1,15 @@
 import clsx from 'clsx';
+import { Smartphone } from 'lucide-react';
 
-import type { MobilePreviewDevice } from '@shared/mobile-simulator-types';
+import {
+  isPhysicalMobilePreviewDevice,
+  type MobilePreviewDevice,
+} from '@shared/mobile-simulator-types';
 
-import { formatDeviceState } from '../utils-device-setup';
+import {
+  formatDeviceConnectionState,
+  formatDeviceState,
+} from '../utils-device-setup';
 import type { MobilePreviewDeviceTaskInfo } from '../utils-device-assignments';
 import { PlatformLogo } from '../ui-common';
 
@@ -28,15 +35,35 @@ export function DeviceRailRow({
 }) {
   const isBooted = device.state === 'booted';
   const isLive = taskInfo?.isActive === true;
+  const isPhysical = isPhysicalMobilePreviewDevice(device);
+  const isUnusable = !!device.unavailableReason;
+
+  // Physical devices report reachability instead of a boot state, so the dot
+  // must track the connection rather than `state`.
+  const dotClassName = isLive
+    ? 'bg-status-done animate-pulse shadow-[0_0_7px_var(--color-status-done)]'
+    : isPhysical
+      ? device.connection === 'connected'
+        ? 'bg-emerald-300 shadow-[0_0_7px_var(--color-status-done)]'
+        : device.connection === 'unauthorized' || device.connection === 'untrusted'
+          ? 'bg-amber-300'
+          : 'bg-ink-4'
+      : isBooted
+        ? 'bg-emerald-300 shadow-[0_0_7px_var(--color-status-done)]'
+        : 'bg-ink-4';
+
+  const meta = getDeviceMetaLabel(device, isPhysical);
 
   return (
     <button
       type="button"
       onClick={onSelect}
       title={
-        taskInfo
-          ? `${device.name} — ${taskInfo.taskName} (${taskInfo.statusLabel})`
-          : `${device.name} — no task`
+        device.unavailableReason
+          ? `${device.name} — ${device.unavailableReason}`
+          : taskInfo
+            ? `${device.name} — ${taskInfo.taskName} (${taskInfo.statusLabel})`
+            : `${device.name} — no task`
       }
       className={clsx(
         'flex w-full items-start gap-2 rounded-[5px] px-2 py-1.5 text-left transition-colors',
@@ -44,27 +71,31 @@ export function DeviceRailRow({
         selected
           ? 'bg-acc-soft shadow-[inset_2px_0_0_var(--color-acc)]'
           : 'hover:bg-bg-2',
+        isUnusable && 'opacity-60',
       )}
     >
       <span
         aria-hidden
-        className={clsx(
-          'mt-[5px] size-[7px] shrink-0 rounded-full',
-          isLive
-            ? 'bg-status-done animate-pulse shadow-[0_0_7px_var(--color-status-done)]'
-            : isBooted
-              ? 'bg-emerald-300 shadow-[0_0_7px_var(--color-status-done)]'
-              : 'bg-ink-4',
-        )}
+        className={clsx('mt-[5px] size-[7px] shrink-0 rounded-full', dotClassName)}
       />
 
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
-          <span className="text-ink-1 min-w-0 truncate text-[12px] font-medium">
+          {isPhysical ? (
+            <span title="Real device" className="flex shrink-0 items-center">
+              <Smartphone aria-label="Real device" className="text-ink-3 size-3" />
+            </span>
+          ) : null}
+          <span
+            className={clsx(
+              'min-w-0 truncate text-[12px] font-medium',
+              isUnusable ? 'text-ink-3' : 'text-ink-1',
+            )}
+          >
             {device.name}
           </span>
-          <span className="text-ink-4 shrink-0 font-mono text-[10px]">
-            {device.osVersion ?? formatDeviceState(device.state)}
+          <span className="text-ink-4 min-w-0 truncate font-mono text-[10px]">
+            {meta}
           </span>
         </span>
 
@@ -105,4 +136,48 @@ export function DeviceRailRow({
       <PlatformLogo platform={device.platform} />
     </button>
   );
+}
+
+function normalizeForCompare(value: string) {
+  return value.toLowerCase().replaceAll(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Physical devices carry a marketing model name that is usually more useful
+ * than the raw host name ("Patrick's iPhone"), so it is preferred whenever it
+ * adds information the name does not already carry.
+ *
+ * A non-connected physical device also states its connection in words: the dot
+ * colour alone is invisible to screen readers and to anyone who does not hover.
+ */
+export function getDeviceMetaLabel(
+  device: MobilePreviewDevice,
+  isPhysical: boolean,
+) {
+  const connectionState = isPhysical
+    ? formatDeviceConnectionState(device)
+    : null;
+  const base = getDeviceDescriptorLabel(device, isPhysical);
+  if (!connectionState) return base;
+  // Rail width is tight: the connection state matters more than the OS build,
+  // so it replaces the fallback rather than stacking onto it.
+  const model = isPhysical ? device.model?.trim() : undefined;
+  const showModel =
+    !!model &&
+    !normalizeForCompare(device.name).includes(normalizeForCompare(model));
+  return showModel ? `${model} · ${connectionState}` : connectionState;
+}
+
+function getDeviceDescriptorLabel(
+  device: MobilePreviewDevice,
+  isPhysical: boolean,
+) {
+  const fallback = device.osVersion ?? formatDeviceState(device.state);
+  if (!isPhysical || !device.model) return fallback;
+  const model = device.model.trim();
+  if (!model) return fallback;
+  if (normalizeForCompare(device.name).includes(normalizeForCompare(model))) {
+    return fallback;
+  }
+  return device.osVersion ? `${model} · ${device.osVersion}` : model;
 }
