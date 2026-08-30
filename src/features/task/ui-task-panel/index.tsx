@@ -139,7 +139,6 @@ import type { AgentResourceSample } from '@/hooks/use-agent-resource-snapshots';
 import { api } from '@/lib/api';
 import { AutoAcceptToggle } from '@/features/agent/ui-auto-accept-toggle';
 import type { AzureDevOpsWorkItem } from '@/lib/api';
-import { BackgroundJobsIndicator } from '@/features/agent/ui-background-jobs-indicator';
 import { Button } from '@/common/ui/button';
 import { Chip } from '@/common/ui/chip';
 import { ContextUsageDisplay } from '@/features/agent/ui-context-usage-display';
@@ -2505,15 +2504,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     }
   }, [clearTaskNavHistoryState, isTaskError, isTaskLoading, task, taskId]);
 
-  // Boolean (not the array) so the stream's `afterLastPromptGroup` slot stays
-  // null when there is nothing to show — a non-null node renders a wrapper with
-  // margins and would add dead space under every prompt group.
-  const hasBackgroundJobs = useTaskMessagesStore((state) =>
-    activeStepId
-      ? (state.backgroundTasksByStepId[activeStepId]?.length ?? 0) > 0
-      : false,
-  );
-
   if (isTaskError || isProjectError) {
     return (
       <TaskPanelState
@@ -3173,23 +3163,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                   }
                   worktreePath={task.worktreePath}
                   afterLastPromptGroup={
-                    hasBackgroundJobs || canContinueInterruptedStep ? (
-                      <div className="flex flex-col items-start gap-2">
-                        {hasBackgroundJobs && (
-                          <BackgroundJobsIndicator stepId={activeStepId} />
-                        )}
-                        {canContinueInterruptedStep && (
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            icon={<Play />}
-                            onClick={handleContinueInterruptedStep}
-                            title="Continue interrupted step"
-                          >
-                            Continue
-                          </Button>
-                        )}
-                      </div>
+                    canContinueInterruptedStep ? (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        icon={<Play />}
+                        onClick={handleContinueInterruptedStep}
+                        title="Continue interrupted step"
+                      >
+                        Continue
+                      </Button>
                     ) : null
                   }
                 />
