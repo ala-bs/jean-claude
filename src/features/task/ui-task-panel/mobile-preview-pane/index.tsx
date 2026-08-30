@@ -135,6 +135,7 @@ import { DevServerTab } from './ui-dev-server-tab';
 import { DevToolsTab } from './ui-devtools-tab';
 import { LogsTab } from './ui-logs-tab';
 import { ManageDevicesDialog } from './ui-manage-devices-dialog';
+import { MetroPortBadge } from './ui-metro-port-badge';
 import type { MobilePreviewPaneTab } from './utils-tabs';
 import type { MobilePreviewProjectConfig } from '@shared/types';
 import { SetupTab } from './ui-setup-tab';
@@ -2952,6 +2953,12 @@ export function MobilePreviewPane({
                 ))}
             </div>
             <div className="min-w-0 flex-1" />
+            <MetroPortBadge
+              port={effectiveDevServerPort}
+              isRunning={isDevServerRunning}
+              isStarting={devServerStarting}
+              onClick={() => setActiveTab('dev-server')}
+            />
             {isStandalone ? (
               <IconButton
                 className={standaloneLayout.inspectorClose}
