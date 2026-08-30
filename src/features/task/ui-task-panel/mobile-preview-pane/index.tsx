@@ -1238,7 +1238,13 @@ export function MobilePreviewPane({
       !hasActiveSession &&
       !isHydratingRetainedSessions &&
       !!deviceId &&
-      selectedDeviceCanStart,
+      selectedDeviceCanStart &&
+      // Physical iPhones have no screen-stream API (simctl/idb are
+      // simulator-only), so `mobilePreview:start` would always reject with the
+      // "Live screen streaming is not supported..." guard and paint an error
+      // banner the user can do nothing about. Do NOT re-enable this: the fix is
+      // a real device-streaming backend, not retrying the doomed call.
+      !physicalIosStreamingUnsupported,
     attemptKey: autoPreviewStartAttemptKey,
     start: () =>
       start({
@@ -1258,7 +1264,15 @@ export function MobilePreviewPane({
         return;
       }
 
-      if (!deviceId || !selectedDeviceCanStart || needsAppSelection) return;
+      // Same simulator-only limitation as the auto-start gate above: starting a
+      // stream on a physical iPhone can only ever fail, so it is a no-op here.
+      if (
+        !deviceId ||
+        !selectedDeviceCanStart ||
+        needsAppSelection ||
+        physicalIosStreamingUnsupported
+      )
+        return;
       await start({
         projectPath: effectiveProjectPath,
         platform,
@@ -1278,6 +1292,7 @@ export function MobilePreviewPane({
     effectiveProjectPath,
     quality,
     selectedDeviceCanStart,
+    physicalIosStreamingUnsupported,
     needsAppSelection,
     start,
     stop,
